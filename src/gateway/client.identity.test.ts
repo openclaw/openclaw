@@ -5,16 +5,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createClientTestIdentity } from "./client.test-support.js";
 
-const loadDeviceIdentityIfPresentAsyncMock = vi.hoisted(() => vi.fn());
-const loadOrCreateDeviceIdentityAsyncMock = vi.hoisted(() => vi.fn());
+const findIdentity = vi.hoisted(() => vi.fn());
+const createIdentity = vi.hoisted(() => vi.fn());
 const wsInstances: MockWebSocket[] = [];
 
 class MockWebSocket extends EventEmitter {
-  static readonly CONNECTING = 0;
   static readonly OPEN = 1;
-  static readonly CLOSING = 2;
-  static readonly CLOSED = 3;
-  readyState = MockWebSocket.CONNECTING;
+  readyState = 0;
 
   constructor() {
     super();
@@ -22,13 +19,11 @@ class MockWebSocket extends EventEmitter {
   }
 
   close(code = 1000, reason = "") {
-    this.readyState = MockWebSocket.CLOSED;
+    this.readyState = 3;
     this.emit("close", code, Buffer.from(reason));
   }
 
-  terminate() {
-    this.close();
-  }
+  terminate = this.close;
 }
 
 vi.mock("../../packages/gateway-client/src/websocket.js", async (importOriginal) => ({
@@ -38,8 +33,8 @@ vi.mock("../../packages/gateway-client/src/websocket.js", async (importOriginal)
 
 // mock-isolation: Control accepted identity work without opening real database state.
 vi.mock("../infra/device-identity-async.js", () => ({
-  loadDeviceIdentityIfPresentAsync: loadDeviceIdentityIfPresentAsyncMock,
-  loadOrCreateDeviceIdentityAsync: loadOrCreateDeviceIdentityAsyncMock,
+  loadDeviceIdentityIfPresentAsync: findIdentity,
+  loadOrCreateDeviceIdentityAsync: createIdentity,
 }));
 
 // mock-isolation: Admission ordering must not alter process-wide proxy routing.
@@ -66,24 +61,21 @@ beforeEach(() => {
   pending = createDeferred<DeviceIdentity | null>();
   closed = createDeferred();
   onConnectError.mockReset();
-  loadDeviceIdentityIfPresentAsyncMock.mockReset();
-  loadOrCreateDeviceIdentityAsyncMock.mockReset().mockReturnValue(pending.promise);
+  findIdentity.mockReset().mockReturnValue(pending.promise);
+  createIdentity.mockReset().mockReturnValue(pending.promise);
 });
 
 it.each([false, true])("prepares identity before transport (read-only: %s)", async (readOnly) => {
   const env = { OPENCLAW_STATE_DIR: "/fixture/client-identity" };
   const loadOrCreateDeviceIdentity = vi.fn(() => defaultIdentity);
-  loadDeviceIdentityIfPresentAsyncMock.mockReturnValue(pending.promise);
   const client = makeClient({
     env,
     ...(readOnly ? { sharedStateMode: "read-only", hostDeps: { loadOrCreateDeviceIdentity } } : {}),
   });
-  expect(loadOrCreateDeviceIdentityAsyncMock).not.toHaveBeenCalled();
+  expect(createIdentity).not.toHaveBeenCalled();
   client.start();
   client.start();
-  const [used, unused] = readOnly
-    ? [loadDeviceIdentityIfPresentAsyncMock, loadOrCreateDeviceIdentityAsyncMock]
-    : [loadOrCreateDeviceIdentityAsyncMock, loadDeviceIdentityIfPresentAsyncMock];
+  const [used, unused] = readOnly ? [findIdentity, createIdentity] : [createIdentity, findIdentity];
   expect(used).toHaveBeenCalledExactlyOnceWith({ env });
   expect(wsInstances).toHaveLength(0);
   pending.resolve(readOnly ? null : defaultIdentity);
@@ -95,25 +87,22 @@ it.each([false, true])("prepares identity before transport (read-only: %s)", asy
   await client.stopAndWait();
 });
 
-it.each(["stop", "stopAndWait"] as const)(
-  "joins accepted identity admission after %s without opening a transport",
-  async (stopMethod) => {
-    const client = makeClient();
-    client.start();
-    void client[stopMethod]();
-    const stopped = vi.fn();
-    const stopping = client.stopAndWait().then(stopped);
-    await Promise.resolve();
-    expect(stopped).not.toHaveBeenCalled();
-    pending.resolve(defaultIdentity);
-    await stopping;
-    client.start();
-    expect(stopped).toHaveBeenCalledOnce();
-    expect(wsInstances).toHaveLength(0);
-    expect(loadOrCreateDeviceIdentityAsyncMock).toHaveBeenCalledOnce();
-    expect(onConnectError).not.toHaveBeenCalled();
-  },
-);
+it.each(["stop", "stopAndWait"] as const)("joins pending identity after %s", async (method) => {
+  const client = makeClient();
+  client.start();
+  void client[method]();
+  const stopped = vi.fn();
+  const stopping = client.stopAndWait().then(stopped);
+  await Promise.resolve();
+  expect(stopped).not.toHaveBeenCalled();
+  pending.resolve(defaultIdentity);
+  await stopping;
+  client.start();
+  expect(stopped).toHaveBeenCalledOnce();
+  expect(wsInstances).toHaveLength(0);
+  expect(createIdentity).toHaveBeenCalledOnce();
+  expect(onConnectError).not.toHaveBeenCalled();
+});
 
 it("retains synchronous custom identity callbacks", async () => {
   const loadOrCreateDeviceIdentity = vi.fn(() => defaultIdentity);
@@ -121,7 +110,7 @@ it("retains synchronous custom identity callbacks", async () => {
   expect(loadOrCreateDeviceIdentity).toHaveBeenCalledOnce();
   client.start();
   expect(wsInstances).toHaveLength(1);
-  expect(loadOrCreateDeviceIdentityAsyncMock).not.toHaveBeenCalled();
+  expect(createIdentity).not.toHaveBeenCalled();
   await client.stopAndWait();
 });
 

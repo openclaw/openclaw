@@ -19,6 +19,7 @@ const decisionWorker = { decisionModel: "fixture/fast" };
 const roster = (entries: NonNullable<OpenClawConfig["agents"]>["entries"]): OpenClawConfig => ({
   agents: { entries },
 });
+const utility = (size: string) => roster({ worker: { utilityModel: `fixture/${size}` } });
 const telegram = (
   policy: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>,
   accountId?: string,
@@ -33,12 +34,7 @@ const planChange = (previous: OpenClawConfig, next: OpenClawConfig) =>
 it.each([
   ["adds the decision agent roster", {}, roster({ worker: decisionWorker }), true],
   ["removes the decision agent roster", roster({ worker: decisionWorker }), {}, true],
-  [
-    "changes a utility model",
-    roster({ worker: { utilityModel: "fixture/small" } }),
-    roster({ worker: { utilityModel: "fixture/large" } }),
-    false,
-  ],
+  ["changes a utility model", utility("small"), utility("large"), false],
   ["adds an agent without a decision override", roster({}), roster({ worker: {} }), false],
 ] satisfies [string, OpenClawConfig, OpenClawConfig, boolean][])(
   "preserves roster actions and scopes provider reloads when it %s",
@@ -67,15 +63,10 @@ it("restarts Slack when plugin approvers are edited", async () => {
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "slack", plugin: slackSetupPlugin, source: "test" }]),
   );
-  const configWithApprover = (approver: string): OpenClawConfig => ({
-    approvals: { plugin: { slack: { approvers: [approver] } } },
+  const configWithApprover = (user: number): OpenClawConfig => ({
+    approvals: { plugin: { slack: { approvers: [`team:T123:user:U${user}`] } } },
   });
-  expect(
-    planChange(
-      configWithApprover("team:T123:user:U111"),
-      configWithApprover("team:T123:user:U222"),
-    ),
-  ).toMatchObject({
+  expect(planChange(configWithApprover(111), configWithApprover(222))).toMatchObject({
     restartGateway: false,
     restartChannels: new Set(["slack"]),
     restartChannelAccounts: new Map(),
@@ -95,22 +86,22 @@ function planTelegramChange(prev: OpenClawConfig, next: OpenClawConfig) {
 }
 
 it.each([undefined, "support"])("retains the monitor for policy changes in %s", (accountId) => {
-  const policy = (next: boolean): Parameters<typeof telegram>[0] => ({
-    dmPolicy: next ? "disabled" : "allowlist",
-    allowFrom: [next ? "43" : "42"],
-    groupPolicy: next ? "disabled" : "allowlist",
-    groupAllowFrom: [next ? "43" : "42"],
-    replyToMode: next ? "first" : "off",
-    streaming: next ? { mode: "partial", preview: { toolProgress: false } } : { mode: "off" },
-    textChunkLimit: next ? 1000 : 4000,
-  });
-  const plan = planTelegramChange(
-    telegram(policy(false), accountId),
-    telegram(policy(true), accountId),
-  );
+  const config = (next: boolean) =>
+    telegram(
+      {
+        dmPolicy: next ? "disabled" : "allowlist",
+        allowFrom: [next ? "43" : "42"],
+        groupPolicy: next ? "disabled" : "allowlist",
+        groupAllowFrom: [next ? "43" : "42"],
+        replyToMode: next ? "first" : "off",
+        streaming: next ? { mode: "partial", preview: { toolProgress: false } } : { mode: "off" },
+        textChunkLimit: next ? 1000 : 4000,
+      },
+      accountId,
+    );
+  const plan = planTelegramChange(config(false), config(true));
   expect(plan.changedPaths.length).toBeGreaterThanOrEqual(7);
   expect(isNoopGatewayReloadPlan(plan)).toBe(true);
-  expect(plan.restartChannels.size).toBe(0);
 });
 
 it("keeps startup ownership for botToken even alongside live policy", () => {

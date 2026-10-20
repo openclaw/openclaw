@@ -1,4 +1,3 @@
-import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -88,17 +87,15 @@ it("preserves project precedence when a later matching transcript is found first
     const releaseFirst = createDeferred();
     const foundSecond = createDeferred();
     const access = fs.access;
-    const accessSpy = vi
-      .spyOn(rawFs.promises, "access")
-      .mockImplementation(async (candidate, mode) => {
-        if (candidate === firstPath) {
-          await releaseFirst.promise;
-        }
-        await access(candidate, mode);
-        if (candidate === secondPath) {
-          foundSecond.resolve();
-        }
-      });
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (candidate, mode) => {
+      if (candidate === firstPath) {
+        await releaseFirst.promise;
+      }
+      await access(candidate, mode);
+      if (candidate === secondPath) {
+        foundSecond.resolve();
+      }
+    });
     const pending = readMessages();
     try {
       await Promise.race([foundSecond.promise, pending]);

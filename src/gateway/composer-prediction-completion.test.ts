@@ -49,20 +49,20 @@ it.each([
 ] as const)("selects the %s model", async (choice, model) => {
   const params = input(choice);
   expect(await completeComposerPrediction(params)).toBe("What should I check next?");
-  const call = completion.mock.calls[0]?.[0];
-  expect(completion).toHaveBeenCalledOnce();
-  expect(call).toMatchObject({
-    provider: "example",
-    model,
-    purpose: "composer-prediction",
-    thinkLevel: "off",
-    answerTokenBudget: 160,
-    timeoutMs: 8_000,
-    prompt: params.conversation,
-    agentHarnessRuntimeOverride: "openclaw",
-    systemPrompt: expect.stringContaining("Never suggest granting approval"),
-  });
-  expect(call.authProfileId).toBe(choice === "conversation" ? "profile:chosen" : undefined);
+  expect(completion).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      provider: "example",
+      model,
+      purpose: "composer-prediction",
+      thinkLevel: "off",
+      answerTokenBudget: 160,
+      timeoutMs: 8_000,
+      prompt: params.conversation,
+      agentHarnessRuntimeOverride: "openclaw",
+      systemPrompt: expect.stringContaining("Never suggest granting approval"),
+      authProfileId: choice === "conversation" ? "profile:chosen" : undefined,
+    }),
+  );
 });
 
 it.each([
@@ -80,10 +80,9 @@ it("checks the zero-tool contract again for utility fallback runtimes", async ()
     utilityModel: modelWithFallbacks("example/small", "example/service-tools", "example/backup"),
   });
   completion.mockRejectedValueOnce(new Error("503 service unavailable"));
-  route
-    .mockResolvedValueOnce(runtime("openclaw"))
-    .mockResolvedValueOnce(runtime("agentsapi"))
-    .mockResolvedValueOnce(runtime("openclaw"));
+  for (const harness of ["openclaw", "agentsapi", "openclaw"]) {
+    route.mockResolvedValueOnce(runtime(harness));
+  }
 
   expect(await completeComposerPrediction(params)).toBe("What should I check next?");
   expect(completion.mock.calls.map(([call]) => [call.model, call.purpose])).toEqual([

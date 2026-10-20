@@ -24,10 +24,7 @@ vi.mock("../../packages/gateway-client/src/client.js", async (importOriginal) =>
   ...(await importOriginal<typeof import("../../packages/gateway-client/src/client.js")>()),
   GatewayClient: class {
     constructor(private readonly options: { hostDeps: GatewayClientHostDeps }) {}
-
-    start() {
-      fixture.hosts.push(this.options.hostDeps);
-    }
+    start = () => fixture.hosts.push(this.options.hostDeps);
   },
 }));
 
@@ -44,9 +41,7 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
-  fixture.hosts.length = 0;
-  fixture.token = "fixture-existing";
-  fixture.malformed = false;
+  Object.assign(fixture, { hosts: [], token: "fixture-existing", malformed: false });
   fixture.load
     .mockReset()
     .mockImplementation((params: Parameters<typeof loadDeviceAuthToken>[0]) => {
@@ -108,26 +103,23 @@ it.each(
   },
 );
 
-it.each([false, true])(
-  "forwards raw legacy bytes only for matching receipt cleanup (origin: %s)",
-  async (origin) => {
-    fixture.token = " fixture-existing ";
-    const deps = host(origin, false, false);
-    await deps.load(scope);
-    await deps.clear({ ...scope, expectedToken: "fixture-existing" });
-    expect(fixture.clear).toHaveBeenLastCalledWith({
-      ...scoped(origin),
-      expectedToken: "fixture-existing",
-      observedToken: " fixture-existing ",
-    });
-    fixture.token = "fixture-newer";
-    await deps.clear({ ...scope, expectedToken: "fixture-issued" });
-    expect(fixture.clear).toHaveBeenLastCalledWith({
-      ...scoped(origin),
-      expectedToken: "fixture-issued",
-    });
-  },
-);
+it.each([false, true])("cleans matching raw token receipts (origin: %s)", async (origin) => {
+  fixture.token = " fixture-existing ";
+  const deps = host(origin, false, false);
+  await deps.load(scope);
+  await deps.clear({ ...scope, expectedToken: "fixture-existing" });
+  expect(fixture.clear).toHaveBeenLastCalledWith({
+    ...scoped(origin),
+    expectedToken: "fixture-existing",
+    observedToken: " fixture-existing ",
+  });
+  fixture.token = "fixture-newer";
+  await deps.clear({ ...scope, expectedToken: "fixture-issued" });
+  expect(fixture.clear).toHaveBeenLastCalledWith({
+    ...scoped(origin),
+    expectedToken: "fixture-issued",
+  });
+});
 
 it("keeps explicit read-only origin auth off storage reads and writes", async () => {
   const deps = host(true, true);
