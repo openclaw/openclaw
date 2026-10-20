@@ -6,6 +6,12 @@ import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-br
 import { createDeferredCore } from "../shared/deferred.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 
+async function expectWorkRefused(work: GatewayConnectionWork) {
+  const late = vi.fn();
+  await expect(work.track(late)).rejects.toThrow("Async work scope is closed");
+  expect(late).not.toHaveBeenCalled();
+}
+
 describe("Gateway connection work", () => {
   it("starts received work synchronously and joins connection cleanup after transport close", async () => {
     const work = new GatewayConnectionWork();
@@ -41,9 +47,7 @@ describe("Gateway connection work", () => {
       await closing;
     }
     expect(drained).toBe(true);
-    const late = vi.fn();
-    await expect(work.track(late)).rejects.toThrow("Async work scope is closed");
-    expect(late).not.toHaveBeenCalled();
+    await expectWorkRefused(work);
   });
 
   it.each(["trackCleanup", "track"] as const)(
@@ -66,15 +70,12 @@ describe("Gateway connection work", () => {
     const first = new GatewayConnectionWork();
     const second = new GatewayConnectionWork();
     const gate = createDeferredCore();
-    let settled = false;
-    const pending = first.track(async () => {
-      await gate.promise;
-      settled = true;
-    });
+    const settled = vi.fn();
+    const pending = first.track(() => gate.promise.then(settled));
     try {
       second.beginClose();
       await second.drain();
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
     } finally {
       gate.resolve();
       first.beginClose();
@@ -149,11 +150,7 @@ describe.skipIf(process.platform === "win32")("Gateway connection broker ownersh
         first.trackCleanup(() => expectBrokerAfterYield(firstBroker)),
       );
       await first.drain();
-      const late = vi.fn();
-      await expect(runWithSpawnBroker(secondBroker, () => first.track(late))).rejects.toThrow(
-        "Async work scope is closed",
-      );
-      expect(late).not.toHaveBeenCalled();
+      await runWithSpawnBroker(secondBroker, () => expectWorkRefused(first));
       await second.track(() => expectBrokerAfterYield(secondBroker));
     } finally {
       await Promise.all([first.drain(), second.drain()]);
