@@ -4,11 +4,7 @@ import type {
   OpenAsyncKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreV2ForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
@@ -32,8 +28,7 @@ const hash = "a".repeat(64);
 const key = reefReplayStoreKey("alice", id);
 
 function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
-  const stateDir = temp.make("reef-replay-");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const env = { OPENCLAW_STATE_DIR: temp.make("reef-replay-") };
   const runtime = flowRuntime(env);
   const options = {
     namespace: REEF_REPLAY_NAMESPACE,
@@ -42,22 +37,16 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
     defaultTtlMs: REEF_REPLAY_TTL_MS,
     env,
   };
-  const store = createPluginStateKeyedStoreV2ForTests<ReefReplayRecord>("reef", options, {
-    assertCurrent() {},
-  });
-  const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", options);
+  const openStore = runtime.state.openKeyedStoreV2;
+  const store = openStore<ReefReplayRecord>(options);
+  const raw = runtime.state.openSyncKeyedStore<ReefReplayRecord>(options);
   runtime.state.openKeyedStoreV2 = <T>(opts: OpenAsyncKeyedStoreOptions) => {
     if (opts.retention === "retained" || opts.namespace !== REEF_REPLAY_NAMESPACE) {
-      return createPluginStateKeyedStoreV2ForTests<T>(
-        "reef",
-        { ...opts, env },
-        { assertCurrent() {} },
-      );
+      return openStore<T>(opts);
     }
     // The runtime's generic namespace selects this fixture's ReefReplayRecord store.
     return { ...store } as PluginStateKeyedStore<T, 2>;
   };
-  const identity = generateIdentity();
   const replayKey = new Uint8Array(32).fill(2);
   const open = (rng: (length: number) => Uint8Array = randomBytes) =>
     new ReefSqliteReplayStore(runtime, replayKey, rng, maxEntries);
@@ -65,7 +54,7 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
     store.register(key, { ...raw.lookup(key)!, ...patch });
   const receipt = signReceipt(
     { id, bodyHash: "b".repeat(64), auditHead: "c".repeat(64), status: "accepted" },
-    identity.signing.secretKey,
+    generateIdentity().signing.secretKey,
   );
   return { store, raw, open, update, receipt };
 }

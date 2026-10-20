@@ -10,18 +10,17 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import reefChannelEntry from "../index.js";
-import { base64url, generateIdentity, type ReviewRequest } from "../protocol/index.js";
+import type { ReviewRequest } from "../protocol/index.js";
 import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
+import { reefKeys } from "./flow.test-helpers.js";
 import { ReefFriendManager } from "./friends.js";
 import { REEF_REPLAY_TTL_MS, reefReplayStoreKey, type ReefReplayRecord } from "./replay-store.js";
 import { createReefRuntimeAuthority } from "./runtime.js";
@@ -53,8 +52,6 @@ import {
 import { ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
 
-const auditKey = base64url(Uint8Array.from({ length: 32 }, (_, index) => index + 1));
-const replayKey = base64url(Uint8Array.from({ length: 32 }, (_, index) => 255 - index));
 const receiptId = "01JZ0000000000000000000000";
 const identityBinding = (handle: string) => ({ handle, relayUrl: "https://reefwire.ai" });
 let stateDir = "";
@@ -82,10 +79,6 @@ function assertNoHostSql(calls: ReturnType<typeof observeHostDataSql>["calls"], 
   }
 }
 
-function reefKeys() {
-  return { ...generateIdentity(), auditKey, replayKey, keyEpoch: 1 };
-}
-
 function reviewRequest(id = receiptId, approvalDigest = "b".repeat(64)): ReviewRequest {
   return {
     id,
@@ -104,30 +97,9 @@ function reviewRequest(id = receiptId, approvalDigest = "b".repeat(64)): ReviewR
   };
 }
 
-function registerReviewListCommand() {
-  const api = createTestPluginApi({ registrationMode: "tool-discovery" });
-  const registerCommand = vi.spyOn(api, "registerCommand");
-  reefChannelEntry.register(api);
-  expect(registerCommand).toHaveBeenCalledOnce();
-  const command = registerCommand.mock.calls[0]![0];
-  return async () =>
-    await command.handler({
-      args: "review list",
-      channel: "test",
-      isAuthorizedSender: true,
-      commandBody: "/reef review list",
-      config: {},
-      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-      detachConversationBinding: async () => ({ removed: false }),
-      getCurrentConversationBinding: async () => null,
-    });
-}
-
-function activateReviewStore(
-  authority: ReturnType<typeof createReefRuntimeAuthority>,
-  stateRuntime: ReturnType<typeof createRuntime>,
-  reviews: ReviewApprovalStore,
-) {
+function activateReviewStore(reviews: ReviewApprovalStore) {
+  const authority = createReefRuntimeAuthority();
+  const stateRuntime = reopen();
   const config = ReefChannelConfigSchema.parse({ handle: "bob" });
   const keys = reefKeys();
   const transport = new ReefTransportClient(config.relayUrl, "bob", keys, async () => {
@@ -160,16 +132,11 @@ function activateReviewStore(
       onOwnerNotice: async () => {},
     }),
   });
+  return () => authority.release();
 }
 
-async function bindIdentity(
-  stateRuntime: ReturnType<typeof createRuntime>,
-  handle: string,
-): Promise<void> {
-  await finalizeReefIdentityBinding(
-    stateRuntime,
-    await reserveReefIdentityBinding(stateRuntime, identityBinding(handle)),
-  );
+async function bindIdentity(handle: string): Promise<void> {
+  await finalizeReefIdentityBinding(runtime, await reserve(handle));
 }
 
 describe("Reef SQLite state", () => {
@@ -230,11 +197,10 @@ describe("Reef SQLite state", () => {
   });
 
   it("persists keys and registration state without creating Reef files", async () => {
-    const observation = observeHostDataSql();
-    const sql = observation.calls;
+    const sql = observeHostDataSql().calls;
     const keys = await generateAndStoreKeys(runtime);
     expect(await loadKeys(reopen())).toEqual(keys);
-    await bindIdentity(runtime, "molty");
+    await bindIdentity("molty");
     await saveReefSetupSession(runtime, {
       session: "setup-secret",
       relayUrl: "https://reefwire.ai",
@@ -251,7 +217,7 @@ describe("Reef SQLite state", () => {
   });
 
   it("atomically rejects redirecting stored identity keys to another handle", async () => {
-    await bindIdentity(runtime, "molty");
+    await bindIdentity("molty");
 
     await expect(reserve("other")).rejects.toThrow("already holds the Reef identity @molty");
     expect(await loadReefIdentityBinding(runtime)).toEqual(identityBinding("molty"));
@@ -312,7 +278,6 @@ describe("Reef SQLite state", () => {
   });
 
   it("does not steal a live replay claim owned by another process", async () => {
-    const keys = reefKeys();
     const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", {
       namespace: "replay",
       maxEntries: 3_000,
@@ -330,7 +295,7 @@ describe("Reef SQLite state", () => {
       claimExpiresAt: Date.now() + 5 * 60_000,
     });
 
-    const replay = (await openStores(runtime, keys)).replay;
+    const replay = (await openStores(runtime, reefKeys())).replay;
     await expect(replay.claim("alice", receiptId, "c".repeat(64))).resolves.toBe("in_flight");
     expect(raw.lookup(key)?.claimOwner).toBe("other-process");
 
@@ -355,66 +320,61 @@ describe("Reef SQLite state", () => {
 
   it("persists review decisions and delivered ids", async () => {
     const keys = reefKeys();
-    const stores = await openStores(reopen(), keys);
+    const { reviews, delivered } = await openStores(reopen(), keys);
     const review = reviewRequest();
+    const digest = review.approvalDigest;
 
-    await expect(stores.reviews.request(review)).resolves.toBeUndefined();
-    await expect(stores.reviews.lookupDecision(review.approvalDigest)).resolves.toBe("pending");
-    await expect(stores.reviews.lookupDecision("c".repeat(64))).resolves.toBe("none");
-    const commandAuthority = createReefRuntimeAuthority();
-    activateReviewStore(commandAuthority, reopen(), stores.reviews);
+    await expect(reviews.request(review)).resolves.toBeUndefined();
+    await expect(reviews.lookupDecision(digest)).resolves.toBe("pending");
+    await expect(reviews.lookupDecision("c".repeat(64))).resolves.toBe("none");
+    const releaseCommand = activateReviewStore(reviews);
     try {
       for (const action of ["approve", "deny"]) {
         await expect(
           handleReefCommand({
-            args: `review ${action} ${review.approvalDigest}`,
+            args: `review ${action} ${digest}`,
             senderIsOwner: true,
             assertOwnerCurrent: () => {
               throw new Error("owner revoked");
             },
           }),
         ).rejects.toThrow("owner revoked");
-        await expect(stores.reviews.lookupDecision(review.approvalDigest)).resolves.toBe("pending");
+        await expect(reviews.lookupDecision(digest)).resolves.toBe("pending");
       }
     } finally {
-      commandAuthority.release();
+      releaseCommand();
     }
-    await expect(stores.reviews.decide(review.approvalDigest, true)).resolves.toMatchObject({
+    await expect(reviews.decide(digest, true)).resolves.toMatchObject({
       id: review.id,
       direction: "outbound",
     });
-    await expect(stores.reviews.decide("c".repeat(64), true)).resolves.toBeUndefined();
+    await expect(reviews.decide("c".repeat(64), true)).resolves.toBeUndefined();
     const pendingReview = { ...review, id: "pending", approvalDigest: "d".repeat(64) };
-    await stores.reviews.request(pendingReview);
-    const reopened = await openStores(reopen(), keys);
+    await reviews.request(pendingReview);
+    const { reviews: restored } = await openStores(reopen(), keys);
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
-    const observation = observeHostDataSql();
-    const sql = observation.calls;
-    await expect(reopened.reviews.lookupDecision(review.approvalDigest)).resolves.toEqual({
+    const sql = observeHostDataSql().calls;
+    await expect(restored.lookupDecision(digest)).resolves.toEqual({
       approved: true,
     });
-    await expect(reopened.reviews.lookupDecision(pendingReview.approvalDigest)).resolves.toBe(
-      "pending",
-    );
-    await expect(reopened.reviews.lookupDecision("c".repeat(64))).resolves.toBe("none");
-    await expect(reopened.reviews.list()).resolves.toEqual([pendingReview]);
-    const listReviews = registerReviewListCommand();
-    const authority = createReefRuntimeAuthority();
-    activateReviewStore(authority, reopen(), reopened.reviews);
+    await expect(restored.lookupDecision(pendingReview.approvalDigest)).resolves.toBe("pending");
+    await expect(restored.lookupDecision("c".repeat(64))).resolves.toBe("none");
+    await expect(restored.list()).resolves.toEqual([pendingReview]);
+    const releaseList = activateReviewStore(restored);
     try {
-      await expect(listReviews()).resolves.toEqual({
+      await expect(handleReefCommand({ args: "review list" })).resolves.toEqual({
         text: `${pendingReview.approvalDigest} outbound alice#1 -> bob#1 ambiguous`,
       });
     } finally {
-      authority.release();
+      releaseList();
     }
     assertNoHostSql(sql, true);
-    await expect(reopened.reviews.request(review)).resolves.toEqual({
+    await expect(restored.request(review)).resolves.toEqual({
       approved: true,
-      approvalDigest: review.approvalDigest,
+      approvalDigest: digest,
     });
-    await stores.delivered.confirm(receiptId);
+    await delivered.confirm(receiptId);
     await expect((await openStores(reopen(), keys)).delivered.status(receiptId)).resolves.toBe(
       "delivered",
     );
@@ -545,12 +505,8 @@ describe("Reef SQLite state", () => {
       const finalRevocation = sibling.decide(review.approvalDigest, false);
       const observed = reviews.lookupDecision(review.approvalDigest);
       pending.push(reapproval, finalRevocation, observed);
-      expect(await Promise.all([revocation, reapproval, finalRevocation, observed])).toEqual([
-        review,
-        review,
-        review,
-        { approved: false },
-      ]);
+      const settled = await Promise.all([revocation, reapproval, finalRevocation, observed]);
+      expect(settled).toEqual([review, review, review, { approved: false }]);
     } finally {
       await Promise.allSettled(pending);
     }
@@ -604,7 +560,6 @@ describe("Reef SQLite state", () => {
   });
 
   it("fails when a delivered marker claim does not persist", async () => {
-    const keys = reefKeys();
     const openKeyedStore = runtime.state.openKeyedStoreV2;
     runtime.state.openKeyedStoreV2 = <T>(
       options: OpenAsyncKeyedStoreOptions,
@@ -615,9 +570,9 @@ describe("Reef SQLite state", () => {
         : store;
     };
 
-    await expect((await openStores(runtime, keys)).delivered.confirm(receiptId)).rejects.toThrow(
-      "Failed persisting Reef delivered marker",
-    );
+    await expect(
+      (await openStores(runtime, reefKeys())).delivered.confirm(receiptId),
+    ).rejects.toThrow("Failed persisting Reef delivered marker");
   });
 
   it("deduplicates concurrent pending reviews and evicts only completed decisions at capacity", async () => {
@@ -647,8 +602,7 @@ describe("Reef SQLite state", () => {
 
 describe("Reef delivered markers", () => {
   it("confirms delivered markers idempotently", async () => {
-    const observation = observeHostDataSql();
-    const sql = observation.calls;
+    const sql = observeHostDataSql().calls;
     const delivered = new ReefDeliveredStore(reopen());
     await expect(delivered.status("m1")).resolves.toBeUndefined();
     await delivered.confirm("m1");
