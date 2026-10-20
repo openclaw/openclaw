@@ -3,6 +3,9 @@ import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createSessionObserverCompletion } from "./session-observer-completion.js";
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import { observerState } from "./session-observer-state.test-support.js";
@@ -16,15 +19,30 @@ import {
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  vi.useFakeTimers();
+  setGatewayPluginMetadataSnapshot(
+    createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "openai",
+          modelIdNormalization: {
+            providers: { openai: { aliases: { "private-manifest-alias": "gpt-test" } } },
+          },
+        },
+      ],
+    }),
+  );
+});
 
 afterEach(() => {
   vi.useRealTimers();
   resetSessionObserverEventSequence();
   resetSecretRedactionRegistryForTest();
+  setCurrentPluginMetadataSnapshot(undefined);
 });
 
-it.each(["exact tool cap", "invalid schema"])(
+it.each(["exact tool cap", "invalid schema", "manifest alias"])(
   "warns once when %s failures disable observation, and retries on the next run",
   async (failure) => {
     vi.setSystemTime(0);
@@ -51,9 +69,11 @@ it.each(["exact tool cap", "invalid schema"])(
         agents: {
           defaults: {
             utilityModel:
-              failure === "exact tool cap"
-                ? "openai/gpt-test@private-profile"
-                : "private-utility-alias@private-profile",
+              failure === "manifest alias"
+                ? "openai/private-manifest-alias@private-profile"
+                : failure === "exact tool cap"
+                  ? "openai/gpt-test@private-profile"
+                  : "private-utility-alias@private-profile",
             models: { "openai/gpt-test": { alias: "private-utility-alias" } },
           },
         },
@@ -81,6 +101,7 @@ it.each(["exact tool cap", "invalid schema"])(
       expect(notices[0]?.data.message).toContain("utilityModel.fallbacks");
       expect(notices[0]?.data.message).not.toContain("private-profile");
       expect(notices[0]?.data.message).not.toContain("private-utility-alias");
+      expect(notices[0]?.data.message).not.toContain("private-manifest-alias");
       const callsAtDisable = prepareModel.mock.calls.length + completeModel.mock.calls.length;
       await harness.observer.handleEventAsync(
         event({ stream: "tool", data: { phase: "start", name: "read", args: { path: "more" } } }),

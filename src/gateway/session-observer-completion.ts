@@ -33,7 +33,6 @@ export function reportSessionObserverDegradation(
     agentId: state.agentId,
     modelRef: state.utilityModelRef,
     useUtilityModel: "required",
-    manifestPlugins: [],
   });
   const modelLabel = selection ? ` "${selection.provider}/${selection.modelId}"` : "";
   const notice = {
