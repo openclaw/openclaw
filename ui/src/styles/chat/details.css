@@ -1,4 +1,6 @@
-openclaw-chat-details {
+openclaw-chat-details,
+openclaw-chat-details-session,
+openclaw-chat-details-progress {
   display: block;
   min-width: 0;
 }
@@ -7,7 +9,9 @@ openclaw-chat-details[mobile] {
   display: contents;
 }
 
-.chat-details-toggle[hidden] {
+.chat-details-toggle[hidden],
+.chat-gutter-header[hidden],
+.chat-details[hidden] {
   display: none;
 }
 
@@ -24,10 +28,6 @@ openclaw-chat-details[mobile] {
   align-items: start;
   width: 100%;
   pointer-events: none;
-}
-
-.chat-gutter-header[hidden] {
-  display: none;
 }
 
 .chat-gutter-header .chat-topbar-notices {
@@ -59,11 +59,6 @@ openclaw-chat-details[mobile] {
   }
 }
 
-openclaw-chat-details-session,
-openclaw-chat-details-progress {
-  display: block;
-  min-width: 0;
-}
 .chat-details-toggle {
   display: inline-flex;
   align-items: center;
@@ -101,9 +96,6 @@ openclaw-chat-details-progress {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   font-size: 12px;
-}
-.chat-details[hidden] {
-  display: none;
 }
 .chat-details--docked {
   position: absolute;
@@ -328,13 +320,16 @@ openclaw-chat-details-progress {
   color: var(--muted);
   font-size: 11px;
 }
-.chat-details__agent-avatar {
+.chat-details__agent-avatar,
+.chat-details__process-icon {
   display: grid;
   place-items: center;
-  flex: none;
   width: 22px;
   height: 22px;
   border-radius: 7px;
+}
+.chat-details__agent-avatar {
+  flex: none;
   color: hsl(var(--chat-details-avatar-hue) 32% 65%);
   background: hsl(var(--chat-details-avatar-hue) 22% 30% / 0.35);
 }
@@ -348,7 +343,8 @@ openclaw-chat-details-progress {
   padding: 0;
 }
 /* Avatar beside two lines: name and elapsed, then live activity and plan steps. */
-.chat-details .chat-subagent-activity__row {
+.chat-details .chat-subagent-activity__row,
+.chat-details__process {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
@@ -403,7 +399,8 @@ openclaw-chat-details-progress {
 .chat-details__agent-avatar[data-status] {
   position: relative;
 }
-.chat-details__agent-avatar[data-status]::after {
+.chat-details__agent-avatar[data-status]::after,
+.chat-details__process-icon::after {
   content: "";
   position: absolute;
   inset-block-end: -2px;
@@ -414,7 +411,8 @@ openclaw-chat-details-progress {
   border-radius: 50%;
   background: var(--muted);
 }
-.chat-details__agent-avatar[data-status="running"]::after {
+.chat-details__agent-avatar[data-status="running"]::after,
+.chat-details__process-icon[data-status="running"]::after {
   background: var(--info);
   animation: chat-details-pulse 1.6s ease-in-out infinite;
 }
@@ -486,54 +484,30 @@ openclaw-chat-details-progress {
   background-size: 200% 100%;
   animation: chat-details-flow 1.8s linear infinite;
 }
-.chat-details__process {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
-  column-gap: 8px;
-  row-gap: 1px;
-  align-items: center;
-  min-height: 30px;
+.chat-details__process,
+.chat-details__more {
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--text);
   font: inherit;
   font-size: 12px;
   text-align: start;
+}
+.chat-details__process {
+  color: var(--text);
 }
 button.chat-details__process:is(:hover, :focus-visible) {
   background: var(--bg-hover);
 }
 .chat-details__process-icon {
-  display: grid;
   grid-row: 1 / span 2;
-  place-items: center;
   position: relative;
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
   color: var(--muted);
   background: var(--bg-hover);
 }
 .chat-details__process-icon > svg {
   width: 13px;
   height: 13px;
-}
-.chat-details__process-icon::after {
-  content: "";
-  position: absolute;
-  inset-block-end: -2px;
-  inset-inline-end: -2px;
-  width: 7px;
-  height: 7px;
-  border: 2px solid var(--panel);
-  border-radius: 50%;
-  background: var(--muted);
-}
-.chat-details__process-icon[data-status="running"]::after {
-  background: var(--info);
-  animation: chat-details-pulse 1.6s ease-in-out infinite;
 }
 .chat-details__process-name,
 .chat-details__process-tail {
@@ -553,13 +527,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-details__more {
   display: block;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
   color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  text-align: start;
 }
 .chat-details__more:is(:hover, :focus-visible) {
   color: var(--text);

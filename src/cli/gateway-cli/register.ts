@@ -5,7 +5,6 @@ import { colorize, isRich, theme } from "../../../packages/terminal-core/src/the
 import type { HealthSummary } from "../../commands/health.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
-import type { DiagnosticStabilityBundle } from "../../logging/diagnostic-stability-bundle.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
@@ -181,79 +180,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
     }
   }
 
-  return lines;
-}
-
-function renderStabilityBundleSummary(params: {
-  bundle: DiagnosticStabilityBundle;
-  path: string;
-  snapshot: DiagnosticStabilitySnapshot;
-  rich: boolean;
-}): string[] {
-  const { bundle, path, rich, snapshot } = params;
-  const processDetails = [
-    `pid=${bundle.process.pid}`,
-    ...(bundle.process.openclawVersion ? [`openclaw=${bundle.process.openclawVersion}`] : []),
-    ...(bundle.process.buildId ? [`build=${bundle.process.buildId}`] : []),
-    ...(bundle.process.commit ? [`commit=${bundle.process.commit}`] : []),
-    `node=${bundle.process.node}`,
-    `${bundle.process.platform}/${bundle.process.arch}`,
-    `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,
-  ].join(" ");
-  const lines = [
-    colorize(rich, theme.heading, "Stability bundle"),
-    `${colorize(rich, theme.muted, "Path:")} ${path}`,
-    `${colorize(rich, theme.muted, "Generated:")} ${bundle.generatedAt}`,
-    `${colorize(rich, theme.muted, "Reason:")} ${bundle.reason}`,
-    `${colorize(rich, theme.muted, "Process:")} ${processDetails}`,
-    `${colorize(rich, theme.muted, "Host:")} ${bundle.host.hostname}`,
-  ];
-  if (bundle.error) {
-    const errorParts = [
-      bundle.error.name ? `name=${bundle.error.name}` : "",
-      bundle.error.code ? `code=${bundle.error.code}` : "",
-    ].filter(Boolean);
-    if (errorParts.length > 0) {
-      lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
-    }
-  }
-  const memoryPressure = bundle.evidence?.memoryPressure;
-  if (memoryPressure) {
-    lines.push(
-      `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
-        memoryPressure.reason
-      } rss=${formatStabilityBytes(memoryPressure.memory.rssBytes)} heap=${formatStabilityBytes(
-        memoryPressure.memory.heapUsedBytes,
-      )} threshold=${formatStabilityBytes(memoryPressure.thresholdBytes)}`,
-    );
-    if (memoryPressure.heapStatistics) {
-      lines.push(
-        `${colorize(rich, theme.muted, "V8 heap:")} used=${formatStabilityBytes(
-          memoryPressure.heapStatistics.usedHeapSizeBytes,
-        )} limit=${formatStabilityBytes(
-          memoryPressure.heapStatistics.heapSizeLimitBytes,
-        )} available=${formatStabilityBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
-      );
-    }
-    if (memoryPressure.activeResources) {
-      const resources = Object.entries(memoryPressure.activeResources.byType)
-        .map(([type, count]) => `${type}=${count}`)
-        .join(", ");
-      lines.push(
-        `${colorize(rich, theme.muted, "Active resources:")} total=${
-          memoryPressure.activeResources.total
-        }${resources ? ` · ${resources}` : ""}`,
-      );
-    }
-    if (memoryPressure.topSessionFiles?.length) {
-      const files = memoryPressure.topSessionFiles
-        .slice(0, 5)
-        .map((file) => `${file.relativePath}=${formatStabilityBytes(file.sizeBytes)}`)
-        .join(", ");
-      lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
-    }
-  }
-  lines.push("", ...renderStabilitySummary(snapshot, rich));
   return lines;
 }
 
@@ -583,13 +509,75 @@ export function registerGatewayCli(program: Command) {
                   snapshot,
                 },
               },
-              (rich) =>
-                renderStabilityBundleSummary({
-                  bundle: result.bundle,
-                  path: result.path,
-                  rich,
-                  snapshot,
-                }),
+              (rich) => {
+                const { bundle, path } = result;
+                const processDetails = [
+                  `pid=${bundle.process.pid}`,
+                  ...(bundle.process.openclawVersion
+                    ? [`openclaw=${bundle.process.openclawVersion}`]
+                    : []),
+                  ...(bundle.process.buildId ? [`build=${bundle.process.buildId}`] : []),
+                  ...(bundle.process.commit ? [`commit=${bundle.process.commit}`] : []),
+                  `node=${bundle.process.node}`,
+                  `${bundle.process.platform}/${bundle.process.arch}`,
+                  `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,
+                ].join(" ");
+                const lines = [
+                  colorize(rich, theme.heading, "Stability bundle"),
+                  `${colorize(rich, theme.muted, "Path:")} ${path}`,
+                  `${colorize(rich, theme.muted, "Generated:")} ${bundle.generatedAt}`,
+                  `${colorize(rich, theme.muted, "Reason:")} ${bundle.reason}`,
+                  `${colorize(rich, theme.muted, "Process:")} ${processDetails}`,
+                  `${colorize(rich, theme.muted, "Host:")} ${bundle.host.hostname}`,
+                ];
+                if (bundle.error) {
+                  const errorParts = [
+                    bundle.error.name ? `name=${bundle.error.name}` : "",
+                    bundle.error.code ? `code=${bundle.error.code}` : "",
+                  ].filter(Boolean);
+                  if (errorParts.length > 0) {
+                    lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
+                  }
+                }
+                const memoryPressure = bundle.evidence?.memoryPressure;
+                if (memoryPressure) {
+                  lines.push(
+                    `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
+                      memoryPressure.reason
+                    } rss=${formatStabilityBytes(memoryPressure.memory.rssBytes)} heap=${formatStabilityBytes(
+                      memoryPressure.memory.heapUsedBytes,
+                    )} threshold=${formatStabilityBytes(memoryPressure.thresholdBytes)}`,
+                  );
+                  if (memoryPressure.heapStatistics) {
+                    lines.push(
+                      `${colorize(rich, theme.muted, "V8 heap:")} used=${formatStabilityBytes(
+                        memoryPressure.heapStatistics.usedHeapSizeBytes,
+                      )} limit=${formatStabilityBytes(
+                        memoryPressure.heapStatistics.heapSizeLimitBytes,
+                      )} available=${formatStabilityBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
+                    );
+                  }
+                  if (memoryPressure.activeResources) {
+                    const resources = Object.entries(memoryPressure.activeResources.byType)
+                      .map(([type, count]) => `${type}=${count}`)
+                      .join(", ");
+                    lines.push(
+                      `${colorize(rich, theme.muted, "Active resources:")} total=${
+                        memoryPressure.activeResources.total
+                      }${resources ? ` · ${resources}` : ""}`,
+                    );
+                  }
+                  if (memoryPressure.topSessionFiles?.length) {
+                    const files = memoryPressure.topSessionFiles
+                      .slice(0, 5)
+                      .map((file) => `${file.relativePath}=${formatStabilityBytes(file.sizeBytes)}`)
+                      .join(", ");
+                    lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
+                  }
+                }
+                lines.push("", ...renderStabilitySummary(snapshot, rich));
+                return lines;
+              },
             );
             return;
           }
