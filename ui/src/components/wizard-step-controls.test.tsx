@@ -71,7 +71,7 @@ it("retains a channel draft through validation, submits it, and resets on a new 
   const [validationError, setValidationError] = createSignal<string>();
   const [stepId, setStepId] = createSignal("account");
   const { container, answer } = mountStep(step("text"), () => ({
-    get step() {
+    get step(): WizardStep {
       return { id: stepId(), type: "text", message: "Account name" };
     },
     value: "",

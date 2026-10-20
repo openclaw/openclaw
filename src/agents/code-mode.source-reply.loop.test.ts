@@ -315,12 +315,18 @@ it.for([
       inner.release.resolve();
       outer.release.resolve();
       agent.abort();
-      await running.finally(resetCodeModeTestState).finally(() => {
-        unsubscribe();
-        harness.dispose();
-        vi.restoreAllMocks();
-        clearRuntimeConfigSnapshot();
-      });
+      try {
+        await running;
+      } finally {
+        try {
+          await resetCodeModeTestState();
+        } finally {
+          unsubscribe();
+          harness.dispose();
+          vi.restoreAllMocks();
+          clearRuntimeConfigSnapshot();
+        }
+      }
     }
   });
 });

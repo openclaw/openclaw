@@ -1,4 +1,4 @@
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   listActiveDegradedSecretOwners,
   SecretSurfaceUnavailableError,
@@ -15,7 +15,10 @@ export type CredentialReloadHarnessOptions = {
 type CredentialReloadHarness = {
   owner: DegradedSecretOwner;
   reload: () => Promise<void>;
-} & Record<"respond" | "startChannel" | "stopChannel" | "isManuallyStopped", Mock>;
+} & Record<
+  "respond" | "startChannel" | "stopChannel" | "isManuallyStopped",
+  ReturnType<typeof vi.fn>
+>;
 
 export function registerGatewaySecretCredentialReloadCases(
   createHarness: (options?: CredentialReloadHarnessOptions) => CredentialReloadHarness,

@@ -110,7 +110,8 @@ it.each([
     await refreshPane(pane);
     await refreshChatModelCatalogOnDemand(pane.state);
     const container = document.createElement("div");
-    const query = <T extends HTMLElement>(selector: string) => container.querySelector<T>(selector);
+    const query = <T extends HTMLElement>(selector: string): T | null =>
+      container.querySelector<T>(selector);
     const controlValues = () => {
       const effort = query("[data-chat-thinking-select]");
       return {

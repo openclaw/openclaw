@@ -77,12 +77,14 @@ it.each([false, true])(
       `import { value as hostLegacyValue } from 'openclaw/plugin-sdk/agent-runtime';
        export const value = hostLegacyValue === 'deprecated' ? 'active' : 'broken';`,
     );
-    const entries = [
-      ["synthetic-source", "index.ts", `export { value } from '${legacy}';`],
-      ["synthetic-commonjs", "index.cjs", `module.exports = require('${legacy}');`],
-      ["synthetic-deferred", "index.ts", `export const read = () => import('${legacy}');`],
-      ["synthetic-active", "index.ts", `export { value } from '${active}';`],
-    ].map(([id, source, body]) => {
+    const entries = (
+      [
+        ["synthetic-source", "index.ts", `export { value } from '${legacy}';`],
+        ["synthetic-commonjs", "index.cjs", `module.exports = require('${legacy}');`],
+        ["synthetic-deferred", "index.ts", `export const read = () => import('${legacy}');`],
+        ["synthetic-active", "index.ts", `export { value } from '${active}';`],
+      ] as const
+    ).map(([id, source, body]) => {
       const directory = path.join(root, id);
       write(directory, "package.json", { name: id, type: "module" });
       return { id, directory, entry: write(directory, source, body) };

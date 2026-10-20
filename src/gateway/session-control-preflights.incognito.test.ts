@@ -39,7 +39,7 @@ beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-control-preflights-") };
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   setRuntimeConfigSnapshot(cfg, cfg);
-  const entry = { sessionId, updatedAt: 1, incognito: true };
+  const entry = { sessionId, updatedAt: 1, incognito: true as const };
   const created = await withSessionActorStorage(
     { agentId: "main", sessionKey, storePath: location().path, env },
     { create: true, authority, lifetime: { assertCurrent() {}, assertReadable() {} } },

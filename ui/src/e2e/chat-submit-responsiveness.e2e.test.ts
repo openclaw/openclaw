@@ -83,6 +83,7 @@ suite.define(() => {
         order.push(value);
         textarea.dataset.submitTaskOrder = JSON.stringify(order);
       };
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the socket receiver below.
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function (data) {
         if (

@@ -175,7 +175,9 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
     });
     const operationalRunInstance = createOperationalRunInstanceRef(identity.runId);
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    resources.defer(() => releaseAgentRunDelegatedAuthority(authority));
+    resources.defer(() => {
+      releaseAgentRunDelegatedAuthority(authority);
+    });
     const capability = mintMessageActionTurnCapability({
       ...identity,
       requesterAccountId: "default",
@@ -187,7 +189,9 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
         currentSourceTurnId: sourceTurnId,
       },
     });
-    resources.defer(() => revokeMessageActionTurnCapability(capability));
+    resources.defer(() => {
+      revokeMessageActionTurnCapability(capability);
+    });
     const context = makeContext(() => cfg);
     context.validateAgentRuntimeApprovalAuthority = createAgentRuntimeApprovalAuthorityValidator();
     const handler = expectDefined(sendHandlers["message.action"], "Gateway message.action handler");

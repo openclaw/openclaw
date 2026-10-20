@@ -76,7 +76,7 @@ function draw(queue: ChatQueueItem[], editingId?: string, onQueueMove?: QueuePro
           presented: () => true,
           read: () => current,
         });
-        invalidate = lifecycle.invalidate;
+        invalidate = () => lifecycle.invalidate();
         return createComponent(renderChatQueueSolid, merge(lifecycle.snapshot));
       },
       { container },

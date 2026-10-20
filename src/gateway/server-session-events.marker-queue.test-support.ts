@@ -127,7 +127,7 @@ export function registerTranscriptMarkerQueueTests() {
       ]);
     try {
       if (keyedFirst) {
-        enqueue("earlier", {
+        void enqueue("earlier", {
           target: { agentId: "main", sessionId: "sess-main", sessionKey: "global", storePath },
         });
         await waitForGate(earlierReadEntered.promise, tasks[0]!, "Earlier read did not start");
@@ -145,7 +145,7 @@ export function registerTranscriptMarkerQueueTests() {
         releaseMembership.resolve();
         await waitForPublication();
       }
-      enqueue("later", {
+      void enqueue("later", {
         sessionKey: "agent:main:global",
         ...(differentStore ? { target: otherTarget } : {}),
         messageSeq: 3,
