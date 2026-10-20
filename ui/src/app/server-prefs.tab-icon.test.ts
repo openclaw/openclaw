@@ -4,12 +4,12 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
+import { resolveServerUiPrefState, extractServerUiPrefs } from "./server-prefs-reconcile.ts";
 import {
-  refreshProfileAppearancePrefs,
-  resolveServerUiPrefState,
-  extractServerUiPrefs,
-} from "./server-prefs-reconcile.ts";
-import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
+  configWithPrefs,
+  createServerPrefsWriter,
+  refreshServerPrefsProfile,
+} from "./server-prefs.test-support.ts";
 import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.ts";
 
@@ -70,13 +70,7 @@ describe("tab icon preference ownership", () => {
     });
     const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
     const config = configWithPrefs({});
-    await refreshProfileAppearancePrefs({
-      client: writer.state.client!,
-      profileId,
-      configObject: config,
-      scope,
-      onApplied: vi.fn(),
-    });
+    await refreshServerPrefsProfile(writer, profileId, config);
     request.mockClear();
     patchSettings({ ...appearance, fontUi: undefined, fontChat: undefined, tabIcon });
     let commits = 0;
@@ -91,14 +85,10 @@ describe("tab icon preference ownership", () => {
       { profileId, canWrite: true, afterCommit },
     );
     await iconStarted.promise;
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["themes.set", "users.prefs.set"]);
-    expect(request).toHaveBeenNthCalledWith(1, "themes.set", {
-      id: "dash",
-      appearance: { accent: "theme", fontUi: null, fontChat: null },
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "users.prefs.set", {
-      entries: { "ui.tabIcon": tabIcon },
-    });
+    expect(request.mock.calls).toEqual([
+      ["themes.set", { id: "dash", appearance: { accent: "theme", fontUi: null, fontChat: null } }],
+      ["users.prefs.set", { entries: { "ui.tabIcon": tabIcon } }],
+    ]);
     expect(stored(pendingKey)).toEqual({ tabIcon });
     expect(provenance(config)).toBe("pending");
     iconReply.resolve({ status: "no_durable_identity" });

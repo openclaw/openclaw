@@ -25,7 +25,6 @@ it("preserves a routed page's focused draft through loader updates and retryable
           value={draft()}
           onInput={(event) => setDraft(event.currentTarget.value)}
         />
-        <output>{draft()}</output>
         <p>
           {String(props.data)} / {props.loaderPending ? "loading" : "ready"}
         </p>
@@ -38,23 +37,14 @@ it("preserves a routed page's focused draft through loader updates and retryable
   }
   const reload = createDeferredCore<string>();
   const failingReload = createDeferredCore<string>();
-  let loads = 0;
+  const replies = ["Initial", reload.promise, failingReload.promise];
   const router: TestRouter = createRouter({
     routes: [
       definePage({
         id: "page",
         path: "/page",
         component: () => ({ renderSolid: FirstPage }),
-        loader: (context) => {
-          loads += 1;
-          return loads === 1
-            ? "Initial"
-            : loads === 2
-              ? reload.promise
-              : loads === 3
-                ? failingReload.promise
-                : `Recovered ${context.label}`;
-        },
+        loader: (context) => replies.shift() ?? `Recovered ${context.label}`,
       }),
       definePage({
         id: "next",

@@ -14,6 +14,10 @@ export function configWithPrefs(prefs: Record<string, unknown>) {
   return { ui: { prefs } };
 }
 
+function mutationFailure(reason: "unavailable" | "conflict" | "rejected" | "error", error: string) {
+  return { ok: false as const, reason, error };
+}
+
 export function createServerPrefsWriter(
   request: RequestMock,
   gatewayUrl = "ws://gw",
@@ -30,37 +34,24 @@ export function createServerPrefsWriter(
       options?: RuntimeConfigExternalMutationOptions<T>,
     ) => {
       if (!writer.state.connected) {
-        return {
-          ok: false as const,
-          reason: "unavailable" as const,
-          error: "offline",
-        };
+        return mutationFailure("unavailable", "offline");
       }
       if (options?.canDispatch && !options.canDispatch()) {
-        return {
-          ok: false as const,
-          reason: "unavailable" as const,
-          error: options.dispatchError ?? "dispatch blocked",
-        };
+        return mutationFailure("unavailable", options.dispatchError ?? "dispatch blocked");
       }
       try {
-        return {
-          ok: true as const,
-          value: await task(client),
-          refresh,
-        };
+        return { ok: true as const, value: await task(client), refresh };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return {
-          ok: false as const,
-          reason: message.includes("config changed since last load")
-            ? ("conflict" as const)
+        return mutationFailure(
+          message.includes("config changed since last load")
+            ? "conflict"
             : error instanceof GatewayRequestError &&
                 (error.gatewayCode === "INVALID_REQUEST" || error.gatewayCode === "FORBIDDEN")
-              ? ("rejected" as const)
-              : ("error" as const),
-          error: message,
-        };
+              ? "rejected"
+              : "error",
+          message,
+        );
       }
     },
   };
@@ -96,15 +87,7 @@ export function createProfilePrefsServer(
       },
     );
     const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-    const refresh = () =>
-      refreshProfileAppearancePrefs({
-        client: writer.state.client!,
-        profileId,
-        configObject: config,
-        scope,
-        onApplied: vi.fn(),
-      });
-    return { writer, request, refresh };
+    return { writer, request, refresh: () => refreshServerPrefsProfile(writer, profileId, config) };
   };
   return { profiles, connect };
 }

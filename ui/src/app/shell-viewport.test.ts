@@ -19,10 +19,13 @@ function flush() {
     callback(0);
   }
 }
-function resize(values: Partial<typeof viewport>, event = "resize") {
+function resize(values: Partial<typeof viewport>, expected?: [string, string?], event = "resize") {
   Object.assign(viewport, values);
   viewport.dispatchEvent(new Event(event));
   flush();
+  if (expected) {
+    expectViewport(...expected);
+  }
 }
 function editor(shadow = false) {
   const input = document.createElement("textarea");
@@ -35,6 +38,11 @@ function editor(shadow = false) {
   }
   input.focus();
   return input;
+}
+
+function connectEditor(shadow = false) {
+  disconnect = connectShellViewport();
+  return editor(shadow);
 }
 
 beforeEach(() => {
@@ -88,43 +96,34 @@ describe("shell visual viewport", () => {
         }
         expectViewport(`${next}px`);
         if (next === 782) {
-          resize({ height: 770, offsetTop: 12 }, "scroll");
-          expectViewport("782px");
+          resize({ height: 770, offsetTop: 12 }, ["782px"], "scroll");
         }
       }
     },
   );
 
-  it.each([false, true])(
-    "tracks keyboard pan and dismissal with retained focus (shadow: %s)",
-    (shadow) => {
-      disconnect = connectShellViewport();
-      const input = editor(shadow);
-      resize({ height: 480 });
-      expectViewport("480px", "0px");
-      resize({ height: 440, offsetTop: 70 }, "scroll");
-      expect(viewportHeight()).toBe("510px");
-      resize({ height: 844, offsetTop: 0 });
-      expectViewport("844px");
+  it.each(["light", "shadow", "resizing"])(
+    "tracks keyboard geometry and dismissal with retained %s focus",
+    (mode) => {
+      const input = connectEditor(mode === "shadow");
+      if (mode === "resizing") {
+        // The browser can resize both viewports before the first focus frame.
+        vi.stubGlobal("innerHeight", 480);
+      }
+      resize({ height: 480 }, ["480px", "0px"]);
+      if (mode === "resizing") {
+        vi.stubGlobal("innerHeight", 844);
+      } else {
+        resize({ height: 440, offsetTop: 70 }, undefined, "scroll");
+        expect(viewportHeight()).toBe("510px");
+      }
+      resize({ height: 844, offsetTop: 0 }, ["844px"]);
       expect(input.matches(":focus")).toBe(true);
     },
   );
 
-  it("captures focus before a content-resizing keyboard and restores its inset", () => {
-    disconnect = connectShellViewport();
-    editor();
-    // The browser can resize both viewports before the first focus frame.
-    vi.stubGlobal("innerHeight", 480);
-    resize({ height: 480 });
-    expectViewport("480px", "0px");
-    vi.stubGlobal("innerHeight", 844);
-    resize({ height: 844 });
-    expectViewport("844px");
-  });
-
   it("does not carry portrait keyboard geometry into landscape", () => {
-    disconnect = connectShellViewport();
-    editor();
+    connectEditor();
     resize({ height: 480 });
     vi.stubGlobal("innerWidth", 844);
     vi.stubGlobal("innerHeight", 390);
@@ -132,23 +131,19 @@ describe("shell visual viewport", () => {
     window.dispatchEvent(new Event("orientationchange"));
     flush();
     expectViewport("390px");
-    resize({ height: 210 });
-    expectViewport("210px", "0px");
+    resize({ height: 210 }, ["210px", "0px"]);
   });
 
   it("leaves pinch zoom and panning to the browser, including while focused", () => {
-    disconnect = connectShellViewport();
-    editor();
+    connectEditor();
     resize({ height: 480 });
-    resize({ height: 422, scale: 2, offsetTop: 50 });
-    expectViewport("");
+    resize({ height: 422, scale: 2, offsetTop: 50 }, [""]);
     resize({ height: 480, scale: 1, offsetTop: 0 });
     expect(viewportHeight()).toBe("480px");
   });
 
   it("coalesces events, removes root overrides, and releases every listener on disconnect", () => {
-    disconnect = connectShellViewport();
-    editor();
+    connectEditor();
     viewport.dispatchEvent(new Event("resize"));
     viewport.dispatchEvent(new Event("scroll"));
     window.dispatchEvent(new Event("resize"));
@@ -170,8 +165,7 @@ describe("shell visual viewport", () => {
 
   it("retains the CSS fallback without VisualViewport", () => {
     vi.stubGlobal("visualViewport", undefined);
-    disconnect = connectShellViewport();
-    editor();
+    connectEditor();
     window.dispatchEvent(new Event("resize"));
     expectViewport("");
     expect(frames.size).toBe(0);

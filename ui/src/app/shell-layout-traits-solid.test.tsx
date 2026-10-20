@@ -35,6 +35,22 @@ function createShell(nested = false) {
 const bounds = { left: 44, right: 284, top: 756, bottom: 800 };
 const footerRect = () => new DOMRect(60, 760, 600, 80);
 
+function Measure(props: {
+  source: () => boolean;
+  content: () => HTMLElement;
+  observations: string[];
+}) {
+  const record = () => {
+    props.observations.push(props.content().className);
+  };
+  onSettled(record);
+  createEffect(
+    () => props.source(),
+    () => record(),
+  );
+  return <span>Measured</span>;
+}
+
 it("renders standalone settings without a shell layout owner", () => {
   const view = render(() => (
     <SettingsWorkspace>
@@ -129,20 +145,11 @@ it("publishes settings layout before mounted descendants measure updates", () =>
   const { content, mount } = createShell(true);
   const [wide, setWide] = createSignal(true);
   const observations: string[] = [];
-  function Measure() {
-    onSettled(() => {
-      observations.push(content.className);
-    });
-    createEffect(wide, () => {
-      observations.push(content.className);
-    });
-    return <span>Measured</span>;
-  }
   mount(() => (
     <SettingsWorkspace>
       <SettingsPage wide={wide()}>
         <SettingsPageHeader title="Settings" />
-        <Measure />
+        <Measure source={wide} content={() => content} observations={observations} />
       </SettingsPage>
     </SettingsWorkspace>
   ));
@@ -164,15 +171,6 @@ it("keeps layout traits through shell class updates and retires them with their 
   const [shown, setShown] = createSignal(true);
   let content!: HTMLElement;
   const measurements: string[] = [];
-  function Measure() {
-    onSettled(() => {
-      measurements.push(content.className);
-    });
-    createEffect(chat, () => {
-      measurements.push(content.className);
-    });
-    return <span>Measured</span>;
-  }
   render(() => (
     <main
       class={["content", { "content--chat": chat() }]}
@@ -192,7 +190,7 @@ it("keeps layout traits through shell class updates and retires them with their 
         <Show when={shown()}>
           <SettingsPage wide>
             <SettingsPageHeader title="Settings" />
-            <Measure />
+            <Measure source={chat} content={() => content} observations={measurements} />
           </SettingsPage>
         </Show>
       </ShellLayoutProvider>

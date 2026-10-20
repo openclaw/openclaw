@@ -13,10 +13,10 @@ const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope + ":profil
 const hooks = { profileId: "a", canWrite: true };
 const store = (key: string, value: unknown) => localStorage.setItem(key, JSON.stringify(value));
 const stored = (key: string) => JSON.parse(localStorage.getItem(key)!);
-const setConnected = (
-  connection: ReturnType<ReturnType<typeof createProfilePrefsServer>["connect"]>,
-  connected: boolean,
-) => Object.assign(connection.writer.state, { connected });
+function connect(entries: Record<string, unknown> = {}) {
+  const server = createProfilePrefsServer({ a: entries });
+  return { ...server, ...server.connect("a") };
+}
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   resetServerUiPrefsSync();
@@ -28,56 +28,43 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(["empty", "order"])(
-  "folds newly persisted sibling pins into an adopted %s writer",
-  async (mode) => {
-    const backend = createProfilePrefsServer({
-      a: {
-        [pins]: mode === "order" ? ["route:cron", "route:usage"] : ["route:usage"],
-      },
-    });
-    const b = backend.connect("a");
+it.each(["empty", "order", "reconnect"])("adopts sibling pins across %s writes", async (mode) => {
+  const b = connect({
+    [pins]: mode === "order" ? ["route:cron", "route:usage"] : ["route:usage"],
+  });
+  if (mode !== "reconnect") {
     await b.refresh();
-    setConnected(b, false);
-    flushServerUiPrefs(b.writer, hooks);
-    // Another realm persists its offline addition after B adopted an empty pin pool.
-    store(pendingKey, {
-      railShortcuts: ["route:usage", "route:cron"],
-      railShortcutsBase: mode === "order" ? ["route:usage", "route:cron"] : ["route:usage"],
-      ...(mode === "order" ? { railShortcutsOrder: true } : {}),
-    });
+  }
+  b.writer.state.connected = false;
+  flushServerUiPrefs(b.writer, hooks);
+  // Another realm persists its offline addition after B adopted an empty pin pool.
+  const pending = {
+    railShortcuts: ["route:usage", "route:cron"],
+    railShortcutsBase: mode === "order" ? ["route:usage", "route:cron"] : ["route:usage"],
+    ...(mode === "order" ? { railShortcutsOrder: true } : {}),
+  };
+  store(pendingKey, pending);
+  if (mode !== "reconnect") {
     patchSettings({ sidebarEntries: ["route:usage", "route:cron"] });
     const before = loadSettings();
     const next = patchSettings({ sidebarEntries: [...before.sidebarEntries, "route:plugins"] });
     pushServerUiPrefs(b.writer, changedServerUiPrefs(before, next)!, hooks);
     await vi.dynamicImportSettled();
-    const queued = stored(pendingKey);
-    setConnected(b, true);
-    flushServerUiPrefs(b.writer, hooks);
-    await vi.dynamicImportSettled();
-    expect(backend.profiles.a?.[pins]).toEqual(["route:usage", "route:cron", "route:plugins"]);
-    expect(queued).toMatchObject({
-      railShortcuts: ["route:usage", "route:cron", "route:plugins"],
-      railShortcutsBase: mode === "order" ? ["route:usage", "route:cron"] : ["route:usage"],
-      ...(mode === "order" ? { railShortcutsOrder: true } : {}),
-    });
-    expect(localStorage.getItem(pendingKey)).toBeNull();
-  },
-);
-
-it("flushes a sibling's new pool after the same adopted writer reconnects", async () => {
-  const backend = createProfilePrefsServer({ a: { [pins]: ["route:usage"] } });
-  const b = backend.connect("a");
-  setConnected(b, false);
-  flushServerUiPrefs(b.writer, hooks);
-  store(pendingKey, {
-    railShortcuts: ["route:usage", "route:cron"],
-    railShortcutsBase: ["route:usage"],
-  });
-  setConnected(b, true);
+  }
+  const queued = stored(pendingKey);
+  b.writer.state.connected = true;
   flushServerUiPrefs(b.writer, hooks);
   await vi.dynamicImportSettled();
-  expect(backend.profiles.a?.[pins]).toEqual(["route:usage", "route:cron"]);
+  const expected = [
+    "route:usage",
+    "route:cron",
+    ...(mode === "reconnect" ? [] : ["route:plugins"]),
+  ];
+  expect(b.profiles.a?.[pins]).toEqual(expected);
+  expect(queued).toMatchObject({
+    ...pending,
+    railShortcuts: expected,
+  });
   expect(localStorage.getItem(pendingKey)).toBeNull();
 });
 
@@ -85,8 +72,7 @@ const lastSeenKey = "openclaw.control.serverPrefs.v1:" + scope + ":profile:a";
 
 it("ignores legacy pending, last-seen, and retained navigation without replaying it", async () => {
   const legacyEntries = ["route:usage", "plugin:workboard/workboard", "session:agent:main:legacy"];
-  const backend = createProfilePrefsServer({ a: {} });
-  const a = backend.connect("a");
+  const a = connect();
   const retainedKey = "openclaw.control.serverPrefs.retained-local.v1:" + scope + ":profile:a";
   const legacyPending = {
     sidebarEntries: legacyEntries,
@@ -104,16 +90,15 @@ it("ignores legacy pending, last-seen, and retained navigation without replaying
   await vi.dynamicImportSettled();
   expect(loadSettings().sidebarEntries).toEqual([]);
   expect(a.request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
-  expect(backend.profiles.a).toEqual({});
+  expect(a.profiles.a).toEqual({});
   expect(stored(pendingKey)).toMatchObject(legacyPending);
   expect(stored(lastSeenKey)).not.toHaveProperty("sidebarEntries");
   expect(stored(retainedKey)).toMatchObject({ sidebarEntries: true });
 });
 
 it("does not admit or re-persist a legacy-only outbox when another preference is queued", () => {
-  const backend = createProfilePrefsServer({ a: {} });
-  const connection = backend.connect("a");
-  setConnected(connection, false);
+  const connection = connect();
+  connection.writer.state.connected = false;
   store(pendingKey, { sidebarEntries: ["route:usage"] });
 
   flushServerUiPrefs(connection.writer, hooks);
@@ -125,14 +110,12 @@ it("does not admit or re-persist a legacy-only outbox when another preference is
 });
 
 it("does not retrofit a newly authored baseless write from a legacy mirror", async () => {
-  const backend = createProfilePrefsServer({ a: { [pins]: ["route:usage"] } });
-  const connection = backend.connect("a");
+  const connection = connect({ [pins]: ["route:usage"] });
   store(lastSeenKey, { sidebarEntries: ["route:usage"] });
   const desired = ["route:plugins"];
   patchSettings({ sidebarEntries: desired });
   pushServerUiPrefs(connection.writer, { sidebarEntries: desired, accent: "#ff0000" }, hooks);
   await vi.dynamicImportSettled();
-  expect(backend.profiles.a?.[pins]).toEqual(["route:usage"]);
-  expect(backend.profiles.a?.["ui.accent"]).toBe("#ff0000");
+  expect(connection.profiles.a).toMatchObject({ [pins]: ["route:usage"], "ui.accent": "#ff0000" });
   expect(resolveServerUiPrefWriteStatus("sidebarEntries", scope, "a").status).toBe("error");
 });
