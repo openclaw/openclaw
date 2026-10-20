@@ -112,8 +112,9 @@ it("keeps internal event authority out of the public reply option types", () => 
   >;
   type Resolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
   type ResolverOptions = NonNullable<Parameters<Resolver>[1]>;
-  type ExposedKeys = keyof DispatchOptions | keyof RuntimeOptions | keyof ResolverOptions;
-  expectTypeOf<Extract<ExposedKeys, PublicReplyKey>>().toEqualTypeOf<never>();
+  expectTypeOf<Extract<keyof DispatchOptions, PublicReplyKey>>().toEqualTypeOf<never>();
+  expectTypeOf<Extract<keyof RuntimeOptions, PublicReplyKey>>().toEqualTypeOf<never>();
+  expectTypeOf<Extract<keyof ResolverOptions, PublicReplyKey>>().toEqualTypeOf<never>();
   expectTypeOf<"onSessionPrepared">().toExtend<keyof DispatchOptions>();
   expectTypeOf<"onSessionPrepared">().toExtend<keyof ResolverOptions>();
 });

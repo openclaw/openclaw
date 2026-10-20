@@ -60,7 +60,9 @@ if (!live) {
         return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
       } catch (error) {
         return runQaGatewayFixture(
-          () => Promise.reject(error),
+          async (): Promise<never> => {
+            throw error;
+          },
           () => owner.cleanup(),
         );
       }

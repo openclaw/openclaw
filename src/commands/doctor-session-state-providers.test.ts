@@ -235,7 +235,11 @@ it("uses the inspected agent route for a store-local global session", async () =
     },
     models: {
       providers: {
-        openai: { agentRuntime: { id: "codex-cli" } },
+        openai: {
+          agentRuntime: { id: "codex-cli" },
+          baseUrl: "https://api.openai.com/v1",
+          models: [],
+        },
       },
     },
     session: { scope: "global" },

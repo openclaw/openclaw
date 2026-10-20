@@ -1,6 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi, type MockInstance } from "vitest";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -14,6 +14,7 @@ import { startSlowRequestDiagnostics } from "./slow-request-diagnostics.js";
 
 let previousDiagnostics: boolean;
 let clock = 0;
+let now: MockInstance<() => number>;
 const log = { isEnabled: vi.fn(() => true), warn: vi.fn() };
 const start = (phase = "setup", details?: () => Record<string, unknown>, operation = "test") =>
   startSlowRequestDiagnostics(log, "slow request", operation, phase, details);
@@ -23,7 +24,7 @@ beforeEach(() => {
   clock = 0;
   log.isEnabled.mockReset().mockReturnValue(true);
   log.warn.mockReset();
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  now = vi.spyOn(performance, "now").mockImplementation(() => clock);
 });
 afterEach(() => {
   setDiagnosticsEnabledForProcess(previousDiagnostics);
@@ -32,7 +33,6 @@ afterEach(() => {
 
 test.each(["disabled", "muted", "fast", "slow"])("slow request diagnostics: %s", (mode) => {
   setDiagnosticsEnabledForProcess(mode !== "disabled");
-  const now = vi.mocked(performance.now);
   log.isEnabled.mockReturnValue(mode !== "muted");
   {
     using diagnostics = start();

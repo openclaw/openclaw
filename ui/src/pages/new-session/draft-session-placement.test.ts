@@ -47,7 +47,7 @@ const recovery = {
   gatewayUrl: "ws://gateway.example",
   recoveryScope: "principal-a",
 };
-const createParams = { key: recovery.sessionKey, agentId: "main", message: "" };
+const createParams = { key: recovery.sessionKey, agentId: "main", message: "" } as const;
 const repository = { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" };
 
 it.each([
