@@ -4,9 +4,9 @@ import path from "node:path";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, assert, expect, it, vi, type Mock } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
-import { buildAgentsApiToolSurface, type AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
+import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 
 // mock-isolation: Transcript persistence is independent of Gateway file authorization.
 vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiToolTranscript: vi.fn() }));
@@ -14,64 +14,13 @@ vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiToolTranscript: vi.
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { permissionMode: "guarded", recordedRoot: true },
-  { permissionMode: "read-only", recordedRoot: true },
-  { permissionMode: "guarded", recordedRoot: false },
-] as const)(
-  "confines $permissionMode PDF reads with recordedRoot=$recordedRoot",
-  async (options) => {
-    await withToolSurface(options, async ({ execute, inside, outside }) => {
-      // Plain text intentionally stops after the real file read, before PDF parsing or inference.
-      expect(await execute("inside", inside)).toMatchObject({
-        success: false,
-        error: expect.stringContaining("Expected PDF but got"),
-      });
-      expect(await execute("outside", outside)).toMatchObject({
-        success: false,
-        error: expect.stringContaining("not under an allowed directory"),
-      });
-    });
-  },
-);
-
-it("retains default media access in full mode and forwards turn exec restrictions", async () => {
-  await withToolSurface(
-    {
-      permissionMode: "full",
-      recordedRoot: true,
-      execOverrides: { security: "deny", ask: "always" },
-    },
-    async ({ execute, outside, construction }) => {
-      expect(await execute("outside", outside)).toMatchObject({
-        success: false,
-        error: expect.stringContaining("Expected PDF but got"),
-      });
-      expect(construction.mock.calls[0]?.[0]).toMatchObject({
-        exec: { security: "deny", ask: "always" },
-      });
-    },
-  );
-});
-
-type ToolFixture = {
-  execute: (id: string, file: string) => Promise<AgentsApiToolExecutionResult>;
-  inside: string;
-  outside: string;
-  construction: Mock<
-    NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
-  >;
-};
-
-async function withToolSurface(
-  options: {
-    permissionMode: NonNullable<AgentHarnessAttemptParamsV2["permissionMode"]>;
-    recordedRoot: boolean;
-    execOverrides?: AgentHarnessAttemptParamsV2["execOverrides"];
-  },
-  run: (fixture: ToolFixture) => Promise<void>,
-) {
+  ["guarded", true],
+  ["read-only", true],
+  ["guarded", false],
+  ["full", true],
+] as const)("applies %s PDF access with recordedRoot=%s", async (permissionMode, recordedRoot) => {
   await withOpenClawTestState({ label: "agentsapi-gateway-permissions" }, async (state) => {
-    const sessionRoot = options.recordedRoot
+    const sessionRoot = recordedRoot
       ? path.join(state.workspaceDir, "project")
       : state.workspaceDir;
     const cwd = path.join(sessionRoot, "src");
@@ -89,10 +38,10 @@ async function withToolSurface(
       sessionFile: state.statePath("permission-session.jsonl"),
       workspaceDir: state.workspaceDir,
       cwd,
-      ...(options.recordedRoot ? { sessionRoot } : {}),
+      ...(recordedRoot ? { sessionRoot } : {}),
       agentDir: state.agentDir(),
-      permissionMode: options.permissionMode,
-      execOverrides: options.execOverrides,
+      permissionMode,
+      execOverrides: permissionMode === "full" ? { security: "deny", ask: "always" } : undefined,
       config: {
         plugins: { allow: [] },
         agents: {
@@ -104,7 +53,7 @@ async function withToolSurface(
         tools: { allow: ["pdf"], fs: { workspaceOnly: false } },
         skills: { load: { watch: false } },
       },
-      runId: `permission-${options.permissionMode}`,
+      runId: `permission-${permissionMode}`,
       prompt: "Inspect the synthetic document.",
       timeoutMs: 5_000,
       abortSignal: controller.signal,
@@ -129,19 +78,32 @@ async function withToolSurface(
         (cleanup) => cleanups.push(cleanup),
       );
       expect(surface.declarations.map((tool) => tool.name)).toContain("pdf");
-      await run({
-        inside,
-        outside,
-        construction,
-        execute: (id, file) =>
-          surface.execute({
-            type: "function_call",
-            turn_id: "permission-turn",
-            call_id: id,
-            name: "pdf",
-            arguments: { pdf: file },
-          }),
+      const execute = (id: string, file: string) =>
+        surface.execute({
+          type: "function_call",
+          turn_id: "permission-turn",
+          call_id: id,
+          name: "pdf",
+          arguments: { pdf: file },
+        });
+      // Plain text reaches the real file read but stops before parsing or inference.
+      if (permissionMode !== "full") {
+        expect(await execute("inside", inside)).toMatchObject({
+          success: false,
+          error: expect.stringContaining("Expected PDF but got"),
+        });
+      }
+      expect(await execute("outside", outside)).toMatchObject({
+        success: false,
+        error: expect.stringContaining(
+          permissionMode === "full" ? "Expected PDF but got" : "not under an allowed directory",
+        ),
       });
+      if (permissionMode === "full") {
+        expect(construction.mock.calls[0]?.[0]).toMatchObject({
+          exec: { security: "deny", ask: "always" },
+        });
+      }
     } finally {
       controller.abort();
       for (const cleanup of cleanups.toReversed()) {
@@ -150,4 +112,4 @@ async function withToolSurface(
       host.close();
     }
   });
-}
+});
