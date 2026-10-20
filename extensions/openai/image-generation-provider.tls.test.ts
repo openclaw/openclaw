@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type Server } from "node:https";
 import { TLSSocket, getCACertificates, setDefaultCACertificates } from "node:tls";
@@ -7,10 +8,10 @@ import "openclaw/plugin-sdk/media-generation-runtime";
 import "openclaw/plugin-sdk/provider-http";
 import {
   acquireTestPortBlock,
-  PROXY_FIXTURE_CERTIFICATE,
-  PROXY_FIXTURE_KEY,
+  PROXY_FIXTURE_CERTIFICATE as cert,
+  PROXY_FIXTURE_KEY as key,
 } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -22,12 +23,7 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP4sAAAAASUVORK5CYII=",
   "base64",
 );
-const tls = {
-  cert: PROXY_FIXTURE_CERTIFICATE,
-  key: PROXY_FIXTURE_KEY,
-  serverName: "files.proxy.test",
-};
-const { cert, key } = tls;
+const tls = { cert, key, serverName: "files.proxy.test" };
 const provider = buildOpenAIImageGenerationProvider({
   ensureAuthProfileStoreAsync: async () => ({ version: 1, profiles: {} }),
   listProfilesForProvider: () => [],
@@ -47,7 +43,7 @@ beforeAll(async () => {
     vi.stubEnv(name, "");
     vi.stubEnv(name.toLowerCase(), "");
   }
-  setDefaultCACertificates([...originalCAs, PROXY_FIXTURE_CERTIFICATE]);
+  setDefaultCACertificates([...originalCAs, cert]);
   const claim = await acquireTestPortBlock({ offsets: [0, 1] });
   releasePorts = () => claim.release();
   providerOrigin = `https://127.0.0.1:${claim.port}`;
@@ -58,9 +54,7 @@ beforeAll(async () => {
       (request, response) => {
         request.resume();
         const socket = request.socket;
-        if (!(socket instanceof TLSSocket)) {
-          throw new Error("Expected TLS socket");
-        }
+        assert(socket instanceof TLSSocket, "Expected TLS socket");
         requests.push({
           path: request.url ?? "",
           certificate: Boolean(socket.getPeerCertificate().raw),
@@ -83,10 +77,6 @@ beforeAll(async () => {
   }
 });
 
-beforeEach(() => {
-  requests.length = 0;
-});
-
 afterAll(async () => {
   for (const server of servers) {
     server.closeAllConnections();
@@ -99,46 +89,37 @@ afterAll(async () => {
   vi.unstubAllEnvs();
 });
 
-it.each(["same-origin", "cross-origin", "redirect"])(
-  "scopes provider TLS identity for %s image downloads",
-  async (route) => {
-    imageUrl =
-      route === "same-origin"
-        ? `${providerOrigin}/image.png`
-        : route === "redirect"
-          ? `${providerOrigin}/redirect`
-          : `${imageOrigin}/image.png`;
-    const openai = {
-      baseUrl: `${providerOrigin}/v1`,
-      apiKey: "endpoint-key",
-      models: [],
-      request: { tls },
-    };
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Synthetic image",
-      cfg: { models: { providers: { openai } } },
-      ssrfPolicy: { allowedOrigins: [providerOrigin, imageOrigin] },
-    });
-    expect(result.images[0]?.buffer).toEqual(png);
-    const providerPaths = [
-      "/v1/images/generations",
-      ...(route === "redirect" ? ["/redirect"] : []),
-    ];
-    expect(requests.slice(0, providerPaths.length)).toEqual(
-      providerPaths.map((path) => ({ path, certificate: true, serverName: tls.serverName })),
-    );
-    const imageRequest = requests.at(-1);
-    expect(imageRequest).toMatchObject({
-      path: "/image.png",
-      certificate: route === "same-origin",
-    });
-    if (route === "same-origin") {
-      expect(imageRequest?.serverName).toBe("files.proxy.test");
-    } else {
-      // Undici omits IP SNI on Node and sends the destination IP on Bun.
-      expect([false, new URL(imageOrigin).hostname]).toContain(imageRequest?.serverName);
-    }
-  },
-);
+it.each(["same-origin", "cross-origin", "redirect"])("%s TLS identity", async (route) => {
+  requests.length = 0;
+  imageUrl = new URL(
+    route === "redirect" ? "/redirect" : "/image.png",
+    route === "cross-origin" ? imageOrigin : providerOrigin,
+  ).href;
+  const openai = {
+    baseUrl: `${providerOrigin}/v1`,
+    apiKey: "endpoint-key",
+    models: [],
+    request: { tls },
+  };
+  const result = await provider.generateImage({
+    provider: "openai",
+    model: "gpt-image-2",
+    prompt: "Synthetic image",
+    cfg: { models: { providers: { openai } } },
+    ssrfPolicy: { allowedOrigins: [providerOrigin, imageOrigin] },
+  });
+  expect(result.images[0]?.buffer).toEqual(png);
+  const providerPaths = ["/v1/images/generations", ...(route === "redirect" ? ["/redirect"] : [])];
+  expect(requests.slice(0, providerPaths.length)).toEqual(
+    providerPaths.map((path) => ({ path, certificate: true, serverName: tls.serverName })),
+  );
+  const imageRequest = requests.at(-1);
+  expect(imageRequest).toMatchObject({
+    path: "/image.png",
+    certificate: route === "same-origin",
+  });
+  // Undici omits IP SNI on Node and sends the destination IP on Bun.
+  const serverNames =
+    route === "same-origin" ? [tls.serverName] : [false, new URL(imageOrigin).hostname];
+  expect(serverNames).toContain(imageRequest?.serverName);
+});

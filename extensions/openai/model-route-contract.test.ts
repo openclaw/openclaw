@@ -16,11 +16,12 @@ function resolveUnconfiguredModel(modelId: string) {
 const platformRoute = { api: "openai-completions", authRequirement: "api-key" };
 const subscriptionRoute = { api: "openai-chatgpt-responses", authRequirement: "subscription" };
 const dualApis = ["openai-responses", "openai-chatgpt-responses"];
+const completions = { api: "openai-completions" };
 function resolveBilling(overrides: Partial<Parameters<typeof resolveModelRoutes>[0]>) {
   return resolveModelRoutes({
     provider: "openai",
     modelId: "gpt-5.4-mini",
-    configuredProvider: { api: "openai-completions" },
+    configuredProvider: completions,
     ...overrides,
   });
 }
@@ -78,10 +79,7 @@ describe("OpenAI billing route intent", () => {
     (routeIntent) => {
       expect(
         resolveBilling({
-          configuredProvider: {
-            api: "openai-completions",
-            baseUrl: "https://api.openai.com/v1",
-          },
+          configuredProvider: { ...completions, baseUrl: "https://api.openai.com/v1" },
           routeIntent,
         }),
       ).toMatchObject({
@@ -105,11 +103,8 @@ describe("OpenAI billing route intent", () => {
   });
 
   it("keeps subscription eligible for an OpenClaw runtime pin with no API credential", () => {
-    expect(
-      resolveBilling({
-        routeIntent: { runtimeId: "openclaw", source: "explicit" },
-      }),
-    ).toMatchObject({
+    const routeIntent = { runtimeId: "openclaw", source: "explicit" } as const;
+    expect(resolveBilling({ routeIntent })).toMatchObject({
       kind: "routes",
       preferredAuthRequirement: "api-key",
       routes: [{ authRequirement: "api-key" }, { authRequirement: "subscription" }],

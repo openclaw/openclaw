@@ -3,10 +3,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-async function runCatalog(
-  response: Response | undefined,
-  options: { apiKey?: string; baseUrl?: string; profileId?: string } = {},
-) {
+type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
+async function runCatalog(response: Response | undefined, options: CatalogOptions = {}) {
   const { apiKey = "sk-openai", baseUrl, profileId } = options;
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
     if (!response) {
@@ -53,15 +51,12 @@ it("shows every listed chat model that runs on Responses with conservative metad
     "gpt-image-2 gpt-realtime-2.1-mini gpt-audio-mini gpt-3.5-turbo-instruct babbage-002 " +
     "text-embedding-3-small omni-moderation-latest tts-1-hd whisper-1 sora-2"
   ).split(" ");
-  const { provider } = await runCatalog(
-    Response.json({
-      data: [
-        ...modelRows(["gpt-5.5", ...admittedIds, ...unadmittedIds]),
-        // OpenAI keeps retired models listed with a past shutdown date; requests to them 404.
-        { id: "gpt-5.2-chat-latest", object: "model", shutdown_date: "2026-01-01" },
-      ],
-    }),
-  );
+  const data = [
+    ...modelRows(["gpt-5.5", ...admittedIds, ...unadmittedIds]),
+    // OpenAI keeps retired models listed with a past shutdown date; requests to them 404.
+    { id: "gpt-5.2-chat-latest", object: "model", shutdown_date: "2026-01-01" },
+  ];
+  const { provider } = await runCatalog(Response.json({ data }));
 
   expect(provider.models.map((model) => model.id).toSorted()).toEqual(
     ["gpt-5.5", ...admittedIds].toSorted(),
