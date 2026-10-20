@@ -43,18 +43,14 @@ export const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts
     >(async () => undefined),
     registryRuntimeMock: {
       getLatestLiveSubagentRunByChildSessionKey: vi.fn<FindRun>(() => undefined),
-      countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
-      isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
-      shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),
       listSubagentRunsForRequester: vi.fn(
         (_requesterSessionKey: string): SubagentRunRecord[] => [],
       ),
-      getLatestSubagentRunByChildSessionKey: vi.fn<FindRun>(() => undefined),
-      resolveRequesterForChildSession: vi.fn((_childSessionKey: string) => null),
     },
   }),
 );
 
+// mock-isolation: settlement reads only the requester wave and its live session owners.
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
   createRequesterDescendantReader:
@@ -71,16 +67,12 @@ vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagent-announce.runtime.js")>()),
   callSubagentLifecycleGateway: vi.fn(async () => ({})),
   dispatchGatewayMethodInProcess: vi.fn(async () => ({})),
-  isSessionRunActive: vi.fn(() => false),
   getRuntimeConfig: () => ({ session: { mainKey: "main", scope: "per-sender" } }),
-  loadSessionStore: vi.fn(() => ({})),
   readSessionMessagesAsync: vi.fn(async () => []),
   readSubagentSessionEntry: vi.fn(
     (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
   ),
-  resolveMainSessionKey: vi.fn(() => "agent:main:main"),
   resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
-  waitForSessionRunEnd: vi.fn(async () => true),
 }));
 
 // mock-isolation: Requester settlement uses the fixture session map and delivery receipt, without transport or session-store access.
@@ -93,10 +85,6 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     agentId: "main",
     storePath: "/synthetic/requester-settle.sqlite",
   }),
-  loadSessionEntryByKey: (sessionKey: string) => sessionStore[sessionKey],
-  resolveSubagentAnnounceTimeoutMs: () => 10_000,
-  resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
-    params.requesterOrigin,
 }));
 
 // mock-isolation: Settlement fixtures supply requester depth without opening a session database.
@@ -150,7 +138,6 @@ beforeEach(() => {
   sessionStore = { [REQUESTER]: { sessionId: "sess-main" } };
   readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
   registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
-  registryRuntimeMock.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
   registryRuntimeMock.getLatestLiveSubagentRunByChildSessionKey
     .mockReset()
     .mockReturnValue(undefined);

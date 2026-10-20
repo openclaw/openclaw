@@ -15,16 +15,6 @@ import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import type { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
-const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
-type CompletionEvent = NonNullable<
-  Parameters<typeof hasFailedSubagentNoOutputCompletion>[0]
->[number];
-const failedEvent = (overrides: Partial<CompletionEvent & { result: string }> = {}) => ({
-  ...failedChild,
-  result: "(no output)",
-  noVisibleResult: true,
-  ...overrides,
-});
 afterEach(() => setSubagentAnnounceDeliveryDepsForTest());
 const dispatch = vi.fn<typeof dispatchGatewayMethodInProcess>();
 beforeEach(() => {
@@ -157,12 +147,19 @@ it.each(["commit", "failure", "revocation"] as const)(
 
 describe("hasFailedSubagentNoOutputCompletion", () => {
   it.each([
-    ["recorded no visible result", failedEvent(), true],
-    ["reworded placeholder", failedEvent({ result: "(nothing to report)" }), true],
-    ["real result resembling placeholder", { ...failedChild, result: "(no output)" }, false],
-    ["successful child", failedEvent({ status: "ok" }), false],
-    ["non-subagent source", failedEvent({ source: "image_generation" }), false],
-  ] as const)("classifies %s from the recorded result fact", (_label, event, expected) => {
+    ["absent", { noVisibleResult: true }, true],
+    ["reworded", { noVisibleResult: true, result: "(nothing to report)" }, true],
+    ["visible placeholder", {}, false],
+    ["success", { noVisibleResult: true, status: "ok" }, false],
+    ["other source", { noVisibleResult: true, source: "image_generation" }, false],
+  ] as const)("classifies %s from the recorded fact", (_label, overrides, expected) => {
+    const event = {
+      type: "task_completion",
+      source: "subagent",
+      status: "error",
+      result: "(no output)",
+      ...overrides,
+    } as const;
     expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
   });
 
