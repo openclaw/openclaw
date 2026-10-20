@@ -78,39 +78,29 @@ describe("update attention", () => {
   });
 
   it.each([
-    { status: "current", present: false },
-    { status: "behind", present: true },
-    { status: "unavailable", present: true },
-  ] as const)(
-    "sets Inbox presence to $present after a $status comparison",
-    ({ status, present }) => {
-      const entry = resolveSidebarUpdateAttention(contextWithGitStatus(status));
-      if (present) {
-        expect(entry).not.toBeNull();
-      } else {
-        expect(entry).toBeNull();
-      }
-    },
-  );
+    ["current", false],
+    ["behind", true],
+    ["unavailable", true],
+  ] as const)("sets Inbox presence after a %s comparison", (status, present) => {
+    expect(resolveSidebarUpdateAttention(contextWithGitStatus(status)) !== null).toBe(present);
+  });
 
   it.each([
-    { name: "stable admin update", canDismiss: true, forced: false, dismissible: true },
-    { name: "read-only update", canDismiss: false, forced: false, dismissible: false },
-    { name: "forced update", canDismiss: true, forced: true, dismissible: false },
-  ])("projects $name with explicit dismissal policy", ({ canDismiss, forced, dismissible }) => {
+    ["stable admin update", "operator.admin", false, true],
+    ["read-only update", "operator.read", false, false],
+    ["forced update", "operator.admin", true, false],
+  ] as const)("projects %s with explicit dismissal policy", (_name, scope, forced, dismissible) => {
     const context = contextWithGitStatus("behind");
     context.gateway.snapshot.client = new GatewayBrowserClient({ url: "ws://gateway.test" });
     context.gateway.snapshot.hello = {
       type: "hello-ok",
       protocol: 1,
       server: { bootId: "boot-a" },
-      auth: { role: "operator", scopes: [canDismiss ? "operator.admin" : "operator.read"] },
+      auth: { role: "operator", scopes: [scope] },
       features: { methods: ["update.run"] },
     };
     context.overlays.snapshot.updateRunning = forced;
 
-    const entry = resolveSidebarUpdateAttention(context);
-
-    expect(Boolean(entry?.dismissal)).toBe(dismissible);
+    expect(Boolean(resolveSidebarUpdateAttention(context)?.dismissal)).toBe(dismissible);
   });
 });

@@ -68,30 +68,16 @@ describe("sidebar menus session routes", () => {
     document.body.append(container);
     let dispose: (() => void) | undefined;
     try {
-      dispose = mountSolid(() => menus.renderRoute("chat", host), container);
-      flush();
-      const chat = container.querySelector<HTMLAnchorElement>("a");
-      expect(chat?.getAttribute("href")).toBe(
-        "/chat/main?catalog=claude&host=gateway%3Alocal&thread=thread-1",
-      );
-      chat?.click();
-      expect(onNavigate).toHaveBeenLastCalledWith("chat", {
-        pathname: "/chat/main",
-        search: "?catalog=claude&host=gateway%3Alocal&thread=thread-1",
-      });
-
-      dispose();
-      dispose = mountSolid(() => menus.renderRoute("dashboard", host), container);
-      flush();
-      const dashboard = container.querySelector<HTMLAnchorElement>("a");
-      expect(dashboard?.getAttribute("href")).toBe(
-        "/dashboard/main?catalog=claude&host=gateway%3Alocal&thread=thread-1",
-      );
-      dashboard?.click();
-      expect(onNavigate).toHaveBeenLastCalledWith("dashboard", {
-        pathname: "/dashboard/main",
-        search: "?catalog=claude&host=gateway%3Alocal&thread=thread-1",
-      });
+      const search = "?catalog=claude&host=gateway%3Alocal&thread=thread-1";
+      for (const route of ["chat", "dashboard"] as const) {
+        dispose?.();
+        dispose = mountSolid(() => menus.renderRoute(route, host), container);
+        flush();
+        const link = container.querySelector<HTMLAnchorElement>("a");
+        expect(link?.getAttribute("href")).toBe(`/${route}/main${search}`);
+        link?.click();
+        expect(onNavigate).toHaveBeenLastCalledWith(route, { pathname: `/${route}/main`, search });
+      }
     } finally {
       dispose?.();
       container.remove();
@@ -103,16 +89,20 @@ describe("sidebar menus session routes", () => {
 describe("mounted sidebar menus", () => {
   setupSidebarTest();
   afterEach(clearNativeGatewayTestState);
+  async function mountConnected(
+    gateway: Parameters<typeof mountSidebar>[0],
+    sessions = createSessions("main", ["agent:main:main"]),
+  ) {
+    const mounted = await mountSidebar(gateway, sessions);
+    mounted.sidebar.connected = true;
+    await mounted.sidebar.updateComplete;
+    return mounted;
+  }
 
   it("closes the filter popup when the gateway viewer changes", async () => {
     const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
     gateway.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
-    const { sidebar } = await mountSidebar(
-      gateway.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-    sidebar.connected = true;
-    await sidebar.updateComplete;
+    const { sidebar } = await mountConnected(gateway.gateway);
     const trigger = () => sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!;
     const popup = () => sidebar.querySelector(".sidebar-session-sort-menu");
     trigger().click();
@@ -134,30 +124,25 @@ describe("mounted sidebar menus", () => {
     );
     const gateway = createGatewayHarness(createTestGatewayClient(request));
     gateway.publish({ hello: gatewayHelloForMethods(["sessions.catalog.list"]) });
-    const { sidebar, provider, context } = await mountSidebar(
-      gateway.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-    sidebar.connected = true;
-    await sidebar.updateComplete;
+    const { sidebar, provider, context } = await mountConnected(gateway.gateway);
     await vi.advanceTimersByTimeAsync(0);
     await sidebar.updateComplete;
     const trigger = () => sidebar.querySelector<HTMLButtonElement>("[data-catalog-session-menu]")!;
     const popup = () => sidebar.querySelector("openclaw-catalog-session-menu");
+    const expectOpen = () => {
+      expect(trigger().getAttribute("aria-expanded")).toBe("true");
+      expect(popup()!.querySelector('[data-value="viewer"]')).not.toBeNull();
+    };
     await waitForSolid(() => expect(trigger()).not.toBeNull());
     const originalTrigger = trigger();
     originalTrigger.click();
-    await waitForSolid(() => {
-      expect(trigger().getAttribute("aria-expanded")).toBe("true");
-      expect(popup()!.querySelector('[data-value="viewer"]')).not.toBeNull();
-    });
+    await waitForSolid(expectOpen);
 
     provider.setContext({ ...context });
     await sidebar.updateComplete;
     await waitForSolid(() => {
       expect(trigger()).not.toBe(originalTrigger);
-      expect(trigger().getAttribute("aria-expanded")).toBe("true");
-      expect(popup()!.querySelector('[data-value="viewer"]')).not.toBeNull();
+      expectOpen();
     });
 
     popup()!
@@ -168,10 +153,7 @@ describe("mounted sidebar menus", () => {
       expect(trigger().getAttribute("aria-expanded")).toBe("false");
     });
     trigger().click();
-    await waitForSolid(() => {
-      expect(trigger().getAttribute("aria-expanded")).toBe("true");
-      expect(popup()!.querySelector('[data-value="viewer"]')).not.toBeNull();
-    });
+    await waitForSolid(expectOpen);
   });
 
   it.each([
@@ -216,9 +198,10 @@ describe("mounted sidebar menus", () => {
     };
     try {
       const gateway = createGatewayHarness(createTestGatewayClient(request));
-      const { sidebar, provider, context } = await mountSidebar(gateway.gateway, sessions.sessions);
-      sidebar.connected = true;
-      await sidebar.updateComplete;
+      const { sidebar, provider, context } = await mountConnected(
+        gateway.gateway,
+        sessions.sessions,
+      );
       const trigger = () =>
         sidebar.querySelector<HTMLButtonElement>("[data-sidebar-session-menu]")!;
       trigger().click();

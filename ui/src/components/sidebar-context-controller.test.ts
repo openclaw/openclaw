@@ -12,11 +12,11 @@ import { getAppSidebarOwner } from "./app-sidebar.tsx";
 
 setupSidebarTest();
 
+const mountEmptySidebar = () =>
+  mountSidebar(createGateway({} as GatewayBrowserClient), createSessions("main", []));
+
 it("restores destination offsets and updates fades after content commits", async () => {
-  const { sidebar } = await mountSidebar(
-    createGateway({} as GatewayBrowserClient),
-    createSessions("main", []),
-  );
+  const { sidebar } = await mountEmptySidebar();
   const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
   let contentHeight = 500;
   Object.defineProperties(scroller, {
@@ -43,18 +43,17 @@ it("restores destination offsets and updates fades after content commits", async
   expect(scroller.scrollTop).toBe(140);
 
   const router = createSidebarTestRouter(() => "machine inventory");
+  const navigate = async (route: "systems" | "cron", offset: number) => {
+    await router.navigate(route, {});
+    await sidebar.updateComplete;
+    expect(scroller.scrollTop).toBe(offset);
+  };
   sidebar.router = router;
-  await router.navigate("systems", {});
-  await sidebar.updateComplete;
-  expect(scroller.scrollTop).toBe(0);
+  await navigate("systems", 0);
   // Navigation must also capture an offset whose native scroll event has not arrived yet.
   scroller.scrollTop = 35;
-  await router.navigate("cron", {});
-  await sidebar.updateComplete;
-  expect(scroller.scrollTop).toBe(140);
-  await router.navigate("systems", {});
-  await sidebar.updateComplete;
-  expect(scroller.scrollTop).toBe(35);
+  await navigate("cron", 140);
+  await navigate("systems", 35);
 
   contentHeight = 80;
   await router.navigate("cron", {});
@@ -83,10 +82,7 @@ it("updates contextual navigation from its router and retires the subscription o
     ],
   });
   onTestFinished(() => router.stop());
-  const { provider, sidebar } = await mountSidebar(
-    createGateway({} as GatewayBrowserClient),
-    createSessions("main", []),
-  );
+  const { provider, sidebar } = await mountEmptySidebar();
   const element = provider.querySelector<HTMLElement>("openclaw-app-sidebar")!;
   const owner = getAppSidebarOwner(element);
   expect(owner).toBeDefined();

@@ -18,22 +18,23 @@ function fixture() {
   };
   const controller = new SidebarEmptyGroupsPreference(() => ({ gateway }));
   controller.reconcile();
-  return { controller, gateway };
+  const reconcile = (snapshot: Partial<typeof gateway.snapshot>) => {
+    Object.assign(gateway.snapshot, snapshot);
+    return controller.reconcile();
+  };
+  return { controller, gateway, reconcile };
 }
 
 describe("personal empty-group preference", () => {
   it("keeps anonymous browser choices separate from signed-in users", () => {
-    const { controller, gateway } = fixture();
+    const { controller, reconcile } = fixture();
     controller.set("always");
-    gateway.snapshot.selfUser = null;
-    controller.reconcile();
+    reconcile({ selfUser: null });
     expect(controller.mode).toBe("filtering");
     controller.set("never");
-    gateway.snapshot.selfUser = { id: "ada" };
-    controller.reconcile();
+    reconcile({ selfUser: { id: "ada" } });
     expect(controller.mode).toBe("always");
-    gateway.snapshot.selfUser = null;
-    controller.reconcile();
+    reconcile({ selfUser: null });
     expect(controller.mode).toBe("never");
   });
 
@@ -42,63 +43,50 @@ describe("personal empty-group preference", () => {
     ["false", "filtering"],
   ] as const)("migrates legacy %s once without copying it to a second user", (legacy, expected) => {
     storage.setItem("openclaw:sidebar:sessions:hide-empty-groups", legacy);
-    const { controller, gateway } = fixture();
+    const { controller, reconcile } = fixture();
     expect(controller.mode).toBe(expected);
     expect(storage.getItem("openclaw:sidebar:sessions:hide-empty-groups")).toBeNull();
-    gateway.snapshot.selfUser = { id: "lin" };
-    controller.reconcile();
+    reconcile({ selfUser: { id: "lin" } });
     expect(controller.mode).toBe("filtering");
-    gateway.snapshot.selfUser = { id: "ada" };
-    controller.reconcile();
+    reconcile({ selfUser: { id: "ada" } });
     expect(controller.mode).toBe(expected);
   });
 
   it("does not persist effective visibility during rerenders or an identified reconnect", () => {
-    const { controller, gateway } = fixture();
+    const { controller, reconcile } = fixture();
     controller.set("never");
     const writes = vi.spyOn(storage, "setItem");
     writes.mockClear();
-    gateway.snapshot.phase = "reconnecting";
-    gateway.snapshot.selfUser = null;
-    controller.reconcile();
+    reconcile({ phase: "reconnecting", selfUser: null });
     expect(controller.mode).toBe("never");
-    gateway.snapshot.selfUser = { id: "ada" };
-    gateway.snapshot.phase = "connected";
-    controller.reconcile();
+    reconcile({ phase: "connected", selfUser: { id: "ada" } });
     expect(controller.mode).toBe("never");
     expect(writes).not.toHaveBeenCalled();
   });
 
   it("retires stopped or replaced connections and rejects an old menu action", () => {
-    const { controller, gateway } = fixture();
+    const { controller, gateway, reconcile } = fixture();
     controller.set("never");
     gateway.snapshot.selfUser = { id: "lin" };
     controller.set("always");
     expect(controller.mode).toBe("filtering");
     controller.set("always");
     expect(controller.mode).toBe("always");
-    gateway.snapshot.phase = "reconnecting";
-    gateway.snapshot.selfUser = null;
     gateway.connectionRevision += 1;
-    expect(controller.reconcile()).toBe(true);
+    expect(reconcile({ phase: "reconnecting", selfUser: null })).toBe(true);
     expect(controller.mode).toBe("filtering");
-    gateway.snapshot.phase = "connected";
-    gateway.snapshot.selfUser = { id: "ada" };
-    controller.reconcile();
+    reconcile({ phase: "connected", selfUser: { id: "ada" } });
     expect(controller.mode).toBe("never");
-    gateway.snapshot.phase = "stopped";
-    gateway.snapshot.selfUser = null;
-    controller.reconcile();
+    reconcile({ phase: "stopped", selfUser: null });
     expect(controller.mode).toBe("filtering");
   });
 
   it("keeps the view usable when browser persistence is denied", () => {
-    vi.spyOn(storage, "getItem").mockImplementation(() => {
+    const denied = () => {
       throw new Error("denied");
-    });
-    vi.spyOn(storage, "setItem").mockImplementation(() => {
-      throw new Error("denied");
-    });
+    };
+    vi.spyOn(storage, "getItem").mockImplementation(denied);
+    vi.spyOn(storage, "setItem").mockImplementation(denied);
     const { controller } = fixture();
     expect(controller.mode).toBe("filtering");
     controller.set("never");

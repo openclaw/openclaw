@@ -21,23 +21,7 @@ beforeEach(() => vi.stubGlobal("localStorage", createTestStorageMock()));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("reconcileSidebarAttentionDismissals", () => {
-  const chip = (kind: SidebarAttentionKind, signature: string) => ({
-    kind,
-    signature,
-  });
-
-  const reconcile = (
-    dismissals: Record<string, string[]>,
-    active: Array<{ kind: SidebarAttentionKind; signature: string }>,
-    scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null },
-  ) => {
-    localStorage.setItem(ATTENTION_KEY, JSON.stringify(dismissals));
-    return reconcileSidebarAttentionDismissals({
-      active,
-      key: ATTENTION_KEY,
-      ...(scope ? { scope } : {}),
-    });
-  };
+  const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });
 
   it.each([
     {
@@ -61,7 +45,10 @@ describe("reconcileSidebarAttentionDismissals", () => {
       },
     },
   ])("reconciles only authoritative dismissals: $name", ({ stored, active, scope, expected }) => {
-    expect(reconcile(stored, active, scope)).toEqual(expected);
+    localStorage.setItem(ATTENTION_KEY, JSON.stringify(stored));
+    expect(reconcileSidebarAttentionDismissals({ active, key: ATTENTION_KEY, scope })).toEqual(
+      expected,
+    );
   });
 });
 
@@ -88,18 +75,11 @@ describe("scope upgrade dismissal fact", () => {
 
 describe("dismissSidebarAttention", () => {
   it("merges with the persisted map so another tab's dismissal survives", () => {
-    const key = ATTENTION_KEY;
-    // Another tab dismissed a cron chip after this tab last loaded.
-    localStorage.setItem(key, JSON.stringify({ cronFailed: ["alpha"] }));
-
-    const next = dismissSidebarAttention(ATTENTION_KEY, {
-      kind: "cronFailed",
-      signature: "beta",
-    });
-
+    localStorage.setItem(ATTENTION_KEY, JSON.stringify({ cronFailed: ["alpha"] }));
+    const next = dismissSidebarAttention(ATTENTION_KEY, { kind: "cronFailed", signature: "beta" });
     const expected = { cronFailed: ["alpha", "beta"] };
     expect(next).toEqual(expected);
-    expect(JSON.parse(localStorage.getItem(key) ?? "null")).toEqual(expected);
+    expect(JSON.parse(localStorage.getItem(ATTENTION_KEY) ?? "null")).toEqual(expected);
   });
 
   it("leaves unknown-owner legacy dismissals untouched and unadopted", () => {
@@ -134,43 +114,31 @@ describe("dismissSidebarAttention", () => {
 describe("update dismissal fact", () => {
   it.each([
     {
-      name: "canonical package version",
+      target: { kind: "package", version: "2026.8.3" },
       latestVersion: "2026.8.2",
-      channel: "latest",
-      updateSchedule: {
-        channel: "stable",
-        autoEnabled: false,
-        target: { kind: "package", version: "2026.8.3" },
-      },
       signature: '["2026.8.3","boot-a"]',
     },
     {
-      name: "git SHA with unchanged package version",
-      latestVersion: "2026.8.1",
-      channel: "dev",
-      updateSchedule: {
-        channel: "dev",
-        autoEnabled: true,
-        target: {
-          kind: "git",
-          upstreamRef: "origin/main",
-          upstreamSha: "abcdef1234567890",
-          commitsBehind: 2,
-        },
+      target: {
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "abcdef1234567890",
+        commitsBehind: 2,
       },
+      latestVersion: "2026.8.1",
       signature: '["abcdef1234567890","boot-a"]',
     },
   ] as const)(
-    "persists the $name and literal boot binding",
-    ({ latestVersion, channel, updateSchedule, signature }) => {
+    "persists the $target.kind identity and literal boot binding",
+    ({ target, latestVersion, signature }) => {
       const dismissal = resolveUpdateAttentionDismissal({
         gatewayBootId: "boot-a",
         updateAvailable: {
           currentVersion: "2026.8.1",
           latestVersion,
-          channel,
+          channel: "stable",
         },
-        updateSchedule,
+        updateSchedule: { channel: "stable", autoEnabled: false, target },
       });
       expect(dismissal).toEqual({ kind: "updateAvailable", signature });
       const stored = dismissSidebarAttention(ATTENTION_KEY, dismissal!);

@@ -2,28 +2,31 @@ import { describe, expect, it } from "vitest";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { SidebarOnlineOrder, type SidebarOnlineCount } from "./sidebar-online-order.ts";
 
-const ada: PresenceViewer = {
-  id: "ada",
-  identity: { type: "profile", id: "ada" },
-  name: "Ada",
+const viewer = (id: string, name: string): PresenceViewer => ({
+  id,
+  identity: { type: "profile", id },
+  name,
   watchedSessions: [],
-};
-const zed: PresenceViewer = {
-  id: "zed",
-  identity: { type: "profile", id: "zed" },
-  name: "Zed",
-  watchedSessions: [],
-};
+});
+const ada = viewer("ada", "Ada");
+const zed = viewer("zed", "Zed");
+const NOW = 1_000_000;
+const activeAda = { ...ada, entries: [{ ts: NOW, lastActivityAt: NOW }] };
+const idleZed = { ...zed, entries: [{ ts: NOW, lastActivityAt: NOW - 180_000 }] };
 const counts = new Map<string, SidebarOnlineCount>([
   ["ada", { open: 2, running: 0 }],
   ["zed", { open: 5, running: 1 }],
 ]);
 const names = (users: readonly PresenceViewer[]) => users.map((user) => user.name);
+function restoredOrder(users = [zed, ada]) {
+  const order = new SidebarOnlineOrder();
+  order.restore(users, counts);
+  return order;
+}
 
 describe("sidebar online ordering", () => {
   it("retains snapshot order through pending counts and an unchanged live summary", () => {
-    const order = new SidebarOnlineOrder();
-    order.restore([zed, ada], counts);
+    const order = restoredOrder();
     const options = { sortMode: "presence", statusFilter: "all", now: 1 } as const;
     const cached = order.resolve({ ...options, users: null, counts: null });
     const pending = order.resolve({ ...options, users: [ada, zed], counts: null });
@@ -44,8 +47,7 @@ describe("sidebar online ordering", () => {
   });
 
   it("keeps running-filter members while counts are pending, then accepts authoritative zero", () => {
-    const order = new SidebarOnlineOrder();
-    order.restore([zed, ada], counts);
+    const order = restoredOrder();
     const options = { sortMode: "running", statusFilter: "running", now: 1 } as const;
     expect(names(order.resolve({ ...options, users: [ada, zed], counts: null }).listUsers)).toEqual(
       ["Zed"],
@@ -58,19 +60,12 @@ describe("sidebar online ordering", () => {
   it.each(["pending", "snapshot"] as const)(
     "preserves saved presence order as activity expires during %s presentation",
     (presentation) => {
-      const savedAt = 1_000_000;
-      const activeAda = { ...ada, entries: [{ ts: savedAt, lastActivityAt: savedAt }] };
-      const idleZed = {
-        ...zed,
-        entries: [{ ts: savedAt, lastActivityAt: savedAt - 180_000 }],
-      };
       const users = [activeAda, idleZed];
-      const order = new SidebarOnlineOrder();
-      order.restore(users, counts);
+      const order = restoredOrder(users);
       const options = {
         sortMode: "presence",
         statusFilter: "all",
-        now: savedAt + 180_000,
+        now: NOW + 180_000,
         counts: null,
       } as const;
       const cached = order.resolve({
@@ -86,10 +81,7 @@ describe("sidebar online ordering", () => {
 
   it("ignores counts outside the selected sort key and retains active-before-idle grouping", () => {
     const order = new SidebarOnlineOrder();
-    const now = 1_000_000;
-    const activeAda = { ...ada, entries: [{ ts: now, lastActivityAt: now }] };
-    const idleZed = { ...zed, entries: [{ ts: now, lastActivityAt: now - 180_000 }] };
-    const options = { users: [idleZed, activeAda], statusFilter: "all", now } as const;
+    const options = { users: [idleZed, activeAda], statusFilter: "all", now: NOW } as const;
     expect(names(order.resolve({ ...options, sortMode: "presence", counts }).users)).toEqual([
       "Ada",
       "Zed",
@@ -108,8 +100,7 @@ describe("sidebar online ordering", () => {
   });
 
   it("drops retained people and counts when the presentation scope changes", () => {
-    const order = new SidebarOnlineOrder();
-    order.restore([zed, ada], counts);
+    const order = restoredOrder();
     order.clear();
     const empty = order.resolve({
       users: null,
@@ -117,7 +108,6 @@ describe("sidebar online ordering", () => {
       sortMode: "presence",
       statusFilter: "all",
     });
-    expect(empty.users).toEqual([]);
-    expect(empty.counts).toBeNull();
+    expect(empty).toMatchObject({ users: [], counts: null });
   });
 });
