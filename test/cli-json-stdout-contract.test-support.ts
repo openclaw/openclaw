@@ -26,8 +26,7 @@ export function isolatedEnv(home: string) {
 }
 
 export function expectCleanOutput(stdout: string, stderr?: string) {
-  expect(stdout, stderr).not.toContain("\u001B");
-  expect(stdout, stderr).not.toContain("\u0007");
+  expect(stdout.includes("\u001B") || stdout.includes("\u0007"), stderr).toBe(false);
 }
 
 export const expectCliError = (stdout: string, message: unknown) =>
@@ -84,15 +83,11 @@ export function runIsolatedCli(
   const { env, source = [], tty, commander, inheritEnvironment } = options;
   const preload = [...source, ...(tty ? ttySource : [])];
   const execArgv = options.source || tty ? preloadArgs(preload) : [];
-  return runBuiltCli(
-    home,
-    args,
-    {
-      ...isolatedEnv(home),
-      ...(commander ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-      ...(tty ? { FORCE_COLOR: "1" } : {}),
-      ...env,
-    },
-    { inheritEnvironment, execArgv },
-  );
+  const environment = {
+    ...isolatedEnv(home),
+    ...(commander ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+    ...(tty ? { FORCE_COLOR: "1" } : {}),
+    ...env,
+  };
+  return runBuiltCli(home, args, environment, { inheritEnvironment, execArgv });
 }

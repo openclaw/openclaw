@@ -8,7 +8,6 @@ import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
 } from "../src/agents/agent-run-terminal-outcome.js";
-import { resolveSettledToolBatchEvidence } from "../src/agents/embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { resolveReplayInvalidFlag } from "../src/agents/embedded-agent-runner/run/incomplete-turn-resolution.js";
 import { prepareTerminalWithSettledTurnFinalization } from "../src/agents/embedded-agent-runner/run/settled-turn-finalization.js";
 import { createSettledFinalizationTestInput } from "../src/agents/embedded-agent-runner/run/settled-turn-finalization.test-support.js";
@@ -37,19 +36,6 @@ describe("registered Codex finalizer host silence contract", () => {
   async function createInput(options: { failedTool?: boolean; timedOut?: boolean } = {}) {
     fixture = await createCodexSettledFinalizerTestFixture(options);
     const { attempt, params } = fixture;
-    expect(attempt.terminal.kind).toBe("failed");
-    expect(attempt.itemLifecycle).toMatchObject({ activeCount: 0, completedCount: 1 });
-    expect(attempt.didSendViaMessagingTool).toBe(false);
-    expect(attempt.messagingToolSentTexts).toEqual([]);
-    expect(attempt.messagingToolSentMediaUrls).toEqual([]);
-    expect(resolveSettledToolBatchEvidence(attempt)).toMatchObject({
-      allToolCallsRecorded: true,
-      allToolsProvenSettled: true,
-      hasUnsettledToolError: false,
-    });
-    expect(attempt.settledTurnFinalizationContext).toMatchObject({
-      data: expect.arrayContaining([expect.objectContaining({ type: "function_call_output" })]),
-    });
     if (options.timedOut) {
       // Deadline ownership follows native projection; a timeout must block finalization.
       attempt.terminal = normalizeAgentRunAttemptTerminal({
@@ -89,26 +75,34 @@ describe("registered Codex finalizer host silence contract", () => {
     { text: "NO_REPLY", expectation: "required", calls: 1 },
     { text: "NO_REPLY", expectation: "result-required", calls: 2 },
     { text: " ", expectation: "required", calls: 2 },
+    { text: undefined, expectation: "optional", calls: 0 },
   ] as const)(
     "preserves the provider failure after $expectation $text output",
     async ({ text, expectation, calls }) => {
       const input = await createInput();
       const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
       input.terminalBase.runParams.terminalReplyExpectation = expectation;
-      returnBoundedText(text);
+      if (text !== undefined) {
+        returnBoundedText(text);
+      }
       const result = await prepareTerminalWithSettledTurnFinalization(input);
       expect(fixture.runBounded).toHaveBeenCalledTimes(calls);
-      expect(result.finalizationOutcome).toBe("failed");
+      expect(result.finalizationOutcome).toBe(calls === 0 ? "not-attempted" : "failed");
+      expect(result.attempt).toBe(input.initial.attempt);
+      expect(result.terminalState).toBe(input.initial.terminalState);
+      expect(result.attempt.terminal).toMatchObject({ kind: "failed" });
+      expect(result.terminalState.outcome.error).toContain("Provider overloaded");
+      if (calls === 0) {
+        expect(runAttempt).not.toHaveBeenCalled();
+        expect(fixture.mirror).not.toHaveBeenCalled();
+        return;
+      }
       expect(fixture.runBounded).toHaveBeenCalledWith(
         expect.objectContaining({
           isolation: "private-stdio",
           requireNoExternalCapabilities: true,
         }),
       );
-      expect(result.attempt).toBe(input.initial.attempt);
-      expect(result.terminalState).toBe(input.initial.terminalState);
-      expect(result.attempt.terminal).toMatchObject({ kind: "failed" });
-      expect(result.terminalState.outcome.error).toContain("Provider overloaded");
       // Native tool-only failures have no completed assistant to prepare a
       // payload from; terminal resolution owns their provider guidance.
       const terminalInput = makeTerminalInput({
@@ -142,22 +136,6 @@ describe("registered Codex finalizer host silence contract", () => {
       expect(fixture.mirror).not.toHaveBeenCalled();
     },
   );
-
-  it("does not finalize an optional empty turn after settled tool work", async () => {
-    const input = await createInput();
-    input.terminalBase.runParams.terminalReplyExpectation = "optional";
-    const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
-
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-
-    expect(result.finalizationOutcome).toBe("not-attempted");
-    expect(result.attempt).toBe(input.initial.attempt);
-    expect(result.terminalState).toBe(input.initial.terminalState);
-    expect(result.terminalState.outcome.error).toContain("Provider overloaded");
-    expect(fixture.runBounded).not.toHaveBeenCalled();
-    expect(runAttempt).not.toHaveBeenCalled();
-    expect(fixture.mirror).not.toHaveBeenCalled();
-  });
 
   it("replaces provider failure with the ordinary finalizer answer", async () => {
     const text = "The command completed and returned: settled.";

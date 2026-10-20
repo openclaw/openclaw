@@ -99,36 +99,35 @@ it.each([
       prompt: "Synthetic native search policy proof.",
     });
     params.config = {
-      ...(coreDispatch
-        ? {
-            agents: { defaults: { workspace: tempDir } },
-            models: {
-              providers: {
-                openai: {
-                  api: "openai-responses" as const,
-                  baseUrl: "https://api.openai.com/v1",
-                  apiKey: "synthetic-native-dispatch-key",
-                  models: ["search-outer", "search-allowed", "search-changed"].map(
-                    (id): ModelDefinitionConfig => ({
-                      id,
-                      name: id,
-                      reasoning: true,
-                      input: ["text", "image"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 32_000,
-                      maxTokens: 4_096,
-                    }),
-                  ),
-                },
-              },
-            },
-          }
-        : {}),
       tools: {
         web: { search: { enabled: true } },
         byProvider: { "openai/search-denied": { deny: ["web_search"] } },
       },
     };
+    if (coreDispatch) {
+      const models = ["search-outer", "search-allowed", "search-changed"].map(
+        (id): ModelDefinitionConfig => ({
+          id,
+          name: id,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32_000,
+          maxTokens: 4_096,
+        }),
+      );
+      params.config.agents = { defaults: { workspace: tempDir } };
+      params.config.models = {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "synthetic-native-dispatch-key",
+            models,
+          },
+        },
+      };
+    }
     fixture.setCodexTestModelSupportsTools(params, true);
     fixture.setCodexTestToolFactory(params, () => []);
     params.agentDir = localPath("agent");
@@ -664,32 +663,30 @@ it.each([
             modelContextWindowTokens: 32_000,
           });
         }
-        expect(coreInput?.runtimeModel).toMatchObject({
+        const modelRoute = {
           provider: nativeProvider,
-          id: nativeModel,
-        });
-        expect(coreInput?.preparedRuntimeAuth.plan).toMatchObject({
-          providerForAuth: nativeProvider,
           modelId: nativeModel,
-          ...(nativeAuth
-            ? { harnessAuthProvider: "openai" }
-            : {
-                modelRoute: {
-                  provider: nativeProvider,
-                  modelId: nativeModel,
-                  authRequirement: "api-key",
-                },
-              }),
+          authRequirement: "api-key",
+        };
+        expect(coreInput).toMatchObject({
+          runtimeModel: { provider: nativeProvider, id: nativeModel },
+          preparedRuntimeAuth: {
+            plan: {
+              providerForAuth: nativeProvider,
+              modelId: nativeModel,
+              ...(nativeAuth ? { harnessAuthProvider: "openai" } : { modelRoute }),
+            },
+          },
+          preparedWebSearchPolicy: {
+            allowed: true,
+            modelRef: { provider: nativeProvider, model: nativeModel },
+          },
         });
         if (nativeAuth) {
           expect(coreInput?.preparedRuntimeAuth.resolvedApiKey).toBeUndefined();
           expect(coreInput?.preparedRuntimeAuth.authProfileStore.profiles).toEqual({});
           expect(coreInput?.preparedRuntimeAuth.plan.modelRoute).toBeUndefined();
         }
-        expect(coreInput?.preparedWebSearchPolicy).toMatchObject({
-          allowed: true,
-          modelRef: { provider: nativeProvider, model: nativeModel },
-        });
       }
     } finally {
       close();
