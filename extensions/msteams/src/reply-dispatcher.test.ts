@@ -184,7 +184,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(typing?.maxDurationMs).toBeGreaterThanOrEqual(300_000);
     await startTool(dispatcher);
     await vi.advanceTimersByTimeAsync(5_000);
-    dispatcher.replyOptions.onItemEvent?.({ progressText: "done" });
+    await dispatcher.replyOptions.onItemEvent?.({ progressText: "done" });
 
     const stream = dispatcher.stream();
     expect(stream.update).toHaveBeenCalled();
@@ -214,7 +214,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     const sendTyping = pipelineArgs().typing?.start;
     expect(sendTyping).toBeTypeOf("function");
 
-    await dispatcher.replyOptions.onPartialReply?.({ text: "first segment tokens" });
+    dispatcher.replyOptions.onPartialReply?.({ text: "first segment tokens" });
     const stream = dispatcher.stream();
     const contextSendActivity = dispatcher.sendActivity;
     contextSendActivity.mockClear();
