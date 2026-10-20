@@ -78,6 +78,10 @@ cutover build reports `too many SQL variables`, the shared credentials remain
 authoritative. Install a build with this fix and rerun `openclaw doctor --fix`;
 do not delete credentials or pair clients again to work around the error.
 
+Doctor’s verified offline NOCOW rewrite transfers a matching credential receipt
+to the replacement shared database file. Existing tokens remain usable after
+the rewrite; an unrelated file replacement remains fenced.
+
 Canonical receipt bindings relative to the local store root survive matched archive activation by directory rename; independent native-source bindings remain absolute.
 
 Outside an update, Doctor takes a fresh table-scoped backup in the same source
