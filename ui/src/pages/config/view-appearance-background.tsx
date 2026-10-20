@@ -16,17 +16,16 @@ export type AppearanceBackgroundView = Omit<BackgroundView, "onRetry"> & {
 export function AppearanceBackground(props: AppearanceBackgroundView) {
   const preference = createMemo(() => props.preference);
   const disabled = createMemo(() => props.busy || preference().source.kind === "none");
-  const presentation = createMemo(() => preference().presentation ?? "faded");
+  const presentation = () => preference().presentation ?? "faded";
   const visibility = createMemo(() => Math.round(preference().visibility * 100));
-  const placementHint = createMemo(() =>
+  const placementHint = () =>
     preference().source.kind === "none"
       ? "noneHint"
       : !preference().showOnNewSession && !preference().showInSessions
         ? "placementOffHint"
         : preference().visibility === 0
           ? "visibilityZeroHint"
-          : undefined,
-  );
+          : undefined;
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.background} class="settings-section">
       <div class="settings-section__header">

@@ -1,5 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createMemo } from "solid-js";
+import { For } from "solid-js";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -10,7 +10,7 @@ import { asConfigSchema } from "./view-schema.tsx";
 import type { ConfigProps } from "./view-types.ts";
 
 export function SessionSources(props: ConfigProps) {
-  const sources = createMemo(() => {
+  const sources = () => {
     const schema = asConfigSchema(props.schema);
     return sessionSourcePresentations
       .filter((source) => props.installedSessionSourcePluginIds?.has(source.pluginId))
@@ -20,7 +20,7 @@ export function SessionSources(props: ConfigProps) {
             ?.properties?.enabled,
         }),
       );
-  });
+  };
   const disabled = () =>
     !props.connected ||
     props.mutationAllowed === false ||

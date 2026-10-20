@@ -65,7 +65,7 @@ export function AgentsPageHeader() {
 }
 
 export function Agents(props: AgentsProps) {
-  const config = createMemo(() => currentConfigObject(props.config), { equals: false });
+  const config = () => currentConfigObject(props.config);
   const defaultId = () =>
     props.readData().agentsList?.selectionRequired
       ? null
