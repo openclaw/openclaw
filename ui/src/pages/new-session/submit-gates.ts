@@ -359,7 +359,7 @@ export function resolveNewSessionSubmitBlock(
       reason:
         place.repository.kind === "checking"
           ? t("newSession.checkingGit")
-          : place.remotePlacement
+          : place.remotePlacement && place.repository.kind !== "forbidden"
             ? t("newSession.remoteSourceUnavailable")
             : (repositoryIssueText(place.repository) ?? t("newSession.gitCheckUnavailable")),
     };

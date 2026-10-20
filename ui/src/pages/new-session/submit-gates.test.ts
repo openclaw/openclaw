@@ -486,6 +486,60 @@ describe("DraftSubmissionFlow submit gates", () => {
     },
   );
 
+  it.each(["forbidden", "unavailable"] as const)(
+    "explains %s Git discovery for a retained device checkout",
+    async (result) => {
+      const fixture = deviceFixture(
+        "build-mac",
+        {
+          id: "device-runtime",
+          source: "model",
+          devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: false },
+        },
+        { model: "openai/gpt-5.6-luna" },
+      );
+      await fixture.gateway.refreshCloudProfiles();
+      await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));
+      fixture.place.selectDevice("build-mac");
+      const discovery = createDeferred<unknown>();
+      fixture.request.mockImplementation((method) =>
+        method === "worktrees.branches" ? discovery.promise : Promise.resolve({}),
+      );
+      fixture.place.applyFolder("/previously-allowed");
+      fixture.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read", "operator.write"];
+      discovery.reject(
+        result === "forbidden"
+          ? new GatewayRequestError({
+              code: "FORBIDDEN",
+              message: "missing scope: operator.admin",
+              details: {
+                code: "MISSING_SCOPE",
+                missingScope: "operator.admin",
+                requiredScopes: ["operator.admin"],
+              },
+            })
+          : new Error("Git discovery unavailable"),
+      );
+      await discovery.promise.catch(() => undefined);
+      expectGate(
+        fixture.flow,
+        "worktree-unavailable",
+        result === "forbidden"
+          ? "Checking Git for this folder requires operator.admin access. Ask the person who manages OpenClaw for access."
+          : "This folder cannot provide a Git checkout. Select New workspace to start empty, or choose a repository.",
+      );
+      await fixture.flow.submit();
+      expect(fixture.context.sessions.createResult).not.toHaveBeenCalled();
+      expect(fixture.place).toMatchObject({
+        deviceId: "build-mac",
+        folder: "/previously-allowed",
+        worktree: true,
+        freshWorkspace: false,
+      });
+      expect(fixture.flow.message).toBe("hello");
+    },
+  );
+
   it("blocks a retained device choice when the selected runtime cannot dispatch there", async () => {
     const fixture = deviceFixture(
       "build-mac",
