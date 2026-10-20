@@ -37,6 +37,24 @@ export function registerAgentThinkingTests({
     applyXaiRuntimeModelCompat: (model: ModelCatalogEntry) => ModelCatalogEntry;
   }>({ dirName: "xai", artifactBasename: "api.js" });
 
+  function installThinkingProvider(id: string, label: string) {
+    const registry = createTestRegistry();
+    registry.providers.push({
+      pluginId: id,
+      source: "test",
+      provider: {
+        id,
+        label,
+        auth: [],
+        resolveThinkingProfile: expectDefined(
+          resolveProviderPolicySurface(id)?.resolveThinkingProfile,
+          `${id} thinking policy`,
+        ),
+      },
+    });
+    setActivePluginRegistry(registry);
+  }
+
   it("validates an unconfigured model against manifest thinking capabilities without live discovery", async () => {
     await withTempHome(async (home) => {
       mockConfig(home, path.join(home, "sessions.json"), { models: {} });
@@ -74,21 +92,7 @@ export function registerAgentThinkingTests({
           model: { primary: "openai/account-reasoner" },
           models: { "openai/account-reasoner": {} },
         });
-        const registry = createTestRegistry();
-        registry.providers.push({
-          pluginId: "openai",
-          source: "test",
-          provider: {
-            id: "openai",
-            label: "OpenAI",
-            auth: [],
-            resolveThinkingProfile: expectDefined(
-              resolveProviderPolicySurface("openai")?.resolveThinkingProfile,
-              "OpenAI thinking policy",
-            ),
-          },
-        });
-        setActivePluginRegistry(registry);
+        installThinkingProvider("openai", "OpenAI");
         vi.mocked(loadManifestModelCatalog).mockReturnValue([
           {
             provider: "openai",
@@ -148,21 +152,7 @@ export function registerAgentThinkingTests({
         model: { primary: modelRef },
         models: { [modelRef]: {} },
       });
-      const registry = createTestRegistry();
-      registry.providers.push({
-        pluginId: "xai",
-        source: "test",
-        provider: {
-          id: "xai",
-          label: "xAI",
-          auth: [],
-          resolveThinkingProfile: expectDefined(
-            resolveProviderPolicySurface("xai")?.resolveThinkingProfile,
-            "xAI thinking policy",
-          ),
-        },
-      });
-      setActivePluginRegistry(registry);
+      installThinkingProvider("xai", "xAI");
       vi.mocked(loadManifestModelCatalog).mockReturnValue([model]);
 
       await agentCommand(

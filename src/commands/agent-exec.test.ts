@@ -45,6 +45,14 @@ function successResult(text = "done") {
   };
 }
 
+function runExec(
+  opts: Parameters<typeof runAgentExecWithMock>[1],
+  runAgent: Parameters<typeof runAgentExecWithMock>[3] = async () => successResult(),
+  runtime = createTestRuntime(),
+) {
+  return runAgentExecWithMock("inspect", opts, runtime, runAgent);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
@@ -133,8 +141,7 @@ describe("agent exec command composition", () => {
       if (mode === "ambient") {
         setRuntimeConfigSnapshot(base);
       }
-      const result = await runAgentExecWithMock(
-        "inspect",
+      const result = await runExec(
         {
           ...(mode === "pinned" ? { config: configPath } : {}),
           cwd: root,
@@ -161,7 +168,6 @@ describe("agent exec command composition", () => {
             '{"tools":{"deny":[]}}',
           ],
         },
-        createTestRuntime(),
         async (invocation) => {
           expect(invocation).toMatchObject({
             agentId: "alpha",
@@ -204,10 +210,8 @@ describe("agent exec command composition", () => {
       JSON.stringify({ env: { vars: { OPENCLAW_EXEC_OVERRIDE_PROBE: "from-config" } } }),
     );
     const runAgent = vi.fn(async () => successResult());
-    const result = await runAgentExecWithMock(
-      "inspect",
+    const result = await runExec(
       { config, configOverride: ['{"tools":{"profile":"invalid"}}'] },
-      createTestRuntime(),
       runAgent,
     );
     expect(result.envelope.error?.message).toContain("Invalid --config-override");
@@ -216,14 +220,7 @@ describe("agent exec command composition", () => {
   });
 
   it("treats invalid timeout syntax as an ordinary usage error", async () => {
-    const runtime = createTestRuntime();
-
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { timeout: "nope", json: true },
-      runtime,
-      vi.fn(async () => successResult()),
-    );
+    const result = await runExec({ timeout: "nope", json: true });
 
     expect(result).toMatchObject({
       exitCode: 1,
@@ -232,7 +229,6 @@ describe("agent exec command composition", () => {
   });
 
   it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
-    const runtime = createTestRuntime();
     const timeout = new AgentRunTerminalOutcomeError(
       new Error("attempt aborted before prompt submission"),
       {
@@ -243,14 +239,9 @@ describe("agent exec command composition", () => {
       },
     );
 
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { json: true },
-      runtime,
-      vi.fn(async () => {
-        throw timeout;
-      }),
-    );
+    const result = await runExec({ json: true }, async () => {
+      throw timeout;
+    });
 
     expect(result).toMatchObject({
       exitCode: 2,
@@ -265,14 +256,7 @@ describe("agent exec command composition", () => {
   });
 
   it("rejects invalid programmatic Code Mode values", async () => {
-    const runtime = createTestRuntime();
-
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { codeMode: "invalid" as never },
-      runtime,
-      vi.fn(async () => successResult()),
-    );
+    const result = await runExec({ codeMode: "invalid" as never });
 
     expect(result).toMatchObject({
       exitCode: 1,
@@ -323,31 +307,26 @@ describe("agent exec command composition", () => {
   it("flushes opted-in identity evidence through its owned direct-local writer", async () => {
     const root = tempDirs.make("openclaw-agent-exec-audit-");
     setRuntimeConfigSnapshot({ logging: { audit: { executionIdentity: true } } });
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { stateDir: root },
-      createTestRuntime(),
-      async () => {
-        expect(
-          enqueueExecutionIdentityContextAtAdmission(
-            {
-              runId: "run",
-              agentId: "main",
-              ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-              runtime: { kind: "embedded" },
-            },
-            {
-              enabled: true,
-              contextId: "context",
-              executionId: "execution",
-              now: Date.now(),
-              runtimeInstanceId: "runtime",
-            },
-          ),
-        ).toMatchObject({ accepted: true });
-        return successResult();
-      },
-    );
+    const result = await runExec({ stateDir: root }, async () => {
+      expect(
+        enqueueExecutionIdentityContextAtAdmission(
+          {
+            runId: "run",
+            agentId: "main",
+            ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+            runtime: { kind: "embedded" },
+          },
+          {
+            enabled: true,
+            contextId: "context",
+            executionId: "execution",
+            now: Date.now(),
+            runtimeInstanceId: "runtime",
+          },
+        ),
+      ).toMatchObject({ accepted: true });
+      return successResult();
+    });
     expect(result.exitCode).toBe(0);
     const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
       readOnly: true,
@@ -370,18 +349,13 @@ describe("agent exec command composition", () => {
   it("keeps operator-installed plugins hidden under --isolated", async () => {
     const operatorStateDir = tempDirs.make("openclaw-agent-exec-plugin-isolated-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: operatorStateDir }, async () => {
-      const result = await runAgentExecWithMock(
-        "inspect",
-        { isolated: true },
-        createTestRuntime(),
-        async () => {
-          const { resolveDefaultPluginExtensionsDir } = await import("../plugins/install-paths.js");
-          const extensionsDir = resolveDefaultPluginExtensionsDir();
-          expect(extensionsDir).not.toBe(path.join(operatorStateDir, "extensions"));
-          expect(path.basename(path.dirname(extensionsDir))).toMatch(/^openclaw-agent-exec-/u);
-          return successResult();
-        },
-      );
+      const result = await runExec({ isolated: true }, async () => {
+        const { resolveDefaultPluginExtensionsDir } = await import("../plugins/install-paths.js");
+        const extensionsDir = resolveDefaultPluginExtensionsDir();
+        expect(extensionsDir).not.toBe(path.join(operatorStateDir, "extensions"));
+        expect(path.basename(path.dirname(extensionsDir))).toMatch(/^openclaw-agent-exec-/u);
+        return successResult();
+      });
       expect(result.exitCode).toBe(0);
     });
   });
@@ -409,10 +383,8 @@ describe("agent exec command composition", () => {
       });
       let visibleTools: string[] | undefined;
       try {
-        const result = await runAgentExecWithMock(
-          "inspect",
+        const result = await runExec(
           { codeMode: mode, model: "test/model-a", localModelLean: true },
-          runtime,
           vi.fn(async (invocation) => {
             const config = expectDefined(getRuntimeConfigSnapshot(), "isolated run config");
             expect(config.tools?.codeMode).toEqual(codeMode);
@@ -436,6 +408,7 @@ describe("agent exec command composition", () => {
             }
             return successResult();
           }),
+          runtime,
         );
         expect(result.exitCode).toBe(0);
         expect(visibleTools).toEqual(enabled ? ["exec", "wait"] : ["read"]);
@@ -451,16 +424,20 @@ describe("agent exec command composition", () => {
     let observedStateDir = "";
     vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
 
-    const result = await runAgentExecWithMock("inspect", { json: true }, runtime, async () => {
-      observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-      return {
-        ...successResult("partial answer"),
-        meta: {
-          durationMs: 25,
-          error: { kind: "context_overflow", message: "original run failure" },
-        },
-      };
-    });
+    const result = await runExec(
+      { json: true },
+      async () => {
+        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+        return {
+          ...successResult("partial answer"),
+          meta: {
+            durationMs: 25,
+            error: { kind: "context_overflow", message: "original run failure" },
+          },
+        };
+      },
+      runtime,
+    );
     externalTempDirs.push(observedStateDir);
 
     expect(result).toMatchObject({
@@ -488,14 +465,13 @@ describe("agent exec command composition", () => {
       return successResult();
     });
 
-    const result = await runAgentExecWithMock(
-      "inspect",
+    const result = await runExec(
       {
         model: "openai/gpt-5.6-sol",
         fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
       },
-      runtime,
       runAgent,
+      runtime,
     );
 
     expect(runAgent).toHaveBeenCalledWith(
@@ -522,17 +498,16 @@ describe("agent exec command composition", () => {
     const runtime = createTestRuntime();
     let observedDuringRun: string | undefined;
 
-    await runAgentExecWithMock(
-      "inspect",
+    await runExec(
       {
         config: seedPath,
         configOverride: ['{"env":{"vars":{"OPENCLAW_EXEC_ENV_PROBE":"from-override"}}}'],
       },
-      runtime,
       vi.fn(async () => {
         observedDuringRun = process.env.OPENCLAW_EXEC_ENV_PROBE;
         return successResult();
       }),
+      runtime,
     );
 
     expect(observedDuringRun).toBe("from-override");
@@ -604,10 +579,14 @@ describe("agent exec tool lifetime", () => {
   it("closes retained tool closures when the invocation ends", async () => {
     const source = vi.fn(async () => ({ content: [], details: {} }));
     let retained: ReturnType<typeof wrapToolWithBeforeToolCallHook> | undefined;
-    const result = await runAgentExecWithMock("inspect", {}, runtime, async () => {
-      retained = wrapToolWithBeforeToolCallHook({ ...createStubTool("read"), execute: source });
-      return successResult();
-    });
+    const result = await runExec(
+      {},
+      async () => {
+        retained = wrapToolWithBeforeToolCallHook({ ...createStubTool("read"), execute: source });
+        return successResult();
+      },
+      runtime,
+    );
 
     expect(result.exitCode).toBe(0);
     await expect(retained?.execute("late", {})).rejects.toThrow();
@@ -617,17 +596,25 @@ describe("agent exec tool lifetime", () => {
   it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
     let retainedGuard: (() => void) | undefined;
     const effect = vi.fn();
-    await runAgentExecWithMock("inspect", {}, runtime, async () => {
-      retainedGuard = captureAgentToolSourceExecutionGuard();
-      return successResult();
-    });
-    const replacement = await runAgentExecWithMock("inspect", {}, runtime, async () => {
-      expect(() => {
-        retainedGuard?.();
-        effect();
-      }).toThrow("execution scope is no longer active");
-      return successResult();
-    });
+    await runExec(
+      {},
+      async () => {
+        retainedGuard = captureAgentToolSourceExecutionGuard();
+        return successResult();
+      },
+      runtime,
+    );
+    const replacement = await runExec(
+      {},
+      async () => {
+        expect(() => {
+          retainedGuard?.();
+          effect();
+        }).toThrow("execution scope is no longer active");
+        return successResult();
+      },
+      runtime,
+    );
     expect(replacement.exitCode).toBe(0);
     expect(effect).not.toHaveBeenCalled();
   });

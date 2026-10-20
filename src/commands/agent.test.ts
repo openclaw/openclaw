@@ -272,6 +272,9 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
 const attemptExecutionMocks = getAgentAttemptExecutionMocks();
 
 const runtime = createThrowingTestRuntime();
+const runCommand = (opts: Parameters<typeof agentCommand>[0]) => agentCommand(opts, runtime);
+const runIngress = (opts: Parameters<typeof agentCommandFromIngress>[0]) =>
+  agentCommandFromIngress(opts, runtime);
 
 function mockConfig(
   home: string,
@@ -356,13 +359,41 @@ function getLastEmbeddedCall() {
   return vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0];
 }
 
+function expectSessionTarget(storePath: string, sessionKey: string, agentId = "ops") {
+  const call = getLastEmbeddedCall();
+  const sessionId = expectDefined(call?.sessionId, "embedded session id");
+  expect(sessionId).toBeTruthy();
+  expect(call).toMatchObject({ agentId, sessionKey, sessionFile: sessionKey });
+  expect(
+    vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+  ).toEqual({ agentId, sessionId, sessionKey, storePath });
+  return sessionId;
+}
+
+function expectOpsSession(storePath: string, sessionKey: string, sessionId: string) {
+  expectOwnedCommandSession({
+    agentId: "ops",
+    excludedAgentId: "main",
+    sessionKey,
+    sessionId,
+    storePath,
+  });
+}
+
 function expectLastRunProviderModel(provider: string, model: string): void {
-  const callArgs = getLastEmbeddedCall();
-  expect(callArgs?.provider).toBe(provider);
-  expect(callArgs?.model).toBe(model);
+  expect(getLastEmbeddedCall()).toMatchObject({ provider, model });
+}
+
+function expectModelAttempts(expected: Array<{ provider: string; model: string }>) {
+  expect(
+    vi.mocked(runEmbeddedAgent).mock.calls.map(([call]) => ({
+      provider: call.provider,
+      model: call.model,
+    })),
+  ).toEqual(expected);
 }
 async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
-  await agentCommand({ message: "hi", sessionKey }, runtime);
+  await runCommand({ message: "hi", sessionKey });
 }
 
 function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
@@ -434,10 +465,7 @@ describe("agentCommand", () => {
         actualDelivery.deliverAgentCommandResult,
       );
 
-      const result = await agentCommand(
-        { message: "Identify this local agent", agentId: "main" },
-        runtime,
-      );
+      const result = await runCommand({ message: "Identify this local agent", agentId: "main" });
 
       expect(result?.payloads).toEqual([{ text: "Local agent: main", mediaUrl: null }]);
       expect(runtime.log).toHaveBeenCalledWith("Local agent: main");
@@ -593,10 +621,12 @@ describe("agentCommand", () => {
           return projected;
         });
 
-        const result = await agentCommand(
-          { message: "probe", agentId: "main", json: true, abortSignal: controller.signal },
-          runtime,
-        );
+        const result = await runCommand({
+          message: "probe",
+          agentId: "main",
+          json: true,
+          abortSignal: controller.signal,
+        });
 
         expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
         expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).not.toHaveBeenCalled();
@@ -630,17 +660,14 @@ describe("agentCommand", () => {
         actualDelivery.deliverAgentCommandResult,
       );
 
-      const result = await agentCommand(
-        {
-          message: "probe",
-          agentId: "main",
-          json: true,
-          deliver: true,
-          channel: "webchat",
-          bestEffortDeliver: true,
-        },
-        runtime,
-      );
+      const result = await runCommand({
+        message: "probe",
+        agentId: "main",
+        json: true,
+        deliver: true,
+        channel: "webchat",
+        bestEffortDeliver: true,
+      });
 
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(result?.deliveryStatus).toMatchObject({ status: "failed", succeeded: false });
@@ -671,10 +698,11 @@ describe("agentCommand", () => {
           },
         );
 
-        const command = agentCommand(
-          { message: "probe", agentId: "main", abortSignal: controller.signal },
-          runtime,
-        );
+        const command = runCommand({
+          message: "probe",
+          agentId: "main",
+          abortSignal: controller.signal,
+        });
         if (fault === "rejection") {
           await expect(command).rejects.toBe(failure);
         } else {
@@ -726,15 +754,12 @@ describe("agentCommand", () => {
   it("owns skill watching for ingress runs with oneShotCliRun=true", async () => {
     await withTempHome(async (home) => {
       mockConfig(home, path.join(home, "sessions.json"));
-      await agentCommandFromIngress(
-        {
-          message: "inspect skills",
-          agentId: "main",
-          oneShotCliRun: true,
-          allowModelOverride: false,
-        },
-        runtime,
-      );
+      await runIngress({
+        message: "inspect skills",
+        agentId: "main",
+        oneShotCliRun: true,
+        allowModelOverride: false,
+      });
 
       expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ watch: false }),
@@ -856,15 +881,12 @@ describe("agentCommand", () => {
         },
       });
 
-      await agentCommandFromIngress(
-        {
-          message: "inspect this repo",
-          sessionKey,
-          workspaceDir: worktree.path,
-          allowModelOverride: false,
-        },
-        runtime,
-      );
+      await runIngress({
+        message: "inspect this repo",
+        sessionKey,
+        workspaceDir: worktree.path,
+        allowModelOverride: false,
+      });
 
       const skillRoots = vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.calls.at(-1)?.[0];
       expect(skillRoots?.workspaceDir).toBe(path.join(home, "openclaw"));
@@ -886,14 +908,11 @@ describe("agentCommand", () => {
         },
       ]);
 
-      await agentCommandFromIngress(
-        {
-          message: "/workflows_review retries and cleanup",
-          agentId: "main",
-          allowModelOverride: false,
-        },
-        runtime,
-      );
+      await runIngress({
+        message: "/workflows_review retries and cleanup",
+        agentId: "main",
+        allowModelOverride: false,
+      });
 
       expect(getLastEmbeddedCall()?.prompt).toBe(
         "Review this workflow carefully.\n\nFocus on:\nretries and cleanup",
@@ -910,10 +929,7 @@ describe("agentCommand", () => {
       mockUserInvocableSkills({ home, skills: [{ name: "hidden-skill" }] });
 
       await expect(
-        agentCommandFromIngress(
-          { message: "$hidden_skill", agentId: "main", allowModelOverride: false },
-          runtime,
-        ),
+        runIngress({ message: "$hidden_skill", agentId: "main", allowModelOverride: false }),
       ).rejects.toThrow(
         'Skill "hidden-skill" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
       );
@@ -928,14 +944,11 @@ describe("agentCommand", () => {
       cfg.skills = { limits: { maxSkillsPromptChars: 1 } };
       mockUserInvocableSkills({ home, skills: [{ name: "release-notes" }] });
 
-      await agentCommandFromIngress(
-        {
-          message: "Use $release_notes despite the catalog cap.",
-          agentId: "main",
-          allowModelOverride: false,
-        },
-        runtime,
-      );
+      await runIngress({
+        message: "Use $release_notes despite the catalog cap.",
+        agentId: "main",
+        allowModelOverride: false,
+      });
 
       expect(getLastEmbeddedCall()?.skillsSnapshot?.prompt).toBe("");
       expect(getLastEmbeddedCall()?.prompt).toContain("- release-notes");
@@ -1037,14 +1050,11 @@ describe("agentCommand", () => {
       mockConfig(home, store);
 
       await expect(
-        agentCommandFromIngress(
-          {
-            message: "do not squat",
-            sessionKey: "agent:main:harness:codex:supervision:missing-ingress",
-            allowModelOverride: false,
-          },
-          runtime,
-        ),
+        runIngress({
+          message: "do not squat",
+          sessionKey: "agent:main:harness:codex:supervision:missing-ingress",
+          allowModelOverride: false,
+        }),
       ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -1093,14 +1103,11 @@ describe("agentCommand", () => {
         return createDefaultAgentResult();
       });
 
-      await agentCommandFromIngress(
-        {
-          message: "write inside the session worktree",
-          sessionKey,
-          allowModelOverride: false,
-        },
-        runtime,
-      );
+      await runIngress({
+        message: "write inside the session worktree",
+        sessionKey,
+        allowModelOverride: false,
+      });
 
       expect(outsideWriteError).toBeInstanceOf(Error);
       expect(String(outsideWriteError)).toMatch(/(?:sandbox|workspace) root/i);
@@ -1125,18 +1132,15 @@ describe("agentCommand", () => {
       });
 
       const runVoiceTurn = async (message: string) =>
-        await agentCommandFromIngress(
-          {
-            message,
-            sessionKey,
-            agentId: "main",
-            messageChannel: "discord",
-            messageProvider: "discord-voice",
-            allowModelOverride: false,
-            deliver: false,
-          },
-          runtime,
-        );
+        await runIngress({
+          message,
+          sessionKey,
+          agentId: "main",
+          messageChannel: "discord",
+          messageProvider: "discord-voice",
+          allowModelOverride: false,
+          deliver: false,
+        });
 
       await runVoiceTurn("remember 42");
       const firstSessionId = getLastEmbeddedCall()?.sessionId;
@@ -1176,14 +1180,11 @@ describe("agentCommand", () => {
       });
 
       await expect(
-        agentCommandFromIngress(
-          {
-            message: "blocked after preparation",
-            sessionId,
-            allowModelOverride: false,
-          },
-          runtime,
-        ),
+        runIngress({
+          message: "blocked after preparation",
+          sessionId,
+          allowModelOverride: false,
+        }),
       ).rejects.toThrow(
         `Session "${sessionKey}" is archived. Restore it before starting new work.`,
       );
@@ -1211,14 +1212,11 @@ describe("agentCommand", () => {
         return { dir: params?.dir ?? "/tmp/openclaw-workspace" };
       });
 
-      await agentCommandFromIngress(
-        {
-          message: "run after restore",
-          sessionId,
-          allowModelOverride: false,
-        },
-        runtime,
-      );
+      await runIngress({
+        message: "run after restore",
+        sessionId,
+        allowModelOverride: false,
+      });
 
       expect(runEmbeddedAgent).toHaveBeenCalled();
       expect(readSessionStore<SessionEntry>(store)[sessionKey]?.archivedAt).toBeUndefined();
@@ -1245,14 +1243,11 @@ describe("agentCommand", () => {
         return createDefaultAgentResult();
       });
 
-      await agentCommandFromIngress(
-        {
-          message: "run an in-band lifecycle command",
-          sessionId,
-          allowModelOverride: false,
-        },
-        runtime,
-      );
+      await runIngress({
+        message: "run an in-band lifecycle command",
+        sessionId,
+        allowModelOverride: false,
+      });
 
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     });
@@ -1294,15 +1289,12 @@ describe("agentCommand", () => {
             }),
         );
 
-        const command = agentCommandFromIngress(
-          {
-            message: "interrupt this lifecycle run",
-            sessionId,
-            allowModelOverride: false,
-            abortSignal: cleanup.signal,
-          },
-          runtime,
-        ).catch((error: unknown) => error);
+        const command = runIngress({
+          message: "interrupt this lifecycle run",
+          sessionId,
+          allowModelOverride: false,
+          abortSignal: cleanup.signal,
+        }).catch((error: unknown) => error);
         try {
           await Promise.race([
             entered.promise,
@@ -1347,15 +1339,12 @@ describe("agentCommand", () => {
       });
 
       await expect(
-        agentCommandFromIngress(
-          {
-            message: "do not enter the replacement session",
-            sessionKey,
-            sessionId: "stale-session-id",
-            allowModelOverride: false,
-          },
-          runtime,
-        ),
+        runIngress({
+          message: "do not enter the replacement session",
+          sessionKey,
+          sessionId: "stale-session-id",
+          allowModelOverride: false,
+        }),
       ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     });
@@ -1372,31 +1361,27 @@ describe("agentCommand", () => {
         }),
       );
 
-      await agentCommand(
-        {
-          message: "ping",
-          to: "+1222",
-          accountId: "kev",
-          thinking: "high",
-          verbose: "on",
-          json: true,
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "ping",
+        to: "+1222",
+        accountId: "kev",
+        thinking: "high",
+        verbose: "on",
+        json: true,
+      });
 
       const saved = readSessionStore<SessionEntry>(store);
       const entry = expectDefined(
         Object.values(saved)[0],
         "Object.values(saved)[0] test invariant",
       );
-      expect(entry.thinkingLevel).toBe("high");
-      expect(entry.verboseLevel).toBe("on");
-
-      const callArgs = getLastEmbeddedCall();
-      expect(callArgs?.thinkLevel).toBe("high");
-      expect(callArgs?.verboseLevel).toBe("on");
-      expect(callArgs?.prompt).toBe("ping");
-      expect(callArgs?.agentAccountId).toBe("kev");
+      expect(entry).toMatchObject({ thinkingLevel: "high", verboseLevel: "on" });
+      expect(getLastEmbeddedCall()).toMatchObject({
+        thinkLevel: "high",
+        verboseLevel: "on",
+        prompt: "ping",
+        agentAccountId: "kev",
+      });
 
       const logCalls = (runtime.log as unknown as MockInstance).mock.calls;
       const logged = logCalls[logCalls.length - 1]?.[0] as string;
@@ -1404,13 +1389,10 @@ describe("agentCommand", () => {
         payloads: Array<{ text: string; mediaUrl?: string | null }>;
         meta: { durationMs: number };
       };
-      expect(expectDefined(parsed.payloads[0], "parsed.payloads[0] test invariant").text).toBe(
-        "json-reply",
-      );
-      expect(expectDefined(parsed.payloads[0], "parsed.payloads[0] test invariant").mediaUrl).toBe(
-        "http://x.test/a.jpg",
-      );
-      expect(parsed.meta.durationMs).toBe(42);
+      expect(parsed).toMatchObject({
+        payloads: [{ text: "json-reply", mediaUrl: "http://x.test/a.jpg" }],
+        meta: { durationMs: 42 },
+      });
     });
   });
 
@@ -1444,25 +1426,23 @@ describe("agentCommand", () => {
         runTurn,
       });
 
-      await agentCommand(
-        {
-          message: "Reply with exactly OPENCLAW-MODEL-OK",
-          sessionKey,
-          model: "openrouter/auto",
-          modelRun: true,
-          promptMode: "none",
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "Reply with exactly OPENCLAW-MODEL-OK",
+        sessionKey,
+        model: "openrouter/auto",
+        modelRun: true,
+        promptMode: "none",
+      });
 
       expect(runTurn).not.toHaveBeenCalled();
-      const callArgs = getLastEmbeddedCall();
-      expect(callArgs?.provider).toBe("openrouter");
-      expect(callArgs?.model).toBe("openrouter/auto");
-      expect(callArgs?.prompt).toBe("Reply with exactly OPENCLAW-MODEL-OK");
-      expect(callArgs?.modelRun).toBe(true);
-      expect(callArgs?.promptMode).toBe("none");
-      expect(callArgs?.disableTools).toBe(true);
+      expect(getLastEmbeddedCall()).toMatchObject({
+        provider: "openrouter",
+        model: "openrouter/auto",
+        prompt: "Reply with exactly OPENCLAW-MODEL-OK",
+        modelRun: true,
+        promptMode: "none",
+        disableTools: true,
+      });
     });
   });
 
@@ -1499,7 +1479,7 @@ describe("agentCommand", () => {
         } as never;
       });
 
-      await agentCommand({ message: "hi", to: "+1555", thinking: "low" }, runtime);
+      await runCommand({ message: "hi", to: "+1555", thinking: "low" });
       stop();
 
       const matching = assistantEvents.filter((evt) => evt.text === "hello");
@@ -1539,18 +1519,12 @@ describe("agentCommand", () => {
           },
         });
 
-      await agentCommand(
-        {
-          message: "hi",
-          sessionKey: "agent:main:subagent:test",
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "hi",
+        sessionKey: "agent:main:subagent:test",
+      });
 
-      const attempts = vi
-        .mocked(runEmbeddedAgent)
-        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
-      expect(attempts).toEqual([
+      expectModelAttempts([
         { provider: "openai", model: "gpt-4.1-mini" },
         { provider: "openai", model: "gpt-5.4" },
       ]);
@@ -1585,10 +1559,7 @@ describe("agentCommand", () => {
       );
 
       await expect(runAgentWithSessionKey(sessionKey)).rejects.toThrow("rate limited");
-      const attempts = vi
-        .mocked(runEmbeddedAgent)
-        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
-      expect(attempts).toEqual([{ provider: "anthropic", model: "claude-opus-4-6" }]);
+      expectModelAttempts([{ provider: "anthropic", model: "claude-opus-4-6" }]);
     });
   });
 
@@ -1613,18 +1584,12 @@ describe("agentCommand", () => {
         { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
       ]);
 
-      await agentCommand(
-        {
-          message: "hi",
-          sessionKey: "agent:main:subagent:legacy-auto",
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "hi",
+        sessionKey: "agent:main:subagent:legacy-auto",
+      });
 
-      const attempts = vi
-        .mocked(runEmbeddedAgent)
-        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
-      expect(attempts).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
+      expectModelAttempts([{ provider: "openai", model: "gpt-4.1-mini" }]);
 
       const cleared = readSessionStore<SessionEntry>(store);
       const entry = cleared["agent:main:subagent:legacy-auto"];
@@ -1667,19 +1632,13 @@ describe("agentCommand", () => {
       vi.mocked(runEmbeddedAgent).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
 
       await expect(
-        agentCommand(
-          {
-            message: "hi",
-            sessionKey: "agent:main:subagent:user-override",
-          },
-          runtime,
-        ),
+        runCommand({
+          message: "hi",
+          sessionKey: "agent:main:subagent:user-override",
+        }),
       ).rejects.toThrow("connect ECONNREFUSED");
 
-      const attempts = vi
-        .mocked(runEmbeddedAgent)
-        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
-      expect(attempts).toEqual([{ provider: "ollama", model: "qwen3.5:27b" }]);
+      expectModelAttempts([{ provider: "ollama", model: "qwen3.5:27b" }]);
     });
   });
 
@@ -1797,15 +1756,12 @@ describe("agentCommand", () => {
       });
 
       await expect(
-        agentCommand(
-          {
-            message: "hi",
-            sessionKey,
-            model: "openai/gpt-4.1-mini",
-            allowModelOverride: true,
-          },
-          runtime,
-        ),
+        runCommand({
+          message: "hi",
+          sessionKey,
+          model: "openai/gpt-4.1-mini",
+          allowModelOverride: true,
+        }),
       ).rejects.toMatchObject({
         name: "ModelSelectionLockedError",
         message: MODEL_SELECTION_LOCKED_MESSAGE,
@@ -1824,15 +1780,12 @@ describe("agentCommand", () => {
         },
       });
 
-      await agentCommand(
-        {
-          message: "use the override",
-          sessionKey: "agent:main:subagent:run-override",
-          provider: "openai",
-          model: "gpt-4.1-mini",
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "use the override",
+        sessionKey: "agent:main:subagent:run-override",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+      });
 
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
 
@@ -1858,40 +1811,30 @@ describe("agentCommand", () => {
         },
       } as never);
 
-      await agentCommand(
-        {
-          message: "use a different provider once",
-          sessionKey: "agent:main:subagent:temp-openai-run",
-          provider: "openai",
-          model: "gpt-4.1-mini",
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "use a different provider once",
+        sessionKey: "agent:main:subagent:temp-openai-run",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+      });
 
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
       expect(getLastEmbeddedCall()?.authProfileId).toBeUndefined();
 
       const savedAuth = readSessionStore<SessionEntry>(store);
-      expect(savedAuth["agent:main:subagent:temp-openai-run"]?.authProfileOverride).toBe(
-        "anthropic:work",
-      );
-      expect(savedAuth["agent:main:subagent:temp-openai-run"]?.authProfileOverrideSource).toBe(
-        "user",
-      );
-      expect(
-        savedAuth["agent:main:subagent:temp-openai-run"]?.authProfileOverrideCompactionCount,
-      ).toBe(2);
+      expect(savedAuth["agent:main:subagent:temp-openai-run"]).toMatchObject({
+        authProfileOverride: "anthropic:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      });
 
       await expect(
-        agentCommand(
-          {
-            message: "use an invalid override",
-            sessionKey: "agent:main:subagent:invalid-override",
-            provider: "openai\u001b[31m",
-            model: "gpt-4.1-mini",
-          },
-          runtime,
-        ),
+        runCommand({
+          message: "use an invalid override",
+          sessionKey: "agent:main:subagent:invalid-override",
+          provider: "openai\u001b[31m",
+          model: "gpt-4.1-mini",
+        }),
       ).rejects.toThrow("Provider override contains invalid control characters.");
 
       const parseModelRefSpy = vi.spyOn(modelSelectionModule, "parseModelRef");
@@ -1911,14 +1854,11 @@ describe("agentCommand", () => {
       });
       try {
         await expect(
-          agentCommand(
-            {
-              message: "use disallowed override",
-              sessionKey: "agent:main:subagent:sanitized-override-error",
-              model: "claude-haiku-4-5",
-            },
-            runtime,
-          ),
+          runCommand({
+            message: "use disallowed override",
+            sessionKey: "agent:main:subagent:sanitized-override-error",
+            model: "claude-haiku-4-5",
+          }),
         ).rejects.toThrow(
           'Model override "anthropic/claude-haiku-4-5" is not allowed for agent "main" by agents.defaults.modelPolicy.allow. Add "anthropic/claude-haiku-4-5" or "anthropic/*" to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.',
         );
@@ -1937,14 +1877,11 @@ describe("agentCommand", () => {
       });
       delete (legacyCfg as { meta?: unknown }).meta;
       await expect(
-        agentCommand(
-          {
-            message: "use the configured fallback directly",
-            sessionKey: "agent:main:subagent:legacy-fallback-override",
-            model: "external/sensitive",
-          },
-          runtime,
-        ),
+        runCommand({
+          message: "use the configured fallback directly",
+          sessionKey: "agent:main:subagent:legacy-fallback-override",
+          model: "external/sensitive",
+        }),
       ).rejects.toThrow(
         'Model override "external/sensitive" is not allowed for agent "main" by agents.defaults.models. Add "external/sensitive" or "external/*" to agents.defaults.modelPolicy.allow, or remove/empty the list to allow any model.',
       );
@@ -1956,10 +1893,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, undefined, undefined, { ops: {} });
 
-      await agentCommand(
-        { message: "hi", agentId: "ops", replyChannel: "slack", thinking: "low" },
-        runtime,
-      );
+      await runCommand({ message: "hi", agentId: "ops", replyChannel: "slack", thinking: "low" });
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:main");
       expect(callArgs?.sessionId).toBeTruthy();
@@ -1978,21 +1912,18 @@ describe("agentCommand", () => {
       expect(callArgs?.messageChannel).toBe("slack");
       expect(runtime.log).toHaveBeenCalledWith("ok");
 
-      await agentCommand(
-        {
-          message: "hi",
-          to: "+1555",
-          channel: "whatsapp",
-          thinking: "low",
-          runContext: { messageChannel: "slack", accountId: "acct-2" },
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "hi",
+        to: "+1555",
+        channel: "whatsapp",
+        thinking: "low",
+        runContext: { messageChannel: "slack", accountId: "acct-2" },
+      });
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.messageChannel).toBe("slack");
       expect(callArgs?.agentAccountId).toBe("acct-2");
 
-      await expect(agentCommand({ message: "hi", agentId: "ghost" }, runtime)).rejects.toThrow(
+      await expect(runCommand({ message: "hi", agentId: "ghost" })).rejects.toThrow(
         'Unknown agent id "ghost"',
       );
     });
@@ -2029,44 +1960,35 @@ describe("agentCommand", () => {
         },
       ]);
       cfg.session = { ...cfg.session, dmScope: "per-account-channel-peer" };
-      await agentCommand(
-        {
-          message: "hi",
-          agentId: "ops",
-          channel: "whatsapp",
-          to: "+15551234567",
-          accountId: "work",
-          thinking: "low",
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "hi",
+        agentId: "ops",
+        channel: "whatsapp",
+        to: "+15551234567",
+        accountId: "work",
+        thinking: "low",
+      });
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:whatsapp:work:direct:+15551234567");
 
-      await agentCommand(
-        {
-          message: "hi",
-          agentId: "ops",
-          channel: "whatsapp",
-          to: "120363040000000000@g.us",
-          thinking: "low",
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "hi",
+        agentId: "ops",
+        channel: "whatsapp",
+        to: "120363040000000000@g.us",
+        thinking: "low",
+      });
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:whatsapp:group:120363040000000000@g.us");
 
       cfg.session = { ...cfg.session, dmScope: "main", mainKey: "work" };
-      await agentCommand(
-        {
-          message: "hi",
-          agentId: "ops",
-          channel: "webchat",
-          to: "+15551234567",
-          thinking: "low",
-        },
-        runtime,
-      );
+      await runCommand({
+        message: "hi",
+        agentId: "ops",
+        channel: "webchat",
+        to: "+15551234567",
+        thinking: "low",
+      });
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:work");
     });
@@ -2081,61 +2003,24 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, undefined, undefined, { main: {}, ops: {} });
 
-      await agentCommand({ message: "hi", sessionKey: "agent:ops:incident-42" }, runtime);
+      await runCommand({ message: "hi", sessionKey: "agent:ops:incident-42" });
 
-      let callArgs = getLastEmbeddedCall();
-      expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
-      expect(callArgs?.sessionId).toBeTruthy();
-      expect(callArgs?.sessionFile).toBe("agent:ops:incident-42");
-      expect(
-        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
-      ).toEqual({
-        agentId: "ops",
-        sessionId: callArgs?.sessionId,
-        sessionKey: "agent:ops:incident-42",
-        storePath: store,
-      });
+      expectSessionTarget(store, "agent:ops:incident-42");
 
-      await agentCommand({ message: "hi", agentId: "ops", sessionKey: "incident-42" }, runtime);
+      await runCommand({ message: "hi", agentId: "ops", sessionKey: "incident-42" });
 
-      callArgs = getLastEmbeddedCall();
+      const callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
 
       for (const sessionKey of ["global", "unknown"]) {
-        await agentCommand({ message: "hi", agentId: "ops", sessionKey }, runtime);
+        await runCommand({ message: "hi", agentId: "ops", sessionKey });
 
-        callArgs = getLastEmbeddedCall();
-        const sessionId = expectDefined(callArgs?.sessionId, "embedded session id");
-        expect(callArgs?.agentId).toBe("ops");
-        expect(callArgs?.sessionKey).toBe(sessionKey);
-        expect(sessionId).toBeTruthy();
-        expect(callArgs?.sessionFile).toBe(sessionKey);
-        expect(
-          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
-        ).toEqual({
-          agentId: "ops",
-          sessionId,
-          sessionKey,
-          storePath: store,
-        });
-        expectOwnedCommandSession({
-          agentId: "ops",
-          excludedAgentId: "main",
-          sessionKey,
-          sessionId,
-          storePath: store,
-        });
-        await agentCommand({ message: "again", sessionId }, runtime);
+        const sessionId = expectSessionTarget(store, sessionKey);
+        expectOpsSession(store, sessionKey, sessionId);
+        await runCommand({ message: "again", sessionId });
         expect(getLastEmbeddedCall()).toMatchObject({ agentId: "ops", sessionKey, sessionId });
-        expectOwnedCommandSession({
-          agentId: "ops",
-          excludedAgentId: "main",
-          sessionKey,
-          sessionId,
-          storePath: store,
-        });
+        expectOpsSession(store, sessionKey, sessionId);
       }
     });
   });
@@ -2149,9 +2034,9 @@ describe("agentCommand", () => {
       });
       mockConfig(home, store, undefined, undefined, { main: {}, work: {} });
 
-      await expect(
-        agentCommand({ message: "hi", agentId: "work", to: sessionKey }, runtime),
-      ).rejects.toThrow('Agent id "work" does not match session key agent "main".');
+      await expect(runCommand({ message: "hi", agentId: "work", to: sessionKey })).rejects.toThrow(
+        'Agent id "work" does not match session key agent "main".',
+      );
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     });
   });
@@ -2180,10 +2065,7 @@ describe("agentCommand", () => {
           }),
         },
       ]);
-      await agentCommand(
-        { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
-        runtime,
-      );
+      await runCommand({ message: "hi", to: sessionKey, deliver: true, channel: "telegram" });
 
       const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
         | { opts?: { to?: string }; sessionEntry?: Pick<SessionEntry, "delivery"> }
@@ -2208,44 +2090,19 @@ describe("agentCommand", () => {
         { ops: {}, main: {} },
       );
 
-      await agentCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
+      await runCommand({ message: "hi", sessionKey: "incident-42" });
 
-      let callArgs = getLastEmbeddedCall();
+      const callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
 
       for (const sessionKey of ["global", "unknown"]) {
-        await agentCommand({ message: "hi", sessionKey }, runtime);
-        callArgs = getLastEmbeddedCall();
-        const sessionId = expectDefined(callArgs?.sessionId, "embedded session id");
-        expect(callArgs?.agentId).toBe("ops");
-        expect(callArgs?.sessionKey).toBe(sessionKey);
-        expect(sessionId).toBeTruthy();
-        expect(callArgs?.sessionFile).toBe(sessionKey);
-        expect(
-          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
-        ).toEqual({
-          agentId: "ops",
-          sessionId,
-          sessionKey,
-          storePath: store,
-        });
-        expectOwnedCommandSession({
-          agentId: "ops",
-          excludedAgentId: "main",
-          sessionKey,
-          sessionId,
-          storePath: store,
-        });
-        await agentCommand({ message: "again", sessionKey }, runtime);
+        await runCommand({ message: "hi", sessionKey });
+        const sessionId = expectSessionTarget(store, sessionKey);
+        expectOpsSession(store, sessionKey, sessionId);
+        await runCommand({ message: "again", sessionKey });
         expect(getLastEmbeddedCall()?.sessionId).toBe(sessionId);
-        expectOwnedCommandSession({
-          agentId: "ops",
-          excludedAgentId: "main",
-          sessionKey,
-          sessionId,
-          storePath: store,
-        });
+        expectOpsSession(store, sessionKey, sessionId);
       }
     });
   });

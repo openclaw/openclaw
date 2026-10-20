@@ -122,6 +122,7 @@ const runEmbeddedAgentSpy = vi.spyOn(embeddedModule, "runEmbeddedAgent");
 const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager");
 
 const runtime = createThrowingTestRuntime();
+const runCommand = (opts: Parameters<typeof agentCommand>[0]) => agentCommand(opts, runtime);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
@@ -150,16 +151,10 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
   };
 }
 
-function mockConfig(home: string, storePath: string) {
-  const cfg = createAcpEnabledConfig(home, storePath);
-  loadConfigSpy.mockReturnValue(cfg);
-  configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
-}
-
-function mockConfigWithAcpOverrides(
+function mockConfig(
   home: string,
   storePath: string,
-  acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>,
+  acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>> = {},
 ) {
   const cfg = createAcpEnabledConfig(home, storePath);
   cfg.acp = {
@@ -271,13 +266,11 @@ async function runAcpTurnWithAssistantEvents(chunks: string[]) {
   const { assistantEvents, stop } = subscribeAssistantEvents();
   const runTurn = createRunTurnFromTextDeltas(chunks);
 
-  mockAcpManager({
-    runTurn: (params: unknown) => runTurn(params),
-  });
+  mockAcpManager({ runTurn });
 
   try {
     vi.mocked(runtime.log).mockClear();
-    await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+    await runCommand({ message: "ping", sessionKey: "agent:codex:acp:test" });
   } finally {
     stop();
   }
@@ -286,20 +279,14 @@ async function runAcpTurnWithAssistantEvents(chunks: string[]) {
   return { assistantEvents, logLines };
 }
 
-async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
-  acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
-  resolveSessionAsync?: Parameters<typeof mockAcpManager>[0]["resolveSessionAsync"];
-}) {
+async function expectAcpPolicyBlocked(acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>) {
   await withTempHome(async (home) => {
     const storePath = path.join(home, "sessions.json");
     writeAcpSessionStore(storePath);
-    mockConfigWithAcpOverrides(home, storePath, params.acpOverrides);
+    mockConfig(home, storePath, acpOverrides);
 
     const runTurn = vi.fn(async (_params: unknown) => {});
-    mockAcpManager({
-      runTurn: (input: unknown) => runTurn(input),
-      ...(params.resolveSessionAsync ? { resolveSessionAsync: params.resolveSessionAsync } : {}),
-    });
+    mockAcpManager({ runTurn });
 
     await expectAcpCommandRejects("agent:codex:acp:test", "ACP_DISPATCH_DISABLED");
     expect(runTurn).not.toHaveBeenCalled();
@@ -312,7 +299,7 @@ async function expectAcpCommandRejects(
   code: string,
   messageIncludes?: string,
 ): Promise<void> {
-  await expect(agentCommand({ message: "ping", sessionKey }, runtime)).rejects.toMatchObject({
+  await expect(runCommand({ message: "ping", sessionKey })).rejects.toMatchObject({
     code,
     ...(messageIncludes ? { message: expect.stringContaining(messageIncludes) } : {}),
   });
@@ -391,15 +378,12 @@ describe("agentCommand ACP runtime routing", () => {
           return projected;
         });
 
-        const result = await agentCommand(
-          {
-            message: "  probe\n",
-            sessionKey: "agent:codex:acp:test",
-            json: true,
-            abortSignal: controller.signal,
-          },
-          runtime,
-        );
+        const result = await runCommand({
+          message: "  probe\n",
+          sessionKey: "agent:codex:acp:test",
+          json: true,
+          abortSignal: controller.signal,
+        });
 
         expect(runTurn).toHaveBeenCalledOnce();
         expect(runTurn).toHaveBeenCalledWith(
@@ -540,7 +524,7 @@ describe("agentCommand ACP runtime routing", () => {
 
       const runTurn = vi.fn(async (_params: unknown) => {});
       mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
+        runTurn,
         resolveSessionAsync: async ({ sessionKey }) => {
           return {
             kind: "stale",
@@ -569,7 +553,7 @@ describe("agentCommand ACP runtime routing", () => {
       { enabled: false },
       { dispatch: { enabled: false } },
     ] satisfies Array<Partial<NonNullable<OpenClawConfig["acp"]>>>) {
-      await runAcpSessionWithPolicyOverridesAndExpectBlocked({ acpOverrides });
+      await expectAcpPolicyBlocked(acpOverrides);
     }
   });
 
@@ -577,13 +561,13 @@ describe("agentCommand ACP runtime routing", () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
       writeAcpSessionStore(storePath);
-      mockConfigWithAcpOverrides(home, storePath, {
+      mockConfig(home, storePath, {
         allowedAgents: ["claude"],
       });
 
       const runTurn = vi.fn(async (_params: unknown) => {});
       mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
+        runTurn,
         resolveSessionAsync: async ({ sessionKey }) => resolveReadySession(sessionKey, "codex"),
       });
 
