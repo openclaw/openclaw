@@ -527,7 +527,8 @@ async function runPendingMaintenance(
     };
     let noFinalization = true;
     let verifiedNextAt: number | undefined;
-    while (true) {
+    // Physical close can retire the owner while archive finalization settles.
+    while (isCurrent()) {
       operation.input.ageContinuation =
         restartSessionMaintenanceAgeScan(operation.input.ageContinuation, owner.ageChanges) ??
         operation.input.ageContinuation;
