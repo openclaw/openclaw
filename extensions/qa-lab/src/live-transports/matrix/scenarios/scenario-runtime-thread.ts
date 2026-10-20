@@ -3,7 +3,6 @@ import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   assertThreadReplyArtifact,
   assertTopLevelReplyArtifact,
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
@@ -12,7 +11,6 @@ import {
   primeMatrixQaDriverScenarioClient,
   runConfigurableTopLevelScenario,
   type MatrixQaScenarioContext,
-  type MatrixQaSyncState,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenario-types.js";
 
@@ -76,12 +74,6 @@ export async function runThreadScenario(params: MatrixQaScenarioContext, tokenPr
     since: startSince,
     timeoutMs: params.timeoutMs,
   });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: params.syncState,
-    nextSince: matched.since,
-    startSince,
-  });
   return {
     driverEventId,
     nestedDriverEventId,
@@ -96,8 +88,7 @@ export async function runMatrixQaCanary(params: {
   driverAccessToken: string;
   observedEvents: MatrixQaObservedEvent[];
   roomId: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaScenarioContext["syncStreams"];
+  syncStreams: MatrixQaScenarioContext["syncStreams"];
   sutUserId: string;
   timeoutMs: number;
 }): Promise<{
@@ -112,7 +103,6 @@ export async function runMatrixQaCanary(params: {
     baseUrl: params.baseUrl,
     observedEvents: params.observedEvents,
     roomId: params.roomId,
-    syncState: params.syncState,
     syncStreams: params.syncStreams,
     sutUserId: params.sutUserId,
     timeoutMs: params.timeoutMs,
@@ -192,12 +182,6 @@ export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenari
   ) {
     throw new Error("Matrix explicit reply lost its selected target or became a thread fallback");
   }
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: explicit.since,
-    startSince,
-  });
   const explicitReply = buildMatrixReplyArtifact(explicit.event, explicitToken);
   return {
     artifacts: { ...buildMatrixQaThreadArtifacts(result), secondReply: explicitReply },

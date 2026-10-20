@@ -15,13 +15,16 @@ concurrency:
 jobs:
   postgres-conformance:
     if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
-    name: PostgreSQL conformance (${{ matrix.version }})
+    name: PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Allow 2× the measured 24m25s maximum in run 39393830074.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 3
       matrix:
+        version: [pg16, pg18]
+        shard: [1/3, 2/3, 3/3]
         include:
           - version: pg16
             image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
@@ -41,3 +44,4 @@ jobs:
         uses: ./.github/actions/postgres-conformance
         with:
           image: ${{ matrix.image }}
+          shard: ${{ matrix.shard }}

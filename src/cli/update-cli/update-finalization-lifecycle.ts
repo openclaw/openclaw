@@ -137,7 +137,7 @@ export class UpdateFinalizationLifecycle {
     if (this.runId && this.ownsRun && installKind !== "unknown") {
       recordUpdateRunPhase(
         this.runId,
-        "requested",
+        this.ownsRepairRun ? "repairing" : "requested",
         {
           target: { kind: installKind, ...(version ? { version } : {}) },
           ...(version ? { after: { version } } : {}),

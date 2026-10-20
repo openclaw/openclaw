@@ -436,6 +436,8 @@ appropriate for migrations that change only core-captured state or have no data
 resources. See the [plugin migration contract](/plugins/sdk-migration/compatibility-policy).
 
 Bundled Canvas and Memory Core migrations declare their legacy data sources.
+Codex declares its legacy thread-binding sidecars, and Voice Call declares its
+existing SQLite call store, including a configured custom location.
 Crabbox's shared SQLite records are core-captured; the retired Workboard check
 leaves its legacy rows unchanged. QMD retirement removes only empty directories
 and disposable stale coordination locks, so it has no additional data to retain.

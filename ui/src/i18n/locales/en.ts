@@ -1071,6 +1071,18 @@ export const en: TranslationMap & {
       "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
+    watcherApprovalScope:
+      "Approval applies to this saved watcher. Source changes or reactivation may require approval again.",
+    watcherSandboxSummary:
+      "Runs in your sandbox after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    watcherGatewaySummary:
+      "Runs on the Gateway after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    watcherSummary:
+      "Runs after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    startWatcher: "Start watching",
+    saveWatcher: "Save watcher change",
+    cancelWatcher: "Cancel",
+
     scope: {
       standingGrant:
         'Always allow runs this exact command for "{automation}" without asking, until revoked (revocable)',
@@ -1120,6 +1132,15 @@ export const en: TranslationMap & {
       "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
+    watcherTitle: "Watcher approval: {name}",
+    watcherChangeTitle: "Watcher change: {name}",
+    watcherLifetime:
+      "If saved and enabled, this watcher runs after you leave this chat, until stopped. It is configured to restart automatically after interruptions.",
+    watcherAllowed:
+      "This proposal was approved. Approval alone does not confirm that the change was saved or the watcher started. Check its current status in Automations.",
+    watcherNotCreated: "This proposal did not create a watcher.",
+    watcherNotChanged:
+      "This proposal did not save the change. It did not stop or change the existing watcher.",
     pending: "Waiting for your decision",
     pendingDescription: "Review the request carefully. The first answer from any surface wins.",
     approvedHere: "Approved here",
@@ -1135,7 +1156,7 @@ export const en: TranslationMap & {
     allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
     deniedDescription: "The operation was denied and will not continue.",
     expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
-    cancelledDescription: "The requesting run ended before a decision could be used.",
+    cancelledDescription: "This approval request was canceled and can no longer be used.",
     summaryLabel: "Summary",
     commandLabel: "Command",
     requestLabel: "Request details",

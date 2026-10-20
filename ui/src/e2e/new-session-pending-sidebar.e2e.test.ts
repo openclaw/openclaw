@@ -143,6 +143,11 @@ suite.define(() => {
                 .locator(".sidebar-recent-session__text")
                 .evaluate((element) => Math.round(element.getBoundingClientRect().left));
             expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
+            // Row spacing, not section spacing: admission swaps rows without moving the rest.
+            const bounds = (row: typeof provisional) =>
+              row.evaluate((element) => element.getBoundingClientRect().toJSON() as DOMRect);
+            const [pendingBox, oldBox] = [await bounds(provisional), await bounds(oldRow)];
+            expect(Math.round(oldBox.top - pendingBox.bottom)).toBe(2);
             expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
             expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
             expect(await provisional.locator("button, a[href]").count()).toBe(0);

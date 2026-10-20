@@ -403,7 +403,8 @@ describe("managed Crabbox", () => {
     async (damage) => {
       const test = await fixture();
       await test.damage(damage === "missing" ? undefined : damage);
-      await expect(test.ensure()).resolves.toEqual(test.installed);
+      const probes = vi.fn(runCommand);
+      await expect(test.ensure({ runCommand: probes })).resolves.toEqual(test.installed);
       expect(await test.read()).toBe(CRABBOX_MIN_VERSION);
       expect(await fs.readFile(test.candidate, "utf8")).toBe("0.66.0");
       const entries = await test.entries();
@@ -413,6 +414,7 @@ describe("managed Crabbox", () => {
       expect(await test.read("operator-note", backup)).toBe("preserve this");
       if (damage !== "missing") {
         expect(await test.read(test.executable, backup)).toBe(damage);
+        expect(probes.mock.calls.filter(([argv]) => argv[0] === test.binary)).toHaveLength(2);
       }
       expect(entries).toHaveLength(2);
     },

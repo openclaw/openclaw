@@ -15,6 +15,7 @@ import {
   placementAuthorityOwnerFor as ownerFor,
   placementAuthorityOwners as owners,
   preparePlacementChangeNotification,
+  withLocalPlacementTurn,
 } from "./placement-authority-owner.js";
 import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import {
@@ -76,12 +77,17 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     owner.placements.delete(change.sessionId);
   } else if (!newerPlacement && change.kind === "claim") {
     if (change.retired) {
+      owner.localClaimSessions.delete(change.sessionId);
       owner.placements.set(change.sessionId, { placement: undefined, sequence });
     } else if (change.workspacePlacement) {
       owner.placements.set(change.sessionId, { placement: change.workspacePlacement, sequence });
     }
   } else if (!newerPlacement && change.kind === "workspace-result" && change.facts) {
     owner.placements.set(change.sessionId, { placement: change.facts.placement, sequence });
+  }
+  const state = owner.placements.get(change.sessionId)?.placement?.state;
+  if (state && state !== "local" && state !== "requested" && state !== "failed") {
+    owner.localClaimSessions.delete(change.sessionId);
   }
   if (change.kind !== "tools" && (change.kind !== "claim" || !change.localOnly)) {
     owner.preservation = undefined;
@@ -403,7 +409,10 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
     const byId = new Map(Array.from(records, (record) => [record.sessionId, record]));
     for (const sessionId of requestedIds ?? byId.keys()) {
       if ((owner.placements.get(sessionId)?.sequence ?? -1) <= sequence) {
-        owner.placements.set(sessionId, { placement: byId.get(sessionId), sequence });
+        owner.placements.set(sessionId, {
+          placement: withLocalPlacementTurn(owner, sessionId, byId.get(sessionId)),
+          sequence,
+        });
       }
     }
   };

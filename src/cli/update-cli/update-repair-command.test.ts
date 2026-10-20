@@ -513,6 +513,31 @@ describe("update repair ledger recovery", () => {
     expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it.each(["exited", "reused"] as const)(
+    "settles a %s repair driver before later maintenance can fail",
+    async (driver) => {
+      const run = seedRun({ phase: "repairing", driver, ageMs: 60_000 });
+      recordUpdateRunStep(run.runId, { step: "finalize:doctor", status: "in_progress" });
+      let observedBeforeMaintenance: UpdateRunRecord | undefined;
+      mocks.finalize.mockImplementationOnce(async () => {
+        observedBeforeMaintenance = getUpdateRun(run.runId);
+        throw new Error("Later maintenance failed");
+      });
+
+      await expect(updateRepairCommand({ yes: true })).rejects.toThrow("Later maintenance failed");
+
+      expect(observedBeforeMaintenance).toMatchObject({
+        phase: "finished",
+        status: "failed",
+        reason: "abandoned",
+      });
+      expect(getUpdateRun(run.runId)).toEqual(observedBeforeMaintenance);
+      expect(observedBeforeMaintenance?.steps).not.toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged" }),
+      );
+    },
+  );
+
   it.each(["abandoned", "legacy-driver-expired"])(
     "exits successfully when the Gateway already reconciled the %s row",
     async (reason) => {
@@ -825,7 +850,7 @@ describe("update repair ledger recovery", () => {
     await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
     expect(getUpdateRun(run.runId)).toEqual(run);
-    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
     expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
   });
 });

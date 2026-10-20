@@ -119,13 +119,13 @@ describe("Decision prefilter policy", () => {
   });
 
   it.each([
-    ["projection overflow", "x".repeat(6_001), "", "context-too-large"],
-    ["astral exact", "🙂".repeat(3_000), "🙂".repeat(1_000), undefined],
-    ["astral overflow", "🙂".repeat(3_000), "🙂".repeat(1_001), "prompt-build-context-too-large"],
-    ["JSON expansion", "x".repeat(6_000), String.fromCharCode(34).repeat(2_000), undefined],
+    ["projection overflow", "x".repeat(6_001), "", false],
+    ["astral exact", "🙂".repeat(3_000), "🙂".repeat(1_000), true],
+    ["astral overflow", "🙂".repeat(3_000), "🙂".repeat(1_001), false],
+    ["JSON expansion", "x".repeat(6_000), String.fromCharCode(34).repeat(2_000), true],
   ] as const)(
     "bounds UTF-16 text, not JSON encoding: %s",
-    async (_label, userMessage, hooks, reason) => {
+    async (_label, userMessage, hooks, shouldPruneTools) => {
       const promptBuildFields = {
         prependContext: hooks.slice(0, 1_000),
         appendSystemContext: hooks.slice(1_000),
@@ -135,9 +135,8 @@ describe("Decision prefilter policy", () => {
         userMessage,
         promptBuildFields,
       });
-      expect(outcome.shouldPruneTools).toBe(reason === undefined);
-      if (reason) {
-        expect(outcome.reason).toBe(reason);
+      expect(outcome.shouldPruneTools).toBe(shouldPruneTools);
+      if (!shouldPruneTools) {
         expect(mocks.evaluate).not.toHaveBeenCalled();
       } else {
         expect(mocks.evaluate.mock.calls[0]?.[0].state).toMatchObject({

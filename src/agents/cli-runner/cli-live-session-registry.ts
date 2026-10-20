@@ -132,6 +132,18 @@ async function closeRecord(
   await (record.cleanupPromise ?? record.handle.waitForExit());
 }
 
+/** Retire warm processes and join resources already waiting for their exit. */
+export async function disposeAllCliLiveSessions(): Promise<void> {
+  const results = await Promise.allSettled([
+    ...retiredSessionCleanup.values(),
+    ...Array.from(liveSessions.values()).map((record) => closeRecord(record, "abort")),
+  ]);
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) {
+    throw failure.reason;
+  }
+}
+
 function retainCleanup(context: PreparedCliRunContext, record: CliLiveSessionRecord): void {
   const owner = context.preparedBackend;
   record.owner = owner;

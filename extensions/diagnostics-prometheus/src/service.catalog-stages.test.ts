@@ -261,6 +261,21 @@ it("bounds diff miss reasons without exporting revision keys or caller supplied 
         "evicted",
         "pending",
         "no-revision",
+        "no-revision-environment",
+        "no-revision-platform",
+        "no-revision-metadata",
+        "no-revision-git-installation",
+        "no-revision-config",
+        "no-revision-reftable",
+        "no-revision-alternates",
+        "no-revision-symlink",
+        "no-revision-nested-repository",
+        "no-revision-status",
+        "no-revision-unmerged",
+        "no-revision-submodule",
+        "no-revision-permission",
+        "no-revision-missing",
+        "no-revision-io",
         "oversized",
         "revision-changed-head",
         "revision-changed-index",
@@ -275,7 +290,7 @@ it("bounds diff miss reasons without exporting revision keys or caller supplied 
     const counters = rendered
       .split("\n")
       .filter((line) => line.startsWith("openclaw_diff_cache_misses_total{"));
-    expect(counters).toHaveLength(20);
+    expect(counters).toHaveLength(50);
     expect(counters.every((line) => line.endsWith(" 1"))).toBe(true);
     expect(rendered).not.toContain("private");
     metrics.record(event, untrusted);

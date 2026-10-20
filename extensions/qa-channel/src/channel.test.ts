@@ -648,9 +648,14 @@ describe("qa-channel plugin", () => {
     }
   });
 
-  it.each(["inline", "remote"] as const)(
-    "rejects oversized %s inbound bytes without stopping subsequent messages",
-    async (source) => {
+  it.each(
+    (["inline", "remote"] as const).flatMap((source) => [
+      { source, mediaMaxMb: 1 / 1024, capBytes: 1024 },
+      { source, mediaMaxMb: 0.3, capBytes: 314572 },
+    ]),
+  )(
+    "enforces the $mediaMaxMb MiB $source inbound cap without stopping subsequent messages",
+    async ({ source, mediaMaxMb, capBytes }) => {
       const dispatched: Record<string, unknown>[] = [];
       const originalFetch = globalThis.fetch;
       if (source === "remote") {
@@ -669,14 +674,17 @@ describe("qa-channel plugin", () => {
       }
       const harness = await startQaChannelTestHarness({
         allowFrom: ["*"],
-        mediaMaxMb: 1 / 1024,
+        mediaMaxMb,
         runtime: createMockQaRuntime({ onDispatch: (ctx) => dispatched.push(ctx) }),
       });
       try {
-        for (const [text, bytes] of [
-          ["oversized", 1536],
+        const inputs = [
+          ["exact", capBytes],
+          ["just-over", capBytes + 1],
+          ["far-over", capBytes * 4],
           ["small", 512],
-        ] as const) {
+        ] as const;
+        for (const [text, bytes] of inputs) {
           harness.state.addInboundMessage({
             conversation: { id: "alice", kind: "direct" },
             senderId: "alice",
@@ -700,12 +708,18 @@ describe("qa-channel plugin", () => {
             timeoutMs: 15_000,
           });
         }
-        expect(dispatched).toHaveLength(2);
-        expect(dispatched[0]?.media).toEqual([]);
-        expect(dispatched[0]?.BodyForAgent).toContain("attachment unavailable");
-        expect(dispatched[1]?.media).toHaveLength(1);
-        const media = dispatched[1]?.media as Array<{ path: string }>;
-        expect(await readFile(media[0]!.path)).toEqual(Buffer.alloc(512, 0x61));
+        expect(dispatched).toHaveLength(inputs.length);
+        for (const [index, [, bytes]] of inputs.entries()) {
+          const context = dispatched[index]!;
+          if (bytes > capBytes) {
+            expect(context.media).toEqual([]);
+            expect(context.BodyForAgent).toContain("attachment unavailable");
+          } else {
+            const media = context.media as Array<{ path: string }>;
+            expect(media).toHaveLength(1);
+            expect(await readFile(media[0]!.path)).toEqual(Buffer.alloc(bytes, 0x61));
+          }
+        }
       } finally {
         await harness.stop();
         vi.unstubAllGlobals();

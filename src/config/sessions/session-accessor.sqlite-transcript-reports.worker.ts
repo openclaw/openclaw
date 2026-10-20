@@ -40,6 +40,7 @@ import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transc
 import { requestSessionEntryCurrentAdmission } from "./session-entry-current-admission.worker.js";
 import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type TranscriptReportWorkerTarget = {
   resolved: Omit<ResolvedTranscriptScope, "env">;
@@ -136,6 +137,10 @@ export function bindSqliteWorkerBackend(
                 -1) + 1
             : undefined;
           let projectionNeedsReconcile = false;
+          let fullEntry: InternalSessionEntry | undefined;
+          const onEntryUpdated = (entry: InternalSessionEntry) => {
+            fullEntry = entry;
+          };
           const projection = {
             scheduleProjectionReconcile: false as const,
             onProjectionReconcileNeeded: () => {
@@ -150,6 +155,7 @@ export function bindSqliteWorkerBackend(
               command.input,
               command.input.preparedMessage,
               projection,
+              onEntryUpdated,
             );
           } else if (command.type === "assistant") {
             const facts = prepareTranscriptReportSelection(database, resolved, {
@@ -208,6 +214,7 @@ export function bindSqliteWorkerBackend(
                   },
                   target.cliWriter,
                   authorizeCommit,
+                  onEntryUpdated,
                 )
               : false;
           const { entry, refusal: rebound } = readCurrentEntry();
@@ -222,6 +229,7 @@ export function bindSqliteWorkerBackend(
             ...((cliHistoryChanged ||
               (abortedPartial && !abortedPartial.skipped && abortedPartial.append.appended)) && {
               entry,
+              fullEntry,
             }),
             ...(abortedPartial
               ? {

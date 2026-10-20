@@ -209,12 +209,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     if (msg.stopReason === "error" && this.retryCount > 0) {
-      this.emit({
-        type: "auto_retry_end",
-        success: false,
-        attempt: this.retryCount,
-        finalError: msg.errorMessage,
-      });
+      this.emit({ type: "auto_retry_end" });
       this.retryCount = 0;
     }
 

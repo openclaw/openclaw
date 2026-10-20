@@ -74,7 +74,7 @@ it("restores prepared session context without waiting for an unrelated database 
       modelRegistry: ModelRegistry.inMemory(authStorage),
       sessionManager: manager,
       settingsManager: SettingsManager.inMemory(),
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
     });
     try {
       expect(await Promise.race([restored.then(() => "ready"), requestedWrite.promise])).toBe(
@@ -179,7 +179,7 @@ it.each(["metadata", "context loading"] as const)(
           compaction: { enabled: false },
           retry: { enabled: false },
         }),
-        resourceLoader: createResourceLoader(),
+        resourceLoader: await createResourceLoader(),
       }).then(
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
@@ -278,7 +278,7 @@ it.each([
         modelRegistry: ModelRegistry.inMemory(authStorage),
         sessionManager: manager,
         settingsManager: SettingsManager.inMemory(),
-        resourceLoader: createResourceLoader(),
+        resourceLoader: await createResourceLoader(),
       }).then(
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
@@ -329,7 +329,7 @@ it.each([
 );
 
 async function createPersistenceExtensionSession(manager: SessionManager, cwd: string) {
-  const resourceLoader = createResourceLoader();
+  const resourceLoader = await createResourceLoader();
   const extensions = resourceLoader.getExtensions();
   let loadedApi: ExtensionAPI | undefined;
   extensions.extensions.push(
@@ -578,7 +578,7 @@ it.each(["SDK initialization", "model transition"] as const)(
           baseUrl: testModel.baseUrl,
           models: [reasoningModel, plainModel],
         });
-        const create = () =>
+        const create = async () =>
           createAgentSession({
             systemPrompt: "Test session prompt",
             cwd: firstDir,
@@ -588,7 +588,7 @@ it.each(["SDK initialization", "model transition"] as const)(
             modelRegistry,
             tools: [],
             settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "high" }),
-            resourceLoader: createResourceLoader(),
+            resourceLoader: await createResourceLoader(),
           });
         if (operation === "model transition") {
           session = (await create()).session;

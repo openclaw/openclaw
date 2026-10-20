@@ -206,7 +206,6 @@ export function analyzeBootstrapBudget(params: {
   const nearLimitFiles = files.filter((file) => file.nearLimit);
 
   return {
-    files,
     truncatedFiles,
     nearLimitFiles,
     totalNearLimit: injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio),
@@ -214,10 +213,8 @@ export function analyzeBootstrapBudget(params: {
     totals: {
       rawChars,
       injectedChars,
-      truncatedChars: Math.max(0, rawChars - injectedChars),
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
-      nearLimitRatio,
     },
   };
 }

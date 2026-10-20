@@ -204,6 +204,7 @@ export function createPageState(
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
+    reconcileApprovalTerminals: context.overlays?.reconcileApprovalTerminals,
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,

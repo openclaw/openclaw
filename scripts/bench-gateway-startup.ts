@@ -1,11 +1,23 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createCipheriv } from "node:crypto";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../src/config/validation-core.js";
 import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
@@ -46,9 +58,11 @@ import {
   waitForInitialProbe as waitForProbe,
 } from "./lib/gateway-bench-runtime.ts";
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
+import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
 type GatewayBenchCase = {
   agentTopology?: "incident-scale" | "single" | "shared-eleven-plus-distinct-one";
+  bundledPluginFixture?: OpenClawConfig;
   completionTracePhase?: string;
   config: Record<string, unknown>;
   env?: Record<string, string>;
@@ -73,6 +87,7 @@ type GatewaySample = {
   exitedBeforeTeardown?: boolean;
   exitCode: number | null;
   firstOutputMs: number | null;
+  firstSessionRpc: { ms: number | null; attempts: number; lastError: string | null };
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
@@ -81,8 +96,11 @@ type GatewaySample = {
   maxRssMb: number | null;
   outputTail: string;
   readyz: InitialProbeResult;
+  shutdownForced: boolean;
+  shutdownMs: number;
   signal: string | null;
   startupTrace: Record<string, number>;
+  startupTraceLines: string[];
 };
 
 type CaseResult = ReturnType<typeof summarizeCase>;
@@ -117,6 +135,7 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const TEAM_BOOT_AUTH_TOKEN = "synthetic-startup-benchmark-token";
 const INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS = 30_000;
 const INCIDENT_COMBINED_READYZ_P95_MAX_MS = 60_000;
 const BOOLEAN_FLAGS = new Set([
@@ -143,6 +162,7 @@ const VALUE_FLAGS = new Set([
   "--agent-database-mib",
   "--agent-gate-delay-ms",
   "--start-at",
+  "--bundled-plugin-fixture",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -182,6 +202,21 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 }
 
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
+  {
+    id: "teamBoot",
+    name: "gateway, 44 startup plugins, eight agents and 4096 sessions",
+    agentTopology: "incident-scale",
+    pluginActivationOnStartup: true,
+    pluginCount: 44,
+    runByDefault: false,
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    config: {
+      ...BASE_CONFIG,
+      gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
+      cron: { enabled: false },
+      agents: { defaults: { heartbeat: { every: "0m" } } },
+    },
+  },
   {
     id: "slowAgentDatabase",
     name: "gateway, one checking agent and four ready agents",
@@ -378,9 +413,45 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       throw new CliArgumentError("--installed-cohort requires --output");
     }
   }
+  let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  const bundledPluginFixturePath = flags.get("--bundled-plugin-fixture")?.[0];
+  if (bundledPluginFixturePath !== undefined) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--bundled-plugin-fixture requires --case teamBoot only");
+    }
+    const value: unknown = JSON.parse(readFileSync(bundledPluginFixturePath, "utf8"));
+    if (
+      !isRecord(value) ||
+      Object.keys(value).some((key) => !["plugins", "models", "tools", "channels"].includes(key))
+    ) {
+      throw new CliArgumentError(
+        "--bundled-plugin-fixture may configure only plugins, models, tools, and channels",
+      );
+    }
+    const validated = validateConfigObjectRaw(value);
+    if (!validated.ok) {
+      throw new CliArgumentError(
+        `--bundled-plugin-fixture has invalid config: ${validated.issues.map((issue) => issue.path).join(", ")}`,
+      );
+    }
+    const bundledPluginIds = validated.config.plugins?.allow ?? [];
+    if (
+      bundledPluginIds.length === 0 ||
+      bundledPluginIds.length > cases[0].pluginCount! ||
+      bundledPluginIds.some((id) => !id.trim()) ||
+      new Set(bundledPluginIds).size !== bundledPluginIds.length ||
+      validated.config.plugins?.load !== undefined
+    ) {
+      throw new CliArgumentError(
+        "--bundled-plugin-fixture requires 1–44 unique plugins.allow IDs and no plugins.load paths",
+      );
+    }
+    const { plugins, models, tools, channels } = validated.config;
+    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels } }];
+  }
   return {
     ...parseGatewayBenchRuntimeOptions(flags),
-    cases: installedCohort ? [] : resolveCases(flags.get("--case") ?? []),
+    cases,
     cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
     heapProfDir: flags.get("--heap-prof-dir")?.[0],
@@ -432,8 +503,9 @@ Options:
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
-  --fixture-root <path> Prepared slowAgentDatabase fixture (requires --runs 1 --warmup 0)
+  --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
   --seed-only         Create a new --fixture-root without launching a Gateway
+  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
   --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
   --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
   --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
@@ -452,10 +524,17 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   return {
     id: benchCase.id,
     name: benchCase.name,
+    ...(benchCase.id === "teamBoot"
+      ? {
+          expectedPluginCount: benchCase.pluginCount ?? 44,
+          bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
+        }
+      : {}),
     samples,
     summary: {
       completionMs: summarize((sample) => sample.completionMs),
       firstOutputMs: summarize((sample) => sample.firstOutputMs),
+      firstSessionRpcMs: summarize((sample) => sample.firstSessionRpc.ms),
       cpuCoreRatio: summarize((sample) => sample.cpuCoreRatio),
       cpuMs: summarize((sample) => sample.cpuMs),
       gatewayReadyLogMs: summarize((sample) => sample.gatewayReadyLogMs),
@@ -463,6 +542,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
       httpListenLogMs: summarize((sample) => sample.httpListenLogMs),
       maxRssMb: summarize((sample) => sample.maxRssMb),
       readyzMs: summarize((sample) => sample.readyz.ms),
+      shutdownMs: summarize((sample) => sample.shutdownMs),
       startupTrace,
     },
   };
@@ -478,6 +558,9 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
       }
       if (sample.readyz.status !== 200 || sample.readyz.ms == null) {
         missing.push("/readyz");
+      }
+      if (sample.firstSessionRpc.ms == null) {
+        missing.push("sessions.list");
       }
       if (sample.completionMs == null) {
         missing.push("completion");
@@ -505,6 +588,24 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
           sampleIndex: index + 1,
         });
         return;
+      }
+      if (result.expectedPluginCount !== undefined) {
+        const inventory = /http server listening \((\d+) plugins?: ([^;)]+)/u.exec(
+          sample.httpListenLogLine ?? "",
+        );
+        const loadedIds = new Set(inventory?.[2]?.split(", ") ?? []);
+        const missingBundled = result.bundledPluginIds?.filter((id) => !loadedIds.has(id)) ?? [];
+        if (
+          Number(inventory?.[1]) !== result.expectedPluginCount ||
+          loadedIds.size !== result.expectedPluginCount ||
+          missingBundled.length > 0
+        ) {
+          failures.push({
+            id: result.id,
+            reason: `plugin inventory mismatch: expected ${result.expectedPluginCount}, observed ${inventory?.[1] ?? "unreported"}; missing bundled: ${missingBundled.join(", ") || "none"}`,
+            sampleIndex: index + 1,
+          });
+        }
       }
       if (result.id === "slowAgentDatabase") {
         const gatePassed = sample.integrityGateMs!["gate-passed"]!;
@@ -536,6 +637,15 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
               : `child exited by ${sample.signal}`,
           sampleIndex: index + 1,
         });
+      } else if (
+        result.id === "teamBoot" &&
+        (sample.shutdownForced || sample.exitCode !== 0 || sample.signal !== null)
+      ) {
+        failures.push({
+          id: result.id,
+          reason: `unclean shutdown (exitCode=${sample.exitCode}, signal=${sample.signal}, forced=${sample.shutdownForced})`,
+          sampleIndex: index + 1,
+        });
       }
     });
     if (result.id !== "incidentCombined") {
@@ -563,7 +673,7 @@ function printBenchmarkFailures(failures: BenchmarkFailure[]): void {
     return;
   }
   console.error(
-    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not produce ready probes or process metrics`,
+    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not satisfy startup or lifecycle checks`,
   );
   for (const failure of failures.slice(0, 8)) {
     console.error(
@@ -797,10 +907,14 @@ async function withGatewayBenchRoot<T>(run: (root: string) => Promise<T>): Promi
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
+  const fixture = benchCase.bundledPluginFixture;
+  const bundledPluginIds = fixture?.plugins?.allow ?? [];
   const hasCatalogFixture =
     benchCase.providerCatalogStallMs !== undefined ||
     benchCase.providerStaticCatalogStallMs !== undefined;
-  const pluginCount = hasCatalogFixture ? 1 : benchCase.pluginCount;
+  const pluginCount = hasCatalogFixture
+    ? 1
+    : (benchCase.pluginCount ?? 0) - bundledPluginIds.length;
   const pluginFixtures = pluginCount
     ? writePluginFixtures(root, {
         activationOnStartup: hasCatalogFixture ? true : benchCase.pluginActivationOnStartup,
@@ -814,7 +928,28 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
     benchCase.id === "slowAgentDatabase"
       ? SLOW_DATABASE_AGENT_IDS.map((id) => ({ id, workspace: path.join(root, "workspace", id) }))
       : buildBenchAgentList(root, benchCase.agentTopology);
-  return writeGatewayBenchConfig(root, benchCase.config, { agentList, pluginFixtures });
+  const plugins = benchCase.config.plugins as OpenClawConfig["plugins"];
+  const config = fixture
+    ? {
+        ...benchCase.config,
+        ...fixture,
+        plugins: {
+          ...plugins,
+          ...fixture.plugins,
+          entries: {
+            ...plugins?.entries,
+            ...fixture.plugins?.entries,
+            ...Object.fromEntries(
+              bundledPluginIds.map((id) => [
+                id,
+                { ...fixture.plugins?.entries?.[id], enabled: true },
+              ]),
+            ),
+          },
+        },
+      }
+    : benchCase.config;
+  return writeGatewayBenchConfig(root, config, { agentList, pluginFixtures });
 }
 
 const SLOW_DATABASE_AGENT_IDS = [
@@ -824,6 +959,89 @@ const SLOW_DATABASE_AGENT_IDS = [
   "bench-fast-04",
   "bench-slow",
 ] as const;
+
+async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): Promise<void> {
+  mkdirSync(root);
+  const configPath = writeConfig(root, benchCase);
+  const env = createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
+  const previousEnv = process.env;
+  process.env = { ...env };
+  try {
+    const [agentDb, stateDb, { writeSessionEntry }, { writeConfigMachineStateAsync }] =
+      await Promise.all([
+        import("../src/state/openclaw-agent-db.js"),
+        import("../src/state/openclaw-state-db.js"),
+        import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+        import("../src/state/config-machine-state-async.js"),
+      ]);
+    const now = Date.parse("2026-10-19T00:00:00Z");
+    const agents = buildBenchAgentList(root, benchCase.agentTopology)!;
+    const databasePaths: string[] = [];
+    let statePath = "";
+    try {
+      for (const { id: agentId, workspace } of agents) {
+        mkdirSync(workspace, { recursive: true });
+        const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
+        agentDb.runOpenClawAgentWriteTransaction(
+          (writable) => {
+            for (let index = 0; index < 512; index++) {
+              writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, {
+                sessionId: `team-boot-${agentId}-${index}`,
+                updatedAt: now - index,
+                label: `Synthetic startup session ${index}`,
+                visibility: "shared",
+              });
+            }
+          },
+          { agentId, env },
+        );
+        database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        databasePaths.push(database.path);
+      }
+      const state = stateDb.openOpenClawStateDatabase({ env });
+      statePath = state.path;
+      // An inert machine-state namespace adds real, incompressible pages without
+      // making startup parse 128 MiB of synthetic records or changing the schema.
+      const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
+      for (let index = 0; index < 128; index++) {
+        if (index % 8 === 0 && process.platform === "linux") {
+          const dirtyKb = Number(
+            /^Dirty:\s+(\d+) kB$/mu.exec(readFileSync("/proc/meminfo", "utf8"))?.[1],
+          );
+          if (!Number.isFinite(dirtyKb) || dirtyKb >= 2 * 1024 * 1024) {
+            throw new Error(
+              "Fixture generation stopped: Linux Dirty must remain below 2 GiB; retry with a new root after writes settle.",
+            );
+          }
+        }
+        const payload = cipher.update(Buffer.alloc(768 * 1024)).toString("base64");
+        await writeConfigMachineStateAsync(`startup-benchmark.payload.${index}`, payload, { env });
+        if (index % 8 === 7) {
+          state.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+          await delay(100);
+        }
+      }
+    } finally {
+      await agentDb.closeOpenClawAgentDatabasesAsync();
+      await stateDb.closeOpenClawStateDatabaseAsync();
+    }
+    writeBenchmarkJson(
+      {
+        pluginCount: 44,
+        bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
+        externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
+        agentCount: agents.length,
+        sessionCount: agents.length * 512,
+        stateDatabaseBytes: statSync(statePath).size,
+        agentDatabaseBytes: databasePaths.map((databasePath) => statSync(databasePath).size),
+        workerEnvironments: "default local startup; no provisioned remote workers",
+      },
+      path.join(root, "team-boot-fixture.json"),
+    );
+  } finally {
+    process.env = previousEnv;
+  }
+}
 
 async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: number): Promise<void> {
   mkdirSync(root);
@@ -982,6 +1200,103 @@ if (isMainThread) {
   }
 }
 
+async function waitForFirstSessionRpc(params: {
+  port: number;
+  startAt: number;
+  deadlineAt: number;
+  isDone: () => boolean;
+  requireSeededSession: boolean;
+  authToken?: string;
+}): Promise<GatewaySample["firstSessionRpc"]> {
+  let attempts = 0;
+  let lastError: string | null = null;
+  while (performance.now() < params.deadlineAt && !params.isDone()) {
+    attempts++;
+    const remaining = () => Math.max(1, params.deadlineAt - performance.now());
+    const client = createGatewayWsClient({
+      url: `ws://127.0.0.1:${params.port}`,
+      openTimeoutMs: remaining(),
+      handshakeTimeoutMs: remaining(),
+    });
+    try {
+      await client.waitOpen();
+      const connected = await client.request(
+        "connect",
+        {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "gateway-client",
+            displayName: "startup-benchmark",
+            version: "1.0.0",
+            platform: process.platform,
+            mode: "backend",
+          },
+          role: "operator",
+          ...(params.authToken ? { auth: { token: params.authToken } } : {}),
+          scopes: ["operator.read"],
+          caps: [],
+        },
+        remaining(),
+      );
+      if (!connected.ok) {
+        throw new Error(`connect: ${JSON.stringify(connected.error)}`);
+      }
+      const response = await client.request(
+        "sessions.list",
+        {
+          limit: 1,
+          ...(params.requireSeededSession
+            ? { agentId: "incident-agent-01", label: "Synthetic startup session 0" }
+            : {}),
+        },
+        remaining(),
+      );
+      if (!response.ok) {
+        throw new Error(`sessions.list: ${JSON.stringify(response.error)}`);
+      }
+      if (
+        !response.payload ||
+        typeof response.payload !== "object" ||
+        !("sessions" in response.payload) ||
+        !Array.isArray(response.payload.sessions)
+      ) {
+        throw new Error("sessions.list returned no sessions array");
+      }
+      if (
+        params.requireSeededSession &&
+        !response.payload.sessions.some(
+          (session: unknown) =>
+            session !== null &&
+            typeof session === "object" &&
+            "key" in session &&
+            session.key === "agent:incident-agent-01:bench-0",
+        )
+      ) {
+        throw new Error("sessions.list has not returned the seeded session");
+      }
+      return { ms: performance.now() - params.startAt, attempts, lastError };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (client.ws.readyState !== client.ws.CLOSED) {
+        const closed = new Promise<void>((resolve) => {
+          client.ws.once("close", () => resolve());
+        });
+        const timer = setTimeout(() => client.ws.terminate(), 1_000);
+        try {
+          client.close();
+          await closed;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    }
+    await delay(25);
+  }
+  return { ms: null, attempts, lastError };
+}
+
 async function runGatewaySample(
   options: GatewayBenchRuntimeOptions & {
     benchCase: GatewayBenchCase;
@@ -999,11 +1314,14 @@ async function runGatewaySample(
     : withGatewayBenchRoot;
   return await withRoot(async (root) => {
     const slowAgent = options.benchCase.id === "slowAgentDatabase";
-    let port = await getFreePort();
-    if (slowAgent) {
-      while (port < 40000) {
-        port = await getFreePort();
-      }
+    let port = 0;
+    for (let attempt = 0; port < 40000 && attempt < 32; attempt++) {
+      port = await getFreePort();
+    }
+    if (port < 40000) {
+      throw new CliArgumentError(
+        "could not allocate a benchmark port >= 40000 after 32 attempts; ensure the host's ephemeral port range includes ports >= 40000",
+      );
     }
     const configPath = writeConfig(root, options.benchCase);
     const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
@@ -1029,6 +1347,7 @@ async function runGatewaySample(
     const startAt = performance.now();
     const deadlineAt = startAt + options.timeoutMs;
     const startupTrace: Record<string, number> = {};
+    const startupTraceLines: string[] = [];
     const output: string[] = [];
     const outputBuffers: Record<"stderr" | "stdout", string> = { stderr: "", stdout: "" };
     let firstOutputMs: number | null = null;
@@ -1054,7 +1373,12 @@ async function runGatewaySample(
           : []),
         ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
       ];
-      const childArgs = buildGatewayBenchChildArgs(options.entry, port, nodeOptions);
+      const childArgs = buildGatewayBenchChildArgs(
+        options.entry,
+        port,
+        nodeOptions,
+        options.benchCase.id === "teamBoot" ? "token" : "none",
+      );
       const command = buildGatewayBenchCommand(childArgs, options);
       child = spawn(command.command, command.args, {
         cwd: process.cwd(),
@@ -1096,7 +1420,9 @@ async function runGatewaySample(
           gatewayReadyLogMs = nowMs;
           gatewayReadyLogLine = line;
         }
-        collectTraceLine(line, "startup trace", startupTrace);
+        if (collectTraceLine(line, "startup trace", startupTrace)) {
+          startupTraceLines.push(line);
+        }
       };
       const onChunk = (stream: "stderr" | "stdout", chunk: Buffer) => {
         if (firstOutputMs == null) {
@@ -1125,7 +1451,23 @@ async function runGatewaySample(
           port,
           startAt,
         });
-      const [healthz, readyz] = await Promise.all([probe("/healthz"), probe("/readyz")]);
+      const healthzProbe = probe("/healthz");
+      const [healthz, readyz, firstSessionRpc] = await Promise.all([
+        healthzProbe,
+        probe("/readyz"),
+        healthzProbe.then((health) =>
+          health.status === 200
+            ? waitForFirstSessionRpc({
+                port,
+                startAt,
+                deadlineAt,
+                isDone: () => childExited,
+                requireSeededSession: options.benchCase.id === "teamBoot",
+                ...(options.benchCase.id === "teamBoot" ? { authToken: TEAM_BOOT_AUTH_TOKEN } : {}),
+              })
+            : { ms: null, attempts: 0, lastError: "Gateway never became healthy" },
+        ),
+      ]);
       if (slowAgent) {
         while (
           Object.keys(agentRecoveryMs).length < SLOW_DATABASE_AGENT_IDS.length &&
@@ -1149,7 +1491,15 @@ async function runGatewaySample(
       const cpuMs =
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
-      const exit = await stopChild(startedChild);
+      const shutdownStartedAt = performance.now();
+      let shutdownForced = false;
+      const exit = await stopChild(startedChild, {
+        ...(options.benchCase.id === "teamBoot" ? { teardownGraceMs: 30_000 } : {}),
+        onForceKill: () => {
+          shutdownForced = true;
+        },
+      });
+      const shutdownMs = performance.now() - shutdownStartedAt;
       const maxRssMb = rssSampler.sample();
       child = undefined;
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
@@ -1162,6 +1512,7 @@ async function runGatewaySample(
         exitedBeforeTeardown: exit.exitedBeforeTeardown,
         exitCode: exit.exitCode,
         firstOutputMs,
+        firstSessionRpc,
         gatewayReadyLogLine,
         gatewayReadyLogMs,
         healthz,
@@ -1170,8 +1521,11 @@ async function runGatewaySample(
         maxRssMb,
         outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,
+        shutdownForced,
+        shutdownMs,
         signal: exit.signal,
         startupTrace,
+        startupTraceLines,
       };
     } finally {
       rssSampler?.stop();
@@ -1206,13 +1560,14 @@ async function runCase(
       samples.push(sample);
       const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: completion=${formatMs(sample.completionMs)} healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} httpListen=${formatMs(sample.httpListenLogMs)} gatewayReady=${formatMs(sample.gatewayReadyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: completion=${formatMs(sample.completionMs)} healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} sessionsRpc=${formatMs(sample.firstSessionRpc.ms)} httpListen=${formatMs(sample.httpListenLogMs)} gatewayReady=${formatMs(sample.gatewayReadyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
       );
       if (
         sample.outputTail &&
         (sample.completionMs == null ||
           sample.healthz.status !== 200 ||
-          sample.readyz.status !== 200)
+          sample.readyz.status !== 200 ||
+          sample.firstSessionRpc.ms === null)
       ) {
         console.error(
           `[gateway-startup-bench] ${options.benchCase.id} output tail:\n${sample.outputTail}`,
@@ -1238,6 +1593,8 @@ function printResult(result: CaseResult): void {
   console.log(`  http listen:  ${formatStats(result.summary.httpListenLogMs)}`);
   console.log(`  gateway ready: ${formatStats(result.summary.gatewayReadyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
+  console.log(`  sessions RPC: ${formatStats(result.summary.firstSessionRpcMs)}`);
+  console.log(`  shutdown:     ${formatStats(result.summary.shutdownMs)}`);
   console.log(`  max RSS:      ${formatStats(result.summary.maxRssMb, formatMb)}`);
   console.log(
     `  ready memory: rss=${formatStats(result.summary.startupTrace["memory.ready.rssMb"], formatMb)} heap=${formatStats(result.summary.startupTrace["memory.ready.heapUsedMb"], formatMb)} external=${formatStats(result.summary.startupTrace["memory.ready.externalMb"], formatMb)}`,
@@ -1266,17 +1623,25 @@ async function main() {
 
   const options = parseOptions(argv);
   const slowAgent = options.cases.length === 1 && options.cases[0]?.id === "slowAgentDatabase";
-  if (options.fixtureRoot || options.seedOnly || slowAgent) {
+  const teamBoot = options.cases.length === 1 && options.cases[0]?.id === "teamBoot";
+  const needsPreparedFixture = options.cases.some(
+    ({ id }) => id === "slowAgentDatabase" || id === "teamBoot",
+  );
+  if (options.fixtureRoot || options.seedOnly || needsPreparedFixture) {
     if (
-      !slowAgent ||
+      (!slowAgent && !teamBoot) ||
       !options.fixtureRoot ||
       (!options.seedOnly && (options.runs !== 1 || options.warmup !== 0))
     ) {
       throw new CliArgumentError(
-        "slowAgentDatabase requires --fixture-root and either --seed-only or --runs 1 --warmup 0",
+        "teamBoot and slowAgentDatabase require --fixture-root and either --seed-only or --runs 1 --warmup 0",
       );
     }
     if (options.seedOnly) {
+      if (teamBoot) {
+        await seedTeamBootFixture(path.resolve(options.fixtureRoot), options.cases[0]!);
+        return;
+      }
       await seedSlowAgentFixture(
         path.resolve(options.fixtureRoot),
         options.agentDatabaseMib,
@@ -1284,9 +1649,33 @@ async function main() {
       );
       return;
     }
-    if (!existsSync(path.join(options.fixtureRoot, "slow-agent-fixture.json"))) {
+    if (
+      !existsSync(
+        path.join(
+          options.fixtureRoot,
+          teamBoot ? "team-boot-fixture.json" : "slow-agent-fixture.json",
+        ),
+      )
+    ) {
       throw new CliArgumentError("--fixture-root must first be prepared with --seed-only");
     }
+    if (teamBoot) {
+      const fixture = JSON.parse(
+        readFileSync(path.join(options.fixtureRoot, "team-boot-fixture.json"), "utf8"),
+      ) as { bundledPluginFixture?: OpenClawConfig };
+      if (
+        JSON.stringify(fixture.bundledPluginFixture ?? {}) !==
+        JSON.stringify(options.cases[0]?.bundledPluginFixture ?? {})
+      ) {
+        throw new CliArgumentError("--bundled-plugin-fixture must match the prepared fixture");
+      }
+    }
+  }
+  if (
+    options.startAt !== undefined &&
+    (options.cases.length !== 1 || options.runs !== 1 || options.warmup !== 0)
+  ) {
+    throw new CliArgumentError("--start-at requires one case with --runs 1 --warmup 0");
   }
   if (options.installedCohort) {
     const { runInstalledGatewayBenchmark } = await import("./lib/gateway-bench-installed.ts");
@@ -1315,6 +1704,13 @@ async function main() {
     gatewayRuntime: options.gatewayRuntime,
     gatewayCpus: options.gatewayCpus,
     generatedAt: new Date().toISOString(),
+    ...(teamBoot
+      ? {
+          fixture: JSON.parse(
+            readFileSync(path.join(options.fixtureRoot!, "team-boot-fixture.json"), "utf8"),
+          ),
+        }
+      : {}),
     results,
   };
   if (options.output) {

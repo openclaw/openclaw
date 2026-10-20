@@ -11,7 +11,6 @@ import {
   buildMatrixReplyArtifact,
   isMatrixQaExactMarkerReply,
   assertTopLevelReplyArtifact,
-  advanceMatrixQaActorCursor,
   primeMatrixQaDriverScenarioClient,
   resolveMatrixQaNoReplyWindowMs,
   runAssertedDriverTopLevelScenario,
@@ -84,12 +83,6 @@ export async function runInitialCatchupThenIncrementalScenario(context: MatrixQa
     roomId,
     since: startSince,
     timeoutMs: context.timeoutMs,
-  });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: catchupMatched.since,
-    startSince,
   });
   const catchupReply = buildMatrixReplyArtifact(catchupMatched.event, catchupToken);
   assertTopLevelReplyArtifact("catchup reply", catchupReply);
@@ -198,12 +191,6 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
       ].join("\n"),
     );
   }
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: duplicate.since,
-    startSince: firstMatchedSince ?? startSince,
-  });
 
   const postRestart = await runAssertedDriverTopLevelScenario({
     context,

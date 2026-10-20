@@ -172,6 +172,5 @@ export function createGeolocationDatabaseStore(deps: StoreDeps) {
       });
       return await inFlight;
     },
-    databaseFile: target,
   };
 }

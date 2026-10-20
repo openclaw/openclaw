@@ -411,6 +411,40 @@ on that original build before replacement. Active modern workers must also drain
 before downgrade or rollback to an older writer, which cannot interpret anchor
 lineage completion.
 
+Persistent sandbox streams use the first-use `sandbox_persistent_execs` companion
+table in shared state, owned by the sandbox registry. The table shape and schema
+version stay unchanged. Cron records desired execution; the companion records
+whole-container cleanup custody, including the original Docker daemon, exact
+dedicated container ID and generation, host process owner, and registry workspace
+binding. The parent sandbox generation remains the reservation relation. Each
+start uses a fresh dedicated container; the receipt does not authorize reusing
+its filesystem or starting execution. Recovery checks the original workspace
+path, kind, and registry generation before settling managed edits. Ordinary
+registry writes, job deletion, and quarantine do not delete these independent
+rows.
+
+Unresolved custody blocks a replacement launch and has no age-based expiry.
+Recovery can claim cleanup after proving the original owner is dead in the same
+host process namespace. Unknown identity retains custody unless the Docker owner
+removes the exact dedicated container and confirms its absence on the original
+daemon; that proof permits only terminal cleanup, never starting
+execution. Container removal and confirmed absence precede workspace settlement
+and custody deletion. No guest helper response authorizes cleanup, and there is
+no autonomous execution lease: after controller loss, the workload may continue
+until recovery. A changed or unavailable Docker target cannot prove that the
+original container disappeared. Reads and installations that never use this
+feature do not create its table.
+
+Persisted sandbox stream jobs use the distinct `sandbox-stream` schedule kind.
+Older readers quarantine this unsupported kind instead of launching its command
+on the Gateway. They ignore the custody companion without erasing its rows.
+Stop and settle these streams on the current build before downgrading; unresolved
+cleanup requires recovery against the original Docker daemon. Older sandbox
+pruning may remove a container, which a later compatible reader can reconcile
+against its exact original identity. Re-upgrade does not automatically
+restore quarantined jobs: recreation or explicit restoration uses current
+authority and approval. Preserve a verified backup before downgrade.
+
 Notification ownership uses bare nullable `TEXT` columns at the same schema
 version: `session_watch_cursors.watcher_store_path`,
 `subagent_runs.requester_store_path`, and `subagent_runs.controller_store_path`.

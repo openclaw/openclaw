@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as harnessRecovery from "../../agents/agent-harness-completion-recovery.js";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { commitMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import type { HarnessCompletionRecovery } from "../../config/sessions/restart-recovery-types.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -18,6 +19,8 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
+import { classifyGatewayStorageFailure } from "../sqlite-error-diagnostics.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import * as workerAdmission from "../sqlite-worker-operation-admission.js";
 import { settleDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
 import { createPendingFinalFixture } from "./delivery-queue.test-helpers.js";
@@ -150,6 +153,33 @@ describe("pending-final delivery completion", () => {
     vi.restoreAllMocks();
     await cleanupSessionStateForTest({ stateDir: tmpDir });
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("preserves storage guidance when final delivery settlement has an unknown outcome", async () => {
+    const before = read();
+    const createActor = sessionActors.createSessionActor;
+    vi.spyOn(sessionActors, "createSessionActor").mockImplementation((params) => {
+      const actor = createActor(params);
+      vi.spyOn(actor, "deliverySettled").mockResolvedValue({
+        kind: "unknown",
+        target: actor.target,
+        commandId: "storage-failure",
+        error: {
+          name: "Error",
+          message: "Unconfirmed actor settlement",
+          cause: Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+        },
+      });
+      return actor;
+    });
+    await expect(settle("delivered", ["prepared"])).rejects.toSatisfy((error: unknown) => {
+      expect(
+        renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(error) }),
+      ).toContain("disk is full. Free up space");
+      return hasSqliteWorkerOutcomeUnknown(error);
+    });
+    expect(read()).toEqual(before);
+    expect(wake).not.toHaveBeenCalled();
   });
 
   it("invalidates an earlier recovery decision and wakes the exact session", async () => {

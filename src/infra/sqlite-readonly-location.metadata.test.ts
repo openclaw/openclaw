@@ -82,7 +82,7 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
 });
 
 it.each(["absent", "unverifiable"])(
-  "keeps %s ownership byte-neutral and rejects a replaced source identity",
+  "keeps %s ownership byte-neutral, refuses unknown holders, and rejects a replaced source identity",
   async (owner) => {
     const root = roots.make("sqlite-offline-metadata-");
     const source = path.join(root, "openclaw.sqlite");
@@ -112,10 +112,16 @@ it.each(["absent", "unverifiable"])(
       expectedSourceIdentity,
       allowLiveOwner: true,
     };
-    const prepared = await prepareSqliteReadOnlyLocationAwaited(source, options);
+    if (owner === "unverifiable") {
+      await expect(prepareSqliteReadOnlyLocationAwaited(source, options)).rejects.toThrow(
+        "cannot verify Gateway ownership from this process",
+      );
+    } else {
+      const prepared = await prepareSqliteReadOnlyLocationAwaited(source, options);
+      expect(await prepared.cleanupAsync()).toBe(true);
+    }
     expect(fs.readFileSync(source)).toEqual(before);
     expect(fs.readdirSync(root)).toEqual(entries);
-    expect(await prepared.cleanupAsync()).toBe(true);
     fs.renameSync(source, path.join(root, "original.sqlite"));
     fs.writeFileSync(source, before);
     await expect(prepareSqliteReadOnlyLocationAwaited(source, options)).rejects.toThrow(

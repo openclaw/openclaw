@@ -79,7 +79,7 @@ import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
 
 const BACKGROUND_EXEC_FOLLOW_UP =
-  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
+  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. Automatic completion wake, when enabled, occurs only after exit. New output while this command is running does not automatically start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.";
 
 export function createExecTool(defaults?: ExecToolDefaults) {
   const secretEgressEnabled = isSecretEgressProxyActive();
@@ -689,6 +689,11 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (toolAborted) {
           throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
         }
+        const deadlineAtMs = run.session.processActivity?.deadlineAtMs;
+        const followUp =
+          deadlineAtMs === undefined
+            ? backgroundFollowUp
+            : `Automatic stop will be requested at ${new Date(deadlineAtMs).toISOString()}; the process may exit earlier. ${backgroundFollowUp}`;
         return attachExecApprovalReview(
           completed.status === "settled"
             ? buildExecForegroundResult({
@@ -704,7 +709,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${backgroundFollowUp}`,
+                    }). ${followUp}`,
                   },
                 ],
                 details: {
@@ -712,10 +717,11 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   sessionId: run.session.id,
                   pid: run.session.pid ?? undefined,
                   startedAt: run.startedAt,
+                  ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
                   cwd: run.session.cwd,
                   tail: run.session.tail,
                   // Structured callers receive details without the visible content.
-                  followUp: backgroundFollowUp,
+                  followUp,
                 },
               },
           approvalReview,

@@ -4,7 +4,6 @@ export const MODEL_ACCOUNT_CONNECT_COMPAT_RECORD = {
   code: "model-account-connect-sync-persistence",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-10-03",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
   removeAfter: "2026-12-31",
@@ -24,12 +23,4 @@ export const MODEL_ACCOUNT_CONNECT_COMPAT_RECORD = {
   diagnostics: [
     "TypeScript @deprecated annotations and one DEP_SESSION_PERSISTENCE warning per plugin and capability family per process; unscoped callers share one SDK-level family warning",
   ],
-  tests: [
-    "src/plugins/compat/registry.test.ts",
-    "src/plugins/compat/model-account-connect-deprecation.test.ts",
-    "test/type-contracts/gateway-model-account-connect-compat.ts",
-    "src/gateway/server-methods/users-auth-connect.test.ts",
-  ],
-  releaseNote:
-    "Personal model-account control-plane operations expose awaited worker-backed methods. Synchronous plugin methods retain their existing arguments, return values, and completion timing through 2026-12-31; RPC envelopes, stored data, retention, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

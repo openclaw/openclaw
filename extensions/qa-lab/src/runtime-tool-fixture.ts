@@ -401,8 +401,6 @@ function findToolRequestEvidence(params: {
   const planned = plannedRequests[0];
   const output = outputRequest
     ? {
-        id: outputRequest.toolOutputCallId,
-        tool: params.toolName,
         text: outputRequest.toolOutput,
         hardFailure: requestHasHappyPathFailureToolOutput(outputRequest),
         failure: requestHasFailureLikeToolOutput(outputRequest),
@@ -410,13 +408,10 @@ function findToolRequestEvidence(params: {
       }
     : undefined;
   return {
-    plannedRequest: planned
-      ? { id: planned.plannedToolCallId, tool: params.toolName, args: planned.plannedToolArgs }
-      : undefined,
+    plannedRequest: planned ? { args: planned.plannedToolArgs } : undefined,
     executedRequest: executedRequest
       ? {
           id: executedRequest.plannedToolCallId,
-          tool: params.toolName,
           args: executedRequest.plannedToolArgs,
         }
       : undefined,

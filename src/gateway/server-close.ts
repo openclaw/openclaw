@@ -3,6 +3,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { WebSocketServer } from "ws";
 import { disposeAcpSessionManager } from "../acp/control-plane/manager.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { disposeAllCliLiveSessions } from "../agents/cli-runner/cli-live-session-registry.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
@@ -345,6 +346,7 @@ async function closeGatewayResources(
   const disposeRuntime = async (
     label:
       | "plugin-services"
+      | "cli-live-sessions"
       | "agent-harnesses"
       | "bundle-mcp"
       | "bundle-lsp"
@@ -402,6 +404,7 @@ async function closeGatewayResources(
         await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId));
       }
     });
+    await disposeRuntime("cli-live-sessions", disposeAllCliLiveSessions);
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
     await shutdownStep("provider-transport-dispatchers", () =>

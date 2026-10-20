@@ -128,6 +128,28 @@ describe("supervised gateway lock recovery", () => {
     expect(probeHealth).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "SQLITE_READONLY",
+    "SQLITE_FULL",
+    "SQLITE_IOERR",
+    "SQLITE_CANTOPEN",
+    "ENOSPC",
+    "EACCES",
+  ])("does not retry or probe health for %s during state acquisition", async (code) => {
+    const error = new GatewayLockError(
+      "failed to acquire gateway state ownership",
+      Object.assign(new Error("storage unavailable"), { code }),
+    );
+    const startLoop = rejectLoop(error);
+    const probeHealth = vi.fn(async () => true);
+    const clock = createClock();
+    await expect(recover({ startLoop, probeHealth, ...clock })).rejects.toBe(error);
+    expect(startLoop).toHaveBeenCalledOnce();
+    expect(probeHealth).not.toHaveBeenCalled();
+    expect(clock.sleep).not.toHaveBeenCalled();
+    expect(testing.resolveGatewayLockErrorExitCode(error)).toBe(1);
+  });
+
   it("bounds supervised retries when the existing gateway stays unhealthy", async () => {
     const clock = createClock();
     const startLoop = rejectLoop(new GatewayLockError("gateway already running"));

@@ -1,5 +1,24 @@
 import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { isReadMarkerOnly } from "./session-unread-ack.js";
 import type { PreparedPatchTarget } from "./sessions-patch-types.js";
+
+export function resolveSessionPatchLifecycleTargets(targets: readonly PreparedPatchTarget[]) {
+  return {
+    kind: targets.every((target) => isReadMarkerOnly(target.fullPatch))
+      ? ("read-marker" as const)
+      : undefined,
+    targets: targets.map((target) =>
+      captureSessionTarget({
+        storeScope: target.storePath,
+        sessionKey: target.canonicalKey,
+        aliases: target.lifecycleIdentities,
+        incarnation: target.initialEntry?.sessionId,
+        agentId: target.targetAgentId,
+      }),
+    ),
+  };
+}
 
 /** Tree archival commits descendants before ancestors, including across physical stores. */
 export async function runSessionPatchGroups(

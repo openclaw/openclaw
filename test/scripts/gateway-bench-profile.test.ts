@@ -370,7 +370,7 @@ it("separates discarded allocation churn from retained objects and cleans up fai
       throw new Error("workload failed");
     }),
   ).rejects.toThrow("workload failed");
-  const stopDiagnostics = await startGatewayDiagnostics(child);
+  const stopDiagnostics = await startGatewayDiagnostics(child, "soak");
   const result = await measure("completed", 4, async () => {
     expect(await sendMessage(child, { run: true })).toEqual({ completed: 4 });
   });
@@ -436,6 +436,7 @@ it("separates discarded allocation churn from retained objects and cleans up fai
   expect(gc.promotedBytes).toBeGreaterThan(0);
   expect(gc.gcCount).toBeGreaterThan(0);
   expect(readGatewayGcTrace(logPath, retainedPath).promotedBytes).toBeGreaterThan(0);
+  expect(readGatewayGcTrace(logPath, "soak", "diagnostics").promotedBytes).toBeGreaterThan(0);
 });
 
 it("accounts only the identified main isolate inside the requested heap capture", async () => {
@@ -448,10 +449,12 @@ it("accounts only the identified main isolate inside the requested heap capture"
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"identify-stop","pid":42}',
     "[42:0xabc] 10 ms: pause=1.0 gc=s promoted=4096",
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":42,"profilePath":"measured"}',
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-start","pid":42,"profilePath":"soak"}',
     "[42:0xabc] 15 ms: pause=1.0 gc=s promoted=1024",
     '[42:0xdef:1] 16 ms: GC: {"gc":"s","promoted":65536}',
     '[42:0xdef:1] 16 ms: GC: {"gc":"s",interleaved worker log',
     "[43:0xabc] 17 ms: pause=1.0 gc=s promoted=65536",
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-stop","pid":42,"profilePath":"soak"}',
     '[42:0xabc:0] 18 ms: GC: {"gc":"mc","promoted":256}',
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-stop","pid":42,"profilePath":"measured"}',
     "[42:0xabc] 20 ms: pause=1.0 gc=s promoted=4096",
@@ -463,6 +466,11 @@ it("accounts only the identified main isolate inside the requested heap capture"
     isolate: "0xabc",
     promotedBytes: 1280,
     gcCount: 2,
+    excludedWorkerGcCount: 2,
+  });
+  expect(readGatewayGcTrace(logPath, "soak", "diagnostics")).toMatchObject({
+    promotedBytes: 1024,
+    gcCount: 1,
     excludedWorkerGcCount: 2,
   });
   expect(() => readGatewayGcTrace(logPath, "missing")).toThrow("complete heap capture window");

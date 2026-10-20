@@ -85,7 +85,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       !Array.isArray(value) &&
       "stateRevision" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_105, var_106) => External[0].test(var_105) || check_2(value[var_105]),
+        (var_107, var_108) => External[0].test(var_107) || check_2(value[var_107]),
       ) &&
       check_3(value.stateRevision) &&
       (value.pendingInputs === void 0 ||
@@ -99,7 +99,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       value !== null &&
       !Array.isArray(value) &&
       Object.getOwnPropertyNames(value).every(
-        (var_107, var_108) => External[1].test(var_107) || check_2(value[var_107]),
+        (var_109, var_110) => External[1].test(var_109) || check_2(value[var_109]),
       ) &&
       (value.pendingInputs === void 0 ||
         !("pendingInputs" in value) ||
@@ -117,7 +117,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "items" in value &&
       "total" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_109, var_110) => External[2].test(var_109) || check_2(value[var_109]),
+        (var_111, var_112) => External[2].test(var_111) || check_2(value[var_111]),
       ) &&
       check_6(value.items) &&
       check_14(value.total) &&
@@ -136,7 +136,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "acceptedAt" in value &&
       "state" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_111, var_112) => External[3].test(var_111) || check_2(value[var_111]),
+        (var_113, var_114) => External[3].test(var_113) || check_2(value[var_113]),
       ) &&
       check_8(value.id) &&
       (value.runId === void 0 || !("runId" in value) || check_9(value.runId)) &&
@@ -170,7 +170,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "key" in value &&
       "kind" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_113, var_114) => External[4].test(var_113) || check_17(value[var_113]),
+        (var_115, var_116) => External[4].test(var_115) || check_17(value[var_115]),
       ) &&
       check_18(value.key) &&
       (value.rowMode === void 0 || !("rowMode" in value) || check_19(value.rowMode)) &&
@@ -424,7 +424,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "text" in value &&
       "timestamp" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_115, var_116) => External[5].test(var_115) || check_2(value[var_115]),
+        (var_117, var_118) => External[5].test(var_117) || check_2(value[var_117]),
       ) &&
       check_18(value.text) &&
       check_11(value.timestamp),
@@ -436,7 +436,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       !Array.isArray(value) &&
       "state" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_117, var_118) => External[6].test(var_117) || check_2(value[var_117]),
+        (var_119, var_120) => External[6].test(var_119) || check_2(value[var_119]),
       ) &&
       (value.canEnsure === void 0 || !("canEnsure" in value) || check_31(value.canEnsure)) &&
       (value.text === void 0 || !("text" in value) || check_39(value.text)) &&
@@ -458,7 +458,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       !Array.isArray(value) &&
       "type" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_119, var_120) => External[7].test(var_119) || check_2(value[var_119]),
+        (var_121, var_122) => External[7].test(var_121) || check_2(value[var_121]),
       ) &&
       check_48(value.type) &&
       (value.id === void 0 || !("id" in value) || check_8(value.id)) &&
@@ -478,7 +478,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "type" in value &&
       "id" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_121, var_122) => External[8].test(var_121) || check_2(value[var_121]),
+        (var_123, var_124) => External[8].test(var_123) || check_2(value[var_123]),
       ) &&
       check_54(value.type) &&
       check_8(value.id),
@@ -490,7 +490,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "type" in value &&
       "id" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_123, var_124) => External[9].test(var_123) || check_2(value[var_123]),
+        (var_125, var_126) => External[9].test(var_125) || check_2(value[var_125]),
       ) &&
       check_50(value.type) &&
       check_8(value.id),
@@ -504,7 +504,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "idKind" in value &&
       "id" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_125, var_126) => External[10].test(var_125) || check_2(value[var_125]),
+        (var_127, var_128) => External[10].test(var_127) || check_2(value[var_127]),
       ) &&
       check_57(value.type) &&
       check_8(value.pluginId) &&
@@ -522,7 +522,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "senderKind" in value &&
       "id" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_127, var_128) => External[11].test(var_127) || check_2(value[var_127]),
+        (var_129, var_130) => External[11].test(var_129) || check_2(value[var_129]),
       ) &&
       check_59(value.type) &&
       check_60(value.pluginId) &&
@@ -542,7 +542,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "source" in value &&
       "id" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_129, var_130) => External[12].test(var_129) || check_2(value[var_129]),
+        (var_131, var_132) => External[12].test(var_131) || check_2(value[var_131]),
       ) &&
       check_64(value.type) &&
       check_18(value.actorType) &&
@@ -580,7 +580,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "runId" in value &&
       "canContinue" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_131, var_132) => External[13].test(var_131) || check_2(value[var_131]),
+        (var_133, var_134) => External[13].test(var_133) || check_2(value[var_133]),
       ) &&
       check_8(value.id) &&
       check_8(value.runId) &&
@@ -615,7 +615,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "groups" in value &&
       "otherActiveGroups" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_133, var_134) => External[14].test(var_133) || check_2(value[var_133]),
+        (var_135, var_136) => External[14].test(var_135) || check_2(value[var_135]),
       ) &&
       check_93(value.groups) &&
       check_14(value.otherActiveGroups),
@@ -634,7 +634,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "done" in value &&
       "failed" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_135, var_136) => External[15].test(var_135) || check_2(value[var_135]),
+        (var_137, var_138) => External[15].test(var_137) || check_2(value[var_137]),
       ) &&
       check_8(value.groupId) &&
       check_95(value.createdAt) &&
@@ -655,7 +655,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "sessionKey" in value &&
       "status" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_137, var_138) => External[16].test(var_137) || check_2(value[var_137]),
+        (var_139, var_140) => External[16].test(var_139) || check_2(value[var_139]),
       ) &&
       check_8(value.sessionKey) &&
       check_98(value.status),
@@ -667,7 +667,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "deviceId" in value &&
       "path" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_139, var_140) => External[17].test(var_139) || check_2(value[var_139]),
+        (var_141, var_142) => External[17].test(var_141) || check_2(value[var_141]),
       ) &&
       check_8(value.deviceId) &&
       check_100(value.path),
@@ -692,7 +692,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "url" in value &&
       "branch" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_141, var_142) => External[18].test(var_141) || check_2(value[var_141]),
+        (var_143, var_144) => External[18].test(var_143) || check_2(value[var_143]),
       ) &&
       check_103(value.url) &&
       (value.ref === void 0 || !("ref" in value) || check_104(value.ref)) &&
@@ -716,7 +716,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       value !== null &&
       !Array.isArray(value) &&
       Object.getOwnPropertyNames(value).every(
-        (var_143, var_144) => External[19].test(var_143) || check_2(value[var_143]),
+        (var_145, var_146) => External[19].test(var_145) || check_2(value[var_145]),
       ) &&
       (value.send === void 0 || !("send" in value) || check_111(value.send)) &&
       (value.receive === void 0 || !("receive" in value) || check_111(value.receive)),
@@ -731,7 +731,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "send" in value &&
       "receive" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_145, var_146) => External[20].test(var_145) || check_2(value[var_145]),
+        (var_147, var_148) => External[20].test(var_147) || check_2(value[var_147]),
       ) &&
       check_111(value.send) &&
       check_111(value.receive),
@@ -759,7 +759,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       !Array.isArray(value) &&
       "actor" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_147, var_148) => External[21].test(var_147) || check_2(value[var_147]),
+        (var_149, var_150) => External[21].test(var_149) || check_2(value[var_149]),
       ) &&
       check_47(value.actor) &&
       (value.assignedBy === void 0 || !("assignedBy" in value) || check_47(value.assignedBy)) &&
@@ -774,7 +774,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       !Array.isArray(value) &&
       "identity" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_149, var_150) => External[22].test(var_149) || check_2(value[var_149]),
+        (var_151, var_152) => External[22].test(var_151) || check_2(value[var_151]),
       ) &&
       check_52(value.identity) &&
       (value.label === void 0 || !("label" in value) || check_8(value.label)) &&
@@ -821,7 +821,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       value !== null &&
       !Array.isArray(value) &&
       Object.getOwnPropertyNames(value).every(
-        (var_151, var_152) => External[23].test(var_151) || check_2(value[var_151]),
+        (var_153, var_154) => External[23].test(var_153) || check_2(value[var_153]),
       ) &&
       (value.mcpServers === void 0 || !("mcpServers" in value) || check_148(value.mcpServers)) &&
       (value.mcpToolsDeny === void 0 ||
@@ -834,14 +834,14 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       value !== null &&
       !Array.isArray(value) &&
       Object.entries(value).every(
-        ([var_153, var_154], _) => !External[24].test(var_153) || check_31(var_154),
+        ([var_155, var_156], _) => !External[24].test(var_155) || check_31(var_156),
       ),
     check_149 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
       Object.entries(value).every(
-        ([var_155, var_156], _) => !External[25].test(var_155) || check_150(var_156),
+        ([var_157, var_158], _) => !External[25].test(var_157) || check_150(var_158),
       ),
     check_150 = (value) =>
       Array.isArray(value) && value.every((element, index) => check_8(element)),
@@ -859,7 +859,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "scope" in value &&
       "acceptsArgs" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_157, var_158) => External[26].test(var_157) || check_2(value[var_157]),
+        (var_159, var_160) => External[26].test(var_159) || check_2(value[var_159]),
       ) &&
       check_153(value.name) &&
       (value.nativeName === void 0 || !("nativeName" in value) || check_153(value.nativeName)) &&
@@ -921,7 +921,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "description" in value &&
       "type" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_159, var_160) => External[27].test(var_159) || check_2(value[var_159]),
+        (var_161, var_162) => External[27].test(var_161) || check_2(value[var_161]),
       ) &&
       check_153(value.name) &&
       check_171(value.description) &&
@@ -947,7 +947,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "value" in value &&
       "label" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_161, var_162) => External[28].test(var_161) || check_2(value[var_161]),
+        (var_163, var_164) => External[28].test(var_163) || check_2(value[var_163]),
       ) &&
       check_178(value.value) &&
       check_178(value.label),
@@ -961,7 +961,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       "when" in value &&
       "action" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_163, var_164) => External[29].test(var_163) || check_2(value[var_163]),
+        (var_165, var_166) => External[29].test(var_165) || check_2(value[var_165]),
       ) &&
       check_180(value.when) &&
       check_181(value.action),
@@ -973,7 +973,7 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       !Array.isArray(value) &&
       "kind" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_165, var_166) => External[30].test(var_165) || check_2(value[var_165]),
+        (var_167, var_168) => External[30].test(var_167) || check_2(value[var_167]),
       ) &&
       check_183(value.kind),
     check_183 = (value) => typeof value == "string" && value === "device-pairing";

@@ -13,6 +13,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
+  listSessionPendingInputs,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -925,12 +926,13 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it.each([
-    { source: "current", revokeDuring: undefined, kept: true },
+    { source: "current prepared", revokeDuring: undefined, kept: true },
     { source: "revoked during preflight", revokeDuring: "preflight", kept: false },
-    { source: "revoked while the append awaits", revokeDuring: "persist", kept: false },
+    { source: "revoked while resolving input", revokeDuring: "persist", kept: false },
     { source: "revoked original input", revokeDuring: "source", kept: false },
+    { source: "original input revoked by its hook", revokeDuring: "hook", kept: false },
   ] as const)(
-    "keeps the user turn after a failed required preflight only for a $source source",
+    "keeps input through preparation only for a $source source",
     async ({ revokeDuring, kept }) => {
       await withTestDir({ prefix: "openclaw-preflight-user-turn-" }, async (tempDir) => {
         const { replyParams, followupRun } = createDirectRuntimeReplyParams();
@@ -942,21 +944,42 @@ describe("runReplyAgent runtime config", () => {
         await replaceSessionEntry(scope, sessionEntry);
         await appendTranscriptMessage(scope, { message: { role: "user", content: "earlier" } });
         let revoked = false;
+        let sourceRevoked = revokeDuring === "source";
         const input = {
           text: "the turn that hit the failed preflight",
           idempotencyKey: "source-1",
         };
+        const assertOriginalSource = () => {
+          if (sourceRevoked) {
+            throw new Error("original input source revoked");
+          }
+        };
+        const preparedSource = Object.assign(
+          () => {
+            throw new Error("Original input source was not prepared");
+          },
+          {
+            prepareSessionSourceScope: async () => {
+              // Source preparation can read the receiving store without deadlocking its writer.
+              await listSessionPendingInputs(scope);
+              return { assertCurrent: assertOriginalSource, checks: [] };
+            },
+          },
+        );
         followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
           input,
-          assertOriginalInputCommit: () => {
-            if (revokeDuring === "source") {
-              throw new Error("original input source revoked");
-            }
-          },
-          // Message resolution is the first await inside persistApproved().
+          assertOriginalInputCommit:
+            revokeDuring === undefined || revokeDuring === "hook"
+              ? preparedSource
+              : assertOriginalSource,
+          // Input resolution precedes durable custody and required maintenance.
           resolveInput: async () => {
             revoked ||= revokeDuring === "persist";
             return input;
+          },
+          beforeMessageWrite: ({ message }) => {
+            sourceRevoked ||= revokeDuring === "hook";
+            return message;
           },
           target: { ...scope, sessionEntry, cwd: tempDir, config: {} },
         });
@@ -984,9 +1007,20 @@ describe("runReplyAgent runtime config", () => {
           throw new Error("Preflight compaction required but failed: summarization_failed");
         });
 
-        const result = await runReplyAgent(replyParams);
-
-        expect(result).toMatchObject({ text: expect.stringContaining("couldn't shorten it") });
+        const reply = runReplyAgent(replyParams);
+        if (revokeDuring === "persist" || revokeDuring === "source" || revokeDuring === "hook") {
+          await expect(reply).rejects.toThrow(
+            revokeDuring === "persist"
+              ? "operator access revoked"
+              : "original input source revoked",
+          );
+          expect(runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
+          expect((await listSessionPendingInputs(scope)).total).toBe(0);
+        } else {
+          await expect(reply).resolves.toMatchObject({
+            text: expect.stringContaining("couldn't shorten it"),
+          });
+        }
         expect(executeAgentTurnMock).not.toHaveBeenCalled();
         const failedTurn = expect.objectContaining({
           role: "user",

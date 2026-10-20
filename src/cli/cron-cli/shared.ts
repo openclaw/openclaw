@@ -27,7 +27,7 @@ import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/pa
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
-import { formatLookupMiss } from "../error-format.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   ExpectedCliError,
   formatCliOperatorError,
@@ -366,12 +366,7 @@ function formatCronJobMatches(matches: readonly CronCliJobMatch[]): string {
 }
 
 export const formatCronLookupMiss = (jobId: string) =>
-  formatLookupMiss({
-    noun: "Automation",
-    value: sanitizeTerminalText(jobId),
-    listCommand: "openclaw cron list",
-    valueLabel: "automation id",
-  });
+  `Automation not found: ${sanitizeTerminalText(jobId)}. Run \`${formatCliCommand("openclaw cron list")}\` to see recent automation ids.`;
 
 // A blank id usually comes from an empty shell variable; reject it here instead of
 // letting the Gateway answer with a raw params-schema error.

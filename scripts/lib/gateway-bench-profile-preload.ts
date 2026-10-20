@@ -156,6 +156,7 @@ if (isMainThread) {
           return;
         }
         namedDiagnostics.set(captureId, startGatewayBenchDiagnostics());
+        markGc("diagnostics-start", captureId);
         reply();
       } else {
         const stopDiagnostics = namedDiagnostics.get(captureId);
@@ -163,6 +164,7 @@ if (isMainThread) {
           reply("Gateway diagnostics have not started");
           return;
         }
+        markGc("diagnostics-stop", captureId);
         const result = stopDiagnostics();
         namedDiagnostics.delete(captureId);
         process.send?.({
@@ -201,7 +203,7 @@ if (isMainThread) {
         } else {
           // Churn includes dead allocations; retention captures only survivors.
           const options = {
-            samplingInterval: GATEWAY_HEAP_SAMPLE_INTERVAL,
+            samplingInterval: message.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
             includeObjectsCollectedByMajorGC: message.includeCollectedObjects ?? true,
             includeObjectsCollectedByMinorGC: message.includeCollectedObjects ?? true,
           };

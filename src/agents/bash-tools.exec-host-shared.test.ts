@@ -1,4 +1,8 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "../../packages/gateway-client/src/protocol-request.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import * as logger from "../logger.js";
 import {
@@ -29,6 +33,7 @@ const mocks = vi.hoisted(() => {
   }
   return {
     approvals,
+    logWarn: vi.fn(),
     followupImports: 0,
     sendExecApprovalFollowup: vi.fn<typeof sendFollowup>(),
     resolveExecApprovals: vi.fn(async () => approvals()),
@@ -37,6 +42,10 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: mocks.logWarn,
+}));
 vi.mock("./bash-tools.exec-approval-followup.js", () => {
   mocks.followupImports += 1;
   return { sendExecApprovalFollowup: mocks.sendExecApprovalFollowup };
@@ -204,6 +213,7 @@ describe("resolveExecApprovalWaitOutcome", () => {
 
   beforeEach(() => {
     mocks.resolveRegisteredExecApprovalDecision.mockReset().mockResolvedValue("allow-once");
+    mocks.logWarn.mockClear();
   });
 
   it.each([
@@ -233,11 +243,48 @@ describe("resolveExecApprovalWaitOutcome", () => {
   });
 
   it.each([
-    [new Error("store unavailable"), "request-failed"],
-    [mocks.approvalRunAbortedError, "run-aborted"],
-  ])("classifies approval waiter failure %s as %s", async (error, kind) => {
+    [
+      new Error("Approval requester authority changed", {
+        cause: new Error("private-fixture-secret"),
+      }),
+      "authority-changed",
+    ],
+    [
+      new GatewayProtocolRequestTimeoutError(
+        { method: "private-fixture-secret", timeoutMs: 100, requestSent: true },
+        "private-fixture-secret",
+      ),
+      "gateway-timeout",
+    ],
+    [
+      new GatewayProtocolRequestError({
+        code: "private-fixture-secret",
+        message: "private-fixture-secret",
+        details: { command: "private-fixture-secret" },
+      }),
+      "gateway-rejected",
+    ],
+    [
+      Object.assign(
+        new Error("private-fixture-secret", { cause: new Error("private-fixture-secret") }),
+        { code: "private-fixture-secret", stack: "private-fixture-secret" },
+      ),
+      "unknown",
+    ],
+    [mocks.approvalRunAbortedError, null],
+  ])("keeps waiter failures denied and logs only the safe category %s", async (error, reason) => {
     mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(error);
-    await expect(wait()).resolves.toEqual({ kind });
+    await expect(wait()).resolves.toEqual({
+      kind: reason === null ? "run-aborted" : "request-failed",
+    });
+    if (reason === null) {
+      expect(mocks.logWarn).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.logWarn).toHaveBeenCalledExactlyOnceWith(
+        `exec approval wait failed (id=approval-wait, reason=${reason})`,
+      );
+      expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain("private-fixture-secret");
+    }
   });
 
   it("does not consume a decision after the owning signal aborts", async () => {

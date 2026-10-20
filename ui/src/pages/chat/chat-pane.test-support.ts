@@ -361,7 +361,6 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
           agentId: null,
           name: "Assistant",
           avatar: null,
-          avatarSource: null,
           avatarStatus: null,
           avatarReason: null,
         },

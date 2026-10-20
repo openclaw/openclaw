@@ -11,7 +11,6 @@ import {
 } from "./scenario-runtime-reaction.js";
 import {
   assertThreadReplyArtifact,
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   buildMatrixBlockStreamingPrompt,
   buildMatrixReplyArtifact,
@@ -88,12 +87,6 @@ export async function runBlockStreamingScenario(context: MatrixQaScenarioContext
       "Matrix block streaming scenario reused one event instead of preserving blocks",
     );
   }
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: secondBlock.since,
-    startSince,
-  });
   return {
     artifacts: {
       blockEventIds: [firstBlock.event.eventId, secondBlock.event.eventId],
@@ -132,12 +125,6 @@ export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioCon
     timeoutMs: context.timeoutMs,
   });
   const joinEvent = joinResult.event;
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: joinResult.since,
-    startSince,
-  });
 
   const result = await runAssertedDriverTopLevelScenario({
     context,
@@ -270,12 +257,6 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     reactionTargetEventId: thread.reply.eventId,
     roomId: context.roomId,
     timeoutMs: context.timeoutMs,
-  });
-  advanceMatrixQaActorCursor({
-    actorId: reaction.actorId,
-    syncState: context.syncState,
-    nextSince: reaction.since,
-    startSince: reaction.startSince,
   });
   return {
     artifacts: {

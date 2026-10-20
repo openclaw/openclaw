@@ -149,7 +149,6 @@ const LEGACY_MEDIA_KINDS = new Set<MediaKind>([
 
 type CanonicalizedPersistedMediaMessage<T extends object> = {
   changed: boolean;
-  hadLegacy: boolean;
   message: T;
 };
 
@@ -162,7 +161,7 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
   const hadTopLevelMedia = Object.hasOwn(record, "media");
   const canonical = readPersistedMediaFactInputs(message);
   if (!hadLegacy && !hadTopLevelMedia && canonical === undefined) {
-    return { changed: false, hadLegacy: false, message };
+    return { changed: false, message };
   }
 
   const topLevelMedia = Array.isArray(record.media)
@@ -246,7 +245,6 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
   }
   return {
     changed: JSON.stringify(next) !== JSON.stringify(record),
-    hadLegacy,
     message: next as T,
   };
 }

@@ -55,12 +55,6 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
   );
 }
 
-type AgentRunsDrainResult = {
-  timedOut: boolean;
-  pendingRunIds: string[];
-  deadlineAtMs: number;
-};
-
 type RawAgentWaitResponse = {
   status?: string;
   error?: string;
@@ -295,7 +289,7 @@ export async function waitForAgentRunsToDrain(params: {
   timeoutMs?: number;
   deadlineAtMs?: number;
   callGateway?: GatewayCaller;
-}): Promise<AgentRunsDrainResult> {
+}): Promise<void> {
   const deadlineAtMs = resolveRunWaitDeadlineAtMs(params);
   const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
 
@@ -330,10 +324,4 @@ export async function waitForAgentRunsToDrain(params: {
       pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
     }
   }
-
-  return {
-    timedOut: pendingRunIds.size > 0,
-    pendingRunIds: [...pendingRunIds],
-    deadlineAtMs,
-  };
 }

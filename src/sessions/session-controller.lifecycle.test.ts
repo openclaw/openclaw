@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -21,6 +22,74 @@ import {
   trackSessionControllerSourceWork,
 } from "./session-controller.mailbox.js";
 import { createReplyOperation } from "./session-controller.operation.js";
+import type { SessionTarget } from "./session-controller.target.js";
+
+function targetFixture(name: string, incarnation?: string) {
+  return captureSessionTarget({
+    storeScope: `${name}.sqlite`,
+    sessionKey: `agent:main:${name}`,
+    incarnation,
+  });
+}
+function reserveSource(
+  target: SessionTarget,
+  options: Omit<Parameters<typeof reserveSessionControllerSource>[1], "target" | "policy"> = {},
+) {
+  return reserveSessionControllerSource(target.sessionKey, {
+    target,
+    policy: { mode: "followup" },
+    ...options,
+  });
+}
+const abortAndCancel = {
+  policy: "preempt",
+  preempt: { activeRun: "abort", waitingInputs: "cancel" },
+} as const;
+const compact = {
+  kind: "compaction",
+  policy: "preempt",
+  preempt: { activeRun: "abort-if-abortable", waitingInputs: "keep" },
+} as const;
+const waitOrPreempt = (policy: "wait" | "preempt") =>
+  policy === "preempt" ? { kind: "reset" as const, ...abortAndCancel } : { policy };
+const turnOptions = (target: SessionTarget) => ({
+  target,
+  sessionKey: target.sessionKey,
+  sessionId: expectDefined(target.incarnation, "Expected a session incarnation"),
+});
+function boundOperation(target: SessionTarget, bindAtCreation = false) {
+  const operation = createReplyOperation({
+    sessionKey: target.sessionKey,
+    sessionId: expectDefined(target.incarnation, "Expected a session incarnation"),
+    resetTriggered: false,
+    ...(bindAtCreation ? { target } : {}),
+  });
+  bindSessionControllerTarget(operation, target);
+  return operation;
+}
+function pause() {
+  const started = createDeferred();
+  const finish = createDeferred();
+  return {
+    started: started.promise,
+    finish: finish.resolve,
+    run: async () => {
+      started.resolve();
+      await finish.promise;
+    },
+  };
+}
+async function abortableTurn(target: SessionTarget) {
+  const started = createDeferred();
+  const active = withSessionTurn(turnOptions(target), async (_operation, signal) => {
+    started.resolve();
+    await new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve());
+    });
+  });
+  await started.promise;
+  return { active };
+}
 
 it.each([
   ["wait", "operation"],
@@ -29,11 +98,7 @@ it.each([
   ["preempt", "claim"],
 ] as const)("%s mutation does not capture another incarnation's %s", async (policy, kind) => {
   vi.useFakeTimers();
-  const target = captureSessionTarget({
-    storeScope: "/synthetic/mutation-incarnation/sessions.json",
-    sessionKey: `agent:main:mutation-${policy}-${kind}`,
-    incarnation: "new",
-  });
+  const target = targetFixture(`mutation-${policy}-${kind}`, "new");
   const old = captureSessionTarget({
     storeScope: target.storeScope,
     sessionKey: target.sessionKey,
@@ -41,37 +106,21 @@ it.each([
   });
   const operation =
     kind === "operation"
-      ? createReplyOperation({
-          sessionKey: target.sessionKey,
-          sessionId: "new",
-          target,
-          resetTriggered: false,
-        })
+      ? createReplyOperation({ ...turnOptions(target), resetTriggered: false })
       : undefined;
-  const input =
-    kind === "claim"
-      ? reserveSessionControllerSource(target.sessionKey, { target, policy: { mode: "followup" } })
-      : undefined;
+  const input = kind === "claim" ? reserveSource(target) : undefined;
   const claim = input ? await claimSessionControllerTask(input, () => {}) : undefined;
-  let ran = false;
+  const run = vi.fn(async () => {});
   const mutation = runSessionMutation({
     target: old,
     requiredSessionId: "old",
-    ...(policy === "preempt"
-      ? {
-          kind: "reset" as const,
-          policy,
-          preempt: { activeRun: "abort" as const, waitingInputs: "cancel" as const },
-        }
-      : { policy }),
-    run: async () => {
-      ran = true;
-    },
+    ...waitOrPreempt(policy),
+    run,
   });
   try {
     await vi.advanceTimersByTimeAsync(0);
     expect(operation?.abortSignal.aborted ?? claim?.abortController.signal.aborted).toBe(false);
-    expect(ran).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
   } finally {
     operation?.complete();
     if (claim) {
@@ -84,40 +133,22 @@ it.each([
 });
 
 it("captures unbound Gateway work by its source owner, not the stack that wakes it", async () => {
-  const target = captureSessionTarget({
-    storeScope: "gateway-claim.sqlite",
-    sessionKey: "agent:main:gateway-claim",
-    incarnation: "gateway-claim-id",
-  });
-  const gatewayA = () => {
+  const target = targetFixture("gateway-claim", "gateway-claim-id");
+  const resolver = () => () => {
     throw new Error("capture must not resolve a Gateway context");
   };
-  const gatewayB = () => {
-    throw new Error("capture must not resolve a Gateway context");
-  };
-  const firstStarted = createDeferred();
-  const firstFinish = createDeferred();
-  const secondStarted = createDeferred();
-  const secondFinish = createDeferred();
-  const cleanupStarted = createDeferred();
-  const cleanupFinish = createDeferred();
+  const gatewayA = resolver();
+  const gatewayB = resolver();
+  const firstPause = pause();
+  const secondPause = pause();
+  const cleanup = pause();
   const first = withPluginRuntimeGatewayContextResolver(gatewayA, () =>
-    withSessionTurn({ sessionKey: target.sessionKey, target }, async () => {
-      firstStarted.resolve();
-      await firstFinish.promise;
-    }),
+    withSessionTurn({ sessionKey: target.sessionKey, target }, firstPause.run),
   );
-  await firstStarted.promise;
+  await firstPause.started;
   const input = withPluginRuntimeGatewayContextResolver(gatewayB, () =>
-    reserveSessionControllerSource(target.sessionKey, {
-      target,
-      policy: { mode: "followup" },
-      adapter: {
-        onSettled: async () => {
-          cleanupStarted.resolve();
-          await cleanupFinish.promise;
-        },
-      },
+    reserveSource(target, {
+      adapter: { onSettled: cleanup.run },
     }),
   );
   // Gateway A's completion wakes B's selected source before any operation exists.
@@ -125,8 +156,7 @@ it("captures unbound Gateway work by its source owner, not the stack that wakes 
     { sessionKey: target.sessionKey, target, controllerInput: input },
     async (operation) => {
       expect(operation).toBeUndefined();
-      secondStarted.resolve();
-      await secondFinish.promise;
+      await secondPause.run();
     },
   );
   const query = {
@@ -135,9 +165,9 @@ it("captures unbound Gateway work by its source owner, not the stack that wakes 
     sessionId: "gateway-claim-id",
   };
   try {
-    firstFinish.resolve();
+    firstPause.finish();
     await first;
-    await secondStarted.promise;
+    await secondPause.started;
     const claim = input.claim;
     if (!claim) {
       throw new Error("selected source has no claim");
@@ -146,11 +176,11 @@ it("captures unbound Gateway work by its source owner, not the stack that wakes 
     expect(captured.targets.get(target.storeScope)).toContain(target.sessionKey);
     expect(captured.isActive(query)).toBe(true);
     expect(captureGatewaySessionControllerWork(gatewayA).isActive(query)).toBe(false);
-    secondFinish.resolve();
+    secondPause.finish();
     await second;
-    await cleanupStarted.promise;
+    await cleanup.started;
     expect(captured.isActive(query)).toBe(true);
-    cleanupFinish.resolve();
+    cleanup.finish();
     await claim.settlement.promise;
     expect(captured.isActive(query)).toBe(false);
     await withPluginRuntimeGatewayContextResolver(gatewayB, () =>
@@ -160,79 +190,58 @@ it("captures unbound Gateway work by its source owner, not the stack that wakes 
       }),
     );
   } finally {
-    firstFinish.resolve();
-    secondFinish.resolve();
-    cleanupFinish.resolve();
+    firstPause.finish();
+    secondPause.finish();
+    cleanup.finish();
     await Promise.all([first, second, input.settlement.promise]);
   }
 });
 
-it("retains a frozen controller owner through refused preemption until its actual settlement", async () => {
-  const target = captureSessionTarget({
-    storeScope: "frozen-owner.sqlite",
-    sessionKey: "agent:main:frozen-owner",
-    incarnation: "frozen-id",
-  });
-  const operation = createReplyOperation({
-    sessionKey: target.sessionKey,
-    sessionId: "frozen-id",
-    resetTriggered: false,
-  });
-  bindSessionControllerTarget(operation, target);
-  operation.freezeAbort();
-  const prepared = createDeferred();
-  let mutated = false;
-  const mutation = runSessionMutation({
-    target,
-    kind: "reset",
-    policy: "preempt",
-    preempt: { activeRun: "abort", waitingInputs: "cancel" },
-    prepare: async () => {
-      prepared.resolve();
-    },
-    run: async () => {
-      mutated = true;
-    },
-  });
-  await prepared.promise;
-  expect(operation.abortByUser()).toBe(false);
-  expect(mutated).toBe(false);
-  expect(isSessionMutationActive(target.storeScope, target.aliases)).toBe(true);
-  let admitted = false;
-  const effect = beginSessionEffect({
-    target,
-    assertAllowed: () => {
-      admitted = true;
-    },
-  });
-  await Promise.resolve();
-  expect(admitted).toBe(false);
-  operation.complete();
-  await mutation;
-  (await effect).release();
-  expect(mutated).toBe(true);
-  expect(admitted).toBe(true);
-});
+it.each(["reset", "compaction"] as const)(
+  "%s retains a frozen owner until actual settlement",
+  async (kind) => {
+    const target = targetFixture("frozen-owner", "frozen-id");
+    const operation = boundOperation(target, kind === "compaction");
+    operation.freezeAbort();
+    const prepared = createDeferred();
+    const run = vi.fn(async () => {});
+    const mutation = runSessionMutation({
+      target,
+      ...(kind === "reset" ? { kind, ...abortAndCancel } : compact),
+      prepare: async () => prepared.resolve(),
+      run,
+    });
+    try {
+      await prepared.promise;
+      expect(operation.abortByUser()).toBe(false);
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(run).not.toHaveBeenCalled();
+      expect(isSessionMutationActive(target.storeScope, target.aliases)).toBe(true);
+      const admitted = vi.fn();
+      const effect = beginSessionEffect({ target, assertAllowed: admitted });
+      await Promise.resolve();
+      expect(admitted).not.toHaveBeenCalled();
+      operation.complete();
+      await mutation;
+      (await effect).release();
+      expect(run).toHaveBeenCalledOnce();
+      expect(admitted).toHaveBeenCalledOnce();
+    } finally {
+      operation.complete();
+      await mutation;
+    }
+  },
+);
 
 it("borrows the exact in-band owner without interrupting or awaiting its own stack", async () => {
-  const target = captureSessionTarget({
-    storeScope: "own-stack.sqlite",
-    sessionKey: "agent:main:own-stack",
-    incarnation: "own-id",
-  });
-  const operation = createReplyOperation({
-    sessionKey: target.sessionKey,
-    sessionId: "own-id",
-    resetTriggered: false,
-  });
-  bindSessionControllerTarget(operation, target);
+  const target = targetFixture("own-stack", "own-id");
+  const operation = boundOperation(target);
   try {
     await withSessionControllerOwner(operation, () =>
       runSessionMutation({
         target,
         kind: "reset",
-        policy: "preempt",
-        preempt: { activeRun: "abort", waitingInputs: "cancel" },
+        ...abortAndCancel,
         run: async () => {
           const interruption = startSessionControllerInterruption({ target });
           await interruption.released;
@@ -246,28 +255,13 @@ it("borrows the exact in-band owner without interrupting or awaiting its own sta
 });
 
 it("sharing can revoke a live turn while scoped effects remain subordinate to it", async () => {
-  const target = captureSessionTarget({
-    storeScope: "live-sharing.sqlite",
-    sessionKey: "agent:main:live-sharing",
-    incarnation: "sharing-id",
-  });
-  const operation = createReplyOperation({
-    sessionKey: target.sessionKey,
-    sessionId: "sharing-id",
-    resetTriggered: false,
-  });
-  bindSessionControllerTarget(operation, target);
-  const effect = await beginSessionEffect({ target, operation, assertAllowed: () => {} });
-  let revoked = false;
+  const target = targetFixture("live-sharing", "sharing-id");
+  const operation = boundOperation(target);
+  const effect = await beginSessionEffect({ target, operation });
+  const run = vi.fn(async () => {});
   try {
-    await runSessionMutation({
-      target,
-      policy: "allow-live",
-      run: async () => {
-        revoked = true;
-      },
-    });
-    expect(revoked).toBe(true);
+    await runSessionMutation({ target, policy: "allow-live", run });
+    expect(run).toHaveBeenCalledOnce();
     expect(operation.abortSignal.aborted).toBe(false);
     expect(effect.isActive()).toBe(true);
   } finally {
@@ -277,65 +271,41 @@ it("sharing can revoke a live turn while scoped effects remain subordinate to it
 });
 
 it("release cannot manufacture completion while captured writer cleanup is still running", async () => {
-  const target = captureSessionTarget({
-    storeScope: "retained-effect.sqlite",
-    sessionKey: "agent:main:retained-effect",
-  });
-  const effect = await beginSessionEffect({ target, assertAllowed: () => {} });
-  const entered = createDeferred();
-  const finish = createDeferred();
-  const running = effect.run(async () => {
-    entered.resolve();
-    await finish.promise;
-  });
-  await entered.promise;
+  const target = targetFixture("retained-effect");
+  const effect = await beginSessionEffect({ target });
+  const writer = pause();
+  const running = effect.run(writer.run);
+  await writer.started;
   const interruption = startSessionControllerInterruption({ target });
-  let settled = false;
-  void interruption.released.then(() => {
-    settled = true;
-  });
+  const settled = vi.fn();
+  void interruption.released.then(settled);
   effect.release();
   await Promise.resolve();
   expect(effect.isActive()).toBe(false);
-  expect(settled).toBe(false);
-  finish.resolve();
+  expect(settled).not.toHaveBeenCalled();
+  writer.finish();
   await running;
   await interruption.released;
-  expect(settled).toBe(true);
+  expect(settled).toHaveBeenCalledOnce();
 });
 
-it("hands off only the captured raw source and joins other interrupted cleanup", async ({
-  signal,
-}) => {
-  const target = captureSessionTarget({
-    storeScope: "handoff-source.sqlite",
-    sessionKey: "agent:main:handoff-source",
-  });
+it("joins interrupted cleanup except for the captured source handoff", async ({ signal }) => {
+  const target = targetFixture("handoff-source");
   const deferredCleanup = createDeferred();
   const otherCleanup = createDeferred();
-  const deferredInput = reserveSessionControllerSource(target.sessionKey, {
-    target,
-    policy: { mode: "followup" },
-  });
-  const otherInput = reserveSessionControllerSource(target.sessionKey, {
-    target,
-    policy: { mode: "followup" },
-  });
+  const deferredInput = reserveSource(target);
+  const otherInput = reserveSource(target);
   trackSessionControllerSourceWork(deferredInput, deferredCleanup.promise);
   trackSessionControllerSourceWork(otherInput, otherCleanup.promise);
-  let deferredSettled = false;
-  void deferredInput.settlement.promise.then(() => {
-    deferredSettled = true;
-  });
+  const deferredSettled = vi.fn();
+  void deferredInput.settlement.promise.then(deferredSettled);
   const interruption = startSessionControllerInterruption({
     target,
     admissionsOnly: true,
     deferSourceSettlement: deferredInput,
   });
-  let interruptedSettled = false;
-  void interruption.released.then(() => {
-    interruptedSettled = true;
-  });
+  const interruptedSettled = vi.fn();
+  void interruption.released.then(interruptedSettled);
   try {
     expect(deferredInput.abortSignal.aborted).toBe(true);
     expect(otherInput.abortSignal.aborted).toBe(true);
@@ -343,11 +313,11 @@ it("hands off only the captured raw source and joins other interrupted cleanup",
       target: captureSessionTarget({ ...target, storeScope: "foreign-handoff-source.sqlite" }),
       run: async () => {},
     });
-    expect(interruptedSettled).toBe(false);
+    expect(interruptedSettled).not.toHaveBeenCalled();
     otherCleanup.resolve();
     await withinTest(interruption.released, signal);
-    expect(deferredSettled).toBe(false);
-    expect(interruptedSettled).toBe(true);
+    expect(deferredSettled).not.toHaveBeenCalled();
+    expect(interruptedSettled).toHaveBeenCalledOnce();
   } finally {
     deferredCleanup.resolve();
     otherCleanup.resolve();
@@ -357,89 +327,49 @@ it("hands off only the captured raw source and joins other interrupted cleanup",
       interruption.released,
     ]);
   }
-  expect(deferredSettled).toBe(true);
+  expect(deferredSettled).toHaveBeenCalledOnce();
 });
 
 it("preempt interrupts a captured subordinate effect before running the mutation", async () => {
-  const target = captureSessionTarget({
-    storeScope: "preempt-effect.sqlite",
-    sessionKey: "agent:main:preempt-effect",
-    incarnation: "preempt-effect-session",
-  });
+  const target = targetFixture("preempt-effect", "preempt-effect-session");
   let releaseEffect = () => {};
   const interrupted = vi.fn(() => releaseEffect());
-  const effect = await beginSessionEffect({
-    target,
-    assertAllowed: () => {},
-    onInterrupt: interrupted,
-  });
+  const effect = await beginSessionEffect({ target, onInterrupt: interrupted });
   releaseEffect = effect.release;
-  let mutated = false;
+  const run = vi.fn(async () => {});
 
-  await runSessionMutation({
-    target,
-    kind: "reset",
-    policy: "preempt",
-    preempt: { activeRun: "abort", waitingInputs: "cancel" },
-    run: async () => {
-      mutated = true;
-    },
-  });
+  await runSessionMutation({ target, kind: "reset", ...abortAndCancel, run });
 
   expect(interrupted).toHaveBeenCalledOnce();
   expect(effect.isActive()).toBe(false);
-  expect(mutated).toBe(true);
+  expect(run).toHaveBeenCalledOnce();
 });
 
 it.each(["wait", "preempt"] as const)(
   "%s mutation joins unclaimed source cleanup without blocking a foreign store",
   async (policy) => {
-    const target = captureSessionTarget({
-      storeScope: "retiring-source.sqlite",
-      sessionKey: "agent:main:retiring-source",
-      incarnation: "retiring-source-id",
-    });
+    const target = targetFixture("retiring-source", "retiring-source-id");
     const cleanup = createDeferred();
-    const input = reserveSessionControllerSource(target.sessionKey, {
-      target,
-      policy: { mode: "followup" },
+    const input = reserveSource(target, {
       adapter: { onSettled: () => cleanup.promise },
     });
     retireSessionControllerInput(input);
-    let ran = false;
-    const mutation = runSessionMutation({
-      target,
-      ...(policy === "preempt"
-        ? {
-            kind: "reset" as const,
-            policy,
-            preempt: { activeRun: "abort" as const, waitingInputs: "cancel" as const },
-          }
-        : { policy }),
-      run: async () => {
-        ran = true;
-      },
-    });
+    const run = vi.fn(async () => {});
+    const mutation = runSessionMutation({ target, ...waitOrPreempt(policy), run });
     try {
       // The same mutation path in another physical store proves the scheduler progressed.
       await runSessionMutation({
         target: captureSessionTarget({ ...target, storeScope: "foreign-source.sqlite" }),
-        ...(policy === "preempt"
-          ? {
-              kind: "reset" as const,
-              policy,
-              preempt: { activeRun: "abort" as const, waitingInputs: "cancel" as const },
-            }
-          : { policy }),
+        ...waitOrPreempt(policy),
         run: async () => {},
       });
-      expect(ran).toBe(false);
+      expect(run).not.toHaveBeenCalled();
     } finally {
       cleanup.resolve();
       await input.settlement.promise;
       await mutation;
     }
-    expect(ran).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
   },
 );
 
@@ -450,34 +380,10 @@ it.each([
 ] as const)(
   "%s preemption applies its queued-input and child policy through Stop",
   async (kind, waitingInputs, stopsChildren) => {
-    const target = captureSessionTarget({
-      storeScope: `${kind}-preempt.sqlite`,
-      sessionKey: `agent:main:${kind}-preempt`,
-      incarnation: `${kind}-session`,
-    });
-    const running = createDeferred();
-    const active = withSessionTurn(
-      {
-        sessionKey: target.sessionKey,
-        sessionId: target.incarnation,
-        target,
-      },
-      async (_operation, signal) => {
-        running.resolve();
-        await new Promise<void>((resolve) => {
-          signal.addEventListener("abort", () => resolve());
-        });
-      },
-    );
-    await running.promise;
-    const firstQueued = reserveSessionControllerSource(target.sessionKey, {
-      target,
-      policy: { mode: "followup" },
-    });
-    const secondQueued = reserveSessionControllerSource(target.sessionKey, {
-      target,
-      policy: { mode: "followup" },
-    });
+    const target = targetFixture(`${kind}-preempt`, `${kind}-session`);
+    const { active } = await abortableTurn(target);
+    const firstQueued = reserveSource(target);
+    const secondQueued = reserveSource(target);
     const stopChildren = vi.fn(async (applyParentStop: () => Promise<boolean>) => {
       await applyParentStop();
       return { stopped: 2, failed: 0 };
@@ -501,11 +407,10 @@ it.each([
       expect(stopChildren).toHaveBeenCalledTimes(stopsChildren ? 1 : 0);
       await active;
     } finally {
-      if (!firstQueued.abortSignal.aborted) {
-        retireSessionControllerInput(firstQueued);
-      }
-      if (!secondQueued.abortSignal.aborted) {
-        retireSessionControllerInput(secondQueued);
+      for (const input of [firstQueued, secondQueued]) {
+        if (!input.abortSignal.aborted) {
+          retireSessionControllerInput(input);
+        }
       }
       await active.catch(() => undefined);
     }
@@ -513,15 +418,8 @@ it.each([
 );
 
 it("cancels queued inputs independently of abort-if-abortable active policy", async () => {
-  const target = captureSessionTarget({
-    storeScope: "/synthetic/preempt-queued/sessions.sqlite",
-    sessionKey: "agent:main:preempt-queued",
-    incarnation: "preempt-queued-session",
-  });
-  const input = reserveSessionControllerSource(target.sessionKey, {
-    target,
-    policy: { mode: "followup" },
-  });
+  const target = targetFixture("preempt-queued", "preempt-queued-session");
+  const input = reserveSource(target);
   const applied = createDeferred();
   const run = vi.fn(async () => {});
   const mutation = runSessionMutation({
@@ -551,21 +449,10 @@ it("cancels queued inputs independently of abort-if-abortable active policy", as
 });
 
 it("does not run a preemptive mutation after its caller aborts during source cleanup", async () => {
-  const target = captureSessionTarget({
-    storeScope: "/synthetic/mutation-cleanup-cancellation/sessions.sqlite",
-    sessionKey: "agent:main:mutation-cleanup-cancellation",
-  });
-  const cleanupStarted = createDeferred();
-  const finishCleanup = createDeferred();
-  const input = reserveSessionControllerSource(target.sessionKey, {
-    target,
-    policy: { mode: "followup" },
-    adapter: {
-      onSettled: async () => {
-        cleanupStarted.resolve();
-        await finishCleanup.promise;
-      },
-    },
+  const target = targetFixture("mutation-cleanup-cancellation");
+  const cleanup = pause();
+  const input = reserveSource(target, {
+    adapter: { onSettled: cleanup.run },
   });
   const caller = new AbortController();
   const reason = new Error("mutation caller cancelled during cleanup");
@@ -573,22 +460,21 @@ it("does not run a preemptive mutation after its caller aborts during source cle
   const mutation = runSessionMutation({
     target,
     kind: "reset",
-    policy: "preempt",
-    preempt: { activeRun: "abort", waitingInputs: "cancel" },
+    ...abortAndCancel,
     signal: caller.signal,
     run,
   });
   const rejected = expect(mutation).rejects.toBe(reason);
   try {
-    await cleanupStarted.promise;
+    await cleanup.started;
     expect(run).not.toHaveBeenCalled();
     caller.abort(reason);
-    finishCleanup.resolve();
+    cleanup.finish();
     await rejected;
     await input.settlement.promise;
     expect(run).not.toHaveBeenCalled();
   } finally {
-    finishCleanup.resolve();
+    cleanup.finish();
     retireSessionControllerInput(input);
     await Promise.allSettled([input.settlement.promise, mutation]);
   }
@@ -597,14 +483,10 @@ it("does not run a preemptive mutation after its caller aborts during source cle
 it.each(["caller", "authority"] as const)(
   "rechecks %s cancellation after preparation before interrupting effects",
   async (invalidation) => {
-    const target = captureSessionTarget({
-      storeScope: `/synthetic/mutation-${invalidation}-authority/sessions.sqlite`,
-      sessionKey: `agent:main:mutation-${invalidation}-authority`,
-    });
+    const target = targetFixture(`mutation-${invalidation}-authority`);
     const onInterrupt = vi.fn();
     const effect = await beginSessionEffect({ target, onInterrupt });
-    const prepared = createDeferred();
-    const finishPreparation = createDeferred();
+    const preparation = pause();
     const caller = new AbortController();
     const reason = new Error("mutation authority revoked during preparation");
     let current = true;
@@ -612,110 +494,60 @@ it.each(["caller", "authority"] as const)(
     const mutation = runSessionMutation({
       target,
       kind: "reset",
-      policy: "preempt",
-      preempt: { activeRun: "abort", waitingInputs: "cancel" },
+      ...abortAndCancel,
       signal: caller.signal,
       assertCurrent: () => {
         if (!current) {
           throw reason;
         }
       },
-      prepare: async () => {
-        prepared.resolve();
-        await finishPreparation.promise;
-      },
+      prepare: preparation.run,
       run,
     });
     const rejected = expect(mutation).rejects.toBe(reason);
     try {
-      await prepared.promise;
+      await preparation.started;
       if (invalidation === "caller") {
         caller.abort(reason);
       } else {
         current = false;
       }
-      finishPreparation.resolve();
+      preparation.finish();
       await rejected;
       expect(onInterrupt).not.toHaveBeenCalled();
       expect(effect.isActive()).toBe(true);
       expect(run).not.toHaveBeenCalled();
     } finally {
-      finishPreparation.resolve();
+      preparation.finish();
       effect.release();
       await Promise.allSettled([mutation]);
     }
   },
 );
 
-it("compaction preserves a non-abortable run until its real settlement", async () => {
-  const target = captureSessionTarget({
-    storeScope: "non-abortable-compaction.sqlite",
-    sessionKey: "agent:main:non-abortable-compaction",
-    incarnation: "non-abortable-session",
-  });
-  const operation = createReplyOperation({
-    sessionKey: target.sessionKey,
-    sessionId: target.incarnation!,
-    target,
-    resetTriggered: false,
-  });
-  bindSessionControllerTarget(operation, target);
-  operation.freezeAbort();
-  let mutated = false;
-  const mutation = runSessionMutation({
-    target,
-    kind: "compaction",
-    policy: "preempt",
-    preempt: { activeRun: "abort-if-abortable", waitingInputs: "keep" },
-    run: async () => {
-      mutated = true;
-    },
-  });
-  try {
-    await Promise.resolve();
-    expect(operation.abortSignal.aborted).toBe(false);
-    expect(mutated).toBe(false);
-    operation.complete();
-    await mutation;
-    expect(mutated).toBe(true);
-  } finally {
-    operation.complete();
-    await mutation;
-  }
-});
-
 it("bounds preempt settlement with a typed mutation timeout", async () => {
   vi.useFakeTimers();
-  const target = captureSessionTarget({
-    storeScope: "preempt-timeout.sqlite",
-    sessionKey: "agent:main:preempt-timeout",
-    incarnation: "preempt-timeout-session",
-  });
-  const effect = await beginSessionEffect({ target, assertAllowed: () => {} });
-  let mutated = false;
+  const target = targetFixture("preempt-timeout", "preempt-timeout-session");
+  const effect = await beginSessionEffect({ target });
+  const run = vi.fn(async () => {});
   const mutation = runSessionMutation({
     target,
     kind: "delete",
     policy: "preempt",
     preempt: { activeRun: "abort", waitingInputs: "cancel", settleTimeoutMs: 1_000 },
-    run: async () => {
-      mutated = true;
-    },
+    run,
   });
-  let timeoutError: unknown;
-  const observedMutation = mutation.catch((error: unknown) => {
-    timeoutError = error;
-  });
+  const observedMutation = mutation.catch((error: unknown) => error);
   try {
     await vi.advanceTimersByTimeAsync(1_000);
-    await observedMutation;
+    const timeoutError = await observedMutation;
     expect(timeoutError).toBeInstanceOf(SessionMutationPreemptTimeoutError);
     expect(timeoutError).toMatchObject({
       name: "SessionMutationPreemptTimeoutError",
       sessionKey: target.sessionKey,
       mutationKind: "delete",
     });
-    expect(mutated).toBe(false);
+    expect(run).not.toHaveBeenCalled();
   } finally {
     effect.release();
     await observedMutation;
@@ -723,25 +555,13 @@ it("bounds preempt settlement with a typed mutation timeout", async () => {
   }
 });
 
-it("keeps an admitted effect's own source through reset while cancelling a waiting sibling", async ({
-  signal,
-}) => {
-  const target = captureSessionTarget({
-    storeScope: "effect-source-reset.sqlite",
-    sessionKey: "agent:main:effect-source-reset",
-    incarnation: "effect-source-session",
-  });
-  const input = reserveSessionControllerSource(target.sessionKey, {
-    target,
-    policy: { mode: "followup" },
-  });
-  const sibling = reserveSessionControllerSource(target.sessionKey, {
-    target,
-    policy: { mode: "followup" },
-  });
+it("reset preserves its effect source and cancels waiting input", async ({ signal }) => {
+  const target = targetFixture("effect-source-reset", "effect-source-session");
+  const input = reserveSource(target);
+  const sibling = reserveSource(target);
   const effect = await beginSessionEffect({ target, sourceInput: input });
   const reason = new Error("reset waiting inputs");
-  let resetCompleted = false;
+  const run = vi.fn(async () => {});
   try {
     await effect.run(async () =>
       runSessionMutation({
@@ -750,17 +570,15 @@ it("keeps an admitted effect's own source through reset while cancelling a waiti
         policy: "preempt",
         preempt: { activeRun: "abort", waitingInputs: "cancel", reason },
         signal,
-        run: async () => {
-          resetCompleted = true;
-        },
+        run,
       }),
     );
-    expect(resetCompleted).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
     expect(effect.isActive()).toBe(true);
     expect(input.claim).toBeUndefined();
     expect(input.abortSignal.aborted).toBe(false);
     expect(input.retirementRequested).not.toBe(true);
-    expect(sibling.abortSignal.aborted).toBe(true);
+    expect(sibling.abortSignal).toMatchObject({ aborted: true });
     expect(sibling.abortSignal.reason).toBe(reason);
     await sibling.settlement.promise;
   } finally {
@@ -772,40 +590,24 @@ it("keeps an admitted effect's own source through reset while cancelling a waiti
 });
 
 for (const policy of ["wait", "preempt"] as const) {
-  it(`preserves an acquired queued-source effect through a ${policy} mutation until its turn runs`, async ({
-    signal,
-  }) => {
-    const target = captureSessionTarget({
-      storeScope: "queued-source-effect-compaction.sqlite",
-      sessionKey: "agent:main:queued-source-effect-compaction",
-      incarnation: "queued-source-session",
-    });
-    const input = reserveSessionControllerSource(target.sessionKey, {
-      target,
-      policy: { mode: "followup" },
-    });
+  it(`keeps a queued-source effect through ${policy} until its turn`, async ({ signal }) => {
+    const target = targetFixture("queued-source-effect-compaction", "queued-source-session");
+    const input = reserveSource(target);
     const interrupted = vi.fn();
     const effect = await beginSessionEffect({
       target,
       sourceInput: input,
       onInterrupt: interrupted,
     });
-    let effectReleased = false;
-    let sourceSettled = false;
-    void effect.released.then(() => {
-      effectReleased = true;
-    });
-    void input.settlement.promise.then(() => {
-      sourceSettled = true;
-    });
+    const effectReleased = vi.fn();
+    const sourceSettled = vi.fn();
+    void effect.released.then(effectReleased);
+    void input.settlement.promise.then(sourceSettled);
     const order: string[] = [];
     try {
       await runSessionMutation({
         target,
-        kind: "compaction",
-        ...(policy === "wait"
-          ? { policy }
-          : { policy, preempt: { activeRun: "abort-if-abortable", waitingInputs: "keep" } }),
+        ...(policy === "wait" ? { kind: "compaction" as const, policy } : compact),
         signal,
         run: async () => {
           order.push("compaction");
@@ -813,15 +615,13 @@ for (const policy of ["wait", "preempt"] as const) {
       });
       expect(interrupted).not.toHaveBeenCalled();
       expect(effect.isActive()).toBe(true);
-      expect(effectReleased).toBe(false);
+      expect(effectReleased).not.toHaveBeenCalled();
       expect(input.abortSignal.aborted).toBe(false);
       expect(input.claim).toBeUndefined();
-      expect(sourceSettled).toBe(false);
+      expect(sourceSettled).not.toHaveBeenCalled();
       await withSessionTurn(
         {
-          target,
-          sessionKey: target.sessionKey,
-          sessionId: target.incarnation,
+          ...turnOptions(target),
           controllerInput: input,
           abortSignal: signal,
         },
@@ -840,51 +640,22 @@ for (const policy of ["wait", "preempt"] as const) {
 }
 
 it("keeps a queued turn behind compaction until the mutation finishes", async () => {
-  const target = captureSessionTarget({
-    storeScope: "queued-behind-compaction.sqlite",
-    sessionKey: "agent:main:queued-behind-compaction",
-    incarnation: "queued-behind-session",
-  });
-  const running = createDeferred();
-  const active = withSessionTurn(
-    { sessionKey: target.sessionKey, sessionId: target.incarnation, target },
-    async (_operation, signal) => {
-      running.resolve();
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve());
-      });
-    },
-  );
-  await running.promise;
-  let queuedStarted = false;
-  const queued = withSessionTurn(
-    { sessionKey: target.sessionKey, sessionId: target.incarnation, target },
-    async () => {
-      queuedStarted = true;
-    },
-  );
-  const mutationStarted = createDeferred();
-  const finishMutation = createDeferred();
-  const mutation = runSessionMutation({
-    target,
-    kind: "compaction",
-    policy: "preempt",
-    preempt: { activeRun: "abort-if-abortable", waitingInputs: "keep" },
-    run: async () => {
-      mutationStarted.resolve();
-      await finishMutation.promise;
-    },
-  });
+  const target = targetFixture("queued-behind-compaction", "queued-behind-session");
+  const { active } = await abortableTurn(target);
+  const runQueued = vi.fn(async () => {});
+  const queued = withSessionTurn(turnOptions(target), runQueued);
+  const work = pause();
+  const mutation = runSessionMutation({ target, ...compact, run: work.run });
   try {
-    await mutationStarted.promise;
+    await work.started;
     await active;
-    expect(queuedStarted).toBe(false);
-    finishMutation.resolve();
+    expect(runQueued).not.toHaveBeenCalled();
+    work.finish();
     await mutation;
     await queued;
-    expect(queuedStarted).toBe(true);
+    expect(runQueued).toHaveBeenCalledOnce();
   } finally {
-    finishMutation.resolve();
+    work.finish();
     await Promise.allSettled([active, mutation, queued]);
   }
 });
