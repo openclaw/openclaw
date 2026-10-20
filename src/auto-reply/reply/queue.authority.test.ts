@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
@@ -11,6 +12,10 @@ import {
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
+import {
+  createChannelAdmissionAudit,
+  consumeChannelAdmissionEvidence,
+} from "../../channels/message-access/admission-evidence.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionReaders from "../../config/sessions/session-transcript-worker-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -94,6 +99,52 @@ function prepareOperatorAdmission(run: FollowupRun, runId: string) {
 }
 
 describe("followup queue authority", () => {
+  it.each([false, true])(
+    "scopes collected reasoning to matching participants (mixed: %s)",
+    async (mixed) => {
+      const audit = createChannelAdmissionAudit({ enabled: true });
+      const q = createQueueCase();
+      try {
+        const reasoningVisibility = {
+          retainForQueue: () => {},
+          releaseDispatch: () => {},
+          close: () => {},
+        };
+        for (const [index, prompt] of ["same one", "same two"].entries()) {
+          const item = createRun({
+            prompt,
+            originatingChannel: "slack",
+            originatingTo: "channel:A",
+          });
+          q.add({
+            ...item,
+            channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
+              audit,
+              channelId: "slack",
+              participantId: mixed ? `user-${index}` : "user-1",
+            }),
+            run: { ...item.run, senderId: "user-1", senderIsOwner: false, reasoningVisibility },
+          });
+        }
+        await q.drain();
+        expect(q.calls).toHaveLength(1);
+        expect(q.calls[0]?.run.senderId).toBe(mixed ? undefined : "user-1");
+        expect(q.calls[0]?.run.reasoningVisibility).toBe(mixed ? undefined : reasoningVisibility);
+        if (!mixed) {
+          expect(
+            consumeChannelAdmissionEvidence(q.calls[0]?.channelAdmissionEvidence),
+          ).toMatchObject({
+            ingressState: "present",
+            invoker: { state: "present", kind: "person" },
+          });
+        }
+      } finally {
+        clearFollowupQueue(q.key);
+        audit.close();
+      }
+    },
+  );
+
   it.each(["collect", "overflow"] as const)(
     "keeps restart-restricted input separate through a %s drain",
     async (mode) => {

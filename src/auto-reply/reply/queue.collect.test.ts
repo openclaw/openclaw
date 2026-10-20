@@ -1519,51 +1519,6 @@ describe("followup queue collect routing", () => {
       audit.close();
     }
   });
-  it.each([false, true])(
-    "scopes collected reasoning to matching participants (mixed: %s)",
-    async (mixed) => {
-      const audit = createChannelAdmissionAudit({ enabled: true });
-      const q = createQueueCase();
-      try {
-        const reasoningVisibility = {
-          retainForQueue: () => {},
-          releaseDispatch: () => {},
-          close: () => {},
-        };
-        for (const [index, prompt] of ["same one", "same two"].entries()) {
-          const item = createRun({
-            prompt,
-            originatingChannel: "slack",
-            originatingTo: "channel:A",
-          });
-          q.add({
-            ...item,
-            channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
-              audit,
-              channelId: "slack",
-              participantId: mixed ? `user-${index}` : "user-1",
-            }),
-            run: { ...item.run, senderId: "user-1", senderIsOwner: false, reasoningVisibility },
-          });
-        }
-        await q.drain();
-        expect(q.calls).toHaveLength(1);
-        expect(q.calls[0]?.run.senderId).toBe(mixed ? undefined : "user-1");
-        expect(q.calls[0]?.run.reasoningVisibility).toBe(mixed ? undefined : reasoningVisibility);
-        if (!mixed) {
-          expect(
-            consumeChannelAdmissionEvidence(q.calls[0]?.channelAdmissionEvidence),
-          ).toMatchObject({
-            ingressState: "present",
-            invoker: { state: "present", kind: "person" },
-          });
-        }
-      } finally {
-        clearFollowupQueue(q.key);
-        audit.close();
-      }
-    },
-  );
 
   it("splits collect batches when queued cancellation owners differ", async () => {
     const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
