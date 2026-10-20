@@ -120,6 +120,7 @@ it.each([
 ] as const)("routes %s only after input verification (%s)", async (label, verified) => {
   const { health, media, microphone, select } = await runAudioStatus(label, verified);
   expect(health).toMatchObject({
+    inCall: true,
     audioInputRouted: verified,
     audioOutputRouted: true,
     micMuted: !verified,
@@ -158,10 +159,4 @@ it("parses input-route health and retries until both routes are ready", () => {
   expect(adapter.shouldRetryJoinStatus?.(pending)).toBe(true);
   expect(ready({ ...pending, audioOutputRouted: true, manualAction: undefined })).toBe(true);
   expect(ready(pending)).toBe(false);
-});
-
-it("keeps adopted calls available to custom input bridges without early observation", async () => {
-  const { health } = await runAudioStatus("BlackHole 2ch");
-  expect(health.inCall).toBe(true);
-  expect(health.manualAction).toBeUndefined();
 });
