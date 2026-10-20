@@ -288,7 +288,8 @@ describe("sessions_send communication boundary", () => {
     for (const sessionId of ["original", "rollover", "recovered"]) {
       await upsertSessionEntryCore(parent, { sessionId, updatedAt: 1 });
     }
-    parent.entry.sessionId = "recovered";
+    const parentEntry: SessionEntry = { sessionId: "recovered", updatedAt: 1 };
+    parent.entry = parentEntry;
     const target = endpoint("child", {
       spawnedBy: parent.sessionKey,
       parentSessionId: "original",
@@ -301,7 +302,7 @@ describe("sessions_send communication boundary", () => {
         expect(input.callGateway).toHaveBeenCalledOnce();
       });
     }
-    parent.entry.communication = { receive: "never" };
+    parentEntry.communication = { receive: "never" };
     vi.mocked(callAgentToolGatewayRequest).mockClear();
     await denied(operation(undefined, target), "disabled");
   });
