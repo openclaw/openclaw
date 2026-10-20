@@ -89,6 +89,7 @@ import { resolveSlackRoomHistory } from "./prepare-room-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackGroupSessionSubject } from "./prepare-session-presentation.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
+import { isSlackThreadAuthorCurrentBot } from "./prepare-thread-context-root.js";
 import { resolveSlackThreadMentionPolicy } from "./prepare-thread-mentions.js";
 import {
   collectSlackMentionIds,
@@ -1030,6 +1031,14 @@ export async function prepareSlackMessage(params: {
   const ignoreOtherMentions = channelConfig?.ignoreOtherMentions ?? false;
   if (isRoom && ignoreOtherMentions && Boolean(ctx.botUserId) && hasAnyMention && !wasMentioned) {
     return drop("other-mention");
+  }
+  // A fallback bot accepts unmentioned channel posts, but not unmentioned
+  // replies to a thread started by a different bot.
+  if (isRoom && ignoreOtherMentions && isThreadReply && !wasMentioned) {
+    const starter = await getThreadStarter();
+    if (starter?.botId && !isSlackThreadAuthorCurrentBot({ identity: ctx, author: starter })) {
+      return drop("other-bot-thread");
+    }
   }
 
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {

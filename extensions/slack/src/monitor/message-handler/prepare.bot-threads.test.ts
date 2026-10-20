@@ -176,3 +176,25 @@ it("admits replies to roots verified by bot ID when bot-thread mentions are disa
   expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
   expect(test.replies).toHaveBeenCalledTimes(1);
 });
+
+it("leaves an unmentioned reply to another bot's thread for that bot", async () => {
+  const test = fixture({ requireMention: false, channels: { C123: { ignoreOtherMentions: true } } });
+  test.message.parent_user_id = "U_OTHER_BOT";
+  test.replies.mockResolvedValue({
+    messages: [{ ts: test.threadTs, bot_id: "B_OTHER", user: "U_OTHER_BOT", text: "Root" }],
+  });
+
+  expect(await test.prepare()).toBeNull();
+  test.expectDrop("other-bot-thread");
+
+  test.message.text = "<@B1> Continue here";
+  expect((await test.prepare())?.ctxPayload.RawBody).toBe(test.message.text);
+});
+
+it("still accepts an unmentioned top-level post for the fallback bot", async () => {
+  const test = fixture({ requireMention: false, channels: { C123: { ignoreOtherMentions: true } } });
+  test.message.thread_ts = undefined;
+  test.message.parent_user_id = undefined;
+
+  expect((await test.prepare())?.ctxPayload.RawBody).toBe("Continue here");
+});
