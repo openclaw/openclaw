@@ -13,6 +13,11 @@ const fixture = vi.hoisted(() => ({
   clear: vi.fn(),
   readOnlyLoad: vi.fn(),
 }));
+const scope = { deviceId: "fixture-device", role: "operator" };
+const scoped = (origin: boolean) => ({
+  ...scope,
+  ...(origin ? { gatewayScope: "wss://gateway.example.test" } : {}),
+});
 
 vi.mock("../../packages/gateway-client/src/client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../packages/gateway-client/src/client.js")>()),
@@ -47,12 +52,7 @@ beforeEach(() => {
       const entry =
         fixture.token === undefined || fixture.malformed
           ? null
-          : {
-              token: fixture.token,
-              role: "operator",
-              scopes: [],
-              updatedAtMs: 1,
-            };
+          : { token: fixture.token, role: "operator", scopes: [], updatedAtMs: 1 };
       params.onSnapshot?.({ entry, expectedToken: fixture.token ?? null });
       return entry;
     });
@@ -95,7 +95,6 @@ it.each(
     fixture.token = token;
     fixture.malformed = malformed;
     const deps = host(origin);
-    const scope = { deviceId: "fixture-device", role: "operator" };
     const loaded = await deps.load(scope);
     if (origin || malformed || token === undefined) {
       expect(loaded).toBeNull();
@@ -103,17 +102,11 @@ it.each(
       expect(loaded?.token).toBe(token);
     }
     fixture.token = "fixture-newer";
-    await deps.store({
-      ...scope,
-      token: "fixture-issued",
-      scopes: [],
-      expectedToken: loaded?.token?.trim() ?? null,
-    });
+    const issued = { ...scope, token: "fixture-issued", scopes: [] };
+    await deps.store({ ...issued, expectedToken: loaded?.token?.trim() ?? null });
     expect(fixture.store).toHaveBeenCalledWith({
-      ...scope,
-      ...(origin ? { gatewayScope: "wss://gateway.example.test" } : {}),
-      token: "fixture-issued",
-      scopes: [],
+      ...issued,
+      ...scoped(origin),
       expectedToken: token ?? null,
     });
   },
@@ -124,20 +117,17 @@ it.each([false, true])(
   async (origin) => {
     fixture.token = " fixture-existing ";
     const deps = host(origin, false, false);
-    const scope = { deviceId: "fixture-device", role: "operator" };
     await deps.load(scope);
     await deps.clear({ ...scope, expectedToken: "fixture-existing" });
     expect(fixture.clear).toHaveBeenLastCalledWith({
-      ...scope,
-      ...(origin ? { gatewayScope: "wss://gateway.example.test" } : {}),
+      ...scoped(origin),
       expectedToken: "fixture-existing",
       observedToken: " fixture-existing ",
     });
     fixture.token = "fixture-newer";
     await deps.clear({ ...scope, expectedToken: "fixture-issued" });
     expect(fixture.clear).toHaveBeenLastCalledWith({
-      ...scope,
-      ...(origin ? { gatewayScope: "wss://gateway.example.test" } : {}),
+      ...scoped(origin),
       expectedToken: "fixture-issued",
     });
   },
@@ -145,7 +135,6 @@ it.each([false, true])(
 
 it("keeps explicit read-only origin auth off storage reads and writes", async () => {
   const deps = host(true, true);
-  const scope = { deviceId: "fixture-device", role: "operator" };
   expect(await deps.load(scope)).toBeNull();
   expect(
     deps.store({ ...scope, token: "fixture-issued", scopes: [], expectedToken: null }),

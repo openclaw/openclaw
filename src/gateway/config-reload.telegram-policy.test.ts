@@ -15,40 +15,31 @@ import {
 beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 afterEach(() => resetPluginRuntimeStateForTest());
 
+const decisionWorker = { decisionModel: "fixture/fast" };
+const roster = (entries: NonNullable<OpenClawConfig["agents"]>["entries"]): OpenClawConfig => ({
+  agents: { entries },
+});
+const telegram = (
+  policy: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>,
+  accountId?: string,
+): OpenClawConfig => ({
+  channels: { telegram: accountId ? { accounts: { [accountId]: policy } } : policy },
+});
+
 describe("decision model reload planning", () => {
-  it.each<{
-    name: string;
-    previous: OpenClawConfig;
-    next: OpenClawConfig;
-    reloadPlugins: boolean;
-  }>([
-    {
-      name: "adds the decision agent roster",
-      previous: {},
-      next: { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } },
-      reloadPlugins: true,
-    },
-    {
-      name: "removes the decision agent roster",
-      previous: { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } },
-      next: {},
-      reloadPlugins: true,
-    },
-    {
-      name: "changes a utility model",
-      previous: { agents: { entries: { worker: { utilityModel: "fixture/small" } } } },
-      next: { agents: { entries: { worker: { utilityModel: "fixture/large" } } } },
-      reloadPlugins: false,
-    },
-    {
-      name: "adds an agent without a decision override",
-      previous: { agents: { entries: {} } },
-      next: { agents: { entries: { worker: {} } } },
-      reloadPlugins: false,
-    },
-  ])(
-    "preserves roster actions and scopes provider reloads when it $name",
-    ({ previous, next, reloadPlugins }) => {
+  it.each([
+    ["adds the decision agent roster", {}, roster({ worker: decisionWorker }), true],
+    ["removes the decision agent roster", roster({ worker: decisionWorker }), {}, true],
+    [
+      "changes a utility model",
+      roster({ worker: { utilityModel: "fixture/small" } }),
+      roster({ worker: { utilityModel: "fixture/large" } }),
+      false,
+    ],
+    ["adds an agent without a decision override", roster({}), roster({ worker: {} }), false],
+  ] satisfies [string, OpenClawConfig, OpenClawConfig, boolean][])(
+    "preserves roster actions and scopes provider reloads when it %s",
+    (_name, previous, next, reloadPlugins) => {
       const paths = diffGatewayReloadPaths(previous, next, listConfigReloadRefinementPrefixes());
       expect(buildGatewayReloadPlan(paths)).toMatchObject({
         restartGateway: false,
@@ -124,10 +115,7 @@ describe("Telegram live policy reload", () => {
       streaming: { mode: "partial" as const, preview: { toolProgress: false } },
       textChunkLimit: 1000,
     };
-    const config = (policy: typeof previous | typeof next): OpenClawConfig => ({
-      channels: { telegram: accountId ? { accounts: { [accountId]: policy } } : policy },
-    });
-    const plan = planTelegramChange(config(previous), config(next));
+    const plan = planTelegramChange(telegram(previous, accountId), telegram(next, accountId));
     expect(plan.changedPaths.length).toBeGreaterThanOrEqual(7);
     expect(isNoopGatewayReloadPlan(plan)).toBe(true);
     expect(plan.restartChannels.size).toBe(0);
@@ -135,16 +123,8 @@ describe("Telegram live policy reload", () => {
 
   it("keeps startup ownership for botToken even alongside live policy", () => {
     const plan = planTelegramChange(
-      { channels: { telegram: { accounts: { support: { dmPolicy: "disabled" } } } } },
-      {
-        channels: {
-          telegram: {
-            accounts: {
-              support: { dmPolicy: "pairing", botToken: "123456:synthetic-token" },
-            },
-          },
-        },
-      },
+      telegram({ dmPolicy: "disabled" }, "support"),
+      telegram({ dmPolicy: "pairing", botToken: "123456:synthetic-token" }, "support"),
     );
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
@@ -158,15 +138,10 @@ describe("Telegram live policy reload", () => {
   ])(
     "refreshes account creation/removal (add: $add, decision agent: $decisionAgent)",
     ({ add, decisionAgent }) => {
-      const empty: OpenClawConfig = {
-        channels: { telegram: { accounts: {} } },
-        ...(decisionAgent ? { agents: { entries: {} } } : {}),
-      };
-      const configured: OpenClawConfig = {
-        channels: { telegram: { accounts: { support: { dmPolicy: "disabled" } } } },
-        ...(decisionAgent
-          ? { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } }
-          : {}),
+      const empty = { ...telegram({ accounts: {} }), ...(decisionAgent ? roster({}) : {}) };
+      const configured = {
+        ...telegram({ dmPolicy: "disabled" }, "support"),
+        ...(decisionAgent ? roster({ worker: decisionWorker }) : {}),
       };
       const plan = planTelegramChange(add ? empty : configured, add ? configured : empty);
       expect(plan.restartChannels).toEqual(new Set(["telegram"]));
