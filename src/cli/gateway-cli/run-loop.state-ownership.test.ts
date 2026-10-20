@@ -17,7 +17,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { runGatewayLoop } from "./run-loop.js";
-import { withIsolatedSignals } from "./run-loop.test-support.js";
+import { createLifecycleGate, withIsolatedSignals } from "./run-loop.test-support.js";
 
 // Exercise real lock files, lease publication, workers and release inside Vitest.
 vi.mock("../../infra/gateway-lock.js", async (original) => {
@@ -50,8 +50,7 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
   const reloadWork = new AsyncWorkScope();
   const initialOwner = createDeferred<string | undefined>();
   const restartedOwner = createDeferred<string | undefined>();
-  const closing = createDeferred();
-  const releaseClose = createDeferred();
+  const closing = createLifecycleGate();
   let starts = 0;
   let closeContext: string | undefined;
 
@@ -70,8 +69,7 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
             close: async () => {
               closeContext = context.getStore();
               await reloadWork.drain();
-              closing.resolve();
-              await releaseClose.promise;
+              await closing.wait();
               await drainGlobalSingletonLifecycleState("restart");
             },
           };
@@ -91,14 +89,14 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
           reloadWork.run(() => requestGatewayRestartWithSignalAdmission("config reload: fixture")),
         ),
       ).toEqual({ status: "emitted" });
-      await awaitGateBeforeSettlement(closing.promise, loop, "Gateway exited before closing");
+      await awaitGateBeforeSettlement(closing.entered, loop, "Gateway exited before closing");
       expect(reloadWork.signal.aborted).toBe(true);
       expect(starts).toBe(1);
       // Delayed close retains real custody; another startup cannot enter it.
       await expect(acquireGatewayLock({ timeoutMs: 0 })).rejects.toThrow(
         "OpenClaw state database is busy",
       );
-      releaseClose.resolve();
+      closing.release();
       const second = await awaitGateBeforeSettlement(
         restartedOwner.promise,
         loop,
@@ -108,7 +106,7 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
       expect(second).not.toBe(first);
       expect(closeContext).toBe("gateway-loop");
     } finally {
-      releaseClose.resolve();
+      closing.release();
       stop();
       await loop;
     }
