@@ -1,5 +1,6 @@
+import type { JSX } from "@solidjs/web";
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { Picker, type SelectPicker } from "./select-picker.ts";
@@ -73,61 +74,81 @@ function labelsFit(picker: SelectPicker) {
 }
 
 async function mountModel(params: Omit<ModelPickerParams, "label" | "onChange">, style: string) {
-  const host = mountHost(style);
   const onChange = vi.fn();
-  mountSolid(() => <ModelPicker label="Model" onChange={onChange} {...params} />, {
-    container: host,
-  });
-  const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-  await picker.updateComplete;
+  const { picker } = await mountPickers(
+    () => <ModelPicker label="Model" onChange={onChange} {...params} />,
+    style,
+  );
   return { picker, onChange };
+}
+
+async function mountPickers(content: () => JSX.Element, style = "", direction = "") {
+  const host = mountHost(style);
+  host.dir = direction;
+  mountSolid(content, { container: host });
+  const pickers = [...host.querySelectorAll<SelectPicker>("openclaw-select-picker")];
+  await Promise.all(pickers.map((picker) => picker.updateComplete));
+  return { host, pickers, picker: pickers[0]! };
+}
+
+function menuCase(
+  sizing: "custom" | "viewport" | "trigger" | "wrap",
+  options: ModelPickerOption[],
+  width = 390,
+  style = "position:fixed;right:12px;top:32px;width:90px",
+  extra: Pick<ModelPickerParams, "placement" | "custom"> = {},
+) {
+  return {
+    sizing,
+    width,
+    style,
+    selected: options[0]!.label,
+    params: { value: options[0]!.value, options, ...extra },
+  };
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
   it("reveals keyboard highlights without untracked reactive reads", async () => {
     const warning = vi.spyOn(console, "warn");
-    try {
-      const { userEvent, role } = await browser(1280);
-      const { picker, onChange } = await mountModel(
-        {
-          value: "fixture/model-0",
-          options: numberedModels(30),
-        },
-        "width:240px;margin:24px",
-      );
-      await role("button", "Model: Model 0").click();
-      await userEvent.keyboard("{ArrowUp}");
-      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
-      const last = picker.querySelector<HTMLElement>('[data-value="fixture/model-29"]')!;
-      await expect.poll(() => last.hasAttribute("data-active")).toBe(true);
-      await expect.poll(() => list.scrollTop).toBeGreaterThan(0);
-      expect(last.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-        list.getBoundingClientRect().bottom + 1,
-      );
-      const end = list.scrollHeight - list.clientHeight;
-      for (const [top, fadeStart, fadeEnd] of [
-        [0, false, true],
-        [1, true, true],
-        [end - 2, true, true],
-        [end - 1, true, false],
-      ] as const) {
-        list.scrollTop = top;
-        list.dispatchEvent(new Event("scroll"));
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        expect(list.scrollTop).toBe(top);
-        expect(last.hasAttribute("data-active")).toBe(true);
-        expect(list.hasAttribute("data-fade-start")).toBe(fadeStart);
-        expect(list.hasAttribute("data-fade-end")).toBe(fadeEnd);
-        expect(onChange).not.toHaveBeenCalled();
-      }
-      await userEvent.keyboard("{ArrowDown}{Enter}");
-      expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/model-0");
-      expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
-    } finally {
-      warning.mockRestore();
+    onTestFinished(() => warning.mockRestore());
+    const { userEvent, role } = await browser(1280);
+    const { picker, onChange } = await mountModel(
+      {
+        value: "fixture/model-0",
+        options: numberedModels(30),
+      },
+      "width:240px;margin:24px",
+    );
+    await role("button", "Model: Model 0").click();
+    await userEvent.keyboard("{ArrowUp}");
+    const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+    const last = picker.querySelector<HTMLElement>('[data-value="fixture/model-29"]')!;
+    await expect.poll(() => last.hasAttribute("data-active")).toBe(true);
+    await expect.poll(() => list.scrollTop).toBeGreaterThan(0);
+    expect(last.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      list.getBoundingClientRect().bottom + 1,
+    );
+    const end = list.scrollHeight - list.clientHeight;
+    for (const [top, fadeStart, fadeEnd] of [
+      [0, false, true],
+      [1, true, true],
+      [end - 2, true, true],
+      [end - 1, true, false],
+    ] as const) {
+      list.scrollTop = top;
+      list.dispatchEvent(new Event("scroll"));
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      expect(list.scrollTop).toBe(top);
+      expect(last.hasAttribute("data-active")).toBe(true);
+      expect(list.hasAttribute("data-fade-start")).toBe(fadeStart);
+      expect(list.hasAttribute("data-fade-end")).toBe(fadeEnd);
+      expect(onChange).not.toHaveBeenCalled();
     }
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/model-0");
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
   });
 
   it.each([undefined, "submenu"] as const)(
@@ -135,66 +156,57 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     async (variant) => {
       const { userEvent } = await import("vitest/browser");
       const computedStyle = vi.spyOn(window, "getComputedStyle");
-      try {
-        const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
-        const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
-        const host = mountHost();
-        mountSolid(
-          () => (
-            <div dir={direction()}>
-              <Picker
-                params={{
-                  label: "Submenu",
-                  value: "one",
-                  options: [{ value: "one", label: "One" }],
-                  variant,
-                  placement: placement(),
-                  onChange() {},
-                }}
-              />
-            </div>
-          ),
-          { container: host },
-        );
-        const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-        await picker.updateComplete;
-        const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
-        const hostStyleReads = () =>
-          computedStyle.mock.calls.filter(([element]) => element === picker);
-        expect(hostStyleReads()).toHaveLength(0);
+      onTestFinished(() => computedStyle.mockRestore());
+      const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
+      const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
+      const { picker } = await mountPickers(() => (
+        <div dir={direction()}>
+          <Picker
+            params={{
+              label: "Submenu",
+              value: "one",
+              options: [{ value: "one", label: "One" }],
+              variant,
+              placement: placement(),
+              onChange() {},
+            }}
+          />
+        </div>
+      ));
+      const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+      const hostStyleReads = () =>
+        computedStyle.mock.calls.filter(([element]) => element === picker);
+      expect(hostStyleReads()).toHaveLength(0);
 
-        setDirection("rtl");
-        setPlacement("top");
-        flush();
-        await picker.updateComplete;
-        expect(hostStyleReads()).toHaveLength(0);
-        const trigger = picker.querySelector<HTMLButtonElement>("button")!;
-        trigger.focus();
-        await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
-        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
-        expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
-        expect(getComputedStyle(menu).direction).toBe("rtl");
+      setDirection("rtl");
+      setPlacement("top");
+      flush();
+      await picker.updateComplete;
+      expect(hostStyleReads()).toHaveLength(0);
+      const trigger = picker.querySelector<HTMLButtonElement>("button")!;
+      trigger.focus();
+      await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+      expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
+      expect(getComputedStyle(menu).direction).toBe("rtl");
 
-        setDirection("ltr");
-        setPlacement("bottom");
-        flush();
-        await picker.updateComplete;
-        expect(menu.dataset.placement).toBe(variant === "submenu" ? "right-start" : "bottom-start");
-        await userEvent.keyboard("{Escape}");
-        computedStyle.mockClear();
-        setDirection("rtl");
-        setPlacement("top");
-        flush();
-        await picker.updateComplete;
-        expect(hostStyleReads()).toHaveLength(0);
-        await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
-        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
-        expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
-        await userEvent.keyboard(variant === "submenu" ? "{ArrowRight}" : "{Escape}");
-        await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
-      } finally {
-        computedStyle.mockRestore();
-      }
+      setDirection("ltr");
+      setPlacement("bottom");
+      flush();
+      await picker.updateComplete;
+      expect(menu.dataset.placement).toBe(variant === "submenu" ? "right-start" : "bottom-start");
+      await userEvent.keyboard("{Escape}");
+      computedStyle.mockClear();
+      setDirection("rtl");
+      setPlacement("top");
+      flush();
+      await picker.updateComplete;
+      expect(hostStyleReads()).toHaveLength(0);
+      await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+      expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
+      await userEvent.keyboard(variant === "submenu" ? "{ArrowRight}" : "{Escape}");
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
     },
   );
 
@@ -207,13 +219,11 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     "starts picker searches at the writing edge in $direction at $width pixels",
     async ({ width, direction }) => {
       const { page, userEvent } = await browser(width);
-      const host = mountHost();
-      host.dir = direction;
       const options = numberedModels(9);
       const onChange = vi.fn();
       const selection = { value: "fixture/model-0", options, onChange };
       const Shared = () => <Picker params={{ label: "Shared", searchable: true, ...selection }} />;
-      mountSolid(
+      const { host, pickers } = await mountPickers(
         () => (
           <>
             <SettingsRow title="Primary" control={<ModelPicker label="Primary" {...selection} />} />
@@ -246,10 +256,10 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
             />
           </>
         ),
-        { container: host },
+        "",
+        direction,
       );
-      for (const picker of host.querySelectorAll<SelectPicker>("openclaw-select-picker")) {
-        await picker.updateComplete;
+      for (const picker of pickers) {
         const trigger = picker.querySelector<HTMLButtonElement>("button")!;
         await page.elementLocator(trigger).click();
         const search = picker.querySelector<HTMLInputElement>('input[role="combobox"]')!;
@@ -303,79 +313,38 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
   });
 
-  it.each<{
-    name: string;
-    width: number;
-    style: string;
-    params: Omit<ModelPickerParams, "label" | "onChange">;
-    selected: string;
-    sizing: "custom" | "viewport" | "trigger" | "wrap";
-  }>([
-    ...(["bottom", "top"] as const).map((placement) => ({
-      name: `custom labels opening ${placement}`,
-      width: placement === "bottom" ? 1280 : 390,
-      style: `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:90px`,
-      params: {
-        value: "",
-        placement,
-        options: [
-          option("", "Default"),
-          { value: "fixture/anchor", label: "fixture/anchor", provider: "fixture" },
-        ],
-        custom: { label: "Custom model…" },
-      },
-      selected: "Default",
-      sizing: "custom" as const,
-    })),
-    {
-      name: "long reference capped to the phone viewport",
-      width: 390,
-      style: "position:fixed;right:12px;top:32px;width:90px",
-      params: {
-        value: "",
-        options: [
-          option("", "Default"),
-          option("fixture/very-long-context-model-reference-for-a-narrow-phone-viewport"),
-        ],
-      },
-      selected: "Default",
-      sizing: "viewport",
-    },
-    {
-      name: "short menu fitted to its trigger",
-      width: 390,
-      style: "width:160px;padding:24px",
-      params: {
-        value: "auto",
-        options: [option("auto", "Auto"), option("off", "Off")],
-      },
-      selected: "Auto",
-      sizing: "trigger",
-    },
-    {
-      name: "long model labels wrapping instead of single-line truncation",
-      width: 390,
-      style: "position:fixed;right:12px;top:32px;width:120px",
-      params: {
-        value: "deepseek/deepseek-r1-0528",
-        options: [
-          {
-            value: "deepseek/deepseek-r1-0528",
-            label: "DeepSeek: DeepSeek-R1-0528",
-            provider: "deepseek",
-          },
-          {
-            value: "deepseek/deepseek-r1-distill",
-            label: "DeepSeek: DeepSeek-R1-Distill",
-            provider: "deepseek",
-          },
-        ],
-      },
-      selected: "DeepSeek: DeepSeek-R1-0528",
-      sizing: "wrap",
-    },
+  it.each([
+    ...(["bottom", "top"] as const).map((placement) =>
+      menuCase(
+        "custom",
+        [option("", "Default"), { ...option("fixture/anchor"), provider: "fixture" }],
+        placement === "bottom" ? 1280 : 390,
+        `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:90px`,
+        { placement, custom: { label: "Custom model…" } },
+      ),
+    ),
+    menuCase("viewport", [
+      option("", "Default"),
+      option("fixture/very-long-context-model-reference-for-a-narrow-phone-viewport"),
+    ]),
+    menuCase(
+      "trigger",
+      [option("auto", "Auto"), option("off", "Off")],
+      390,
+      "width:160px;padding:24px",
+    ),
+    menuCase(
+      "wrap",
+      ["0528", "distill"].map((suffix) => ({
+        value: `deepseek/deepseek-r1-${suffix}`,
+        label: `DeepSeek: DeepSeek-R1-${suffix === "distill" ? "Distill" : suffix}`,
+        provider: "deepseek",
+      })),
+      390,
+      "position:fixed;right:12px;top:32px;width:120px",
+    ),
   ])(
-    "keeps compact model menus readable: $name",
+    "keeps compact model menus readable: $sizing at $width pixels",
     async ({ width, style, params, selected, sizing }) => {
       const { userEvent, role } = await browser(width);
       const { picker, onChange } = await mountModel(params, style);
@@ -420,7 +389,6 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
 
   it("displays a saved disabled utility model without making it selectable as primary", async () => {
     const { role, userEvent } = await browser();
-    const host = mountHost("width:320px;padding:24px");
     const available = [
       "agent-backup",
       "fallback-one",
@@ -436,7 +404,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     };
     const utilityChange = vi.fn();
     const primaryChange = vi.fn();
-    mountSolid(
+    await mountPickers(
       () => (
         <>
           <ModelPicker
@@ -464,12 +432,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
           />
         </>
       ),
-      { container: host },
-    );
-    await Promise.all(
-      [...host.querySelectorAll<SelectPicker>("openclaw-select-picker")].map(
-        (picker) => picker.updateComplete,
-      ),
+      "width:320px;padding:24px",
     );
     const utility = role("button", "Utility Model: retired/not-offered");
     await expect.element(utility).toBeVisible();
@@ -522,10 +485,9 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     "fits grouped decisions and supports native header keyboard controls at %i pixels",
     async (width) => {
       const { userEvent, role } = await browser(width);
-      const host = mountHost("position:fixed;right:12px;top:32px;width:90px");
       const onChange = vi.fn();
       const [value, setValue] = createSignal("alpha/one");
-      mountSolid(
+      const { picker } = await mountPickers(
         () => (
           <>
             <DecisionModelPicker
@@ -541,10 +503,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
             <input id="after-picker" aria-label="Next field" />
           </>
         ),
-        { container: host },
+        "position:fixed;right:12px;top:32px;width:90px",
       );
-      const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-      await picker.updateComplete;
       let trigger = role("button", "Decision Model: Alpha decision model");
       await trigger.click();
       const search = role("combobox", "Search");

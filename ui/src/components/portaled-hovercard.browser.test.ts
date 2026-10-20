@@ -71,7 +71,7 @@ describe.skipIf(!hasPopoverApi)("portaled hovercard placement", () => {
       box.left < row.right && box.right > row.left && box.top < row.bottom && box.bottom > row.top,
     ).toBe(expected.overlaps);
     expect(card.dataset.side).toBe(expected.side);
-    expect({ x: box.x, y: box.y, width: box.width, height: box.height }).toEqual({
+    expect(box).toMatchObject({
       x: expected.x,
       y: expected.y,
       width: 294,

@@ -118,23 +118,13 @@ describe("hovercard controls", () => {
     const rileyAvatar = facepile.querySelector<HTMLAnchorElement>('a[href="/activity/riley"]')!;
     expect(tooltip.hasAttribute("open")).toBe(false);
     expect(controls.read()).toEqual([name, trigger, miraAvatar, rileyAvatar]);
-
-    trigger.click();
-    await settleTooltip(tooltip);
-    expect(tooltip.hasAttribute("open")).toBe(true);
-    expect(controls.read()).toEqual([
-      name,
-      trigger,
-      miraDetail,
-      rileyDetail,
-      miraAvatar,
-      rileyAvatar,
-    ]);
-
-    trigger.click();
-    await settleTooltip(tooltip);
-    expect(tooltip.hasAttribute("open")).toBe(false);
-    expect(controls.read()).toEqual([name, trigger, miraAvatar, rileyAvatar]);
+    for (const open of [true, false]) {
+      trigger.click();
+      await settleTooltip(tooltip);
+      expect(tooltip.hasAttribute("open")).toBe(open);
+      const details = open ? [miraDetail, rileyDetail] : [];
+      expect(controls.read()).toEqual([name, trigger, ...details, miraAvatar, rileyAvatar]);
+    }
     miraAvatar.focus();
     expect(document.activeElement).toBe(miraAvatar);
 
