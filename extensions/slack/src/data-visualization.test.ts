@@ -4,14 +4,22 @@ import {
   renderSlackDataVisualizationFallbackText,
 } from "./data-visualization.js";
 
+const title = "Quarterly revenue";
+const categories = ["Q1", "Q2"];
+const segments = [
+  { label: "Americas", value: 52 },
+  { label: "Europe", value: 31 },
+];
+const datum = (label: string, value: number) => ({ label, value });
+
 describe("Slack data visualization blocks", () => {
   it("maps portable series charts to Slack's exact native shape", () => {
     expect(
       buildSlackDataVisualizationBlock({
         type: "chart",
         chartType: "line",
-        title: "Quarterly revenue",
-        categories: ["Q1", "Q2"],
+        title,
+        categories,
         series: [
           { name: "Product", values: [120, 145] },
           { name: "Services", values: [80, 95] },
@@ -21,30 +29,14 @@ describe("Slack data visualization blocks", () => {
       }),
     ).toEqual({
       type: "data_visualization",
-      title: "Quarterly revenue",
+      title,
       chart: {
         type: "line",
         series: [
-          {
-            name: "Product",
-            data: [
-              { label: "Q1", value: 120 },
-              { label: "Q2", value: 145 },
-            ],
-          },
-          {
-            name: "Services",
-            data: [
-              { label: "Q1", value: 80 },
-              { label: "Q2", value: 95 },
-            ],
-          },
+          { name: "Product", data: [datum("Q1", 120), datum("Q2", 145)] },
+          { name: "Services", data: [datum("Q1", 80), datum("Q2", 95)] },
         ],
-        axis_config: {
-          categories: ["Q1", "Q2"],
-          x_label: "Quarter",
-          y_label: "Revenue",
-        },
+        axis_config: { categories: ["Q1", "Q2"], x_label: "Quarter", y_label: "Revenue" },
       },
     });
   });
@@ -55,20 +47,14 @@ describe("Slack data visualization blocks", () => {
         type: "chart",
         chartType: "pie",
         title: "Requests by region",
-        segments: [
-          { label: "Americas", value: 52 },
-          { label: "Europe", value: 31 },
-        ],
+        segments,
       }),
     ).toEqual({
       type: "data_visualization",
       title: "Requests by region",
       chart: {
         type: "pie",
-        segments: [
-          { label: "Americas", value: 52 },
-          { label: "Europe", value: 31 },
-        ],
+        segments: [datum("Americas", 52), datum("Europe", 31)],
       },
     });
   });
@@ -87,7 +73,7 @@ describe("Slack data visualization blocks", () => {
         type: "chart",
         chartType: "bar",
         title: "Invalid",
-        categories: ["Q1", "Q2"],
+        categories,
         series: [{ name: "Revenue", values: [1] }],
       }),
     ).toBeUndefined();
@@ -109,19 +95,11 @@ describe("Slack data visualization blocks", () => {
     expect(
       renderSlackDataVisualizationFallbackText({
         type: "data_visualization",
-        title: "Quarterly revenue",
+        title,
         chart: {
           type: "line",
-          series: [
-            {
-              name: "Revenue",
-              data: [
-                { label: "Q2", value: 145 },
-                { label: "Q1", value: 120 },
-              ],
-            },
-          ],
-          axis_config: { categories: ["Q1", "Q2"] },
+          series: [{ name: "Revenue", data: [datum("Q2", 145), datum("Q1", 120)] }],
+          axis_config: { categories },
         },
       }),
     ).toBe("Quarterly revenue (line chart)\n- Revenue: Q1: 120; Q2: 145");

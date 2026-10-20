@@ -1,67 +1,33 @@
-// Slack tests cover channel migration plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { migrateSlackChannelConfig } from "./channel-migration.js";
 
 function createSlackGlobalChannelConfig(channels: Record<string, Record<string, unknown>>) {
-  return {
-    channels: {
-      slack: {
-        channels,
-      },
-    },
-  };
+  return { channels: { slack: { channels } } };
 }
 
 function createSlackAccountChannelConfig(
   accountId: string,
   channels: Record<string, Record<string, unknown>>,
 ) {
-  return {
-    channels: {
-      slack: {
-        accounts: {
-          [accountId]: {
-            channels,
-          },
-        },
-      },
-    },
-  };
+  return { channels: { slack: { accounts: { [accountId]: { channels } } } } };
+}
+
+function migrate(cfg: OpenClawConfig, accountId = "default") {
+  return migrateSlackChannelConfig({ cfg, accountId, oldChannelId: "C123", newChannelId: "C999" });
 }
 
 describe("migrateSlackChannelConfig", () => {
   it("migrates global channel ids", () => {
-    const cfg = createSlackGlobalChannelConfig({
-      C123: { requireMention: false },
-    });
-
-    const result = migrateSlackChannelConfig({
-      cfg,
-      accountId: "default",
-      oldChannelId: "C123",
-      newChannelId: "C999",
-    });
-
-    expect(result.migrated).toBe(true);
-    expect(cfg.channels.slack.channels).toEqual({
-      C999: { requireMention: false },
-    });
+    const cfg = createSlackGlobalChannelConfig({ C123: { requireMention: false } });
+    expect(migrate(cfg).migrated).toBe(true);
+    expect(cfg.channels.slack.channels).toEqual({ C999: { requireMention: false } });
   });
 
   it("migrates account-scoped channels", () => {
-    const cfg = createSlackAccountChannelConfig("primary", {
-      C123: { requireMention: true },
-    });
-
-    const result = migrateSlackChannelConfig({
-      cfg,
-      accountId: "primary",
-      oldChannelId: "C123",
-      newChannelId: "C999",
-    });
-
-    expect(result.migrated).toBe(true);
+    const cfg = createSlackAccountChannelConfig("primary", { C123: { requireMention: true } });
+    expect(migrate(cfg, "primary").migrated).toBe(true);
     expect(
       expectDefined(cfg.channels.slack.accounts.primary, "primary Slack account").channels,
     ).toEqual({
@@ -70,18 +36,8 @@ describe("migrateSlackChannelConfig", () => {
   });
 
   it("matches account ids case-insensitively", () => {
-    const cfg = createSlackAccountChannelConfig("Primary", {
-      C123: {},
-    });
-
-    const result = migrateSlackChannelConfig({
-      cfg,
-      accountId: "primary",
-      oldChannelId: "C123",
-      newChannelId: "C999",
-    });
-
-    expect(result.migrated).toBe(true);
+    const cfg = createSlackAccountChannelConfig("Primary", { C123: {} });
+    expect(migrate(cfg, "primary").migrated).toBe(true);
     expect(
       expectDefined(cfg.channels.slack.accounts.Primary, "Primary Slack account").channels,
     ).toEqual({
@@ -101,14 +57,7 @@ describe("migrateSlackChannelConfig", () => {
       },
     };
 
-    expect(
-      migrateSlackChannelConfig({
-        cfg,
-        accountId: "primary",
-        oldChannelId: "C123",
-        newChannelId: "C999",
-      }),
-    ).toEqual({ migrated: false, skippedExisting: false });
+    expect(migrate(cfg, "primary")).toEqual({ migrated: false, skippedExisting: false });
     expect(cfg.channels.slack.accounts.Primary.channels).toEqual({
       C123: { requireMention: true },
     });
@@ -120,15 +69,7 @@ describe("migrateSlackChannelConfig", () => {
       C999: { requireMention: false },
     });
 
-    const result = migrateSlackChannelConfig({
-      cfg,
-      accountId: "default",
-      oldChannelId: "C123",
-      newChannelId: "C999",
-    });
-
-    expect(result.migrated).toBe(false);
-    expect(result.skippedExisting).toBe(true);
+    expect(migrate(cfg)).toEqual({ migrated: false, skippedExisting: true });
     expect(cfg.channels.slack.channels).toEqual({
       C123: { requireMention: true },
       C999: { requireMention: false },

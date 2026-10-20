@@ -76,7 +76,12 @@ function createConversationFixture(
       },
       ...overrides,
     });
-  return { adapter, cfg, invoke, requests };
+  const open = (
+    userIds = ["U11111111", "U22222222"],
+    overrides: Partial<ChannelMessageActionContext> = {},
+  ) => invoke("conversation-open", { userIds }, overrides);
+  const discover = () => adapter.describeMessageTool({ cfg, accountId: "default" });
+  return { cfg, invoke, open, discover, requests };
 }
 
 afterEach(() => {
@@ -86,8 +91,8 @@ afterEach(() => {
 
 describe("Slack conversation-open", () => {
   it("exposes the recipient contract to the message tool", () => {
-    const { adapter, cfg } = createConversationFixture();
-    const discovery = adapter.describeMessageTool({ cfg, accountId: "default" });
+    const { discover } = createConversationFixture();
+    const discovery = discover();
     expect(discovery?.actions).toContain("conversation-open");
     const contributions = discovery?.schema;
     const schema = (Array.isArray(contributions) ? contributions : [contributions]).find((entry) =>
@@ -99,10 +104,10 @@ describe("Slack conversation-open", () => {
 
   it("opens one group DM and sends to its returned target as the bot", async () => {
     const channelId = "C01234567";
-    const { cfg, invoke, requests } = createConversationFixture(channelId);
+    const { cfg, invoke, open, requests } = createConversationFixture(channelId);
     cfg.channels!.slack!.dm = { groupEnabled: false, groupChannels: ["G99999999"] };
     const policy = structuredClone(cfg);
-    const opened = await invoke("conversation-open", { userIds: ["U11111111", "U22222222"] });
+    const opened = await open();
     const target = `team:T11111111:channel:${channelId}`;
     expect(opened.details).toEqual({ ok: true, channelId, target });
     expect(requests).toEqual([
@@ -127,12 +132,8 @@ describe("Slack conversation-open", () => {
   });
 
   it("opens a one-to-one DM without requiring a current conversation", async () => {
-    const { invoke, requests } = createConversationFixture("D01234567");
-    const opened = await invoke(
-      "conversation-open",
-      { userIds: ["U11111111"] },
-      { toolContext: undefined },
-    );
+    const { open, requests } = createConversationFixture("D01234567");
+    const opened = await open(["U11111111"], { toolContext: undefined });
     expect(opened.details).toEqual({
       ok: true,
       channelId: "D01234567",
@@ -143,44 +144,32 @@ describe("Slack conversation-open", () => {
   });
 
   it("rejects duplicates after trimming before calling Slack", async () => {
-    const { invoke, requests } = createConversationFixture();
-    await expect(
-      invoke("conversation-open", { userIds: ["U11111111", " U11111111 "] }),
-    ).rejects.toThrow();
+    const { open, requests } = createConversationFixture();
+    await expect(open(["U11111111", " U11111111 "])).rejects.toThrow();
     expect(requests).toEqual([]);
   });
 
   it("honors the messages action gate in discovery and execution", async () => {
-    const { adapter, cfg, invoke, requests } = createConversationFixture();
+    const { cfg, open, discover, requests } = createConversationFixture();
     cfg.channels!.slack!.actions = { messages: false };
-    expect(adapter.describeMessageTool({ cfg, accountId: "default" })?.actions).not.toContain(
-      "conversation-open",
-    );
-    await expect(
-      invoke("conversation-open", { userIds: ["U11111111", "U22222222"] }),
-    ).rejects.toThrow("Slack messages are disabled");
+    expect(discover()?.actions).not.toContain("conversation-open");
+    await expect(open()).rejects.toThrow("Slack messages are disabled");
     expect(requests).toEqual([]);
   });
 
   it("does not fall back to a user read token when the bot token is missing", async () => {
-    const { adapter, cfg, invoke, requests } = createConversationFixture();
+    const { cfg, open, discover, requests } = createConversationFixture();
     vi.stubEnv("SLACK_BOT_TOKEN", undefined);
     cfg.channels!.slack!.botToken = undefined;
-    expect(adapter.describeMessageTool({ cfg, accountId: "default" })?.actions).not.toContain(
-      "conversation-open",
-    );
-    await expect(invoke("conversation-open", { userIds: ["U11111111"] })).rejects.toThrow(
-      "botToken is required",
-    );
+    expect(discover()?.actions).not.toContain("conversation-open");
+    await expect(open(["U11111111"])).rejects.toThrow("botToken is required");
     expect(requests).toEqual([]);
   });
 
   it("rejects an invalid Slack conversation ID without sending a message", async () => {
     const response = { ok: true, channel: { id: "U11111111" } };
-    const { invoke, requests } = createConversationFixture("C01234567", response);
-    await expect(
-      invoke("conversation-open", { userIds: ["U11111111", "U22222222"] }),
-    ).rejects.toThrow("valid conversation ID");
+    const { open, requests } = createConversationFixture("C01234567", response);
+    await expect(open()).rejects.toThrow("valid conversation ID");
     expect(requests.map((request) => request.method)).toEqual(["conversations.open"]);
   });
 });

@@ -6,7 +6,10 @@ import { setSlackRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
   scopes: vi.fn(),
-  targets: vi.fn(),
+  targets:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/target-resolver-runtime").resolveTargetsWithOptionalToken
+    >(),
   summary: vi.fn(),
 }));
 vi.mock("./scopes.js", () => ({ fetchSlackScopes: mocks.scopes }));
@@ -27,6 +30,10 @@ beforeEach(() => {
 function config(tokens: { botToken?: string; userToken?: string } = {}): OpenClawConfig {
   return { channels: { slack: tokens } };
 }
+function accountContext(tokens: { botToken?: string; userToken?: string }) {
+  const cfg = config(tokens);
+  return { cfg, account: slackPlugin.config.resolveAccount(cfg, "default") };
+}
 
 describe("Slack lazy channel surfaces", () => {
   it.each([true, false])("summarizes token sources when configured=%s", async (configured) => {
@@ -39,13 +46,11 @@ describe("Slack lazy channel surfaces", () => {
     };
     const summary = { configured: true };
     mocks.summary.mockReturnValue(summary);
-    const cfg = config({ botToken: "xoxb-bot" });
     expect(
       await slackPlugin.status!.buildChannelSummary!({
         snapshot,
-        cfg,
         defaultAccountId: "default",
-        account: slackPlugin.config.resolveAccount(cfg, "default"),
+        ...accountContext({ botToken: "xoxb-bot" }),
       }),
     ).toBe(summary);
     expect(mocks.summary).toHaveBeenCalledExactlyOnceWith(snapshot, {
@@ -58,13 +63,11 @@ describe("Slack lazy channel surfaces", () => {
     { tokens: { botToken: "xoxb-bot", userToken: "xoxp-user" }, present: true },
     { tokens: {}, present: false },
   ])("reports scopes with tokens present=$present", async ({ tokens, present }) => {
-    const cfg = config(tokens);
     const botScopes = { ok: true, scopes: ["chat:write"] };
     const userScopes = { ok: true, scopes: ["users:read"] };
     mocks.scopes.mockResolvedValueOnce(botScopes).mockResolvedValueOnce(userScopes);
     const result = await slackPlugin.status!.buildCapabilitiesDiagnostics!({
-      cfg,
-      account: slackPlugin.config.resolveAccount(cfg, "default"),
+      ...accountContext(tokens),
       timeoutMs: 5000,
     });
     expect(mocks.scopes.mock.calls).toEqual(
@@ -78,9 +81,7 @@ describe("Slack lazy channel surfaces", () => {
     expect(result?.details).toEqual(
       present
         ? { botScopes, userScopes }
-        : {
-            botScopes: { ok: false, error: "Slack bot token missing." },
-          },
+        : { botScopes: { ok: false, error: "Slack bot token missing." } },
     );
   });
 
@@ -114,16 +115,7 @@ describe("Slack lazy channel surfaces", () => {
         }),
       );
       if (kind === "user") {
-        const params: unknown = mocks.targets.mock.calls[0]?.[0];
-        expect(params).toHaveProperty("mapResolved");
-        if (
-          !params ||
-          typeof params !== "object" ||
-          !("mapResolved" in params) ||
-          typeof params.mapResolved !== "function"
-        ) {
-          throw new Error("Expected Slack target mapper");
-        }
+        const params = mocks.targets.mock.calls[0]![0];
         expect(params.mapResolved(resolved[0])).toEqual(resolved[0]);
       }
     },

@@ -17,6 +17,19 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 const { uploadSlackFile } = await import("./client-delivery.js");
 
+const uploadUrl = { ok: true, upload_url: "https://files.slack.com/upload", file_id: "F123" };
+function uploadClient(getUploadURLExternal = vi.fn(async () => uploadUrl)) {
+  const completeUploadExternal = vi.fn(async () => ({ ok: true }));
+  return {
+    client: { files: { getUploadURLExternal, completeUploadExternal } } as unknown as WebClient,
+    getUploadURLExternal,
+    completeUploadExternal,
+  };
+}
+function uploadResponse(url: string) {
+  return { response: new Response("ok"), finalUrl: url, release: async () => {} };
+}
+
 afterEach(() => {
   vi.resetAllMocks();
 });
@@ -28,14 +41,12 @@ describe("uploadSlackFile snapshots", () => {
     const expectedBytes = Buffer.from([0, 0x80, 0xff]);
     loadMedia.mockResolvedValue({ buffer, contentType, kind: "image", fileName: "image.png" });
     const urlReady = createDeferred<void>();
-    const getUploadURLExternal = vi.fn(async () => {
-      await urlReady.promise;
-      return { ok: true, upload_url: "https://files.slack.com/upload", file_id: "F123" };
-    });
-    const completeUploadExternal = vi.fn(async () => ({ ok: true }));
-    const client = {
-      files: { getUploadURLExternal, completeUploadExternal },
-    } as unknown as WebClient;
+    const { client, getUploadURLExternal, completeUploadExternal } = uploadClient(
+      vi.fn(async () => {
+        await urlReady.promise;
+        return uploadUrl;
+      }),
+    );
     let uploadedBytes: Buffer | undefined;
     let uploadedMime: string | null | undefined;
     guardedFetch.mockImplementation(async (params) => {
@@ -43,11 +54,7 @@ describe("uploadSlackFile snapshots", () => {
       const request = new Request(params.url, params.init);
       uploadedBytes = Buffer.from(await request.arrayBuffer());
       uploadedMime = request.headers.get("content-type");
-      return {
-        response: new Response("ok"),
-        finalUrl: params.url,
-        release: async () => {},
-      };
+      return uploadResponse(params.url);
     });
 
     const upload = uploadSlackFile({ client, channelId: "C123", mediaUrl: "/tmp/image.png" });
@@ -69,26 +76,14 @@ describe("uploadSlackFile snapshots", () => {
       kind: "document",
       fileName: "answer.txt",
     });
-    const getUploadURLExternal = vi.fn(async () => ({
-      ok: true,
-      upload_url: "https://files.slack.com/upload",
-      file_id: "F123",
-    }));
-    const completeUploadExternal = vi.fn(async () => ({ ok: true }));
-    const client = {
-      files: { getUploadURLExternal, completeUploadExternal },
-    } as unknown as WebClient;
+    const { client, completeUploadExternal } = uploadClient();
     const preparation = createDeferred<void>();
     const rawUpload = vi.fn();
     guardedFetch.mockImplementation(async (params) => {
       await preparation.promise;
       params.beforeRequest?.();
       rawUpload();
-      return {
-        response: new Response("ok"),
-        finalUrl: params.url,
-        release: async () => {},
-      };
+      return uploadResponse(params.url);
     });
     let authorized = true;
     const upload = uploadSlackFile({
