@@ -48,61 +48,20 @@ export class FakeMatrixEvent extends EventEmitter {
     return this.decryptionFailureReasonValue;
   }
 
-  getRoomId(): string {
-    return this.data.roomId;
-  }
-
-  getId(): string {
-    return this.data.eventId;
-  }
-
-  getSender(): string {
-    return this.data.sender;
-  }
-
-  getType(): string {
-    return this.clearEvent?.type ?? this.data.type;
-  }
-
-  getTs(): number {
-    return this.data.ts;
-  }
-
-  getContent(): Record<string, unknown> {
-    return this.clearEvent?.content ?? this.data.content;
-  }
-
-  getOriginalContent(): Record<string, unknown> {
-    return this.getContent();
-  }
-
-  getWireContent(): Record<string, unknown> {
-    return this.data.content;
-  }
-
-  getUnsigned(): { age?: number; redacted_because?: unknown } {
-    return this.data.unsigned ?? {};
-  }
-
-  getStateKey(): string | undefined {
-    return this.data.stateKey;
-  }
-
-  getWireStateKey(): string | undefined {
-    return this.data.stateKey;
-  }
-
-  isDecryptionFailure(): boolean {
-    return this.decryptionFailure;
-  }
-
-  shouldAttemptDecryption(): boolean {
-    return this.encrypted && this.clearEvent === undefined;
-  }
-
-  getDecryptionPromise(): Promise<void> | null {
-    return this.decryptionPromise;
-  }
+  getRoomId = () => this.data.roomId;
+  getId = () => this.data.eventId;
+  getSender = () => this.data.sender;
+  getType = () => this.clearEvent?.type ?? this.data.type;
+  getTs = () => this.data.ts;
+  getContent = () => this.clearEvent?.content ?? this.data.content;
+  getOriginalContent = () => this.getContent();
+  getWireContent = () => this.data.content;
+  getUnsigned = (): NonNullable<FakeMatrixEventParams["unsigned"]> => this.data.unsigned ?? {};
+  getStateKey = () => this.data.stateKey;
+  getWireStateKey = () => this.data.stateKey;
+  isDecryptionFailure = () => this.decryptionFailure;
+  shouldAttemptDecryption = () => this.encrypted && this.clearEvent === undefined;
+  getDecryptionPromise = () => this.decryptionPromise;
 
   setDecryptionPromise(promise: Promise<void> | null): void {
     this.decryptionPromise = promise;

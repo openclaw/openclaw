@@ -7,8 +7,11 @@ import {
   parseMxc,
 } from "./event-helpers.js";
 
-function messageEvent(overrides: ConstructorParameters<typeof MatrixEvent>[0] = {}) {
-  return new MatrixEvent({
+function messageEvent(
+  overrides: ConstructorParameters<typeof MatrixEvent>[0] = {},
+  wire?: Record<string, unknown>,
+) {
+  const event = new MatrixEvent({
     event_id: "$root",
     sender: "@alice:example.org",
     type: "m.room.message",
@@ -16,25 +19,18 @@ function messageEvent(overrides: ConstructorParameters<typeof MatrixEvent>[0] = 
     content: { body: "original", msgtype: "m.text" },
     ...overrides,
   });
+  if (wire) {
+    event.makeEncrypted(
+      "m.room.encrypted",
+      { algorithm: "m.megolm.v1.aes-sha2", ...wire },
+      "curve-key",
+      "ed-key",
+    );
+  }
+  return event;
 }
 
 const unsigned = { "m.relations": { "m.replace": { event_id: "$edit" } } };
-const makeEditedMessageEvent = (): MatrixEvent => {
-  const event = messageEvent({ unsigned });
-  event.makeReplaced(
-    new MatrixEvent({
-      type: "m.room.message",
-      content: {
-        "m.new_content": {
-          body: "@bot edited",
-          "m.mentions": { user_ids: ["@bot:example.org"] },
-          msgtype: "m.text",
-        },
-      },
-    }),
-  );
-  return event;
-};
 
 describe("event-helpers", () => {
   it("parses mxc URIs", () => {
@@ -54,60 +50,37 @@ describe("event-helpers", () => {
   });
 
   it("preserves reply-only wire relations for encrypted events with clear content", () => {
-    const event = messageEvent({
-      event_id: "$encrypted",
-      content: { body: "decrypted reply", msgtype: "m.text" },
-    });
-    event.makeEncrypted(
-      "m.room.encrypted",
-      {
-        algorithm: "m.megolm.v1.aes-sha2",
-        "m.relates_to": { "m.in_reply_to": { event_id: "$parent" } },
-      },
-      "curve-key",
-      "ed-key",
-    );
+    const reply = { "m.in_reply_to": { event_id: "$parent" } };
+    const event = messageEvent({}, { "m.relates_to": reply });
 
-    expect(matrixEventToRaw(event).content["m.relates_to"]).toEqual({
-      "m.in_reply_to": { event_id: "$parent" },
-    });
+    expect(matrixEventToRaw(event).content["m.relates_to"]).toEqual(reply);
     expect(matrixEventToRaw(event)).not.toHaveProperty("decryptionFailure");
   });
 
   it("retains the SDK decryption-failure fact without replacing its display content", () => {
-    const event = messageEvent({
-      event_id: "$unreadable",
-      content: {
-        msgtype: "m.bad.encrypted",
-        body: "Synthetic missing session key",
-        "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
-      },
-    });
-    vi.spyOn(event, "isDecryptionFailure").mockReturnValue(true);
-    const raw = matrixEventToRaw(event);
-    expect(getMatrixEventProjection(raw)?.decryptionFailure).toBe(true);
-    expect(raw.content).toEqual({
+    const content = {
       msgtype: "m.bad.encrypted",
       body: "Synthetic missing session key",
       "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
-    });
+    };
+    const event = messageEvent({ content });
+    vi.spyOn(event, "isDecryptionFailure").mockReturnValue(true);
+    const raw = matrixEventToRaw(event);
+    expect(getMatrixEventProjection(raw)?.decryptionFailure).toBe(true);
+    expect(raw.content).toEqual(content);
     const literal = new MatrixEvent({ type: "m.room.message", content: event.getContent() });
     expect(getMatrixEventProjection(matrixEventToRaw(literal))?.decryptionFailure).toBe(false);
     expect(getMatrixEventProjection({ ...raw, decryptionFailure: true })).toBeUndefined();
   });
 
   it("preserves packed wire state keys when clear state is unavailable", () => {
-    const event = messageEvent({
-      event_id: "$encrypted-state",
-      type: "m.room.member",
-      state_key: "@alice:example.org",
-      content: { membership: "join" },
-    });
-    event.makeEncrypted(
-      "m.room.encrypted",
-      { algorithm: "m.megolm.v1.aes-sha2" },
-      "curve-key",
-      "ed-key",
+    const event = messageEvent(
+      {
+        type: "m.room.member",
+        state_key: "@alice:example.org",
+        content: { membership: "join" },
+      },
+      {},
     );
     vi.spyOn(event, "getStateKey").mockReturnValue(undefined);
 
@@ -115,7 +88,10 @@ describe("event-helpers", () => {
   });
 
   it("can serialize original content for inbound trigger filtering", () => {
-    expect(matrixEventToRaw(makeEditedMessageEvent(), { contentMode: "original" })).toEqual({
+    const event = messageEvent({ unsigned });
+    const edit = { body: "edited", msgtype: "m.text" };
+    event.makeReplaced(messageEvent({ content: { "m.new_content": edit } }));
+    expect(matrixEventToRaw(event, { contentMode: "original" })).toEqual({
       event_id: "$root",
       sender: "@alice:example.org",
       type: "m.room.message",

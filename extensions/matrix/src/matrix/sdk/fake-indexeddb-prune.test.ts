@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { installFakeIndexedDbTransactionPruner } from "./fake-indexeddb-prune.js";
 
 function openDatabase(name: string): Promise<IDBDatabase> {
@@ -49,36 +49,34 @@ function rawTransactions(db: IDBDatabase): Array<{ _state?: string }> {
   );
 }
 
-describe("Matrix fake-indexeddb transaction pruning", () => {
-  const databaseNames = new Set<string>();
+const databaseNames = new Set<string>();
 
-  afterEach(async () => {
-    for (const name of databaseNames) {
-      await deleteDatabase(name);
-    }
-    databaseNames.clear();
-  });
-
-  it.each(["::matrix-sdk-crypto", "::matrix-sdk-crypto-meta", ""])(
-    "prunes finished transactions only for Matrix crypto databases (suffix: %s)",
-    async (suffix) => {
-      installFakeIndexedDbTransactionPruner();
-      const databaseName = `openclaw-matrix-prune-test-${Date.now()}${suffix}`;
-      databaseNames.add(databaseName);
-      const db = await openDatabase(databaseName);
-
-      for (let i = 0; i < (suffix ? 5 : 1); i += 1) {
-        await putRecord(db, `key-${i}`);
-      }
-
-      if (suffix) {
-        expect(rawTransactions(db)).toHaveLength(0);
-      } else {
-        expect(
-          rawTransactions(db).filter((transaction) => transaction["_state"] === "finished").length,
-        ).toBeGreaterThan(0);
-      }
-      db.close();
-    },
-  );
+afterEach(async () => {
+  for (const name of databaseNames) {
+    await deleteDatabase(name);
+  }
+  databaseNames.clear();
 });
+
+it.each(["::matrix-sdk-crypto", "::matrix-sdk-crypto-meta", ""])(
+  "prunes finished transactions only for Matrix crypto databases (suffix: %s)",
+  async (suffix) => {
+    installFakeIndexedDbTransactionPruner();
+    const databaseName = `openclaw-matrix-prune-test-${Date.now()}${suffix}`;
+    databaseNames.add(databaseName);
+    const db = await openDatabase(databaseName);
+
+    for (let i = 0; i < (suffix ? 5 : 1); i += 1) {
+      await putRecord(db, `key-${i}`);
+    }
+
+    if (suffix) {
+      expect(rawTransactions(db)).toHaveLength(0);
+    } else {
+      expect(
+        rawTransactions(db).filter((transaction) => transaction["_state"] === "finished").length,
+      ).toBeGreaterThan(0);
+    }
+    db.close();
+  },
+);

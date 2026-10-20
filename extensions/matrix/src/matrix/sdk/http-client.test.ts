@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MatrixAuthedHttpClient } from "./http-client.js";
 
 const { performMatrixRequestMock } = vi.hoisted(() => ({
   performMatrixRequestMock: vi.fn(),
@@ -8,7 +9,6 @@ vi.mock("./transport.js", () => ({
   performMatrixRequest: performMatrixRequestMock,
 }));
 
-let MatrixAuthedHttpClient: typeof import("./http-client.js").MatrixAuthedHttpClient;
 const auth = { homeserver: "https://matrix.example.org", accessToken: "token" };
 const request = {
   method: "GET",
@@ -16,20 +16,16 @@ const request = {
   timeoutMs: 5000,
 } as const;
 
-function mockResponse(text: string, contentType = "application/json", status = 200) {
+function mockResponse(body: string | Buffer, contentType = "application/json", status = 200) {
   performMatrixRequestMock.mockResolvedValue({
-    response: new Response(text, { status, headers: { "content-type": contentType } }),
-    text,
-    buffer: Buffer.from(text, "utf8"),
+    response: new Response(body, { status, headers: { "content-type": contentType } }),
+    text: body.toString(),
+    buffer: typeof body === "string" ? Buffer.from(body, "utf8") : body,
   });
 }
 
 describe("MatrixAuthedHttpClient", () => {
-  let client: InstanceType<typeof MatrixAuthedHttpClient>;
-
-  beforeAll(async () => {
-    ({ MatrixAuthedHttpClient } = await import("./http-client.js"));
-  });
+  let client: MatrixAuthedHttpClient;
 
   beforeEach(() => {
     performMatrixRequestMock.mockReset();
@@ -76,11 +72,7 @@ describe("MatrixAuthedHttpClient", () => {
 
   it("returns raw buffers for media requests", async () => {
     const payload = Buffer.from([1, 2, 3, 4]);
-    performMatrixRequestMock.mockResolvedValue({
-      response: new Response(payload, { status: 200 }),
-      text: payload.toString("utf8"),
-      buffer: payload,
-    });
+    mockResponse(payload);
 
     const result = await client.requestRaw({
       ...request,

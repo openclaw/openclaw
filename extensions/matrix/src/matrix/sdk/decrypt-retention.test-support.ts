@@ -15,82 +15,57 @@ type DecryptRetentionContext = {
 };
 
 export function registerDecryptRetentionTests(context: DecryptRetentionContext): void {
-  const { createSdkClient, getMatrixJsClient } = context;
-  function setup() {
-    vi.useFakeTimers();
-    const client = createSdkClient();
-    const sdk = getMatrixJsClient();
-    sdk.decryptEventIfNeeded = vi.fn(async () => {
-      throw new Error("still missing key");
-    });
-    const emitFailure = (event: FakeMatrixEvent) => {
-      sdk.emit("event", event);
-      event.emit("decrypted", event, new Error("missing room key"));
-    };
-    const expectAttempts = async (count: number) => {
-      await vi.advanceTimersByTimeAsync(200_000);
-      expect(sdk.decryptEventIfNeeded).toHaveBeenCalledTimes(count);
-    };
-    return { client, emitFailure, expectAttempts };
-  }
-
-  it("stops decryption retries after hitting retry cap", async () => {
-    const { client, emitFailure, expectAttempts } = setup();
-    const failed: string[] = [];
-
-    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
-      failed.push(error.message);
-    });
-
-    const encrypted = makeMatrixEvent({ decryptionFailure: true });
-
-    await client.start();
-    emitFailure(encrypted);
-
-    expect(failed).toEqual(["missing room key"]);
-
-    await expectAttempts(8);
-
-    encrypted.emit("decrypted", encrypted, new Error("missing room key again"));
-
-    await expectAttempts(8);
-    expect(failed).toEqual(["missing room key"]);
-  });
-
-  it.each(["capacity", "expiry"] as const)(
-    "retires failed-decryption notifications with exhausted retries on %s",
+  it.each(["retry cap", "capacity", "expiry"] as const)(
+    "retains failed-decryption notifications through %s",
     async (retirement) => {
-      const { client, emitFailure, expectAttempts } = setup();
-      const failed = vi.fn();
+      vi.useFakeTimers();
+      const client = context.createSdkClient();
+      const sdk = context.getMatrixJsClient();
+      const failed = vi.fn<(_room: string, _event: unknown, error: Error) => void>();
+      const notifications = () => failed.mock.calls.map((call) => call[2].message);
       client.on("room.failed_decryption", failed);
-      const oldest = makeMatrixEvent({ eventId: "$oldest", decryptionFailure: true });
-      let retained = oldest;
+      sdk.decryptEventIfNeeded = vi.fn(async () => {
+        throw new Error("still missing key");
+      });
+      const emitFailure = (event: FakeMatrixEvent) => {
+        sdk.emit("event", event);
+        event.emit("decrypted", event, new Error("missing room key"));
+      };
+      const expectAttempts = async (count: number) => {
+        await vi.advanceTimersByTimeAsync(200_000);
+        expect(sdk.decryptEventIfNeeded).toHaveBeenCalledTimes(count);
+      };
+      const makeFailed = (eventId: string) => makeMatrixEvent({ eventId, decryptionFailure: true });
+      const oldest = makeFailed("$oldest");
       const events = [
         oldest,
         ...Array.from({ length: retirement === "capacity" ? 512 : 0 }, (_unused, index) =>
-          makeMatrixEvent({ eventId: `$retained-${index}`, decryptionFailure: true }),
+          makeFailed(`$retained-${index}`),
         ),
       ];
-
       await client.start();
-      for (const event of events) {
-        emitFailure(event);
-        retained = event;
+      events.forEach(emitFailure);
+      let retained = events.at(-1) ?? oldest;
+      if (retirement === "retry cap") {
+        expect(notifications()).toEqual(["missing room key"]);
       }
       await expectAttempts(events.length * 8);
-
+      if (retirement === "retry cap") {
+        oldest.emit("decrypted", oldest, new Error("missing room key again"));
+        await expectAttempts(8);
+        expect(notifications()).toEqual(["missing room key"]);
+        return;
+      }
       if (retirement === "expiry") {
         await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
-        retained = makeMatrixEvent({ eventId: "$retained", decryptionFailure: true });
+        retained = makeFailed("$retained");
         emitFailure(retained);
         await expectAttempts(16);
       }
-
       const initialNotifications = retirement === "capacity" ? 513 : 2;
       expect(failed).toHaveBeenCalledTimes(initialNotifications);
       retained.emit("decrypted", retained, new Error("retained failure"));
       expect(failed).toHaveBeenCalledTimes(initialNotifications);
-
       oldest.emit("decrypted", oldest, new Error("retired failure"));
       expect(failed).toHaveBeenCalledTimes(initialNotifications + 1);
       expect(failed).toHaveBeenLastCalledWith(
