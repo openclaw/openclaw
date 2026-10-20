@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
@@ -27,126 +27,110 @@ function diagnostic(before: ReturnType<typeof responses>, after: ReturnType<type
   }
   return "";
 }
+const stable = (
+  before: ReturnType<typeof responses>,
+  after: ReturnType<typeof responses>,
+  options: Parameters<typeof assertStableProviderPrefix>[2] = { label: "test" },
+) => expect(() => assertStableProviderPrefix(before, after, options));
 
-describe("provider cache prefix assertion", () => {
-  it.each(["system", "tools", "cacheKey", "history[0]"])(
-    "identifies a changed %s without disclosing request content",
-    (segment) => {
-      const before = responses();
-      const payload = fixture();
-      if (segment === "system") {
-        payload.instructions += " changed";
-      }
-      if (segment === "tools") {
-        payload.tools[0]!.description += " changed";
-      }
-      if (segment === "cacheKey") {
-        payload.prompt_cache_key += " changed";
-      }
-      if (segment === "history[0]") {
-        payload.input[0]!.content += " changed";
-      }
-      const message = diagnostic(before, responses(payload));
-      expect(message).toMatch(
-        new RegExp(
-          `segment=${segment.replace(/[[\]]/g, "\\$&")} previous=[a-f0-9]{64} next=[a-f0-9]{64} path=`,
-        ),
-      );
-      expect(message).not.toContain("private");
-      expect(message).toMatch(/leafPrevious=[a-f0-9]{64} leafNext=[a-f0-9]{64} leafBytes=\d+:\d+$/);
-      if (segment === "history[0]") {
-        expect(message).toContain("path=$.content");
-      }
-    },
-  );
-
-  it("does not disclose arbitrary object keys in field diagnostics", () => {
-    const snapshot = (value: string) =>
-      snapshotProviderPrefix("openai-responses", {
-        ...fixture(),
-        tools: [{ "private schema key": { content: value } }],
-      });
-    const message = diagnostic(snapshot("private old value"), snapshot("private new value"));
-    expect(message).toContain("path=$[0].fields[0].content");
-    expect(message).not.toContain("private");
-  });
-
-  it("accepts appended history but rejects deletion of an earlier item", () => {
-    const original = fixture();
-    const before = responses(original);
-    original.input.push({ role: "assistant", content: "answer" });
-    const appended = responses(original);
-    expect(() => assertStableProviderPrefix(before, appended, { label: "append" })).not.toThrow();
-    expect(() => assertStableProviderPrefix(appended, before, { label: "delete" })).toThrow(
-      /segment=history\[1\].* next=absent/,
-    );
-  });
-
-  it("allows Anthropic breakpoint advancement but rejects a retention change or disappearance", () => {
-    const system = { system: [textBlock("instructions", true)] };
-    const before = anthropic([{ role: "user", content: [textBlock("history", true)] }], system);
-    const next = anthropic(
-      [
-        { role: "user", content: [textBlock("history")] },
-        { role: "assistant", content: [textBlock("answer")] },
-        { role: "user", content: [textBlock("next", true)] },
-      ],
-      system,
-    );
-    expect(() => assertStableProviderPrefix(before, next, { label: "advance" })).not.toThrow();
-    next.breakpoints[0]!.policy = JSON.stringify({ type: "ephemeral", ttl: "1h" });
-    expect(() => assertStableProviderPrefix(before, next, { label: "retention" })).toThrow(
-      /segment=cacheBreakpoint.policy/,
-    );
-    next.breakpoints = [];
-    expect(() => assertStableProviderPrefix(before, next, { label: "missing" })).toThrow(
-      /segment=cacheBreakpoint.policy/,
-    );
-  });
-  it("normalizes Anthropic text shorthand without hiding retained text changes", () => {
-    const snapshot = (content: string | Array<{ text: string; type: string }>) =>
-      anthropic([{ role: "user", content }]);
-    // The release gate sorts provider JSON keys before taking this snapshot.
-    const before = snapshot([{ text: "retained text", type: "text" }]);
-    const shorthand = snapshot("retained text");
-    expect(() =>
-      assertStableProviderPrefix(before, shorthand, { label: "shorthand replay" }),
-    ).not.toThrow();
-    expect(() =>
-      assertStableProviderPrefix(shorthand, before, { label: "block replay" }),
-    ).not.toThrow();
-    const changed = snapshot("changed text");
-    expect(() => assertStableProviderPrefix(before, changed, { label: "rewritten text" })).toThrow(
-      /segment=history\[0\].*path=\$.block.text/,
-    );
-  });
-
-  it("preserves every retained item across an explicit history-window boundary", () => {
+it.each(["system", "tools", "cacheKey", "history[0]"])(
+  "identifies a changed %s without disclosing request content",
+  (segment) => {
+    const before = responses();
     const payload = fixture();
-    payload.input.push({ role: "user", content: "retained turn" });
-    const before = responses(payload);
-    payload.input.shift();
-    const options = {
-      label: "window",
-      boundary: { kind: "history-pruning" as const, startIndex: 0, deleteCount: 1 },
-    };
-    expect(() => assertStableProviderPrefix(before, responses(payload), options)).not.toThrow();
-    payload.input[0]!.content += " rewritten";
-    expect(() => assertStableProviderPrefix(before, responses(payload), options)).toThrow(
-      /segment=history\[0\]/,
+    if (segment === "system") {
+      payload.instructions += " changed";
+    } else if (segment === "tools") {
+      payload.tools[0]!.description += " changed";
+    } else if (segment === "cacheKey") {
+      payload.prompt_cache_key += " changed";
+    } else {
+      payload.input[0]!.content += " changed";
+    }
+    const message = diagnostic(before, responses(payload));
+    expect(message).toMatch(
+      new RegExp(
+        `segment=${segment.replace(/[[\]]/g, "\\$&")} previous=[a-f0-9]{64} next=[a-f0-9]{64} path=`,
+      ),
     );
-  });
+    expect(message).not.toContain("private");
+    expect(message).toMatch(/leafPrevious=[a-f0-9]{64} leafNext=[a-f0-9]{64} leafBytes=\d+:\d+$/);
+    if (segment === "history[0]") {
+      expect(message).toContain("path=$.content");
+    }
+  },
+);
 
-  it("rejects a changed earlier breakpoint even when the last one is unchanged", () => {
-    const snapshot = anthropic([
-      { role: "user", content: [textBlock("first", true), textBlock("second", true)] },
-    ]);
-    const after = {
-      ...snapshot,
-      breakpoints: [{ index: 0, policy: "changed" }, snapshot.breakpoints[1]!],
-    };
-    expect(() => assertStableProviderPrefix(snapshot, after, { label: "retention" })).toThrow(
-      /segment=cacheBreakpoint.policy/,
-    );
-  });
+it("does not disclose arbitrary object keys in field diagnostics", () => {
+  const snapshot = (value: string) =>
+    snapshotProviderPrefix("openai-responses", {
+      ...fixture(),
+      tools: [{ "private schema key": { content: value } }],
+    });
+  const message = diagnostic(snapshot("private old value"), snapshot("private new value"));
+  expect(message).toContain("path=$[0].fields[0].content");
+  expect(message).not.toContain("private");
+});
+
+it("accepts appended history but rejects deletion of an earlier item", () => {
+  const original = fixture();
+  const before = responses(original);
+  original.input.push({ role: "assistant", content: "answer" });
+  const appended = responses(original);
+  stable(before, appended).not.toThrow();
+  stable(appended, before).toThrow(/segment=history\[1\].* next=absent/);
+});
+
+it("allows breakpoint advancement, not retention changes or disappearance", () => {
+  const system = { system: [textBlock("instructions", true)] };
+  const before = anthropic([{ role: "user", content: [textBlock("history", true)] }], system);
+  const next = anthropic(
+    [
+      { role: "user", content: [textBlock("history")] },
+      { role: "assistant", content: [textBlock("answer")] },
+      { role: "user", content: [textBlock("next", true)] },
+    ],
+    system,
+  );
+  stable(before, next).not.toThrow();
+  next.breakpoints[0]!.policy = JSON.stringify({ type: "ephemeral", ttl: "1h" });
+  stable(before, next).toThrow(/segment=cacheBreakpoint.policy/);
+  next.breakpoints = [];
+  stable(before, next).toThrow(/segment=cacheBreakpoint.policy/);
+});
+it("normalizes Anthropic text shorthand without hiding retained text changes", () => {
+  const snapshot = (content: string | Array<{ text: string; type: string }>) =>
+    anthropic([{ role: "user", content }]);
+  // The release gate sorts provider JSON keys before taking this snapshot.
+  const before = snapshot([{ text: "retained text", type: "text" }]);
+  const shorthand = snapshot("retained text");
+  stable(before, shorthand).not.toThrow();
+  stable(shorthand, before).not.toThrow();
+  const changed = snapshot("changed text");
+  stable(before, changed).toThrow(/segment=history\[0\].*path=\$.block.text/);
+});
+
+it("preserves every retained item across an explicit history-window boundary", () => {
+  const payload = fixture();
+  payload.input.push({ role: "user", content: "retained turn" });
+  const before = responses(payload);
+  payload.input.shift();
+  const options = {
+    label: "window",
+    boundary: { kind: "history-pruning" as const, startIndex: 0, deleteCount: 1 },
+  };
+  stable(before, responses(payload), options).not.toThrow();
+  payload.input[0]!.content += " rewritten";
+  stable(before, responses(payload), options).toThrow(/segment=history\[0\]/);
+});
+
+it("rejects a changed earlier breakpoint even when the last one is unchanged", () => {
+  const snapshot = anthropic([
+    { role: "user", content: [textBlock("first", true), textBlock("second", true)] },
+  ]);
+  const after = {
+    ...snapshot,
+    breakpoints: [{ index: 0, policy: "changed" }, snapshot.breakpoints[1]!],
+  };
+  stable(snapshot, after).toThrow(/segment=cacheBreakpoint.policy/);
 });

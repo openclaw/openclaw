@@ -57,16 +57,15 @@ const cases = [
     ([null, "SIGINT", "SIGTERM"] as const).map((signal) => ({
       phase,
       signal,
-      boundary: `${phase} write`,
     })),
   ),
-  { phase: "install", signal: "SIGTERM", boundary: "running installer" } as const,
+  { phase: "install", signal: "SIGTERM" } as const,
 ];
 
 it.skipIf(process.platform === "win32").for([undefined, "node", "bun"])(
   "selects the %s runtime for the serving Agent Plugin Gateway",
-  async (runtime, { signal }) => {
-    await fixtures.run(async () => {
+  (runtime, { signal }) =>
+    fixtures.run(async () => {
       const { controls, env } = setup("runtime");
       const result = await run(
         {
@@ -85,15 +84,14 @@ it.skipIf(process.platform === "win32").for([undefined, "node", "bun"])(
       );
       expect(command).toBe(runtime === "node" ? hostExecPath : process.execPath);
       expectCleanup(controls);
-    });
-  },
+    }),
 );
 
 it.skipIf(process.platform === "win32").for(cases)(
-  "respects Agent Plugin E2E cancellation across the $boundary ($signal)",
+  "respects Agent Plugin E2E cancellation during $phase ($signal)",
   { timeout: 30_000 },
-  async ({ phase, signal }, context) => {
-    await fixtures.run(async () => {
+  ({ phase, signal }, context) =>
+    fixtures.run(async () => {
       const { controls, env } = setup(phase);
       const release = path.join(controls, "release");
       const ready = createDeferred();
@@ -153,6 +151,5 @@ it.skipIf(process.platform === "win32").for(cases)(
         writeFileSync(release, "release");
         await command;
       }
-    });
-  },
+    }),
 );
