@@ -5,8 +5,8 @@ it("keeps image offsets, references and output arrays local across successive do
   const first =
     "A\r\n![one](a.png)\r\n\r\n![![nested](ignored.png)][shared]\r\n\r\n[shared]: a-ref.png";
   const second = "> ![![nested](b.png)][shared]";
-  const expectedFirst = [{ start: 3, end: 16, destination: "a.png" }];
-  const expectedSecond = [{ start: 4, end: 20, destination: "b.png" }];
+  const expectedFirst = [{ start: 3, end: 16, destination: "a.png", alt: "one" }];
+  const expectedSecond = [{ start: 4, end: 20, destination: "b.png", alt: "nested" }];
 
   const firstImages = findMarkdownImageSpans(first);
   const secondImages = findMarkdownImageSpans(second);

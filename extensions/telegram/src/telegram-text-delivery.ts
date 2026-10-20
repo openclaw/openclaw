@@ -7,10 +7,15 @@ import {
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
-import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js";
+import {
+  inputRichBlockMediaSources,
+  type TelegramRichBlocksDegradationReason,
+} from "./rich-block-model.js";
+import type { TelegramRichLocalMedia } from "./rich-local-media.js";
 import {
   buildTelegramRichMarkdownPlan,
   splitTelegramRichMessageTextChunks,
+  telegramRichMediaReference,
   type TelegramInputRichMessage,
 } from "./rich-message.js";
 import {
@@ -26,6 +31,8 @@ export type TelegramTextDeliveryPage = {
   fullSourceText?: string;
   htmlText?: string;
   richMessage?: TelegramInputRichMessage;
+  /** Local uploads behind `richMessage.media`; resent as legacy media after a plain fallback. */
+  richLocalMedia?: readonly TelegramRichLocalMedia[];
   degradationReasons?: readonly TelegramRichBlocksDegradationReason[];
 };
 
@@ -37,6 +44,7 @@ type TelegramTextPlanParams = {
   textMode?: "html" | "plain";
   richMessages?: boolean;
   richMessage?: TelegramInputRichMessage;
+  richLocalMedia?: readonly TelegramRichLocalMedia[];
   degradationReasons?: readonly TelegramRichBlocksDegradationReason[];
   skipEntityDetection?: boolean;
   warn?: (message: string) => void;
@@ -55,6 +63,38 @@ function htmlPage(
   plainText = telegramHtmlToPlainTextFallback(htmlText),
 ): TelegramTextDeliveryPage {
   return { htmlText, plainText, sourceText: htmlText, sourceTextMode: "html" };
+}
+
+function attachTelegramRichLocalMedia(
+  page: { plainText: string; richMessage: TelegramInputRichMessage },
+  media: readonly TelegramRichLocalMedia[] | undefined,
+): {
+  plainText: string;
+  richMessage: TelegramInputRichMessage;
+  richLocalMedia?: readonly TelegramRichLocalMedia[];
+} {
+  const mediaSources = inputRichBlockMediaSources(page.richMessage.blocks);
+  const matched = media?.filter((entry) => mediaSources.has(telegramRichMediaReference(entry)));
+  if (!matched?.length) {
+    return { plainText: page.plainText, richMessage: page.richMessage };
+  }
+  // The plain fallback names the file: a tg:// id only resolves inside the
+  // rich upload, and the original file follows through the legacy media path.
+  const fileNames = new Map(
+    matched.map((entry) => [telegramRichMediaReference(entry), entry.fileName]),
+  );
+  const plainText = page.plainText.replace(
+    /tg:\/\/(?:photo|video|audio)\?id=[A-Za-z0-9_-]+/g,
+    (reference) => fileNames.get(reference) ?? reference,
+  );
+  return {
+    plainText,
+    richMessage: {
+      ...page.richMessage,
+      media: matched.map(({ id, media: upload }) => ({ id, media: upload })),
+    },
+    richLocalMedia: matched,
+  };
 }
 
 export function planTelegramTextDeliveryPages(
@@ -77,8 +117,10 @@ export function planTelegramTextDeliveryPages(
     }
     const pages = splitTelegramRichMessageTextChunks({ plan: richPlan, textLimit: maxChars }).map(
       (chunk, index) => {
-        const page = plainPage(chunk.plainText);
-        page.richMessage = chunk.richMessage;
+        const attached = attachTelegramRichLocalMedia(chunk, params.richLocalMedia);
+        const page = plainPage(attached.plainText);
+        page.richMessage = attached.richMessage;
+        page.richLocalMedia = attached.richLocalMedia;
         page.degradationReasons = params.richMessage
           ? index === 0
             ? params.degradationReasons
@@ -158,6 +200,8 @@ type TelegramTextPageSender<TPlain, THtml, TRich> = {
   /** Drafts keep HTML transport for source-mode pages even when the rendered text is empty. */
   html?: boolean;
   fallbackLimit?: number;
+  /** Observes a page whose formatted send degraded to plain chunks. */
+  onPlainFallback?: (page: TelegramTextDeliveryPage) => void;
 };
 
 // Yield outside the transport fallback catch. Observing an accepted message may
@@ -200,6 +244,7 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
     yield { result: delivery.result, page };
     return;
   }
+  params.onPlainFallback?.(page);
   for (const [index, text] of delivery.chunks.entries()) {
     yield {
       result: await params.sender.sendPlain(

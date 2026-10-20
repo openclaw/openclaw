@@ -20,6 +20,7 @@ import {
   isTelegramQuoteParamError,
 } from "./reply-parameters.js";
 import {
+  inlineTelegramRichMessageMediaUploads,
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
 } from "./rich-message.js";
@@ -181,6 +182,7 @@ export function createTelegramPreparedSender(config: {
     tracking: Tracking;
     /** Durable text drains definite rejected fallback parts; direct replies stop that page. */
     drainFallback?: boolean;
+    onPlainFallback?: (page: TelegramTextDeliveryPage) => void;
   }) => {
     const start = parts.length;
     let firstRejectedError: unknown;
@@ -245,6 +247,7 @@ export function createTelegramPreparedSender(config: {
         page,
         context: params.context,
         warn: config.warn,
+        onPlainFallback: params.onPlainFallback,
         sender: {
           sendPlain: (text, fallback, label) => sendPlainOrHtml(text, false, fallback, label),
           sendHtml: (text) => sendPlainOrHtml(text, true),
@@ -257,7 +260,7 @@ export function createTelegramPreparedSender(config: {
               (effective) =>
                 config.api.raw.sendRichMessage({
                   chat_id: config.chatId,
-                  rich_message: richMessage,
+                  rich_message: inlineTelegramRichMessageMediaUploads(richMessage),
                   ...effective,
                   ...markup,
                 }),
