@@ -1,12 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { saveCronStore } from "../cron/store.js";
 import {
   claimCronRunReceiptForTest,
@@ -16,11 +11,13 @@ import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-pr
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { createTestGate, readClosedDatabase } from "./server-close.lifecycle.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
 it("joins accepted cron writes and receipt finalization before closing shared state", async ({
   signal,
 }) => {
+  const gate = createTestGate(signal);
   const fixture = await createGatewayMetadataCloseFixture("gateway-cron-close");
   const saveCommitted = createDeferred();
   const finishCommitted = createDeferred();
@@ -51,10 +48,7 @@ it("joins accepted cron writes and receipt finalization before closing shared st
     saving = kernel.connectionWork.track(() =>
       saveCronStore(storePath, { version: 1, jobs: [{ ...job, enabled: false }] }),
     );
-    await withinTest(
-      awaitGateBeforeSettlement(saveCommitted.promise, saving, "Cron save did not commit"),
-      signal,
-    );
+    await gate(saveCommitted.promise, saving, "Cron save did not commit");
     finishing = kernel.connectionWork.track(async () => {
       await stateWorker.runOpenClawStateWorkerOperation(
         captureOpenClawStateWorkerContext(),
@@ -86,14 +80,7 @@ it("joins accepted cron writes and receipt finalization before closing shared st
           }),
       );
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        finishCommitted.promise,
-        finishing,
-        "Cron finalization did not commit",
-      ),
-      signal,
-    );
+    await gate(finishCommitted.promise, finishing, "Cron finalization did not commit");
     kernel.connectionWork.signal.addEventListener("abort", () => receivedWorkCancelled.resolve(), {
       once: true,
     });
@@ -101,22 +88,12 @@ it("joins accepted cron writes and receipt finalization before closing shared st
     closing = server.close({ reason: "cron close regression" }).then(() => {
       closed = true;
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        receivedWorkCancelled.promise,
-        closing,
-        "Gateway did not cancel received work",
-      ),
-      signal,
-    );
+    await gate(receivedWorkCancelled.promise, closing, "Gateway did not cancel received work");
     expect(kernel.connectionWork.signal.aborted).toBe(true);
     expect(closed).toBe(false);
     releaseReplies.resolve();
     await withinTest(Promise.all([saving, finishing, closing]), signal);
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
-      readOnly: true,
-    });
-    try {
+    readClosedDatabase(resolveOpenClawStateSqlitePath(fixture.state.env), (database) => {
       expect(
         database
           .prepare("SELECT status, finished_at_ms FROM cron_run_receipts WHERE receipt_id = ?")
@@ -127,9 +104,7 @@ it("joins accepted cron writes and receipt finalization before closing shared st
           .prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
           .get(handle.storeKey, job.id),
       ).toEqual({ enabled: 0 });
-    } finally {
-      database.close();
-    }
+    });
   } finally {
     releaseReplies.resolve();
     await Promise.allSettled([saving, finishing, closing]);

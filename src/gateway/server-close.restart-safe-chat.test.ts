@@ -1,8 +1,8 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -10,12 +10,14 @@ import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import * as writeAdmission from "../state/openclaw-agent-write-admission.js";
+import { createTestGate } from "./server-close.lifecycle.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { terminalizeRestartSafeChatAdmission } from "./server-methods/chat-restart-recovery.js";
 
 it("joins accepted restart-safe terminal persistence after the real close prelude cancels its caller", async ({
   signal,
 }) => {
+  const gate = createTestGate(signal);
   const fixture = await createGatewayMetadataCloseFixture("restart-safe-terminal-close");
   const accepted = createDeferredCore();
   const release = createDeferredCore();
@@ -114,31 +116,18 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
     await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
     assert(job);
-    await withinTest(
-      awaitGateBeforeSettlement(accepted.promise, job, "Terminal persistence skipped admission"),
-      signal,
-    );
+    await gate(accepted.promise, job, "Terminal persistence skipped admission");
     closing = server.close({ reason: "restart-safe terminal close proof" });
-    await withinTest(
-      awaitGateBeforeSettlement(joining.promise, closing, "Gateway skipped scheduler settlement"),
-      signal,
-    );
+    await gate(joining.promise, closing, "Gateway skipped scheduler settlement");
     expect(kernel.scheduler.signal.aborted).toBe(true);
     const late = vi.fn();
     await kernel.scheduler.schedule({ id: "late-terminal-work", delayMs: 0, run: late }).stop();
     expect(late).not.toHaveBeenCalled();
     sql = observeHostDataSql();
     release.resolve();
-    expect(
-      await withinTest(
-        awaitGateBeforeSettlement(
-          settled.promise,
-          job,
-          "Accepted terminal persistence did not settle",
-        ),
-        signal,
-      ),
-    ).toBe(true);
+    expect(await gate(settled.promise, job, "Accepted terminal persistence did not settle")).toBe(
+      true,
+    );
     expect(sql.queries).toEqual([]);
     settlementAuthority.abort(new Error("Terminal settlement completed"));
     sql.restore();

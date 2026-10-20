@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -15,10 +15,12 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
+import { createTestGate } from "./server-close.lifecycle.test-support.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
 it("settles accepted writes and all cleanup before Gateway close resolves", async ({ signal }) => {
+  const gate = createTestGate(signal);
   const state = await createOpenClawTestState({ scenario: "minimal" });
   setRuntimeConfigSnapshot({});
   const scheduler = createTestGatewayScheduler();
@@ -110,13 +112,10 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       restartExpectedMs: 1_500,
       drainTimeoutMs: 0,
     }).then((preparation) => completeGatewayClose(params, preparation));
-    await withinTest(
-      awaitGateBeforeSettlement(
-        terminalDraining.promise,
-        closing,
-        "Gateway skipped accepted terminal persistence before close",
-      ),
-      signal,
+    await gate(
+      terminalDraining.promise,
+      closing,
+      "Gateway skipped accepted terminal persistence before close",
     );
     expect(shutdownHook).toHaveBeenCalledTimes(1);
     expect(preRestartHook).toHaveBeenCalledTimes(1);
@@ -132,24 +131,18 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       resolvedWidgetName: "accepted",
       widgets: [{ name: "accepted" }],
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        runtimesDrained.promise,
-        closing,
-        "Gateway skipped runtime cleanup before retiring memory",
-      ),
-      signal,
+    await gate(
+      runtimesDrained.promise,
+      closing,
+      "Gateway skipped runtime cleanup before retiring memory",
     );
     expect(params.stopScheduler).not.toHaveBeenCalled();
     expect(agent.db.isOpen).toBe(true);
     releaseMemory.resolve();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        schedulerStopping.promise,
-        closing,
-        "Gateway skipped scheduler settlement before database close",
-      ),
-      signal,
+    await gate(
+      schedulerStopping.promise,
+      closing,
+      "Gateway skipped scheduler settlement before database close",
     );
     expect(agent.db.isOpen).toBe(true);
     releaseScheduler.resolve();

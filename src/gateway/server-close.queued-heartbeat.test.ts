@@ -6,6 +6,7 @@ import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellati
 import { createCronServiceState } from "../cron/service/state.js";
 import { executeJobCoreWithTimeout } from "../cron/service/timer-job-runner.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
@@ -35,16 +36,14 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
   const stateDir = tempDirs.make("gateway-close-queued-heartbeat-");
   const cfg = { cron: { enabled: false }, agents: { entries: { main: {} } } };
   const scheduler = createTestGatewayScheduler();
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const { cron } = buildGatewayCronService({
-    storePath: await resolveCronJobsStorePathFromConfigAsync(cfg, {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-    }),
+    storePath: await resolveCronJobsStorePathFromConfigAsync(cfg, env),
     scheduler,
     cfg,
     deps: {} as CliDeps,
     broadcast: () => {},
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    env,
   });
   const runOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
   const runner = startHeartbeatRunner({ cfg, runOnce });
@@ -74,32 +73,30 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
       return { status: "ok" };
     },
   });
-  const sibling = executeJobCoreWithTimeout(core, {
+  const run = (job: Pick<CronJob, "id" | "name" | "payload" | "sessionTarget" | "agentId">) =>
+    executeJobCoreWithTimeout(core, {
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "every", everyMs: 60_000 },
+      wakeMode: "next-heartbeat",
+      state: {},
+      ...job,
+    });
+  const sibling = run({
     id: "admitted-sibling",
     name: "admitted sibling",
-    enabled: true,
-    createdAtMs: Date.now(),
-    updatedAtMs: Date.now(),
-    schedule: { kind: "every", everyMs: 60_000 },
     payload: { kind: "agentTurn", message: "finish owned work" },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    state: {},
   });
   await siblingStarted.promise;
   let heartbeatSettled = false;
-  const running = executeJobCoreWithTimeout(core, {
+  const running = run({
     id: "queued-monitor",
     name: "queued monitor",
     agentId: "main",
-    enabled: true,
-    createdAtMs: Date.now(),
-    updatedAtMs: Date.now(),
-    schedule: { kind: "every", everyMs: 60_000 },
     payload: { kind: "heartbeat" },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    state: {},
   }).then((result) => {
     heartbeatSettled = true;
     return result;

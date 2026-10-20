@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyClawAddPlanStateless } from "../claws/add-stateless.js";
 import { buildGatewayClawAddPlan } from "../claws/gateway-add-plan.js";
@@ -19,6 +19,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { createTestGate } from "./server-close.lifecycle.test-support.js";
 import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
@@ -59,6 +60,7 @@ describe("Claw-managed official plugin approvals (real Gateway)", () => {
   it("lets the installed plugin request review and gates its effect on Allow once or Deny", async ({
     signal,
   }) => {
+    const gate = createTestGate(signal);
     const home = dirs.make("openclaw-claw-plugin-approval-");
     const stateDir = path.join(home, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -199,19 +201,7 @@ describe("Claw-managed official plugin approvals (real Gateway)", () => {
       if (!review) {
         throw new Error("Expected an official plugin capability review");
       }
-      const pluginConsent = bindClawPluginInstallConsent(
-        [review],
-        [
-          {
-            actionId: review.actionId,
-            pluginId: review.pluginId,
-            reviewToken: review.reviewToken,
-            capabilityGrants: review.capabilityGrants,
-            capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
-          },
-        ],
-        () => {},
-      );
+      const pluginConsent = bindClawPluginInstallConsent([review], [review], () => {});
       const added = await applyClawAddPlanStateless(plan, {
         config,
         consentPlanIntegrity: plan.planIntegrity,
@@ -273,46 +263,28 @@ describe("Claw-managed official plugin approvals (real Gateway)", () => {
           args: {},
         });
 
-      const allowed = invoke();
-      const allowId = await withinTest(
-        awaitGateBeforeSettlement(
+      const reviewEffect = async (decision: "allow-once" | "deny", before: () => Promise<void>) => {
+        requested = createDeferredCore<string>();
+        const pending = invoke();
+        const id = await gate(
           requested.promise,
-          allowed,
-          "The plugin tool settled before requesting approval",
-        ),
-        signal,
-      );
-      await expect(fs.readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-      await withinTest(
-        reviewer.request("plugin.approval.resolve", { id: allowId, decision: "allow-once" }),
-        signal,
-      );
-      await expect(withinTest(allowed, signal)).resolves.toMatchObject({
-        ok: true,
-        output: { content: [{ type: "text", text: "allow-once" }] },
+          pending,
+          "Tool settled before requesting approval",
+        );
+        await before();
+        await withinTest(reviewer!.request("plugin.approval.resolve", { id, decision }), signal);
+        await expect(withinTest(pending, signal)).resolves.toMatchObject({
+          ok: true,
+          output: { content: [{ type: "text", text: decision }] },
+        });
+        expect(await fs.readFile(markerPath, "utf8")).toBe("approved\n");
+      };
+      await reviewEffect("allow-once", async () => {
+        await expect(fs.readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       });
-      expect(await fs.readFile(markerPath, "utf8")).toBe("approved\n");
-
-      requested = createDeferredCore<string>();
-      const denied = invoke();
-      const denyId = await withinTest(
-        awaitGateBeforeSettlement(
-          requested.promise,
-          denied,
-          "The plugin tool settled before requesting approval",
-        ),
-        signal,
-      );
-      expect(await fs.readFile(markerPath, "utf8")).toBe("approved\n");
-      await withinTest(
-        reviewer.request("plugin.approval.resolve", { id: denyId, decision: "deny" }),
-        signal,
-      );
-      await expect(withinTest(denied, signal)).resolves.toMatchObject({
-        ok: true,
-        output: { content: [{ type: "text", text: "deny" }] },
+      await reviewEffect("deny", async () => {
+        expect(await fs.readFile(markerPath, "utf8")).toBe("approved\n");
       });
-      expect(await fs.readFile(markerPath, "utf8")).toBe("approved\n");
 
       expect(
         getActiveRuntimePluginRegistry()?.plugins.find((plugin) => plugin.id === "lobster"),

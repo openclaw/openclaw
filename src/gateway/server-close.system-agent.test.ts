@@ -1,15 +1,11 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { createTestGate, readClosedDatabase } from "./server-close.lifecycle.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewaySystemAgentSession } from "./server-methods/shared-types.js";
@@ -18,6 +14,7 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 it("settles an accepted system-agent turn before Gateway close retires its audit database", async ({
   signal,
 }) => {
+  const gate = createTestGate(signal);
   const fixture = await createGatewayMetadataCloseFixture("gateway-system-agent-audit-close");
   const recordingEntered = createDeferred();
   const releaseRecording = createDeferred();
@@ -87,13 +84,10 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
     );
     // Shutdown may revoke the reply; the accepted logbook still has to settle.
     void turning.catch(() => undefined);
-    await withinTest(
-      awaitGateBeforeSettlement(
-        recordingEntered.promise,
-        turning,
-        "Turn returned before audit persistence entered its worker owner",
-      ),
-      signal,
+    await gate(
+      recordingEntered.promise,
+      turning,
+      "Turn returned before audit persistence entered its worker owner",
     );
     kernel.scheduler.signal.addEventListener("abort", () => preludeEntered.resolve(), {
       once: true,
@@ -102,14 +96,7 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
     closing = server.close({ reason: "system-agent audit close regression" }).then(() => {
       closed = true;
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        preludeEntered.promise,
-        closing,
-        "Gateway skipped its close prelude",
-      ),
-      signal,
-    );
+    await gate(preludeEntered.promise, closing, "Gateway skipped its close prelude");
     expect(closed).toBe(false);
     expect(shared.isOpen).toBe(true);
     await expect(
@@ -122,10 +109,7 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
     releaseRecording.resolve();
     await withinTest(Promise.all([turning.catch(() => undefined), closing]), signal);
     expect(shared.isOpen).toBe(false);
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
-      readOnly: true,
-    });
-    try {
+    readClosedDatabase(resolveOpenClawStateSqlitePath(fixture.state.env), (database) => {
       const rows = database
         .prepare(
           "SELECT payload_json FROM diagnostic_events WHERE scope = 'system-agent-transcript' ORDER BY sequence",
@@ -135,9 +119,7 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
         { role: "user", text: "Accepted question", at: expect.any(Number) },
         { role: "assistant", text: "Accepted answer", at: expect.any(Number) },
       ]);
-    } finally {
-      database.close();
-    }
+    });
   } finally {
     releaseRecording.resolve();
     await Promise.allSettled([turning, closing]);

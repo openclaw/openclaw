@@ -1,20 +1,17 @@
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { makeClient } from "./server-broadcast.test-helpers.js";
+import { createTestGate, readClosedDatabase } from "./server-close.lifecycle.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import * as sessionObserverModel from "./session-observer-model.js";
 
 it("settles an accepted observer digest across the close prelude before closing its database", async ({
   signal,
 }) => {
+  const gate = createTestGate(signal);
   const fixture = await createGatewayMetadataCloseFixture("gateway-session-observer-close");
   const persistEntered = createDeferred();
   const releasePersist = createDeferred();
@@ -84,13 +81,10 @@ it("settles an accepted observer digest across the close prelude before closing 
       data: { kind: "preamble", progressText: headline },
     };
     handling = observer.handleEventAsync(event);
-    await withinTest(
-      awaitGateBeforeSettlement(
-        persistEntered.promise,
-        handling,
-        "Observer event settled without accepting its digest write",
-      ),
-      signal,
+    await gate(
+      persistEntered.promise,
+      handling,
+      "Observer event settled without accepting its digest write",
     );
     await withinTest(handling, signal);
     const dispose = observer.disposeAsync.bind(observer);
@@ -104,14 +98,7 @@ it("settles an accepted observer digest across the close prelude before closing 
     closing = server.close({ reason: "session observer close regression" }).then(() => {
       closed = true;
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        disposalEntered.promise,
-        closing,
-        "Gateway closed without joining the observer",
-      ),
-      signal,
-    );
+    await gate(disposalEntered.promise, closing, "Gateway closed without joining the observer");
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(kernel.connectionWork.signal.aborted).toBe(true);
     expect(closed).toBe(false);
@@ -132,10 +119,9 @@ it("settles an accepted observer digest across the close prelude before closing 
     expect(accepted).toBe(true);
     expect(settledBeforeDatabaseClose).toBe(true);
     expect(agent.db.isOpen).toBe(false);
-    const reopened = new DatabaseSync(agent.path, { readOnly: true });
-    try {
+    readClosedDatabase(agent.path, (database) => {
       expect(
-        reopened
+        database
           .prepare(`
         SELECT json_extract(entry_json, '$.observerDigest.headline') AS headline,
                json_extract(entry_json, '$.observerDigest.runId') AS run_id,
@@ -144,9 +130,7 @@ it("settles an accepted observer digest across the close prelude before closing 
       `)
           .get(sessionKey),
       ).toEqual({ headline, run_id: runId, revision: 1 });
-    } finally {
-      reopened.close();
-    }
+    });
   } finally {
     releasePersist.resolve();
     await Promise.allSettled([handling, persisting, closing]);

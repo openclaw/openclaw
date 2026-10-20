@@ -9,56 +9,29 @@ import * as codeRegions from "../shared/text/code-regions.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { createChatRunState } from "./server-chat-state.js";
 
+function source(name: string, prefix: string, suffix: string, expected = suffix) {
+  return { name, prefix, suffix, expected };
+}
+
 describe("live chat directive projection", () => {
   it.each([
-    {
-      name: "literal trailing marker",
-      prefix: "The token is ",
-      suffix: SILENT_REPLY_TOKEN,
-      expected: SILENT_REPLY_TOKEN,
-    },
-    {
-      name: "punctuated literal suffix",
-      prefix: "The token is ",
-      suffix: `${SILENT_REPLY_TOKEN}.`,
-      expected: `${SILENT_REPLY_TOKEN}.`,
-    },
-    {
-      name: "prepared literal marker",
-      prefix: "",
-      suffix: SILENT_REPLY_TOKEN,
-      expected: SILENT_REPLY_TOKEN,
-    },
-    {
-      name: "prepared short reply",
-      prefix: SILENT_REPLY_TOKEN.slice(0, 1),
-      suffix: SILENT_REPLY_TOKEN.slice(1, 2),
-      expected: SILENT_REPLY_TOKEN.slice(1, 2),
-    },
-    {
-      name: "runtime directive crossing occurrences",
-      prefix: `Opening\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nPrivate`,
-      suffix: ` context\n${INTERNAL_RUNTIME_CONTEXT_END}\nVisible`,
-      expected: " context\nVisible",
-    },
-    {
-      name: "media directive crossing occurrences",
-      prefix: "Opening\nMEDIA",
-      suffix: ":./model.png\nVisible",
-      expected: ":./model.png\nVisible",
-    },
-    {
-      name: "code literal crossing occurrences",
-      prefix: "`",
-      suffix: "[[reply_to_current]]`",
-      expected: "`",
-    },
-    {
-      name: "media URL retained after its directive prefix commits",
-      prefix: "Opening\nMEDIA:prose ./model.png ",
-      suffix: "https://example.com/a.png\n",
-      expected: "https://example.com/a.png\n",
-    },
+    source("literal trailing marker", "The token is ", SILENT_REPLY_TOKEN),
+    source("punctuated literal suffix", "The token is ", `${SILENT_REPLY_TOKEN}.`),
+    source("prepared literal marker", "", SILENT_REPLY_TOKEN),
+    source("prepared short reply", SILENT_REPLY_TOKEN.slice(0, 1), SILENT_REPLY_TOKEN.slice(1, 2)),
+    source(
+      "runtime directive crossing occurrences",
+      `Opening\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nPrivate`,
+      ` context\n${INTERNAL_RUNTIME_CONTEXT_END}\nVisible`,
+      " context\nVisible",
+    ),
+    source("media directive crossing occurrences", "Opening\nMEDIA", ":./model.png\nVisible"),
+    source("code literal crossing occurrences", "`", "[[reply_to_current]]`", "`"),
+    source(
+      "media URL retained after its directive prefix commits",
+      "Opening\nMEDIA:prose ./model.png ",
+      "https://example.com/a.png\n",
+    ),
   ])("preserves prepared source for $name", ({ prefix, suffix, expected }) => {
     const state = createChatRunState();
     const runId = "source-classification";
