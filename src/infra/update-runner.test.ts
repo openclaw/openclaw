@@ -40,13 +40,7 @@ describe("update install surface and command ownership", () => {
     runCommand: ReturnType<typeof createRunner>["runner"],
   ) => resolveUpdateInstallSurface({ root, installKind, timeoutMs: 1000, runCommand });
   it("owns default updater subprocess trees", async () => {
-    const runCommandWithTimeoutMock = vi.fn(async () => ({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      killed: false,
-      signal: null,
-    }));
+    const runCommandWithTimeoutMock = vi.fn(async () => ({ stdout: "", stderr: "", code: 0 }));
     vi.resetModules();
     vi.doMock("../process/exec.js", () => ({ runCommandWithTimeout: runCommandWithTimeoutMock }));
     vi.doMock("./update-global.js", () => ({
@@ -104,29 +98,22 @@ describe("update install surface and command ownership", () => {
     },
   );
 
-  it("uses a prepared Git checkout without probing process artifacts again", async () => {
-    const sourceRoot = path.join(tempDir, "source");
-    const { runner, calls } = createRunner({});
-
-    await expect(resolveSurface(sourceRoot, "git", runner)).resolves.toMatchObject({
-      kind: "git",
-      mode: "git",
-      root: sourceRoot,
-      packageRoot: sourceRoot,
-    });
-    expect(calls).toEqual([]);
-  });
-
-  it("preserves non-global package roots without probing Git or the process cwd", async () => {
-    const root = path.join(tempDir, "standalone-package");
-    const { runner, calls } = createRunner({
-      "npm root -g": path.join(tempDir, "npm-global"),
-      "pnpm root -g": path.join(tempDir, "pnpm-global"),
-    });
-
-    await expect(
-      resolveUpdateInstallSurface({ root, installKind: "package", runCommand: runner }),
-    ).resolves.toEqual({ kind: "package-root", mode: "unknown", root, packageRoot: root });
-    expect(calls).toEqual(["npm root -g", "pnpm root -g"]);
-  });
+  it.each(["git", "package"] as const)(
+    "preserves prepared %s roots without Git probes",
+    async (installKind) => {
+      const root = path.join(tempDir, installKind);
+      const responses = {
+        "npm root -g": path.join(tempDir, "npm-global"),
+        "pnpm root -g": path.join(tempDir, "pnpm-global"),
+      };
+      const { runner, calls } = createRunner(installKind === "git" ? {} : responses);
+      await expect(resolveSurface(root, installKind, runner)).resolves.toEqual({
+        kind: installKind === "git" ? "git" : "package-root",
+        mode: installKind === "git" ? "git" : "unknown",
+        root,
+        packageRoot: root,
+      });
+      expect(calls).toEqual(installKind === "git" ? [] : ["npm root -g", "pnpm root -g"]);
+    },
+  );
 });

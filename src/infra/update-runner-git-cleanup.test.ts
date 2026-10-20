@@ -30,7 +30,6 @@ it.each(["none", "start", "complete"] as const)(
       'Could not record update step "preflight-cleanup": undergoing offline maintenance',
     );
     let validated = false;
-    let stopped = false;
     const doctor = vi.fn();
     const error = await fixture
       .run({
@@ -39,7 +38,6 @@ it.each(["none", "start", "complete"] as const)(
         },
         beforeGitMutation: async () => {
           expect(validated).toBe(true);
-          stopped = true;
           throw original;
         },
         runGitDoctor: doctor,
@@ -49,7 +47,6 @@ it.each(["none", "start", "complete"] as const)(
         ),
       })
       .catch((caught: unknown) => caught);
-    expect(stopped).toBe(true);
     expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(before);
     expect(doctor).not.toHaveBeenCalled();
     expect(removals(fixture)).toHaveLength(1);
@@ -77,17 +74,14 @@ it("keeps a successful update successful when cleanup reporting is unavailable",
   });
   expect(result.status).toBe("ok");
   expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(fixture.target);
-  expect(result.steps).toContainEqual(
-    expect.objectContaining({
-      name: "preflight-cleanup-reporting",
-      exitCode: 0,
-      advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
-      failureFacts: [
-        expect.objectContaining({ message: "offline maintenance" }),
-        expect.objectContaining({ message: "completion reporting unavailable" }),
-      ],
-    }),
-  );
+  expect(result.steps.find(({ name }) => name === "preflight-cleanup-reporting")).toMatchObject({
+    exitCode: 0,
+    advisory: { kind: "recoverable-maintenance" },
+    failureFacts: [
+      { message: "offline maintenance" },
+      { message: "completion reporting unavailable" },
+    ],
+  });
 });
 
 it("preserves uncertain process cleanup and the original failure without removing live scratch", async () => {

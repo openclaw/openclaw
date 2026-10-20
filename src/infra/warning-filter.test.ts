@@ -81,11 +81,12 @@ describe("warning filter", () => {
     const onWarning = ({ code, name, message }: Error & { code?: string }) => {
       seenWarnings.push({ code, name, message });
     };
-    const punycode = {
-      name: "DeprecationWarning",
-      code: "DEP0040",
-      message: "The punycode module is deprecated.",
-    };
+    const makeWarning = (name: string, message: string, code?: string) => ({ name, message, code });
+    const punycode = makeWarning(
+      "DeprecationWarning",
+      "The punycode module is deprecated.",
+      "DEP0040",
+    );
     const warningError = (warning: { name: string; code?: string; message: string }) =>
       Object.assign(new Error(warning.message), warning);
     const extendMessage =
@@ -108,40 +109,22 @@ describe("warning filter", () => {
       await setImmediate();
       expect(seenWarnings).toEqual([]);
 
-      const visible = {
-        code: "OPENCLAW_TEST_WARNING",
-        name: "Warning",
-        message: "Visible warning",
-      };
+      const visible = makeWarning("Warning", "Visible warning", "OPENCLAW_TEST_WARNING");
       emitWarning(visible.message, { type: visible.name, code: visible.code });
       emitWarning(warningError(punycode), { type: "Warning", code: "OPENCLAW_VISIBLE_OVERRIDE" });
-      await setImmediate();
-      expect(seenWarnings.find((warning) => warning.code === visible.code)).toStrictEqual(visible);
-      expect(seenWarnings.find((warning) => warning.code === punycode.code)).toStrictEqual(
-        punycode,
-      );
-
       const visibleWarnings = [
-        {
-          name: "DeprecationWarning",
-          code: "DEP9999",
-          message: "Totally new warning",
-        },
-        {
-          name: "ExperimentalWarning",
-          message: "Different experimental warning",
-        },
+        makeWarning("DeprecationWarning", "Totally new warning", "DEP9999"),
+        makeWarning("ExperimentalWarning", "Different experimental warning"),
         { ...punycode, message: "Different deprecated module" },
       ];
       for (const warning of visibleWarnings) {
         process.emitWarning(warningError(warning));
       }
       await setImmediate();
-      for (const warning of visibleWarnings) {
-        expect(seenWarnings.find((seen) => seen.message === warning.message)).toStrictEqual({
-          code: undefined,
-          ...warning,
-        });
+      for (const expected of [visible, punycode, ...visibleWarnings]) {
+        expect(seenWarnings.find((seen) => seen.message === expected.message)).toStrictEqual(
+          expected,
+        );
       }
     } finally {
       process.off("warning", onWarning);

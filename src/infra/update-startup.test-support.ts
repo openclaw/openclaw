@@ -62,21 +62,8 @@ vi.mock("./supervisor-markers.js", async (original) => ({
 
 vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: checkTelemetryUpdateMock }));
 
-vi.mock("./update-check.js", async () => {
-  const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
-  const compareSemverStrings = (a: string, b: string) => {
-    const left = parse(a);
-    const right = parse(b);
-    for (let idx = 0; idx < 3; idx += 1) {
-      const l = left[idx] ?? 0;
-      const r = right[idx] ?? 0;
-      if (l !== r) {
-        return l < r ? -1 : 1;
-      }
-    }
-    return 0;
-  };
-
+vi.mock("./update-check.js", async (original) => {
+  const { compareSemverStrings } = await original<typeof import("./update-check.js")>();
   return {
     checkUpdateStatus: vi.fn(),
     compareSemverStrings,
