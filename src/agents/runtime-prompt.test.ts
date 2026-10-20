@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentRuntimePrompt } from "./runtime-prompt.js";
 
@@ -24,58 +24,42 @@ vi.mock("../config/channel-capabilities.js", async (importOriginal) => ({
   resolveChannelCapabilities: channelMocks.capabilities,
 }));
 
-vi.mock("./shell-utils.js", () => ({
-  detectRuntimeShell: vi.fn(() => "zsh"),
-}));
+vi.mock("./shell-utils.js", () => ({ detectRuntimeShell: () => "zsh" }));
+vi.mock("./git-coauthor-prompt.js", () => ({ resolveSessionGitCoauthorPrompt: vi.fn() }));
+vi.mock("../infra/machine-name.js", () => ({ getMachineDisplayName: async () => "test-host" }));
+vi.mock("../infra/os-summary.js", () => ({ resolveRuntimeOsLabel: () => "TestOS 1.0" }));
 
-vi.mock("./git-coauthor-prompt.js", () => ({
-  resolveSessionGitCoauthorPrompt: vi.fn(),
-}));
+const gitCoauthorPrompt = "Git co-authors:\nCo-authored-by: Ada <ada@example.com>";
+const params = { config: {}, agentId: "main", model: "openai/gpt-test" };
 
-vi.mock("../infra/machine-name.js", () => ({
-  getMachineDisplayName: vi.fn(async () => "test-host"),
-}));
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
+});
 
-vi.mock("../infra/os-summary.js", () => ({
-  resolveRuntimeOsLabel: vi.fn(() => "TestOS 1.0"),
-}));
-
-describe("resolveAgentRuntimePrompt", () => {
-  const gitCoauthorPrompt =
-    "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
-    "Co-authored-by: ada <20+ada@users.noreply.github.com>";
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
+it("resolves shared runtime and channel prompt facts", async () => {
+  const session = { sessionKey: "agent:main:telegram:direct:123", sessionId: "session-1" };
+  const result = await resolveAgentRuntimePrompt({
+    ...params,
+    ...session,
+    workspaceDir: "/tmp/workspace",
+    cwd: "/tmp/workspace",
+    channel: "Telegram",
+    accountId: "work",
+    chatType: "group",
   });
 
-  it("resolves shared runtime and channel prompt facts", async () => {
-    const config = {};
-    const result = await resolveAgentRuntimePrompt({
-      config,
-      agentId: "main",
-      workspaceDir: "/tmp/workspace",
-      cwd: "/tmp/workspace",
-      sessionKey: "agent:main:telegram:direct:123",
-      sessionId: "session-1",
-      model: "openai/gpt-test",
-      channel: "Telegram",
-      accountId: "work",
-      chatType: "group",
-    });
-
-    const channelContext = { cfg: config, channel: "telegram", accountId: "work" };
-    for (const mock of Object.values(channelMocks)) {
-      expect(mock).toHaveBeenCalledWith(channelContext);
-    }
-    expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
-      config,
-      agentId: "main",
-      sessionKey: "agent:main:telegram:direct:123",
-      sessionId: "session-1",
-    });
-    expect(result.runtimeInfo).toMatchObject({
+  const channelContext = { cfg: params.config, channel: "telegram", accountId: "work" };
+  for (const mock of Object.values(channelMocks)) {
+    expect(mock).toHaveBeenCalledWith(channelContext);
+  }
+  expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+    config: params.config,
+    agentId: "main",
+    ...session,
+  });
+  expect(result).toMatchObject({
+    runtimeInfo: {
       agentId: "main",
       host: "test-host",
       os: "TestOS 1.0",
@@ -86,31 +70,24 @@ describe("resolveAgentRuntimePrompt", () => {
       chatType: "group",
       capabilities: ["voice"],
       gitCoauthorPrompt,
-    });
-    expect(result).toEqual(
-      expect.objectContaining({
-        runtimeChannel: "telegram",
-        runtimeCapabilities: ["voice"],
-        reactionGuidance: { level: "minimal", channel: "Telegram" },
-        messageToolHints: ["Use the message tool."],
-      }),
-    );
+    },
+    runtimeChannel: "telegram",
+    runtimeCapabilities: ["voice"],
+    messageToolHints: ["Use the message tool."],
+  });
+  expect(result.reactionGuidance).toEqual({ level: "minimal", channel: "Telegram" });
+});
+
+it.each([
+  { name: "prepared credit", preparedGitCoauthorPrompt: gitCoauthorPrompt },
+  { name: "explicit undefined", preparedGitCoauthorPrompt: undefined },
+  { name: "explicit null", preparedGitCoauthorPrompt: null },
+])("retains $name without refreshing session credit", async ({ preparedGitCoauthorPrompt }) => {
+  const result = await resolveAgentRuntimePrompt({
+    ...params,
+    preparedGitCoauthorPrompt,
   });
 
-  it.each([
-    { name: "prepared credit", preparedGitCoauthorPrompt: gitCoauthorPrompt },
-    { name: "explicit undefined", preparedGitCoauthorPrompt: undefined },
-    { name: "explicit null", preparedGitCoauthorPrompt: null },
-  ])("retains $name without refreshing session credit", async ({ preparedGitCoauthorPrompt }) => {
-    const result = await resolveAgentRuntimePrompt({
-      config: {},
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      model: "openai/gpt-test",
-      preparedGitCoauthorPrompt,
-    });
-
-    expect(result.runtimeInfo.gitCoauthorPrompt).toBe(preparedGitCoauthorPrompt ?? undefined);
-    expect(resolveSessionGitCoauthorPrompt).not.toHaveBeenCalled();
-  });
+  expect(result.runtimeInfo.gitCoauthorPrompt).toBe(preparedGitCoauthorPrompt ?? undefined);
+  expect(resolveSessionGitCoauthorPrompt).not.toHaveBeenCalled();
 });

@@ -13,10 +13,7 @@ const { toolPolicyAuditInfo } = vi.hoisted(() => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    // Audit logging is asserted without touching the real subsystem logger.
-    info: toolPolicyAuditInfo,
-  }),
+  createSubsystemLogger: () => ({ info: toolPolicyAuditInfo }),
 }));
 
 function config(
@@ -57,15 +54,12 @@ describe("sandbox explain helpers", () => {
   it("prefers agent overrides > global > defaults (sandbox tool policy)", () => {
     const cfg = config({ allow: ["read"], deny: ["browser"] }, { allow: ["write"] });
 
-    const resolved = resolveSandboxConfigForAgent(cfg, "work");
-    expect(resolved.tools.allow).toEqual(["write", "view_image"]);
-    expect(resolved.tools.deny).toEqual(["browser"]);
-
-    const policy = resolveSandboxToolPolicyForAgent(cfg, "work");
-    expect(policy.allow).toEqual(["write", "view_image"]);
-    expect(policy.sources.allow.source).toBe("agent");
-    expect(policy.deny).toEqual(["browser"]);
-    expect(policy.sources.deny.source).toBe("global");
+    const lists = { allow: ["write", "view_image"], deny: ["browser"] };
+    expect(resolveSandboxConfigForAgent(cfg, "work").tools).toMatchObject(lists);
+    expect(resolveSandboxToolPolicyForAgent(cfg, "work")).toMatchObject({
+      ...lists,
+      sources: { allow: { source: "agent" }, deny: { source: "global" } },
+    });
   });
 
   it("expands group tool shorthands inside sandbox tool policy", () => {

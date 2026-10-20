@@ -56,29 +56,18 @@ describe("sandbox config merges", () => {
   });
 
   it("applies per-agent browser and prune overrides (ignored under shared scope)", () => {
-    const browser = resolve(
-      { scope: "agent", browser: { enabled: false, headless: false, noVncEnabled: true } },
-      { browser: { enabled: true, headless: true, noVncEnabled: false } },
-    ).browser;
-    expect(browser).toMatchObject({ enabled: true, headless: true, noVncEnabled: false });
-
-    const prune = resolve(
-      { scope: "agent", prune: { idleHours: 24, maxAgeDays: 7 } },
-      { prune: { idleHours: 0, maxAgeDays: 1 } },
-    ).prune;
-    expect(prune).toEqual({ idleHours: 0, maxAgeDays: 1 });
-
-    const browserShared = resolve(
-      { scope: "shared", browser: { enabled: false } },
-      { browser: { enabled: true } },
-    ).browser;
-    expect(browserShared.enabled).toBe(false);
-
-    const pruneShared = resolve(
-      { scope: "shared", prune: { idleHours: 24, maxAgeDays: 7 } },
-      { prune: { idleHours: 0, maxAgeDays: 1 } },
-    ).prune;
-    expect(pruneShared).toEqual({ idleHours: 24, maxAgeDays: 7 });
+    const browser = { enabled: false, headless: false, noVncEnabled: true };
+    const agentBrowser = { enabled: true, headless: true, noVncEnabled: false };
+    const prune = { idleHours: 24, maxAgeDays: 7 };
+    const agentPrune = { idleHours: 0, maxAgeDays: 1 };
+    for (const scope of ["agent", "shared"] as const) {
+      const resolved = resolve(
+        { scope, browser, prune },
+        { browser: agentBrowser, prune: agentPrune },
+      );
+      expect(resolved.browser).toMatchObject(scope === "agent" ? agentBrowser : browser);
+      expect(resolved.prune).toEqual(scope === "agent" ? agentPrune : prune);
+    }
   });
 
   it("merges sandbox ssh settings and ignores agent overrides under shared scope", () => {
