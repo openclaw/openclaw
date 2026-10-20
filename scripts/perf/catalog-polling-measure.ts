@@ -498,6 +498,8 @@ async function measureLoads(runs: number) {
         );
         if (typeof session.label === "string" && session.label) {
           await page
+            .locator(".chat-pane__header")
+            .filter({ visible: true })
             .getByText(session.label, { exact: true })
             .filter({ visible: true })
             .first()
@@ -506,7 +508,7 @@ async function measureLoads(runs: number) {
         detailsVerification = {
           server: expected,
           presentedDetailsMatch: true,
-          visibleLabel: session.label,
+          visibleConversationLabel: session.label,
         };
       }
       const result = await page.evaluate(() => {
