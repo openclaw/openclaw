@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vitest";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   collectConfiguredCatalogModels,
   resolveConfiguredModelEntries,
 } from "./configured-model-entries.js";
+
+function model(id: string, overrides: Partial<ModelDefinitionConfig> = {}): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32768,
+    maxTokens: 1024,
+    ...overrides,
+  };
+}
+
+type ResolveOptions = Omit<Parameters<typeof resolveConfiguredModelEntries>[0], "cfg">;
+function resolveDefaults(defaults: AgentDefaultsConfig, options: ResolveOptions = {}) {
+  return resolveConfiguredModelEntries({
+    cfg: { agents: { defaults }, models: { providers: {} } },
+    allowPluginNormalization: false,
+    ...options,
+  });
+}
 
 describe("resolveConfiguredModelEntries", () => {
   it("collects authored catalog candidates with scoped aliases and literal provider declarations", () => {
@@ -22,18 +46,7 @@ describe("resolveConfiguredModelEntries", () => {
           ollama: {
             baseUrl: "http://127.0.0.1:11434",
             api: "ollama",
-            models: [
-              {
-                id: "qwen3:8bb",
-                name: "Typo",
-                baseUrl: "http://other-server:11434",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32768,
-                maxTokens: 1024,
-              },
-            ],
+            models: [model("qwen3:8bb", { name: "Typo", baseUrl: "http://other-server:11434" })],
           },
         },
       },
@@ -75,19 +88,11 @@ describe("resolveConfiguredModelEntries", () => {
   );
 
   it("parses configured models without loading provider-runtime normalization", () => {
-    const { entries } = resolveConfiguredModelEntries({
-      allowPluginNormalization: false,
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "codex/gpt-5.5", fallbacks: ["codex/gpt-5.4-mini"] },
-            models: {
-              "codex/gpt-5.5": { alias: "Codex" },
-              "codex/gpt-5.4-mini": {},
-            },
-          },
-        },
-        models: { providers: {} },
+    const { entries } = resolveDefaults({
+      model: { primary: "codex/gpt-5.5", fallbacks: ["codex/gpt-5.4-mini"] },
+      models: {
+        "codex/gpt-5.5": { alias: "Codex" },
+        "codex/gpt-5.4-mini": {},
       },
     });
 
@@ -115,15 +120,13 @@ describe("resolveConfiguredModelEntries", () => {
               api: "openai-completions",
               baseUrl: "https://kilocode.test/v1",
               models: [
-                {
-                  id: "google/gemini-3-pro-preview",
+                model("google/gemini-3-pro-preview", {
                   name: "Gemini 3 Pro",
                   reasoning: true,
                   input: ["text", "image"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 1_048_576,
                   maxTokens: 65_536,
-                },
+                }),
               ],
             },
           },
@@ -136,19 +139,11 @@ describe("resolveConfiguredModelEntries", () => {
     expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
   });
   it("treats provider wildcard defaults as selectors, not configured model rows", () => {
-    const { entries } = resolveConfiguredModelEntries({
-      allowPluginNormalization: false,
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
-            models: {
-              "openai/*": {},
-              "openai/gpt-5.5": { alias: "Primary" },
-            },
-          },
-        },
-        models: { providers: {} },
+    const { entries } = resolveDefaults({
+      model: "openai/gpt-5.5",
+      models: {
+        "openai/*": {},
+        "openai/gpt-5.5": { alias: "Primary" },
       },
     });
 
@@ -158,18 +153,15 @@ describe("resolveConfiguredModelEntries", () => {
   });
 
   it("preserves aliases and roles when provider references are canonicalized", () => {
-    const { entries } = resolveConfiguredModelEntries({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "legacy/model",
-            models: { "legacy/model": { alias: "Work" } },
-          },
-        },
+    const { entries } = resolveDefaults(
+      {
+        model: "legacy/model",
+        models: { "legacy/model": { alias: "Work" } },
       },
-      allowPluginNormalization: false,
-      canonicalizeRef: (ref) => ({ ...ref, provider: "current" }),
-    });
+      {
+        canonicalizeRef: (ref) => ({ ...ref, provider: "current" }),
+      },
+    );
     expect(entries.map((entry) => entry.key)).toEqual(["current/model"]);
     expect(entries[0]?.aliases).toEqual(["Work"]);
     expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));

@@ -17,31 +17,43 @@ const model: Model = {
   maxTokens: 1_000,
 };
 
+function summarize(overrides: Partial<Parameters<typeof summarizeCompactionHistory>[0]>) {
+  return summarizeCompactionHistory({
+    messages: [{ role: "user", content: "Preserve the deployment decision.", timestamp: 1 }],
+    model,
+    apiKey: "test-key", // pragma: allowlist secret
+    signal: new AbortController().signal,
+    reserveTokens: 1_000,
+    ...overrides,
+  });
+}
+
+function response(overrides: Parameters<typeof makeAgentAssistantMessage>[0]) {
+  const message = makeAgentAssistantMessage(overrides);
+  const stream = createAssistantMessageEventStream();
+  stream.push({
+    type: "done",
+    reason: overrides.stopReason === "length" ? "length" : "stop",
+    message,
+  });
+  stream.end();
+  return stream;
+}
+
 describe("compaction summary format propagation", () => {
   it("does not repeat an unchanged request after a reasoning-only length stop", async () => {
     const requests: Array<{ modelId: string; maxTokens: number | undefined }> = [];
     const streamFn: StreamFn = (selectedModel, _context, options) => {
       requests.push({ modelId: selectedModel.id, maxTokens: options?.maxTokens });
-      const stream = createAssistantMessageEventStream();
-      stream.push({
-        type: "done",
-        reason: "length",
-        message: makeAgentAssistantMessage({
-          content: [{ type: "thinking", thinking: "reasoning filled the output budget" }],
-          stopReason: "length",
-        }),
+      return response({
+        content: [{ type: "thinking", thinking: "reasoning filled the output budget" }],
+        stopReason: "length",
       });
-      stream.end();
-      return stream;
     };
 
     await expect(
-      summarizeCompactionHistory({
-        messages: [{ role: "user", content: "Preserve the deployment decision.", timestamp: 1 }],
+      summarize({
         model: { ...model, reasoning: true },
-        apiKey: "test-key", // pragma: allowlist secret
-        signal: new AbortController().signal,
-        reserveTokens: 1_000,
         streamFn,
       }),
     ).rejects.toThrow("summary output budget (800 tokens) was exhausted");
@@ -61,27 +73,14 @@ describe("compaction summary format propagation", () => {
       const streamFn: StreamFn = (_model, context, options) => {
         requests.push(JSON.stringify(context));
         expect(options?.maxTokens).toBe(summaryPrompt.kind === "turn-prefix" ? 500 : 800);
-        const stream = createAssistantMessageEventStream();
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: makeAgentAssistantMessage({
-            content: [{ type: "text", text: "summary" }],
-          }),
-        });
-        stream.end();
-        return stream;
+        return response({ content: [{ type: "text", text: "summary" }] });
       };
-      const result = await summarizeCompactionHistory({
+      const result = await summarize({
         messages: Array.from({ length: 4 }, (_, index) => ({
           role: "user" as const,
           content: `receipt_${index}: ${"Keep the deployment decision. ".repeat(20)}`,
           timestamp: index + 1,
         })),
-        model,
-        apiKey: "test-key",
-        signal: new AbortController().signal,
-        reserveTokens: 1_000,
         summaryPrompt,
         customInstructions: "Preserve the canary decision.",
         streamFn,
@@ -104,23 +103,10 @@ describe("compaction summary format propagation", () => {
     const requests: string[] = [];
     const streamFn: StreamFn = (_model, context) => {
       requests.push(JSON.stringify(context));
-      const stream = createAssistantMessageEventStream();
-      stream.push({
-        type: "done",
-        reason: "stop",
-        message: makeAgentAssistantMessage({
-          content: [{ type: "text", text: "retained summary" }],
-        }),
-      });
-      stream.end();
-      return stream;
+      return response({ content: [{ type: "text", text: "retained summary" }] });
     };
-    const result = await summarizeCompactionHistory({
+    const result = await summarize({
       messages: [{ role: "user", content: "Keep receipt_90210", timestamp: 1 }],
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      reserveTokens: 1_000,
       summaryPrompt: { kind: "custom", instructions: "Use ## Decisions and ## Pending user asks." },
       previousSummary: "Earlier canary decision.",
       streamFn,
