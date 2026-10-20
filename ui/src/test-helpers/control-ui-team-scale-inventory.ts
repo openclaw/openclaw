@@ -27,7 +27,7 @@ export function createTeamScaleSessionInventory({
     const pinned = index >= counts.sessions - counts.pinned;
     const owner = people[index % counts.owners]!;
     const running = index < 24;
-    return {
+    const row: TeamScaleSession = {
       key:
         index === 0
           ? "agent:main:main"
@@ -60,15 +60,12 @@ export function createTeamScaleSessionInventory({
       contextTokens: 200_000,
       totalTokens: 4_000 + index * 31,
       pinned,
-      ...(pinned
-        ? {
-            pinnedAt: now - index,
-            hasBoard: true,
-            boardFace: "dashboard" as const,
-          }
-        : {}),
       lastMessagePreview: `Synthetic project ${index + 1}: reviewed the implementation and recorded the next concrete step.`,
     };
+    if (pinned) {
+      Object.assign(row, { pinnedAt: now - index, hasBoard: true, boardFace: "dashboard" });
+    }
+    return row;
   });
   prepareTeamScaleSessionOwnership(sessions, people.slice(0, counts.owners));
   const pinnedRows = sessions.slice(-counts.pinned);

@@ -26,9 +26,13 @@ function installBoard(page: { execute(script: string): void }, cards: (typeof ca
   page.execute(`(${installWorkboardBoardMock.toString()})(${JSON.stringify(seed)})`);
 }
 
-it.for(["move", "archive", "delete"] as const)(
+it.for([
+  ["move", { status: "done", position: 2000 }],
+  ["archive", { metadata: { archivedAt: expect.any(Number) } }],
+  ["delete", null],
+] as const)(
   "rejects stale %s through the serialized Workboard mock without changing cards or emitting events",
-  async (action, { gatewayPage }) => {
+  async ([action, expectedCard], { gatewayPage }) => {
     installBoard(gatewayPage, [card]);
     const socket = gatewayPage.connect();
     await flushMockTimers();
@@ -46,18 +50,11 @@ it.for(["move", "archive", "delete"] as const)(
       ...params,
       expectedUpdatedAt: card.updatedAt,
     });
-    if (action === "delete") {
+    if (expectedCard === null) {
       expect(result).toEqual({ deleted: true });
       expect((await socket.request("deleted", "workboard.cards.list", {})).cards).toEqual([]);
     } else {
-      expect(result).toMatchObject({
-        card: {
-          updatedAt: expect.any(Number),
-          ...(action === "move"
-            ? { status: "done", position: 2000 }
-            : { metadata: { archivedAt: expect.any(Number) } }),
-        },
-      });
+      expect(result).toMatchObject({ card: { updatedAt: expect.any(Number), ...expectedCard } });
       expect(result).not.toMatchObject({ card: { updatedAt: card.updatedAt } });
     }
     expect(socket.frames.filter((frame) => frame.type === "event")).toHaveLength(events.length + 1);
