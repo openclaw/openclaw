@@ -54,19 +54,6 @@ function resolveElevenLabsAcceptHeader(outputFormat: string): string | undefined
   return undefined;
 }
 
-function normalizeElevenLabsRequestLatencyTier(
-  latencyTier: number | undefined,
-): number | undefined {
-  if (latencyTier === undefined || !Number.isFinite(latencyTier)) {
-    return undefined;
-  }
-  if (!Number.isSafeInteger(latencyTier)) {
-    throw new Error("latencyTier must be an integer");
-  }
-  requireInRange(latencyTier, 0, 4, "latencyTier");
-  return latencyTier;
-}
-
 type ElevenLabsTtsRequestParams = {
   text: string;
   apiKey: string;
@@ -98,30 +85,19 @@ async function requestElevenLabsTts(params: ElevenLabsTtsRequestParams, stream: 
   if (!isValidElevenLabsVoiceId(voiceId)) {
     throw new Error("Invalid voiceId format");
   }
-  requireInRange(voiceSettings.stability, 0, 1, "stability");
-  requireInRange(voiceSettings.similarityBoost, 0, 1, "similarityBoost");
-  requireInRange(voiceSettings.style, 0, 1, "style");
-  requireInRange(voiceSettings.speed, 0.5, 2, "speed");
   const normalizedLanguage = normalizeLanguageCode(languageCode);
   const normalizedNormalization = normalizeApplyTextNormalization(applyTextNormalization);
-  const normalizedSeed = normalizeSeed(seed);
-  const normalizedBaseUrl = normalizeElevenLabsBaseUrl(baseUrl);
-  const normalizedLatencyTier = normalizeElevenLabsRequestLatencyTier(latencyTier);
-  const url = new URL(
-    `${normalizedBaseUrl}/v1/text-to-speech/${voiceId}${stream ? "/stream" : ""}`,
-  );
-  if (outputFormat) {
-    url.searchParams.set("output_format", outputFormat);
-  }
+  const url = new URL(`${baseUrl}/v1/text-to-speech/${voiceId}${stream ? "/stream" : ""}`);
+  url.searchParams.set("output_format", outputFormat);
   const supportsStreamingLatency = modelId.trim().toLowerCase() !== "eleven_v3";
-  if (normalizedLatencyTier !== undefined && supportsStreamingLatency) {
-    url.searchParams.set("optimize_streaming_latency", normalizedLatencyTier.toString());
+  if (latencyTier !== undefined && supportsStreamingLatency) {
+    url.searchParams.set("optimize_streaming_latency", latencyTier.toString());
   }
   const acceptHeader = resolveElevenLabsAcceptHeader(outputFormat);
   const body = JSON.stringify({
     text,
     model_id: modelId,
-    seed: normalizedSeed,
+    seed,
     apply_text_normalization: normalizedNormalization,
     language_code: normalizedLanguage,
     voice_settings: {
@@ -147,7 +123,7 @@ async function requestElevenLabsTts(params: ElevenLabsTtsRequestParams, stream: 
       body,
     },
     timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     auditContext: stream ? "elevenlabs.tts.stream" : "elevenlabs.tts",
   });
   try {
