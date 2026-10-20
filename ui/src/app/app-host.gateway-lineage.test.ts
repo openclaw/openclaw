@@ -16,6 +16,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import {
+  composerContextWrapper,
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
@@ -309,6 +310,7 @@ describe("Control UI Gateway target lineage", () => {
         });
         unmountComposer = mountSolid(() => createComponent(ChatComposer, props), {
           container: composer,
+          wrapper: composerContextWrapper(composer),
         }).unmount;
         flush();
         if (!sameOwner) {
