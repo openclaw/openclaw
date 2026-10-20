@@ -24,40 +24,26 @@ export async function createInterruptedPackagePublication(
   const f = await createPackageSwapFixture(fixtureRoot);
   const stageRoot = f.params.stage.packageRoot;
   const write = (file: string, value: string | object) => {
-    fs.mkdirSync(path.dirname(path.join(stageRoot, file)), { recursive: true });
-    fs.writeFileSync(
-      path.join(stageRoot, file),
-      typeof value === "string" ? value : JSON.stringify(value),
-    );
+    const target = path.join(stageRoot, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, typeof value === "string" ? value : JSON.stringify(value));
   };
   write("package.json", {
     name: "openclaw",
     version: "2.0.0",
     type: "module",
     main: "dist/index.js",
-    exports: {
-      ".": { import: "./dist/index.js", default: ["./dist/index.js", null] },
-      "./nested": "./dist/nested/index.js",
-      "./cli-entry": "./openclaw.mjs",
-      "./package.json": "./package.json",
-    },
+    exports: { ".": { import: "./dist/index.js", default: ["./dist/index.js", null] } },
     bin: { openclaw: "openclaw.mjs" },
   });
   write("openclaw.mjs", 'import "./dist/index.js";\n');
-  write("README.md", "Synthetic package README\n");
-  write("LICENSE", "Synthetic package license\n");
-  write("dist/nested/index.js", "export {};\n");
   write("dist/scoped/package.json", { type: "module" });
   write("dist/build-info.json", { version: "2.0.0" });
   const stagedLauncher = path.join(f.params.stage.layout.binDir, "openclaw");
   fs.unlinkSync(stagedLauncher);
   fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", stagedLauncher);
   for (const dependency of ["dep-a", "@scope/dep-b", "dep-a/node_modules/dep-c"]) {
-    write(`node_modules/${dependency}/package.json`, {
-      name: path.basename(dependency),
-      version: "1.0.0",
-      type: "commonjs",
-    });
+    write(`node_modules/${dependency}/package.json`, { type: "commonjs" });
   }
   await writePackageDistInventory(stageRoot);
   const reader = createPackageIntegrityReader();
@@ -100,11 +86,9 @@ export async function createInterruptedPackagePublication(
     try {
       const owner = createPublicationOwner(anchor, journal, fence.assertCurrent, initial);
       const publication = owner.publish(false);
-      if (phase === "publishing") {
-        await expect(publication).rejects.toThrow("external write during publication");
-      } else {
-        await publication;
-      }
+      await (phase === "publishing"
+        ? expect(publication).rejects.toThrow("external write during publication")
+        : publication);
     } finally {
       interruption.mockRestore();
     }
