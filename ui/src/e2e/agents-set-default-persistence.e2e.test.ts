@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { configSnapshot, createConfigSuite } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -29,15 +30,7 @@ suite.define(() => {
         assistantName: "Main agent",
         defaultAgentId: "main",
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main agent" },
-              { id: "kimi", name: "Kimi agent" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": agentRoster({ main: "Main agent", kimi: "Kimi agent" }, "main", "agent"),
           "config.get": configResponse(initialConfig, "hash-1"),
           "config.set": configResponse(savedConfig, "hash-2"),
         },
@@ -53,9 +46,9 @@ suite.define(() => {
 
       // A draft-only update never emits config.set.
       const setRequest = await gateway.waitForRequest("config.set");
-      const raw = requireRecord(setRequest.params).raw;
-      expect(JSON.parse(String(raw))).toEqual(savedConfig);
-      expect(requireRecord(JSON.parse(String(raw))).agents).not.toHaveProperty("list");
+      const saved = JSON.parse(String(requireRecord(setRequest.params).raw));
+      expect(saved).toEqual(savedConfig);
+      expect(requireRecord(saved).agents).not.toHaveProperty("list");
     });
   });
 
@@ -75,15 +68,13 @@ suite.define(() => {
           defaultAgentId: defaultId,
           methodResponses: {
             "agents.list": {
-              agents: [
-                { id: "main", name: "Main agent" },
-                { id: "research", name: "Research agent" },
-              ],
-              defaultId,
+              ...agentRoster(
+                { main: "Main agent", research: "Research agent" },
+                defaultId,
+                "per-sender",
+              ),
               ownership: "explicit",
               selectionRequired,
-              mainKey: "main",
-              scope: "per-sender",
             },
             "config.get": configResponse(config, "roster-hash"),
           },

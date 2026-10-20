@@ -3,6 +3,7 @@ import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playbac
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { computedStyles as styles } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectStyles } from "./style-contract.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Attachment file styles" });
 
@@ -28,11 +29,7 @@ suite.define(() => {
               attachment("audio", "style-proof.mp3", "audio/mpeg"),
               {
                 type: "attachment_error",
-                attachment: {
-                  code: "file-not-found",
-                  kind: "document",
-                  label: "missing.pdf",
-                },
+                attachment: { code: "file-not-found", kind: "document", label: "missing.pdf" },
               },
             ],
             timestamp: 1,
@@ -55,7 +52,7 @@ suite.define(() => {
           document.documentElement.dataset.themeMode = mode;
         }, theme);
         const large = documentCard.locator(".chat-attachment-file-icon");
-        expect(await styles(large, ["width", "height", "background-image"])).toEqual({
+        await expectStyles(large, {
           width: "44px",
           height: "44px",
           "background-image": expect.stringContaining(`large/shell-${theme}.svg`),
@@ -72,50 +69,32 @@ suite.define(() => {
           "mask-image": expect.stringContaining("overlays/pdf.svg"),
           "-webkit-mask-image": glyph["mask-image"],
         });
-        expect(await styles(compact, ["width", "height", "background-image"])).toEqual({
+        await expectStyles(compact, {
           width: "20px",
           height: "20px",
           "background-image": expect.stringContaining(`compact/${theme}/mp3.svg`),
         });
-        expect(await styles(documentCard, ["display", "padding"])).toEqual({
-          display: "block",
-          padding: "0px",
+        await expectStyles(documentCard, { display: "block", padding: "0px" });
+        const danger = await unavailable.evaluate((card) => {
+          const sample = document.createElement("span");
+          sample.style.color = getComputedStyle(card).getPropertyValue("--danger").trim();
+          document.body.append(sample);
+          const resolved = getComputedStyle(sample).color;
+          sample.remove();
+          return resolved;
         });
-        const failedStyle = await unavailable.evaluate((card) => {
-          const icon = card.querySelector(".chat-attachment-file-icon")!;
-          const metadata = card.querySelector(".chat-assistant-attachment-card__status-meta")!;
-          const title = card.querySelector(".chat-assistant-attachment-card__title")!;
-          return {
-            color: getComputedStyle(card).color,
-            danger: getComputedStyle(card).getPropertyValue("--danger").trim(),
-            iconColor: getComputedStyle(icon).color,
-            statusColor: getComputedStyle(metadata).color,
-            opacity: getComputedStyle(icon).opacity,
-            decoration: getComputedStyle(title).textDecorationLine,
-            thickness: getComputedStyle(title).textDecorationThickness,
-            display: getComputedStyle(card).display,
-            padding: getComputedStyle(card).padding,
-          };
-        });
-        expect(failedStyle).toMatchObject({
-          iconColor: failedStyle.color,
-          statusColor: failedStyle.color,
+        await expectStyles(unavailable, { color: danger, display: "block", padding: "0px" });
+        await expectStyles(unavailable.locator(".chat-attachment-file-icon"), {
+          color: danger,
           opacity: "0.42",
-          decoration: "line-through",
-          thickness: "1px",
-          display: "block",
-          padding: "0px",
         });
-        expect(failedStyle.color).toBe(
-          await page.evaluate((color) => {
-            const sample = document.createElement("span");
-            sample.style.color = color;
-            document.body.append(sample);
-            const resolved = getComputedStyle(sample).color;
-            sample.remove();
-            return resolved;
-          }, failedStyle.danger),
-        );
+        await expectStyles(unavailable.locator(".chat-assistant-attachment-card__status-meta"), {
+          color: danger,
+        });
+        await expectStyles(unavailable.locator(".chat-assistant-attachment-card__title"), {
+          "text-decoration-line": "line-through",
+          "text-decoration-thickness": "1px",
+        });
       }
     });
   });

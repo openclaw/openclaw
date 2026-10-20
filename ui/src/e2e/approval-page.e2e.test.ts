@@ -12,6 +12,7 @@ import {
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { layoutBox, twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -86,16 +87,6 @@ function pendingPluginApproval(basePath: string): PendingApprovalSnapshot {
   };
 }
 
-function allowedApproval(pending: PendingApprovalSnapshot): AllowedApprovalSnapshot {
-  return {
-    ...pending,
-    status: "allowed",
-    decision: "allow-once",
-    reason: "user",
-    resolvedAtMs: APPROVAL_NOW_MS,
-  };
-}
-
 async function createSurface(
   params: {
     basePath?: string;
@@ -161,38 +152,26 @@ async function visitApproval({ page }: ApprovalSurface, url = approvalUrl("")) {
 }
 
 async function expectStandaloneApprovalPage(page: Page): Promise<void> {
-  for (const selector of ["openclaw-approval-page", ".approval-page"]) {
-    expect(await page.locator(selector).count()).toBe(1);
-  }
-  expect(
-    await page
-      .locator(
-        "openclaw-app-shell, .shell, openclaw-app-topbar, openclaw-app-sidebar, openclaw-exec-approval",
-      )
-      .count(),
-  ).toBe(0);
+  expect(await page.locator("openclaw-approval-page").count()).toBe(1);
+  expect(await page.locator(".approval-page").count()).toBe(1);
+  expect(await page.locator("openclaw-app-shell, .shell").count()).toBe(0);
+  expect(await page.locator("openclaw-app-topbar, openclaw-app-sidebar").count()).toBe(0);
+  expect(await page.locator("openclaw-exec-approval").count()).toBe(0);
 }
 
 async function expectNoDecisionButtons(page: Page): Promise<void> {
-  await expect
-    .poll(
-      async () =>
-        (await page.getByRole("button", { name: "Allow once" }).count()) +
-        (await page.getByRole("button", { name: "Deny" }).count()),
-    )
-    .toBe(0);
+  const decisions = page
+    .getByRole("button", { name: "Allow once" })
+    .or(page.getByRole("button", { name: "Deny" }));
+  await expect.poll(() => decisions.count()).toBe(0);
 }
 
 async function captureProof(page: Page, name: string, documentOnly = false): Promise<void> {
   if (!CAPTURE_UI_PROOF) {
     return;
   }
-  await page.evaluate(async () => {
-    await document.fonts.ready;
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    });
-  });
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  await twoFrames(page);
   if (!documentOnly && page.viewportSize()?.width === MOBILE_VIEWPORT.width) {
     await expect
       .poll(async () => {
@@ -214,10 +193,7 @@ async function pauseRecordedProof(page: Page): Promise<void> {
 
 async function expectMobilePendingLayout(page: Page): Promise<void> {
   for (const name of ["Allow once", "Deny"]) {
-    const bounds = await page.getByRole("button", { name }).boundingBox();
-    if (!bounds) {
-      throw new Error("Approval decision button is missing layout bounds");
-    }
+    const bounds = await layoutBox(page.getByRole("button", { name }));
     expect(bounds.height).toBeGreaterThanOrEqual(44);
   }
 
@@ -229,34 +205,23 @@ async function expectMobilePendingLayout(page: Page): Promise<void> {
       }
       return found;
     };
-    const rootBounds = element(".approval-page").getBoundingClientRect();
-    const cardBounds = element(".approval-page__card").getBoundingClientRect();
+    const root = element(".approval-page").getBoundingClientRect();
+    const card = element(".approval-page__card").getBoundingClientRect();
     const preview = element(".approval-page__preview");
     const previewBounds = preview.getBoundingClientRect();
-    const backLinkBounds = element(".approval-page__back-link").getBoundingClientRect();
     return {
-      backLinkTop: backLinkBounds.top,
-      cardBottom: cardBounds.bottom,
-      cardLeft: cardBounds.left,
-      cardRight: cardBounds.right,
+      backLinkGap: element(".approval-page__back-link").getBoundingClientRect().top - card.bottom,
       documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
-      previewClientHeight: preview.clientHeight,
-      previewRight: previewBounds.right,
-      previewScrollHeight: preview.scrollHeight,
-      rootLeft: rootBounds.left,
-      rootRight: rootBounds.right,
-      viewportWidth: window.innerWidth,
+      previewOverflow: preview.scrollHeight - preview.clientHeight,
+      left: Math.min(root.left, card.left),
+      rightOverflow: Math.max(root.right, card.right, previewBounds.right) - window.innerWidth,
     };
   });
   expect(metrics.documentOverflow).toBeLessThanOrEqual(0);
-  for (const left of [metrics.rootLeft, metrics.cardLeft]) {
-    expect(left).toBeGreaterThanOrEqual(0);
-  }
-  for (const right of [metrics.rootRight, metrics.cardRight, metrics.previewRight]) {
-    expect(right).toBeLessThanOrEqual(metrics.viewportWidth);
-  }
-  expect(metrics.previewScrollHeight).toBeGreaterThanOrEqual(metrics.previewClientHeight);
-  expect(metrics.backLinkTop).toBeGreaterThanOrEqual(metrics.cardBottom + 10);
+  expect(metrics.left).toBeGreaterThanOrEqual(0);
+  expect(metrics.rightOverflow).toBeLessThanOrEqual(0);
+  expect(metrics.previewOverflow).toBeGreaterThanOrEqual(0);
+  expect(metrics.backLinkGap).toBeGreaterThanOrEqual(10);
 }
 
 suite.define(() => {
@@ -267,7 +232,13 @@ suite.define(() => {
 
   it("keeps one canonical winner across conflicting surfaces and terminal reload", async () => {
     const pending = pendingApproval("");
-    const terminal = allowedApproval(pending);
+    const terminal: AllowedApprovalSnapshot = {
+      ...pending,
+      status: "allowed",
+      decision: "allow-once",
+      reason: "user",
+      resolvedAtMs: APPROVAL_NOW_MS,
+    };
     const mobile = await createSurface({
       deferredMethods: ["approval.resolve"],
       pending,
@@ -343,18 +314,14 @@ suite.define(() => {
       ]);
       await Promise.all(surfaces.map(({ page }) => expectNoDecisionButtons(page)));
       const terminalFocus = await mobile.page.evaluate(() => {
-        const active = document.activeElement as HTMLElement | null;
+        const active = document.activeElement;
         const bounds = active?.getBoundingClientRect();
         return {
-          bottom: bounds?.bottom ?? Number.POSITIVE_INFINITY,
           id: active?.id ?? null,
-          top: bounds?.top ?? Number.NEGATIVE_INFINITY,
-          viewportHeight: window.innerHeight,
+          inViewport: Boolean(bounds && bounds.top >= 0 && bounds.bottom <= window.innerHeight),
         };
       });
-      expect(terminalFocus.id).toBe("approval-page-title");
-      expect(terminalFocus.top).toBeGreaterThanOrEqual(0);
-      expect(terminalFocus.bottom).toBeLessThanOrEqual(terminalFocus.viewportHeight);
+      expect(terminalFocus).toEqual({ id: "approval-page-title", inViewport: true });
       expect(await mobile.page.title()).toBe("Approved here — OpenClaw");
       await captureProof(mobile.page, "after-competing-answer-terminal.png");
       await captureProof(desktop.page, "after-competing-answer-loser-desktop.png");

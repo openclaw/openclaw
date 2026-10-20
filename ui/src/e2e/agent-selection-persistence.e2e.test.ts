@@ -8,9 +8,9 @@ import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
   type ControlUiMockGatewayScenario,
-  type MockGatewayControls,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -22,20 +22,18 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
+const roster = agentRoster({ dummy: "Dummy", openclaw: "OpenClaw" }, "dummy", "global");
 const agentsList = {
-  agents: Object.entries({ dummy: "Dummy", openclaw: "OpenClaw" }).map(([id, name]) => ({
+  ...roster,
+  agents: roster.agents.map(({ id, name }) => ({
     id,
+    name,
     identity: { name },
     kind: "agent",
-    name,
   })),
-  defaultId: "dummy",
-  mainKey: "main",
-  scope: "global",
 };
 
 const scenario: ControlUiMockGatewayScenario = {
-  assistantAgentId: "dummy",
   assistantName: "Dummy",
   defaultAgentId: "dummy",
   sessionKey: "global",
@@ -88,19 +86,6 @@ async function expectOpenClaw(page: Page) {
   await expect.poll(() => page.getByRole("heading", { name: "OpenClaw" }).isVisible()).toBe(true);
 }
 
-async function hasOpenClawStartup(gateway: MockGatewayControls): Promise<boolean> {
-  return (await gateway.getRequests("chat.startup")).some((request) => {
-    const params = request.params as
-      | { agentId?: unknown; limit?: unknown; sessionKey?: unknown }
-      | undefined;
-    return (
-      params?.agentId === "openclaw" &&
-      params.sessionKey === "agent:openclaw:main" &&
-      params.limit === 80
-    );
-  });
-}
-
 async function persistCanonicalGlobalSession(page: Page): Promise<void> {
   await page.evaluate(
     ({ gatewayUrl, settingsKey }) => {
@@ -122,13 +107,12 @@ async function persistCanonicalGlobalSession(page: Page): Promise<void> {
   );
 }
 
-async function openPage(
-  context: BrowserContext,
-): Promise<{ gateway: MockGatewayControls; page: Page }> {
+async function openPage(context: BrowserContext) {
   const page = await context.newPage();
   const gateway = await installMockGateway(page, scenario);
   await page.goto(`${suite.server.baseUrl}chat`);
   await page.locator("openclaw-app-sidebar").waitFor();
+  await gateway.waitForRequest("chat.startup");
   return { gateway, page };
 }
 
@@ -143,9 +127,8 @@ suite.define(() => {
         : {}),
     });
     try {
-      const { gateway: firstGateway, page: firstPage } = await openPage(context);
+      const { page: firstPage } = await openPage(context);
       const sidebar = firstPage.locator("openclaw-app-sidebar");
-      await firstGateway.waitForRequest("chat.startup");
       await expect.poll(() => selectedAgentName(firstPage)).toBe("Dummy");
       await screenshot(firstPage, "01-default-agent.png");
 
@@ -164,10 +147,17 @@ suite.define(() => {
 
       await firstPage.close();
       const { gateway: reopenedGateway, page: reopenedPage } = await openPage(context);
-      await reopenedGateway.waitForRequest("chat.startup");
       await waitForControlUiRoute(reopenedPage, { pathname: "/chat/openclaw", routeId: "chat" });
       await screenshot(reopenedPage, "03-reopened-agent.png");
-      await expect.poll(() => hasOpenClawStartup(reopenedGateway)).toBe(true);
+      await expect
+        .poll(() =>
+          reopenedGateway.getRequests("chat.startup", {
+            agentId: "openclaw",
+            sessionKey: "agent:openclaw:main",
+            limit: 80,
+          }),
+        )
+        .not.toHaveLength(0);
       await expectOpenClaw(reopenedPage);
       await screenshot(reopenedPage, "04-verified-reopened-agent.png");
       await reopenedPage.getByRole("link", { name: "New conversation", exact: true }).click();

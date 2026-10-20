@@ -5,30 +5,33 @@ import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createConfigSuite } from "./config-composer-fixtures.test-support.ts";
+import { polledFocus, polledVisible } from "./chat-presentation.test-support.ts";
+import {
+  configProof,
+  createConfigSuite,
+  pageRunner,
+} from "./config-composer-fixtures.test-support.ts";
+import { expectStyles } from "./style-contract.test-support.ts";
 
 const suite = createConfigSuite("Control UI app chrome interaction mocked Gateway E2E");
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const { capture: captureUiProof, enabled: captureUiProofEnabled } =
+  configProof("app-chrome-interaction");
+const withPage = pageRunner(suite, {
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 900, width: 1440 },
+});
 
 const scrollModels = Array.from({ length: 24 }, (_, index) => ({
   id: `scroll-model-${index + 1}`,
   name: `Scroll Model ${index + 1}`,
   provider: "openai",
 }));
-const historyMessages = [
-  {
-    role: "assistant",
-    content: [
-      {
-        type: "text",
-        text: "Selectable transcript content\n\nRead [example.ts](/tmp/example.ts) for details.",
-      },
-    ],
-  },
-];
+const messages = (text: string) => [{ role: "assistant", content: [{ type: "text", text }] }];
 
 async function dragAcross(page: Page, locator: Locator): Promise<string> {
+  await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
   await locator.scrollIntoViewIfNeeded();
   const box = await locator.boundingBox();
   if (!box) {
@@ -48,53 +51,28 @@ async function readFocusOutline(locator: Locator) {
     return {
       focusVisible: element.matches(":focus-visible"),
       outlineStyle: styles.outlineStyle,
+      active: element === document.activeElement,
     };
   });
 }
 
 async function expectChrome(page: Page, selections: Record<string, string>, scrollbars: string[]) {
   for (const [selector, value] of Object.entries(selections)) {
-    expect(
-      await page
-        .locator(selector)
-        .first()
-        .evaluate((node) => getComputedStyle(node).userSelect),
-    ).toBe(value);
+    await expectStyles(page.locator(selector).first(), { "user-select": value });
   }
   for (const selector of scrollbars) {
-    expect(
-      await page
-        .locator(selector)
-        .first()
-        .evaluate((node) => getComputedStyle(node, "::-webkit-scrollbar").width),
-    ).toBe("12px");
+    await expectStyles(page.locator(selector).first(), { width: "12px" }, "::-webkit-scrollbar");
   }
-}
-
-async function captureUiProof(page: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    path: path.join(suite.artifactDir, fileName),
-  });
 }
 
 suite.define(() => {
   it("keeps canonical scrollbars without horizontal model-picker overflow and preserves selection", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        recordVideo: captureUiProofEnabled
-          ? { dir: path.join(suite.artifactDir, "video"), size: { height: 900, width: 1440 } }
-          : undefined,
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
+    await withPage(
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          historyMessages,
+          historyMessages: messages(
+            "Selectable transcript content\n\nRead [example.ts](/tmp/example.ts) for details.",
+          ),
           models: [
             {
               contextWindow: 1_000_000,
@@ -126,9 +104,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
         const fileLink = page.getByRole("button", { name: "example.ts", exact: true });
-        expect(await fileLink.evaluate((element) => getComputedStyle(element).userSelect)).toBe(
-          "text",
-        );
+        await expectStyles(fileLink, { "user-select": "text" });
         const thread = page.locator(".chat-thread");
         expect(await readFocusOutline(thread)).toMatchObject({
           focusVisible: false,
@@ -138,22 +114,15 @@ suite.define(() => {
 
         await thread.focus();
         await page.keyboard.press("Tab");
-        await expect
-          .poll(() => thread.evaluate((element) => element !== document.activeElement))
-          .toBe(true);
+        await polledFocus(thread).toBe(false);
         await page.keyboard.press("Shift+Tab");
         await expect
-          .poll(() =>
-            thread.evaluate(
-              (element) => element === document.activeElement && element.matches(":focus-visible"),
-            ),
-          )
-          .toBe(true);
-        const focusedOutline = await readFocusOutline(thread);
-        expect(focusedOutline).toMatchObject({
-          focusVisible: true,
-          outlineStyle: "none",
-        });
+          .poll(() => readFocusOutline(thread))
+          .toEqual({
+            active: true,
+            focusVisible: true,
+            outlineStyle: "none",
+          });
         await captureUiProof(page, "02-chat-thread-keyboard-focus.png");
 
         await page.setViewportSize({ height: 650, width: 1440 });
@@ -177,12 +146,10 @@ suite.define(() => {
           [".content", ".settings-sidebar__nav"],
         );
 
-        await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
         expect(await dragAcross(page, settingsTitle)).toBe("");
         const sectionTitle = page.locator(".settings-section__heading").first();
         expect(await dragAcross(page, sectionTitle)).not.toBe("");
         const toggleRow = page.locator(".settings-row--toggle").first();
-        await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
         expect(await dragAcross(page, toggleRow.locator(".settings-row__title"))).toBe("");
         await settingsSearch.selectText();
         expect(
@@ -216,12 +183,14 @@ suite.define(() => {
         const usageErrorCallout = page.locator(".usage-callout.callout.danger");
         await usageErrorCallout.waitFor();
         expect(await usageErrorCallout.textContent()).toContain(usageError);
-        expect(
-          await usageErrorCallout.evaluate((element) => getComputedStyle(element).userSelect),
-        ).toBe("text");
-        await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
+        await expectStyles(usageErrorCallout, { "user-select": "text" });
         expect(await dragAcross(page, usageErrorCallout)).toContain(usageError);
         await captureUiProof(page, "04-usage-selectable-error.png");
+      },
+      {
+        recordVideo: captureUiProofEnabled
+          ? { dir: path.join(suite.artifactDir, "video"), size: { height: 900, width: 1440 } }
+          : undefined,
       },
     );
   });
@@ -229,21 +198,10 @@ suite.define(() => {
   it("resolves the scrollbar thumb from theme tokens and captures dark/light proof", async () => {
     const thumbColorByScheme: Record<"dark" | "light", string> = { dark: "", light: "" };
     for (const colorScheme of ["dark", "light"] as const) {
-      await suite.withPage(
-        {
-          colorScheme,
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1440 },
-        },
+      await withPage(
         async ({ page }) => {
           await installMockGateway(page, {
-            historyMessages: [
-              {
-                role: "assistant",
-                content: [{ type: "text", text: "Selectable transcript content" }],
-              },
-            ],
+            historyMessages: messages("Selectable transcript content"),
             models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }, ...scrollModels],
           });
 
@@ -256,7 +214,7 @@ suite.define(() => {
 
           await page.locator('[data-chat-model-select="true"]').click();
           const modelOptions = page.locator(".chat-controls__model-options");
-          await expect.poll(() => modelOptions.isVisible()).toBe(true);
+          await polledVisible(modelOptions).toBe(true);
           await captureUiProof(page, `model-picker-${colorScheme}.png`);
           await page.keyboard.press("Escape");
 
@@ -266,18 +224,15 @@ suite.define(() => {
           await expect
             .poll(() => capabilityMenu.evaluate((node) => node.hasAttribute("open")))
             .toBe(true);
-          const menuScrollbar = await capabilityMenu.evaluate((node) => {
-            const part = node.querySelector(".oc-menu");
-            if (!part) {
-              return null;
-            }
-            return {
-              width: getComputedStyle(part, "::-webkit-scrollbar").width,
-              thumbBackground: getComputedStyle(part, "::-webkit-scrollbar-thumb").backgroundColor,
-            };
-          });
-          expect(menuScrollbar).toEqual({ width: "12px", thumbBackground: expect.any(String) });
-          expect(menuScrollbar?.thumbBackground).not.toBe("rgba(0, 0, 0, 0)");
+          const menu = capabilityMenu.locator(".oc-menu").first();
+          await expectStyles(menu, { width: "12px" }, "::-webkit-scrollbar");
+          await expectStyles(
+            menu,
+            {
+              "background-color": expect.not.stringMatching(/^rgba\(0, 0, 0, 0\)$/),
+            },
+            "::-webkit-scrollbar-thumb",
+          );
           await captureUiProof(page, `capability-menu-native-${colorScheme}.png`);
 
           const menuScrollbarWidths = await page.evaluate(() => {
@@ -289,6 +244,7 @@ suite.define(() => {
           expect(menuScrollbarWidths.length).toBeGreaterThan(1);
           expect([...new Set(menuScrollbarWidths)]).toEqual(["12px"]);
         },
+        { colorScheme },
       );
     }
     expect(thumbColorByScheme.dark).not.toBe(thumbColorByScheme.light);

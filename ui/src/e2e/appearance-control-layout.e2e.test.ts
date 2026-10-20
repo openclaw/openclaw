@@ -7,6 +7,7 @@ import {
 import { polledAttribute, polledStyle, polledText } from "./chat-presentation.test-support.ts";
 import { computedStyles, configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectStyles } from "./style-contract.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Appearance control layout",
@@ -32,13 +33,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
         await waitForControlUiSettingsTakeover(page);
 
-        const headings = (
-          await page
-            .locator(
-              ".settings-page > .settings-section > .settings-section__header > .settings-section__heading",
-            )
-            .allTextContents()
-        ).map((heading) => heading.trim());
+        const headingNodes = page
+          .locator(".settings-page > .settings-section > .settings-section__header")
+          .locator(":scope > .settings-section__heading");
+        const headings = (await headingNodes.allTextContents()).map((heading) => heading.trim());
         const themeIndex = headings.indexOf("Theme");
         expect(headings.slice(themeIndex, themeIndex + 3)).toEqual([
           "Theme",
@@ -59,7 +57,7 @@ suite.define(() => {
         await expect
           .poll(() => computedStyles(customSwatch, ["outline-offset", "outline-width"]))
           .toEqual({ "outline-offset": "4px", "outline-width": "2px" });
-        expect((await computedStyles(customSwatch, ["box-shadow"]))["box-shadow"]).not.toBe("none");
+        await expectStyles(customSwatch, { "box-shadow": expect.not.stringMatching(/^none$/) });
 
         const grid = page.locator("#settings-appearance-theme .settings-theme-grid");
         for (const [width, expectedColumns] of [
