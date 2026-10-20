@@ -1,8 +1,5 @@
-import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { ChatSessionSharing } from "../pages/chat/components/chat-session-sharing.solid.tsx";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   menuItem,
   mountMenu,
@@ -15,6 +12,7 @@ import {
   sessionOwnerProfiles,
 } from "../test-helpers/session-owner-menu.ts";
 import "../test-helpers/load-styles.ts";
+import { mountPeopleSharing } from "./session-people-search.test-support.ts";
 
 const roots: HTMLElement[] = [];
 afterEach(() => roots.splice(0).forEach((root) => root.remove()));
@@ -73,38 +71,7 @@ it.each(
       assignment.focus();
       await userEvent.keyboard("{Enter}");
     } else {
-      root = document.createElement("div");
-      roots.push(root);
-      document.body.append(root);
-      mountSolid(
-        () =>
-          createComponent(ChatSessionSharing, {
-            session: {
-              key: "agent:main:people",
-              kind: "direct",
-              updatedAt: 1,
-              sharingRole: "owner",
-            },
-            state: {
-              loading: false,
-              result: {
-                sessionKey: "agent:main:people",
-                role: "owner",
-                allowedVisibilities: ["shared"],
-                members: [],
-                identities: Array.from({ length: count }, (_, i) => ({
-                  type: "human" as const,
-                  id: `person-${i}`,
-                  label: `Person ${String(i).padStart(4, "0")}`,
-                })),
-              },
-            },
-            onOpen: vi.fn(),
-            onVisibilityChange: vi.fn(),
-            onMemberChange: onAction,
-          }),
-        { container: root },
-      );
+      root = mountPeopleSharing(count, onAction);
       const trigger = page.getByRole("button", { name: "Session sharing", exact: true });
       await expect.element(trigger).toBeVisible();
       returnTarget = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")!;

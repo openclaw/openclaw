@@ -1,17 +1,16 @@
 /* @vitest-environment jsdom */
-import { createComponent, flush } from "solid-js";
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
-import { ChatSessionSharing } from "../pages/chat/components/chat-session-sharing.solid.tsx";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { containers, mountMenu, openSubmenu } from "../test-helpers/session-menu.ts";
+import { mountMenu, openSubmenu } from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
 } from "../test-helpers/session-owner-menu.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { mountPeopleSharing } from "./session-people-search.test-support.ts";
 
 describe("searchable session people", () => {
   it("preserves a loading query until the connection changes", async () => {
@@ -58,33 +57,7 @@ describe("searchable session people", () => {
 
   it("filters the member directory and preserves remove-member selection", async () => {
     const onMemberChange = vi.fn();
-    const root = document.createElement("div");
-    containers.push(root);
-    document.body.append(root);
-    mountSolid(
-      () =>
-        createComponent(ChatSessionSharing, {
-          session: { key: "agent:main:people", kind: "direct", updatedAt: 1, sharingRole: "owner" },
-          state: {
-            loading: false,
-            result: {
-              sessionKey: "agent:main:people",
-              role: "owner",
-              allowedVisibilities: ["shared"],
-              members: [{ identityId: "person-100", addedBy: "owner", addedAt: 1 }],
-              identities: Array.from({ length: 101 }, (_, i) => ({
-                type: "human" as const,
-                id: `person-${i}`,
-                label: `Person ${String(i).padStart(4, "0")}`,
-              })),
-            },
-          },
-          onOpen: vi.fn(),
-          onVisibilityChange: vi.fn(),
-          onMemberChange,
-        }),
-      { container: root },
-    );
+    const root = mountPeopleSharing(101, onMemberChange, ["person-100"]);
     flush();
     root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")!.click();
     await waitForSolid(() =>

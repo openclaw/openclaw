@@ -27,33 +27,47 @@ function mountProgress(initialSource: ProgressCardProjectionSource) {
     return <>{content()}</>;
   });
   flush();
+  onTestFinished(view.unmount);
   return { ...view, progress, replaceSource, redraw };
+}
+
+function progressGateway(request: Parameters<typeof createTestGatewayClient>[0]) {
+  return createApplicationGateway({
+    phase: "connected",
+    client: createTestGatewayClient(request),
+    hello: gatewayHelloForMethods(["progressCard.get"]),
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: "main",
+    sessionKey: "",
+    lastError: null,
+    lastErrorCode: null,
+  });
+}
+
+function requestedSessionKey(params: unknown) {
+  if (
+    !params ||
+    typeof params !== "object" ||
+    !("sessionKey" in params) ||
+    typeof params.sessionKey !== "string"
+  ) {
+    throw new Error("Missing progress-card session key");
+  }
+  return params.sessionKey;
 }
 
 describe("session progress card projection", () => {
   it("keeps source updates detached after explicit disposal while mounted", async () => {
     const request = vi.fn().mockResolvedValue({ card: null });
-    const { gateway } = createApplicationGateway({
-      phase: "connected",
-      client: createTestGatewayClient(request),
-      hello: gatewayHelloForMethods(["progressCard.get"]),
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "main",
-      sessionKey: "",
-      lastError: null,
-      lastErrorCode: null,
-    });
+    const { gateway } = progressGateway(request);
     const store = sessionProgressCardsForGateway(gateway);
     const subscribe = vi.spyOn(store, "subscribe");
     const host = mountProgress({
       store,
       target: { sessionKey: "agent:main:disposed-progress" },
     });
-    onTestFinished(() => {
-      host.unmount();
-      subscribe.mockRestore();
-    });
+    onTestFinished(() => subscribe.mockRestore());
     await waitForSolid(() => expect(host.progress.read().loading).toBe(false));
     expect(request).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
@@ -71,39 +85,16 @@ describe("session progress card projection", () => {
 
   it("retains same-store snapshots across target changes and observes resets while hidden", async () => {
     const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (
-        !params ||
-        typeof params !== "object" ||
-        !("sessionKey" in params) ||
-        typeof params.sessionKey !== "string"
-      ) {
-        throw new Error("Missing progress-card session key");
-      }
+      const sessionKey = requestedSessionKey(params);
       return {
-        card: {
-          sessionKey: params.sessionKey,
-          revision: 1,
-          updatedAt: 1,
-          markdown: params.sessionKey,
-        },
+        card: { sessionKey, revision: 1, updatedAt: 1, markdown: sessionKey },
       };
     });
-    const { gateway, publishEvent } = createApplicationGateway({
-      phase: "connected",
-      client: createTestGatewayClient(request),
-      hello: gatewayHelloForMethods(["progressCard.get"]),
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "main",
-      sessionKey: "",
-      lastError: null,
-      lastErrorCode: null,
-    });
+    const { gateway, publishEvent } = progressGateway(request);
     const store = sessionProgressCardsForGateway(gateway);
     const first = { sessionKey: "agent:main:first-progress" };
     const second = { sessionKey: "agent:main:second-progress" };
     const host = mountProgress({ store, target: first });
-    onTestFinished(host.unmount);
     await waitForSolid(() => expect(host.progress.read().card?.sessionKey).toBe(first.sessionKey));
     const firstCard = host.progress.read().card;
     const firstLifetime = host.progress.read().lifetime;
@@ -153,34 +144,17 @@ describe("session progress card projection", () => {
       if (readError) {
         throw readError;
       }
-      if (
-        !params ||
-        typeof params !== "object" ||
-        !("sessionKey" in params) ||
-        typeof params.sessionKey !== "string"
-      ) {
-        throw new Error("Missing progress-card session key");
-      }
+      const sessionKey = requestedSessionKey(params);
       return {
         card: {
-          sessionKey: params.sessionKey,
+          sessionKey,
           revision,
           updatedAt: revision,
-          markdown: `${params.sessionKey} revision ${revision}`,
+          markdown: `${sessionKey} revision ${revision}`,
         },
       };
     });
-    const { gateway, publishEvent } = createApplicationGateway({
-      phase: "connected",
-      client: createTestGatewayClient(request),
-      hello: gatewayHelloForMethods(["progressCard.get"]),
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "main",
-      sessionKey: "",
-      lastError: null,
-      lastErrorCode: null,
-    });
+    const { gateway, publishEvent } = progressGateway(request);
     let target = { sessionKey: "agent:main:visible-progress" };
     const store = sessionProgressCardsForGateway(gateway);
     const host = mountProgress({ store, target });
@@ -188,8 +162,6 @@ describe("session progress card projection", () => {
     const notified = vi.fn();
     const stop = store.subscribe(notified);
     onTestFinished(() => {
-      host.unmount();
-      inactive.unmount();
       stop();
       vi.restoreAllMocks();
     });
@@ -269,19 +241,7 @@ describe("session progress card projection", () => {
     "waits for renewed view admission across a connection transition (replace client: %s)",
     async (replaceClient) => {
       const request = vi.fn().mockResolvedValue({ card: null });
-      const snapshots = new Set<Parameters<ApplicationGateway["subscribe"]>[0]>();
-      const gateway = {
-        snapshot: {
-          phase: "connected",
-          client: createTestGatewayClient(request),
-          hello: gatewayHelloForMethods(["progressCard.get"]),
-        },
-        subscribe: (listener: Parameters<ApplicationGateway["subscribe"]>[0]) => {
-          snapshots.add(listener);
-          return () => snapshots.delete(listener);
-        },
-        subscribeEvents: () => () => undefined,
-      } as unknown as ApplicationGateway;
+      const { gateway, publish } = progressGateway(request);
       let admitted = true;
       const store = sessionProgressCardsForGateway(gateway);
       const target = { sessionKey: "agent:main:connection-progress" };
@@ -297,7 +257,6 @@ describe("session progress card projection", () => {
         };
       };
       const host = mountProgress(source());
-      onTestFinished(host.unmount);
       await waitForSolid(() => expect(host.progress.read().loading).toBe(false));
       expect(request).toHaveBeenCalledTimes(1);
 
@@ -305,15 +264,11 @@ describe("session progress card projection", () => {
         gateway.snapshot.client = createTestGatewayClient(request);
       } else {
         gateway.snapshot.phase = "reconnecting";
-        for (const listener of snapshots) {
-          listener(gateway.snapshot);
-        }
+        publish(gateway.snapshot);
         gateway.snapshot.phase = "connected";
       }
       gateway.snapshot.hello = gatewayHelloForMethods(["progressCard.get"]);
-      for (const listener of snapshots) {
-        listener(gateway.snapshot);
-      }
+      publish(gateway.snapshot);
       // The new history is still pending; the Solid owner has not committed the update.
       expect(request).toHaveBeenCalledTimes(1);
       admitted = false;
@@ -350,13 +305,10 @@ describe("session progress card projection", () => {
       } as unknown as ApplicationGateway;
       const store = sessionProgressCardsForGateway(gateway);
       const subscribe = vi.spyOn(store, "subscribe");
-      onTestFinished(() => {
-        vi.restoreAllMocks();
-      });
+      onTestFinished(() => vi.restoreAllMocks());
 
       for (let connections = 1; connections <= 2; connections += 1) {
         const host = mountProgress({ store, target });
-        onTestFinished(host.unmount);
         if (target) {
           await store.load(target);
           flush();
