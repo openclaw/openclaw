@@ -10,7 +10,7 @@ import {
   getFollowupQueueDepth,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { createQueueTestRun as createRun } from "./queue.test-helpers.js";
+import { createQueueTestRun as createRun, createQueueSettings } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
 
@@ -25,6 +25,35 @@ async function settleSources(...runs: FollowupRun[]) {
       await input.claim?.settlement.promise;
     }),
   );
+}
+
+function trackedRun(
+  prompt: string,
+  onSettled: () => void,
+  route: Partial<Parameters<typeof createRun>[0]> = {},
+): FollowupRun {
+  return {
+    ...createRun({ prompt, ...route }),
+    turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled },
+  };
+}
+
+function blockedDrain(shouldBlock: (run: FollowupRun) => boolean, adopt = true) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const calls: FollowupRun[] = [];
+  const runFollowup = async (run: FollowupRun) => {
+    calls.push(run);
+    if (adopt) {
+      await run.turnAdoptionLifecycle?.onAdopted?.();
+    }
+    if (shouldBlock(run)) {
+      entered.resolve();
+      await release.promise;
+    }
+    completeFollowupRunLifecycle(run);
+  };
+  return { entered, release, calls, runFollowup };
 }
 
 describe("followup queue in-flight ownership", () => {
@@ -43,41 +72,19 @@ describe("followup queue in-flight ownership", () => {
     return key;
   };
 
-  const createSettings = (dropPolicy: QueueDropPolicy): QueueSettings => ({
-    mode: "followup",
-    debounceMs: 0,
-    cap: 1,
-    dropPolicy,
-  });
+  const createSettings = (dropPolicy: QueueDropPolicy) =>
+    createQueueSettings({ mode: "followup", cap: 1, dropPolicy });
 
   it.each(["old", "summarize"] as const)(
     "keeps an active single delivery out of %s overflow victims",
     async (dropPolicy) => {
       const key = createKey(dropPolicy);
-      const entered = createDeferred();
-      const release = createDeferred();
       const activeComplete = vi.fn();
       const pendingComplete = vi.fn();
-      const calls: FollowupRun[] = [];
-      const active = {
-        ...createRun({ prompt: "active" }),
-        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: activeComplete },
-      };
-      const pending: FollowupRun = {
-        ...createRun({ prompt: "pending" }),
-        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
-      };
+      const active = trackedRun("active", activeComplete);
+      const pending = trackedRun("pending", pendingComplete);
       const survivor = createRun({ prompt: "survivor" });
-      const runFollowup = async (run: FollowupRun) => {
-        calls.push(run);
-
-        await run.turnAdoptionLifecycle?.onAdopted?.();
-        if (run === active) {
-          entered.resolve();
-          await release.promise;
-        }
-        completeFollowupRunLifecycle(run);
-      };
+      const { entered, release, calls, runFollowup } = blockedDrain((run) => run === active);
 
       try {
         expect(
@@ -115,28 +122,13 @@ describe("followup queue in-flight ownership", () => {
 
   it("admits one pending item under drop:new while another item is active", async () => {
     const key = createKey("new");
-    const entered = createDeferred();
-    const release = createDeferred();
     const rejectedEnqueued = vi.fn();
     const rejectedComplete = vi.fn();
     const active = createRun({ prompt: "active" });
     const pending = createRun({ prompt: "pending" });
-    const rejected: FollowupRun = {
-      ...createRun({ prompt: "rejected" }),
-      turnAdoptionLifecycle: {
-        onAdopted: async () => {},
-        onDeferred: rejectedEnqueued,
-        onSettled: rejectedComplete,
-      },
-    };
-    const runFollowup = async (run: FollowupRun) => {
-      await run.turnAdoptionLifecycle?.onAdopted?.();
-      if (run === active) {
-        entered.resolve();
-        await release.promise;
-      }
-      completeFollowupRunLifecycle(run);
-    };
+    const rejected = trackedRun("rejected", rejectedComplete);
+    rejected.turnAdoptionLifecycle!.onDeferred = rejectedEnqueued;
+    const { entered, release, runFollowup } = blockedDrain((run) => run === active);
 
     try {
       expect(enqueueFollowupRun(key, active, createSettings("new"), "none", runFollowup)).toBe(
@@ -166,44 +158,28 @@ describe("followup queue in-flight ownership", () => {
 
   it("protects a collect group and counts only active identities still present", async () => {
     const key = createKey("collect");
-    const entered = createDeferred();
-    const release = createDeferred();
     const groupCompletions = [vi.fn(), vi.fn()];
     const pendingComplete = vi.fn();
     const rejectedComplete = vi.fn();
     let aggregate: FollowupRun | undefined;
-    const initialSettings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
-    const group = groupCompletions.map((onComplete, index) => ({
-      ...createRun({
-        prompt: `group-${index + 1}`,
-        originatingChannel: "slack" as const,
+    const initialSettings = createQueueSettings();
+    const group = groupCompletions.map((onComplete, index) =>
+      trackedRun(`group-${index + 1}`, onComplete, {
+        originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingChatType: "channel",
       }),
-      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
-    }));
-    const pending: FollowupRun = {
-      ...createRun({ prompt: "pending-old" }),
-      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
-    };
+    );
+    const pending = trackedRun("pending-old", pendingComplete);
     const survivor = createRun({ prompt: "survivor" });
-    const rejected: FollowupRun = {
-      ...createRun({ prompt: "rejected-new" }),
-      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: rejectedComplete },
-    };
-    const runFollowup = async (run: FollowupRun) => {
+    const rejected = trackedRun("rejected-new", rejectedComplete);
+    const { entered, release, runFollowup } = blockedDrain((run) => {
       if (!aggregate) {
         aggregate = run;
-        entered.resolve();
-        await release.promise;
+        return true;
       }
-      completeFollowupRunLifecycle(run);
-    };
+      return false;
+    }, false);
 
     for (const run of group) {
       expect(enqueueFollowupRun(key, run, initialSettings, "none", undefined, false)).toBe(true);
@@ -250,12 +226,7 @@ describe("followup queue in-flight ownership", () => {
 
   it("retains a cancelled summary claim until raw settlement without replaying it or losing pending overflow", async () => {
     const key = createKey("summary-cancellation");
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createSettings("summarize");
     const activeEntered = createDeferred();
     const releaseActive = createDeferred();
     const calls: string[] = [];

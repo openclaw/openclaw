@@ -41,32 +41,20 @@ function metadata(ctx: TemplateContext) {
 
 describe("prepared reply conversation", () => {
   it.each([
-    { name: "matching exec", input: current, inherits: true },
-    {
-      name: "heartbeat without a current route",
-      input: { InternalTurnSource: "heartbeat" },
-      inherits: true,
-    },
-    { name: "cron without a current route", input: { InternalTurnSource: "cron" }, inherits: true },
-    { name: "exec without a current route", input: { InternalTurnSource: "exec" }, inherits: true },
-    {
-      name: "different channel",
-      input: { ...current, OriginatingChannel: "discord" },
-      inherits: false,
-    },
-    { name: "different target", input: { ...current, OriginatingTo: "C999" }, inherits: false },
-    { name: "different account", input: { ...current, AccountId: "personal" }, inherits: false },
-    { name: "missing account", input: { ...current, AccountId: undefined }, inherits: false },
-    { name: "different thread", input: { ...current, MessageThreadId: 43 }, inherits: false },
-    { name: "missing thread", input: { ...current, MessageThreadId: undefined }, inherits: false },
-    {
-      name: "missing destination",
-      input: { ...current, OriginatingTo: undefined },
-      inherits: false,
-    },
-  ] satisfies Array<{ name: string; input: TemplateContext; inherits: boolean }>)(
-    "$name shares room context and activation only for its own conversation",
-    ({ input, inherits }) => {
+    ["matching exec", current, true],
+    ["heartbeat without a current route", { InternalTurnSource: "heartbeat" }, true],
+    ["cron without a current route", { InternalTurnSource: "cron" }, true],
+    ["exec without a current route", { InternalTurnSource: "exec" }, true],
+    ["different channel", { ...current, OriginatingChannel: "discord" }, false],
+    ["different target", { ...current, OriginatingTo: "C999" }, false],
+    ["different account", { ...current, AccountId: "personal" }, false],
+    ["missing account", { ...current, AccountId: undefined }, false],
+    ["different thread", { ...current, MessageThreadId: 43 }, false],
+    ["missing thread", { ...current, MessageThreadId: undefined }, false],
+    ["missing destination", { ...current, OriginatingTo: undefined }, false],
+  ] satisfies Array<[string, TemplateContext, boolean]>)(
+    "%s shares room context and activation only for its own conversation",
+    (_name: string, input: TemplateContext, inherits: boolean) => {
       const conversation = prepareReplyConversation({ ctx: input, sessionEntry: stored });
       const rendered = buildInboundUserContextPrefix(conversation.fields);
       expect(rendered.includes('"group_subject":"Operations"')).toBe(inherits);

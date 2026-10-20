@@ -30,7 +30,7 @@ import {
 import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { resolveFollowupAbortSignal } from "./queue/types.js";
+import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 installQueueRuntimeErrorSilencer();
 function createOperatorAuthority() {
@@ -63,6 +63,17 @@ function createOperatorAuthority() {
       references -= 1;
     },
   };
+}
+
+function prepareOperatorAdmission(run: FollowupRun, runId: string) {
+  return prepareChannelRunAdmission({
+    cfg: {},
+    runId,
+    agentId: "agent",
+    ingressKind: "channel",
+    boundary: "auto-reply.agent-runner",
+    operatorAuthority: run.operatorAuthority,
+  });
 }
 
 describe("followup queue authority", () => {
@@ -183,25 +194,16 @@ describe("followup queue authority", () => {
           workspaceDir: params.workspaceDir,
         });
       }
+      const common = {
+        senderId: "sender-1",
+        senderIsOwner: false,
+        canSpawn: true,
+        sessionRoot: "/tmp/requester-task",
+        workspaceDir: "/tmp/requester-task",
+      };
       expect(observed).toEqual([
-        {
-          senderId: "sender-1",
-          senderIsOwner: false,
-          source: "sender",
-          canSpawn: true,
-          canExec: false,
-          sessionRoot: "/tmp/requester-task",
-          workspaceDir: "/tmp/requester-task",
-        },
-        {
-          senderId: "sender-1",
-          senderIsOwner: false,
-          source: undefined,
-          canSpawn: true,
-          canExec: true,
-          sessionRoot: "/tmp/requester-task",
-          workspaceDir: "/tmp/requester-task",
-        },
+        { ...common, source: "sender", canExec: false },
+        { ...common, source: undefined, canExec: true },
       ]);
     } finally {
       clearFollowupQueue(q.key);
@@ -240,14 +242,7 @@ describe("followup queue authority", () => {
       }
       source.releaseRequest();
       scheduleFollowupDrain(key, async (run) => {
-        const prepared = prepareChannelRunAdmission({
-          cfg: {},
-          runId: `queued-operator-${observed.length}`,
-          agentId: "agent",
-          ingressKind: "channel",
-          boundary: "auto-reply.agent-runner",
-          operatorAuthority: run.operatorAuthority,
-        });
+        const prepared = prepareOperatorAdmission(run, `queued-operator-${observed.length}`);
         try {
           await admitFollowupRunLifecycle(run);
           const beforeAdmission = readPreparedRunOperatorAuthority(prepared);
@@ -317,14 +312,7 @@ describe("followup queue authority", () => {
         source.releaseRequest();
         scheduleFollowupDrain(key, async (run) => {
           const abortSignal = resolveFollowupAbortSignal(run);
-          const prepared = prepareChannelRunAdmission({
-            cfg: {},
-            runId: "collected-operator-revocation",
-            agentId: "agent",
-            ingressKind: "channel",
-            boundary: "auto-reply.agent-runner",
-            operatorAuthority: run.operatorAuthority,
-          });
+          const prepared = prepareOperatorAdmission(run, "collected-operator-revocation");
           try {
             await admitFollowupRunLifecycle(run);
             const context = await prepared.admit("embedded");
@@ -698,28 +686,25 @@ describe("followup queue authority", () => {
   });
 
   it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
-    const createAuthorityRun = () =>
-      createRun({ prompt: "authority", originatingChannel: "slack", originatingTo: "channel:A" });
-    const baseline = createAuthorityRun();
-    const toolsAllow = createAuthorityRun();
-    toolsAllow.toolsAllow = ["exec"];
-    const disabled = createAuthorityRun();
-    disabled.disableTools = true;
-    const roles = createAuthorityRun();
-    roles.run.memberRoleIds = ["operator"];
-    const firstIntersection = createAuthorityRun();
-    firstIntersection.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-    const secondIntersection = createAuthorityRun();
-    secondIntersection.toolsAllow = attachToolAllowlistIntersection(
-      ["exec"],
-      [["exec"], ["message"]],
-    );
-    const baselineKey = resolveFollowupDeliveryStorageKey(baseline);
-    expect(resolveFollowupDeliveryStorageKey(toolsAllow)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryStorageKey(disabled)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryStorageKey(roles)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryStorageKey(firstIntersection)).not.toBe(
-      resolveFollowupDeliveryStorageKey(secondIntersection),
+    const keyFor = (
+      overrides: Partial<FollowupRun> = {},
+      runOverrides: Partial<FollowupRun["run"]> = {},
+    ) => {
+      const run = createRun({
+        prompt: "authority",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      });
+      Object.assign(run, overrides);
+      Object.assign(run.run, runOverrides);
+      return resolveFollowupDeliveryStorageKey(run);
+    };
+    const baselineKey = keyFor();
+    expect(keyFor({ toolsAllow: ["exec"] })).not.toBe(baselineKey);
+    expect(keyFor({ disableTools: true })).not.toBe(baselineKey);
+    expect(keyFor({}, { memberRoleIds: ["operator"] })).not.toBe(baselineKey);
+    expect(keyFor({ toolsAllow: attachToolAllowlistIntersection(["exec"], [["exec"]]) })).not.toBe(
+      keyFor({ toolsAllow: attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]) }),
     );
   });
 });
