@@ -19,14 +19,7 @@ import {
   ChatProviderReviewDialog,
 } from "./chat-provider-review-controller.tsx";
 
-const containers: { element: HTMLElement; dispose: () => void }[] = [];
-afterEach(() => {
-  for (const container of containers.splice(0)) {
-    container.dispose();
-    container.element.remove();
-  }
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 const row: GatewaySessionRow = {
   key: "agent:main:main",
@@ -55,27 +48,22 @@ function fixture(review = row.providerReview) {
   const refresh = vi
     .spyOn(state.sessions, "reconcileMutation")
     .mockResolvedValue({ status: "refreshed" });
-  const container = document.createElement("div");
-  document.body.append(container);
   const input = { state, canWrite: true };
   let owner!: ReturnType<typeof createChatProviderReview>;
   let publishSource = () => flush();
-  const mounted = mountSolid(
-    () => {
-      const [source, setSource] = createSignal({ ...input });
-      publishSource = () => {
-        setSource({ ...input });
-        flush();
-      };
-      owner = createChatProviderReview({ source, readState: () => state });
-      return [
-        createComponent(ChatProviderReviewNotice, { owner }),
-        createComponent(ChatProviderReviewDialog, { owner }),
-      ];
-    },
-    { container },
-  );
-  containers.push({ element: container, dispose: mounted.unmount });
+  const mounted = mountSolid(() => {
+    const [source, setSource] = createSignal({ ...input });
+    publishSource = () => {
+      setSource({ ...input });
+      flush();
+    };
+    owner = createChatProviderReview({ source, readState: () => state });
+    return [
+      createComponent(ChatProviderReviewNotice, { owner }),
+      createComponent(ChatProviderReviewDialog, { owner }),
+    ];
+  });
+  const { container } = mounted;
   flush();
   const click = (text: string, settle = true) => {
     const button = [...container.querySelectorAll("button")].find(
@@ -99,6 +87,14 @@ function fixture(review = row.providerReview) {
     click("Acknowledge findings and continue");
     return requireRecord(calls()[0]?.[1], "acknowledgment");
   };
+  const setRow = (patch: Partial<GatewaySessionRow>, version = 2) => {
+    state.sessionsResult = sessionsResult([{ ...row, ...patch }], version);
+  };
+  const expectPaused = (disabled: boolean) => {
+    expect(container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(disabled);
+    expect(calls()).toHaveLength(1);
+    expect(state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
+  };
   return {
     state,
     container,
@@ -112,6 +108,9 @@ function fixture(review = row.providerReview) {
     outcome,
     request,
     refresh,
+    setRow,
+    expectPaused,
+    text: () => container.textContent,
     unmount: mounted.unmount,
   };
 }
@@ -139,27 +138,20 @@ it.each(["connection", "session", "review", "disconnection"] as const)(
   "ignores a late continuation outcome after %s changes",
   async (replacement) => {
     const f = fixture();
-    await f.open();
-    f.click("Acknowledge findings and continue");
+    await f.acknowledge();
     if (replacement === "connection") {
       f.state.connectionEpoch += 1;
     }
     if (replacement === "session") {
       f.state.currentSessionId = "replacement";
     }
-    f.state.sessionsResult = sessionsResult(
-      [
-        {
-          ...row,
-          sessionId: replacement === "session" ? "replacement" : row.sessionId,
-          providerReview: {
-            ...row.providerReview!,
-            id: replacement === "review" ? "review-two" : row.providerReview!.id,
-          },
-        },
-      ],
-      2,
-    );
+    f.setRow({
+      sessionId: replacement === "session" ? "replacement" : row.sessionId,
+      providerReview: {
+        ...row.providerReview!,
+        id: replacement === "review" ? "review-two" : row.providerReview!.id,
+      },
+    });
     if (replacement === "disconnection") {
       f.unmount();
     } else {
@@ -169,7 +161,7 @@ it.each(["connection", "session", "review", "disconnection"] as const)(
     await f.outcome.promise.catch(() => {});
     await Promise.resolve();
     flush();
-    expect(f.container.textContent).not.toContain("Old connection failed");
+    expect(f.text()).not.toContain("Old connection failed");
     expect(f.container.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(f.state.sessions.reconcileMutation).not.toHaveBeenCalled();
   },
@@ -187,7 +179,7 @@ it.each([
   if (details.explanation) {
     await f.open();
   }
-  expect(f.container.textContent).not.toContain("Acknowledge findings and continue");
+  expect(f.text()).not.toContain("Acknowledge findings and continue");
   expect(f.calls()).toHaveLength(0);
 });
 
@@ -223,7 +215,7 @@ it("requires explicit safe review, retains the pause, and retries status without
   const dialog = f.container.querySelector("openclaw-modal-dialog");
   f.publishSource();
   expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
-  expect(f.container.textContent).toContain(row.providerReview!.explanation);
+  expect(f.text()).toContain(row.providerReview!.explanation);
   expect(f.container.querySelector("img")).toBeNull();
   expect(f.container.querySelector("blockquote")?.textContent).toBe(
     row.providerReview!.continuationMessage,
@@ -247,12 +239,9 @@ it("requires explicit safe review, retains the pause, and retries status without
   firstRefresh.resolve({ status: "failed", error: "Disconnected during refresh" });
   await firstRefresh.promise;
   flush();
-  expect(f.container.textContent).toContain(
-    "Continuation was requested, but its status could not be refreshed.",
-  );
-  expect(f.container.textContent).not.toContain("Waiting for the provider to accept it.");
-  expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
-  expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
+  expect(f.text()).toContain("Continuation was requested, but its status could not be refreshed.");
+  expect(f.text()).not.toContain("Waiting for the provider to accept it.");
+  f.expectPaused(true);
   expect(f.refresh).toHaveBeenCalledTimes(1);
   f.click("Check continuation status");
   expect(f.refresh).toHaveBeenCalledTimes(2);
@@ -260,12 +249,10 @@ it("requires explicit safe review, retains the pause, and retries status without
   secondRefresh.resolve({ status: "refreshed" });
   await secondRefresh.promise;
   flush();
-  expect(f.container.textContent).toContain("Waiting for the provider to accept it.");
-  expect(f.container.textContent).not.toContain("status could not be refreshed");
-  expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
-  expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
-  expect(f.calls()).toHaveLength(1);
-  f.state.sessionsResult = sessionsResult([{ ...row, providerReview: undefined }], 2);
+  expect(f.text()).toContain("Waiting for the provider to accept it.");
+  expect(f.text()).not.toContain("status could not be refreshed");
+  f.expectPaused(true);
+  f.setRow({ providerReview: undefined });
   f.publishSource();
   expect(f.container.querySelector(".chat-provider-review")).toBeNull();
   expect(f.container.querySelector("openclaw-modal-dialog")).toBeNull();
@@ -292,39 +279,29 @@ it.each([
     if (source === "row") {
       await f.refresh.mock.results[0]?.value;
       await Promise.resolve();
-      f.state.sessionsResult = sessionsResult(
-        [
-          {
-            ...row,
-            lastRunId: runId,
-            status,
-            hasActiveRun: false,
-            activeRunIds: [],
-            lastRunError: "Provider authentication failed before acceptance.",
-          },
-        ],
-        2,
-      );
+      f.setRow({
+        lastRunId: runId,
+        status,
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunError: "Provider authentication failed before acceptance.",
+      });
     }
     f.publishSource();
-    expect(f.container.textContent).toContain("Continuation was not accepted.");
+    expect(f.text()).toContain("Continuation was not accepted.");
     if (source === "row") {
-      expect(f.container.textContent).toContain(
-        "Provider authentication failed before acceptance.",
-      );
-      expect(f.container.textContent).not.toContain("Waiting for the provider to accept it.");
+      expect(f.text()).toContain("Provider authentication failed before acceptance.");
+      expect(f.text()).not.toContain("Waiting for the provider to accept it.");
     } else {
       expect(f.refresh).not.toHaveBeenCalled();
     }
-    expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
-    expect(f.calls()).toHaveLength(1);
-    expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
+    f.expectPaused(false);
     if (source === "row") {
       // A later row may omit the terminal receipt; only an explicit retry retires it.
-      f.state.sessionsResult = sessionsResult([{ ...row }], 3);
+      f.setRow({}, 3);
       f.publishSource();
-      expect(f.container.textContent).toContain("Continuation was not accepted.");
-      expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
+      expect(f.text()).toContain("Continuation was not accepted.");
+      f.expectPaused(false);
     }
     await expectFreshRetry(f, first);
   },
@@ -345,22 +322,17 @@ it.each(["acknowledgment", "refresh"] as const)(
       f.outcome.resolve({ runId, status: "started" });
       await refreshStarted.promise;
     }
-    f.state.sessionsResult = sessionsResult(
-      [{ ...row, lastRunId: runId, status: "failed", hasActiveRun: false, activeRunIds: [] }],
-      2,
-    );
+    f.setRow({ lastRunId: runId, status: "failed", hasActiveRun: false, activeRunIds: [] });
     f.publishSource();
-    expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
-    expect(f.calls()).toHaveLength(1);
+    f.expectPaused(true);
     f.outcome.resolve({ runId, status: "started" });
     await refreshStarted.promise;
     refresh.resolve({ status: "refreshed" });
     await refresh.promise;
     await Promise.resolve();
     f.publishSource();
-    expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
-    expect(f.container.textContent).toContain("Continuation was not accepted.");
-    expect(f.calls()).toHaveLength(1);
+    f.expectPaused(false);
+    expect(f.text()).toContain("Continuation was not accepted.");
   },
 );
 
@@ -375,18 +347,12 @@ it.each(["missing", "foreign", "active", "active-ids", "running"] as const)(
     await Promise.resolve();
     await f.refresh.mock.results[0]?.value;
     await Promise.resolve();
-    f.state.sessionsResult = sessionsResult(
-      [
-        {
-          ...row,
-          lastRunId: proof === "missing" ? undefined : proof === "foreign" ? "other-run" : runId,
-          status: proof === "running" ? "running" : "failed",
-          hasActiveRun: proof === "active",
-          activeRunIds: proof === "active-ids" ? [runId] : [],
-        },
-      ],
-      2,
-    );
+    f.setRow({
+      lastRunId: proof === "missing" ? undefined : proof === "foreign" ? "other-run" : runId,
+      status: proof === "running" ? "running" : "failed",
+      hasActiveRun: proof === "active",
+      activeRunIds: proof === "active-ids" ? [runId] : [],
+    });
     f.publishSource();
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
     f.click("Acknowledge findings and continue");
