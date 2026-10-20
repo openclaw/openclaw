@@ -22,10 +22,12 @@ function makeWatchdog(timeoutMultiplier = 3) {
     watchdog.noteRunnerStarted({ jobId, phase: "runner_entered", isFallback });
   const phase = (nextPhase: CronAgentExecutionPhase) =>
     watchdog.notePhase({ jobId, phase: nextPhase });
-  const expectTimeout = (execution: Omit<CronAgentExecutionStarted, "jobId">) =>
-    expect(triggerTimeout).toHaveBeenCalledExactlyOnceWith(
-      preExecutionTimeoutErrorMessage({ jobId, ...execution }),
+  const advance = async (ms: number, execution?: Omit<CronAgentExecutionStarted, "jobId">) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    expect(triggerTimeout.mock.calls).toEqual(
+      execution ? [[preExecutionTimeoutErrorMessage({ jobId, ...execution })]] : [],
     );
+  };
   watchdog.start();
   dispose = watchdog.dispose;
   const fallback = () => {
@@ -33,18 +35,16 @@ function makeWatchdog(timeoutMultiplier = 3) {
     runner(true);
     phase("runtime_plugins");
   };
-  return { triggerTimeout, watchdog, runner, phase, fallback, expectTimeout };
+  return { triggerTimeout, watchdog, runner, phase, fallback, advance };
 }
 
 describe("cron agent setup watchdog", () => {
   it("starts setup timeout only after lane admission", async () => {
-    const { triggerTimeout, watchdog } = makeWatchdog(2);
+    const { triggerTimeout, watchdog, advance } = makeWatchdog(2);
 
     watchdog.noteLaneWait();
 
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
-
-    expect(triggerTimeout).not.toHaveBeenCalled();
+    await advance(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
     expect(watchdog.observedLaneWait()).toBe(true);
 
     watchdog.noteLaneAdmitted();
@@ -59,53 +59,42 @@ describe("cron agent setup watchdog", () => {
   });
 
   it("lets initial workspace progress use the configured job timeout", async () => {
-    const { triggerTimeout, runner, phase } = makeWatchdog();
+    const { runner, phase, advance } = makeWatchdog();
     runner();
     phase("workspace");
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS);
-
-    expect(triggerTimeout).not.toHaveBeenCalled();
+    await advance(CRON_AGENT_SETUP_WATCHDOG_MS);
   });
 
   it.each(["runner_entered", "runtime_plugins"] as const)(
     "keeps the pre-execution watchdog armed at %s",
     async (phase) => {
-      const { triggerTimeout, runner, fallback, expectTimeout } = makeWatchdog();
+      const { runner, fallback, advance } = makeWatchdog();
       runner();
       if (phase === "runtime_plugins") {
         fallback();
       }
 
-      await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-      expect(triggerTimeout).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expectTimeout({ phase });
+      await advance(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
+      await advance(1, { phase });
     },
   );
 
   it("keeps the fallback watchdog armed across later setup progress", async () => {
-    const { runner, phase, fallback, expectTimeout } = makeWatchdog();
+    const { runner, phase, fallback, advance } = makeWatchdog();
     runner();
     fallback();
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS / 2);
     phase("model_resolution");
     phase("auth");
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS / 2);
-
-    expectTimeout({ phase: "auth" });
+    await advance(CRON_AGENT_SETUP_WATCHDOG_MS / 2, { phase: "auth" });
   });
 
   it("gives a fallback a fresh guard when the initial runner made no progress", async () => {
-    const { triggerTimeout, runner, expectTimeout } = makeWatchdog();
+    const { runner, advance } = makeWatchdog();
     runner();
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
     runner(true);
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-
-    expect(triggerTimeout).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expectTimeout({ phase: "runner_entered", isFallback: true });
+    await advance(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
+    await advance(1, { phase: "runner_entered", isFallback: true });
   });
 });

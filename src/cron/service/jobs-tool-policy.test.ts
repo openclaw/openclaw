@@ -7,32 +7,23 @@ import {
   resolveCronJobMessageToolAuthorityInputs,
 } from "./jobs-tool-policy.js";
 
-function toolJob(toolsAllow: string[] | undefined): CronStoredJob {
+function toolJob(toolsAllow: readonly string[] | undefined): CronStoredJob {
   return {
     ...createDueIsolatedJob({ id: "job-1", nowMs: 1, nextRunAtMs: 1 }),
-    payload: { kind: "script", script: "return {}", ...(toolsAllow ? { toolsAllow } : {}) },
+    payload: { kind: "script", script: "return {}", toolsAllow: toolsAllow?.slice() },
   };
 }
 
 const gateway = { version: 1, host: "gateway" } satisfies CronToolsAllowExecTarget;
 const pinned = { ...gateway, ask: "always" } satisfies CronToolsAllowExecTarget;
-it.each<
-  [
-    name: string,
-    cap: string[] | undefined,
-    previous: CronToolsAllowExecTarget | undefined,
-    explicit: boolean,
-    captured: CronToolsAllowExecTarget | undefined,
-    expected: CronToolsAllowExecTarget | undefined,
-  ]
->([
+it.each([
   ["stamps explicit exec", ["exec", "read"], undefined, true, pinned, pinned],
   ["pins wildcard exec", ["*"], undefined, true, pinned, pinned],
   ["excludes non-exec caps", ["read"], undefined, true, gateway, undefined],
   ["clears rewritten caps without capture", ["exec"], pinned, true, undefined, undefined],
   ["preserves untouched caps", ["exec"], pinned, false, undefined, pinned],
   ["drops removed caps", undefined, gateway, false, gateway, undefined],
-])("exec pin: %s", (_name, cap, previous, explicit, captured, expected) => {
+] as const)("exec pin: %s", (_name, cap, previous, explicit, captured, expected) => {
   const job = toolJob(cap);
   if (previous) {
     job.toolsAllowExecTarget = structuredClone(previous);

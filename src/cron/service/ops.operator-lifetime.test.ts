@@ -61,7 +61,6 @@ it.each(["manual", "manual-rpc", "timer"] as const)(
     const payloadEntered = createDeferredCore();
     const continuePayload = createDeferredCore();
     const finished = createDeferredCore<CronEvent>();
-    let readError: string | undefined;
     let observed: unknown;
     const state = createCronRegressionState({
       storePath: store.storePath,
@@ -75,17 +74,12 @@ it.each(["manual", "manual-rpc", "timer"] as const)(
       runIsolatedAgentJob: async () => {
         payloadEntered.resolve();
         await continuePayload.promise;
-        try {
-          const result = await withGatewayToolCallerIdentity(
-            { agentId: "main", sessionKey: "agent:main:cron:operator-lifetime" },
-            () => createGitHubIdentityStatusTool().execute("scheduled-github-check", {}),
-          );
-          observed = result.details;
-          return { status: "ok" };
-        } catch (error) {
-          readError = String(error);
-          return { status: "error", error: readError };
-        }
+        const result = await withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: "agent:main:cron:operator-lifetime" },
+          () => createGitHubIdentityStatusTool().execute("scheduled-github-check", {}),
+        );
+        observed = result.details;
+        return { status: "ok" };
       },
     });
     const cron = new CronService(state.deps);
@@ -133,10 +127,7 @@ it.each(["manual", "manual-rpc", "timer"] as const)(
       continuePayload.resolve();
       const terminal = await finished.promise;
       await timerRun;
-      expect({ terminalError: terminal.error, readError }).toEqual({
-        terminalError: undefined,
-        readError: undefined,
-      });
+      expect(terminal.error).toBeUndefined();
       expect(observed).toEqual(readResult);
       expect(readHandler).toHaveBeenCalledOnce();
     } finally {
