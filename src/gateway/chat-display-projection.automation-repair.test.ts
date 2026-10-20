@@ -53,10 +53,9 @@ it("keeps scheduler repair inputs in the model transcript, not pending, live, or
       })),
     });
     const history = await readChatHistoryPage({
+      ...scope,
       entry,
       provider: undefined,
-      sessionId: scope.sessionId,
-      storePath: scope.storePath,
       sessionAgentId: scope.agentId,
       canonicalKey: scope.sessionKey,
       max: 20,

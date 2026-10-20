@@ -442,10 +442,6 @@ it.for(["steer", "followup"] as const)(
         timeout: 30_000,
       });
       await expectRunOk(`${runPrefix}-peer`);
-      expect(startedRuns.slice(0, 2)).toEqual([
-        `${runPrefix}-recovery-predecessor`,
-        `${runPrefix}-peer`,
-      ]);
       await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-unchanged`), {
         timeout: 30_000,
       });

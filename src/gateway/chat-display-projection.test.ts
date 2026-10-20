@@ -109,9 +109,7 @@ it("normalizes context markers independently from assistant billing", () => {
   const usage = { input: 6, output: 77, cacheRead: 54_631, totalTokens: 54_714 };
   const marker = { state: "available", promptTokens: 27_378, totalTokens: 27_379 };
   const message = (contextUsage: unknown) =>
-    assistant([text("done")], {
-      usage: { ...usage, contextUsage },
-    });
+    assistant("done", { usage: { ...usage, contextUsage } });
   const projected = sanitizeChatHistoryMessages([
     message({ ...marker, source: "private" }),
     message({ state: "unavailable", source: "private", promptTokens: 100 }),
@@ -421,26 +419,22 @@ it.each([
 );
 
 it.each([
-  { toolName: "exec", details: { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false } },
-  { toolName: "sessions_spawn", details: { ok: true, sessionKey: "agent:helper:main" } },
-])("retains $toolName status in standalone and nested history", ({ toolName, details }) => {
-  const result = toolResult(toolName, { content: "done", details });
-  const messages = toolRows(result);
-  expect(sanitizeChatHistoryMessages(messages)).toEqual(messages);
-});
-
-it.each([
-  { exitCode: Number.NaN, durationMs: Infinity, sessionKey: " padded ", ok: "true" },
-  { exitCode: "0", durationMs: -Infinity, sessionKey: "s".repeat(33), ok: 1 },
-])("keeps malformed status metadata out of display history (%j)", (details) => {
-  const result = toolResult("exec", { details: { changed: true } });
-  expect(
-    sanitizeChatHistoryMessages(
-      toolRows({ ...result, details: { ...details, changed: true } }),
-      32,
-    ),
-  ).toEqual(toolRows(result));
-});
+  ["exec", { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false }, {}],
+  ["sessions_spawn", { ok: true, sessionKey: "agent:helper:main" }, {}],
+  ["exec", {}, { exitCode: Number.NaN, durationMs: Infinity, sessionKey: " padded ", ok: "true" }],
+  ["exec", {}, { exitCode: "0", durationMs: -Infinity, sessionKey: "s".repeat(33), ok: 1 }],
+] as const)(
+  "preserves valid %s status and strips malformed fields (%j, %j)",
+  (toolName, valid, invalid) => {
+    const result = toolResult(toolName, { content: "done", details: { ...valid, changed: true } });
+    expect(
+      sanitizeChatHistoryMessages(
+        toolRows({ ...result, details: { ...result.details, ...invalid } }),
+        32,
+      ),
+    ).toEqual(toolRows(result));
+  },
+);
 
 it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
   "caps nested output once, preserves literal text, and removes private media (%j)",
@@ -528,22 +522,15 @@ const projectedIds = (messages: unknown[]) =>
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([
   [
-    "legacy structured error",
-    {
-      errorCode: "misalignment_policy_violation",
-      errorType: "invalid_request_error",
-    },
+    { errorCode: "misalignment_policy_violation", errorType: "invalid_request_error" },
     legacyGuidance,
   ],
-  ["saved code only", { errorCode: "misalignment_policy_violation" }, legacyGuidance],
+  [{ errorCode: "misalignment_policy_violation" }, legacyGuidance],
   [
-    "current refusal diagnostic",
-    {
-      diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
-    },
+    { diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }] },
     "Chat stopped as a precaution. Review the findings in chat before continuing.",
   ],
-] as const)("preserves %s guidance with empty and partial replies", (_name, error, expected) => {
+] as const)("preserves guidance with empty and partial replies (%j)", (error, expected) => {
   for (const content of [[], [text("Partial reply")]]) {
     const message = {
       ...failed,
@@ -563,15 +550,12 @@ it.each([
 });
 
 it.each([
-  { name: "structured", content: [tool] },
-  { name: "phased commentary", content: [phasedText("PRIVATE_COMMENTARY", "commentary")] },
-  {
-    name: "over-limit phased final",
-    content: [phasedText("Partial reply ".repeat(700), "final_answer")],
-  },
-  { name: "string content", content: "Partial reply" },
-  { name: "text alias", content: [], text: "Partial reply" },
-])("retains safe incomplete-tool guidance in $name history", ({ name: _name, ...partial }) => {
+  { content: [tool] },
+  { content: [phasedText("PRIVATE_COMMENTARY", "commentary")] },
+  { content: [phasedText("Partial reply ".repeat(700), "final_answer")] },
+  { content: "Partial reply" },
+  { content: [], text: "Partial reply" },
+])("retains safe incomplete-tool guidance (%j)", (partial) => {
   const message = {
     ...failed,
     ...partial,
@@ -731,37 +715,28 @@ it("drops only old announce pairs across adjacent chunks", () => {
   }
 });
 
-const failure = (errorMessage: string, fields: Record<string, unknown> = {}) =>
-  projectChatDisplayMessage({
-    role: "assistant",
-    stopReason: "error",
-    content: [],
-    errorMessage,
-    ...fields,
-  });
-
+const schemaError = "Invalid service_tier argument";
 it.each([
-  {
-    name: "schema rejection without response-envelope leaks",
-    error: "Invalid service_tier argument",
-    fields: {
+  [
+    schemaError,
+    {
       errorType: "invalid_request_error",
       errorBody: JSON.stringify({
-        error: { type: "invalid_request_error", message: "Invalid service_tier argument" },
+        error: { type: "invalid_request_error", message: schemaError },
         request: { input: "PRIVATE_PROMPT", headers: { authorization: "PRIVATE_AUTH" } },
       }),
     },
-    expected: String.raw`LLM request rejected: Invalid service\_tier argument`,
-  },
-  {
-    name: "safe guidance alongside partial reply text",
-    error: "429: PRIVATE_CANARY",
-    fields: { content: [text("The first step completed.")] },
-    expected:
-      "⚠️ The AI service needs a short break. Please try again in a few minutes.\n\nThe first step completed.",
-  },
-])("retains $name", ({ error, fields, expected }) => {
-  const projected = failure(error, fields);
+    String.raw`LLM request rejected: Invalid service\_tier argument`,
+  ],
+  [
+    "429: PRIVATE_CANARY",
+    { content: [text("The first step completed.")] },
+    "⚠️ The AI service needs a short break. Please try again in a few minutes.\n\nThe first step completed.",
+  ],
+] as const)("retains safe failure guidance for %s", (errorMessage, fields, expected) => {
+  const projected = projectChatDisplayMessage(
+    assistant([], { stopReason: "error", errorMessage, ...fields }),
+  );
   expect(projected).toMatchObject({ content: [text(expected)] });
   expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
   expect(projected).not.toHaveProperty("errorBody");

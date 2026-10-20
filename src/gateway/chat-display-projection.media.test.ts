@@ -70,10 +70,12 @@ function expectPrepared(source: Record<string, unknown>, content: unknown[]) {
   expect(project(projected)).toEqual(expected);
   expect(source).toEqual(before);
 }
+const thinking = (value: string) => ({ type: "thinking", thinking: value });
+const user = (content: unknown) => ({ role: "user", content });
 
 it("correlates queued deliveries with earlier source rows rather than the adjacent reply", () => {
   const first = assistant();
-  const user = { role: "user", content: "And the next train?" };
+  const question = user("And the next train?");
   const second = assistant({
     __openclaw: { id: "second-answer" },
     content: [text("The next train leaves at two.")],
@@ -82,7 +84,8 @@ it("correlates queued deliveries with earlier source rows rather than the adjace
     content: second.content,
     openclawDeliveryMirror: { kind: "channel-final", sourceAssistantMessageId: "second-answer" },
   });
-  expect(project([first, user, second, mirror(), secondMirror])).toEqual([first, user, second]);
+  const expected = [first, question, second];
+  expect(project([...expected, mirror(), secondMirror])).toEqual(expected);
 });
 it("caps commentary captions across an intervening image as one message", () => {
   const caption = (letter: string) => phased(letter.repeat(20), "commentary", "progress-caption");
@@ -202,15 +205,15 @@ describe("commentary group visibility", () => {
 });
 
 it("preserves error-turn media after a later reply", () => {
-  const user = { role: "user", content: "hello" };
+  const question = user("hello");
   const failed = assistant({
-    content: [{ type: "thinking", thinking: "Internal reasoning" }],
+    content: [thinking("Internal reasoning")],
     stopReason: "error",
     __openclaw: { runId: "run-retry", media },
   });
   const recovered = assistant({ stopReason: "stop", __openclaw: { runId: "run-retry" } });
-  expect(project([user, failed, recovered])).toEqual([
-    user,
+  expect(project([question, failed, recovered])).toEqual([
+    question,
     { role: "assistant", content: [], __openclaw: { runId: "run-retry", media } },
     recovered,
   ]);
@@ -273,8 +276,8 @@ describe("correlated channel mirrors in Gateway history", () => {
     );
 
   it("hides new correlated mirrors while preserving old bytes and distinct identical turns", async () => {
-    const oldThinking = { type: "thinking", thinking: "Checking the old timetable." };
-    const thinking = { type: "thinking", thinking: "Checking the current timetable." };
+    const oldThinking = thinking("Checking the old timetable.");
+    const currentThinking = thinking("Checking the current timetable.");
     await appendAssistant("old-answer", [oldThinking, ...reply], 9000);
     await append(
       "old-mirror",
@@ -288,15 +291,11 @@ describe("correlated channel mirrors in Gateway history", () => {
     const progress = phased("I will check the departure.", "commentary", "commentary");
     await appendAssistant(
       "first-new-answer",
-      [thinking, progress, phased(answer, "final_answer", "final")],
+      [currentThinking, progress, phased(answer, "final_answer", "final")],
       8000,
     );
     await appendMirror("first-new-delivery");
-    await append("second-question", {
-      role: "user",
-      content: "Please confirm that again.",
-      timestamp: 500,
-    });
+    await append("second-question", { ...user("Please confirm that again."), timestamp: 500 });
     await appendAssistant("second-new-answer", reply, 400);
     await appendMirror("second-new-delivery");
     const beforeRead = storedRows();
@@ -309,7 +308,7 @@ describe("correlated channel mirrors in Gateway history", () => {
       {
         role: "assistant",
         __openclaw: { id: "first-new-answer" },
-        content: [thinking, text(answer)],
+        content: [currentThinking, text(answer)],
       },
       { role: "user", __openclaw: { id: "second-question" } },
       { role: "assistant", __openclaw: { id: "second-new-answer" } },
@@ -359,7 +358,7 @@ describe("channel mirror display controls", () => {
       attachment: { kind: "audio", label: "reply.mp3", mimeType: "audio/mpeg" },
     };
     const displayed = project([
-      assistant({ content: [{ type: "thinking", thinking: "Checking the timetable." }, ...reply] }),
+      assistant({ content: [thinking("Checking the timetable."), ...reply] }),
       mirror(),
       {
         role: "assistant",
@@ -381,10 +380,7 @@ describe("multimodal display privacy", () => {
     const encoded = png.toString("base64");
     const prefix = Object.freeze(text("keep prefix text"));
     const suffix = Object.freeze(text("keep suffix text"));
-    const message = {
-      role: "user",
-      content: [prefix, { type: "image", mimeType: "image/png", data: encoded }, suffix],
-    };
+    const message = user([prefix, { type: "image", mimeType: "image/png", data: encoded }, suffix]);
     const messages = project([message]);
     expect(messages).toMatchObject([
       {
@@ -450,10 +446,10 @@ describe("multimodal display privacy", () => {
       },
     ];
     const caption = text("keep mixed media metadata");
-    const rawMessage = {
-      role: "user",
-      content: [caption, ...clean.map((block, index) => ({ ...block, ...privateFields[index] }))],
-    };
+    const rawMessage = user([
+      caption,
+      ...clean.map((block, index) => ({ ...block, ...privateFields[index] })),
+    ]);
     const original = structuredClone(rawMessage);
     const state = SessionHistorySseState.fromSnapshot({
       target: { sessionId: "mixed-media", sessionKey: "agent:main:mixed-media" },
@@ -497,28 +493,25 @@ describe("multimodal display privacy", () => {
       },
       { type: "audio", url: "/media/audio.wav", openUrl: "/__openclaw__/audio/clip.wav" },
     ];
-    const message = {
-      role: "user",
-      content: [
-        {
-          type: "audio",
-          data: { rawSecret: privateMarker },
-          url: "data:audio/wav;base64," + privateMarker,
-          openUrl: "file:///tmp/" + privateMarker + ".wav",
-          audio_url: "~/" + privateMarker + ".wav",
+    const message = user([
+      {
+        type: "audio",
+        data: { rawSecret: privateMarker },
+        url: "data:audio/wav;base64," + privateMarker,
+        openUrl: "file:///tmp/" + privateMarker + ".wav",
+        audio_url: "~/" + privateMarker + ".wav",
+        ...privateFiles,
+        source: {
+          type: "opaque",
+          codec: "pcm",
+          data: new Uint8Array([111, 112, 113]),
+          url: "/tmp/" + privateMarker + "-source.wav",
           ...privateFiles,
-          source: {
-            type: "opaque",
-            codec: "pcm",
-            data: new Uint8Array([111, 112, 113]),
-            url: "/tmp/" + privateMarker + "-source.wav",
-            ...privateFiles,
-          },
         },
-        { type: "audio", url: "C:\\a.wav", source: { url: "\\\\s\\a.wav" } },
-        ...safeAudio,
-      ],
-    };
+      },
+      { type: "audio", url: "C:\\a.wav", source: { url: "\\\\s\\a.wav" } },
+      ...safeAudio,
+    ]);
     const original = structuredClone(message);
     expect(project([message])).toEqual([
       {

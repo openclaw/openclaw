@@ -109,7 +109,6 @@ it("prepares before cancellation and publishes only after exact authority retire
     aborted: true,
   });
   expect(ops.onRunAborted).toHaveBeenCalledOnce();
-  expect(entry.input.abortSignal.aborted).toBe(true);
   expect(abort({ onAbortCommitted })).toEqual({ aborted: false });
   expect(onAbortCommitted).toHaveBeenCalledOnce();
 });

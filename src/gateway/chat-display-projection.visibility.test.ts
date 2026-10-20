@@ -28,10 +28,7 @@ it.each(["reviewer", "legacy-plugin"])("projects %s steering only on request", (
   const metadata = { pluginId, ...(legacy ? {} : { pluginName: "Review Helper" }) };
   const displayText = "Use the smaller change.";
   const steering = {
-    ...internalMessage(
-      `Private model-facing steering prefix.\n\n${displayText}`,
-      `plugin:${pluginId}`,
-    ),
+    ...internalMessage(`Private prefix.\n\n${displayText}`, `plugin:${pluginId}`),
     display: false,
     __openclaw: {
       seq: 2,
@@ -39,13 +36,13 @@ it.each(["reviewer", "legacy-plugin"])("projects %s steering only on request", (
     },
   };
   const original = structuredClone(steering);
-  const unrelated = [
+  const rows = [
+    steering,
     { ...steering, provenance: { kind: "internal_system", sourceTool: "exec" } },
     { ...steering, provenance: { kind: "internal_system", sourceTool: "plugin:" } },
     { ...steering, provenance: { kind: "external_user", sourceTool: `plugin:${pluginId}` } },
     { ...steering, role: "assistant" },
   ];
-  const rows = [steering, ...unrelated];
   expectProjection(rows, []);
   expectProjection(rows, [], { includePluginSteering: false });
   expect(projectChatDisplayMessages(rows, { includePluginSteering: true })).toMatchObject([
@@ -101,10 +98,7 @@ it.each([
   [" exec ", "Exec failed (background-job, code 1) :: PRIVATE_COMMAND_OUTPUT"],
   ["subagent_announce", "private child announcement"],
   ["subagent_settle", "private child settlement"],
-  [
-    "image_generate",
-    'session_key: image_generate:task-123\npath="/root/.openclaw/media/private.png"',
-  ],
+  ["image_generate", 'session_key: image_generate:task-123\npath="/private.png"'],
 ])("hides internal %s inputs without hiding authored outcomes", (sourceTool, text) => {
   const exec = sourceTool.trim() === "exec";
   const completion = {
@@ -112,9 +106,6 @@ it.each([
     provenance: {
       kind: exec ? "internal_system" : "inter_session",
       sourceTool,
-      sourceChannel: "internal",
-      sourceSessionKey:
-        sourceTool === "image_generate" ? "image_generate:task-123" : "agent:main:subagent:child",
     },
   };
   const original = structuredClone(completion);

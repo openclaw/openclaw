@@ -22,6 +22,7 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
   loadDeviceAuthTokenReadOnlyMock: DeviceAuthLookupMock;
   loadOriginDeviceTokenMock: DeviceAuthLookupMock;
 }): void {
+  const getOptions = fixture.getClientOptions;
   const backend = {
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -32,8 +33,9 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
     fixture.setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
     fixture.setGatewayNetworkDefaults();
   };
+  const url = "ws://127.0.0.1:18789";
   it.each([undefined, "read-only"] as const)(
-    "fails before connecting when identity storage is unavailable (%s)",
+    "rejects unreadable identity storage (%s)",
     async (sharedStateMode) => {
       fixture.setGatewayConfig({ mode: "local", auth: { mode: "none" } });
       const load =
@@ -46,7 +48,7 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
       await expect(
         fixture.callGateway({ method: "sessions.create", sharedStateMode }),
       ).rejects.toThrow(/device identity.*openclaw doctor --fix/is);
-      expect(fixture.getClientOptions()).toBeNull();
+      expect(getOptions()).toBeNull();
     },
   );
 
@@ -57,22 +59,14 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
       requireLocalBackendSharedAuth: true,
       ...options,
     });
-  it.each(["shared", "none"])(
-    "uses local backend %s auth without a device identity",
-    async (auth) => {
-      if (auth === "shared") {
-        fixture.setLocalLoopbackGatewayConfig();
-      } else {
-        localAuthNone();
-      }
-      await nodeList(auth === "shared" ? { token: "explicit-token" } : {});
-      expect(fixture.getClientOptions()).toMatchObject(backend);
-      if (auth === "none") {
-        expect(fixture.getClientOptions()?.token).toBeUndefined();
-        expect(fixture.getClientOptions()?.password).toBeUndefined();
-      }
-    },
-  );
+  it.each(["shared", "none"])("uses identity-free backend %s auth", async (auth) => {
+    (auth === "shared" ? fixture.setLocalLoopbackGatewayConfig : localAuthNone)();
+    await nodeList(auth === "shared" ? { token: "explicit-token" } : {});
+    expect(getOptions()).toMatchObject(backend);
+    if (auth === "none") {
+      expect([getOptions()?.token, getOptions()?.password]).toEqual([undefined, undefined]);
+    }
+  });
 
   it("keeps local auth-none CLI cron.status off device storage", async () => {
     localAuthNone();
@@ -82,10 +76,7 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
       ok: true,
     });
 
-    expect(fixture.getClientOptions()).toMatchObject({
-      ...backend,
-      scopes: ["operator.read"],
-    });
+    expect(getOptions()).toMatchObject({ ...backend, scopes: ["operator.read"] });
     for (const load of [
       fixture.loadOrCreateDeviceIdentityMock,
       fixture.loadDeviceIdentityIfPresentMock,
@@ -96,46 +87,41 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
     }
   });
 
-  it.each(["url", "device", "stored auth"])(
-    "preserves explicit %s authentication for auth-none CLI calls",
-    async (kind) => {
-      localAuthNone();
-      const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
-      fixture.loadOriginDeviceTokenMock.mockReturnValue({
-        token: "fixture-origin-token",
-        role: "operator",
-        scopes: ["operator.read"],
-        updatedAtMs: 123,
-      });
+  it.each([
+    ["url", { url, token: "fixture-override-token" }, () => ({})],
+    ["device", {}, () => ({ deviceIdentity: fixture.getDeviceIdentity() })],
+    ["stored auth", {}, () => ({ useStoredDeviceAuth: true })],
+  ] as const)("keeps explicit %s auth for CLI auth-none", async (_kind, options, extra) => {
+    localAuthNone();
+    const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
+    fixture.loadOriginDeviceTokenMock.mockReturnValue({
+      token: "fixture-origin-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
 
-      await callGatewayFromCliRuntime(
-        "cron.status",
-        {
-          json: true,
-          config: fixture.getRuntimeConfig(),
-          ...(kind === "url"
-            ? { url: "ws://127.0.0.1:18789", token: "fixture-override-token" }
-            : {}),
-        },
-        undefined,
-        {
-          ...(kind === "device" ? { deviceIdentity: fixture.getDeviceIdentity() } : {}),
-          ...(kind === "stored auth" ? { useStoredDeviceAuth: true } : {}),
-        },
-      );
+    await callGatewayFromCliRuntime(
+      "cron.status",
+      {
+        json: true,
+        config: fixture.getRuntimeConfig(),
+        ...options,
+      },
+      undefined,
+      extra(),
+    );
 
-      expect(fixture.getClientOptions()).toMatchObject({
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        deviceIdentity: fixture.getDeviceIdentity(),
-      });
-    },
-  );
+    expect(getOptions()).toMatchObject({
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      deviceIdentity: fixture.getDeviceIdentity(),
+    });
+  });
 
   it.each(["URL override", "remote-mode tunnel"])(
     "rejects required local backend auth for %s",
     async (kind) => {
-      const url = "ws://127.0.0.1:18789";
       if (kind === "remote-mode tunnel") {
         fixture.setGatewayConfig({ mode: "remote", remote: { url, token: "remote-token" } });
         fixture.setGatewayNetworkDefaults();
@@ -143,7 +129,7 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
       await expect(
         nodeList(kind === "URL override" ? { url, token: "explicit-token" } : {}),
       ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
-      expect(fixture.getClientOptions()).toBeNull();
+      expect(getOptions()).toBeNull();
     },
   );
 }
