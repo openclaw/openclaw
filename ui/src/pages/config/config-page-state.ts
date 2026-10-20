@@ -7,6 +7,7 @@ import type {
   SystemInfoResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type * as Push from "../../../../packages/gateway-protocol/src/schema/push.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -120,13 +121,10 @@ export function createConfigPage(
   }>({ formModes: {}, selections: {} });
   let pageId: ConfigPageId = "advanced";
   let routeData: ConfigRouteData | null = null;
-  const routeListeners = new Set<() => void>();
+  const routeListeners = createChangeListeners();
   const admittedRoute: ConfigRouteSource = {
     read: () => routeData,
-    subscribe(listener) {
-      routeListeners.add(listener);
-      return () => routeListeners.delete(listener);
-    },
+    subscribe: routeListeners.subscribe,
   };
   let connected = false;
   let settings = loadSettings();
@@ -210,9 +208,7 @@ export function createConfigPage(
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
     synchronize();
     invalidate();
-    for (const notify of routeListeners) {
-      notify();
-    }
+    routeListeners.publish();
   }
 
   const hiddenSessionCatalogsChanged = () => {
