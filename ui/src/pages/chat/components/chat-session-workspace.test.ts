@@ -470,7 +470,7 @@ describe("openSessionWorkspaceFile", () => {
           hello: gatewayHelloForMethods(["sessions.files.set"]),
         },
       );
-      openSessionWorkspaceFile(state, { path: "notes.md" });
+      void openSessionWorkspaceFile(state, { path: "notes.md" });
       const file = await loadedSidebarContent(state);
       if (file?.kind !== "file" || !file.edit) {
         throw new Error("Expected an editable file");
@@ -494,7 +494,7 @@ describe("openSessionWorkspaceFile", () => {
         state,
         () => state.sessionWorkspaceState?.previews[0]?.content !== file,
       );
-      openSessionWorkspaceFile(state, { path: "notes.md" });
+      void openSessionWorkspaceFile(state, { path: "notes.md" });
       await reopened;
       const fresh = await loadedSidebarContent(state);
       if (fresh.kind !== "file" || !fresh.edit) {
@@ -553,7 +553,7 @@ describe("openSessionWorkspaceFile", () => {
       const workspace = getSessionWorkspace(state);
       workspace.list = workspaceList(oldSource.root);
       if (view === "forwarded") {
-        openSessionWorkspaceFile(state, { path: "notes.md", sessionKey: key });
+        void openSessionWorkspaceFile(state, { path: "notes.md", sessionKey: key });
       } else {
         workspaceProps(state).onOpenFile("notes.md", "workspace");
       }
