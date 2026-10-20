@@ -2506,8 +2506,10 @@ until settlement. A lost reply never triggers mutation replay.
 
 Workspace setup and attestation writers publish the complete snapshot they just
 committed, so the next preparation reuses those facts without another registration
-read. Unchanged hashes still refresh the durable attestation timestamp: the
-24-hour disappearance protection must survive a restart. Alias changes invalidate
+read. Unchanged hashes refresh the durable attestation timestamp only after an
+hour; first attestations and changed hashes write immediately. The persisted
+24-hour disappearance guard therefore protects at least 23 hours after the last
+unchanged preparation, including across a restart. Alias changes invalidate
 cached resolutions. Local and repository workspaces and node prepared-workspace
 lifecycle operations publish through their existing native or worker kernels.
 Deletion remains a tombstone, and newer native changes supersede delayed worker

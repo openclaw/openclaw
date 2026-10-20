@@ -42,6 +42,7 @@ type StatusDegradationSummary = Pick<
   | "startupRecoveryWarning"
   | "modelReasoningWarning"
   | "installationReplacementWarning"
+  | "utilityModelWarnings"
   | "childRuntime"
   | "secretEgressProxy"
   | "pluginReload"
@@ -65,6 +66,9 @@ function buildStatusDegradationRows(
     summary.childRuntime ? formatMissingChildRuntimeWarning(summary.childRuntime) : undefined,
   );
   addWarning("Installation replaced", summary.installationReplacementWarning);
+  for (const warning of summary.utilityModelWarnings ?? []) {
+    addWarning("Utility model", `${warning.path}: ${warning.message}`);
+  }
   if (summary.secretEgressProxy) {
     const status = summary.secretEgressProxy;
     rows.push({

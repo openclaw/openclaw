@@ -81,7 +81,7 @@ const expectations: Record<
       },
     },
   },
-  "legacy-roster.json": { providers: ["openai"] },
+  "legacy-roster.json": { providers: ["openai"], model: "gpt-4.1" },
   "models-allow.json": { providers: ["fixture-provider"], model: "fixture-model" },
   "oauth-only.json": { providers: ["openai"] },
   "provider-partially-unavailable.json": { providers: ["openai"], model: "gpt-5.4" },
@@ -268,6 +268,7 @@ describe("operator config startup corpus", () => {
       if (name === "legacy-roster.json") {
         expect([...migrated.changeLines, ...normalized.changes].length).toBeGreaterThan(0);
         expect(config.agents?.entries?.main).toBeDefined();
+        expect(config.agents?.entries?.main?.model).toBe("openai/gpt-4.1");
       }
 
       for (const agentId of agentIds) {

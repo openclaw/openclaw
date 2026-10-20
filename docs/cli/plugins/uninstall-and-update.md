@@ -100,6 +100,12 @@ confirmed. The command reports the failure without claiming runtime activation.
 
 If update finalization fails, the error reports the original cause first and retains any rollback failures as additional diagnostic context. A failed rollback remains retryable; a successfully committed or rolled-back install is not applied again during cleanup.
 
+If another process holds plugin files during replacement, the updater restores
+any removed files from its backup without overwriting the held files. Stop the
+Gateway and any other process holding those files, then retry. If restoration
+cannot finish, the error names the retained backup recovery path; keep that
+backup until recovery is complete. Uninstalling the plugin is not required.
+
 On source installations, a selected plugin built with the host stays in use. Named updates, `--all`, and stable/beta core updates report why the registry copy was not admitted and leave its dormant install record unchanged. Package ownership checks still apply to plugins being updated; explicit plugin paths retain their selection priority.
 
 During `openclaw update`, a locally linked plugin with an explicit load path keeps its selection even when OpenClaw bundles the same plugin ID. The update reports the retained plugin and path as a warning; update that plugin at its source. Linked path records are excluded from package-update ownership reconciliation, so stale package metadata does not turn link retention into an update failure.

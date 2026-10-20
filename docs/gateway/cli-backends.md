@@ -57,6 +57,13 @@ When `agents.defaults.utilityModel` is unset, OpenClaw uses the primary provider
 
 An explicitly configured utility model keeps its own runtime. A compatible runtime explicitly selected for the session, or a runtime pinned on the derived model's own entry, also wins over inherited routing. For other runtimes, automatic utility routing can prefer an available provider credential before borrowing the primary model's pinned runtime.
 
+Utility completions require an exact, empty tool cap. Config validation, Doctor,
+and status warn when a selected CLI backend cannot enforce that contract. The
+warning preserves your explicit route; choose a capable utility model or configure
+capable `utilityModel.fallbacks`.
+Read-only status output, including `status --json`, keeps a generic warning while
+omitting model and configuration details.
+
 To explicitly use the Anthropic API for utility work, configure its runtime on the utility model:
 
 ```json5
@@ -704,8 +711,17 @@ are connected, select one explicitly. When local execution is allowed by policy,
 use managed `exec` for local Claude MCP turns, or the native shell when the backend
 retains it.
 
-When a run passes configured MCP servers to the CLI natively (runs without an
-exact tool selection), `tools.allow` and `tools.deny` also constrain those servers.
+Local bundled `claude-cli` turns serve configured MCP servers through the
+Gateway's existing bridge as `<server>__<tool>` tools. This includes local turns
+with effective `tools.exec.host: "node"`: Claude does not spawn another copy of
+each configured server. Without an exact or restricted tool selection, that mode
+keeps native Bash on the Gateway host, Claude's native tools, user settings, and
+native permission handling. The separate bridge `exec` capability still targets
+the selected node. Changing the configured MCP surface starts one fresh Claude
+session for an affected existing conversation; OpenClaw history is preserved.
+
+When another backend passes configured MCP servers to its harness natively,
+`tools.allow` and `tools.deny` also constrain those servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
 provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,
 and applies the complete layered policy before process spawn or Codex

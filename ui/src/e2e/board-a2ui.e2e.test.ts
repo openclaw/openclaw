@@ -7,6 +7,7 @@ import type { Frame } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
+import { a2uiV09Corpus } from "../test-helpers/a2ui-v09-corpus.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeBoardTestServer, createBoardE2eSuite } from "./board-browser.test-support.ts";
@@ -112,6 +113,218 @@ const suite = createBoardE2eSuite("Control UI dashboard A2UI", {
   afterSandboxClose: () => closeBoardTestServer(rendererServer),
 });
 suite.define(() => {
+  it("renders the v0.9 catalog and keeps bound inputs, templates, validation, and actions live", async () => {
+    const page = await suite.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.evaluate((messages) => {
+      const actions: unknown[] = [];
+      Reflect.set(globalThis, "catalogActions", actions);
+      Reflect.set(globalThis, "openclawA2UIBoot", { messages });
+      Reflect.set(globalThis, "openclaw", {
+        state: {
+          emit: async (action: unknown) => {
+            actions.push(action);
+          },
+        },
+      });
+      document.body.append(document.createElement("openclaw-a2ui-host"));
+    }, a2uiV09Corpus());
+    await page.addScriptTag({
+      path: path.join(bundleDirectory, bundleFiles["v0.9"]),
+      type: "module",
+    });
+    await page.getByRole("heading", { name: "Canvas catalog" }).waitFor();
+    expect(await page.evaluate(() => Reflect.get(globalThis, "litHtmlVersions"))).toBeUndefined();
+    await expect.poll(() => page.locator("#intro strong").textContent()).toBe("live");
+    expect(await page.locator("#icon svg path").getAttribute("d")).toBe(
+      "M3 12l6 6L21 6l-2-2L9 14l-4-4z",
+    );
+    await page.getByAltText("Synthetic landscape").waitFor();
+    expect(await page.locator("#video video").getAttribute("controls")).toBe("");
+    expect(await page.locator("#audio audio").getAttribute("controls")).toBe("");
+    await page.locator("#divider hr").waitFor();
+    await expect
+      .poll(async () =>
+        (await page.locator("#items .a2ui-text").allTextContents()).map((text) => text.trim()),
+      )
+      .toEqual(["First item", "Second item"]);
+    await page.getByLabel("Name", { exact: true }).fill("Grace");
+    await expect.poll(() => page.locator("#echo p").textContent()).toBe("Grace");
+    await page.getByLabel("Notifications").uncheck();
+    await page.getByLabel("Capacity").press("End");
+    await page.getByLabel("Date", { exact: true }).fill("2026-10-21");
+    await page.getByLabel("Time", { exact: true }).fill("15:45");
+    await page.getByRole("button", { name: "Beta", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
+    expect(await page.evaluate(() => Reflect.get(globalThis, "catalogActions"))).toMatchObject([
+      {
+        eventType: "a2ui.action",
+        action: {
+          name: "save",
+          sourceComponentId: "submit",
+          surfaceId: "main",
+          context: {
+            name: "Grace",
+            enabled: false,
+            amount: 100,
+            when: "2026-10-21T15:45:00",
+            choices: ["a", "b"],
+          },
+        },
+      },
+    ]);
+
+    await page.getByRole("tab", { name: "Notes", exact: true }).click();
+    await expect.poll(() => page.locator("#notes p").textContent()).toBe("Second tab content");
+    await page.getByRole("tab", { name: "Notes", exact: true }).press("ArrowLeft");
+    await expect
+      .poll(async () =>
+        (await page.locator("#items .a2ui-text").allTextContents()).map((text) => text.trim()),
+      )
+      .toEqual(["First item", "Second item"]);
+    await page.getByRole("button", { name: "Open details" }).click();
+    await expect
+      .poll(() => page.getByRole("dialog").textContent())
+      .toContain("Details in a dialog");
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    expect(
+      await page
+        .getByRole("button", { name: "Open details" })
+        .evaluate((button) => button === document.activeElement),
+    ).toBe(true);
+
+    await applyMessages(page.mainFrame(), [
+      {
+        version: "v0.9",
+        updateDataModel: { surfaceId: "main", path: "/name", value: "Server update" },
+      },
+      {
+        version: "v0.9",
+        updateDataModel: {
+          surfaceId: "main",
+          path: "/items",
+          value: [{ title: "Replacement item" }],
+        },
+      },
+      {
+        version: "v0.9",
+        updateComponents: {
+          surfaceId: "main",
+          components: [
+            {
+              id: "submit",
+              component: "Button",
+              child: "submit-label",
+              action: { event: { name: "save" } },
+              checks: [{ condition: false, message: "Complete the form" }],
+            },
+            {
+              id: "intro",
+              component: "Text",
+              text: "**Safe** <img src=x onerror=alert(1)> [bad](javascript:alert(1))",
+            },
+            { id: "amount", component: "Slider", label: "Capacity", min: 0, max: 1, value: 0.5 },
+            {
+              id: "when",
+              component: "DateTimeInput",
+              value: { path: "/when" },
+              enableDate: true,
+              enableTime: true,
+              min: "2026-10-20T09:00:00",
+              max: "2026-10-22T17:00:00",
+            },
+          ],
+        },
+      },
+    ]);
+    await expect
+      .poll(() => page.getByLabel("Name", { exact: true }).inputValue())
+      .toBe("Server update");
+    await expect.poll(() => page.locator("#items p").textContent()).toBe("Replacement item");
+    await expect
+      .poll(() => page.getByRole("button", { name: "Save changes" }).isDisabled())
+      .toBe(true);
+    await expect.poll(() => page.locator("#intro strong").textContent()).toBe("Safe");
+    expect(await page.locator("#intro img, #intro a, #intro script").count()).toBe(0);
+    await expect.poll(() => page.getByLabel("Capacity").inputValue()).toBe("0.5");
+    expect(
+      await page
+        .getByLabel("Capacity")
+        .evaluate((input) => input instanceof HTMLInputElement && input.validity.valid),
+    ).toBe(true);
+    expect(await page.getByLabel("Date", { exact: true }).getAttribute("min")).toBe("2026-10-20");
+    expect(await page.getByLabel("Date", { exact: true }).getAttribute("max")).toBe("2026-10-22");
+    expect(await page.getByLabel("Time", { exact: true }).getAttribute("min")).toBeNull();
+    await page.getByLabel("Date", { exact: true }).fill("2026-10-20");
+    await expect
+      .poll(() => page.getByLabel("Time", { exact: true }).getAttribute("min"))
+      .toBe("09:00");
+    await page.getByLabel("Date", { exact: true }).evaluate((input) => {
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error("Expected native date input");
+      }
+      input.value = "2026-10-21";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    });
+    await applyMessages(page.mainFrame(), [
+      {
+        version: "v0.9",
+        updateComponents: {
+          surfaceId: "main",
+          components: [
+            {
+              id: "when",
+              component: "DateTimeInput",
+              label: "Calendar refreshed",
+              value: { path: "/when" },
+              enableDate: true,
+              enableTime: true,
+              min: "2026-10-19T09:00:00",
+              max: "2026-10-22T17:00:00",
+            },
+          ],
+        },
+      },
+    ]);
+    await page.getByText("Calendar refreshed", { exact: true }).waitFor();
+    expect(await page.getByLabel("Date", { exact: true }).inputValue()).toBe("2026-10-21");
+    await applyMessages(page.mainFrame(), [
+      updateComponents("v0.9", [
+        { id: "root", component: "Column", children: ["weighted", "action"] },
+        { id: "weighted", component: "Row", children: ["left", "right"] },
+        { ...textComponent("v0.9", "left", "Left"), weight: 1 },
+        { ...textComponent("v0.9", "right", "Right"), weight: 2 },
+        refreshButton(),
+        textComponent("v0.9", "action-label", "Themed action"),
+      ]),
+    ]);
+    await expect
+      .poll(async () => {
+        const left = await page.locator("#left .a2ui-text").boundingBox();
+        const right = await page.locator("#right .a2ui-text").boundingBox();
+        return left && right ? right.width / left.width : 0;
+      })
+      .toBeCloseTo(2, 2);
+    await page.emulateMedia({ colorScheme: "light" });
+    const themedAction = page.getByRole("button", { name: "Themed action" });
+    await themedAction.hover();
+    expect(
+      await themedAction.evaluate((button) => {
+        const sample = document.createElement("span");
+        sample.style.backgroundColor = "color-mix(in oklab, #197a55 85%, black)";
+        document.body.append(sample);
+        const expected = getComputedStyle(sample).backgroundColor;
+        sample.remove();
+        return getComputedStyle(button).backgroundColor === expected;
+      }),
+    ).toBe(true);
+    await page.evaluate(() => Reflect.get(globalThis, "openclawA2UI").reset());
+    await expect.poll(() => page.locator("a2ui-surface").count()).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
   it("sends each v0.8 action once after the host reconnects", async () => {
     const page = await suite.newPage();
     await page.addScriptTag({

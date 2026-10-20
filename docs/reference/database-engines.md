@@ -612,6 +612,11 @@ and recovery must account for that durability policy. The adapter sets generous
 lock and statement timeouts once during connection setup; operations do not
 change timeout settings individually.
 
+PostgreSQL model-context navigation reads parse each selected transcript row once
+and keep intermediate projections as JSONB until the navigation and byte counts
+cross the database boundary. The read remains bounded by the context page, and
+PostgreSQL transcript writes do not precompute navigation envelopes.
+
 ## Anchors and backups
 
 A PostgreSQL store keeps a small SQLite anchor at its usual local database path.

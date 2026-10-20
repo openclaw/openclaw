@@ -62,7 +62,8 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
               schedule: { kind: "at", at: new Date(Date.now() + 2_000).toISOString() },
               sessionTarget: "main",
               wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "Windows process identity proof fired" },
+              // Exercise receipt ownership without waiting for a session to adopt a reminder.
+              payload: { kind: "script", script: "return {};", toolsAllow: [] },
             },
             { signal },
           );

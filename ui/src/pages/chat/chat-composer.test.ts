@@ -348,20 +348,16 @@ describe("renderChatComposer controls", () => {
       canAbort: true,
       onAbort,
       gatewayQuestionPrompts: [{ ...questionPrompt("pending", "Continue?"), sessionKey: "main" }],
-      asyncQuestions: {
-        scope: "archived-session",
-        pending: [{ itemId: "audience", questions: [{ title: "Which audience?" }] }],
-        archived: new Map(),
-        historyKey: "",
-        resolved: new Map(),
-        delivery: new Map(),
-        discard: vi.fn(),
-        drafts: new Map(),
-        dismiss: vi.fn(async () => {}),
-        onChange: vi.fn(),
-        reopen: vi.fn(),
-        submit: vi.fn(async () => true),
-      },
+      messages: [
+        {
+          role: "assistant",
+          openclawAsyncDelivery: {
+            itemId: "audience",
+            questions: [{ title: "Which audience?" }],
+          },
+        },
+      ],
+      onAsyncQuestionSubmit: vi.fn(async () => true),
       disabledBanner: {
         kind: "composer-replacement",
         text: "This session is archived. Unarchive it to continue the conversation.",

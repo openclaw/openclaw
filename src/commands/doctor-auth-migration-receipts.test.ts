@@ -11,7 +11,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  archiveAuthProfileMigrationSource,
   prepareAuthProfileSourceReceipt,
   digestAuthProfileMigrationValue,
   finalizeAuthProfileMigrationSource,
@@ -76,7 +75,8 @@ describe("auth profile migration receipts", () => {
       "openai:default": digestAuthProfileMigrationValue(profileValue),
     };
     recordAuthProfileMigrationImported(receipt);
-    archiveAuthProfileMigrationSource(receipt);
+    // Model a crash after the source rename but before the receipt completes.
+    fs.renameSync(receipt.sourcePath, receipt.archivePath);
     target.prepare("DELETE FROM auth_profile_store").run();
     target.close();
 
@@ -93,7 +93,7 @@ describe("auth profile migration receipts", () => {
 
   it("does not overwrite a source recreated before archive restoration", async () => {
     const { sourcePath, receipt } = await makeReceipt();
-    archiveAuthProfileMigrationSource(receipt);
+    fs.renameSync(receipt.sourcePath, receipt.archivePath);
     fs.writeFileSync(sourcePath, '{"newer":true}\n', "utf8");
 
     expect(restoreAuthProfileMigrationArchiveNoClobber(receipt)).toBe("source-exists");
@@ -169,7 +169,7 @@ describe("auth profile migration receipts", () => {
     const { state, receipt } = await makeReceipt();
     receipt.completionStatus = "archived-unparsed";
     recordAuthProfileMigrationImported(receipt);
-    archiveAuthProfileMigrationSource(receipt);
+    fs.renameSync(receipt.sourcePath, receipt.archivePath);
 
     resumePendingAuthProfileMigrationArchives(state.env);
     const row = openOpenClawStateDatabase({ env: state.env })
