@@ -159,6 +159,7 @@ it("builds status-all overview rows from the shared surface", () => {
     },
     summary: {
       ...params.summary,
+      modelReasoningWarning: "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
       secretEgressProxy: {
         state: "degraded",
         caExpiresAt: "2036-09-01T00:00:00.000Z",
@@ -204,6 +205,7 @@ it("builds status-all overview rows from the shared surface", () => {
     "Secret egress proxy": "Check OpenSSL, then retry the request.",
     "Degraded secrets": "1 degraded · capability:tts",
     "Degraded plugins": "1 configured-unavailable · discord",
+    "Model reasoning": "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
     Secrets: "2 diagnostics",
   });
 });

@@ -1058,25 +1058,6 @@ describe("createOllamaStreamFn", () => {
     expect(message).not.toContain("trailing text");
     expect(tracked.wasCanceled()).toBe(true);
   });
-
-  it("drops streamed reasoning chunks for non-reasoning models", async () => {
-    const events = await collectMockedOllamaEvents(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
-      ],
-      { model: { reasoning: false } },
-    );
-    const doneEvent = events.at(-1);
-    if (!doneEvent || doneEvent.type !== "done") {
-      throw new Error("Expected done event");
-    }
-
-    expect(doneEvent.message.content).toEqual([]);
-    expect(doneEvent.message.usage.output).toBeGreaterThan(0);
-    expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
-  });
 });
 
 describe("createConfiguredOllamaStreamFn", () => {

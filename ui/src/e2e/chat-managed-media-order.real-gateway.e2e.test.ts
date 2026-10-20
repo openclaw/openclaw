@@ -15,6 +15,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { ChatState } from "../pages/chat/chat-state-contract.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
@@ -43,6 +44,7 @@ const expectedOrder = [
 const fixtureKey = "synthetic-managed-media-key";
 
 async function startProvider() {
+  const echoReleased = createDeferred();
   const requests: string[] = [];
   const failures: string[] = [];
   const routes: string[] = [];
@@ -67,26 +69,31 @@ async function startProvider() {
           response.destroy();
         });
         request.on("end", () => {
-          try {
-            const model = asOptionalRecord(JSON.parse(body))?.model;
-            if (model !== "echo" && model !== "metadata") {
-              throw new Error("Unexpected fixture model");
+          void (async () => {
+            try {
+              const model = asOptionalRecord(JSON.parse(body))?.model;
+              if (model !== "echo" && model !== "metadata") {
+                throw new Error("Unexpected fixture model");
+              }
+              requests.push(model);
+              if (model === "echo" && (!reply || !body.includes(prompt))) {
+                throw new Error("The provider must receive the browser chat.send prompt");
+              }
+              if (model === "echo") {
+                await echoReleased.promise;
+              }
+              // Exactly one assistant message containing two local MEDIA directives.
+              // No tool result, preordered image block, or direct transcript write bypasses delivery.
+              writeOpenAiResponsesText(response, {
+                text: model === "echo" ? reply : "Managed media ordering proof",
+                messageId: `managed-media-message-${requests.length}`,
+                responseId: `managed-media-response-${requests.length}`,
+              });
+            } catch (error) {
+              failures.push(String(error));
+              response.writeHead(500).end("Synthetic provider failed");
             }
-            requests.push(model);
-            if (model === "echo" && (!reply || !body.includes(prompt))) {
-              throw new Error("The provider must receive the browser chat.send prompt");
-            }
-            // Exactly one assistant message containing two local MEDIA directives.
-            // No tool result, preordered image block, or direct transcript write bypasses delivery.
-            writeOpenAiResponsesText(response, {
-              text: model === "echo" ? reply : "Managed media ordering proof",
-              messageId: `managed-media-message-${requests.length}`,
-              responseId: `managed-media-response-${requests.length}`,
-            });
-          } catch (error) {
-            failures.push(String(error));
-            response.writeHead(500).end("Synthetic provider failed");
-          }
+          })();
         });
       }),
   });
@@ -98,8 +105,10 @@ async function startProvider() {
     setReply(text: string) {
       reply = text;
     },
-    close: () =>
-      runQaGatewayFixture(
+    releaseEcho: () => echoReleased.resolve(),
+    close: () => {
+      echoReleased.resolve();
+      return runQaGatewayFixture(
         async () => {},
         async () => {
           const shutdown = reservation.releaseListener();
@@ -107,7 +116,8 @@ async function startProvider() {
           await shutdown;
         },
         reservation.claim.release,
-      ),
+      );
+    },
   };
 }
 
@@ -357,6 +367,17 @@ async function runManagedMediaScenario() {
       await waitForControlUiGatewayReady(page);
       await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
       await page.getByRole("button", { name: "Send message", exact: true }).click();
+      // The recap belongs to a run the pane observed, not a terminal history row.
+      await page.waitForFunction((expectedSessionKey) => {
+        const state = document.querySelector<HTMLElement & { state?: ChatState }>(
+          'openclaw-chat-pane[aria-hidden="false"]',
+        )?.state;
+        return state?.sessionKey === expectedSessionKey && Boolean(state.chatRunId);
+      }, sessionKey);
+      await page
+        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-working-indicator')
+        .waitFor({ state: "visible" });
+      provider.releaseEcho();
       const bubble = page.locator(".chat-group.assistant .chat-bubble").filter({ hasText: intro });
       const renderedImages = bubble.locator("img.chat-message-image");
       // A durable reply can briefly overlap its live tail until the run retires.

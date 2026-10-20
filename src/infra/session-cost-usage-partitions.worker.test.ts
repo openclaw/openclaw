@@ -147,10 +147,11 @@ if (!isMainThread) {
       await using owner = await acquireUsageLock(agentId);
       const ids = Array.from({ length: 50 }, (_, index) => `session-${index}`);
       await owner.writeRollup(
-        [...ids, "unrelated"].map((id) => ({
-          ...rollup(id, { totalTokens: 7 }, 1, new Uint8Array([1])),
-          partitions: partitions(["2026-01-01", "2026-02-01"], { tokens: 3 }, 2),
-        })),
+        [...ids, "unrelated"].map((id) =>
+          Object.assign(rollup(id, { totalTokens: 7 }, 1, new Uint8Array([1])), {
+            partitions: partitions(["2026-01-01", "2026-02-01"], { tokens: 3 }, 2),
+          }),
+        ),
       );
       await fs.writeFile(log, "");
       expect(

@@ -2222,7 +2222,6 @@
 ["src/agents/model-fallback.test.ts","./auth-profiles.runtime.js","bc9c58a5634a23234926a070c7b72cba9cba78fc3065efc7214eddfc9186dd66",1]
 ["src/agents/model-fallback.test.ts","./auth-profiles/source-check.js","790f450ab2eee62b196354c08f193dc48aeeca0423c9fe4fbde01fcfcf54014e",1]
 ["src/agents/model-fallback.test.ts","./provider-model-normalization.runtime.js","975734f5c064307911dd8c5808afc070d903d5a122918d0f830aeaa4a6302fe8",1]
-["src/agents/model-runtime-choice.native.test.ts","./prepared-model-catalog.js","09edac6c0db7a75bc0d8e77b581dea2a7e80362b58347f95c212a28f8de5780b",1]
 ["src/agents/model-runtime-choice.test.ts","./prepared-model-catalog.js","312007b4b9576ba99d7f54f4c0c80464768e25aace6b87ae41658d2c71bbbb1a",1]
 ["src/agents/model-scan.probes.test.ts","@openclaw/ai","c19f0736091f7306e6fccb7bb0d636f47ab441c6b970f56624e87e118a8e9c6e",1]
 ["src/agents/model-scan.probes.test.ts","@openclaw/ai/providers","d33f70a034f7d0491fc5bc742f77c351e88e82ff526cb1ec4e2569921d3c5e61",1]

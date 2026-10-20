@@ -50,8 +50,6 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
 import type {
   PluginHookCronChangedEvent,
@@ -97,6 +95,7 @@ import {
   withObservedCronStreamState,
 } from "./server-cron-drain.js";
 import {
+  enqueueCronSystemEvent,
   fireOnExitJob,
   fireStreamJob,
   formatOnExitRunSummary,
@@ -513,24 +512,7 @@ export function buildGatewayCronService(params: {
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,
     sessionStorePath,
-    enqueueSystemEvent: (text, opts) => {
-      const { agentId, sessionKey } = resolveCronTarget(opts);
-      if (!agentId || !sessionKey) {
-        throw new Error("Cron system event target did not resolve an owner and session key.");
-      }
-      const remove = enqueueSystemEventWithReceipt(
-        text,
-        withSystemEventOwner(
-          {
-            sessionKey,
-            contextKey: opts?.contextKey,
-            deliveryContext: opts?.deliveryContext,
-          },
-          agentId,
-        ),
-      );
-      return remove ? { accepted: true, remove } : { accepted: false };
-    },
+    enqueueSystemEvent: (text, opts) => enqueueCronSystemEvent(text, opts, resolveCronTarget(opts)),
     resolveOriginDeliveryContext: (opts) => {
       // Global scope removes the key's agent prefix; retain the selected store owner.
       const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({

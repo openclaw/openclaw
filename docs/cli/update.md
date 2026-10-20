@@ -841,6 +841,12 @@ through activation, readiness, and recovery, including native service commands.
 Expiry reports `update-activation-timeout` or pending recovery; it does not start
 another recovery phase. Outstanding writers retain ownership until they settle.
 
+Candidate checks compute an automatic allowance from the copied SQLite and
+plugin state. A shorter update deadline limits that allowance; the update report
+and history warn with both values because checks may time out early. Increase
+`--timeout` to allow more time. This warning comes from the installed updater and
+protects subsequent updates after installation.
+
 The same deadline cancels runtime-retention inventory, its file-hashing workers,
 and materialization before activation. Retention makes one attempt and stops if
 dependency discovery cannot make progress; it does not repeatedly copy a changing

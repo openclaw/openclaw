@@ -621,6 +621,89 @@ it.each(["device changed", "metadata changed"])(
     }),
 );
 
+it.each(["restored", "bytes changed", "mtime changed", "hard linked"] as const)(
+  "recovers only a verified inode-only restored registry: %s",
+  (variant) =>
+    withOpenClawTestState({ label: "doctor-restored-registry" }, async (state) => {
+      const { sessions, store, run, scope, entry, search } = discoveryState(state);
+      const key = "agent:main:main";
+      const id = "99999999-9999-4999-8999-999999999999";
+      const original = path.join(sessions, `${id}.jsonl`);
+      fs.writeFileSync(original, transcript(id, "restoredregistryneedle"));
+      writeJson(store, {
+        [key]: { sessionId: "old-current", previousSessionId: id, updatedAt: 1 },
+      });
+      fs.utimesSync(store, 1, 1);
+      const saved = await retainSources(state, [store, original], { version: "2026.9.4" });
+      const registry = [...saved.keys()][0]!;
+      const inventory = collectRecoveryInventory({ cfg: {}, env: state.env });
+      const manifestPath = inventory.references.get(registry)![0]!.run.manifestPath;
+      const receiptBefore = fs.readFileSync(manifestPath, "utf8");
+      const originalIdentity = readMigrationArtifactIdentity(registry);
+      const restored = `${registry}.restored`;
+      fs.copyFileSync(registry, restored);
+      fs.utimesSync(restored, 1, 1);
+      fs.renameSync(restored, registry);
+      expect(fs.statSync(registry, { bigint: true }).ino.toString()).not.toBe(originalIdentity.ino);
+      if (variant === "bytes changed") {
+        fs.writeFileSync(registry, saved.get(registry)!.replace("old-current", "bad-current"));
+        fs.utimesSync(registry, 1, 1);
+      } else if (variant === "mtime changed") {
+        fs.utimesSync(registry, 2, 2);
+      } else if (variant === "hard linked") {
+        fs.linkSync(registry, restored);
+      }
+      await importSqliteSessionRows({
+        ...scope,
+        storePath: store,
+        sessionKey: key,
+        entry: { sessionId: "new-current", updatedAt: 999, label: "current-user-label" },
+      });
+      const currentEntry = entry(key);
+      expect(issues(await run("dry-run"))).toEqual([
+        expect.objectContaining({ code: "historical_transcript_deferred" }),
+      ]);
+      expect(fs.readFileSync(manifestPath, "utf8")).toBe(receiptBefore);
+      const recovered = await run("recover");
+      if (variant === "restored") {
+        expect(issues(recovered)).toEqual([]);
+        const recoveredReceipt = fs.readFileSync(manifestPath, "utf8");
+        const manifest = readManifest(manifestPath)!;
+        for (const move of [
+          ...manifest.targets[0]!.plannedMoves,
+          ...manifest.targets[0]!.completedMoves,
+        ].filter((candidate) => candidate.kind === "legacy-store")) {
+          expect(move.artifact).toEqual({
+            ...inventory.references.get(registry)![0]!.move.artifact,
+            identity: readMigrationArtifactIdentity(registry),
+          });
+        }
+        expect(issues(await run("recover"))).toEqual([]);
+        expect(fs.readFileSync(manifestPath, "utf8")).toBe(recoveredReceipt);
+        expect(search("restoredregistryneedle")).toEqual([
+          expect.objectContaining({ sessionKey: key, sessionId: id }),
+        ]);
+      } else {
+        expect(issues(recovered)).toEqual([
+          expect.objectContaining({ code: "historical_transcript_deferred" }),
+        ]);
+        expect(fs.readFileSync(manifestPath, "utf8")).toBe(receiptBefore);
+      }
+      expect(entry(key)).toEqual(currentEntry);
+      expect(entry(key)?.entry).toMatchObject({
+        sessionId: "new-current",
+        updatedAt: 999,
+        label: "current-user-label",
+      });
+      expect(fs.existsSync(store)).toBe(false);
+      expect(fs.readFileSync(registry, "utf8")).toBe(
+        variant === "bytes changed"
+          ? saved.get(registry)!.replace("old-current", "bad-current")
+          : saved.get(registry),
+      );
+    }),
+);
+
 it("preserves retained shared aliases after the old migration cleared their filenames", () =>
   withOpenClawTestState({ label: "doctor-shared-archive" }, async (state) => {
     const { sessions, store, run, search, entry: readEntry } = discoveryState(state);

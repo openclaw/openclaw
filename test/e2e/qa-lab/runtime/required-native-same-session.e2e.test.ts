@@ -306,7 +306,6 @@ it.skipIf(process.platform === "win32")(
           operator,
           root,
           capacity: 1,
-          capacityWaitMs: 0,
           nodeConfig: {
             ...nodeConfig.config,
             models: { providers: { [providerId!]: nativeProvider } },

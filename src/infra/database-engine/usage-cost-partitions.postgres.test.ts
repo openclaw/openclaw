@@ -27,16 +27,27 @@ const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 
 it.skipIf(!connection)(
-  "refreshes and ranges PostgreSQL usage partitions for quoted source paths",
+  "reuses report connections while refreshing and ranging PostgreSQL usage partitions",
   async () => {
     const prefix = `usagecost_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     const client = new Client({ connectionString: connection });
+    const databaseUrl = new URL(connection!);
+    databaseUrl.pathname = `/${prefix}`;
+    const databaseClient = new Client({ connectionString: databaseUrl.href });
     await client.connect();
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: connection!, schemaPrefix: prefix },
-    });
     try {
+      // Refusing new connections must not affect another test's database.
+      await client.query(`CREATE DATABASE "${prefix}"`);
+      await databaseClient.connect();
+      await databaseClient.query("CREATE EXTENSION unaccent");
+      await databaseClient.query("CREATE EXTENSION pg_trgm");
+      await databaseClient.query("CREATE EXTENSION vector");
+      installDatabaseEngineSelection({
+        effectiveEngines: resolveDatabaseFamilyEngines({
+          database: { families: { agent: { engine: "postgres" } } },
+        }),
+        postgres: { connection: databaseUrl.href, schemaPrefix: prefix },
+      });
       await withOpenClawTestState(
         { scenario: "minimal", prepareProfileCatalog: false },
         async (state) => {
@@ -78,6 +89,14 @@ it.skipIf(!connection)(
           await refresh();
           expect((await read(sessionFile, 8)).summaries[0]?.totalTokens).toBe(7);
           expect((await read(sessionFile, 9)).summaries[0]?.totalTokens).toBe(11);
+          // Warm reports must use the retained reader, even when another open is impossible.
+          await client.query(`ALTER DATABASE "${prefix}" ALLOW_CONNECTIONS false`);
+          try {
+            expect((await read(sessionFile, 8)).summaries[0]?.totalTokens).toBe(7);
+            expect((await read(sessionFile, 9)).summaries[0]?.totalTokens).toBe(11);
+          } finally {
+            await client.query(`ALTER DATABASE "${prefix}" ALLOW_CONNECTIONS true`);
+          }
           await fs.writeFile(sessionFile, september);
           await refresh();
           expect((await read(sessionFile, 9)).summaries[0]?.totalTokens).toBe(0);
@@ -90,7 +109,7 @@ it.skipIf(!connection)(
           const namespace = `"${facts.namespace.replaceAll('"', '""')}"`;
           const stored = async () =>
             (
-              await client.query<{
+              await databaseClient.query<{
                 scope: string;
                 key: string;
                 value_json: string;
@@ -109,10 +128,11 @@ it.skipIf(!connection)(
           await using owner = await acquireUsageLock(agentId);
           expect(
             await owner.writeRollup(
-              [...ids, "batch-unrelated"].map((id) => ({
-                ...rollup(id, { totalTokens: 7 }, 1, new Uint8Array([1])),
-                partitions: partitions(["2026-01-01", "2026-02-01"], { tokens: 3 }, 2),
-              })),
+              [...ids, "batch-unrelated"].map((id) =>
+                Object.assign(rollup(id, { totalTokens: 7 }, 1, new Uint8Array([1])), {
+                  partitions: partitions(["2026-01-01", "2026-02-01"], { tokens: 3 }, 2),
+                }),
+              ),
             ),
           ).toBe(true);
           const before = await stored();
@@ -125,7 +145,7 @@ it.skipIf(!connection)(
             ),
             ...(index < 2 ? { replacePartitions: true } : { removedDates: ["2026-01-01"] }),
           }));
-          await client.query(`
+          await databaseClient.query(`
             CREATE FUNCTION ${namespace}.reject_usage_batch() RETURNS trigger
             LANGUAGE plpgsql AS $$ BEGIN
               IF NEW.key = 'batch-append' THEN RAISE EXCEPTION 'usage batch refused'; END IF;
@@ -138,7 +158,7 @@ it.skipIf(!connection)(
             await expect(owner.writeRollup(update)).rejects.toThrow("usage batch refused");
             expect(await stored()).toEqual(before);
           } finally {
-            await client.query(`
+            await databaseClient.query(`
               DROP TRIGGER reject_usage_batch ON ${namespace}.cache_entries;
               DROP FUNCTION ${namespace}.reject_usage_batch();
             `);
@@ -172,17 +192,16 @@ it.skipIf(!connection)(
         },
       );
     } finally {
+      resetDatabaseEngineSelectionForTest();
       try {
-        const schemas = await client.query<{ nspname: string }>(
-          "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-          [prefix.length + 1, `${prefix}_`],
-        );
-        for (const { nspname } of schemas.rows) {
-          await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
-        }
+        await databaseClient.end();
       } finally {
-        await client.end();
-        resetDatabaseEngineSelectionForTest();
+        try {
+          // No FORCE: fixture drain must close every retained report connection.
+          await client.query(`DROP DATABASE IF EXISTS "${prefix}"`);
+        } finally {
+          await client.end();
+        }
       }
     }
   },
