@@ -3,7 +3,7 @@ import { createReplyOperation } from "../../sessions/session-controller.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createMockReplyOperation } from "./test-helpers.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -39,18 +39,7 @@ export function getFollowupTurnTestState() {
   return followupTurnTestState;
 }
 
-export function createFollowupTurnTestTypingController() {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    isActive: vi.fn(() => false),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  };
-}
+export const createFollowupTurnTestTypingController = createMockTypingController;
 
 export function createFollowupTurnTestTurn(
   overrides: Partial<AdmittedFollowupTurn> = {},

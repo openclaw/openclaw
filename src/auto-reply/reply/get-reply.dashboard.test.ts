@@ -59,6 +59,27 @@ async function createCommandReplyFixture(label: string) {
   return { fixture, cfg };
 }
 
+function commandContext(
+  body: string,
+  sessionKey: string,
+  source: "text" | "native" | "omitted",
+  authorized = true,
+) {
+  return finalizeInboundContext({
+    Body: body,
+    RawBody: body,
+    BodyForAgent: body,
+    CommandBody: body,
+    ...(source === "omitted" ? {} : { CommandSource: source }),
+    CommandAuthorized: authorized,
+    Provider: "webchat",
+    Surface: "webchat",
+    ChatType: "direct",
+    SessionKey: sessionKey,
+    ...(source === "native" ? { CommandTargetSessionKey: sessionKey } : {}),
+  });
+}
+
 it.each([
   { source: "text", authorized: true },
   { source: "native", authorized: true },
@@ -76,19 +97,7 @@ it.each([
     const body = "/dashboard release health";
     const sessionKey = "agent:main:dashboard-proof";
     const reply = await getReplyFromConfig(
-      finalizeInboundContext({
-        Body: body,
-        RawBody: body,
-        BodyForAgent: body,
-        CommandBody: body,
-        CommandSource: source,
-        CommandAuthorized: authorized,
-        Provider: "webchat",
-        Surface: "webchat",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        ...(source === "native" ? { CommandTargetSessionKey: sessionKey } : {}),
-      }),
+      commandContext(body, sessionKey, source, authorized),
       undefined,
       cfg,
     );
@@ -134,19 +143,7 @@ it.each([
     const body = `/followup ${payload}`;
     const onBlockReply = vi.fn();
     const reply = await getReplyFromConfig(
-      finalizeInboundContext({
-        Body: body,
-        RawBody: body,
-        BodyForAgent: body,
-        CommandBody: body,
-        ...(source === "omitted" ? {} : { CommandSource: source }),
-        CommandAuthorized: true,
-        Provider: "webchat",
-        Surface: "webchat",
-        ChatType: "direct",
-        SessionKey: followupSessionKey,
-        ...(source === "native" ? { CommandTargetSessionKey: followupSessionKey } : {}),
-      }),
+      commandContext(body, followupSessionKey, source),
       { onBlockReply },
       cfg,
     );

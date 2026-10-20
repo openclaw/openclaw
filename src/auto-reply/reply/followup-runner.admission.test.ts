@@ -5,7 +5,7 @@ import { getSessionControllerOperation } from "../../sessions/session-controller
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import type { FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
-import type { TypingController } from "./typing.js";
+import { createMockTypingController as createTypingController } from "./test-helpers.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn<typeof import("./agent-runner-result-accounting.js").accountFollowupTurn>(),
@@ -74,19 +74,6 @@ function createQueuedRun(sessionKey: string): FollowupRun {
   };
 }
 
-function createTypingController(): TypingController {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    isActive: vi.fn(() => false),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  };
-}
-
 function createSettledExecution(): FollowupExecutionResult {
   return {
     commentaryPayloadsEnabled: false,
@@ -109,6 +96,25 @@ function createSettledExecution(): FollowupExecutionResult {
 }
 
 const activeKeys = new Set<string>();
+
+async function drain(sessionKey: string, queued: FollowupRun, defaults: FollowupRunnerParams) {
+  const completed = createDeferred();
+  const runner = createFollowupRunner(defaults);
+  expect(
+    enqueueFollowupRun(
+      sessionKey,
+      queued,
+      { mode: "followup", debounceMs: 0 },
+      "none",
+      async (run) => {
+        await runner(run);
+        completed.resolve();
+      },
+    ),
+  ).toBe(true);
+  await completed.promise;
+  expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
+}
 
 afterEach(async () => {
   for (const key of activeKeys) {
@@ -154,23 +160,7 @@ async function runPolicyRefreshScenario(params: {
     sessionEntry,
     sessionStore: { [params.sessionKey]: sessionEntry },
   };
-  const completed = createDeferred();
-  const runner = createFollowupRunner(defaults);
-  expect(
-    enqueueFollowupRun(
-      params.sessionKey,
-      queued,
-      { mode: "followup", debounceMs: 0 },
-      "none",
-      async (run) => {
-        await runner(run);
-        completed.resolve();
-      },
-    ),
-  ).toBe(true);
-
-  await completed.promise;
-  expect(getSessionControllerOperation(params.sessionKey)).toBeUndefined();
+  await drain(params.sessionKey, queued, defaults);
 }
 
 describe("createFollowupRunner admission ownership", () => {
@@ -186,30 +176,13 @@ describe("createFollowupRunner admission ownership", () => {
     const onAdopted = vi.fn().mockRejectedValue(failure);
     queued.turnAdoptionLifecycle = { onAdopted };
     const typing = createTypingController();
-    const runner = createFollowupRunner({
+    await drain(sessionKey, queued, {
       typing,
       typingMode: "never",
       defaultModel: "anthropic/claude",
     });
-    const completed = createDeferred();
-    const runFollowup = async (run: FollowupRun) => {
-      await runner(run);
-      completed.resolve();
-    };
-    expect(
-      enqueueFollowupRun(
-        sessionKey,
-        queued,
-        { mode: "followup", debounceMs: 0 },
-        "none",
-        runFollowup,
-      ),
-    ).toBe(true);
-
-    await completed.promise;
     expect(state.execute).toHaveBeenCalledOnce();
     expect(onAdopted).toHaveBeenCalledOnce();
-    expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
   });
 
   it("suppresses a deferred compaction notice after preflight refreshes policy to deny", async () => {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -29,22 +30,33 @@ beforeEach(resetFollowupTurnTestState);
 type FollowupTurnParams = Parameters<typeof executeFollowupTurn>[0];
 
 function executeTestTurn(
-  params: Omit<FollowupTurnParams, "defaults" | "onToolResult" | "onCompactionNoticePayload"> &
+  params: Omit<
+    FollowupTurnParams,
+    "turn" | "defaults" | "onToolResult" | "onCompactionNoticePayload"
+  > &
     Partial<Pick<FollowupTurnParams, "onToolResult" | "onCompactionNoticePayload">> & {
+      turn?: FollowupTurnParams["turn"];
       defaults?: Partial<FollowupTurnParams["defaults"]>;
+      opts?: FollowupTurnParams["defaults"]["opts"];
     },
 ) {
   return executeFollowupTurn({
     ...params,
+    turn: params.turn ?? createTurn(),
     defaults: {
       typing: createTypingController(),
       typingMode: "never",
       defaultModel: "claude",
+      opts: params.opts,
       ...params.defaults,
     },
     onToolResult: params.onToolResult ?? vi.fn(async () => {}),
     onCompactionNoticePayload: params.onCompactionNoticePayload ?? vi.fn(async () => {}),
   });
+}
+
+function createSession(current: () => InternalSessionEntry): AdmittedFollowupTurn["session"] {
+  return { kind: "session", key: "main", current, publish: () => undefined };
 }
 
 async function runFastAutoProgressCase(params: {
@@ -63,16 +75,11 @@ async function runFastAutoProgressCase(params: {
   const onChannelToolResult = vi.fn(() => params.callbackResult);
   const onDurableToolResult = vi.fn(async () => {});
   const turn = createTurn({
-    session: {
-      kind: "session",
-      key: "main",
-      current: () => ({
-        sessionId: "session",
-        updatedAt: 1,
-        verboseLevel: params.verboseLevel ?? "on",
-      }),
-      publish: () => undefined,
-    },
+    session: createSession(() => ({
+      sessionId: "session",
+      updatedAt: 1,
+      verboseLevel: params.verboseLevel ?? "on",
+    })),
   });
   turn.queued.run.sourceReplyDeliveryMode = params.sourceReplyDeliveryMode;
   state.execute.mockImplementation(async (turnParams: AgentTurnParams) => {
@@ -82,12 +89,7 @@ async function runFastAutoProgressCase(params: {
 
   const result = await executeTestTurn({
     turn,
-    defaults: {
-      opts: {
-        ...params.opts,
-        onToolResult: onChannelToolResult,
-      },
-    },
+    opts: { ...params.opts, onToolResult: onChannelToolResult },
     onToolResult: onDurableToolResult,
   });
   await result.progress.drain();
@@ -101,7 +103,7 @@ describe("executeFollowupTurn", () => {
     turn.queued.forceCodeModeTools = true;
     await executeTestTurn({
       turn,
-      defaults: { opts: { forceRestartSafeTools: false, forceCodeModeTools: false } },
+      opts: { forceRestartSafeTools: false, forceCodeModeTools: false },
     });
     expect(state.execute.mock.calls[0]?.[0]?.opts).toMatchObject({
       forceRestartSafeTools: true,
@@ -111,17 +113,12 @@ describe("executeFollowupTurn", () => {
 
   it("refreshes the eligible queued turn from its current personal profile", async () => {
     const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        current: () => ({
-          sessionId: "session",
-          updatedAt: 2,
-          createdActor: { type: "human", source: "profile", id: "creator" },
-          owner: { actor: { type: "human", id: "new-owner" } },
-        }),
-        publish: () => undefined,
-      },
+      session: createSession(() => ({
+        sessionId: "session",
+        updatedAt: 2,
+        createdActor: { type: "human", source: "profile", id: "creator" },
+        owner: { actor: { type: "human", id: "new-owner" } },
+      })),
     });
     turn.queued.personalBootstrapEligible = true;
     turn.queued.run.bootstrapUserProfileId = "previous-owner";
@@ -140,9 +137,7 @@ describe("executeFollowupTurn", () => {
 
     await executeTestTurn({
       turn,
-      defaults: {
-        opts: { [REPLY_OPERATION_RUN_STATE]: newerReceipt },
-      },
+      opts: { [REPLY_OPERATION_RUN_STATE]: newerReceipt },
     });
 
     expect(receipts.map(resolveReplyOperationAgentTurn)).toEqual(["failed", "failed"]);
@@ -207,26 +202,19 @@ describe("executeFollowupTurn", () => {
   it("uses turn-owned preference updates for awaited visibility", async () => {
     let verboseLevel: "off" | "full" = "off";
     const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel }),
-        publish: () => undefined,
-      },
+      session: createSession(() => ({ sessionId: "session", updatedAt: 1, verboseLevel })),
     });
     const legacy = vi.fn();
     await executeTestTurn({
       turn,
-      defaults: {
-        opts: {
-          onVerboseProgressVisibility: legacy,
-          onVerboseProgressVisibilityAsync: async (isActive) => {
-            expect(await isActive()).toBe(false);
-            verboseLevel = "full";
-            expect(await isActive()).toBe(true);
-            turn.queued.run.verboseLevelOverride = "off";
-            expect(await isActive()).toBe(false);
-          },
+      opts: {
+        onVerboseProgressVisibility: legacy,
+        onVerboseProgressVisibilityAsync: async (isActive) => {
+          expect(await isActive()).toBe(false);
+          verboseLevel = "full";
+          expect(await isActive()).toBe(true);
+          turn.queued.run.verboseLevelOverride = "off";
+          expect(await isActive()).toBe(false);
         },
       },
     });
@@ -237,12 +225,7 @@ describe("executeFollowupTurn", () => {
     let verboseLevel: "on" | "off" = "off";
     let isVerboseProgressActive = () => true;
     const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel }),
-        publish: () => undefined,
-      },
+      session: createSession(() => ({ sessionId: "session", updatedAt: 1, verboseLevel })),
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       expect(params.resolvedVerboseLevel).toBe("off");
@@ -254,13 +237,11 @@ describe("executeFollowupTurn", () => {
 
     const result = await executeTestTurn({
       turn,
-      defaults: {
-        opts: {
-          commentaryPayloadsEnabled: true,
-          shouldDeliverCommentaryPayloads: () => isVerboseProgressActive(),
-          onVerboseProgressVisibility: (getter) => {
-            isVerboseProgressActive = getter;
-          },
+      opts: {
+        commentaryPayloadsEnabled: true,
+        shouldDeliverCommentaryPayloads: () => isVerboseProgressActive(),
+        onVerboseProgressVisibility: (getter) => {
+          isVerboseProgressActive = getter;
         },
       },
     });
@@ -284,12 +265,10 @@ describe("executeFollowupTurn", () => {
       });
       const result = await executeTestTurn({
         turn,
-        defaults: {
-          opts: {
-            progressRequiresReply: true,
-            suppressDefaultToolProgressMessages: true,
-            onItemEvent,
-          },
+        opts: {
+          progressRequiresReply: true,
+          suppressDefaultToolProgressMessages: true,
+          onItemEvent,
         },
         onToolResult: onDurableToolResult,
       });
@@ -303,12 +282,7 @@ describe("executeFollowupTurn", () => {
     const onItemEvent = vi.fn(async () => true as const);
     let preambleVisible: boolean | void = true;
     const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
-        publish: () => undefined,
-      },
+      session: createSession(() => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" })),
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       preambleVisible = await params.opts?.onItemEvent?.({
@@ -320,9 +294,7 @@ describe("executeFollowupTurn", () => {
 
     const result = await executeTestTurn({
       turn,
-      defaults: {
-        opts: { onItemEvent, commentaryPayloadsEnabled: true },
-      },
+      opts: { onItemEvent, commentaryPayloadsEnabled: true },
     });
     await result.progress.drain();
 
@@ -357,7 +329,7 @@ describe("executeFollowupTurn", () => {
         return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
       });
 
-      const result = await executeTestTurn({ turn, defaults: { opts: { onItemEvent } } });
+      const result = await executeTestTurn({ turn, opts: { onItemEvent } });
       await result.progress.drain();
 
       expect(onItemEvent).toHaveBeenCalledTimes(sendPolicy === "allow" ? 2 : 0);
@@ -493,16 +465,14 @@ describe("executeFollowupTurn", () => {
 
     const result = await executeTestTurn({
       turn,
-      defaults: {
-        opts: {
-          allowToolLifecycleWhenProgressHidden: true,
-          onToolStart,
-          onItemEvent,
-          onCommandOutput,
-          onApprovalEvent,
-          onPatchSummary,
-          onToolResult: onChannelToolResult,
-        },
+      opts: {
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolStart,
+        onItemEvent,
+        onCommandOutput,
+        onApprovalEvent,
+        onPatchSummary,
+        onToolResult: onChannelToolResult,
       },
       onToolResult: onDurableToolResult,
     });
@@ -556,16 +526,9 @@ describe("executeFollowupTurn lifecycle", () => {
         params.opts?.abortSignal?.throwIfAborted();
         return completed;
       });
-      const pending = executeFollowupTurn({
+      const pending = executeTestTurn({
         turn,
-        defaults: {
-          typing: createTypingController(),
-          typingMode: "never",
-          defaultModel: "claude",
-          opts: { abortSignal: sibling.signal },
-        },
-        onToolResult: vi.fn(async () => {}),
-        onCompactionNoticePayload: vi.fn(async () => {}),
+        opts: { abortSignal: sibling.signal },
       });
       try {
         await expect(
@@ -594,21 +557,13 @@ describe("executeFollowupTurn lifecycle", () => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
-    const result = await executeFollowupTurn({
-      turn: createTurn(),
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-        opts: {
-          onItemEvent: async () => {
-            await progressBarrier;
-            order.push("progress");
-          },
+    const result = await executeTestTurn({
+      opts: {
+        onItemEvent: async () => {
+          await progressBarrier;
+          order.push("progress");
         },
       },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
     });
     const drain = result.progress.drain().then(() => order.push("drained"));
     await Promise.resolve();
@@ -626,20 +581,12 @@ describe("executeFollowupTurn lifecycle", () => {
       void detachedProgress.catch(() => undefined);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
-    const result = await executeFollowupTurn({
-      turn: createTurn(),
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-        opts: {
-          onItemEvent: async () => {
-            throw failure;
-          },
+    const result = await executeTestTurn({
+      opts: {
+        onItemEvent: async () => {
+          throw failure;
         },
       },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
     });
 
     await expect(detachedProgress).resolves.toBe(false);
@@ -657,21 +604,14 @@ describe("executeFollowupTurn lifecycle", () => {
     const turn = createTurn();
     const onAdopted = vi.fn();
     turn.queued.turnAdoptionLifecycle = { onAdopted };
-    const pending = executeFollowupTurn({
+    const pending = executeTestTurn({
       turn,
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-        opts: {
-          onItemEvent: async () => {
-            await progressBarrier;
-            order.push("progress");
-          },
+      opts: {
+        onItemEvent: async () => {
+          await progressBarrier;
+          order.push("progress");
         },
       },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
     });
     await Promise.resolve();
     expect(order).toEqual([]);
@@ -698,11 +638,7 @@ describe("executeFollowupTurn lifecycle", () => {
       const receipt: ReplyOperationRunState = {};
       const failure = new Error("execution failed after start");
       const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
-      const fail = vi.fn();
-      const operation = {
-        ...createMockReplyOperation().replyOperation,
-        fail,
-      } as unknown as AdmittedFollowupTurn["operation"];
+      const { replyOperation: operation, failMock: fail } = createMockReplyOperation();
       const turn = createTurn({ operation });
       turn.queued.replyOperationRunStates = [receipt];
       turn.queued.run.terminalReplyExpectation = expectation;
@@ -717,20 +653,14 @@ describe("executeFollowupTurn lifecycle", () => {
         observedVisibility = await params.resolveVisibleReplyDelivery?.();
         throw failure;
       });
-      const pending = executeFollowupTurn({
+      const pending = executeTestTurn({
         turn,
-        defaults: {
-          typing: createTypingController(),
-          typingMode: "never",
-          defaultModel: "claude",
-          opts: {
-            onItemEvent: async () => {
-              await progressBarrier;
-              return accepted;
-            },
+        opts: {
+          onItemEvent: async () => {
+            await progressBarrier;
+            return accepted;
           },
         },
-        onToolResult: vi.fn(async () => {}),
         onCompactionNoticePayload: async () => {
           await progressBarrier;
         },
@@ -771,12 +701,7 @@ describe("executeFollowupTurn lifecycle", () => {
       params.pendingToolTasks.add(slowTask);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
-    const result = await executeFollowupTurn({
-      turn: createTurn(),
-      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
+    const result = await executeTestTurn({});
 
     const drain = result.progress.drain();
     await Promise.resolve();
