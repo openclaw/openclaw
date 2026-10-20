@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
   emitInternalDiagnosticEvent,
@@ -9,21 +9,17 @@ import {
   getDiagnosticStabilitySnapshot,
   resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
-  stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 
-beforeEach(() => {
-  resetDiagnosticStabilityRecorderForTest();
-  resetDiagnosticEventsForTest();
-});
-
 afterEach(() => {
-  stopDiagnosticStabilityRecorder();
+  // Reset owns recorder unsubscription as well as clearing its records.
   resetDiagnosticStabilityRecorderForTest();
   resetDiagnosticEventsForTest();
 });
 
 it("records a bounded payload-free projection of diagnostic events", async () => {
+  resetDiagnosticStabilityRecorderForTest();
+  resetDiagnosticEventsForTest();
   startDiagnosticStabilityRecorder();
   const tool = {
     type: "tool.loop",
@@ -86,17 +82,17 @@ it("records a bounded payload-free projection of diagnostic events", async () =>
 
   const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
-  expect(snapshot.count).toBe(3);
-  expect(snapshot.summary.byType).toMatchObject({
-    "webhook.error": 1,
-    "tool.loop": 1,
-    "talk.event": 1,
+  expect(snapshot).toMatchObject({
+    count: 3,
+    summary: {
+      byType: {
+        "webhook.error": 1,
+        "tool.loop": 1,
+        "talk.event": 1,
+      },
+    },
+    events: [{ type: "webhook.error", channel: "telegram" }, tool, { ...talk, bytes: 345 }],
   });
-  expect(snapshot.events).toMatchObject([
-    { type: "webhook.error", channel: "telegram" },
-    tool,
-    { ...talk, bytes: 345 },
-  ]);
   for (const [index, keys] of [
     ["error", "chatId"],
     ["message", "sessionId", "sessionKey"],
