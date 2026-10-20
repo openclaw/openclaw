@@ -23,7 +23,9 @@ class MockWebSocket extends EventEmitter {
     this.emit("close", code, Buffer.from(reason));
   }
 
-  terminate = this.close;
+  terminate() {
+    this.close();
+  }
 }
 
 vi.mock("../../packages/gateway-client/src/websocket.js", async (importOriginal) => ({

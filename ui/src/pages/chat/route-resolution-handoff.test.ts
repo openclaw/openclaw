@@ -134,9 +134,7 @@ describe("session route navigation handoffs", () => {
       if (replaced === "hello") {
         snapshot.hello = hello();
       } else {
-        snapshot.client = pending
-          ? createTestGatewayClient(h.request)
-          : ({ request } as NonNullable<typeof snapshot.client>);
+        snapshot.client = createTestGatewayClient(request);
       }
       deferred.resolve({ ok: true, ...oldSession, agentId: "roboclaw" });
       const resolved = completed ?? canonicalSession(await navigation);
