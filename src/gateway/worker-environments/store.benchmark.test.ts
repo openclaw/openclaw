@@ -1,19 +1,13 @@
 import { createHash } from "node:crypto";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useStateDatabaseTempDirs();
 
 it.skipIf(!["1", "baseline"].includes(process.env.OPENCLAW_WORKER_INVENTORY_BENCH ?? ""))(
   "measures 5,000 environment inventory rows across 50 viewers",
@@ -26,11 +20,11 @@ it.skipIf(!["1", "baseline"].includes(process.env.OPENCLAW_WORKER_INVENTORY_BENC
       options: Parameters<typeof createWorkerEnvironmentStore>[0],
     ) => BenchmarkStore | Promise<BenchmarkStore>;
     // The comparison command stages the exact original source beside its original writer.
-    const baseline: { createWorkerEnvironmentStore: Factory } | undefined =
+    const createStore: Factory =
       process.env.OPENCLAW_WORKER_INVENTORY_BENCH === "baseline"
-        ? await import(new URL("./store.baseline.test-support.ts", import.meta.url).href)
-        : undefined;
-    const createStore = baseline?.createWorkerEnvironmentStore ?? createWorkerEnvironmentStore;
+        ? ((await import(new URL("./store.baseline.test-support.ts", import.meta.url).href))
+            .createWorkerEnvironmentStore ?? createWorkerEnvironmentStore)
+        : createWorkerEnvironmentStore;
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-inventory-bench-") },
     });

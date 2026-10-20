@@ -4,6 +4,7 @@ import type {
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { makeAgentUserMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -72,11 +73,7 @@ export const PROVIDER_REPLAY = {
 
 export function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscriptMessage[] {
   return [
-    {
-      role: "user",
-      content: [{ type: "text", text: userText }],
-      timestamp: 100,
-    },
+    makeAgentUserMessage({ content: [{ type: "text", text: userText }], timestamp: 100 }),
     {
       role: "assistant",
       content: [
@@ -112,11 +109,7 @@ export const SESSION_ID = "session-worker-transcript";
 export const RUN_EPOCH = 7;
 
 export function createRequest(
-  params: {
-    baseLeafId?: string | null;
-    messages?: WorkerTranscriptMessage[];
-    seq?: number;
-  } = {},
+  params: Partial<Pick<WorkerTranscriptCommitParams, "baseLeafId" | "messages" | "seq">> = {},
 ): WorkerTranscriptCommitParams {
   return {
     runEpoch: RUN_EPOCH,

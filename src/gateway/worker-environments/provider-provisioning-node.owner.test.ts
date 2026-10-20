@@ -1,13 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type {
-  NodeWorkerSupervisorNodeProof,
-  NodeWorkerSupervisorTransport,
-} from "../node-registry-private.js";
+import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import * as support from "./service.test-support.js";
 
 function createHeldInstaller(boundary: "attachment read" | "discovery" | "installation") {
@@ -17,16 +13,9 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
     entered.resolve();
     return release.promise;
   };
-  const node: NodeWorkerSupervisorNodeProof = {
-    nodeId: "cloud-owner-node",
-    connId: "owner-connection",
-    pairingIdentity: "owner-pairing",
-    pairingGeneration: "owner-generation",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  const node = {
+    ...createNodeWorkerBundleTestNode(),
     workerHost: { enabled: true, capacity: { total: 1, available: 1 }, bundlePrewarm: 1 },
-    commands: [],
   };
   const transfer = createNodeWorkerBundleTransferService();
   const grant = vi.spyOn(transfer, "prepare");
@@ -83,7 +72,7 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
     { ensureNodeWorkerBundle: install },
   );
   const controller = new AbortController();
-  let settled = false;
+  const settled = vi.fn();
   const creation = service
     .createWithRequest({
       profileId: "development",
@@ -91,13 +80,8 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
       executionMode: "worker-turn",
       signal: boundary === "installation" ? undefined : controller.signal,
     })
-    .then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    )
-    .finally(() => {
-      settled = true;
-    });
+    .catch((error: unknown) => ({ error }))
+    .finally(settled);
   return {
     node,
     entered,
@@ -108,9 +92,7 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
     destroy,
     controller,
     creation,
-    get settled() {
-      return settled;
-    },
+    settled,
     [Symbol.asyncDispose]: async () => {
       release.resolve();
       await creation;
@@ -187,7 +169,7 @@ describe("node provisioning installer ownership", () => {
     expect(fixture.grant).toHaveBeenCalledOnce();
     expect(fixture.invoke).toHaveBeenCalledOnce();
     expect(fixture.destroy).not.toHaveBeenCalled();
-    expect(fixture.settled).toBe(false);
+    expect(fixture.settled).not.toHaveBeenCalled();
     fixture.release.resolve();
     expect(await creation).toHaveProperty("error");
     expect(fixture.destroy).toHaveBeenCalledOnce();
