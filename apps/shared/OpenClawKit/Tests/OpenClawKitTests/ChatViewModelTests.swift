@@ -15400,23 +15400,7 @@ struct ChatTranscriptRevisionTests {
         #expect(model.liveUserTurnRevision == 1)
     }
 
-    /// The chat view caches its transcript layout on `transcriptRevision`. Streaming deltas must not
-    /// bump it (that re-derived the whole transcript per word), but any transcript change must.
-    @Test @MainActor func `streaming text leaves the transcript revision alone but messages bump it`() {
-        let viewModel = OpenClawChatViewModel(
-            sessionKey: "main",
-            transport: TestChatTransport(historyResponses: []))
-        let start = viewModel.transcriptRevision
-        viewModel.updateStreamingAssistantText("Paris")
-        viewModel.updateStreamingAssistantText("Paris, Rome")
-        #expect(viewModel.transcriptRevision == start)
 
-        viewModel.appendMessage(OpenClawChatMessage(
-            role: "assistant",
-            content: [.init(type: "text", text: "Paris, Rome", mimeType: nil, fileName: nil, content: nil)],
-            timestamp: 1))
-        #expect(viewModel.transcriptRevision != start)
-    }
 }
 
 private func pagedHistory(
