@@ -164,8 +164,7 @@ it.each(["database admission", "plugin cache"] as const)(
           expect(await outcome).toMatchObject({
             status: "rejected",
             error: {
-              code: "PLUGIN_CACHE_FACT_INVALIDATED",
-              cause: { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" },
+              code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
             },
           });
         } else {

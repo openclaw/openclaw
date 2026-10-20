@@ -122,7 +122,6 @@ function installStatusTracking(db: DatabaseSync, schemaVersion: number): void {
     return;
   }
   installSqliteTempTrackingSchema(db, {
-    kind: "transcript-index",
     statusTable: "openclaw_transcript_index_status",
     pendingTable: "openclaw_transcript_index_pending",
     pendingIndex: "openclaw_transcript_index_pending_state",

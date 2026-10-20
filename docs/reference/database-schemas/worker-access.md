@@ -5098,17 +5098,18 @@ replacement uses the registry worker's prepared descendant selection and the
 live in-process descendant guard without a second durable digest scan. Schemas,
 retention, durability, and update behavior are unchanged.
 
-Placement turn claims and releases execute through the shared-state writer,
-including their coordinator acquisition. Local turns retain durable claims:
-cloud dispatch closes admission and joins their settlement before preparing the
-workspace. Local claims without a remote environment admit the live caller once
-before their conditional DML and use SQLite autocommit for claim and release.
-Remote placement keeps transaction and commit admission; conditional release
-compares the exact claim in its write. Commit
-receipts publish claim authority and release observers before callers continue,
-including when ordinary reply delivery fails. Local forced completion and final
-cleanup join the same pending release. Restart recovery, schemas, persisted
-fields, and update behavior are unchanged.
+Local turns without a remote environment are claimed and released by the existing
+in-process placement owner. Dispatch and publication reserve admission before
+awaiting; dispatch persists its progress and joins the local predecessor before
+preparing the workspace. Gateway placement readers consume that owner's claim,
+which is no longer visible to direct SQL readers. A process restart discards these
+local claims; startup still clears legacy persisted local claims and recovers
+durable dispatch progress. Remote worker and remote-exec claims remain durable
+through the shared-state writer, with transaction and commit admission and an
+exact-claim comparison on release. Claim authority and release observers publish
+before callers continue, including when ordinary reply delivery fails. Local
+forced completion and final cleanup join the same pending release. Schemas,
+persisted remote fields, and update behavior are unchanged.
 
 Worker transcript replay-ledger begin, completion, and exact discard use typed
 `placementTranscript` commands in the existing shared-state registry. The

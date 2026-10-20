@@ -47,6 +47,24 @@ describe("config defaults", () => {
     vi.unstubAllEnvs();
   });
 
+  it("materializes the canonical main session key and warns only once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const source = { session: { mainKey: " custom " } };
+    const options = { env: {}, manifestRegistry: { plugins: [] } };
+    try {
+      expect(materializeRuntimeConfig(source, options).session?.mainKey).toBe("main");
+      expect(source.session.mainKey).toBe(" custom ");
+      expect(
+        materializeRuntimeConfig({ session: { mainKey: "another" } }, options).session?.mainKey,
+      ).toBe("main");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        'session.mainKey is ignored; main session is always "main".',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("skips provider defaults when agent defaults are absent", () => {
     const cfg = {
       models: {

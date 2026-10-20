@@ -13,10 +13,7 @@ import type {
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadReply,
-} from "../state/openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "../state/openclaw-state-read.types.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import {
   TUI_LAST_SESSION_STATE_KEY_PREFIX,
@@ -97,11 +94,11 @@ export function clearRetiredTuiPointers(
 export function readTuiLastSessionCommand(
   database: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "tui.lastSession.read" }>,
-): Extract<OpenClawStateReadReply, { type: "tui.lastSession.read" }> {
+) {
   return {
-    ok: true,
+    ok: true as const,
     type: command.type,
-    sourceAdmitted: true,
+    sourceAdmitted: true as const,
     row: readConfigMachineStateRowInDatabase(database, command.stateKey),
   };
 }

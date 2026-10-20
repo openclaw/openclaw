@@ -30,14 +30,13 @@ import {
 import type { ModelDefinitionConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-type WarnState = { warned: boolean };
 type ProviderPolicyDefaultsOptions = {
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
 
-const defaultWarnState: WarnState = { warned: false };
+let warnedAboutMainKey = false;
 
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   opus: "anthropic/claude-opus-5-5",
@@ -109,11 +108,6 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
     : Math.min(DEFAULT_MODEL_MAX_TOKENS, params.contextWindow);
 }
 
-type SessionDefaultsOptions = {
-  warn?: (message: string) => void;
-  warnState?: WarnState;
-};
-
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const messages = cfg.messages;
   if (messages?.ackReactionScope !== undefined) {
@@ -143,27 +137,22 @@ export function applyMessageQueueDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applySessionDefaults(
-  cfg: OpenClawConfig,
-  options: SessionDefaultsOptions = {},
-): OpenClawConfig {
+export function applySessionDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const session = cfg.session;
   if (!session || session.mainKey === undefined) {
     return cfg;
   }
 
   const trimmed = session.mainKey.trim();
-  const warn = options.warn ?? console.warn;
-  const warnState = options.warnState ?? defaultWarnState;
 
   const next: OpenClawConfig = {
     ...cfg,
     session: { ...session, mainKey: "main" },
   };
 
-  if (trimmed && trimmed !== "main" && !warnState.warned) {
-    warnState.warned = true;
-    warn('session.mainKey is ignored; main session is always "main".');
+  if (trimmed && trimmed !== "main" && !warnedAboutMainKey) {
+    warnedAboutMainKey = true;
+    console.warn('session.mainKey is ignored; main session is always "main".');
   }
 
   return next;
