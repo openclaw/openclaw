@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -112,15 +109,6 @@ suite.define(() => {
             expect(
               await page.getByRole("status").filter({ hasText: "Loading Workboard…" }).count(),
             ).toBe(0);
-            if (outcome === "success" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              const frame = await takeControlUiScreenshotFrame(page, board, [title], {
-                animations: "disabled",
-              });
-              await writeFile(
-                path.join(suite.artifactDir, "compiled-workboard-page.png"),
-                frame.png,
-              );
-            }
           } finally {
             gate.resolve();
             await page.unroute(chunks);
