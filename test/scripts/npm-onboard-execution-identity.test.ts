@@ -55,46 +55,28 @@ describe("installed-package execution identity proof", () => {
     expect(existsSync(path.join(state, "state/openclaw.sqlite"))).toBe(false);
   });
 
-  it.each([
-    [
-      "missing identity",
-      (result: ReturnType<typeof projection>) => {
-        result.identity.state = "unknown";
-      },
-    ],
-    [
-      "wrong run",
-      (result: ReturnType<typeof projection>) => {
-        result.run.runId = "other-run";
-      },
-    ],
+  it.each<[string, (result: ReturnType<typeof projection>) => void]>([
+    ["missing identity", (result) => Object.assign(result.identity, { state: "unknown" })],
+    ["wrong run", (result) => Object.assign(result.run, { runId: "other-run" })],
     [
       "fabricated invoker",
-      (result: ReturnType<typeof projection>) => {
-        result.identity.context.invoker.state = "present";
-      },
+      (result) => Object.assign(result.identity.context.invoker, { state: "present" }),
     ],
     [
       "raw runtime",
-      (result: ReturnType<typeof projection>) => {
-        result.identity.context.runtimeInstance.runtimeRef = "raw-runtime";
-      },
+      (result) =>
+        Object.assign(result.identity.context.runtimeInstance, { runtimeRef: "raw-runtime" }),
     ],
     [
       "false enforcement",
-      (result: ReturnType<typeof projection>) => {
+      (result) => {
         for (const display of result.decisionDisplays) {
           display.enforcement.coverageState = "enforced";
         }
       },
     ],
-    [
-      "lost admission",
-      (result: ReturnType<typeof projection>) => {
-        result.decisionDisplays = [];
-      },
-    ],
-  ] as const)("rejects %s", (_label, mutate) => {
+    ["lost admission", (result) => Object.assign(result, { decisionDisplays: [] })],
+  ])("rejects %s", (_label, mutate) => {
     const result = projection();
     mutate(result);
     expect(() =>

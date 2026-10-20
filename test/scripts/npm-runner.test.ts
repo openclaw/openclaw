@@ -1,12 +1,22 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
+import { resolveNpmRunner, type NpmRunnerParams } from "../../scripts/npm-runner.mts";
 
 const originalVersions = process.versions;
 afterEach(() => {
   Object.defineProperty(process, "versions", { value: originalVersions });
 });
+
+function localRunner(execPath: string, npmPath: string, options: NpmRunnerParams = {}) {
+  return resolveNpmRunner({
+    execPath,
+    env: {},
+    existsSync: (candidate) => candidate === npmPath,
+    platform: "win32",
+    ...options,
+  });
+}
 
 describe("resolveNpmRunner", () => {
   it("runs bundled npm under the default Bun runtime without PATH Node", () => {
@@ -29,129 +39,80 @@ describe("resolveNpmRunner", () => {
     });
   });
 
-  it("uses the active node executable when its basename is not node", () => {
-    const execPath = "/Users/test/.toolchains/node-24/bin/node24";
-    const expectedNpmCliPath = path.posix.resolve(
-      path.posix.dirname(execPath),
+  it.each([
+    [
+      "darwin",
+      "/Users/test/.toolchains/node-24/bin/node24",
       "../lib/node_modules/npm/bin/npm-cli.js",
-    );
-
-    const runner = resolveNpmRunner({
-      execPath,
-      env: {},
-      existsSync: (candidate) => candidate === expectedNpmCliPath,
-      npmArgs: ["pack", "openclaw@beta"],
-      platform: "darwin",
-    });
-
-    expect(runner).toEqual({
-      command: execPath,
-      args: [expectedNpmCliPath, "pack", "openclaw@beta"],
-      packageJsonPath: path.posix.resolve(expectedNpmCliPath, "../../package.json"),
-      shell: false,
-    });
-  });
-
-  it("anchors Windows npm staging to the adjacent npm-cli.js without a shell", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const expectedNpmCliPath = path.win32.resolve(
-      path.win32.dirname(execPath),
-      "node_modules/npm/bin/npm-cli.js",
-    );
-
-    const runner = resolveNpmRunner({
-      execPath,
-      env: {},
-      existsSync: (candidate) => candidate === expectedNpmCliPath,
-      platform: "win32",
-    });
-
-    expect(runner).toEqual({
-      command: execPath,
-      args: [expectedNpmCliPath],
-      packageJsonPath: path.win32.resolve(expectedNpmCliPath, "../../package.json"),
-      shell: false,
-    });
-  });
+      ["pack", "openclaw@beta"],
+    ],
+    ["win32", "C:\\nodejs\\node.exe", "node_modules/npm/bin/npm-cli.js", []],
+  ] as const)(
+    "anchors npm-cli.js to the active %s executable",
+    (platform, execPath, relative, args) => {
+      const paths = platform === "win32" ? path.win32 : path.posix;
+      const npmPath = paths.resolve(paths.dirname(execPath), relative);
+      expect(localRunner(execPath, npmPath, { platform, npmArgs: [...args] })).toEqual({
+        command: execPath,
+        args: [npmPath, ...args],
+        packageJsonPath: paths.resolve(npmPath, "../../package.json"),
+        shell: false,
+      });
+    },
+  );
 
   it("uses an adjacent npm.exe on Windows without a shell", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const expectedNpmExePath = path.win32.resolve(path.win32.dirname(execPath), "npm.exe");
 
-    const runner = resolveNpmRunner({
-      execPath,
-      env: {},
-      existsSync: (candidate) => candidate === expectedNpmExePath,
-      npmArgs: ["install", "--silent"],
-      platform: "win32",
-    });
-
-    expect(runner).toEqual({
-      command: expectedNpmExePath,
-      args: ["install", "--silent"],
-      shell: false,
-    });
+    expect(localRunner(execPath, expectedNpmExePath, { npmArgs: ["install", "--silent"] })).toEqual(
+      {
+        command: expectedNpmExePath,
+        args: ["install", "--silent"],
+        shell: false,
+      },
+    );
   });
 
   it.each([
     [
       "C:\\Program Files\\nodejs\\node.exe",
+      "--omit=dev",
       '""C:\\Program Files\\nodejs\\npm.cmd" install --omit=dev"',
     ],
-  ])("wraps the adjacent npm.cmd without shell mode for %s", (execPath, commandLine) => {
-    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+    [
+      "C:\\nodejs\\node.exe",
+      "@slack/bolt@^4.6.0",
+      "C:\\nodejs\\npm.cmd install @slack/bolt@^^4.6.0",
+    ],
+  ])(
+    "quotes npm.cmd paths and arguments without shell mode: %s / %s",
+    (execPath, argument, commandLine) => {
+      const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+      const runner = localRunner(execPath, npmCmdPath, {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["install", argument],
+      });
 
-    const runner = resolveNpmRunner({
-      comSpec: "C:\\Windows\\System32\\cmd.exe",
-      execPath,
-      env: {},
-      existsSync: (candidate) => candidate === npmCmdPath,
-      npmArgs: ["install", "--omit=dev"],
-      platform: "win32",
-    });
-
-    expect(runner).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", commandLine],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
-
-  it("escapes caret semver specs when invoking npm.cmd through cmd.exe", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
-
-    const runner = resolveNpmRunner({
-      comSpec: "C:\\Windows\\System32\\cmd.exe",
-      execPath,
-      env: {},
-      existsSync: (candidate) => candidate === npmCmdPath,
-      npmArgs: ["install", "@slack/bolt@^4.6.0"],
-      platform: "win32",
-    });
-
-    expect(runner).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", `${npmCmdPath} install @slack/bolt@^^4.6.0`],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
+      expect(runner).toEqual({
+        command: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/s", "/c", commandLine],
+        shell: false,
+        windowsVerbatimArguments: true,
+      });
+    },
+  );
 
   it("ignores ambient ComSpec when wrapping an adjacent npm.cmd on Windows", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
 
-    const runner = resolveNpmRunner({
+    const runner = localRunner(execPath, npmCmdPath, {
       env: {
         ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
         SystemRoot: "D:\\Windows",
       },
-      execPath,
-      existsSync: (candidate) => candidate === npmCmdPath,
       npmArgs: ["install"],
-      platform: "win32",
     });
 
     expect(runner.command).toBe("D:\\Windows\\System32\\cmd.exe");
