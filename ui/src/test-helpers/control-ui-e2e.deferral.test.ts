@@ -9,11 +9,8 @@ import {
 
 const ids = (items: readonly { id?: string }[]) => items.map(({ id }) => id);
 function expectReply(frames: readonly unknown[], id: string, payload?: unknown) {
-  expect(frames.at(-1)).toMatchObject({
-    id,
-    ok: true,
-    ...(payload === undefined ? {} : { payload }),
-  });
+  const result = { id, ok: true };
+  expect(frames.at(-1)).toMatchObject(payload === undefined ? result : { ...result, payload });
 }
 
 it.for(["resolve", "reject"] as const)(
@@ -52,7 +49,7 @@ it.for(["resolve", "reject"] as const)(
       outcome === "resolve"
         ? { ok: true, payload: catalog }
         : { ok: false, error: expect.objectContaining({ message: "catalog unavailable" }) };
-    expect(frames.filter((frame) => frame.id.startsWith("catalog-"))).toEqual(
+    expect(frames.slice(1)).toEqual(
       ["catalog-first", "catalog-replacement"].map((id) =>
         expect.objectContaining({ id, ...released }),
       ),

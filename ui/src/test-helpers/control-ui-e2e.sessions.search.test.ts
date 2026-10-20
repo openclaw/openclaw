@@ -17,13 +17,8 @@ it("scopes search hits before limiting and returns matched snapshots", async ({ 
     { key: "agent:main:controlled", spawnedBy: parent, category: " " },
     { key: "agent:main:cron:job" },
     { key: "agent:main:probe", createdActor: { type: "system" } },
-    {
-      key: "agent:main:visible",
-      label: "Visible match",
-      spawnedBy: parent,
-      category: "Research",
-    },
-    { key: "agent:main:later", label: "Later match" },
+    { key: "agent:main:visible", spawnedBy: parent, category: "Research" },
+    { key: "agent:main:later" },
   ];
   const hits = rows.map(({ key }) => ({ sessionKey: key, snippet: "needle" }));
   const { request, controls } = await connect({
@@ -43,7 +38,8 @@ it("scopes search hits before limiting and returns matched snapshots", async ({ 
     excludeSystem: true,
   };
   const params = { query: "needle", limit: 1, scope };
-  const search = async () => (await request("sessions.search", params)).payload;
+  const search = async (queryScope: Record<string, unknown> = scope) =>
+    (await request("sessions.search", { ...params, scope: queryScope })).payload;
   expect(await search()).toEqual({
     results: [hits[9]],
     sessions: [expect.objectContaining(rows[9])],
@@ -52,15 +48,8 @@ it("scopes search hits before limiting and returns matched snapshots", async ({ 
     archivedTranscriptsExcluded: 2,
   });
   const { agentId: _agentId, ...allAgents } = scope;
-  expect(
-    (await request("sessions.search", { ...params, scope: allAgents })).payload.results,
-  ).toEqual([hits[1]]);
-  const onlyArchived = (
-    await request("sessions.search", {
-      ...params,
-      scope: { ...scope, archived: true },
-    })
-  ).payload;
+  expect((await search(allAgents)).results).toEqual([hits[1]]);
+  const onlyArchived = await search({ ...scope, archived: true });
   expect(onlyArchived.results).toEqual([hits[0]]);
   expect(onlyArchived).not.toHaveProperty("truncated");
 
@@ -101,11 +90,7 @@ it("preserves scoped list pages, deferred snapshots and search errors", async ({
   controls.resolveDeferred("sessions.search", { results: [hit], sessions: [child] });
   await flush();
   expect(response(pending)?.payload).toEqual(matched);
-  controls.setMethodResponse("sessions.search", {
-    __mockError: { code: "FORBIDDEN", message: "Search denied" },
-  });
-  expect(await request("sessions.search", params)).toMatchObject({
-    ok: false,
-    error: { code: "FORBIDDEN", message: "Search denied" },
-  });
+  const error = { code: "FORBIDDEN", message: "Search denied" };
+  controls.setMethodResponse("sessions.search", { __mockError: error });
+  expect(await request("sessions.search", params)).toMatchObject({ ok: false, error });
 });

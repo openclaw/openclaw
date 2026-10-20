@@ -30,22 +30,16 @@ it("excludes a running parent from child queries", async ({ connect }) => {
 });
 
 it("uses current child ownership before archive partitioning", async ({ connect }) => {
-  const spawned = row("spawned", { spawnedBy: parentKey });
-  const navigation = row("navigation", { parentSessionKey: parentKey });
-  const controlled = row("controlled", {
-    spawnedBy: "agent:main:old-owner",
-    controlOwnerSessionKey: parentKey,
-  });
-  const archived = row("archived-child", { spawnedBy: parentKey, archived: true });
   const rows = [
     row("parent", { spawnedBy: parentKey }),
-    spawned,
-    navigation,
-    controlled,
-    archived,
+    row("spawned", { spawnedBy: parentKey }),
+    row("navigation", { parentSessionKey: parentKey }),
+    row("controlled", { spawnedBy: "agent:main:old-owner", controlOwnerSessionKey: parentKey }),
+    row("archived-child", { spawnedBy: parentKey, archived: true }),
     row("moved", { spawnedBy: parentKey, controlOwnerSessionKey: "agent:main:other" }),
     row("unrelated"),
   ];
+  const [, spawned, navigation, controlled, archived] = rows;
   const { request } = await connect({
     sessionKey: parentKey,
     sessionArchiveFiltering: true,

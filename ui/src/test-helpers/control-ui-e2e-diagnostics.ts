@@ -227,16 +227,16 @@ type ControlUiE2eFailureDiagnosticsOptions = {
 function summarizeRecordedModelResponses(
   responses: NonNullable<ControlUiE2eFailureDiagnosticsOptions["modelResponses"]>,
 ) {
+  const array = (value: unknown): readonly unknown[] | undefined =>
+    Array.isArray(value) ? value : undefined;
+  const count = (value: readonly unknown[] | undefined) => value?.length ?? null;
   const list = asOptionalRecord(responses.list);
   const auth = asOptionalRecord(responses.authStatus);
   const snapshot = asOptionalRecord(responses.snapshot);
   const health = asOptionalRecord(auth?.payload);
-  const profiles = Array.isArray(health?.providers)
-    ? health.providers.flatMap((provider) => {
-        const record = asOptionalRecord(provider);
-        return Array.isArray(record?.profiles) ? record.profiles : [];
-      })
-    : undefined;
+  const profiles = array(health?.providers)?.flatMap(
+    (provider) => array(asOptionalRecord(provider)?.profiles) ?? [],
+  );
   const statusCounts = (entries: unknown, allowed: string[]) => {
     if (!Array.isArray(entries)) {
       return null;
@@ -253,17 +253,14 @@ function summarizeRecordedModelResponses(
   };
   const catalogCounts = (payload: unknown) => {
     const catalog = asOptionalRecord(payload);
-    const models = Array.isArray(catalog?.models) ? catalog.models : undefined;
+    const models = array(catalog?.models);
     const availability = models?.map((model) => asOptionalRecord(model)?.available);
     return {
-      models: models?.length ?? null,
-      available: availability?.filter((value) => value === true).length ?? null,
-      unavailable: availability?.filter((value) => value === false).length ?? null,
-      unknownAvailability:
-        availability?.filter((value) => typeof value !== "boolean").length ?? null,
-      pendingProviders: Array.isArray(catalog?.pendingProviders)
-        ? catalog.pendingProviders.length
-        : null,
+      models: count(models),
+      available: count(availability?.filter((value) => value === true)),
+      unavailable: count(availability?.filter((value) => value === false)),
+      unknownAvailability: count(availability?.filter((value) => typeof value !== "boolean")),
+      pendingProviders: count(array(catalog?.pendingProviders)),
       providerOutcomes: statusCounts(catalog?.providerOutcomes, [
         "ready",
         "auth-rejected",

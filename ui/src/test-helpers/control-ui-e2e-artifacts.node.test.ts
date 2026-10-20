@@ -35,11 +35,8 @@ async function captureInWorker(parent: string, contents: string): Promise<string
     directory = value;
   });
   const [code] = await once(worker, "exit");
-  if (code !== 0) {
-    throw new Error(`Capture worker exited with ${code}`);
-  }
-  if (typeof directory !== "string") {
-    throw new Error("Capture worker returned no directory");
+  if (code !== 0 || typeof directory !== "string") {
+    throw new Error(`Capture worker did not finish with a directory (exit ${code})`);
   }
   return directory;
 }
@@ -66,33 +63,29 @@ it("allocates independently in concurrent workers sharing the same parent and sc
   }
 });
 
-it("keeps explicit parents authoritative and trims the existing configured root", () => {
-  const explicit = makeTempDir(tempDirs, "control-ui-proof-explicit-");
-  const configured = makeTempDir(tempDirs, "control-ui-proof-configured-");
-  vi.stubEnv("OPENCLAW_UI_E2E_ARTIFACT_DIR", `  ${configured}  `);
-  expect(path.dirname(createControlUiE2eArtifactDir("configured"))).toBe(configured);
-  expect(path.dirname(createControlUiE2eArtifactDir("explicit", explicit))).toBe(explicit);
-});
-
-it.each([undefined, "   "])(
-  "uses the repository parent for an unset or blank root (%s)",
-  (root) => {
-    vi.stubEnv("OPENCLAW_UI_E2E_ARTIFACT_DIR", root);
-    const directory = createControlUiE2eArtifactDir("allocator-regression");
-    // Only this exclusive child is disposable; the repository evidence parent is not ours.
-    tempDirs.push(directory);
-    expect(path.dirname(directory)).toBe(
-      path.resolve(sourceDir, "../../../.artifacts/control-ui-e2e"),
-    );
-  },
-);
-
-it("does not enable optional capture when allocating an always-on scenario", () => {
-  const parent = makeTempDir(tempDirs, "control-ui-proof-disabled-");
-  vi.stubEnv("OPENCLAW_UI_E2E_ARTIFACT_DIR", undefined);
+it.each([
+  ["configured", false],
+  ["configured", true],
+  [undefined, false],
+  ["   ", false],
+  [undefined, true],
+] as const)("allocates without enabling capture (root %s, explicit %s)", (root, explicit) => {
+  const configured = root === "configured" ? makeTempDir(tempDirs, "proof-root-") : undefined;
+  const parent = explicit ? makeTempDir(tempDirs, "proof-explicit-") : undefined;
+  const rawRoot = configured ? `  ${configured}  ` : root;
+  vi.stubEnv("OPENCLAW_UI_E2E_ARTIFACT_DIR", rawRoot);
   vi.stubEnv("OPENCLAW_CAPTURE_UI_PROOF", "0");
-  const directory = createControlUiE2eArtifactDir("always-on", parent);
-  expect(readdirSync(parent)).toEqual([path.basename(directory)]);
+  const directory = createControlUiE2eArtifactDir("allocator-regression", parent);
+  // Track only the exclusive child, never the repository evidence parent.
+  if (!parent && !configured) {
+    tempDirs.push(directory);
+  }
+  expect(path.dirname(directory)).toBe(
+    parent ?? configured ?? path.resolve(sourceDir, "../../../.artifacts/control-ui-e2e"),
+  );
+  if (parent) {
+    expect(readdirSync(parent)).toEqual([path.basename(directory)]);
+  }
   expect(process.env.OPENCLAW_CAPTURE_UI_PROOF).toBe("0");
-  expect(process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR).toBeUndefined();
+  expect(process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR).toBe(rawRoot);
 });
