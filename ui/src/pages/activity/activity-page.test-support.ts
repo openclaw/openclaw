@@ -15,21 +15,15 @@ export type TestActivityPage = ReturnType<typeof createActivityPage>;
 
 export function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
   const [location, setLocation] = createSignal(initial);
-  const mounted = mountSolid(
-    () => {
-      const page = createActivityPageState(context);
-      createEffect(location, (next) => page.setRouteLocation(next));
-      return createComponent(ActivityPageView, { page });
-    },
-    {
-      wrapper: (props) =>
-        createComponent(ApplicationProvider, {
-          value: context,
-          get children() {
-            return props.children;
-          },
-        }),
-    },
+  const mounted = mountSolid(() =>
+    createComponent(ApplicationProvider, {
+      value: context,
+      get children() {
+        const page = createActivityPageState(context);
+        createEffect(location, (next) => page.setRouteLocation(next));
+        return createComponent(ActivityPageView, { page });
+      },
+    }),
   );
   flush();
   return {
@@ -64,12 +58,7 @@ export function toolEvent(id: string, sessionKey = "main", name = "read", runId 
     stream: "tool",
     runId,
     sessionKey,
-    data: {
-      toolCallId: id,
-      name,
-      phase: "result",
-      result: { text: `${id} output` },
-    },
+    data: { toolCallId: id, name, phase: "result", result: { text: `${id} output` } },
   });
 }
 
@@ -133,14 +122,11 @@ export function activityRoster(
 }
 
 export function activityResponse(method: string, params: unknown) {
-  switch (method) {
-    case "sessions.list":
-      return activityRoster();
-    case "sessions.subscribe":
-      return { subscribed: true };
-    case "sessions.messages.subscribe":
-      return params;
-    default:
-      return {};
-  }
+  return method === "sessions.list"
+    ? activityRoster()
+    : method === "sessions.subscribe"
+      ? { subscribed: true }
+      : method === "sessions.messages.subscribe"
+        ? params
+        : {};
 }

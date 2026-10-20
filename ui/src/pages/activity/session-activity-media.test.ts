@@ -4,7 +4,6 @@ import { createComponent, createSignal, createStore, type Accessor } from "solid
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -63,6 +62,11 @@ afterEach(() => {
 const imageAlt = (root: ParentNode) => root.querySelector("img")?.getAttribute("alt");
 const waitImage = (root: ParentNode, alt: string) =>
   waitForSolid(() => expect(imageAlt(root)).toBe(alt));
+const lightbox = (root: ParentNode) => root.querySelector("openclaw-image-lightbox");
+const thumbnail = (root: ParentNode) =>
+  root.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
+const olderAction = (root: ParentNode) =>
+  root.querySelector<HTMLButtonElement>(".activity-feed__note-action");
 const mediaContext = (request: GatewayRequestHandler) => {
   const harness = createGatewayHarness(createTestGatewayClient(request));
   return { harness, context: createContext(harness.gateway, createSessions("main", [])) };
@@ -107,26 +111,21 @@ function images(label: string, count = 4): ArtifactsListResult {
 
 function mountMedia(
   request: GatewayRequestHandler,
-  {
-    sessionKey = "agent:main:images",
-    agentId = "main",
-    session,
-  }: {
-    sessionKey?: string;
-    agentId?: string;
-    session?: GatewaySessionRow;
-  } = {},
+  overrides: Partial<Pick<ActivitySessionMediaProps, "sessionKey" | "agentId" | "session">> = {},
 ) {
   const { harness, context } = mediaContext(request);
   const [props, setProps] = createStore<ActivitySessionMediaProps>(
-    { context, sessionKey, agentId, session, revision: 0 },
+    { context, sessionKey: "agent:main:images", agentId: "main", revision: 0, ...overrides },
     { shallow: true },
   );
   mountSolid(() => createComponent(ActivitySessionMedia, props), { container });
   flush();
   return {
     harness,
-    setProps,
+    update: (patch: Partial<ActivitySessionMediaProps>) =>
+      setProps((draft) => {
+        Object.assign(draft, patch);
+      }),
     row: container.querySelector<HTMLElement>("openclaw-activity-session-media")!,
   };
 }
@@ -168,14 +167,14 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
     expect(rows[0]!.querySelectorAll(".chat-message-image")).toHaveLength(4),
   );
   expect(rows[3]!.querySelectorAll("img")).toHaveLength(0);
-  rows[0]!.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  thumbnail(rows[0]!).click();
   await waitForSolid(() =>
     expect(rows[0]!.querySelector("openclaw-image-lightbox .image")?.getAttribute("src")).toBe(
       "https://images.example.test/first-0.png",
     ),
   );
   const first = rows[0]!;
-  const lightbox = first.querySelector("openclaw-image-lightbox");
+  const opened = lightbox(first);
   setFirstProps((props) => {
     props.revision = 1;
   });
@@ -183,19 +182,19 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
     expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4);
     expect(imageAlt(first)).toBe("first-0");
-    expect(first.querySelector("openclaw-image-lightbox")).toBe(lightbox);
+    expect(lightbox(first)).toBe(opened);
   } finally {
     pending[3]!.resolve(images("refreshed"));
   }
   await waitImage(first, "refreshed-0");
-  expect(first.querySelector("openclaw-image-lightbox")).toBe(lightbox);
-  expect(lightbox?.querySelector(".image")?.getAttribute("src")).toBe(
+  expect(lightbox(first)).toBe(opened);
+  expect(opened?.querySelector(".image")?.getAttribute("src")).toBe(
     "https://images.example.test/first-0.png",
   );
   setFirstProps((props) => {
     props.session = { key: "agent:main:images-0", kind: "direct", permissionMode: "workspace" };
   });
-  await waitForSolid(() => expect(first.querySelector("openclaw-image-lightbox")).toBeNull());
+  await waitForSolid(() => expect(lightbox(first)).toBeNull());
   view.unmount();
   expect(observers.size).toBe(0);
 });
@@ -214,14 +213,12 @@ it.each(["initial discovery", "revision refresh"])(
       })
       .mockReturnValueOnce(failedRefresh.promise)
       .mockReturnValueOnce(retry.promise);
-    const { row, setProps } = mountMedia(request);
+    const { row, update } = mountMedia(request);
     await waitForSolid(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
     if (!initialDiscovery) {
       await waitImage(row, "original-0");
-      setProps((props) => {
-        props.revision = 1;
-      });
+      update({ revision: 1 });
     }
     try {
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
@@ -242,9 +239,7 @@ it.each(["initial discovery", "revision refresh"])(
       await waitImage(row, "fresh-0");
       expect(row.querySelector('[role="status"]')).toBeNull();
       request.mockResolvedValueOnce({ artifacts: [] });
-      setProps((props) => {
-        props.revision = initialDiscovery ? 1 : 2;
-      });
+      update({ revision: initialDiscovery ? 1 : 2 });
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
       await waitForSolid(() => expect(row.querySelector("img")).toBeNull());
     } finally {
@@ -264,25 +259,19 @@ it.each(["session", "agent", "connection"] as const)(
       .mockResolvedValueOnce(images("original", 1))
       .mockReturnValueOnce(stale.promise)
       .mockReturnValueOnce(fresh.promise);
-    const { harness, row, setProps } = mountMedia(request, {
+    const { harness, row, update } = mountMedia(request, {
       session: { key: "agent:main:images", kind: "direct", sessionId: "original" },
     });
     await waitForSolid(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
     await waitImage(row, "original-0");
-    setProps((props) => {
-      props.revision = 1;
-    });
+    update({ revision: 1 });
     try {
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
       if (change === "session") {
-        setProps((props) => {
-          props.session = { key: "agent:main:images", kind: "direct", sessionId: "reset" };
-        });
+        update({ session: { key: "agent:main:images", kind: "direct", sessionId: "reset" } });
       } else if (change === "agent") {
-        setProps((props) => {
-          props.agentId = "other";
-        });
+        update({ agentId: "other" });
       } else {
         harness.publish({ client: createTestGatewayClient(request) });
       }
@@ -303,13 +292,11 @@ it.each(["session", "agent", "connection"] as const)(
         flush();
         expect(row.querySelectorAll("img")).toHaveLength(1);
         expect(imageAlt(row)).toBe("fresh-0");
-        row.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
-        await waitForSolid(() =>
-          expect(row.querySelector("openclaw-image-lightbox")).not.toBeNull(),
-        );
+        thumbnail(row).click();
+        await waitForSolid(() => expect(lightbox(row)).not.toBeNull());
         harness.publish({ phase: "offline" });
         await waitForSolid(() => expect(row.querySelector("img")).toBeNull());
-        expect(row.querySelector("openclaw-image-lightbox")).toBeNull();
+        expect(lightbox(row)).toBeNull();
       }
     } finally {
       stale.resolve(images("released", 1));
@@ -373,7 +360,7 @@ it.each([
       if (error) {
         request.mockResolvedValueOnce(result).mockRejectedValueOnce(new Error("Unavailable"));
       }
-      const { row, setProps } = mountMedia(request, { sessionKey: "agent:main:stable" });
+      const { row, update } = mountMedia(request, { sessionKey: "agent:main:stable" });
       observers.get(row)?.(true);
       await vi.advanceTimersByTimeAsync(0);
       flush();
@@ -392,7 +379,7 @@ it.each([
         expect(note?.querySelector('[role="status"]')?.textContent).toBe("Couldn't load images");
         expect(note?.querySelector("button")?.textContent?.trim()).toBe("Retry");
       }
-      const action = row.querySelector<HTMLButtonElement>(".activity-feed__note-action");
+      const action = olderAction(row);
       expect(action?.classList.contains("btn") ?? false).toBe(false);
       if (cursor && !error) {
         expect(action?.textContent?.trim()).toBe("Older images");
@@ -407,9 +394,7 @@ it.each([
         expect(media!.textContent).toContain(error ? "Couldn't load images" : "Older images");
         const settledCalls = request.mock.calls.length;
         request.mockReturnValueOnce(refresh.promise);
-        setProps((props) => {
-          props.revision++;
-        });
+        update({ revision: 1 });
         flush();
         expect(request).toHaveBeenCalledTimes(settledCalls + 1);
         expect(row.querySelector(".activity-feed__media")).toBe(media);
@@ -440,7 +425,7 @@ it.each([
         if (revalidate) {
           expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count + 1);
         } else {
-          expect(row.querySelector(".activity-feed__note-action")).toBeNull();
+          expect(olderAction(row)).toBeNull();
         }
       }
       if (revalidate) {
@@ -449,7 +434,7 @@ it.each([
         flush();
         expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(4);
         expect(imageAlt(row)).toBe("replacement-0");
-        expect(row.querySelector(".activity-feed__note-action")).toBeNull();
+        expect(olderAction(row)).toBeNull();
         expect(row.querySelector(".activity-feed__note")).toBeNull();
       }
     } finally {
@@ -535,13 +520,11 @@ it("keeps queued pagination separate from background revalidation", async () => 
     await vi.advanceTimersByTimeAsync(0);
     setRevision(1);
     flush();
-    row.querySelector<HTMLButtonElement>(".activity-feed__note-action")!.click();
+    olderAction(row)!.click();
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(imageAlt(row)).toBe("queued-0");
-    expect(row.querySelector<HTMLButtonElement>(".activity-feed__note-action")?.disabled).toBe(
-      true,
-    );
+    expect(olderAction(row)).toMatchObject({ disabled: true });
     blockers[0]!.resolve({ artifacts: [] });
     blockers[1]!.resolve({ artifacts: [] });
     await vi.advanceTimersByTimeAsync(0);

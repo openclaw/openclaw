@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { createSessionActivity } from "./session-activity-owner.ts";
 import "../../styles/base.css";
@@ -10,7 +9,11 @@ import "../../styles/components.css";
 import "../../styles/settings.css";
 import "../../styles/settings-controls.css";
 import "../../styles/activity.css";
-import { mountSolid, type SessionActivityTestProps } from "./session-activity-view.test-harness.ts";
+import {
+  mountSolid,
+  props as activityProps,
+  type SessionActivityTestProps,
+} from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
 const renderSessionActivityViewSolid = mountSolid<SessionActivityTestProps>(
@@ -26,9 +29,7 @@ beforeEach(() => {
   document.body.append(container);
 });
 
-afterEach(() => {
-  container.remove();
-});
+afterEach(() => container.remove());
 
 it.each([
   { personId: null, width: 900 },
@@ -39,49 +40,25 @@ it.each([
   "keeps content stable through passive refresh and explicit Retry ($personId, $width px)",
   async ({ personId, width }) => {
     await page.viewport(width, 700);
-    const props: SessionActivityTestProps = {
-      context: {
-        basePath: "",
-        navigate: vi.fn(),
-        gateway: {
-          snapshot: { hello: null, client: null, phase: "stopped" },
-          subscribe: () => () => {},
-          subscribeEvents: () => () => {},
-        },
-        agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-        agentSelection: { state: { selectedId: "main" } },
-        sessions: { state: { result: { sessions: [] } } },
-      } as unknown as ApplicationContext,
+    const props = activityProps({
       filters: { personId, query: "", time: "7d" },
-      presenceViewers: [],
-      loading: false,
-      retrying: false,
-      result: {
-        ts: 1,
-        path: "",
-        count: 0,
-        sessions: [],
-        defaults: { model: null, modelProvider: null, contextTokens: null },
-        people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
-        activityPulse: {
-          since: new Date(2026, 8, 20).getTime(),
-          until: new Date(2026, 8, 28).getTime(),
-          buckets: Array.from({ length: 8 }, () => 0),
-          sessions: 0,
-          started: 0,
-          running: 0,
-        },
+    });
+    Object.assign(props.context.gateway.snapshot, { hello: null, client: null, phase: "stopped" });
+    Object.assign(props.result!, {
+      people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
+      activityPulse: {
+        since: new Date(2026, 8, 20).getTime(),
+        until: new Date(2026, 8, 28).getTime(),
+        buckets: Array.from({ length: 8 }, () => 0),
+        sessions: 0,
+        started: 0,
+        running: 0,
       },
-      expandedAutomationDays: new Set(),
-      onRetry: vi.fn(),
-      onAutomationDayToggle: vi.fn(),
-      onFiltersChange: vi.fn(),
-    };
+    });
     renderSessionActivityViewSolid(props, container);
     const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
-    const content = main.querySelector<HTMLElement>(
-      personId ? "[data-activity-identity]" : ".activity-pulse",
-    )!;
+    const contentSelector = personId ? "[data-activity-identity]" : ".activity-pulse";
+    const content = main.querySelector<HTMLElement>(contentSelector)!;
     expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
       "32px",
     );
@@ -115,14 +92,14 @@ it.each([
     try {
       await controller.load(client, props.filters);
       expect(controller.loading).toBe(false);
-      const retained = container.querySelector<HTMLElement>(
-        personId ? "[data-activity-identity]" : ".activity-pulse",
-      )!;
+      const retained = container.querySelector<HTMLElement>(contentSelector)!;
       const retainedTop = retained.getBoundingClientRect().top;
+      const expectStable = () =>
+        expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       request.mockRejectedValueOnce(new Error("Refresh failed"));
       await controller.load(client, props.filters, "refresh");
       expect(controller.error).toBe("Refresh failed");
-      expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
+      expectStable();
       const retryButton = () =>
         container.querySelector<HTMLButtonElement>(".activity-feed__feedback button");
       expect(retryButton()?.textContent?.trim()).toBe("Retry");
@@ -133,13 +110,13 @@ it.each([
       expect(request).toHaveBeenCalledTimes(3);
       expect(container.querySelector('[role="status"]')?.textContent).toContain("Refreshing");
       expect(retryButton()?.disabled).toBe(true);
-      expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
+      expectStable();
       pending.reject(new Error("Retry failed"));
       await retryCompletion;
       expect(controller.error).toBe("Retry failed");
       expect(retryButton()?.disabled).toBe(false);
       expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry failed");
-      expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
+      expectStable();
       const recovered = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(recovered.promise);
       retryButton()!.click();
@@ -152,7 +129,7 @@ it.each([
       expect(retryButton()).toBeNull();
       expect(container.textContent).not.toContain("Refreshing");
       expect(container.querySelector('[role="alert"]')).toBeNull();
-      expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
+      expectStable();
     } finally {
       controller.dispose();
     }
