@@ -80,6 +80,40 @@ function interceptChildRegistrationWrite(
   return { failure, restore: () => spy.mockRestore() };
 }
 
+function abortableChild(
+  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>,
+) {
+  const started = createDeferred();
+  const state: { signal?: AbortSignal; settled: boolean } = { settled: false };
+  runEmbeddedAgent.mockImplementationOnce(async (params) => {
+    const signal = expectDefined(params.abortSignal, "accepted child abort signal");
+    state.signal = signal;
+    started.resolve();
+    try {
+      return await new Promise<never>((_resolve, reject) => {
+        const abort = () =>
+          reject(toErrorObject(signal.reason, "Accepted child execution aborted"));
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) {
+          signal.removeEventListener("abort", abort);
+          abort();
+        }
+      });
+    } finally {
+      state.settled = true;
+    }
+  });
+  return { started, state };
+}
+
+function cancelFixtureChildren(bound: BoundParent, message: string) {
+  for (const entry of rpcSourceTesting.values()) {
+    if (entry !== bound.parent.entry) {
+      requestRpcSourceCancellation(entry, new Error(message));
+    }
+  }
+}
+
 export function registerOperatorSpawnRollbackCases(options: {
   createBoundParent: (
     authority?: AdmittedRunOperatorAuthority,
@@ -125,9 +159,8 @@ export function registerOperatorSpawnRollbackCases(options: {
       const preserveSession = phase === "uncertain registration";
       let childSessionKey: string | undefined;
       let childRunId: string | undefined;
-      let embeddedSignal: AbortSignal | undefined;
-      let embeddedSettled = false;
-      const embeddedStarted = createDeferred();
+      const childExecution =
+        phase === "preparation" ? undefined : abortableChild(options.runEmbeddedAgent);
       let invocation: Promise<unknown> | undefined;
       let registrationUncertain = false;
       let registrationWrite: ReturnType<typeof interceptChildRegistrationWrite> | undefined;
@@ -155,24 +188,6 @@ export function registerOperatorSpawnRollbackCases(options: {
           },
         });
       } else {
-        options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-          const signal = expectDefined(params.abortSignal, "accepted child abort signal");
-          embeddedSignal = signal;
-          embeddedStarted.resolve();
-          try {
-            return await new Promise<never>((_resolve, reject) => {
-              const abort = () =>
-                reject(toErrorObject(signal.reason, "Accepted child execution aborted"));
-              signal.addEventListener("abort", abort, { once: true });
-              if (signal.aborted) {
-                signal.removeEventListener("abort", abort);
-                abort();
-              }
-            });
-          } finally {
-            embeddedSettled = true;
-          }
-        });
         registrationWrite = interceptChildRegistrationWrite(
           bound.parentSessionKey,
           async (record) => {
@@ -185,10 +200,10 @@ export function registerOperatorSpawnRollbackCases(options: {
             );
             expect(getRpcSourceIdentity(acceptedRun).sessionKey).toBe(record.child_session_key);
             if (phase === "uncertain registration") {
-              await embeddedStarted.promise;
-              expect(expectDefined(embeddedSignal, "running child abort signal").aborted).toBe(
-                false,
-              );
+              await childExecution?.started.promise;
+              expect(
+                expectDefined(childExecution?.state.signal, "running child abort signal").aborted,
+              ).toBe(false);
               expect(rpcSourceTesting.get(record.run_id)).toBe(acceptedRun);
               const childEntry = expectDefined(
                 loadSessionEntry({
@@ -229,9 +244,9 @@ export function registerOperatorSpawnRollbackCases(options: {
               const runId = expectDefined(childRunId, "registered child run");
               const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
               source.authority.assertCurrent();
-              expect(expectDefined(embeddedSignal, "accepted child abort signal").aborted).toBe(
-                true,
-              );
+              expect(
+                expectDefined(childExecution?.state.signal, "accepted child abort signal").aborted,
+              ).toBe(true);
               expect(dispatch).toHaveBeenCalledWith(
                 "chat.abort",
                 { sessionKey: childKey, runId },
@@ -255,7 +270,7 @@ export function registerOperatorSpawnRollbackCases(options: {
             loadSessionEntry({ storePath: bound.storePath, sessionKey: childKey }),
           ).toMatchObject(expectDefined(retainedChildIdentity, "original retained child identity"));
           expect(options.runEmbeddedAgent).toHaveBeenCalledOnce();
-          expect(embeddedSignal).toBeDefined();
+          expect(childExecution?.state.signal).toBeDefined();
           if (phase === "uncertain registration") {
             expect(registrationWrite?.failure).toHaveBeenCalledOnce();
           }
@@ -276,9 +291,9 @@ export function registerOperatorSpawnRollbackCases(options: {
             payload: { runId, status: expect.stringMatching(/^(error|timeout)$/) },
           });
           expect(subagentRuns.has(runId)).toBe(false);
-          if (embeddedSignal) {
-            expect(embeddedSignal.aborted).toBe(true);
-            expect(embeddedSettled).toBe(true);
+          if (childExecution?.state.signal) {
+            expect(childExecution.state.signal.aborted).toBe(true);
+            expect(childExecution.state.settled).toBe(true);
           } else {
             expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
           }
@@ -286,14 +301,10 @@ export function registerOperatorSpawnRollbackCases(options: {
       } catch (error) {
         failures.push(error);
       } finally {
-        embeddedStarted.resolve();
+        childExecution?.started.resolve();
         spawnTesting.setDepsForTest();
         registrationWrite?.restore();
-        for (const entry of rpcSourceTesting.values()) {
-          if (entry !== bound.parent.entry) {
-            requestRpcSourceCancellation(entry, new Error("spawn rollback fixture cleanup"));
-          }
-        }
+        cancelFixtureChildren(bound, "spawn rollback fixture cleanup");
         if (preserveSession) {
           await invocation?.catch(() => {});
         }
@@ -323,7 +334,7 @@ export function registerOperatorSpawnRollbackCases(options: {
       const source = operator ? createSpawnOperatorSource() : undefined;
       const bound = await options.createBoundParent(source?.authority);
       const { context, runtime } = await options.createBoundGateway(bound);
-      const embeddedStarted = createDeferred();
+      const childExecution = abortableChild(options.runEmbeddedAgent);
       const failures: unknown[] = [];
       const registrationFailure = new SubagentRegistryWriteError(
         "unknown",
@@ -337,8 +348,6 @@ export function registerOperatorSpawnRollbackCases(options: {
             sessionIdentity: { sessionId: string; lifecycleRevision?: string };
           }
         | undefined;
-      let embeddedSignal: AbortSignal | undefined;
-      let embeddedSettled = false;
       let abortAttempts = 0;
       let invocation: Promise<unknown> | undefined;
       const dispatchSessionMethod = runtime.recovery.dispatchSessionMethod;
@@ -351,24 +360,6 @@ export function registerOperatorSpawnRollbackCases(options: {
           abortAttempts += 1;
           throw new Error("accepted-child abort failed");
         });
-      options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-        const signal = expectDefined(params.abortSignal, "accepted child abort signal");
-        embeddedSignal = signal;
-        embeddedStarted.resolve();
-        try {
-          return await new Promise<never>((_resolve, reject) => {
-            const abort = () =>
-              reject(toErrorObject(signal.reason, "Accepted child execution aborted"));
-            signal.addEventListener("abort", abort, { once: true });
-            if (signal.aborted) {
-              signal.removeEventListener("abort", abort);
-              abort();
-            }
-          });
-        } finally {
-          embeddedSettled = true;
-        }
-      });
       const registrationWrite = interceptChildRegistrationWrite(
         bound.parentSessionKey,
         async (record) => {
@@ -389,7 +380,7 @@ export function registerOperatorSpawnRollbackCases(options: {
               lifecycleRevision: session.lifecycleRevision,
             },
           };
-          await embeddedStarted.promise;
+          await childExecution.started.promise;
           throw registrationFailure;
         },
       );
@@ -402,7 +393,7 @@ export function registerOperatorSpawnRollbackCases(options: {
           message: "registration failure waited for accepted-child execution",
         });
         const accepted = expectDefined(child, "accepted child before registration failure");
-        const signal = expectDefined(embeddedSignal, "running accepted child");
+        const signal = expectDefined(childExecution.state.signal, "running accepted child");
         const details = expectDefined(asOptionalRecord(result.details), "spawn failure details");
         expect(details).toMatchObject({
           status: "error",
@@ -414,7 +405,7 @@ export function registerOperatorSpawnRollbackCases(options: {
         expect(details.error).toContain("Its session is retained");
         expect(abortAttempts).toBe(1);
         expect(signal.aborted).toBe(false);
-        expect(embeddedSettled).toBe(false);
+        expect(childExecution.state.settled).toBe(false);
         expect(rpcSourceTesting.get(accepted.runId)).toBe(accepted.entry);
         expect(subagentRuns.has(accepted.runId)).toBe(false);
         expect(
@@ -444,21 +435,17 @@ export function registerOperatorSpawnRollbackCases(options: {
           () => {},
         );
         expect(signal.aborted).toBe(true);
-        expect(embeddedSettled).toBe(true);
+        expect(childExecution.state.settled).toBe(true);
         expect(rpcSourceTesting.has(accepted.runId)).toBe(false);
         expect(abortAttempts).toBe(1);
       } catch (error) {
         failures.push(error);
       } finally {
-        embeddedStarted.resolve();
+        childExecution.started.resolve();
         if (child) {
           requestRpcSourceCancellation(child.entry, new Error("uncertain spawn fixture cleanup"));
         }
-        for (const entry of rpcSourceTesting.values()) {
-          if (entry !== bound.parent.entry) {
-            requestRpcSourceCancellation(entry, new Error("uncertain spawn fixture cleanup"));
-          }
-        }
+        cancelFixtureChildren(bound, "uncertain spawn fixture cleanup");
         registrationWrite.restore();
         await invocation?.catch((error: unknown) => {
           failures.push(error);

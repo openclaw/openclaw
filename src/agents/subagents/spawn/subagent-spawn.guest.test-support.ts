@@ -5,8 +5,6 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
 import {
@@ -21,39 +19,41 @@ import { settleRequesterAfterSessionSpawns } from "../registry/subagent-registry
 import {
   createBoundSpawnInvocation,
   recordSpawnBoundaryFinal,
-  type createSpawnBoundaryParent,
   type createSpawnOperatorSource,
+  type RequestCustodySpawnCaseOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
-type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 type Source = ReturnType<typeof createSpawnOperatorSource>;
-type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
+type BoundParent = Awaited<ReturnType<RequestCustodySpawnCaseOptions["createBoundParent"]>>;
+const hiddenSpawn = { visible: false, context: "isolated", completionTarget: "parent" } as const;
+function visibleResult(text: string): EmbeddedAgentRunResult {
+  return {
+    payloads: [{ text }],
+    meta: { durationMs: 1, terminalReply: { disposition: "visible", text } },
+  };
+}
 
-export function registerGuestSpawnCases(options: {
-  createGuestParent: (audit?: boolean) => Promise<{
-    bound: BoundParent;
-    source: Source;
-    modelPolicy: Source["authority"]["modelPolicy"];
-    scopes: string[];
-  }>;
-  createBoundGateway: (
-    bound: BoundParent,
-  ) => Promise<{ context: GatewayRequestContext; runtime: GatewayRuntime }>;
-  closeBoundGateway: (
-    bound: BoundParent,
-    runtime: GatewayRuntime,
-    childRunId?: string,
-  ) => Promise<unknown[]>;
-  waitForEmbeddedRun: (
-    bound: BoundParent,
-    runId: string,
-    started?: Promise<void>,
-    calls?: number,
-  ) => Promise<void>;
-  throwBoundFailures: (failures: unknown[]) => void;
-  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
-}) {
+export function registerGuestSpawnCases(
+  options: Pick<
+    RequestCustodySpawnCaseOptions,
+    "createBoundGateway" | "closeBoundGateway" | "throwBoundFailures"
+  > & {
+    createGuestParent: (audit?: boolean) => Promise<{
+      bound: BoundParent;
+      source: Source;
+      modelPolicy: Source["authority"]["modelPolicy"];
+      scopes: string[];
+    }>;
+    waitForEmbeddedRun: (
+      bound: BoundParent,
+      runId: string,
+      started?: Promise<void>,
+      calls?: number,
+    ) => Promise<void>;
+    runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
+  },
+) {
   it.for([false, true])(
     "launches an owned hidden child and returns its result (audit=%s)",
     async (audit, { signal }) => {
@@ -95,23 +95,14 @@ export function registerGuestSpawnCases(options: {
         );
         await params.onExecutionStarted?.();
         if (params.sessionKey === bound.parentSessionKey) {
-          parentTurns.push({
-            prompt: params.prompt,
-            internalEvents: params.internalEvents,
-          });
+          parentTurns.push({ prompt: params.prompt, internalEvents: params.internalEvents });
           await recordSpawnBoundaryFinal({
             storePath: bound.storePath,
             sessionKey: bound.parentSessionKey,
             runId: params.runId,
             text: "Parent received the result",
           });
-          return {
-            payloads: [{ text: "Parent received the result" }],
-            meta: {
-              durationMs: 1,
-              terminalReply: { disposition: "visible", text: "Parent received the result" },
-            },
-          };
+          return visibleResult("Parent received the result");
         }
         started.resolve();
         const result = await modelResult.promise;
@@ -126,11 +117,7 @@ export function registerGuestSpawnCases(options: {
       let childRunId: string | undefined;
       const failures: unknown[] = [];
       try {
-        const result = await createBoundSpawnInvocation(bound, {
-          visible: false,
-          context: "isolated",
-          completionTarget: "parent",
-        })();
+        const result = await createBoundSpawnInvocation(bound, hiddenSpawn)();
         expect(result.details, JSON.stringify(result)).toMatchObject({ status: "accepted" });
         const details = result.details as { childSessionKey: string; runId: string };
         childRunId = details.runId;
@@ -156,13 +143,7 @@ export function registerGuestSpawnCases(options: {
         bound.admission.close();
         bound.parent.cleanup();
         source.closeRequest();
-        modelResult.resolve({
-          payloads: [{ text: "guest child complete" }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "guest child complete" },
-          },
-        });
+        modelResult.resolve(visibleResult("guest child complete"));
         expect(await withinTest(delivered.promise, signal)).toBe("delivered");
         expect(parentTurns).toHaveLength(1);
         expect(parentTurns[0]?.prompt).toContain(RUNTIME_EVENT_USER_PROMPT);
@@ -173,13 +154,7 @@ export function registerGuestSpawnCases(options: {
       } catch (error) {
         failures.push(error);
       } finally {
-        modelResult.resolve({
-          payloads: [{ text: "guest child complete" }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "guest child complete" },
-          },
-        });
+        modelResult.resolve(visibleResult("guest child complete"));
         failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
         options.throwBoundFailures(failures);
       }
@@ -220,9 +195,7 @@ export function registerGuestSpawnCases(options: {
             if (change === "replaced child") {
               await upsertSessionEntryCore(
                 { storePath: bound.storePath, sessionKey: childKey },
-                {
-                  lifecycleRevision: "successor-lifecycle",
-                },
+                { lifecycleRevision: "successor-lifecycle" },
               );
             }
           }
@@ -234,11 +207,7 @@ export function registerGuestSpawnCases(options: {
         },
       });
       try {
-        const result = await createBoundSpawnInvocation(bound, {
-          visible: false,
-          context: "isolated",
-          completionTarget: "parent",
-        })();
+        const result = await createBoundSpawnInvocation(bound, hiddenSpawn)();
         expect(result.details).toMatchObject({ status: "error" });
         expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
         const child = loadSessionEntry({

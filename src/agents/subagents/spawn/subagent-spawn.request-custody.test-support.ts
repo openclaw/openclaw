@@ -1,19 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { handleChatAbortRequestWithLifecycle } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { requireLastRespondCall } from "../../../gateway/server-methods/chat.abort-authorization.test-helpers.js";
-import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
-import {
-  captureExecRequestOwners,
-  withExecRequestOwners,
-  withExecRequestTurn,
-} from "../../../infra/exec-request-context.js";
-import {
-  consumeSelectedSystemEventEntries,
-  enqueueSystemEventEntry,
-} from "../../../infra/system-events.js";
+import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
+import { consumeSelectedSystemEventEntries } from "../../../infra/system-events.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import { killSubagentRunAdmin } from "../registry/subagent-control-kill.js";
@@ -23,7 +13,11 @@ import {
   createBoundSpawnInvocation,
   type RequestCustodySpawnCaseOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
-import { registerCompletedRequestCustodySpawnCases } from "./subagent-spawn.request-custody-completed.test-support.js";
+import {
+  createCustodyStop,
+  registerCompletedRequestCustodySpawnCases,
+  retainOriginalRequest,
+} from "./subagent-spawn.request-custody-completed.test-support.js";
 
 export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCaseOptions) {
   const {
@@ -40,31 +34,11 @@ export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCas
     async (mode) => {
       const bound = await createBoundParent();
       const { runtime } = await createBoundGateway(bound);
-      const original = {
-        runId: "original-exec-request",
-        sessionKey: "agent:main:main",
-        sessionId: "original-exec-session",
-        agentId: "main",
-        ownerConnId: "request-owner",
-      };
-      await replaceSessionEntry(
-        { storePath: bound.storePath, sessionKey: original.sessionKey },
-        { sessionId: original.sessionId, updatedAt: Date.now() },
-      );
-      const owners = await withExecRequestTurn({ identity: original }, async () =>
-        expectDefined(captureExecRequestOwners(original), "original request owners"),
-      );
-      const event = expectDefined(
-        enqueueSystemEventEntry(
-          "Exec completed: continue original request",
-          withExecRequestOwners(
-            {
-              sessionKey: original.sessionKey,
-            },
-            owners,
-          ),
-        ),
-        "retained request occurrence",
+      const { original, owners, event } = await retainOriginalRequest(
+        bound,
+        "original-exec-request",
+        "original-exec-session",
+        "Exec completed: continue original request",
       );
       const groupId = "routed-native-request";
       const capacity = "routed-native-capacity";
@@ -113,19 +87,8 @@ export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCas
         bound.parent.cleanup();
         const commands = captureExecRequestCancellation(original);
         expect(commands.owners).toEqual(owners);
-        const context = bound.context;
-        const stop = (connId: string, exact = mode === "exact") =>
-          invokeChatAbortHandler({
-            handler: (requestOptions) =>
-              handleChatAbortRequestWithLifecycle(requestOptions, { cascadeDescendants: true }),
-            context,
-            request: {
-              sessionKey: original.sessionKey,
-              agentId: original.agentId,
-              ...(exact ? { runId: original.runId } : {}),
-            },
-            client: { connId, connect: { scopes: ["operator.write"] } },
-          });
+        const stopRequest = createCustodyStop(bound, original);
+        const stop = (connId: string, exact = mode === "exact") => stopRequest(connId, exact);
         const foreign = requireLastRespondCall(await stop("another-owner"));
         if (mode === "exact") {
           expect(foreign[0]).toBe(false);

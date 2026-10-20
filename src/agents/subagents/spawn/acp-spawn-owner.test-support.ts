@@ -22,59 +22,48 @@ export function registerAcpSpawnOwnerTests(fixture: {
     createTargetWorkspace?: boolean;
   }) => Promise<{ workspaceRoot: string; mainWorkspace: string; targetWorkspace: string }>;
 }) {
-  it("keeps a raw ACP harness under the requester OpenClaw owner and workspace", async () => {
-    const workspace = await fixture.createCrossAgentWorkspaceFixture();
-    try {
-      fixture.state.cfg.acp = { ...fixture.state.cfg.acp, allowedAgents: ["codex"] };
-      fixture.state.cfg.agents = {
-        entries: { main: { workspace: workspace.mainWorkspace } },
-      };
-      const accepted = fixture.expectAcceptedSpawn(
-        await fixture.spawn({ agentId: "codex", mode: "run" }),
-      );
-      expect(accepted.childSessionKey).toMatch(/^agent:main:acp:/);
-      fixture.expectInitializeSessionFields({
-        agentId: "main",
-        agent: "codex",
-        cwd: workspace.mainWorkspace,
-        sessionKey: accepted.childSessionKey,
-      });
-      expectRegisteredSubagentRun(
-        fixture.registerSubagentRunMock,
-        {
-          childSessionKey: accepted.childSessionKey,
-          childAgentId: "main",
-          requesterAgentId: "main",
-        },
-        { assertCurrent: undefined },
-      );
-    } finally {
-      await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
-    }
-  });
-
-  it.each([true, false])("resolves the target workspace (exists=%s)", async (exists) => {
+  it.each([
+    { agent: "codex", exists: true },
+    { agent: "claude-code", exists: true },
+    { agent: "claude-code", exists: false },
+  ])("resolves $agent ownership and workspace (exists=$exists)", async ({ agent, exists }) => {
     const workspace = await fixture.createCrossAgentWorkspaceFixture({
       createTargetWorkspace: exists,
     });
+    const rawHarness = agent === "codex";
+    const owner = rawHarness ? "main" : agent;
     try {
       fixture.state.cfg.acp = {
         ...fixture.state.cfg.acp,
-        allowedAgents: ["codex", "claude-code"],
+        allowedAgents: rawHarness ? [agent] : ["codex", agent],
       };
       fixture.state.cfg.agents = {
         entries: {
           main: { workspace: workspace.mainWorkspace },
-          "claude-code": { workspace: workspace.targetWorkspace },
+          ...(!rawHarness ? { [agent]: { workspace: workspace.targetWorkspace } } : {}),
         },
       };
-      fixture.expectAcceptedSpawn(await fixture.spawn({ agentId: "claude-code", mode: "run" }));
+      const accepted = fixture.expectAcceptedSpawn(
+        await fixture.spawn({ agentId: agent, mode: "run" }),
+      );
+      expect(accepted.childSessionKey).toMatch(new RegExp(`^agent:${owner}:acp:`));
       fixture.expectInitializeSessionFields({
-        agentId: "claude-code",
-        agent: "claude-code",
-        cwd: exists ? workspace.targetWorkspace : undefined,
-        sessionKey: expect.stringMatching(/^agent:claude-code:acp:/),
+        agentId: owner,
+        agent,
+        cwd: rawHarness ? workspace.mainWorkspace : exists ? workspace.targetWorkspace : undefined,
+        sessionKey: accepted.childSessionKey,
       });
+      if (rawHarness) {
+        expectRegisteredSubagentRun(
+          fixture.registerSubagentRunMock,
+          {
+            childSessionKey: accepted.childSessionKey,
+            childAgentId: "main",
+            requesterAgentId: "main",
+          },
+          { assertCurrent: undefined },
+        );
+      }
     } finally {
       await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
     }
