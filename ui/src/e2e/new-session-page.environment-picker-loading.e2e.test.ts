@@ -1,28 +1,12 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
-  captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   installMockGateway,
   openEnvironmentPicker,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-
-async function capture(page: Parameters<typeof openEnvironmentPicker>[0], name: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await page.evaluate(async () => {
-    await document.fonts.ready;
-  });
-  await writeFile(
-    path.join(suite.artifactDir, name),
-    await page.screenshot({ animations: "disabled", scale: "css" }),
-  );
-}
 
 suite.define(() => {
   it("shows catalog skeletons, then uses provider capabilities and fallback defaults", async () => {
@@ -47,19 +31,9 @@ suite.define(() => {
           .locator(".new-session-page__environment-skeleton-row")
           .evaluateAll((rows) => rows.map((row) => Math.round(row.getBoundingClientRect().width)));
         expect(new Set(skeletonWidths).size).toBe(1);
-        await capture(page, "environment-picker-loading-after.png");
 
         await gateway.resolveDeferred("environments.list", {
-          environments: [
-            {
-              id: "node:studio",
-              type: "node",
-              label: "Studio Mac",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 2, available: 2 },
-            },
-          ],
+          environments: [],
           profiles: [
             {
               id: "Daytona Crabbox",
@@ -99,7 +73,6 @@ suite.define(() => {
           const center = (box: typeof plusBox) => (box?.x ?? 0) + (box?.width ?? 0) / 2;
           expect(Math.abs(center(plusBox) - center(chevronBox))).toBeLessThanOrEqual(4);
         });
-        await capture(page, "environment-picker-capabilities-after.png");
       },
     );
   });

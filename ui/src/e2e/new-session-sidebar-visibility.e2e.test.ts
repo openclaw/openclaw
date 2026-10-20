@@ -1,8 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
@@ -105,13 +101,7 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "new?agent=main");
       await page.locator(`.sidebar-recent-session[data-session-key="${old.key}"]`).waitFor();
       await chooseSidebarOwner(page, "involving-me");
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list")).some(
-            (request) => (request.params as { involvingMe?: boolean }).involvingMe === true,
-          ),
-        )
-        .toBe(true);
+      await gateway.waitForRequest("sessions.list", { match: { involvingMe: true } });
       const message = page.locator(".new-session-page__message");
       await message.fill(prompt);
       await message.press("Enter");
@@ -126,14 +116,6 @@ suite.define(() => {
       // manual refresh, or terminal message may make the new row appear.
       await page.clock.runFor(0);
       const row = page.locator(`.sidebar-recent-session[data-session-key="${created.key}"]`);
-      const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactParent) {
-        const directory = createControlUiE2eArtifactDir("new-session-sidebar", artifactParent);
-        const png = await takeControlUiViewportScreenshot(page, page.locator("body"), [
-          page.locator(".sidebar"),
-        ]);
-        await writeFile(path.join(directory, "accepted-running-session.png"), png);
-      }
       await expect.poll(() => row.count()).toBe(1);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
     });

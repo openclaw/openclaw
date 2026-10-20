@@ -40,7 +40,6 @@ suite.define(() => {
       await modelTrigger.click();
       const input = page.locator(".new-session-page__message");
       await input.fill("Warmup ");
-      await input.focus();
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
@@ -48,9 +47,7 @@ suite.define(() => {
           }),
       );
       const sessionKey = "agent:main:dashboard:typing-0";
-      const sidebarRow = page
-        .locator('aside.sidebar [data-session-key="' + sessionKey + '"]')
-        .first();
+      const sidebarRow = page.locator(`aside.sidebar [data-session-key="${sessionKey}"]`).first();
       await expect.poll(() => sidebarRow.textContent()).toContain("Research session 0");
       await pauseVirtualClock(page);
       const observation = await page.evaluateHandle(() => {
@@ -65,23 +62,19 @@ suite.define(() => {
           this: string,
           ...args: Parameters<string["toLocaleLowerCase"]>
         ) {
-          if (/^Model \d+$/.test(this)) {
-            catalogLabelReads += 1;
-          }
+          catalogLabelReads += /^Model \d+$/.test(this) ? 1 : 0;
           return Reflect.apply(original, this, args);
         };
-        return {
-          finish() {
-            // oxlint-disable-next-line no-extend-native -- Restore the page-local instrumentation.
-            String.prototype.toLocaleLowerCase = original;
-            return {
-              catalogLabelReads,
-              sameTextarea: textarea === document.querySelector(".new-session-page__message"),
-              sameModelOption:
-                modelOption ===
-                document.querySelector('[data-chat-model-option="fixture/model-1999"]'),
-            };
-          },
+        return () => {
+          // oxlint-disable-next-line no-extend-native -- Restore the page-local instrumentation.
+          String.prototype.toLocaleLowerCase = original;
+          return {
+            catalogLabelReads,
+            sameTextarea: textarea === document.querySelector(".new-session-page__message"),
+            sameModelOption:
+              modelOption ===
+              document.querySelector('[data-chat-model-option="fixture/model-1999"]'),
+          };
         };
       });
       const row = await gateway.getSessionRow(sessionKey);
@@ -101,12 +94,10 @@ suite.define(() => {
         await input.press(key);
         await page.clock.runFor(32);
       }
-      // Cross the entire event-collection window so a wrongly queued read
-      // cannot pass just because this runner typed faster than the debounce.
-      // The paused clock keeps independent 60-second fallbacks outside it.
+      // Cross the event-collection window, but not the independent 60-second fallback.
       await page.clock.fastForward(5_001);
       expect(await input.inputValue()).toBe("Warmup abcdefghij");
-      expect(await observation.evaluate((value) => value.finish())).toEqual({
+      expect(await observation.evaluate((finish) => finish())).toEqual({
         catalogLabelReads: 0,
         sameTextarea: true,
         sameModelOption: true,

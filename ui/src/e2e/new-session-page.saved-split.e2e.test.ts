@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { UiSettings } from "../app/settings.ts";
+import type { PersistedUiSettings } from "../app/settings-storage-types.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -34,10 +34,9 @@ const savedLayout = (left: string, right: string): ChatSplitLayout => ({
 
 function readSaved(page: Page, storageKey: string) {
   return page.evaluate((key) => {
-    const settings = JSON.parse(localStorage.getItem(key) ?? "null") as {
-      chatSplitLayout?: ChatSplitLayout;
-      sessionsByGateway?: Record<string, Pick<UiSettings, "sessionKey" | "lastActiveSessionKey">>;
-    } | null;
+    const settings = JSON.parse(
+      localStorage.getItem(key) ?? "null",
+    ) as Partial<PersistedUiSettings> | null;
     const scope = key.slice("openclaw.control.settings.v1:".length);
     const selected = settings?.sessionsByGateway?.[scope];
     return {

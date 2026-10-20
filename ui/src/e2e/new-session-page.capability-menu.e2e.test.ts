@@ -10,90 +10,76 @@ const draftAccess = {
   hasMultipleSessionSharingIdentities: true,
   operatorScopes: ["operator.read", "operator.write", "operator.admin"],
 } satisfies NonNullable<Parameters<typeof installMockGateway>[1]>;
+const config = {
+  mcp: { servers: { github: { enabled: true, url: "https://mcp.example.test" } } },
+  tools: { web: { search: { provider: "brave" } } },
+};
+const methodResponses = {
+  "config.get": {
+    raw: JSON.stringify(config),
+    hash: "new-session-capabilities",
+    sourceConfig: config,
+    runtimeConfig: config,
+    config,
+  },
+  "skills.status": {
+    skills: [
+      {
+        name: "Release",
+        skillKey: "release",
+        disabled: false,
+        blockedByAllowlist: false,
+        missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
+      },
+    ],
+  },
+  "sessions.create": { key: "agent:main:new-session-capabilities", runStarted: true },
+};
 
 suite.define(() => {
   it.each([
-    { name: "desktop", viewport: { width: 1280, height: 900 }, composerVisible: true },
-    { name: "mobile", viewport: { width: 390, height: 844 }, composerVisible: false },
-  ])("shows Draft once on $name", async ({ viewport, composerVisible }) => {
-    await suite.withPage({ viewport }, async ({ page }) => {
-      await installMockGateway(page, draftAccess);
-
-      await page.goto(`${suite.server.baseUrl}new`);
-      const composer = page.locator(".new-session-page__composer");
-      await composer.getByRole("button", { name: "Add attachment" }).click();
-      await composer
-        .locator(".agent-chat__capability-menu")
-        .getByRole("menuitemcheckbox", { name: "Draft" })
-        .click();
-
-      await expect
-        .poll(() => composer.locator(".new-session-page__visibility--draft").isVisible())
-        .toBe(composerVisible);
-      await expect
-        .poll(() => page.locator(".new-session-page__draft-toggle").isVisible())
-        .toBe(!composerVisible);
-    });
-  });
-
-  it("creates the first turn with Draft and selected capabilities atomically", async () => {
-    await suite.withPage({ viewport: { width: 555, height: 1200 } }, async ({ page }) => {
-      const config = {
-        mcp: { servers: { github: { enabled: true, url: "https://mcp.example.test" } } },
-        tools: { web: { search: { provider: "brave" } } },
-      };
-      const gateway = await installMockGateway(page, {
-        ...draftAccess,
-        methodResponses: {
-          "config.get": {
-            raw: JSON.stringify(config),
-            hash: "new-session-capabilities",
-            sourceConfig: config,
-            runtimeConfig: config,
-            config,
-          },
-          "skills.status": {
-            skills: [
-              {
-                name: "Release",
-                skillKey: "release",
-                disabled: false,
-                blockedByAllowlist: false,
-                missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
-              },
-            ],
-          },
-          "sessions.create": {
-            key: "agent:main:new-session-capabilities",
-            runStarted: true,
-          },
-        },
-      });
-
+    ["desktop", 1280, 900],
+    ["mobile", 390, 844],
+    ["atomic submission", 555, 1200],
+  ] as const)("supports Draft capabilities on %s", async (mode, width, height) => {
+    await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+      const atomic = mode === "atomic submission";
+      const gateway = await installMockGateway(
+        page,
+        atomic ? { ...draftAccess, methodResponses } : draftAccess,
+      );
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__composer");
       const menu = composer.locator(".agent-chat__capability-menu");
-      await composer.getByRole("button", { name: "Add attachment" }).click();
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
-
       const draft = menu.getByRole("menuitemcheckbox", { name: "Draft" });
-      await expect.poll(() => draft.getAttribute("aria-checked")).toBe("false");
-      await draft.focus();
-      await page.keyboard.press("Space");
-      await expect.poll(() => draft.getAttribute("aria-checked")).toBe("true");
+      await composer.getByRole("button", { name: "Add attachment" }).click();
+      if (atomic) {
+        await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
+        await expect.poll(() => draft.getAttribute("aria-checked")).toBe("false");
+        await draft.focus();
+        await page.keyboard.press("Space");
+        await expect.poll(() => draft.getAttribute("aria-checked")).toBe("true");
+      } else {
+        await draft.click();
+        await expect
+          .poll(() => composer.locator(".new-session-page__visibility--draft").isVisible())
+          .toBe(mode === "desktop");
+        await expect
+          .poll(() => page.locator(".new-session-page__draft-toggle").isVisible())
+          .toBe(mode === "mobile");
+        return;
+      }
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("skills");
       const release = menu.getByRole("menuitemcheckbox", { name: "Release" });
       await expect.poll(() => release.isEnabled()).toBe(true);
       await release.click();
       await menu.getByRole("menuitem", { name: "Back" }).click();
-
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
       await menu.getByRole("menuitemcheckbox", { name: /^github/ }).click();
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
-
       await expect
         .poll(async () =>
           (await composer.locator(".new-session-page__selection-status").allTextContents()).map(
@@ -103,9 +89,7 @@ suite.define(() => {
         .toEqual(["3 overrides"]);
       await page.locator(".new-session-page__message").fill("prepare the release");
       await composer.getByRole("button", { name: "Start session" }).click();
-
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
+      expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
         agentId: "main",
         message: "prepare the release",
         visibility: "draft",

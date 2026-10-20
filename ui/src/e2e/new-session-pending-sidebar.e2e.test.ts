@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -64,7 +61,7 @@ suite.define(() => {
     { destination: "pinned agent", mode: "roster", pinned: true },
   ] as const)(
     "shows a provisional row only where the admitted row appears ($destination) and restores the draft on rejection",
-    async ({ destination, mode, pinned }) => {
+    async ({ mode, pinned }) => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
         async ({ page }) => {
@@ -111,27 +108,12 @@ suite.define(() => {
           if (mode === "chip") {
             await expect.poll(() => provisional.count()).toBe(1);
           } else {
-            // The agent-only roster never lists the admitted session, so a handoff row
-            // there would flash under the agent header and vanish on admission.
+            // Agent-only rosters must not flash a row they will not retain after admission.
             await page.locator('[data-agent-id="main"]').waitFor();
             expect(await provisional.count()).toBe(0);
           }
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const sessions = page.locator(".sidebar-shell__body");
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator("body"),
-              [sessions, page.locator(".chat-pane__header")],
-              { animations: "disabled", elements: [sessions] },
-            );
-            await writeFile(
-              path.join(suite.artifactDir, `pending-session-${destination.replace(" ", "-")}.png`),
-              frame.elements[0]!.png,
-            );
-          }
           if (mode === "chip") {
-            // The handoff occupies the slot its admitted row will take, not a detached
-            // row above the list.
+            // The handoff occupies the slot its admitted row will take.
             const handoffSlot = page.locator(
               ".sidebar-sessions .sidebar-recent-sessions .sidebar-recent-session--creating",
             );
@@ -161,11 +143,11 @@ suite.define(() => {
           expect(await bars.count()).toBe(mode === "chip" ? 2 : 1);
           for (const bar of await bars.all()) {
             const style = await bar.evaluate((element) => {
-              const computed = getComputedStyle(element);
+              const { borderRadius, transform, backgroundColor } = getComputedStyle(element);
               return {
-                radius: computed.borderRadius,
-                transform: computed.transform,
-                background: computed.backgroundColor,
+                radius: borderRadius,
+                transform,
+                background: backgroundColor,
                 animation: getComputedStyle(element, "::after").animationName,
               };
             });
