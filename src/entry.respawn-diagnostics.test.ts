@@ -68,17 +68,33 @@ vi.mock("./cli/update-cli/update-command-admit.js", () => ({
 const originalArgv = process.argv;
 const originalTitle = process.title;
 const originalExitCode = process.exitCode;
+const entryPath = "/fixture/openclaw/dist/entry.js";
+
+async function launch(...args: string[]) {
+  process.argv = [process.execPath, entryPath, ...args];
+  await import("./entry.js");
+}
+
+async function expectAdmissionExit(events: string[]) {
+  expect(boundary.events).toEqual(events);
+  expect(process.exitCode).toBe(2);
+  const { enableOpenClawCompileCache } = await import("./entry.compile-cache.js");
+  expect(enableOpenClawCompileCache).not.toHaveBeenCalled();
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
-  boundary.events = [];
-  boundary.runtimeSupported = true;
-  boundary.writer = undefined;
-  boundary.spawnTitle = undefined;
-  boundary.admissionContext = undefined;
+  Object.assign(boundary, {
+    events: [],
+    mode: "compile-cache",
+    trace: true,
+    runtimeSupported: false,
+    writer: undefined,
+    spawnTitle: undefined,
+    admissionContext: undefined,
+  });
   process.title = "doctor-launcher-fixture";
-  process.argv = [process.execPath, "/fixture/openclaw/dist/entry.js", "doctor", "--fix"];
 });
 afterEach(() => {
   process.argv = originalArgv;
@@ -94,32 +110,29 @@ it.each([
 ] as const)(
   "preserves the idle Doctor launcher through $mode respawn diagnostics (trace: $trace, supported: $supported)",
   async ({ mode, trace, supported }) => {
-    boundary.runtimeSupported = supported;
-    boundary.mode = mode;
-    boundary.trace = trace;
+    Object.assign(boundary, { runtimeSupported: supported, mode, trace });
     const launcherTitle = process.title;
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
       boundary.events.push("diagnostic");
       return true;
     });
 
-    await import("./entry.js");
+    await launch("doctor", "--fix");
 
-    expect(boundary.spawnTitle).toBe(launcherTitle);
-    expect(process.title).toBe(launcherTitle);
+    expect([boundary.spawnTitle, process.title]).toEqual([launcherTitle, launcherTitle]);
     const recoveryEvents = supported ? [] : ["dotenv", "trace formatting"];
-    expect(boundary.events).toEqual([
+    const beforeDiagnostic = [
       ...recoveryEvents,
       ...(trace ? ["dotenv", "trace formatting", "spawn"] : ["spawn"]),
-    ]);
+    ];
+    expect(boundary.events).toEqual(beforeDiagnostic);
     expect(stderr).not.toHaveBeenCalled();
     expect(boundary.writer).toBeTypeOf("function");
     await boundary.writer?.("startup failed");
     expect(boundary.events).toEqual([
-      ...recoveryEvents,
-      ...(trace
-        ? ["dotenv", "trace formatting", "spawn", "diagnostic"]
-        : ["spawn", "dotenv", "trace formatting", "diagnostic"]),
+      ...beforeDiagnostic,
+      ...(!trace ? ["dotenv", "trace formatting"] : []),
+      "diagnostic",
     ]);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("startup failed"));
   },
@@ -128,18 +141,14 @@ it.each([
 it("names the final executing CLI after startup respawn decisions", async () => {
   boundary.mode = "none";
   boundary.trace = false;
-  process.argv = [process.execPath, "/fixture/openclaw/dist/entry.js", "--version"];
-
-  await import("./entry.js");
+  boundary.runtimeSupported = true;
+  await launch("--version");
 
   expect(boundary.spawnTitle).toBeUndefined();
   expect(process.title).toBe("openclaw");
 });
 
 it("runs internal admission with root options before runtime recovery, cache activation, or respawn", async () => {
-  boundary.mode = "compile-cache";
-  boundary.trace = true;
-  boundary.runtimeSupported = false;
   const { isUpdateAdmissionAuthorityEnvKey } = await import("./infra/update-admission-contract.js");
   for (const key of Object.keys(process.env)) {
     if (isUpdateAdmissionAuthorityEnvKey(key)) {
@@ -149,9 +158,7 @@ it("runs internal admission with root options before runtime recovery, cache act
   for (const key of ["OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]) {
     vi.stubEnv(key, undefined);
   }
-  process.argv = [
-    process.execPath,
-    "/fixture/openclaw/dist/entry.js",
+  await launch(
     "--profile",
     "admission-fixture",
     "update",
@@ -159,36 +166,18 @@ it("runs internal admission with root options before runtime recovery, cache act
     "--context",
     "/fixture/context.json",
     "--no-color",
-  ];
-  await import("./entry.js");
-  expect(boundary.events).toEqual(["admission"]);
+  );
+  await expectAdmissionExit(["admission"]);
   expect(boundary.admissionContext).toBe("/fixture/context.json");
   expect(process.env.OPENCLAW_PROFILE).toBe("admission-fixture");
-  expect(process.exitCode).toBe(2);
-  const compileCache = await import("./entry.compile-cache.js");
-  expect(compileCache.enableOpenClawCompileCache).not.toHaveBeenCalled();
 });
 
 it("rejects malformed admission argv before runtime recovery or respawn", async () => {
-  boundary.mode = "compile-cache";
-  boundary.trace = true;
-  boundary.runtimeSupported = false;
-  process.argv = [
-    process.execPath,
-    "/fixture/openclaw/dist/entry.js",
-    "update",
-    "admit",
-    "--context",
-  ];
   const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
   const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
 
-  await import("./entry.js");
-
-  expect(boundary.events).toEqual([]);
-  expect(process.exitCode).toBe(2);
+  await launch("update", "admit", "--context");
+  await expectAdmissionExit([]);
   expect(stdout).not.toHaveBeenCalled();
   expect(stderr).toHaveBeenCalledOnce();
-  const compileCache = await import("./entry.compile-cache.js");
-  expect(compileCache.enableOpenClawCompileCache).not.toHaveBeenCalled();
 });
