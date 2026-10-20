@@ -17,71 +17,62 @@ function pressArrow(target: HTMLElement, key: "ArrowDown" | "ArrowUp") {
   target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
 }
 
+function get<T extends HTMLElement = HTMLElement>(
+  root: Pick<ParentNode, "querySelector">,
+  selector: string,
+) {
+  return expectDefined(root.querySelector<T>(selector), selector);
+}
+
+async function openSettings(host: Pick<ParentNode, "querySelector">) {
+  get(host, ".palette-session-settings__trigger").click();
+  const settings = get(host, ".palette-session-settings");
+  await waitForSolid(() => expect(settings.matches(":popover-open")).toBe(true));
+  return settings;
+}
+
+const mountAgents = () =>
+  mount({
+    agents: [
+      { id: "main", workspace: "/workspace" },
+      { id: "other", workspace: "/other" },
+    ],
+  });
+
 describe("palette settings menus", () => {
   it("lets the agent menu consume Escape before closing palette settings", async () => {
-    const { host } = await mount({
-      agents: [
-        { id: "main", workspace: "/workspace" },
-        { id: "other", workspace: "/other" },
-      ],
-    });
-    host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
-    const settings = host.querySelector<HTMLElement>(".palette-session-settings")!;
-    await waitForSolid(() => expect(settings.matches(":popover-open")).toBe(true));
-    host.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
-    const menu = host.querySelector<HTMLElement>(".agent-select__menu")!;
+    const { host } = await mountAgents();
+    const settings = await openSettings(host);
+    get(host, ".agent-select__trigger").click();
+    const menu = get(host, ".agent-select__menu");
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
 
-    menu
-      .querySelector<HTMLElement>('[role="menuitemradio"]')!
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-      );
+    get(menu, '[role="menuitemradio"]').dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
     expect(settings.matches(":popover-open")).toBe(true);
     expect(document.activeElement).toBe(host.querySelector(".agent-select__trigger"));
   });
 
   it("includes the agent menu controls while leaving their navigation with the menu", async () => {
-    const { host } = await mount({
-      agents: [
-        { id: "main", workspace: "/workspace" },
-        { id: "other", workspace: "/other" },
-      ],
-    });
-    host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
-    const settings = host.querySelector<HTMLElement>(".palette-session-settings")!;
-    await waitForSolid(() => expect(settings.matches(":popover-open")).toBe(true));
+    const { host } = await mountAgents();
+    const settings = await openSettings(host);
     await waitForSolid(() =>
       expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
     );
-    const workspace = expectDefined(
-      host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
-      "workspace button",
-    );
-    const trigger = expectDefined(
-      host.querySelector<HTMLButtonElement>(".agent-select__trigger"),
-      "agent trigger",
-    );
-    const remember = expectDefined(
-      host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
-      "remember checkbox",
-    );
+    const workspace = get(host, ".palette-session-settings__workspace");
+    const trigger = get(host, ".agent-select__trigger");
+    const remember = get<HTMLInputElement>(host, ".palette-session-settings__remember input");
     expect(remember.disabled).toBe(true);
     pressArrow(workspace, "ArrowDown");
     expect(document.activeElement).toBe(trigger);
 
     trigger.click();
-    const menu = host.querySelector<HTMLElement>(".agent-select__menu")!;
+    const menu = get(host, ".agent-select__menu");
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
-    const first = expectDefined(
-      menu.querySelector<HTMLButtonElement>('[data-value="option:main"]'),
-      "first agent option",
-    );
-    const last = expectDefined(
-      menu.querySelector<HTMLButtonElement>('[data-value="option:other"]'),
-      "last agent option",
-    );
+    const first = get(menu, '[data-value="option:main"]');
+    const last = get(menu, '[data-value="option:other"]');
     pressArrow(workspace, "ArrowUp");
     expect(document.activeElement).toBe(last);
     pressArrow(last, "ArrowDown");
@@ -107,9 +98,7 @@ describe("palette settings menus", () => {
       }),
     });
     await context.agents.refreshList();
-    host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
-    const settings = host.querySelector<HTMLElement>(".palette-session-settings")!;
-    await waitForSolid(() => expect(settings.matches(":popover-open")).toBe(true));
+    await openSettings(host);
     await waitForSolid(() =>
       expect(host.querySelector("[data-required-placement] button")).not.toBeNull(),
     );
@@ -117,18 +106,9 @@ describe("palette settings menus", () => {
     options.preferences.failed = true;
     options.onChange();
     await host.updateComplete;
-    const placementRetry = expectDefined(
-      host.querySelector<HTMLButtonElement>("[data-required-placement] button"),
-      "placement retry",
-    );
-    const preferenceRetry = expectDefined(
-      host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
-      "preference retry",
-    );
-    const trigger = expectDefined(
-      host.querySelector<HTMLButtonElement>(".agent-select__trigger"),
-      "agent trigger",
-    );
+    const placementRetry = get(host, "[data-required-placement] button");
+    const preferenceRetry = get(host, ".palette-session-settings__error button");
+    const trigger = get(host, ".agent-select__trigger");
     pressArrow(placementRetry, "ArrowDown");
     expect(document.activeElement).toBe(preferenceRetry);
 
@@ -142,10 +122,7 @@ describe("palette settings menus", () => {
     await waitForSolid(() =>
       expect(host.querySelector("[data-required-placement] button")).not.toBeNull(),
     );
-    const replacementRetry = expectDefined(
-      host.querySelector<HTMLButtonElement>("[data-required-placement] button"),
-      "replacement placement retry",
-    );
+    const replacementRetry = get(host, "[data-required-placement] button");
     pressArrow(replacementRetry, "ArrowDown");
     expect(document.activeElement).toBe(preferenceRetry);
 
@@ -201,39 +178,25 @@ describe("palette settings menus", () => {
     const options = expectDefined(host.draft.settingsView(), "palette settings").options;
     options.preferences.failed = true;
     options.onChange();
-    host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
-    const settings = host.querySelector<HTMLElement>(".palette-session-settings")!;
-    await waitForSolid(() => expect(settings.matches(":popover-open")).toBe(true));
-    const retry = expectDefined(
-      host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
-      "preference retry",
-    );
+    await openSettings(host);
+    const retry = get(host, ".palette-session-settings__error button");
     await waitForSolid(() =>
       expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
     );
-    host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace")!.click();
+    get(host, ".palette-session-settings__workspace").click();
     await waitForSolid(() =>
       expect(host.querySelector('[data-machine="local"][data-project="alpha"]')).not.toBeNull(),
     );
     await waitForSolid(() =>
       expect(host.querySelector('[data-machine="runtime:hosted"]')).not.toBeNull(),
     );
-    const content = host.querySelector<HTMLElement>(".palette-session-settings__content")!;
-    const back = content.querySelector<HTMLButtonElement>(".palette-session-settings__back")!;
-    const search = content.querySelector<HTMLInputElement>(".palette-session-settings__search")!;
-    const connect = content.querySelector<HTMLButtonElement>(
-      ":scope > .palette-session-settings__row",
-    )!;
-    const unavailable = expectDefined(
-      content.querySelector<HTMLButtonElement>('[data-machine="runtime:hosted"]'),
-      "unavailable hosted option",
-    );
-    const alpha = content.querySelector<HTMLButtonElement>(
-      '[data-machine="local"][data-project="alpha"]',
-    )!;
-    const beta = content.querySelector<HTMLButtonElement>(
-      '[data-machine="local"][data-project="beta"]',
-    )!;
+    const content = get(host, ".palette-session-settings__content");
+    const back = get(content, ".palette-session-settings__back");
+    const search = get<HTMLInputElement>(content, ".palette-session-settings__search");
+    const connect = get(content, ":scope > .palette-session-settings__row");
+    const unavailable = get<HTMLButtonElement>(content, '[data-machine="runtime:hosted"]');
+    const alpha = get(content, '[data-machine="local"][data-project="alpha"]');
+    const beta = get(content, '[data-machine="local"][data-project="beta"]');
     expect(unavailable.getAttribute("aria-disabled")).toBe("true");
     expect(unavailable.disabled).toBe(false);
     pressArrow(search, "ArrowDown");
@@ -255,10 +218,7 @@ describe("palette settings menus", () => {
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await host.updateComplete;
-    const restoredAlpha = expectDefined(
-      content.querySelector<HTMLButtonElement>('[data-machine="local"][data-project="alpha"]'),
-      "restored project option",
-    );
+    const restoredAlpha = get(content, '[data-machine="local"][data-project="alpha"]');
     pressArrow(beta, "ArrowUp");
     expect(document.activeElement).toBe(restoredAlpha);
   });

@@ -5,10 +5,17 @@ import type { NewSessionRouteData } from "./location.ts";
 import { newSessionModelSearch } from "./model-location.ts";
 import { page } from "./route.ts";
 
-// The loader is exercised through the page contract so route.ts keeps its
-// internals unexported; new-session routes never resolve to RouteNotFound.
 const loadNewSessionData = (context: ApplicationContext, search: string) =>
   page.loader?.(context, { location: { search } } as never) as Promise<NewSessionRouteData>;
+
+function roster(defaultId: string, ids = [defaultId]) {
+  return {
+    defaultId,
+    mainKey: "main",
+    scope: "per-sender" as const,
+    agents: ids.map((id) => ({ id })),
+  };
+}
 
 function createContext(params: {
   assistantAgentId: string | null;
@@ -48,10 +55,7 @@ function createContext(params: {
   };
   const context = {
     gateway: { snapshot },
-    agents: {
-      state: agentsState,
-      ensureList,
-    },
+    agents: { state: agentsState, ensureList },
   } as unknown as ApplicationContext;
   return { agentsState, client, context, ensureList, request };
 }
@@ -60,19 +64,14 @@ describe("new-session route catalog target", () => {
   it.each(["current", "failed", "retired-agent"] as const)(
     "resolves catalog routes only against %s live discovery",
     async (outcome) => {
-      const roster: NonNullable<ApplicationContext["agents"]["state"]["agentsList"]> = {
-        defaultId: "current",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "current" }],
-      };
+      const currentRoster = roster("current");
       const { context, agentsState, ensureList, request } = createContext({
         assistantAgentId: "old",
-        agentsList: outcome === "retired-agent" ? roster : null,
+        agentsList: outcome === "retired-agent" ? currentRoster : null,
       });
       ensureList.mockImplementation(async () => {
         if (outcome === "current") {
-          agentsState.agentsList = roster;
+          agentsState.agentsList = currentRoster;
         }
         return agentsState.agentsList;
       });
@@ -132,21 +131,13 @@ describe("new-session route catalog target", () => {
     } as unknown as ApplicationContext;
     const group = unavailable ? "Client" : "Deleted";
     const data = await loadNewSessionData(context, `?group=${group}`);
-    expect(data.group).toBe(group);
-    expect(data.groupStatus).toBe(groupStatus);
-    expect(data.groupCwd).toBe("");
-    expect(data.groupWorktree).toBe(false);
+    expect(data).toMatchObject({ group, groupStatus, groupCwd: "", groupWorktree: false });
   });
 
   it("waits for the replacement client's roster before preserving a valid route agent", async () => {
     const { agentsState, client, context, request } = createContext({
       assistantAgentId: "roboclaw",
-      agentsList: {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      },
+      agentsList: roster("main"),
       staleRosterClient: true,
     });
 
@@ -156,12 +147,7 @@ describe("new-session route catalog target", () => {
     expect(request).not.toHaveBeenCalled();
 
     agentsState.client = client;
-    agentsState.agentsList = {
-      defaultId: "roboclaw",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "roboclaw" }, { id: "research" }],
-    };
+    agentsState.agentsList = roster("roboclaw", ["roboclaw", "research"]);
     const data = await loadNewSessionData(context, "?agent=research&catalog=claude");
 
     expect(data.agentId).toBe("research");

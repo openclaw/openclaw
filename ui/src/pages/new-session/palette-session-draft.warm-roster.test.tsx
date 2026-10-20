@@ -1,101 +1,11 @@
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { PaletteDraftHost } from "../../test-helpers/palette-session-draft.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import {
-  PaletteSessionAttachments,
-  PaletteSessionAuxiliary,
-  PaletteSessionControls,
-  PaletteSessionRecovery,
-} from "./palette-session-draft-view.tsx";
-import { PaletteSessionDraft } from "./palette-session-draft.ts";
-
-class WarmRosterHost {
-  readonly element = document.createElement("div");
-  readonly ownerDocument = document;
-  readonly querySelector = this.element.querySelector.bind(this.element);
-  readonly querySelectorAll = this.element.querySelectorAll.bind(this.element);
-  private publish = () => {};
-  private readonly onDraftChange = () => this.publish();
-  private readonly unmount: () => void;
-  readonly placementReady = createDeferred();
-  readonly context: ApplicationContext;
-  readonly draft = new PaletteSessionDraft(
-    this.element,
-    () => ({ context: this.context, open: true }),
-    {
-      changed: this.onDraftChange,
-      updateComplete: () => this.updateComplete,
-      onClose: () => undefined,
-    },
-  );
-
-  constructor(context: ApplicationContext) {
-    this.context = context;
-    document.body.append(this.element);
-    const mounted = mountSolid(
-      () => {
-        const [revision, setRevision] = createSignal({}, { ownedWrite: true });
-        this.publish = () => setRevision({});
-        const recovery = createMemo(() => {
-          revision();
-          return this.draft.recoveryAction;
-        });
-        createEffect(revision, () => {
-          this.draft.synchronize();
-          this.draft.settled();
-          if (this.querySelector(".palette-session-settings__workspace")) {
-            this.placementReady.resolve();
-          }
-        });
-        onSettled(() => {
-          const stops = [
-            context.agents,
-            context.agentIdentity,
-            context.sessions,
-            context.config,
-          ].map((source) => source.subscribe(this.onDraftChange));
-          this.draft.connect();
-          this.onDraftChange();
-          return () => {
-            this.publish = () => {};
-            stops.forEach((stop) => stop());
-            this.draft.disconnect();
-          };
-        });
-        return (
-          <>
-            <PaletteSessionControls draft={this.draft} revision={revision()} />
-            <Show when={recovery()}>
-              {(onOpen) => <PaletteSessionRecovery onOpen={onOpen()} />}
-            </Show>
-            <PaletteSessionAuxiliary draft={this.draft} revision={revision()} />
-            <PaletteSessionAttachments draft={this.draft} revision={revision()} />
-          </>
-        );
-      },
-      { container: this.element },
-    );
-    this.unmount = mounted.unmount;
-  }
-
-  get updateComplete() {
-    return Promise.resolve(true).then(() => {
-      flush();
-      return true;
-    });
-  }
-
-  remove() {
-    this.unmount();
-    this.element.remove();
-  }
-}
 
 function roster(id: string, workspace: string): AgentsListResult {
   return {
@@ -152,9 +62,11 @@ describe("palette live roster authority", () => {
         initialRun: { status: "idle" },
       });
       let read = agents.ensureList();
-      const host = new WarmRosterHost(context);
+      const host = new PaletteDraftHost(context);
       host.draft.open();
-      await host.placementReady.promise;
+      await waitForSolid(() =>
+        expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+      );
       try {
         host.draft.setMessage("Keep this draft while defaults refresh");
         expect(host.draft.canSubmit).toBe(false);

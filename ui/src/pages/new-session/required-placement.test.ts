@@ -26,6 +26,7 @@ const profile = {
   executionModes: ["worker-turn"],
 };
 const catalog = { requiredProfile: profile.id, profiles: [profile], environments: [] };
+const optionalCatalog = { profiles: [], environments: [] };
 function fixture(
   request: (method: string) => Promise<unknown> = async () => catalog,
   modelSelectionPolicy?: { restricted: true; defaultModel: string | null },
@@ -88,13 +89,20 @@ function fixture(
     request,
   });
 }
-async function ready(f: ReturnType<typeof fixture>) {
+async function ready(f = fixture()) {
   await Promise.all([
     f.gateway.retryRequiredPlacement(),
     loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" }),
   ]);
   f.place.restorePreferenceSelections();
   f.flow.setMessage("Inspect the workspace");
+  return f;
+}
+
+function expectRecovery(f: ReturnType<typeof fixture>, recovery: Record<string, unknown>) {
+  expect(f.context.placementStartup.start).toHaveBeenCalledWith(
+    expect.objectContaining({ recovery: expect.objectContaining(recovery) }),
+  );
 }
 afterEach(() => {
   vi.restoreAllMocks();
@@ -103,8 +111,7 @@ afterEach(() => {
 });
 
 it("starts a required worker for a non-admin without manual placement or workspace choices", async () => {
-  const f = fixture();
-  await ready(f);
+  const f = await ready();
   expect(f.place.cloudProfileId).toBe(profile.id);
   expect(f.place.freshWorkspace).toBe(true);
   expect(f.flow.canSubmit()).toBe(true);
@@ -118,13 +125,7 @@ it("starts a required worker for a non-admin without manual placement or workspa
     expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
     expect.anything(),
   );
-  expect(f.context.placementStartup.start).toHaveBeenCalledWith(
-    expect.objectContaining({
-      recovery: expect.objectContaining({
-        target: { kind: "profile", profileId: profile.id, required: true },
-      }),
-    }),
-  );
+  expectRecovery(f, { target: { kind: "profile", profileId: profile.id, required: true } });
   expect(f.request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
 });
 
@@ -144,8 +145,7 @@ it("waits for initial policy and never falls back when its required profile is m
 
 it("projects the latest policy over cached placement without persisting that policy as a preference", async () => {
   let current: typeof catalog | { profiles: (typeof profile)[]; environments: never[] } = catalog;
-  const f = fixture(async () => current);
-  await ready(f);
+  const f = await ready(fixture(async () => current));
   f.place.selectDevice("");
   expect(f.place.cloudProfileId).toBe(profile.id);
   current = {
@@ -155,15 +155,14 @@ it("projects the latest policy over cached placement without persisting that pol
   };
   await f.gateway.retryRequiredPlacement();
   expect(f.place.cloudProfileId).toBe("replacement");
-  current = { profiles: [], environments: [] };
+  current = optionalCatalog;
   await f.gateway.retryRequiredPlacement();
   expect(f.place.cloudProfileId).toBe("");
   expect(f.place.remotePlacement).toBe(false);
 });
 
 it("rejects direct hosted placement and blocks hosted model changes under required placement", async () => {
-  const f = fixture();
-  await ready(f);
+  const f = await ready();
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.modelControl.agentRuntime).toBeUndefined();
   expect(f.place.cloudProfileId).toBe(profile.id);
@@ -179,12 +178,8 @@ it("rejects direct hosted placement and blocks hosted model changes under requir
 });
 
 it("applies a newly required profile over an open hosted draft without advertising a hosted destination", async () => {
-  let current: typeof catalog | { profiles: (typeof profile)[]; environments: never[] } = {
-    profiles: [],
-    environments: [],
-  };
-  const f = fixture(async () => current);
-  await ready(f);
+  let current: typeof catalog | typeof optionalCatalog = optionalCatalog;
+  const f = await ready(fixture(async () => current));
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.hostedEnvironment).toEqual(hostedRuntime.workspaceEnvironment);
   expect(f.flow.canSubmit()).toBe(true);
@@ -205,7 +200,7 @@ it("applies a newly required profile over an open hosted draft without advertisi
   await f.flow.submit();
   expect(f.context.sessions.createResult).not.toHaveBeenCalled();
 
-  current = { profiles: [], environments: [] };
+  current = optionalCatalog;
   await f.gateway.retryRequiredPlacement();
   f.place.restorePreferenceSelections();
   expect(f.place.hostedEnvironment).toEqual(hostedRuntime.workspaceEnvironment);
@@ -238,18 +233,15 @@ it("uses worker configured defaults instead of a cached external runtime without
 });
 
 it("does not grant a model or write permission through required worker metadata", async () => {
-  const restricted = fixture(undefined, { restricted: true, defaultModel: null });
-  await ready(restricted);
+  const restricted = await ready(fixture(undefined, { restricted: true, defaultModel: null }));
   expect(restricted.flow.canSubmit()).toBe(false);
-  const f = fixture();
-  await ready(f);
+  const f = await ready();
   f.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
   expect(f.flow.submitBlock()?.gate).toBe("access");
 });
 
 it("renders required placement as a readonly indicator, not a machine or workspace picker", async () => {
-  const f = fixture();
-  await ready(f);
+  const f = await ready();
   const container = document.createElement("div");
   mountSolid(
     () =>
@@ -298,8 +290,7 @@ it("keeps an initial failed catalog closed and allows its existing refresh owner
 });
 
 it("keeps a server startup failure with the created session for Retry rather than sending or creating again", async () => {
-  const f = fixture();
-  await ready(f);
+  const f = await ready();
   f.context.placementStartup.start = vi.fn();
   vi.mocked(f.context.sessions.createResult).mockResolvedValue({
     key: "agent:main:failed-required",
@@ -307,16 +298,12 @@ it("keeps a server startup failure with the created session for Retry rather tha
   });
   await f.flow.submit(undefined, true);
   expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-  expect(f.context.placementStartup.start).toHaveBeenCalledWith(
-    expect.objectContaining({
-      recovery: expect.objectContaining({
-        sessionKey: "agent:main:failed-required",
-        phase: "paused",
-        reason: "not-sent",
-        error: "Required worker is offline",
-      }),
-    }),
-  );
+  expectRecovery(f, {
+    sessionKey: "agent:main:failed-required",
+    phase: "paused",
+    reason: "not-sent",
+    error: "Required worker is offline",
+  });
   expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
 });
 

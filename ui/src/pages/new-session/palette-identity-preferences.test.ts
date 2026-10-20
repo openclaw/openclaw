@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { acquirePaletteIdentityPreferences } from "./palette-identity-preferences.ts";
@@ -36,7 +36,11 @@ function fixture(isCurrent = () => true) {
   };
   const state = acquirePaletteIdentityPreferences(owner);
   const stop = state.subscribe(() => {}, isCurrent);
-  return { owner, state, entries, writes, release: firstWrite.resolve, stop };
+  onTestFinished(() => {
+    firstWrite.resolve();
+    stop();
+  });
+  return { owner, state, entries, writes, release: firstWrite.resolve };
 }
 
 afterEach(() => {
@@ -46,80 +50,67 @@ afterEach(() => {
 
 describe("palette identity preferences", () => {
   it("scopes its cache and reads without migrating or writing ordinary defaults", async () => {
-    const { owner, state, entries, writes, release, stop } = fixture();
-    try {
-      await vi.waitFor(() => expect(state.mode).toBe("remote"));
-      expect(acquirePaletteIdentityPreferences(owner)).toBe(state);
-      expect(acquirePaletteIdentityPreferences({ ...owner, hello: {} })).not.toBe(state);
-      expect(acquirePaletteIdentityPreferences({ ...owner, profileId: "bob" })).not.toBe(state);
-      expect(state.palettePreference).toBeNull();
-      expect(writes).toEqual([]);
-      expect(entries).toEqual({ "new-session.v1:main": { folder: "/normal" } });
-    } finally {
-      release();
-      stop();
-    }
+    const { owner, state, entries, writes } = fixture();
+    await vi.waitFor(() => expect(state.mode).toBe("remote"));
+    expect(acquirePaletteIdentityPreferences(owner)).toBe(state);
+    expect(acquirePaletteIdentityPreferences({ ...owner, hello: {} })).not.toBe(state);
+    expect(acquirePaletteIdentityPreferences({ ...owner, profileId: "bob" })).not.toBe(state);
+    expect(state.palettePreference).toBeNull();
+    expect(writes).toEqual([]);
+    expect(entries).toEqual({ "new-session.v1:main": { folder: "/normal" } });
   });
 
   it.each(["queued", "new"] as const)(
     "rejects %s intent after its authority retires",
     async (phase) => {
       let current = true;
-      const { state, writes, release, stop } = fixture(() => phase === "new" || current);
-      try {
-        await vi.waitFor(() => expect(state.mode).toBe("remote"));
-        if (phase === "new") {
-          current = false;
-        }
-        const first =
-          phase === "queued"
-            ? state.setPalettePreference({ agentId: "first", selection: {} }, () => true)
-            : undefined;
-        const rejected = state.setPalettePreference(
-          { agentId: "retired", selection: {} },
-          () => current,
-        );
-        if (first) {
-          await vi.waitFor(() => expect(writes).toHaveLength(1));
-          current = false;
-          release();
-          expect(await first).toBe(true);
-        }
-        expect(await rejected).toBe(false);
-        expect(writes).toHaveLength(phase === "queued" ? 1 : 0);
-      } finally {
-        release();
-        stop();
+      const { state, writes, release } = fixture(() => phase === "new" || current);
+      await vi.waitFor(() => expect(state.mode).toBe("remote"));
+      if (phase === "new") {
+        current = false;
       }
+      const first =
+        phase === "queued"
+          ? state.setPalettePreference({ agentId: "first", selection: {} }, () => true)
+          : undefined;
+      const rejected = state.setPalettePreference(
+        { agentId: "retired", selection: {} },
+        () => current,
+      );
+      if (first) {
+        await vi.waitFor(() => expect(writes).toHaveLength(1));
+        current = false;
+        release();
+        expect(await first).toBe(true);
+      }
+      expect(await rejected).toBe(false);
+      expect(writes).toHaveLength(phase === "queued" ? 1 : 0);
     },
   );
 
   it("publishes a confirmed write to surviving current subscribers, not a retired initiator", async () => {
-    const { state, writes, release, stop } = fixture();
+    const { state, writes, release } = fixture();
     let current = true;
     const retired = vi.fn();
     const surviving = vi.fn();
     const stopRetired = state.subscribe(retired, () => current);
     const stopSurviving = state.subscribe(surviving, () => true);
-    try {
-      await vi.waitFor(() => expect(state.mode).toBe("remote"));
-      retired.mockClear();
-      surviving.mockClear();
-      const saved = state.setPalettePreference(
-        { agentId: "main", selection: { worktree: true } },
-        () => current,
-      );
-      await vi.waitFor(() => expect(writes).toHaveLength(1));
-      current = false;
-      release();
-      expect(await saved).toBe(true);
-      expect(surviving).toHaveBeenCalledWith("changed");
-      expect(retired).not.toHaveBeenCalled();
-    } finally {
-      release();
+    onTestFinished(() => {
       stopRetired();
       stopSurviving();
-      stop();
-    }
+    });
+    await vi.waitFor(() => expect(state.mode).toBe("remote"));
+    retired.mockClear();
+    surviving.mockClear();
+    const saved = state.setPalettePreference(
+      { agentId: "main", selection: { worktree: true } },
+      () => current,
+    );
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    current = false;
+    release();
+    expect(await saved).toBe(true);
+    expect(surviving).toHaveBeenCalledWith("changed");
+    expect(retired).not.toHaveBeenCalled();
   });
 });
