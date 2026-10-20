@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import net from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FaceTimeHelperUnavailableError } from "../src/helper-results.js";
 import { FaceTimeHelperSocketServer } from "../src/helper-rpc.js";
 
@@ -169,16 +169,21 @@ async function registerHelper(
 }
 
 describe("FaceTime helper RPC", () => {
-  let helper: FaceTimeHelperSocketServer | undefined;
+  let rpc: FaceTimeHelperSocketServer;
+  let port: number;
   const clients = new Set<net.Socket>();
+  type ServerOptions = ConstructorParameters<typeof FaceTimeHelperSocketServer>[0];
+  const onMessage = vi.fn<ServerOptions["onMessage"]>();
+  const onStale = vi.fn<NonNullable<ServerOptions["onStale"]>>();
+  const onDisconnect = vi.fn<NonNullable<ServerOptions["onDisconnect"]>>();
 
-  async function startDefaultHelper(
-    overrides: Partial<ConstructorParameters<typeof FaceTimeHelperSocketServer>[0]> = {},
-  ): Promise<{ rpc: FaceTimeHelperSocketServer; port: number }> {
+  beforeEach(async () => {
+    onMessage.mockReset();
+    onStale.mockReset();
+    onDisconnect.mockReset();
     // Observe the real listener so its ephemeral port stays bound until helper.stop().
     const createServer = vi.spyOn(net, "createServer");
     let listener: net.Server;
-    let rpc: FaceTimeHelperSocketServer;
     try {
       rpc = new FaceTimeHelperSocketServer({
         host: "127.0.0.1",
@@ -186,10 +191,10 @@ describe("FaceTime helper RPC", () => {
         logger: console,
         ipcKey: TEST_HELPER_AUTH_TOKEN,
         buildId: TEST_HELPER_BUILD_ID,
-        onMessage: () => undefined,
-        ...overrides,
+        onMessage,
+        onStale,
+        onDisconnect,
       });
-      helper = rpc;
       const created = createServer.mock.results[0];
       if (created?.type !== "return") {
         throw new Error("helper did not create its TCP listener");
@@ -203,10 +208,10 @@ describe("FaceTime helper RPC", () => {
     if (!address || typeof address === "string") {
       throw new Error("helper did not bind a TCP port");
     }
-    return { rpc, port: address.port };
-  }
+    port = address.port;
+  });
 
-  async function connectClient(port: number): Promise<net.Socket> {
+  async function connectClient(): Promise<net.Socket> {
     const socket = net.createConnection({ host: "127.0.0.1", port });
     clients.add(socket);
     socket.setEncoding("utf8");
@@ -214,34 +219,22 @@ describe("FaceTime helper RPC", () => {
     return socket;
   }
 
-  async function connectHelper(
-    rpc: FaceTimeHelperSocketServer,
-    port: number,
-    bundle = "com.apple.FaceTime",
-    processId = 1234,
-  ) {
-    const client = await connectClient(port);
+  async function connectHelper(bundle = "com.apple.FaceTime", processId = 1234) {
+    const client = await connectClient();
     await registerHelper(client, rpc, bundle, TEST_HELPER_BUILD_ID, true, processId);
     return client;
-  }
-
-  async function startConnectedHelper() {
-    const { rpc, port } = await startDefaultHelper();
-    const client = await connectHelper(rpc, port);
-    return { rpc, client };
   }
 
   afterEach(async () => {
     for (const socket of clients) {
       socket.destroy();
     }
-    await helper?.stop();
+    await rpc?.stop();
     clients.clear();
-    helper = undefined;
   });
 
   it("sends set-muted actions over newline-framed JSON and resolves acknowledgements", async () => {
-    const { rpc, client } = await startConnectedHelper();
+    const client = await connectHelper();
     const { result, payload } = await exchange(
       client,
       () => rpc.setMuted("call-1", false),
@@ -277,10 +270,8 @@ describe("FaceTime helper RPC", () => {
     ["answerCall", "answer-call"],
     ["leaveCall", "leave-call"],
   ] as const)("fans %s out to FaceTime and Phone helpers", async (method, action) => {
-    const { rpc, port } = await startDefaultHelper();
-
-    const faceTimeClient = await connectHelper(rpc, port);
-    const phoneClient = await connectHelper(rpc, port, "com.apple.mobilephone");
+    const faceTimeClient = await connectHelper();
+    const phoneClient = await connectHelper("com.apple.mobilephone");
 
     const payloadsPromise = Promise.all([
       readHelperPayload(faceTimeClient),
@@ -310,10 +301,9 @@ describe("FaceTime helper RPC", () => {
 
   it("keeps a disconnected carrier peer in inspect-call completeness", async () => {
     const disconnected = Promise.withResolvers<string>();
-    const { rpc, port } = await startDefaultHelper({ onDisconnect: disconnected.resolve });
-
-    const faceTimeClient = await connectHelper(rpc, port);
-    const phoneClient = await connectHelper(rpc, port, "com.apple.mobilephone", 5678);
+    onDisconnect.mockImplementation(disconnected.resolve);
+    const faceTimeClient = await connectHelper();
+    const phoneClient = await connectHelper("com.apple.mobilephone", 5678);
 
     const faceTimeClosed = waitForSocketEvent(faceTimeClient, "close");
     faceTimeClient.destroy();
@@ -340,7 +330,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("distinguishes definitive helper rejection from transport failure", async () => {
-    const { rpc, client } = await startConnectedHelper();
+    const client = await connectHelper();
     const { result } = await exchange(
       client,
       () => rpc.startCall(dialRequest, "dial-2", requestedAt),
@@ -354,7 +344,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("preserves helper-declared ambiguous dial outcomes", async () => {
-    const { rpc, client } = await startConnectedHelper();
+    const client = await connectHelper();
     const { result } = await exchange(
       client,
       () => rpc.startCall(dialRequest, "dial-3", requestedAt),
@@ -383,10 +373,8 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("routes outbound calls to FaceTime regardless of helper connection order", async () => {
-    const { rpc, port } = await startDefaultHelper();
-
-    const phoneClient = await connectHelper(rpc, port, "com.apple.mobilephone");
-    const faceTimeClient = await connectHelper(rpc, port);
+    const phoneClient = await connectHelper("com.apple.mobilephone");
+    const faceTimeClient = await connectHelper();
 
     const phoneReceivedAction = vi.fn();
     phoneClient.on("data", phoneReceivedAction);
@@ -404,18 +392,13 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("reports a dial as definitely unsent when no helper is connected", async () => {
-    const { rpc } = await startDefaultHelper();
-
     await expect(rpc.startCall(dialRequest, "dial-4", requestedAt)).rejects.toBeInstanceOf(
       FaceTimeHelperUnavailableError,
     );
   });
 
   it("rejects an authenticated stale helper and reports its process", async () => {
-    const onStale = vi.fn();
-    const { rpc, port } = await startDefaultHelper({ onStale });
-
-    const client = await connectClient(port);
+    const client = await connectClient();
     await registerHelper(client, rpc, "com.apple.FaceTime", "c".repeat(64), false);
     await waitFor(() => onStale.mock.calls.length > 0);
     expect(onStale).toHaveBeenLastCalledWith("com.apple.FaceTime", 1234);
@@ -423,9 +406,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("rejects the retired pre-build-id authentication shape", async () => {
-    const onStale = vi.fn();
-    const { rpc, port } = await startDefaultHelper({ onStale });
-    const client = await connectClient(port);
+    const client = await connectClient();
     writeFrame(client, { event: "ping", bundle_identifier: "com.apple.FaceTime" });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -435,7 +416,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("queries the helper for a known outgoing call UUID", async () => {
-    const { rpc, client } = await startConnectedHelper();
+    const client = await connectHelper();
     const { result } = await exchange(
       client,
       () => rpc.findOutgoingCall("owner@example.com", "call-3", "dial-5", "proxy-3"),
@@ -454,11 +435,8 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("excludes unauthenticated sockets from call-control fanout", async () => {
-    const onMessage = vi.fn();
-    const { rpc, port } = await startDefaultHelper({ onMessage });
-
-    const faceTimeClient = await connectHelper(rpc, port);
-    const rogueClient = await connectClient(port);
+    const faceTimeClient = await connectHelper();
+    const rogueClient = await connectClient();
     const rogueReceivedAction = vi.fn();
     rogueClient.on("data", rogueReceivedAction);
     const data = {
@@ -490,38 +468,31 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("delivers a signed helper event once and closes the connection on replay", async () => {
-    const events: unknown[] = [];
-    const { rpc, port } = await startDefaultHelper({
-      onMessage: (message, peer) => {
-        expect(peer).toMatchObject({ bundleIdentifier: "com.apple.FaceTime", processId: 1234 });
-        events.push(message);
-      },
-    });
-    const client = await connectHelper(rpc, port);
-
-    const envelope = encodeHelperPayload(client, {
+    const client = await connectHelper();
+    const event = {
       event: "ft-call-status-changed",
       data: { call_uuid: "call-once" },
-    });
+    };
+    const envelope = encodeHelperPayload(client, event);
     const closed = waitForSocketEvent(client, "close");
     client.write(envelope);
-    await waitFor(() => events.length === 1);
+    await waitFor(() => onMessage.mock.calls.length === 1);
     client.write(envelope);
     await closed;
 
-    expect(events).toEqual([{ event: "ft-call-status-changed", data: { call_uuid: "call-once" } }]);
+    expect(onMessage.mock.calls).toEqual([
+      [event, expect.objectContaining({ bundleIdentifier: "com.apple.FaceTime", processId: 1234 })],
+    ]);
   });
 
   it.each([
     { name: "complete", payload: `${"x".repeat(64 * 1024 + 1)}\n` },
     { name: "incomplete", payload: "x".repeat(64 * 1024 + 1) },
   ])("closes an oversized $name helper frame before parsing", async ({ payload }) => {
-    const { rpc, port } = await startDefaultHelper({
-      onMessage: () => {
-        throw new Error("oversized input reached the message boundary");
-      },
+    onMessage.mockImplementation(() => {
+      throw new Error("oversized input reached the message boundary");
     });
-    const client = await connectClient(port);
+    const client = await connectClient();
     const closed = waitForSocketEvent(client, "close");
     client.write(payload);
     await closed;
@@ -529,8 +500,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("closes a byte-dripping unauthenticated helper socket at the absolute deadline", async () => {
-    const { rpc, port } = await startDefaultHelper();
-    const client = await connectClient(port);
+    const client = await connectClient();
     const closed = waitForSocketEvent(client, "close");
     const socketErrors: Error[] = [];
     // A drip in flight at peer rejection can turn the expected close into a TCP reset.
@@ -548,7 +518,6 @@ describe("FaceTime helper RPC", () => {
   }, 5_000);
 
   it("rejects helper connections beyond the bounded socket set", async () => {
-    const { port } = await startDefaultHelper();
     const sockets: net.Socket[] = [];
     try {
       for (let index = 0; index < 8; index += 1) {

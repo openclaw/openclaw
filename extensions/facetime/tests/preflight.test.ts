@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>()),
@@ -37,39 +37,45 @@ const defaults = {
   input: { isAggregate: false, name: "Mac Mic", uid: "mic" },
   output: { isAggregate: false, name: "Mac Speakers", uid: "speakers" },
 };
+const audioProfile = (names: string[], virtual = false) =>
+  JSON.stringify({
+    SPAudioDataType: [
+      {
+        _items: names.map((_name) => ({
+          _name,
+          ...(virtual ? { coreaudio_device_transport: "coreaudio_device_type_virtual" } : {}),
+        })),
+      },
+    ],
+  });
+const config = (overrides: Record<string, unknown> = {}) =>
+  resolveFaceTimeConfig({ ownerHandles: ["omar@example.com"], ...overrides });
 
 function preflight({
   output = defaults.output,
-  profiler = JSON.stringify({
-    SPAudioDataType: [{ _items: [{ _name: "OpenClaw-Mic" }, { _name: "OpenClaw-Feed" }] }],
-  }),
+  profiler = audioProfile(["OpenClaw-Mic", "OpenClaw-Feed"]),
   ...overrides
 }: Partial<Parameters<typeof runFaceTimePreflight>[0]> & {
   output?: typeof defaults.output;
   profiler?: string;
 } = {}) {
+  const responses = new Map([
+    ["/bin/test", commandResult()],
+    ["/usr/bin/pgrep", commandResult("123\n")],
+    ["/usr/sbin/system_profiler", commandResult(profiler)],
+    ["--default-devices", commandResult(JSON.stringify({ ...defaults, output }))],
+    ["--check", commandResult("", "capture ready")],
+  ]);
   const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-    if (argv[0] === "/bin/test") {
-      return commandResult();
+    const response = responses.get(argv[0] ?? "") ?? responses.get(argv.at(-1) ?? "");
+    if (!response) {
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
     }
-    if (argv[0] === "/usr/bin/pgrep") {
-      return commandResult("123\n");
-    }
-    if (argv[0] === "/usr/sbin/system_profiler") {
-      return commandResult(profiler);
-    }
-    if (argv.at(-1) === "--default-devices") {
-      return commandResult(JSON.stringify({ ...defaults, output }));
-    }
-    if (argv.at(-1) === "--check") {
-      return commandResult("", "capture ready");
-    }
-    throw new Error(`unexpected command: ${argv.join(" ")}`);
+    return response;
   });
 
   return runFaceTimePreflight({
-    config: resolveFaceTimeConfig({
-      ownerHandles: ["omar@example.com"],
+    config: config({
       realtime: { providers: { openai: { apiKey: "test-api-key" } } },
     }),
     fullConfig: {},
@@ -80,101 +86,80 @@ function preflight({
   });
 }
 
-describe("FaceTime preflight", () => {
-  it("passes the paired-driver, process-tap, output, and provider checks", async () => {
-    const result = await preflight();
-    expect(result.ok).toBe(true);
-    expect(result.currentAudioDefaults).toEqual(defaults);
-    expect(result.checks.map((check) => [check.id, check.ok, check.required])).toEqual(
-      checkIds.map((id) => [id, true, true]),
-    );
-  });
-
-  afterEach(() => vi.unstubAllEnvs());
-
-  it.each(["{invalid", "        OpenClaw-Mic:\n        OpenClaw-Feed:\n"])(
-    "reports missing driver devices when system_profiler violates its JSON contract: %s",
-    async (profiler) => {
-      const result = await preflight({ profiler });
-      expect(result.ok).toBe(false);
-      expect(result.checks.filter((check) => check.id.startsWith("paired-driver-"))).toEqual([
-        expect.objectContaining({ id: "paired-driver-mic", ok: false }),
-        expect.objectContaining({ id: "paired-driver-feed", ok: false }),
-      ]);
-    },
-  );
-
-  it("fails provider readiness for an unresolved configured SecretRef", async () => {
-    const missingKey = "OPENCLAW_FACETIME_TEST_MISSING_KEY";
-    vi.stubEnv(missingKey, undefined);
-    const result = await preflight({
-      config: resolveFaceTimeConfig({
-        ownerHandles: ["omar@example.com"],
-        realtime: {
-          providers: { openai: { apiKey: { source: "env", provider: "default", id: missingKey } } },
-        },
-      }),
-      fullConfig: { secrets: { providers: { default: { source: "env" } } } },
-    });
-    expect(result.checks.find((check) => check.id === "realtime-provider")?.ok).toBe(false);
-    expect(result.ok).toBe(false);
-  });
-
-  it("reports actionable readiness failures", async () => {
-    const result = await preflight({
-      config: resolveFaceTimeConfig({ ownerHandles: ["omar@example.com"] }),
-      runtime: runtimeWithCommands(
-        vi.fn().mockResolvedValue({ code: 1, stdout: "", stderr: "ENOENT" }),
-      ),
-      helperConnected: false,
-      captureBinary: "/missing/capture",
-    });
-    expect(result.ok).toBe(false);
-    expect(
-      result.checks.filter((check) => check.required && !check.ok).map((check) => check.id),
-    ).toEqual(checkIds);
-  });
-
-  it.each([
-    {
-      name: "aggregate output",
-      output: { isAggregate: true, name: "Aggregate Device", uid: "aggregate" },
-      message: "aggregate",
-    },
-    {
-      name: "virtual output",
-      output: { isAggregate: false, name: "OpenClaw-Feed", uid: "feed" },
-      message: "virtual",
-    },
-  ])("rejects $name at the preflight boundary", async ({ output, message }) => {
-    const result = await preflight({ output });
-
-    expect(result.checks.find((check) => check.id === "physical-output")).toMatchObject({
-      ok: false,
-      message: expect.stringContaining(message),
-    });
-  });
-
-  it("rejects a virtual default output reported by Core Audio transport metadata", async () => {
-    const output = { isAggregate: false, name: "Jump Desktop Audio", uid: "jump-audio" };
-    const result = await preflight({
-      output,
-      profiler: JSON.stringify({
-        SPAudioDataType: [
-          {
-            _name: "coreaudio_device",
-            _items: ["OpenClaw-Mic", "OpenClaw-Feed", output.name].map((_name) => ({
-              _name,
-              coreaudio_device_transport: "coreaudio_device_type_virtual",
-            })),
+it.each([true, false])(
+  "reports all readiness checks with dependencies available=%s",
+  async (available) => {
+    const result = await preflight(
+      available
+        ? {}
+        : {
+            config: config(),
+            runtime: runtimeWithCommands(vi.fn().mockResolvedValue(commandResult("", "ENOENT", 1))),
+            helperConnected: false,
+            captureBinary: "/missing/capture",
           },
-        ],
-      }),
-    });
+    );
+    expect(result.ok).toBe(available);
+    if (available) {
+      expect(result.currentAudioDefaults).toEqual(defaults);
+    }
+    expect(result.checks.map((check) => [check.id, check.ok, check.required])).toEqual(
+      checkIds.map((id) => [id, available, true]),
+    );
+  },
+);
 
-    expect(result.checks.find((check) => check.id === "physical-output")).toMatchObject({
-      ok: false,
-      message: "system output is virtual device Jump Desktop Audio",
-    });
+afterEach(() => vi.unstubAllEnvs());
+
+it.each(["{invalid", "        OpenClaw-Mic:\n        OpenClaw-Feed:\n"])(
+  "reports missing driver devices when system_profiler violates its JSON contract: %s",
+  async (profiler) => {
+    const result = await preflight({ profiler });
+    expect(result.ok).toBe(false);
+    expect(result.checks.filter((check) => check.id.startsWith("paired-driver-"))).toEqual([
+      expect.objectContaining({ id: "paired-driver-mic", ok: false }),
+      expect.objectContaining({ id: "paired-driver-feed", ok: false }),
+    ]);
+  },
+);
+
+it("fails provider readiness for an unresolved configured SecretRef", async () => {
+  const missingKey = "OPENCLAW_FACETIME_TEST_MISSING_KEY";
+  vi.stubEnv(missingKey, undefined);
+  const result = await preflight({
+    config: config({
+      realtime: {
+        providers: { openai: { apiKey: { source: "env", provider: "default", id: missingKey } } },
+      },
+    }),
+    fullConfig: { secrets: { providers: { default: { source: "env" } } } },
+  });
+  expect(result.checks.find((check) => check.id === "realtime-provider")?.ok).toBe(false);
+  expect(result.ok).toBe(false);
+});
+
+it.each([
+  [true, "Aggregate Device", "aggregate"],
+  [false, "OpenClaw-Feed", "virtual"],
+] as const)("rejects aggregate=%s output %s", async (isAggregate, name, message) => {
+  const output = { isAggregate, name, uid: "output" };
+  const result = await preflight({ output });
+
+  expect(result.checks.find((check) => check.id === "physical-output")).toMatchObject({
+    ok: false,
+    message: expect.stringContaining(message),
+  });
+});
+
+it("rejects a virtual default output reported by Core Audio transport metadata", async () => {
+  const output = { isAggregate: false, name: "Jump Desktop Audio", uid: "jump-audio" };
+  const result = await preflight({
+    output,
+    profiler: audioProfile(["OpenClaw-Mic", "OpenClaw-Feed", output.name], true),
+  });
+
+  expect(result.checks.find((check) => check.id === "physical-output")).toMatchObject({
+    ok: false,
+    message: "system output is virtual device Jump Desktop Audio",
   });
 });

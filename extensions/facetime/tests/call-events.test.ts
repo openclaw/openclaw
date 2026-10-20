@@ -12,6 +12,7 @@ import {
 import { incomingCall } from "./fixtures.test-support.js";
 
 const verifiedFaceTimeTransport = incomingCall().data.transport;
+const telephony = { service: 1, provider_is_facetime: false, provider_is_telephony: true };
 
 function call(data: Record<string, unknown>) {
   return normalizeFaceTimeCallEvent({
@@ -44,8 +45,6 @@ describe("FaceTime call events", () => {
       ...normalized,
       conversation_resolved_audio_video_mode: "1",
       local_meter_level: "0.37",
-      handle: { value: "mailto:omar@example.com" },
-      transport: verifiedFaceTimeTransport,
     });
     expect(event.data).toMatchObject({
       ...normalized,
@@ -58,11 +57,8 @@ describe("FaceTime call events", () => {
   });
 
   it("does not grant owner authority outside the FaceTime allowlist", () => {
-    expect(
-      owner(
-        call({ handle: { value: "stranger@example.com" }, transport: verifiedFaceTimeTransport }),
-      ),
-    ).toBeUndefined();
+    const event = call({ handle: "stranger@example.com", transport: verifiedFaceTimeTransport });
+    expect(owner(event)).toBeUndefined();
   });
 
   it("uses the exact authorized candidate from nested handle dictionaries", () => {
@@ -90,22 +86,13 @@ describe("FaceTime call events", () => {
     [
       "cellular",
       {
+        ...telephony,
         kind: "cellular",
-        service: 1,
         facetime_transport_type: 0,
-        provider_is_facetime: false,
-        provider_is_telephony: true,
         is_wifi_call: true,
       },
     ],
-    [
-      "telephony provider",
-      {
-        service: 1,
-        provider_is_facetime: false,
-        provider_is_telephony: true,
-      },
-    ],
+    ["telephony provider", telephony],
     ["baseband", { is_using_baseband: true }],
     ["Wi-Fi calling", { is_wifi_call: true }],
     ["unknown provider", { provider_classified: false }],
