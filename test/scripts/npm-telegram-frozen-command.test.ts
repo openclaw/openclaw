@@ -41,15 +41,8 @@ function resolveFixture(source: string, selectedSha?: string) {
     env: { ...process.env, OPENCLAW_SELECTED_SHA: selectedSha ?? sha, GITHUB_ENV: output },
     stdio: "pipe",
   });
-  return {
-    sha,
-    env: Object.fromEntries(
-      read(output)
-        .trim()
-        .split("\n")
-        .map((line) => line.split(/[=](.*)/su, 2)),
-    ),
-  };
+  const lines = read(output).trim().split("\n");
+  return { sha, env: Object.fromEntries(lines.map((line) => line.split(/[=](.*)/su, 2))) };
 }
 
 function captureSuiteMounts(overlay?: string) {
