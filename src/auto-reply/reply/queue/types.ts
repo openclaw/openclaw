@@ -285,6 +285,8 @@ export type FollowupRun = {
     runtimePluginToolGrant?: RuntimePluginToolGrant;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    /** Source-owned eligibility; never inherited from a later queue drain callback. */
+    allowRestartRecoveryFailureNotice?: boolean;
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;

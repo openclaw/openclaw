@@ -143,10 +143,14 @@ describe("resolveFollowupDeliveryDecision", () => {
   it.each([
     { state: undefined, routed: true, delivered: true },
     { state: "missing", routed: true, delivered: false },
+    { state: "pending", routed: true, delivered: false },
     { state: undefined, routed: false, delivered: false },
   ] as const)(
     "requires current-source evidence before suppressing a queued duplicate: $state/$routed",
     async ({ state, routed, delivered }) => {
+      const onSourceReplyDelivered = vi.fn();
+      const turn = createTurn();
+      turn.queued.deliveryCorrelations = [{ begin: () => {}, onSourceReplyDelivered }];
       const execution = createSettledExecution("Completed.");
       execution.outcome.result.sourceReplyDeliveryState = state;
       execution.outcome.result.messagingToolSentTexts = ["Completed."];
@@ -154,15 +158,18 @@ describe("resolveFollowupDeliveryDecision", () => {
         ? [{ ...sourceReplyTarget, text: "Completed." }]
         : undefined;
       const decision = await resolveFollowupDeliveryDecision({
-        turn: createTurn(),
+        turn,
         execution,
         accounting: createAccounting([{ text: "Completed." }]),
       });
       expect(decision).toMatchObject(
         delivered
           ? { kind: "suppress", reason: "silent" }
-          : { kind: "deliver", payloads: [{ isError: true, text: expect.any(String) }] },
+          : state === "pending"
+            ? { kind: "suppress", reason: "silent" }
+            : { kind: "deliver", payloads: [{ isError: true, text: expect.any(String) }] },
       );
+      expect(onSourceReplyDelivered).toHaveBeenCalledTimes(delivered ? 1 : 0);
     },
   );
 

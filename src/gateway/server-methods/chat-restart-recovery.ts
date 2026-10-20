@@ -393,6 +393,7 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoverySameChannelThreadRequired: undefined,
       restartRecoverySourceIngress: "control-ui",
       restartRecoverySourceReplyDeliveryMode: undefined,
+      restartRecoveryFailureNoticeAllowed: undefined,
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }
         : {}),

@@ -76,6 +76,8 @@ export type QueuedReplyDeliveryCorrelation = {
   shouldSuppressReply?: (payload: ReplyPayload) => boolean;
   /** Called only after the origin transport confirms visible delivery. */
   onReplyDelivered?: (payload: ReplyPayload) => void;
+  /** A source reply is confirmed through another path; progress is not sufficient. */
+  onSourceReplyDelivered?: () => void;
   /** No settlement means a source retry or a separate source-owned delivery outcome. */
   begin: () =>
     | ((settlement?: {
@@ -412,6 +414,8 @@ export type GetReplyOptions = {
    * private unless dispatch explicitly marks a source reply as deliverable.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Original channel policy permits a host-owned terminal restart failure notice. */
+  allowRestartRecoveryFailureNotice?: boolean;
   /** Enables task-suggestion tools only when the initiating surface can action Gateway events. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Starts delivery tracking when this turn later drains as a queued followup. */

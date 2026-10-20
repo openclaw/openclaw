@@ -91,6 +91,8 @@ export type SessionRestartRecoveryState = {
   restartRecoverySameChannelThreadRequired?: true;
   restartRecoverySourceIngress?: "channel" | "control-ui" | "internal";
   restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Original source policy authorizes one host-owned terminal failure notice. Legacy absence is silent. */
+  restartRecoveryFailureNoticeAllowed?: true;
   restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
   restartRecoveryTerminalRunIds?: string[];
 };

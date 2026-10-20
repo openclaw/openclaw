@@ -28,5 +28,6 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
+    restartRecoveryFailureNoticeAllowed: undefined,
   };
 }

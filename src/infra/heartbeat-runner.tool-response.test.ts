@@ -17,6 +17,8 @@ import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { deleteCronJobScratch, readCronJobScratchState } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
@@ -509,8 +511,8 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     },
   );
 
-  it("keeps changed failures in one episode while answering foreground manual checks", async () => {
-    await withHeartbeat(async ({ sessionKey, storePath, replySpy, sendTelegram, run }) => {
+  it("retains a failure episode after storage reopens while answering foreground manual checks", async () => {
+    await withHeartbeat(async ({ tmpDir, sessionKey, storePath, replySpy, sendTelegram, run }) => {
       let text = "The backend could not complete this background check.";
       let toolFailure = false;
       replySpy.mockImplementation(async (_ctx, options) => {
@@ -523,6 +525,12 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       expect(await run()).toMatchObject({ status: "failed", reason: "agent-runner-failure" });
       const episodeKey = readSessionStoreForTest(storePath)[sessionKey]?.lastHeartbeatFailureKey;
       expect(episodeKey).toEqual(expect.any(String));
+      // Retire the actual database workers and handles. Subsequent runs must use
+      // the persisted delivery receipt, not a live connection or run-local cache.
+      await closeOpenClawAgentDatabasesAsync(tmpDir);
+      await closeOpenClawStateDatabaseAsync();
+      resetHeartbeatEventsForTest();
+      resetSystemEventsForTest();
       text = "The backend now requires authentication.";
       expect(await run()).toMatchObject({ status: "failed", reason: "agent-runner-failure" });
       toolFailure = true;

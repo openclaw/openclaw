@@ -216,6 +216,9 @@ export function createFollowupRunner(
         execution.execution.outcome.kind === "settled" &&
         hasCompletedSourceReplyDeliveryEvidence(execution.execution.outcome.result)
       ) {
+        for (const correlation of turn.queued.deliveryCorrelations ?? []) {
+          correlation.onSourceReplyDelivered?.();
+        }
         await onObservedReplyDelivery();
       }
       const accounting = await accountFollowupTurn({ turn, defaults, execution });

@@ -563,85 +563,97 @@ describe("createReplyRestartRecoveryClaimController", () => {
     });
   });
 
-  it("keeps claim adoption valid across unrelated same-session metadata writes", async () => {
-    const root = tempDirs.make("openclaw-reply-admission-metadata-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:telegram:group:chat:topic:thread";
-    const sessionId = "channel-session-id";
-    const sourceTurnId = "telegram-update-new";
-    const deliveryContext = {
-      channel: "telegram",
-      to: "chat",
-      accountId: "default",
-      threadId: "thread",
-    };
-    let entry: SessionEntry = {
-      sessionId,
-      updatedAt: 10,
-      abortedLastRun: false,
-      restartRecoveryDeliveryContext: deliveryContext,
-      restartRecoveryDeliveryRunId: "orphaned-run",
-      restartRecoveryDeliverySourceRunId: "telegram-update-old",
-      status: "done",
-    };
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
-    const admission = createTestAdmission({
-      entryId: sourceTurnId,
-      sessionId,
-      sessionKey,
-      storePath,
-    });
-    const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>();
-    const recorder = {
-      message: undefined,
-      getPersistedMessage: () => undefined,
-      resolveMessage: async () => {
-        await updateSessionEntry({ storePath, sessionKey }, (current) => ({
-          model: "gpt-5.6-luna",
-          updatedAt: current.updatedAt + 1,
-        }));
-        return {
-          role: "user" as const,
-          content: "continue",
-          idempotencyKey: sourceTurnId,
-          timestamp: Date.now(),
-        };
-      },
-      getAdmissionReceipt: () => admission,
-      markRuntimePersistencePending: () => {},
-      markRuntimePersisted: () => {},
-      markBlocked: () => {},
-      hasPersisted: () => true,
-      isBlocked: () => false,
-      hasRuntimePersistencePending: () => false,
-      waitForRuntimePersistence: async () => {},
-      persistApproved,
-      persistBlocked: async () => undefined,
-      persistFallback: async () => undefined,
-    } satisfies UserTurnTranscriptRecorder;
-    const controller = createReplyRestartRecoveryClaimController({
-      agentId: "main",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      getEntry: () => entry,
-      getSessionId: () => sessionId,
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => deliveryContext,
-      sessionKey,
-      setEntry: (next) => {
-        entry = next;
-      },
-      sourceTurnId,
-      storePath,
-    });
+  it.each([true, false, undefined])(
+    "keeps source notice eligibility %s across unrelated metadata writes without inheriting it",
+    async (failureNoticeAllowed) => {
+      const root = tempDirs.make("openclaw-reply-admission-metadata-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:telegram:group:chat:topic:thread";
+      const sessionId = "channel-session-id";
+      const sourceTurnId = "telegram-update-new";
+      const deliveryContext = {
+        channel: "telegram",
+        to: "chat",
+        accountId: "default",
+        threadId: "thread",
+      };
+      let entry: SessionEntry = {
+        sessionId,
+        updatedAt: 10,
+        abortedLastRun: false,
+        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoveryDeliveryRunId: "orphaned-run",
+        restartRecoveryDeliverySourceRunId: "telegram-update-old",
+        restartRecoveryFailureNoticeAllowed: true,
+        status: "done",
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      const admission = createTestAdmission({
+        entryId: sourceTurnId,
+        sessionId,
+        sessionKey,
+        storePath,
+      });
+      const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>();
+      const recorder = {
+        message: undefined,
+        getPersistedMessage: () => undefined,
+        resolveMessage: async () => {
+          await updateSessionEntry({ storePath, sessionKey }, (current) => ({
+            model: "gpt-5.6-luna",
+            updatedAt: current.updatedAt + 1,
+          }));
+          return {
+            role: "user" as const,
+            content: "continue",
+            idempotencyKey: sourceTurnId,
+            timestamp: Date.now(),
+          };
+        },
+        getAdmissionReceipt: () => admission,
+        markRuntimePersistencePending: () => {},
+        markRuntimePersisted: () => {},
+        markBlocked: () => {},
+        hasPersisted: () => true,
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: async () => {},
+        persistApproved,
+        persistBlocked: async () => undefined,
+        persistFallback: async () => undefined,
+      } satisfies UserTurnTranscriptRecorder;
+      const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        getEntry: () => entry,
+        getSessionId: () => sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => deliveryContext,
+        sessionKey,
+        setEntry: (next) => {
+          entry = next;
+        },
+        sourceTurnId,
+        failureNoticeAllowed,
+        storePath,
+      });
 
-    await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
-    expect(persistApproved).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      model: "gpt-5.6-luna",
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-      status: "running",
-    });
-  });
+      await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+      expect(persistApproved).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        model: "gpt-5.6-luna",
+        restartRecoveryDeliverySourceRunId: sourceTurnId,
+        status: "running",
+      });
+      expect(loadSessionEntry({ storePath, sessionKey })?.restartRecoveryFailureNoticeAllowed).toBe(
+        failureNoticeAllowed === true ? true : undefined,
+      );
+      await controller.clear();
+      expect(
+        loadSessionEntry({ storePath, sessionKey })?.restartRecoveryFailureNoticeAllowed,
+      ).toBeUndefined();
+    },
+  );
 
   it("rejects claim adoption when a recovery cycle starts after the snapshot", async () => {
     const root = tempDirs.make("openclaw-reply-admission-cycle-");

@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
@@ -18,7 +17,6 @@ import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.read.js";
 import {
@@ -31,7 +29,6 @@ import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   bindCommandHarnessCompletionAssertion,
-  resolveCommandRecoveryOptions,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
@@ -41,18 +38,18 @@ import { finishAgentCommandCleanup } from "./command/cleanup.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { prepareCommandForegroundRun } from "./command/maintenance.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
-import {
-  createCompactionSessionIdReporter,
-  finalizeEmbeddedAgentCommand,
-} from "./command/post-run.js";
+import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
 import {
   prepareAgentCommandExecution,
   type PreparedAgentCommandRuntimeContext,
 } from "./command/prepare.js";
+import { createCommandRestartRecoveryFailureReporter } from "./command/restart-recovery-failure-notice.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
 import {
+  prepareCommandRecoveryRuntime,
+  prepareCommandSessionActor,
   prepareCommandSessionDiffBaseline,
   prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
@@ -64,7 +61,6 @@ import type {
   AgentCommandOpts,
 } from "./command/types.js";
 import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
-import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
 import { createAgentRunRestartAbortError, isAgentRunDirectAbortReason } from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
@@ -90,19 +86,9 @@ async function agentCommandInternal(
   const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
   const preserveUserFacingSessionModelState =
     initialOpts.preserveUserFacingSessionModelState === true;
-  const lifecycleAbortController = new AbortController();
-  const preparedOpts = resolveCommandRecoveryOptions(prepared);
-  const compactionSessionIdReporter = createCompactionSessionIdReporter(
-    prepared.sessionId,
-    preparedOpts.onSessionIdChanged,
-  );
-  let opts: AgentCommandOpts = {
-    ...preparedOpts,
-    onSessionIdChanged: compactionSessionIdReporter.onSessionIdChanged,
-    abortSignal: preparedOpts.abortSignal
-      ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
-      : lifecycleAbortController.signal,
-  };
+  const recoverySetup = prepareCommandRecoveryRuntime(prepared);
+  const { lifecycleAbortController, compactionSessionIdReporter } = recoverySetup;
+  let opts = recoverySetup.opts;
   const {
     body,
     transcriptBody,
@@ -139,15 +125,7 @@ async function agentCommandInternal(
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   let sessionEntry = prepared.sessionEntry,
     runOwnedSessionId = sessionId;
-  const sessionStateActor = classifySessionStateActor({
-    inputProvenance: opts.inputProvenance,
-    internalEvents: opts.internalEvents,
-    sessionEffects: opts.sessionEffects,
-  });
-  // Subagent-lane turns are the parent's own task dispatch into the child (they
-  // carry no inter_session provenance today); classifying them as human would tell
-  // the parent a human interjected on every spawn, for embedded and ACP children alike.
-  const isSubagentLaneTurn = normalizeOptionalString(opts.lane) === AGENT_LANE_SUBAGENT;
+  const { sessionStateActor, isSubagentLaneTurn } = prepareCommandSessionActor(opts);
   let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryClaim = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
@@ -166,6 +144,12 @@ async function agentCommandInternal(
       },
     });
 
+  const recoveryFailure = createCommandRestartRecoveryFailureReporter({
+    prepared,
+    getCurrent: () => ({ opts, sessionId: runOwnedSessionId, lifecycleGeneration }),
+    onError: (error) =>
+      log.warn(`failed to deliver restart recovery failure notice: ${diagnosticError(error)}`),
+  });
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let releaseForeground: (() => void) | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
@@ -410,6 +394,7 @@ async function agentCommandInternal(
           ingress: admissionIngress,
           lifecycleGeneration,
         });
+        recoveryFailure.finishExecution();
         return await runAcpAgentCommand({
           cfg,
           deps: resolvedDeps,
@@ -543,6 +528,7 @@ async function agentCommandInternal(
         trackInternalModelRunTarget,
         preparedRunAdmission,
       });
+      recoveryFailure.finishExecution();
       if (embeddedAttempt.fallbackExhausted) {
         opts.onModelFallbackExhausted?.();
       }
@@ -566,6 +552,7 @@ async function agentCommandInternal(
           sessionReboundDuringRun = ownership.sessionReboundDuringRun;
           compactionSessionIdReporter.onCompactionCommitted(committedCompactionSessionId);
         },
+        onExecutionFailure: recoveryFailure.onExecutionFailure,
         onTerminalDeliveryEvidenceChanged: (evidence) => {
           restartRecoveryTerminalDeliveryEvidence = evidence;
         },
@@ -576,6 +563,9 @@ async function agentCommandInternal(
       maintenanceRequest = finalized.maintenance;
       return finalized.deliveryResult;
     });
+  } catch (error) {
+    await recoveryFailure.reportThrownFailure(error);
+    throw error;
   } finally {
     await finishAgentCommandCleanup({
       prepared,
@@ -619,8 +609,12 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  const { localIngress } = executionIdentity;
-  return await agentCommandWithAdmissionIngress(opts, localIngress, runtime, deps);
+  return await agentCommandWithAdmissionIngress(
+    opts,
+    executionIdentity.localIngress,
+    runtime,
+    deps,
+  );
 }
 
 export async function agentCommandFromSystem(

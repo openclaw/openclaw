@@ -560,6 +560,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
+      allowRestartRecoveryFailureNotice: opts?.allowRestartRecoveryFailureNotice === true,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic,

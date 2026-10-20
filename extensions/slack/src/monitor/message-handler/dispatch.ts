@@ -399,6 +399,7 @@ async function dispatchSlackMessageWithSetup(
       record: prepared.turn.record,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
+        allowRestartRecoveryFailureNotice: failurePolicy.shouldReportFailure(),
         onVisibleWorkSessions: progress.onVisibleWorkSessions,
         groupThreadReplyFormatter: formatSlackGroupThreadReply,
         // Followups can outlive this dispatch and retain their own source address.

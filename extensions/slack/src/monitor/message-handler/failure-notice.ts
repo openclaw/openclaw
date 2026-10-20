@@ -191,6 +191,10 @@ export function createSlackQueuedFailureNoticePolicy(
       };
     },
     shouldSuppressReply: (payload) => policy.filter(payload) === null,
+    onSourceReplyDelivered() {
+      visibleReplySent = true;
+      usefulReplySent = true;
+    },
     onReplyDelivered(payload) {
       policy.recordDelivered(payload);
       visibleReplySent = true;

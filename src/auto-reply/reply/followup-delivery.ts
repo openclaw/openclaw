@@ -251,6 +251,9 @@ export async function resolveFollowupDeliveryDecision(params: {
       : undefined,
   });
   if (!completedSourceDelivery && completion.outcome === "delivered") {
+    for (const correlation of turn.queued.deliveryCorrelations ?? []) {
+      correlation.onSourceReplyDelivered?.();
+    }
     await opts?.onObservedReplyDelivery?.();
   }
   const recovery =

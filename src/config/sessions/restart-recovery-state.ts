@@ -416,6 +416,10 @@ export function normalizeRestartRecoveryEntryFields(
       ? entry.restartRecoverySourceReplyDeliveryMode
       : undefined,
   );
+  assign(
+    "restartRecoveryFailureNoticeAllowed",
+    entry.restartRecoveryFailureNoticeAllowed === true ? true : undefined,
+  );
   const terminalDeliveryEvidence = normalizeRestartRecoveryTerminalDeliveryEvidence(
     entry.restartRecoveryTerminalDeliveryEvidence,
   );
@@ -555,6 +559,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoverySameChannelThreadRequired: undefined,
     restartRecoverySourceIngress: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
+    restartRecoveryFailureNoticeAllowed: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence
       ? { restartRecoveryTerminalDeliveryEvidence: terminalDeliveryEvidence }

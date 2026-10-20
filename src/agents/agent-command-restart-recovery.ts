@@ -349,6 +349,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryForceSafeTools"
   | "restartRecoverySourceIngress"
   | "restartRecoverySourceReplyDeliveryMode"
+  | "restartRecoveryFailureNoticeAllowed"
   | "restartRecoverySuppressTextDelivery"
 > {
   // Recovery can preclaim a run by id. Preserve its original source semantics
@@ -404,6 +405,9 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       : createsScopedDeliveryClaim
         ? params.sourceIngress
         : undefined,
+    restartRecoveryFailureNoticeAllowed: adoptsExistingClaim
+      ? params.entry.restartRecoveryFailureNoticeAllowed
+      : undefined,
     restartRecoverySourceReplyDeliveryMode: adoptsExistingClaim
       ? params.entry.restartRecoverySourceReplyDeliveryMode
       : params.sourceRunId

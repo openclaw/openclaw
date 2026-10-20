@@ -5,6 +5,8 @@ import type { Mock } from "vitest";
 import { expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
+import { registerGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -16,7 +18,17 @@ import {
 } from "./agent-harness-completion-scope.js";
 import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "./embedded-agent-runner/run/terminal-resolution.test-support.js";
-import { createAgentRunRestartAbortError } from "./run-termination.js";
+import { AgentHarnessPreflightError } from "./harness/errors.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import {
+  registerGeneratedMediaTaskActivity,
+  clearGeneratedMediaTaskActivity,
+} from "./media-generation-activity.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
+} from "./run-termination.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -25,6 +37,7 @@ import {
 type AgentCommandRecoveryFixture = {
   state: {
     runAgentAttemptMock: Mock;
+    runWithModelFallbackMock: Mock;
     resolveAgentDeliveryPlanWithSessionRouteMock: Mock;
     commandWarnMock: Mock;
     emitAgentEventMock: Mock;
@@ -70,6 +83,208 @@ export async function withStoredAgentCommandRecoverySession(
 export function registerAgentCommandRecoveryCases(
   getFixture: () => AgentCommandRecoveryFixture,
 ): void {
+  it.each([
+    { kind: "public", notice: true },
+    { kind: "legacy", notice: false },
+    { kind: "private", notice: true },
+    { kind: "transport", notice: true },
+    { kind: "generated-handoff", notice: false },
+    { kind: "owner-replaced", notice: false },
+    { kind: "delivery-failure", notice: true },
+    { kind: "restart", notice: false },
+    { kind: "abort", notice: false },
+    { kind: "superseded", notice: false },
+    { kind: "returned-error", notice: true },
+    { kind: "fallback-success", notice: false },
+    { kind: "pending-reply", notice: false },
+    { kind: "delivered-reply", notice: false },
+    { kind: "pending-receipt", notice: false },
+    { kind: "delivered-receipt", notice: false },
+  ] as const)(
+    "settles restart failure notification from execution and delivery custody ($kind)",
+    async ({ kind, notice }) => {
+      const fixture = getFixture();
+      fixture.setupSingleAttemptFallback();
+      await withStoredAgentCommandRecoverySession(fixture, async (scope) => {
+        const runId = "restart-refusal-run";
+        const sourceRunId = "channel-user:original";
+        const publicMessage =
+          "The interrupted task could not safely continue. Its history is preserved.";
+        const failure =
+          kind === "restart"
+            ? createAgentRunRestartAbortError()
+            : kind === "abort"
+              ? createAgentRunDirectAbortError()
+              : kind === "superseded"
+                ? createAgentRunSupersededAbortError()
+                : kind === "generated-handoff"
+                  ? new LiveSessionModelSwitchError({ provider: "anthropic", model: "claude" })
+                  : kind === "transport"
+                    ? new Error("private native transport diagnostic")
+                    : new AgentHarnessPreflightError("private recovery diagnostic", {
+                        userMessage: kind === "private" ? undefined : publicMessage,
+                      });
+        const { entry } = fixture.setupBareStoredSession(
+          {
+            ...sessionAccessor.loadSessionEntry(scope),
+            restartRecoveryDeliveryRunId: runId,
+            restartRecoveryDeliverySourceRunId: sourceRunId,
+            restartRecoverySourceIngress: "channel",
+            restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+            restartRecoveryDeliveryContext: { channel: "slack", to: "C123", threadId: "123.456" },
+            restartRecoveryFailureNoticeAllowed: kind === "legacy" ? undefined : true,
+            restartRecoveryDeliveryReceiptState:
+              kind === "pending-receipt"
+                ? "terminal-pending"
+                : kind === "delivered-receipt"
+                  ? "delivered-terminal"
+                  : undefined,
+          },
+          scope.storePath,
+          scope.sessionKey,
+        );
+        await sessionAccessor.replaceSessionEntry(scope, entry);
+        const returnsResult =
+          kind === "returned-error" ||
+          kind === "fallback-success" ||
+          kind === "pending-reply" ||
+          kind === "delivered-reply";
+        if (returnsResult) {
+          const originalFallback = fixture.state.runWithModelFallbackMock.getMockImplementation()!;
+          const result =
+            kind === "fallback-success"
+              ? fixture.makeSuccessResult("anthropic", "claude")
+              : {
+                  payloads: [{ text: "private terminal detail", isError: true }],
+                  sourceReplyDeliveryState:
+                    kind === "pending-reply"
+                      ? "pending"
+                      : kind === "delivered-reply"
+                        ? "delivered"
+                        : "missing",
+                  meta: {
+                    durationMs: 100,
+                    aborted: false,
+                    stopReason: "end_turn",
+                    error: {
+                      kind: "incomplete_turn",
+                      message: "private terminal diagnostic",
+                      fallbackSafe: true,
+                      terminalPresentation: true,
+                    },
+                    agentMeta: { provider: "anthropic", model: "claude" },
+                  },
+                };
+          if (kind === "fallback-success") {
+            fixture.state.runAgentAttemptMock
+              .mockRejectedValueOnce(new Error("temporary transport error"))
+              .mockResolvedValueOnce(result);
+            fixture.state.runWithModelFallbackMock.mockImplementationOnce(async (...args) => {
+              await originalFallback(...args).catch(() => undefined);
+              return originalFallback(...args);
+            });
+          } else {
+            fixture.state.runAgentAttemptMock.mockResolvedValueOnce(result);
+            fixture.state.runWithModelFallbackMock.mockImplementationOnce(async (...args) => ({
+              ...(await originalFallback(...args)),
+              outcome: "exhausted",
+            }));
+          }
+        } else {
+          fixture.state.runAgentAttemptMock.mockImplementationOnce(async () => {
+            if (kind === "generated-handoff") {
+              registerGeneratedMediaTaskActivity(`${runId}:media`, scope.sessionKey, scope.agentId);
+            }
+            if (kind === "owner-replaced") {
+              await sessionAccessor.updateSessionEntry(scope, () => ({
+                restartRecoveryDeliveryRunId: "successor-run",
+                restartRecoveryDeliverySourceRunId: "successor-source",
+              }));
+            }
+            throw failure;
+          });
+        }
+        const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(
+          async (payload) => {
+            expect(payload.isCurrent?.({})).toBe(true);
+            expect(sessionAccessor.loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBe(
+              runId,
+            );
+            if (kind === "delivery-failure") {
+              throw new Error("outbound delivery unavailable");
+            }
+            return { suppressed: false };
+          },
+        );
+        const unused = async () => {
+          throw new Error("unexpected recovery dispatch");
+        };
+        const unregister = registerGatewayRecoveryRuntime({
+          dispatchSessionMethod: unused,
+          dispatchAgent: unused,
+          waitForAgent: unused,
+          sendRecoveryNotice,
+        });
+        try {
+          const command = fixture.agentCommand({
+            message: "Continue the interrupted task",
+            sessionKey: scope.sessionKey,
+            runId,
+            deliver: false,
+            sourceReplyDeliveryMode: "message_tool_only",
+            inputProvenance: {
+              kind: "internal_system",
+              sourceTool: "main_session_restart_recovery",
+            },
+          });
+          if (returnsResult) {
+            await command;
+          } else {
+            await expect(command).rejects.toBe(failure);
+          }
+          expect(sendRecoveryNotice).toHaveBeenCalledTimes(notice ? 1 : 0);
+          if (notice) {
+            const sent = sendRecoveryNotice.mock.calls[0] as unknown as [Record<string, unknown>];
+            expect(sent[0]).toMatchObject({
+              channel: "slack",
+              to: "C123",
+              threadId: "123.456",
+              idempotencyKey: `main-session-restart-recovery:${sourceRunId}:failed-notice`,
+            });
+            expect(sent[0].text).not.toContain("private");
+            if (kind === "public" || kind === "delivery-failure") {
+              expect(sent[0].text).toBe(publicMessage);
+            }
+          }
+          if (kind !== "restart" && kind !== "owner-replaced") {
+            const terminal = sessionAccessor.loadSessionEntry(scope);
+            expect(terminal?.restartRecoveryDeliveryRunId).toBeUndefined();
+            expect(terminal?.restartRecoveryFailureNoticeAllowed).toBeUndefined();
+            expect(terminal?.restartRecoveryTerminalRunIds).toContain(sourceRunId);
+          }
+          if (kind === "public") {
+            expect(sendRecoveryNotice.mock.calls[0]?.[0].isCurrent?.({})).toBe(false);
+            const current = sessionAccessor.loadSessionEntry(scope);
+            fixture.setupBareStoredSession(current, scope.storePath, scope.sessionKey);
+            fixture.state.runAgentAttemptMock.mockResolvedValueOnce(
+              fixture.makeSuccessResult("anthropic", "claude"),
+            );
+            await fixture.agentCommand({
+              message: "A new direct request",
+              sessionKey: scope.sessionKey,
+              runId: "later-direct-request",
+              deliver: false,
+            });
+            expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+          }
+        } finally {
+          clearGeneratedMediaTaskActivity(`${runId}:media`);
+          unregister();
+        }
+      });
+    },
+  );
+
   it("preserves rejected best-effort delivery intent without private Incognito diagnostics", async () => {
     const {
       state,

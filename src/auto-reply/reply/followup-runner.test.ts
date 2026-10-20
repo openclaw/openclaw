@@ -168,7 +168,9 @@ describe("createFollowupRunner", () => {
       const end = vi.fn();
       turn.queued.deliveryCorrelations = [{ begin: () => end }];
       const execution = createSettledExecution();
-      if (aborted) execution.execution.outcome = { kind: "aborted", reason: "user" };
+      if (aborted) {
+        execution.execution.outcome = { kind: "aborted", reason: "user" };
+      }
       state.admit.mockResolvedValue({ kind: "admitted", turn });
       state.execute.mockResolvedValue(execution);
       state.account.mockResolvedValue(undefined);
@@ -857,24 +859,46 @@ describe("createFollowupRunner", () => {
     );
   });
 
-  it("reports a completed message-tool source delivery before final projection", async () => {
-    const typing = createTypingController();
-    const onObservedReplyDelivery = vi.fn(async () => {});
-    const turn = createTurn();
-    const execution = createSettledExecution();
-    state.completedSourceDelivery = true;
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockResolvedValue(execution);
-    state.account.mockResolvedValue({});
-    state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
+  it.each([false, true])(
+    "distinguishes confirmed source delivery from queued progress before projection (confirmed=%s)",
+    async (confirmed) => {
+      const typing = createTypingController();
+      const onObservedReplyDelivery = vi.fn(async () => {});
+      const onSourceReplyDelivered = vi.fn();
+      const turn = createTurn();
+      turn.queued.deliveryCorrelations = [{ begin: () => {}, onSourceReplyDelivered }];
+      const execution = createSettledExecution();
+      state.completedSourceDelivery = confirmed;
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockImplementationOnce(
+        async (params: { onToolResult: (payload: ReplyPayload) => Promise<unknown> }) => {
+          await params.onToolResult({ text: "Working", isStatusNotice: true });
+          return execution;
+        },
+      );
+      state.account.mockImplementationOnce(async () => {
+        expect(onSourceReplyDelivered).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+        return {};
+      });
+      state.deliver.mockImplementation(
+        async (params: { kind?: string; onObservedReplyDelivery?: () => Promise<void> }) => {
+          if (params.kind === "tool") {
+            await params.onObservedReplyDelivery?.();
+          }
+          return { kind: "completed", payloads: [] };
+        },
+      );
 
-    await createFollowupRunner({
-      typing,
-      typingMode: "instant",
-      defaultModel: "claude",
-      opts: { onObservedReplyDelivery },
-    })(turn.queued);
+      await createFollowupRunner({
+        typing,
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: { onObservedReplyDelivery },
+      })(turn.queued);
 
-    expect(onObservedReplyDelivery).toHaveBeenCalledOnce();
-  });
+      expect(onObservedReplyDelivery).toHaveBeenCalledOnce();
+      expect(onSourceReplyDelivered).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+      expect(state.account).toHaveBeenCalledOnce();
+    },
+  );
 });

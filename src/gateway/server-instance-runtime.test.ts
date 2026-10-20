@@ -12,6 +12,7 @@ import {
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
@@ -262,6 +263,8 @@ describe("createGatewayInstanceRuntime", () => {
           idempotencyKey,
         } as const;
         await runtime.recovery.sendRecoveryNotice(notice);
+        // Simulate process storage retirement: replay must use the durable completed intent.
+        await closeOpenClawStateDatabaseAsync();
         await runtime.recovery.sendRecoveryNotice(notice);
 
         expect(await findDeliveryIntentOwner(idempotencyKey)).toMatchObject({

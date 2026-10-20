@@ -119,6 +119,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   sameChannelThreadRequired?: boolean;
   sourceTurnId?: unknown;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  failureNoticeAllowed?: boolean;
   storePath?: string;
 }): ReplyRestartRecoveryClaimController {
   let recoveryRunId: string = randomUUID();
@@ -333,6 +334,8 @@ export function createReplyRestartRecoveryClaimController(params: {
             params.sameChannelThreadRequired === true ? true : undefined,
           restartRecoverySourceIngress: "channel",
           restartRecoverySourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          restartRecoveryFailureNoticeAllowed:
+            params.failureNoticeAllowed === true ? true : undefined,
           runtimeMs: undefined,
           startedAt: updatedAt,
           status: "running",

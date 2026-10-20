@@ -176,6 +176,18 @@ it.each<{ payload: ReplyPayload; useful: boolean }>([
   },
 );
 
+it("permits failure feedback after a confirmed source-tool answer and resets on the next run", () => {
+  const queued = createSlackQueuedFailureNoticePolicy(allowParams, beginRun);
+  const end = queued.begin();
+  expect(queued.shouldSuppressReply?.(failure)).toBe(true);
+  queued.onSourceReplyDelivered?.();
+  expect(queued.shouldSuppressReply?.(failure)).toBe(false);
+  end?.({ visibleReplySent: true, failed: true });
+  const nextEnd = queued.begin();
+  expect(queued.shouldSuppressReply?.(failure)).toBe(true);
+  nextEnd?.({ visibleReplySent: false, failed: true });
+});
+
 it("does not treat an unconfirmed answer or pending delivery as a useful reply", () => {
   const queued = createSlackQueuedFailureNoticePolicy(allowParams, beginRun);
   const end = queued.begin();

@@ -31,6 +31,7 @@ export function buildRestartRecoveryExpectedState(
     restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
     restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+    restartRecoveryFailureNoticeAllowed: entry.restartRecoveryFailureNoticeAllowed,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
   };
@@ -80,6 +81,8 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           expectedState.restartRecoverySourceIngress &&
         selected.entry.restartRecoverySourceReplyDeliveryMode ===
           expectedState.restartRecoverySourceReplyDeliveryMode &&
+        selected.entry.restartRecoveryFailureNoticeAllowed ===
+          expectedState.restartRecoveryFailureNoticeAllowed &&
         sameRestartRecoveryTerminalRunIds(
           selected.entry.restartRecoveryTerminalRunIds,
           expectedState.restartRecoveryTerminalRunIds,

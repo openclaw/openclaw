@@ -42,6 +42,7 @@ import {
 import { createCommandBudget } from "./maintenance-budget.js";
 import { createCommandMaintenanceFollowup } from "./maintenance.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
+import { shouldNotifyCommandExecutionFailure } from "./restart-recovery-failure-notice.js";
 import type { runEmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
   loadCliCompactionRuntime,
@@ -159,6 +160,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     ownership: { runOwnedSessionId: string; sessionReboundDuringRun: boolean },
     committedCompactionSessionId?: string,
   ) => void;
+  onExecutionFailure?: (abortSignal: AbortSignal) => Promise<void>;
   onTerminalDeliveryEvidenceChanged: (
     evidence: RestartRecoveryTerminalDeliveryEvidenceResult,
   ) => void;
@@ -590,6 +592,19 @@ export async function finalizeEmbeddedAgentCommand(params: {
         : deliveryParams,
     );
 
+    hasResultError = Boolean(fallbackExhausted || lifecycle.resolveResultError(result, false));
+    if (
+      shouldNotifyCommandExecutionFailure({
+        result,
+        deliveryResult,
+        hasResultError,
+        outcome: terminal.outcome,
+        abortSignal: deferredLifecycle.signal,
+      })
+    ) {
+      await params.onExecutionFailure?.(deferredLifecycle.signal);
+    }
+
     if (
       sessionStore &&
       sessionKey &&
@@ -667,7 +682,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       }
     }
 
-    hasResultError = Boolean(fallbackExhausted || lifecycle.resolveResultError(result, false));
     terminalError = hasResultError
       ? lifecycle.resolveTerminalError(result, fallbackExhausted, terminal)
       : terminal.outcome.error;

@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
@@ -11,21 +12,59 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
-import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
+import {
+  classifySessionStateActor,
+  recordSessionHumanDirectMessage,
+} from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
+  resolveCommandRecoveryOptions,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
+import { createCompactionSessionIdReporter } from "./post-run.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+export function prepareCommandRecoveryRuntime(
+  prepared: Parameters<typeof resolveCommandRecoveryOptions>[0] & { sessionId: string },
+) {
+  const lifecycleAbortController = new AbortController();
+  const preparedOpts = resolveCommandRecoveryOptions(prepared);
+  const compactionSessionIdReporter = createCompactionSessionIdReporter(
+    prepared.sessionId,
+    preparedOpts.onSessionIdChanged,
+  );
+  const opts: AgentCommandOpts = {
+    ...preparedOpts,
+    onSessionIdChanged: compactionSessionIdReporter.onSessionIdChanged,
+    abortSignal: preparedOpts.abortSignal
+      ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
+      : lifecycleAbortController.signal,
+  };
+  return { opts, lifecycleAbortController, compactionSessionIdReporter };
+}
+
+export function prepareCommandSessionActor(opts: AgentCommandOpts) {
+  const sessionStateActor = classifySessionStateActor({
+    inputProvenance: opts.inputProvenance,
+    internalEvents: opts.internalEvents,
+    sessionEffects: opts.sessionEffects,
+  });
+  // Subagent-lane turns are the parent's own task dispatch into the child (they
+  // carry no inter_session provenance today); classifying them as human would tell
+  // the parent a human interjected on every spawn, for embedded and ACP children alike.
+  const isSubagentLaneTurn = normalizeOptionalString(opts.lane) === AGENT_LANE_SUBAGENT;
+  return { sessionStateActor, isSubagentLaneTurn };
+}
 
 export function prepareCommandSessionRecoveryEntry(
   params: Omit<
