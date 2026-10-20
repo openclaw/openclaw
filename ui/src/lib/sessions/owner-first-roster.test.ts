@@ -63,7 +63,6 @@ describe("owner-first session roster plan", () => {
     emitEvent(sessionChangedEvent(sharedRows[1]!.key));
     await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
-    expect(request.mock.calls).toHaveLength(3);
     expect(request.mock.calls.map(([, params]) => params)).toEqual([
       expect.objectContaining({ ownerFirst: true, limit: 60 }),
       expect.objectContaining({ limit: 60, offset: 60 }),

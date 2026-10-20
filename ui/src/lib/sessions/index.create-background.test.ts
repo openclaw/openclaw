@@ -17,6 +17,8 @@ import {
 const listed = (key: string, fields: Partial<GatewaySessionRow>, ts: number) =>
   sessionsResult([{ key, kind: "direct", ...fields }], ts);
 const worktree = { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" };
+const placement = (key: string, fields: Partial<GatewaySessionRow>) =>
+  listed(key, { updatedAt: 2, worktree, ...fields }, 2);
 const background = { reconciliation: "background" } as const;
 const model = "openai/gpt-5.6-sol";
 
@@ -77,17 +79,11 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
     }
 
     pendingList.resolve(
-      listed(
-        key,
-        {
-          updatedAt: 2,
-          model: "gpt-5.6-sol",
-          modelProvider: "openai",
-          modelOverrideSource: null,
-          worktree,
-        },
-        2,
-      ),
+      placement(key, {
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        modelOverrideSource: null,
+      }),
     );
     await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
     if (claim === "failed-after-list") {
@@ -107,97 +103,74 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
     }
   },
 );
-it.each([
-  {
-    label: "versioned event",
-    event: { thinkingLevel: "medium", updatedAt: 2 },
-    settleWithEvent: true,
-  },
-  {
-    label: "unversioned event",
-    event: { sessionId: "created-session", thinkingLevel: "medium" },
-    settleWithEvent: false,
-  },
-])("claims created placement through background reconciliation ($label)", async (testCase) => {
-  const pendingList = createDeferred<SessionsListResult>();
-  const pendingAppendList = createDeferred<SessionsListResult>();
-  const pendingCanonicalList = createDeferred<SessionsListResult>();
-  let listCalls = 0;
-  const key = "agent:main:created-in-background";
-  const { sessions, emitEvent } = harness({
-    "sessions.create": () => ({
-      key,
-      entry: {
-        sessionId: "created-session",
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        thinkingLevel: "xhigh",
-        updatedAt: 1,
+it.each([{ updatedAt: 2 }, { sessionId: "created-session" }])(
+  "reconciles created placement (%j)",
+  async (event) => {
+    const settleWithEvent = "updatedAt" in event;
+    const pendingList = createDeferred<SessionsListResult>();
+    const pendingAppendList = createDeferred<SessionsListResult>();
+    const pendingCanonicalList = createDeferred<SessionsListResult>();
+    const key = "agent:main:created-in-background";
+    const { sessions, emitEvent } = harness({
+      "sessions.create": () => ({
+        key,
+        entry: {
+          sessionId: "created-session",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          thinkingLevel: "xhigh",
+          updatedAt: 1,
+        },
+      }),
+      "sessions.list": vi
+        .fn()
+        .mockReturnValueOnce(listed("agent:main:main", { updatedAt: 1 }, 1))
+        .mockReturnValueOnce(pendingList.promise)
+        .mockReturnValueOnce(
+          settleWithEvent ? pendingCanonicalList.promise : pendingAppendList.promise,
+        )
+        .mockReturnValue(pendingCanonicalList.promise),
+      "sessions.patch": () => {
+        throw new Error("thinking rejected");
       },
-    }),
-    "sessions.list": () => {
-      listCalls += 1;
-      if (listCalls === 1) {
-        return sessionsResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }], 1);
-      }
-      if (listCalls === 2) {
-        return pendingList.promise;
-      }
-      if (listCalls === 3 && !testCase.settleWithEvent) {
-        return pendingAppendList.promise;
-      }
-      return pendingCanonicalList.promise;
-    },
-    "sessions.patch": () => {
-      throw new Error("thinking rejected");
-    },
-  });
-  await sessions.refresh({ force: true });
-  const created = await createPrepared(sessions, key);
-  expect(sessions.think(key)).toBe("xhigh");
-  const stateChanged = vi.fn();
-  sessions.subscribe(stateChanged);
-  emitEvent(changed(key, testCase.event));
-  expect(sessions.think(key)).toBe("medium");
-  expect(stateChanged).toHaveBeenCalledOnce();
-
-  pendingList.resolve(
-    listed(
-      key,
-      {
-        thinkingLevel: "xhigh",
-        updatedAt: 2,
-        worktree,
-      },
-      2,
-    ),
-  );
-  await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
-  expect(sessions.think(key)).toBe("medium");
-  await expect(sessions.patch(key, { thinkingLevel: "medium" })).rejects.toThrow(
-    "thinking rejected",
-  );
-  expect(sessions.think(key)).toBe("medium");
-  if (testCase.settleWithEvent) {
-    emitEvent(changed(key, { thinkingLevel: "medium", updatedAt: 3 }));
-    expect(sessions.think(key)).toBeUndefined();
-  } else {
-    const appendRefresh = sessions.refresh({ append: true, offset: 1, force: true });
-    pendingAppendList.resolve(sessionsResult([], 3));
-    await appendRefresh;
+    });
+    await sessions.refresh({ force: true });
+    const created = await createPrepared(sessions, key);
+    expect(sessions.think(key)).toBe("xhigh");
+    const stateChanged = vi.fn();
+    sessions.subscribe(stateChanged);
+    emitEvent(changed(key, { thinkingLevel: "medium", ...event }));
     expect(sessions.think(key)).toBe("medium");
-  }
-  const canonicalRefresh = sessions.refresh({ force: true });
-  const canonicalThinkingLevel = testCase.settleWithEvent ? "medium" : "high";
-  pendingCanonicalList.resolve(
-    listed(key, { thinkingLevel: canonicalThinkingLevel, updatedAt: 3 }, 3),
-  );
-  await canonicalRefresh;
-  expect(sessions.think(key)).toBeUndefined();
-  expect(sessions.state.result?.sessions[0]?.thinkingLevel).toBe(canonicalThinkingLevel);
-  expect(created).toHaveBeenCalledOnce();
-  expect(sessions.isPreparedWorkSession(key)).toBe(false);
-});
+    expect(stateChanged).toHaveBeenCalledOnce();
+
+    pendingList.resolve(placement(key, { thinkingLevel: "xhigh" }));
+    await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
+    expect(sessions.think(key)).toBe("medium");
+    await expect(sessions.patch(key, { thinkingLevel: "medium" })).rejects.toThrow(
+      "thinking rejected",
+    );
+    expect(sessions.think(key)).toBe("medium");
+    if (settleWithEvent) {
+      emitEvent(changed(key, { thinkingLevel: "medium", updatedAt: 3 }));
+      expect(sessions.think(key)).toBeUndefined();
+    } else {
+      const appendRefresh = sessions.refresh({ append: true, offset: 1, force: true });
+      pendingAppendList.resolve(sessionsResult([], 3));
+      await appendRefresh;
+      expect(sessions.think(key)).toBe("medium");
+    }
+    const canonicalRefresh = sessions.refresh({ force: true });
+    const canonicalThinkingLevel = settleWithEvent ? "medium" : "high";
+    pendingCanonicalList.resolve(
+      listed(key, { thinkingLevel: canonicalThinkingLevel, updatedAt: 3 }, 3),
+    );
+    await canonicalRefresh;
+    expect(sessions.think(key)).toBeUndefined();
+    expect(sessions.state.result?.sessions[0]?.thinkingLevel).toBe(canonicalThinkingLevel);
+    expect(created).toHaveBeenCalledOnce();
+    expect(sessions.isPreparedWorkSession(key)).toBe(false);
+  },
+);
 
 it("clears a created thinking claim for an unversioned removal", async () => {
   const key = "agent:main:created-then-archived";
@@ -237,6 +210,7 @@ it("isolates delayed raw-global thinking claims by agent", async () => {
 it.each(["success", "in-place", "failure", "replaced"])(
   "keeps recovery notifications, errors and refresh scoped to the connection (%s)",
   async (outcome) => {
+    const succeeded = outcome === "success" || outcome === "in-place";
     const recovery = createDeferred<unknown>();
     const list = createDeferred<unknown>();
     const { sessions, publish, request } = harness({
@@ -264,7 +238,7 @@ it.each(["success", "in-place", "failure", "replaced"])(
     } else {
       recovery.resolve(successor);
     }
-    if (outcome === "success" || outcome === "in-place") {
+    if (succeeded) {
       await waitForFast(() =>
         expect(request).toHaveBeenCalledWith(
           "sessions.list",
@@ -276,14 +250,12 @@ it.each(["success", "in-place", "failure", "replaced"])(
       } else {
         expect(created).not.toHaveBeenCalled();
       }
-      list.resolve(sessionsResult([{ key: successor.key, kind: "direct", updatedAt: 1 }], 1));
+      list.resolve(listed(successor.key, { updatedAt: 1 }, 1));
     }
 
-    await expect(operation).resolves.toEqual(
-      outcome === "success" || outcome === "in-place" ? successor : null,
-    );
+    await expect(operation).resolves.toEqual(succeeded ? successor : null);
     expect(sessions.state.error).toBe(outcome === "failure" ? "recovery rejected" : null);
-    if (outcome === "failure" || outcome === "replaced") {
+    if (!succeeded) {
       expect(created).not.toHaveBeenCalled();
       expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
     }

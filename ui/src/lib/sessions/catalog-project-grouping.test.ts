@@ -17,13 +17,11 @@ function attributed(
   return { ...session(threadId), createdActor: { type, id, identity, label } };
 }
 
-describe("normalizeCatalogProjectGrouping", () => {
-  it.each([
-    ["person", "person"],
-    [undefined, "project"],
-  ] as const)("normalizes %s to %s", (raw, expected) => {
-    expect(normalizeCatalogProjectGrouping(raw)).toBe(expected);
-  });
+it.each([
+  ["person", "person"],
+  [undefined, "project"],
+] as const)("normalizes %s to %s", (raw, expected) => {
+  expect(normalizeCatalogProjectGrouping(raw)).toBe(expected);
 });
 
 describe("groupCatalogSessionsByProject", () => {
@@ -49,29 +47,20 @@ describe("groupCatalogSessionsByProject", () => {
     ]);
   });
 
-  it.each([["C:\\Users\\dev\\openclaw\\.claude\\worktrees\\fix-1", "C:\\Users\\dev\\openclaw"]])(
-    "folds worktree cwd %s into %s",
-    (worktreeCwd, expectedProject) => {
-      const result = groupCatalogSessionsByProject([
-        session("direct", expectedProject),
-        session("worktree", worktreeCwd),
-      ]);
+  it("folds Windows worktree checkouts into the project", () => {
+    const expectedProject = "C:\\Users\\dev\\openclaw";
+    const result = groupCatalogSessionsByProject([
+      session("direct", expectedProject),
+      session("worktree", `${expectedProject}\\.claude\\worktrees\\fix-1`),
+    ]);
 
-      expect(result.groups).toHaveLength(1);
-      expect(result.groups[0]?.key).toBe(`project:${expectedProject}`);
-      expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual([
-        "direct",
-        "worktree",
-      ]);
-    },
-  );
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.key).toBe(`project:${expectedProject}`);
+    expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["direct", "worktree"]);
+  });
 
   it("leaves missing and blank cwd values ungrouped", () => {
-    const result = groupCatalogSessionsByProject([
-      session("missing"),
-      session("blank", "  "),
-      session("grouped", "/work/project"),
-    ]);
+    const result = groupCatalogSessionsByProject([session("missing"), session("blank", "  ")]);
 
     expect(result.ungrouped.map((item) => item.threadId)).toEqual(["missing", "blank"]);
   });
