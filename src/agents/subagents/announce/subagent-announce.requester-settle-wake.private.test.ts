@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
+import { completionReader, visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
   findTranscriptEventMock,
@@ -7,7 +7,6 @@ import {
   sessionStore,
   setSessionStore,
   wakeParams,
-  visibleCompletion,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
 import {
   REQUESTER,
@@ -22,23 +21,15 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
-  beforeEach(() => {
-    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
-      const child = listedRequesterRuns().find(
-        (entry) => sessionStore[entry.childSessionKey]?.sessionId === sessionId,
-      );
-      const event = {
-        type: "message",
-        message: {
-          role: "assistant",
-          display: true,
-          content: [{ type: "text", text: child?.completion?.resultText }],
-          __openclaw: { runId: child?.runId },
-        },
-      };
-      return child && matchesTranscriptEvent(event, match) ? { event } : undefined;
-    });
-  });
+  beforeEach(() =>
+    findTranscriptEventMock.mockImplementation(
+      completionReader((sessionId) =>
+        listedRequesterRuns().find(
+          (entry) => sessionStore[entry.childSessionKey]?.sessionId === sessionId,
+        ),
+      ),
+    ),
+  );
 
   const settledPrivateChildren = ({
     mixed,
@@ -109,10 +100,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   // upgrade they keep their admitted private policy under the same stable identity.
   it.each([false, true])("preserves a batch's policy and identity (marked=%s)", async (marked) => {
     const children = settledPrivateChildren({ mixed: false, yielded: true, single: true, marked });
-    children[0]!.requesterSettleWake = {
-      ...children[0]!.requesterSettleWake!,
-      batchRunIds: ["run-b"],
-    };
+    children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
     const call = deliveredCallArg();

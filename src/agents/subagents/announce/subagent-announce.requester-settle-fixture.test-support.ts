@@ -22,39 +22,38 @@ import {
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 import { getRuntimeConfig } from "./subagent-announce.runtime.js";
 
-let sessionStore: Record<
+export let sessionStore: Record<
   string,
   { sessionId?: string; lifecycleRevision?: string; lastChannel?: string; lastTo?: string }
 >;
 
-const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi.hoisted(() => ({
-  readDescendantFacts: vi.fn<
-    (
-      params: Parameters<typeof createRequesterDescendantReader>[0],
-    ) => ReturnType<ReturnType<typeof createRequesterDescendantReader>>
-  >(async () => ({ unsettled: false, active: 0 })),
-  findTranscriptEventMock: vi.fn<
-    typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent
-  >(async () => undefined),
-  registryRuntimeMock: {
-    getLatestLiveSubagentRunByChildSessionKey: vi.fn<
+type FindRun = (
+  sessionKey: string,
+  matches?: (entry: SubagentRunRecord) => boolean,
+) => SubagentRunRecord | undefined;
+export const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi.hoisted(
+  () => ({
+    readDescendantFacts: vi.fn<
       (
-        sessionKey: string,
-        matches?: (entry: SubagentRunRecord) => boolean,
-      ) => SubagentRunRecord | undefined
-    >(() => undefined),
-    countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
-    isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
-    shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),
-    listSubagentRunsForRequester: vi.fn((_requesterSessionKey: string): unknown[] => []),
-    getLatestSubagentRunByChildSessionKey: vi.fn(
-      (
-        _childSessionKey: string,
-      ): Pick<SubagentRunRecord, "runId" | "requesterSessionKey"> | undefined => undefined,
-    ),
-    resolveRequesterForChildSession: vi.fn((_childSessionKey: string) => null),
-  },
-}));
+        params: Parameters<typeof createRequesterDescendantReader>[0],
+      ) => ReturnType<ReturnType<typeof createRequesterDescendantReader>>
+    >(async () => ({ unsettled: false, active: 0 })),
+    findTranscriptEventMock: vi.fn<
+      typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent
+    >(async () => undefined),
+    registryRuntimeMock: {
+      getLatestLiveSubagentRunByChildSessionKey: vi.fn<FindRun>(() => undefined),
+      countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
+      isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
+      shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),
+      listSubagentRunsForRequester: vi.fn(
+        (_requesterSessionKey: string): SubagentRunRecord[] => [],
+      ),
+      getLatestSubagentRunByChildSessionKey: vi.fn<FindRun>(() => undefined),
+      resolveRequesterForChildSession: vi.fn((_childSessionKey: string) => null),
+    },
+  }),
+);
 
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
@@ -110,13 +109,11 @@ vi.mock("../spawn/subagent-depth.js", () => ({
 
 const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
 
-function listedRequesterRuns(requesterSessionKey = REQUESTER): SubagentRunRecord[] {
-  return registryRuntimeMock.listSubagentRunsForRequester(
-    requesterSessionKey,
-  ) as SubagentRunRecord[];
+export function listedRequesterRuns(requesterSessionKey = REQUESTER): SubagentRunRecord[] {
+  return registryRuntimeMock.listSubagentRunsForRequester(requesterSessionKey);
 }
 
-function wakeParams(
+export function wakeParams(
   overrides?: Partial<Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]>,
 ) {
   return {
@@ -171,27 +168,3 @@ afterEach(() => {
 export function setSessionStore(store: typeof sessionStore): void {
   sessionStore = store;
 }
-
-export function visibleCompletion(text: string) {
-  return {
-    required: true,
-    resultText: text,
-    terminalReply: { disposition: "visible" as const, text },
-  };
-}
-
-export function pendingWake(
-  batchRunIds: string[],
-  overrides: Partial<NonNullable<SubagentRunRecord["requesterSettleWake"]>> = {},
-): NonNullable<SubagentRunRecord["requesterSettleWake"]> {
-  return { status: "pending", attemptCount: 0, batchRunIds, ...overrides };
-}
-
-export {
-  sessionStore,
-  readDescendantFacts,
-  registryRuntimeMock,
-  findTranscriptEventMock,
-  listedRequesterRuns,
-  wakeParams,
-};

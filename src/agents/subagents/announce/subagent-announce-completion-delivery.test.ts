@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -13,6 +13,7 @@ import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.j
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
 import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+import type { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
 type CompletionEvent = NonNullable<
@@ -25,29 +26,27 @@ const failedEvent = (overrides: Partial<CompletionEvent & { result: string }> = 
   ...overrides,
 });
 afterEach(() => setSubagentAnnounceDeliveryDepsForTest());
+const dispatch = vi.fn<typeof dispatchGatewayMethodInProcess>();
+beforeEach(() => {
+  dispatch.mockReset().mockResolvedValue({ status: "ok" });
+  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
+});
+const announce = (overrides: Partial<Parameters<typeof runAnnounceAgentCall>[0]> = {}) =>
+  runAnnounceAgentCall({ agentParams: {}, isExecutionAllowed: () => true, ...overrides });
 
 it("does not dispatch a private handoff after its caller has already cancelled", async () => {
   const caller = new AbortController();
   caller.abort(new Error("requester stopped"));
-  const dispatch = vi.fn(async () => {
-    throw new Error("cancelled dispatch must not start");
-  });
-  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
-  await expect(
-    runAnnounceAgentCall({
-      agentParams: {},
-      privateCompletion: true,
-      signal: caller.signal,
-      isExecutionAllowed: () => true,
-    }),
-  ).rejects.toThrow("requester stopped");
+  await expect(announce({ privateCompletion: true, signal: caller.signal })).rejects.toThrow(
+    "requester stopped",
+  );
   expect(dispatch).not.toHaveBeenCalled();
 });
 
 it("keeps genuine cancellation attached after requester execution starts", async () => {
   const caller = new AbortController();
   const started = vi.fn();
-  const dispatch = vi.fn(async (_method, _params, options) => {
+  dispatch.mockImplementation(async (_method, _params, options) => {
     options?.onExecutionStarted?.();
     return await new Promise((_resolve, reject) => {
       options?.signal?.addEventListener("abort", () => reject(options.signal?.reason as Error), {
@@ -55,13 +54,7 @@ it("keeps genuine cancellation attached after requester execution starts", async
       });
     });
   });
-  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
-  const delivery = runAnnounceAgentCall({
-    agentParams: {},
-    signal: caller.signal,
-    onExecutionStarted: started,
-    isExecutionAllowed: () => true,
-  });
+  const delivery = announce({ signal: caller.signal, onExecutionStarted: started });
   expect(started).toHaveBeenCalledOnce();
   caller.abort(new Error("requester stopped"));
   await expect(delivery).rejects.toThrow("requester stopped");
@@ -98,11 +91,10 @@ it.each([
       }),
     });
     const observedAuthority = vi.fn();
-    const dispatch = vi.fn(async () => {
+    dispatch.mockImplementation(async () => {
       observedAuthority(readOperatorToolGatewayAuthority()?.operatorRunAuthority);
       return { status: "ok" };
     });
-    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
     try {
       const delivery = runWithOperatorToolGatewayAuthority(
         {
@@ -110,12 +102,7 @@ it.each([
           scopes: ambientAuthority.scopes,
           signal: new AbortController().signal,
         },
-        () =>
-          runAnnounceAgentCall({
-            agentParams: {},
-            controllerInput: input,
-            isExecutionAllowed: () => true,
-          }),
+        () => announce({ controllerInput: input }),
       );
       if (current) {
         await expect(delivery).resolves.toEqual({ status: "ok" });
@@ -139,11 +126,8 @@ it.each(["commit", "failure", "revocation"] as const)(
     const release = createDeferredCore();
     const failed = new Error("dispatch receipt unavailable");
     let current = true;
-    const dispatch = vi.fn(async () => ({ status: "ok" }));
-    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
     try {
-      const delivery = runAnnounceAgentCall({
-        agentParams: {},
+      const delivery = announce({
         isExecutionAllowed: () => current,
         onBeforeDispatch: async () => {
           entered.resolve();
@@ -159,14 +143,12 @@ it.each(["commit", "failure", "revocation"] as const)(
       release.resolve();
       if (outcome === "commit") {
         await expect(delivery).resolves.toEqual({ status: "ok" });
-        expect(dispatch).toHaveBeenCalledOnce();
       } else if (outcome === "failure") {
         await expect(delivery).rejects.toBe(failed);
-        expect(dispatch).not.toHaveBeenCalled();
       } else {
         await expect(delivery).rejects.toThrow("subagent source lifecycle changed");
-        expect(dispatch).not.toHaveBeenCalled();
       }
+      expect(dispatch).toHaveBeenCalledTimes(outcome === "commit" ? 1 : 0);
     } finally {
       release.resolve();
     }

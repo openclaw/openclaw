@@ -3,12 +3,11 @@ import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
 import { listUnsettledRequesterChildrenInRuns } from "../registry/subagent-registry-requester-yield.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { pendingWake, visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   setSessionStore,
   registryRuntimeMock,
   wakeParams,
-  pendingWake,
-  visibleCompletion,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 import {
@@ -18,6 +17,11 @@ import {
   deliveredCallArg,
   completeBatch,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
+
+async function expectWake(delivered: boolean, calls: number, params = wakeParams()) {
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(delivered);
+  expect(deliverSpy).toHaveBeenCalledTimes(calls);
+}
 
 describe("requester pause notices", () => {
   it.each([
@@ -46,7 +50,6 @@ describe("requester pause notices", () => {
           completionTarget: parentOnly ? "parent" : undefined,
           completionRequesterSessionId: "requester-session",
           completion: { required: true },
-          delivery: { status: "pending" },
           requesterSettleWake: pendingWake(["paused-child"], {
             pauseNotice: { acknowledgment: "TURNOVER-PAUSE" },
           }),
@@ -75,10 +78,9 @@ describe("requester pause notices", () => {
             consumeSubagentPauseNotice(child);
           },
         });
-        expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
+        await expectWake(false, 1, params);
         if (replacedSession) {
           expect(child.requesterSettleWake?.pauseNotice).toBeUndefined();
-          expect(deliverSpy).toHaveBeenCalledOnce();
           return;
         }
         expect(child.requesterSettleWake).toMatchObject({
@@ -86,10 +88,11 @@ describe("requester pause notices", () => {
           pauseNotice: { acknowledgment: "TURNOVER-PAUSE" },
         });
         const firstKey = deliveredCallArg().directIdempotencyKey;
-        expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
-        expect(deliverSpy).toHaveBeenCalledTimes(2);
-        expect(deliverSpy.mock.calls[1]?.[0].directIdempotencyKey).toBe(firstKey);
-        expect(deliverSpy.mock.calls[1]?.[0].triggerMessage).toContain("TURNOVER-PAUSE");
+        await expectWake(true, 2, params);
+        expect(deliverSpy.mock.calls[1]?.[0]).toMatchObject({
+          directIdempotencyKey: firstKey,
+          triggerMessage: expect.stringContaining("TURNOVER-PAUSE"),
+        });
         expect(child.requesterSettleWake?.pauseNotice).toBeUndefined();
         expect(child.pauseReason).toBe("sessions_yield");
       } finally {
@@ -102,7 +105,6 @@ describe("requester pause notices", () => {
     const child = makeSettledChild({
       runId: "run-b",
       outcome: { status: "error", error: "interrupted before pausing" },
-      delivery: { status: "pending" },
       completion: visibleCompletion("Final interruption result"),
       requesterSettleWake: pendingWake(["run-b"], {
         pauseNotice: { acknowledgment: "OBSOLETE-PAUSE-INTENT" },
@@ -116,8 +118,7 @@ describe("requester pause notices", () => {
       expect(isSourceSessionEffectsAllowed()).toBe(true);
       return { delivered: true, path: "direct" };
     });
-    await expect(maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).resolves.toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
+    await expectWake(true, 1);
     expect(deliveredCallArg().triggerMessage).toContain("Final interruption result");
     expect(deliveredCallArg().triggerMessage).not.toContain("OBSOLETE-PAUSE-INTENT");
     expect(deliveredCallArg().triggerMessage).not.toContain('"state":"paused"');
@@ -130,7 +131,6 @@ describe("requester pause notices", () => {
       runId: "run-b",
       label: "landing child",
       pauseReason: "sessions_yield",
-      delivery: { status: "pending" },
       requesterSettleWake: pendingWake(batchRunIds, {
         requesterYieldBatch: true,
         rearmGeneration: 1,
@@ -164,8 +164,7 @@ describe("requester pause notices", () => {
       expect(child.requesterSettleWake?.batchRunIds).toEqual(["run-a", "run-b"]);
       return { delivered: true, path: "direct" };
     });
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
+    await expectWake(true, 1, params);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).toContain('"state":"paused"');
     expect(message).toContain('"runId":"run-b"');
@@ -200,8 +199,7 @@ describe("requester pause notices", () => {
         expect.objectContaining({ runId: child.runId, state: "paused" }),
       ]),
     });
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
-    expect(deliverSpy).toHaveBeenCalledOnce();
+    await expectWake(false, 1, params);
 
     child.pauseReason = undefined;
     child.execution = { status: "running", startedAt: 4_000 };
@@ -210,14 +208,12 @@ describe("requester pause notices", () => {
       entry.execution = { status: "terminal", endedAt: 5_000, outcome: { status: "ok" } };
       entry.completion = visibleCompletion(`completed ${entry.runId}`);
     }
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledTimes(2);
+    await expectWake(true, 2, params);
     expect(deliverSpy.mock.calls[1]?.[0].triggerMessage).toContain("completed run-b");
     expect(deliverSpy.mock.calls[1]?.[0].directIdempotencyKey).not.toBe(
       deliveredCallArg().directIdempotencyKey,
     );
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
-    expect(deliverSpy).toHaveBeenCalledTimes(2);
+    await expectWake(false, 2, params);
   });
 
   it.each([
@@ -230,7 +226,6 @@ describe("requester pause notices", () => {
     // continues the paused work; with one it is an independent sibling.
     const child = makeSettledChild({
       runId: "run-b",
-      delivery: { status: "pending" },
       ...(paused
         ? { pauseReason: "sessions_yield" as const }
         : { completion: visibleCompletion("Completed before follow-up") }),
@@ -257,9 +252,6 @@ describe("requester pause notices", () => {
         ),
     );
 
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).resolves.toBe(delivered);
-    expect(deliverSpy).toHaveBeenCalledTimes(delivered ? 1 : 0);
+    await expectWake(delivered, delivered ? 1 : 0, wakeParams({ settledEntry: child }));
   });
 });

@@ -153,26 +153,20 @@ vi.mock("../registry/subagent-registry.js", () => ({
 }));
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
-type AnnounceFlowParams = Parameters<
-  typeof import("./subagent-announce.js").runSubagentAnnounceFlow
->[0];
-
-const baseAnnounceFlowParams = {
-  childSessionKey: "agent:main:subagent:worker",
-  requesterSessionKey: "agent:main:main",
-  task: "do thing",
-  timeoutMs: 1_000,
-  cleanup: "keep",
-  roundOneReply: "done",
-  outcome: { status: "ok" as const },
-} satisfies Omit<AnnounceFlowParams, "childRunId">;
+type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
 
 async function runAnnounceFlowForTest(
   childRunId: string,
   overrides: Partial<AnnounceFlowParams> = {},
 ): ReturnType<typeof runSubagentAnnounceFlow> {
   return await runSubagentAnnounceFlow({
-    ...baseAnnounceFlowParams,
+    childSessionKey: "agent:main:subagent:worker",
+    requesterSessionKey: "agent:main:main",
+    task: "do thing",
+    timeoutMs: 1_000,
+    cleanup: "keep",
+    roundOneReply: "done",
+    outcome: { status: "ok" },
     childRunId,
     ...overrides,
   });
@@ -218,12 +212,15 @@ describe("subagent announce timeout config", () => {
       requesterOrigin: { channel: "discord", to: "channel:cron-results", accountId: "acct-1" },
     });
 
-    const params = findFinalDirectAgentCall()?.params;
-    expect(params?.sessionKey).toBe(cronSessionKey);
-    expect(params?.deliver).toBe(false);
-    expect(params?.channel).toBeUndefined();
-    expect(params?.to).toBeUndefined();
-    expect(params?.accountId).toBeUndefined();
+    const { sessionKey, deliver, channel, to, accountId } =
+      findFinalDirectAgentCall()?.params ?? {};
+    expect({ sessionKey, deliver, channel, to, accountId }).toEqual({
+      sessionKey: cronSessionKey,
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+    });
   });
 
   it("uses timeout progress without replacing an authoritative empty terminal fact", async () => {
@@ -306,35 +303,26 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.params?.message).not.toContain("older fallback");
   });
 
-  it("reports tool progress when a later tool invalidates timeout silence", async () => {
-    chatHistoryMessages = [
-      ...createTimeoutHistoryWithNoReply(),
+  it.each([
+    [
+      "reports tool progress when a later tool invalidates timeout silence",
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call2", name: "exec", arguments: {} }],
       },
-    ];
-
-    await runTimeoutFlow("run-timeout-mixed-no-reply", {
-      terminalReply: { disposition: "empty" },
-    });
-
-    expect(completionEvent()?.result).toBe("2 tool call(s) made without visible output.");
-  });
-
-  it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {
-    chatHistoryMessages = [
-      ...createTimeoutHistoryWithNoReply(),
+      "2 tool call(s) made without visible output.",
+    ],
+    [
+      "prefers later visible assistant progress over an earlier NO_REPLY marker",
       textAssistant("A longer partial summary that should stay silent."),
-    ];
-
-    await runTimeoutFlow("run-timeout-no-reply-overrides-latest-text", {
+      expect.stringContaining("A longer partial summary that should stay silent."),
+    ],
+  ] as const)("%s", async (_name, latest, expected) => {
+    chatHistoryMessages = [...createTimeoutHistoryWithNoReply(), latest];
+    await runTimeoutFlow("run-timeout-latest-progress", {
       terminalReply: { disposition: "empty" },
     });
-
-    expect(completionEvent()?.result).toContain(
-      "A longer partial summary that should stay silent.",
-    );
+    expect(completionEvent()?.result).toEqual(expected);
   });
 });
 
