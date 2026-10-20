@@ -8,6 +8,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
+import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 type GatewayRequest = { method: string; params?: Record<string, unknown> };
@@ -232,19 +233,20 @@ describe("openclaw session lookup context", () => {
     });
   });
 
-  it("resolves a scoped agent key before synchronous tool construction", () => {
-    let constructionError: unknown;
-    try {
+  it("constructs tools with the scoped owner before synchronous preparation", async () => {
+    setEmbeddedMode(true);
+    const tools = withLegacySessionCapabilityRead(() =>
       createOpenClawTools({
         agentSessionKey: "agent:research:dashboard:control",
         runSessionKey: "global",
         config: { agents: { ownership: "explicit", entries: { main: {}, research: {} } } },
+        disablePluginTools: true,
         wrapBeforeToolCallHook: false,
-      });
-    } catch (error) {
-      constructionError = error;
-    }
-    expect(String(constructionError)).not.toContain("Multiple agents are configured");
+      }),
+    );
+    expect(tools.length).toBeGreaterThan(0);
+    await requireTool(tools, "sessions_search").execute("scoped-owner", { query: "needle" });
+    expectGateway("sessions.search", { agentId: "research" });
   });
 
   it("accepts an explicit execution owner before outer tool construction", () => {
