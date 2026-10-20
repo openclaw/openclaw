@@ -79,6 +79,23 @@ async function readMenuColors(page: Page): Promise<{ background: string; foregro
 let browser: Browser;
 let fixtureServer: FixtureServer;
 
+async function withFixturePage(
+  run: (page: Page) => Promise<void>,
+  options: Parameters<Browser["newPage"]>[0] = {},
+) {
+  const page = await browser.newPage(options);
+  try {
+    await run(page);
+  } finally {
+    await page.close();
+  }
+}
+
+async function openPreviewChat(page: Page) {
+  await page.goto(new URL("/chat", fixtureServer.url).toString());
+  await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+}
+
 async function requestPreviewGateway(
   page: Page,
   requests: Array<{ method: string; params?: unknown }>,
@@ -112,10 +129,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   });
 
   it("correlates concurrent caretaker replies with their original requests", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+    await withFixturePage(async (page) => {
+      await openPreviewChat(page);
       const replies = await requestPreviewGateway(page, [
         { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
         { method: "openclaw.chat", params: { sessionId: "welcome" } },
@@ -124,16 +139,12 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         { sessionId: "delayed", reply: expect.stringContaining("demo turn 0") },
         { sessionId: "welcome", reply: expect.stringContaining("system caretaker") },
       ]);
-    } finally {
-      await page.close();
-    }
+    });
   });
 
   it("keeps renamed preview groups authoritative across reads and reloads", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+    await withFixturePage(async (page) => {
+      await openPreviewChat(page);
       await requestPreviewGateway(page, [
         { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
       ]);
@@ -146,84 +157,75 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
         ]);
       }
-    } finally {
-      await page.close();
-    }
+    });
   });
 
-  it.each([
-    {
-      sessionKey: "agent:main:tax-research",
-      user: "Inspect this session.",
-      assistant: "The current state is available in the session controls.",
-    },
-  ])(
-    "serves preview session $sessionKey through both chat entry points",
-    async ({ sessionKey, user, assistant }) => {
-      const page = await browser.newPage();
-      try {
-        await page.goto(new URL("/chat", fixtureServer.url).toString());
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        const sampledAt = 1_790_598_431_356;
-        await page.clock.setFixedTime(sampledAt);
-        const [description] = (await requestPreviewGateway(page, [
-          { method: "sessions.describe", params: { key: sessionKey } },
-        ])) as Array<{ session: { sessionId: string; snapshotAt: number } }>;
-        expect(description).toMatchObject({
-          session: { key: sessionKey, sessionId: expect.any(String), snapshotAt: sampledAt },
-        });
-        // Each projection samples its read clock, not the stored row. Advance
-        // Date without delaying timers so descriptor/history/startup cannot
-        // accidentally pass by sharing one millisecond.
-        const replies: unknown[] = [];
-        for (const [index, method] of ["chat.history", "chat.startup"].entries()) {
-          await page.clock.setFixedTime(sampledAt + index + 1);
-          const [reply] = await requestPreviewGateway(page, [{ method, params: { sessionKey } }]);
-          replies.push(reply);
-        }
-        const userMessage = expect.objectContaining({
-          role: "user",
-          content: [{ type: "text", text: expect.stringContaining(user) }],
-        });
-        const assistantMessage = expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: expect.stringContaining(assistant) }],
-        });
-        for (const [index, reply] of replies.entries()) {
-          expect(reply).toMatchObject({
-            sessionId: description!.session.sessionId,
-            sessionInfo: { ...description!.session, snapshotAt: sampledAt + index + 1 },
-            messages: expect.arrayContaining([userMessage, assistantMessage]),
-          });
-          const messages = asNullableRecord(reply)?.messages;
-          if (!Array.isArray(messages)) {
-            throw new Error("Background task history must contain messages");
-          }
-          const userIndex = messages.findIndex((message) => userMessage.asymmetricMatch(message));
-          const assistantIndex = messages.findIndex((message) =>
-            assistantMessage.asymmetricMatch(message),
-          );
-          expect(userIndex).toBeLessThan(assistantIndex);
-        }
-        const history = asNullableRecord(replies[0]);
-        expect(replies[1]).toMatchObject({
-          ...history,
-          sessionInfo: {
-            ...asNullableRecord(history?.sessionInfo),
-            snapshotAt: sampledAt + 2,
-          },
-        });
-      } finally {
-        await page.close();
+  it("serves preview session agent:main:tax-research through both chat entry points", async () => {
+    const sessionKey = "agent:main:tax-research";
+    await withFixturePage(async (page) => {
+      await openPreviewChat(page);
+      const sampledAt = 1_790_598_431_356;
+      await page.clock.setFixedTime(sampledAt);
+      const [description] = (await requestPreviewGateway(page, [
+        { method: "sessions.describe", params: { key: sessionKey } },
+      ])) as Array<{ session: { sessionId: string; snapshotAt: number } }>;
+      expect(description).toMatchObject({
+        session: { key: sessionKey, sessionId: expect.any(String), snapshotAt: sampledAt },
+      });
+      // Each projection samples its read clock, not the stored row. Advance
+      // Date without delaying timers so descriptor/history/startup cannot
+      // accidentally pass by sharing one millisecond.
+      const replies: unknown[] = [];
+      for (const [index, method] of ["chat.history", "chat.startup"].entries()) {
+        await page.clock.setFixedTime(sampledAt + index + 1);
+        const [reply] = await requestPreviewGateway(page, [{ method, params: { sessionKey } }]);
+        replies.push(reply);
       }
-    },
-  );
+      const userMessage = expect.objectContaining({
+        role: "user",
+        content: [{ type: "text", text: expect.stringContaining("Inspect this session.") }],
+      });
+      const assistantMessage = expect.objectContaining({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining(
+              "The current state is available in the session controls.",
+            ),
+          },
+        ],
+      });
+      for (const [index, reply] of replies.entries()) {
+        expect(reply).toMatchObject({
+          sessionId: description!.session.sessionId,
+          sessionInfo: { ...description!.session, snapshotAt: sampledAt + index + 1 },
+          messages: expect.arrayContaining([userMessage, assistantMessage]),
+        });
+        const messages = asNullableRecord(reply)?.messages;
+        if (!Array.isArray(messages)) {
+          throw new Error("Background task history must contain messages");
+        }
+        const userIndex = messages.findIndex((message) => userMessage.asymmetricMatch(message));
+        const assistantIndex = messages.findIndex((message) =>
+          assistantMessage.asymmetricMatch(message),
+        );
+        expect(userIndex).toBeLessThan(assistantIndex);
+      }
+      const history = asNullableRecord(replies[0]);
+      expect(replies[1]).toMatchObject({
+        ...history,
+        sessionInfo: {
+          ...asNullableRecord(history?.sessionInfo),
+          snapshotAt: sampledAt + 2,
+        },
+      });
+    });
+  });
 
   it("keeps the main preview run active when hydrating canonical session metadata", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+    await withFixturePage(async (page) => {
+      await openPreviewChat(page);
       expect(
         await requestPreviewGateway(page, [
           { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
@@ -235,16 +237,12 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         },
       ]);
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
-    } finally {
-      await page.close();
-    }
+    });
   });
 
   it("keeps generated search-session metadata in the canonical fixture catalog", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+    await withFixturePage(async (page) => {
+      await openPreviewChat(page);
       const replies = await requestPreviewGateway(
         page,
         ["telegram", "claude"].map((search) => ({
@@ -267,9 +265,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           ]),
         },
       ]);
-    } finally {
-      await page.close();
-    }
+    });
   });
 
   it("keeps synthetic avatar requests on the preview origin across reloads", async () => {
@@ -759,8 +755,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   }
 
   it("renders consistent menu options with a leading trash icon", async () => {
-    const page = await browser.newPage();
-    try {
+    await withFixturePage(async (page) => {
       await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
       await openWidgetMenu(page);
       const presentation = await page
@@ -795,26 +790,22 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         iconHidden: "true",
         iconSvg: true,
       });
-    } finally {
-      await page.close();
-    }
+    });
   });
 
   it("follows live system color-scheme changes", async () => {
-    const context = await browser.newContext({ colorScheme: "dark" });
-    try {
-      const page = await context.newPage();
-      await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
-      await page.emulateMedia({ colorScheme: "light" });
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-    } finally {
-      await context.close();
-    }
+    await withFixturePage(
+      async (page) => {
+        await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+        await page.emulateMedia({ colorScheme: "light" });
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+      },
+      { colorScheme: "dark" },
+    );
   });
 
   it("opens a visible catalog session with its transcript in chronological order", async () => {
-    const page = await browser.newPage();
-    try {
+    await withFixturePage(async (page) => {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
       // External catalog sessions have no human owner.
       await selectAllSidebarSessions(page);
@@ -839,14 +830,11 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           .getByText("Cannot read properties of undefined (reading 'toReversed')", { exact: false })
           .count(),
       ).toBe(0);
-    } finally {
-      await page.close();
-    }
+    });
   });
 
   it("starts with aligned build identity and an upgraded chat pane", async () => {
-    const page = await browser.newPage();
-    try {
+    await withFixturePage(async (page) => {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
       expect(await page.locator(".community-invite-card").count()).toBe(0);
       await selectAllSidebarSessions(page);
@@ -877,14 +865,11 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         upgraded: true,
       });
       expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
-    } finally {
-      await page.close();
-    }
+    });
   });
 
   it("renders a deterministic reply after generic chat.send", async () => {
-    const page = await browser.newPage();
-    try {
+    await withFixturePage(async (page) => {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
       await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
@@ -902,9 +887,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         .getByText(`Mock reply: ${prompt}`, { exact: true })
         .waitFor();
       expect(await composer.inputValue()).toBe("");
-    } finally {
-      await page.close();
-    }
+    });
   });
 });
 

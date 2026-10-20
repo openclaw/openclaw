@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { SessionBackground } from "../components/session-background.tsx";
@@ -9,6 +10,19 @@ import { configResponse } from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Personal background first-paint readiness" });
+
+function backgroundOf(page: Page) {
+  const element = page.locator("openclaw-session-background").first();
+  return {
+    element,
+    source: () =>
+      element.evaluate(
+        (node) => (node as SessionBackground).context?.theme.settings.background?.source.kind,
+      ),
+  };
+}
+
+const preferences = (entries: Record<string, unknown>) => ({ status: "ok", entries });
 
 suite.define(() => {
   it.each(["none", "custom"] as const)(
@@ -32,42 +46,22 @@ suite.define(() => {
         });
         await page.goto(suite.server.baseUrl + "new");
         await gateway.waitForRequest("users.prefs.get");
-        await gateway.resolveDeferred("users.prefs.get", {
-          status: "ok",
-          entries: { "ui.background": custom },
-        });
+        await gateway.resolveDeferred("users.prefs.get", preferences({ "ui.background": custom }));
         await expect.poll(() => reads.length).toBe(1);
         reads.length = 0;
         await page.reload();
         await gateway.waitForRequest("users.prefs.get");
-        const background = page.locator("openclaw-session-background").first();
-        await expect
-          .poll(() =>
-            background.evaluate(
-              (element) =>
-                (element as SessionBackground).context?.theme.settings.background?.source.kind,
-            ),
-          )
-          .toBe("custom");
+        const { element: background, source } = backgroundOf(page);
+        await expect.poll(source).toBe("custom");
         await background.evaluate(async (element) => {
           await (element as SessionBackground).updateComplete;
         });
         expect(await background.getAttribute("data-custom")).toBeNull();
         expect(reads).toEqual([]);
         const saved = choice === "none" ? selectBackgroundSource({ kind: "none" }) : custom;
-        await gateway.resolveDeferred("users.prefs.get", {
-          status: "ok",
-          entries: { "ui.background": saved },
-        });
+        await gateway.resolveDeferred("users.prefs.get", preferences({ "ui.background": saved }));
         if (choice === "none") {
-          await expect
-            .poll(() =>
-              background.evaluate(
-                (element) =>
-                  (element as SessionBackground).context?.theme.settings.background?.source.kind,
-              ),
-            )
-            .toBe("none");
+          await expect.poll(source).toBe("none");
           expect(await background.getAttribute("data-custom")).toBeNull();
           expect(reads).toEqual([]);
         } else {
@@ -95,7 +89,7 @@ suite.define(() => {
             deferredMethods: ["users.prefs.get"],
             methodResponses: {
               "config.get": configResponse({ themeMode: "dark" }, "background-startup"),
-              "users.prefs.get": { status: "ok", entries },
+              "users.prefs.get": preferences(entries),
             },
           });
           const imageRequests: string[] = [];
@@ -126,20 +120,9 @@ suite.define(() => {
               shell.evaluate((element) => getComputedStyle(element).backgroundImage);
             expect(await shellImage()).toBe("none");
             expect(imageRequests).toEqual([]);
-            await gateway.resolveDeferred("users.prefs.get", { status: "ok", entries });
+            await gateway.resolveDeferred("users.prefs.get", preferences(entries));
             if (choice === "none") {
-              await expect
-                .poll(() =>
-                  page
-                    .locator("openclaw-session-background")
-                    .first()
-                    .evaluate(
-                      (element) =>
-                        (element as SessionBackground).context?.theme.settings.background?.source
-                          .kind,
-                    ),
-                )
-                .toBe("none");
+              await expect.poll(backgroundOf(page).source).toBe("none");
               expect(await shellImage()).toBe("none");
               expect(await page.locator(".session-background__image").count()).toBe(0);
               expect(imageRequests).toEqual([]);

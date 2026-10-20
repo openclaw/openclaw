@@ -89,9 +89,9 @@ function paramsOf(rpc: BackgroundWorkRpc): Record<string, unknown> {
   return rpc.request.params as Record<string, unknown>;
 }
 
-function payloadOf(rpc: BackgroundWorkRpc): unknown {
+function payloadOf<T = unknown>(rpc: BackgroundWorkRpc): T {
   expect(rpc.response.ok, JSON.stringify(rpc.response.error)).toBe(true);
-  return rpc.response.payload;
+  return rpc.response.payload as T;
 }
 
 async function capture(page: Page, name: string, focus: Locator) {
@@ -152,6 +152,19 @@ suite.define(() => {
         });
         const page = await context.newPage();
         const wire = observeBackgroundWorkRpc(page, signal);
+        const waitForPayload = async <T>(
+          method: string,
+          matches: (payload: T | undefined, rpc: BackgroundWorkRpc) => boolean,
+          after = 0,
+        ) =>
+          payloadOf<T>(
+            await wire.waitFor(
+              (rpc) =>
+                rpc.request.method === method &&
+                matches(rpc.response.payload as T | undefined, rpc),
+              after,
+            ),
+          );
         // The scenario aborts before closing the page, including native test timeouts.
         const logFailure = () =>
           console.error(
@@ -241,15 +254,10 @@ suite.define(() => {
           .getAttribute("data-session-key");
         expect(childKey).toMatch(/^agent:main:subagent:/);
         proof.stage = "wait for child roster response";
-        const roster = payloadOf(
-          await wire.waitFor(
-            (rpc) =>
-              rpc.request.method === "sessions.list" &&
-              (rpc.response.payload as SessionsListResult | undefined)?.sessions?.some(
-                (row) => row.key === childKey,
-              ) === true,
-          ),
-        ) as SessionsListResult;
+        const roster = await waitForPayload<SessionsListResult>(
+          "sessions.list",
+          (payload) => payload?.sessions?.some((row) => row.key === childKey) === true,
+        );
         const childRow = roster.sessions.find((row) => row.key === childKey)!;
         // Ordinary list rows may omit activeRunIds. Do not invent a singleton to enable row Stop.
         proof.child = {
@@ -263,14 +271,10 @@ suite.define(() => {
         proof.stage = "wait for child task transcript";
         await detail.getByText(fixture.childTask, { exact: false }).waitFor();
         proof.stage = "observe child in-flight startup response";
-        const history = payloadOf(
-          await wire.waitFor(
-            (rpc) =>
-              rpc.request.method === "chat.startup" &&
-              paramsOf(rpc).sessionKey === childKey &&
-              Boolean((rpc.response.payload as ChatHistoryResult | undefined)?.inFlightRun),
-          ),
-        ) as ChatHistoryResult;
+        const history = await waitForPayload<ChatHistoryResult>(
+          "chat.startup",
+          (payload, rpc) => paramsOf(rpc).sessionKey === childKey && Boolean(payload?.inFlightRun),
+        );
         const run = history.inFlightRun!;
         proof.childHistory = { runId: run.runId, sessionAbortable: run.sessionAbortable ?? false };
         expect(run.runId).toBeTruthy();
@@ -289,16 +293,12 @@ suite.define(() => {
         await openChatSidePanelType(page, "Processes");
         const processes = parent.locator("openclaw-chat-processes-panel");
         proof.stage = "wait for process list with retained output";
-        const processList = payloadOf(
-          await wire.waitFor(
-            (rpc) =>
-              rpc.request.method === "sessions.processes.list" &&
-              paramsOf(rpc).key === fixture.key &&
-              (rpc.response.payload as SessionsProcessesListResult | undefined)?.processes?.some(
-                (row) => row.tail.includes(fixture.output),
-              ) === true,
-          ),
-        ) as SessionsProcessesListResult;
+        const processList = await waitForPayload<SessionsProcessesListResult>(
+          "sessions.processes.list",
+          (payload, rpc) =>
+            paramsOf(rpc).key === fixture.key &&
+            payload?.processes?.some((row) => row.tail.includes(fixture.output)) === true,
+        );
         expect(processList.processes).toHaveLength(1);
         const processRow = processList.processes[0]!;
         expect(processRow).toMatchObject({ status: "running", canStop: true, truncated: false });
@@ -350,7 +350,7 @@ suite.define(() => {
           runId: run.runId,
         });
         expect(paramsOf(stoppedChild).clearQueued).toBeUndefined();
-        const childReply = payloadOf(stoppedChild) as Record<string, unknown>;
+        const childReply = payloadOf<Record<string, unknown>>(stoppedChild);
         if (run.sessionAbortable) {
           expect(childReply).toMatchObject({
             ok: true,
@@ -403,24 +403,23 @@ suite.define(() => {
           processId: processRow.processId,
           instanceId: processRow.instanceId,
         });
-        expect(payloadOf(stoppedProcess) as SessionsProcessesStopResult).toEqual({
+        expect(payloadOf<SessionsProcessesStopResult>(stoppedProcess)).toEqual({
           requested: true,
         });
         proof.stage = "settle process cancellation and observe terminal response";
         await provider.wait(provider.processClosed, signal);
-        const terminal = (
-          payloadOf(
-            await wire.waitFor(
-              (rpc) =>
-                rpc.request.method === "sessions.processes.list" &&
-                paramsOf(rpc).key === fixture.key &&
-                (rpc.response.payload as SessionsProcessesListResult | undefined)?.processes?.some(
-                  (row) => row.instanceId === processRow.instanceId && row.status !== "running",
-                ) === true,
-              beforeProcessStop,
-            ),
-          ) as SessionsProcessesListResult
-        ).processes.find((row) => row.instanceId === processRow.instanceId)!;
+        const terminalList = await waitForPayload<SessionsProcessesListResult>(
+          "sessions.processes.list",
+          (payload, rpc) =>
+            paramsOf(rpc).key === fixture.key &&
+            payload?.processes?.some(
+              (row) => row.instanceId === processRow.instanceId && row.status !== "running",
+            ) === true,
+          beforeProcessStop,
+        );
+        const terminal = terminalList.processes.find(
+          (row) => row.instanceId === processRow.instanceId,
+        )!;
         expect(terminal).toMatchObject({
           processId: processRow.processId,
           status: "killed",
@@ -432,17 +431,23 @@ suite.define(() => {
         await processStop.waitFor({ state: "hidden" });
         await processes.getByRole("button", { name: "Back to Processes", exact: true }).click();
         const finishedToggle = processes.getByRole("button", { name: "Finished (1)", exact: true });
-        await finishedToggle.waitFor();
-        expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
-        expect(await processOpen.count()).toBe(0);
-        await finishedToggle.click();
-        await processOpen.click();
-        expect(await processes.locator("pre").textContent()).toContain(fixture.output);
-        await capture(
-          page,
-          "mobile-process-stopped-output",
-          processes.getByRole("button", { name: "Back to Processes", exact: true }),
-        );
+        const reopenFinished = async (screenshot: string, waitForRow = false) => {
+          await finishedToggle.waitFor();
+          expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
+          expect(await processOpen.count()).toBe(0);
+          await finishedToggle.click();
+          if (waitForRow) {
+            await processOpen.waitFor();
+          }
+          await processOpen.click();
+          expect(await processes.locator("pre").textContent()).toContain(fixture.output);
+          await capture(
+            page,
+            screenshot,
+            processes.getByRole("button", { name: "Back to Processes", exact: true }),
+          );
+        };
+        await reopenFinished("mobile-process-stopped-output");
         await assertParent();
         proof.processStop = {
           params: paramsOf(stoppedProcess),
@@ -457,18 +462,7 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await composer.waitFor();
         await assertParent();
-        await finishedToggle.waitFor();
-        expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
-        expect(await processOpen.count()).toBe(0);
-        await finishedToggle.click();
-        await processOpen.waitFor();
-        await processOpen.click();
-        expect(await processes.locator("pre").textContent()).toContain(fixture.output);
-        await capture(
-          page,
-          "desktop-reloaded-process-output",
-          processes.getByRole("button", { name: "Back to Processes", exact: true }),
-        );
+        await reopenFinished("desktop-reloaded-process-output", true);
         await switchTab("Subagents");
         await childOpen.click();
         await detail.getByText(fixture.childText, { exact: true }).waitFor();
