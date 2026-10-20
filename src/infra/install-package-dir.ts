@@ -326,11 +326,8 @@ export async function installPackageDir<
     assertCurrent();
     assertDirectoryIdentity(installBaseRealPath, baseIdentity);
   };
-  const assertInstallCustody = retainMutationAuthority(() => {
+  const assertPersistentApply = retainMutationAuthority(() => {
     assertRollbackOwned();
-  });
-  const assertPublicationAuthority = retainMutationAuthority(() => {
-    assertInstallCustody();
     return params.beforePersistentApply?.();
   });
   const removeInstallTree = async (removal: {
@@ -621,8 +618,8 @@ export async function installPackageDir<
         await params.authorizeMutation();
       }
       await movePathWithCopyFallback({
-        assertBeforeRename: assertPublicationAuthority,
-        assertBeforeMutation: assertInstallCustody,
+        assertBeforeRename: assertPersistentApply,
+        assertBeforeMutation: assertPersistentApply,
         onDestinationPublished: (receipt) => {
           published.backup = receipt;
         },
@@ -658,8 +655,8 @@ export async function installPackageDir<
       await params.authorizeMutation();
     }
     await movePathWithCopyFallback({
-      assertBeforeRename: assertPublicationAuthority,
-      assertBeforeMutation: assertInstallCustody,
+      assertBeforeRename: assertPersistentApply,
+      assertBeforeMutation: assertPersistentApply,
       onDestinationPublished: (receipt) => {
         published.install = receipt;
       },
@@ -692,7 +689,7 @@ export async function installPackageDir<
     await removeInstallTree({
       directory: published.backup.path,
       identity: published.backup,
-      assertOwner: assertInstallCustody,
+      assertOwner: assertPersistentApply,
       bestEffort: true,
     });
   }

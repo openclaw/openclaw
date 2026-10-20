@@ -594,4 +594,39 @@ describe("skill upload gateway handlers", () => {
       fs.readFile(path.join(workspaceDir, "skills", slug, "SKILL.md"), "utf8"),
     ).resolves.toContain("second version");
   });
+
+  it("fails before publication when lease loss is confirmed", async () => {
+    const { handlers, install: installArchive, stateDir, workspaceDir } = await makeHarness();
+    const slug = "lost-before-apply";
+    const archive = await makeSkillArchive({ name: "Lost Before Apply", body: "unpublished" });
+    const { uploadId } = await uploadArchive(handlers, { archive, slug });
+
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    const renewalSettled = observeSkillUploadRenewal();
+    installSecurityScanState.evaluateSkillInstallPolicy.mockImplementationOnce(async () => {
+      uploadDb(stateDir)
+        .prepare(
+          "UPDATE state_leases SET expires_at = ? WHERE scope = 'skill-upload-install' AND lease_key = ?",
+        )
+        .run(Date.now() - 1, uploadId);
+      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 30_000)?.[0];
+      if (!heartbeat) {
+        throw new Error("Install heartbeat was not scheduled");
+      }
+      heartbeat();
+      await renewalSettled;
+      return undefined;
+    });
+
+    try {
+      const install = await installArchive(uploadId, slug);
+      expectRejected(install, "UNAVAILABLE", "upload install lease is no longer active");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await expectPathMissing(path.join(workspaceDir, "skills", slug));
+    expect(skillUploadExists(stateDir, uploadId)).toBe(true);
+  });
 });

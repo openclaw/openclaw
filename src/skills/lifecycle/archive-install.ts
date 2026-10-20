@@ -94,7 +94,10 @@ function archiveFailureKind(error: string): SkillArchiveInstallFailureKind {
 }
 
 export async function installExtractedSkillRoot(
-  params: SkillRootInstallFiles & { policy?: SkillArchiveInstallPolicy },
+  params: SkillRootInstallFiles & {
+    policy?: SkillArchiveInstallPolicy;
+    authorizeMutation?: () => Promise<void>;
+  },
 ): Promise<SkillArchiveInstallResult> {
   try {
     const changeSource = resolveCommittedSkillChangeSource(params.policy?.origin.type);
@@ -116,13 +119,15 @@ export async function installExtractedSkillRoot(
         "Transactional ClawHub skill replacement is unavailable for a remote workspace",
       );
     }
-    const applyRoot = access?.applySkillRoot ?? applyExtractedSkillRoot;
-    const { policy: _policy, ...files } = params;
+    const remoteApplyRoot = access?.applySkillRoot;
+    const { policy: _policy, authorizeMutation, ...files } = params;
     params.beforePersistentApply?.();
-    const result = await applyRoot({
+    const applyParams = {
       ...files,
       ...(captureChanges ? { changes: { source: changeSource, sourceVersion } } : {}),
-      beforeInstall: async (mode) => {
+      beforeInstall: async (
+        mode: "install" | "update",
+      ): Promise<{ error: string; failureKind: SkillArchiveInstallFailureKind } | undefined> => {
         if (!params.policy) {
           return undefined;
         }
@@ -149,7 +154,10 @@ export async function installExtractedSkillRoot(
             }
           : undefined;
       },
-    });
+    };
+    const result = remoteApplyRoot
+      ? await remoteApplyRoot(applyParams)
+      : await applyExtractedSkillRoot({ ...applyParams, authorizeMutation });
     if (!result.ok) {
       return result;
     }
@@ -329,6 +337,7 @@ export async function installSkillArchiveFromPath(params: {
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
   beforePersistentApply?: () => void;
+  authorizeMutation?: () => Promise<void>;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -346,6 +355,7 @@ export async function installSkillArchiveFromPath(params: {
         logger: params.logger,
         policy: params.policy,
         beforePersistentApply: params.beforePersistentApply,
+        authorizeMutation: params.authorizeMutation,
       }),
   });
   if (!result.ok) {
