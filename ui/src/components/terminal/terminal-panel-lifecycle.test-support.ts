@@ -1,13 +1,46 @@
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTestTerminalPanel,
+  createTerminalController,
+  defineTestTerminalPanelElement,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
+
+export function panelFixture(timers = false, afterUnmount = () => {}, autoCreate = true) {
+  const create: CreateGhosttyTerminalMock = vi.fn();
+  const tag = defineTestTerminalPanelElement(create);
+  const terminals: ReturnType<typeof createTerminalController>[] = [];
+  panelTestStorage(create, timers, afterUnmount);
+  beforeEach(() => {
+    terminals.length = 0;
+    if (autoCreate) {
+      create.mockImplementation(async () => {
+        const terminal = createTerminalController();
+        terminals.push(terminal);
+        return terminal;
+      });
+    }
+  });
+  return {
+    create,
+    terminals,
+    mount: (props: Partial<OpenClawTerminalPanel>, open = true) =>
+      mountPanel(tag, { available: true, ...props }, open),
+  };
+}
+
+export function queueCatalog(catalog: CatalogSessionKey, agentId = "ops") {
+  sessionStorage.setItem(
+    "openclaw.terminal.actions.v1",
+    JSON.stringify([{ kind: "catalog", agentId, catalog }]),
+  );
+}
 
 export function panelTestStorage(
   create: CreateGhosttyTerminalMock,
@@ -67,6 +100,8 @@ export function eventGateway(respond: (method: string, params?: unknown) => unkn
   return {
     client,
     request,
+    calls: (method: string) =>
+      request.mock.calls.filter(([name]) => name === method).map(([, params]) => params),
     emit: (event: string, payload: unknown) => {
       for (const listener of listeners) {
         listener({ event, payload });

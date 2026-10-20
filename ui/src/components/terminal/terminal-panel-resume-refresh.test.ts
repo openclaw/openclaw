@@ -10,32 +10,26 @@ import {
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  mountPanel,
-  panelTestStorage,
-  togglePanel,
-} from "./terminal-panel-lifecycle.test-support.ts";
-import {
-  createTerminalController,
-  defineTestTerminalPanelElement,
-  terminalOpenResult,
-  type CreateGhosttyTerminalMock,
-} from "./terminal-panel.test-support.ts";
+import { panelFixture, togglePanel } from "./terminal-panel-lifecycle.test-support.ts";
+import { createTerminalController, terminalOpenResult } from "./terminal-panel.test-support.ts";
 
 vi.mock("../../app/sw-refresh.runtime.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../app/sw-refresh.runtime.ts")>()),
   refreshControlUiServiceWorker: vi.fn(),
 }));
 
-const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
-const elementName = defineTestTerminalPanelElement(createGhosttyTerminalMock);
-panelTestStorage(createGhosttyTerminalMock, false, () => {
-  vi.restoreAllMocks();
-  vi.mocked(refreshControlUiServiceWorker).mockReset();
-});
+const fixture = panelFixture(
+  false,
+  () => {
+    vi.restoreAllMocks();
+    vi.mocked(refreshControlUiServiceWorker).mockReset();
+  },
+  false,
+);
+const createGhosttyTerminalMock = fixture.create;
 
 function mount(request: ReturnType<typeof createGatewayRequestMock>) {
-  return mountPanel(elementName, { client: createTestGatewayClient(request), available: true });
+  return fixture.mount({ client: createTestGatewayClient(request) });
 }
 
 const savedIds = () => sessionStorage.getItem("openclaw.terminal.sessions.v1");
@@ -62,8 +56,7 @@ it("settles availability changes while offline without repeatedly suspending the
     await vi.dynamicImportSettled();
     await panel.updateComplete;
     expect(terminal.dispose).toHaveBeenCalledOnce();
-    expect(panel.hostedTabs).toEqual([]);
-    expect(panel.terminalPanelOpen).toBe(available);
+    expect(panel).toMatchObject({ hostedTabs: [], terminalPanelOpen: available });
     expect(panel.querySelector(".tp") !== null).toBe(available);
     expect(request).not.toHaveBeenCalled();
   }
