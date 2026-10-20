@@ -49,7 +49,9 @@ async function receivedSessions(page: Page): Promise<unknown[]> {
 }
 
 suite.define(() => {
-  it.each(["roster", "preview-off"] as const)(
+  // Default rows show observer headlines only with previews on; roster rows
+  // always do.
+  it.each(["roster", "preview-on"] as const)(
     "preserves the visible consumers in %s presentation",
     async (mode) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
@@ -61,7 +63,7 @@ suite.define(() => {
           [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
             sidebarAgentsMode: mode === "roster" ? "roster" : "chip",
           }),
-          "openclaw:sidebar:sessions:show-preview": String(mode === "roster"),
+          "openclaw:sidebar:sessions:show-preview": "true",
         });
         const gateway = await installMockGateway(page, {
           sessionKey: first,
