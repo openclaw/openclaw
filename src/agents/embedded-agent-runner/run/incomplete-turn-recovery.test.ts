@@ -5,8 +5,7 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
-  resolveEmptyResponseRetryInstruction,
-  resolveReasoningOnlyRetryInstruction,
+  resolveNonVisibleTurnRetryInstructions,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import { resolveIncompleteTurnPayloadText } from "./incomplete-turn-resolution.js";
@@ -43,12 +42,15 @@ describe("incomplete-turn recovery policy", () => {
     });
 
     expect(
-      resolveReasoningOnlyRetryInstruction({
+      resolveNonVisibleTurnRetryInstructions({
+        payloadCount: 0,
+        settledToolPayloadCount: 0,
+        replyDeliveryState: "missing",
         modelApi: "openai-completions",
         aborted: false,
         timedOut: false,
         attempt: emptyAttempt(assistant),
-      }),
+      })[0],
     ).toBeNull();
   });
 
@@ -86,7 +88,11 @@ describe("incomplete-turn recovery policy", () => {
         }),
       ).toBe(true);
       expect(
-        resolveEmptyResponseRetryInstruction({ ...state, replyDeliveryState: "missing" }),
+        resolveNonVisibleTurnRetryInstructions({
+          ...state,
+          settledToolPayloadCount: 0,
+          replyDeliveryState: "missing",
+        })[1],
       ).toBeNull();
       expect(resolveIncompleteTurnPayloadText({ ...state, externalAbort: false })).toBeNull();
     },
@@ -171,7 +177,8 @@ describe("incomplete-turn recovery policy", () => {
     "returns the visible-answer prompt for $name",
     ({ provider, modelId, modelApi, assistant }) => {
       expect(
-        resolveEmptyResponseRetryInstruction({
+        resolveNonVisibleTurnRetryInstructions({
+          settledToolPayloadCount: 0,
           provider,
           modelId,
           modelApi,
@@ -180,7 +187,7 @@ describe("incomplete-turn recovery policy", () => {
           aborted: false,
           timedOut: false,
           attempt: emptyAttempt(assistant),
-        }),
+        })[1],
       ).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     },
   );
@@ -191,7 +198,8 @@ describe("incomplete-turn recovery policy", () => {
     attempt.replayMetadata = { hadPotentialSideEffects: true, replaySafe: false };
 
     expect(
-      resolveEmptyResponseRetryInstruction({
+      resolveNonVisibleTurnRetryInstructions({
+        settledToolPayloadCount: 0,
         provider: "openai",
         modelId: "gpt-5.4",
         replyDeliveryState: "missing",
@@ -199,7 +207,7 @@ describe("incomplete-turn recovery policy", () => {
         aborted: false,
         timedOut: false,
         attempt,
-      }),
+      })[1],
     ).toBeNull();
   });
 
@@ -212,14 +220,17 @@ describe("incomplete-turn recovery policy", () => {
     });
 
     expect(
-      resolveReasoningOnlyRetryInstruction({
+      resolveNonVisibleTurnRetryInstructions({
+        payloadCount: 0,
+        settledToolPayloadCount: 0,
+        replyDeliveryState: "missing",
         provider: "kimi",
         modelId: "kimi-for-coding",
         modelApi: "anthropic-messages",
         aborted: false,
         timedOut: false,
         attempt: emptyAttempt(assistant),
-      }),
+      })[0],
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 });

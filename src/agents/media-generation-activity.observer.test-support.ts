@@ -48,7 +48,7 @@ export function observeMediaActivity(
         observations.completeOperation(observation);
       } else if (update.status === "failed") {
         observations.failOperation(observation);
-      } else {
+      } else if (update.progressSummary !== undefined) {
         observations.recordProgress(observation);
       }
       actual.updateMediaGenerationOperation(runId, update);

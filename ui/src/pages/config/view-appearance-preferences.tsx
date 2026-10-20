@@ -1,4 +1,6 @@
 import { createMemo, Show, For } from "solid-js";
+import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -7,19 +9,62 @@ import {
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings.ts";
+import { Picker } from "../../components/select-picker.ts";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsDefaultDescription,
   SettingsRow,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
-import { languageLabel, LanguageSelect } from "./language-select.tsx";
+import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
-import { SessionObserverSettings } from "./session-observer-settings.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import type { ConfigProps } from "./view-types.ts";
+
+registerEnglishCatalog(registerSettingsEnglish);
+
+function languageLabel(locale: Locale) {
+  const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
+  return t(`languages.${key}`);
+}
+
+const AUTO_VALUE = "__openclaw_observer_auto__";
+
+function resolvedModelLabel(status: ConfigProps["sessionObserverResolvedModel"]): string {
+  if (!status || status.status === "unavailable") {
+    return t("configView.sessionObserver.modelUnavailable");
+  }
+  if (status.status === "disabled") {
+    return t("configView.sessionObserver.modelDisabled");
+  }
+  const runtime = formatCompletionRoute(status.runtime)?.label;
+  return t(
+    status.status === "auto"
+      ? "configView.sessionObserver.modelAuto"
+      : "configView.sessionObserver.modelConfigured",
+    { model: runtime ? `${status.model} · ${runtime}` : status.model },
+  );
+}
+
+function modelOptions(models: readonly ModelCatalogEntry[]) {
+  return dedupeByKey(
+    models
+      .filter((model) => model.available !== false)
+      .map((model) => ({
+        value: model.id.startsWith(`${model.provider}/`)
+          ? model.id
+          : `${model.provider}/${model.id}`,
+        label: model.name || model.id,
+        provider: model.provider,
+      })),
+    (model) => model.value,
+  ).toSorted((a, b) => a.label.localeCompare(b.label));
+}
 
 export { LobsterPetSection } from "./view-appearance-lobster.tsx";
 export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
@@ -41,7 +86,7 @@ export function LanguageSection(props: ConfigProps) {
       overridden={props.localeOverridden}
     />
   );
-  const provenance = createMemo(() => serverUiPrefProvenanceHint(props.localeProvenance));
+  const provenance = () => serverUiPrefProvenanceHint(props.localeProvenance);
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.language} class="settings-section">
       <SettingsSectionHeader title={t("quickSettings.language")} />
@@ -54,10 +99,21 @@ export function LanguageSection(props: ConfigProps) {
             </>
           }
           control={
-            <LanguageSelect
-              localeOverride={props.localeOverride}
-              systemLocale={props.systemLocale}
-              onLocaleChange={props.onLocaleChange}
+            <Picker
+              params={{
+                label: t("quickSettings.language"),
+                value: props.localeOverride ?? "system",
+                options: [
+                  {
+                    value: "system",
+                    label: `${t("common.system")} (${languageLabel(props.systemLocale)})`,
+                  },
+                  ...SUPPORTED_LOCALES.map((value) => ({ value, label: languageLabel(value) })),
+                ],
+                showOptionTooltips: false,
+                onChange: (value) =>
+                  props.onLocaleChange(SUPPORTED_LOCALES.find((locale) => locale === value)),
+              }}
             />
           }
         />
@@ -68,9 +124,8 @@ export function LanguageSection(props: ConfigProps) {
 function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "camera" }) {
   const state = createMemo(() => props.config[props.kind]);
   const title = createMemo(() => t(`chat.composer.${props.kind}Input`));
-  const onSelect = createMemo(() =>
-    props.kind === "microphone" ? props.config.onMicrophoneSelect : props.config.onCameraSelect,
-  );
+  const onSelect = () =>
+    props.kind === "microphone" ? props.config.onMicrophoneSelect : props.config.onCameraSelect;
   const selectedDeviceId = createMemo(() => state()?.selectedDeviceId.trim() ?? "");
   const selectOptions = createMemo(() => {
     const devices = state()?.devices ?? [];
@@ -168,13 +223,12 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
 export function ChatPreferencesSection(props: ConfigProps) {
   const followUpSelection = createMemo(() => props.chatFollowUpMode ?? "server");
   const serverQueueMode = createMemo(() => props.serverQueueMode ?? t("chat.followUpModeLoading"));
-  const followUpDescription = createMemo(() =>
+  const followUpDescription = () =>
     props.chatFollowUpMode
       ? t("chat.followUpModeOverriding", {
           mode: serverQueueMode(),
         })
-      : undefined,
-  );
+      : undefined;
   // The value binding rewrites the DOM whenever it reruns. Track only the stored
   // width so unrelated settings refreshes keep an uncommitted draft.
   const messageWidth = createMemo(() => props.chatMessageMaxWidth ?? "");
@@ -194,12 +248,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
       overridden={props.chatSendShortcutOverridden}
     />
   );
-  const sendShortcutProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.chatSendShortcutProvenance),
-  );
-  const followUpProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance),
-  );
+  const sendShortcutProvenance = () => serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
+  const followUpProvenance = () => serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
   const catalogTargetDefaultDescription = (
     <SettingsDefaultDescription
       value={t("chat.catalogOpenTargetViewer")}
@@ -385,6 +435,32 @@ export function ChatPreferencesSection(props: ConfigProps) {
 }
 export function SidebarPreferencesSection(props: ConfigProps) {
   const hiddenCatalogIds = createMemo(() => [...props.hiddenSessionCatalogIds].toSorted());
+  const selected = () =>
+    props.sessionObserverUtilityModel === undefined
+      ? AUTO_VALUE
+      : props.sessionObserverUtilityModel;
+  const options = createMemo(() => {
+    const catalog = modelOptions(props.sessionObserverModels ?? []);
+    const result = [
+      { value: AUTO_VALUE, label: t("configView.sessionObserver.auto") },
+      { value: "", label: t("configView.sessionObserver.disabled") },
+      ...(selected() !== AUTO_VALUE &&
+      selected() !== "" &&
+      !catalog.some((option) => option.value === selected())
+        ? [
+            {
+              value: selected(),
+              label: selected(),
+              disabled: props.sessionObserverModelsUnavailable === true,
+            },
+          ]
+        : []),
+      ...catalog.map((option) =>
+        Object.assign({}, option, { disabled: props.sessionObserverModelsUnavailable === true }),
+      ),
+    ];
+    return result;
+  });
 
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
@@ -437,16 +513,44 @@ export function SidebarPreferencesSection(props: ConfigProps) {
         <h3 class="settings-section__heading">{t("configView.sessionObserver.title")}</h3>
       </div>
       <p class="settings-section__desc">{t("configView.sessionObserver.hint")}</p>
-      <SessionObserverSettings
-        enabled={props.sessionObserverEnabled !== false}
-        utilityModel={props.sessionObserverUtilityModel}
-        resolvedUtilityModel={props.sessionObserverResolvedModel}
-        models={props.sessionObserverModels ?? []}
-        modelsUnavailable={props.sessionObserverModelsUnavailable === true}
-        disabled={props.sessionObserverDisabled === true}
-        onEnabledChange={(enabled) => props.setSessionObserverEnabled?.(enabled)}
-        onUtilityModelChange={(selection) => props.setSessionObserverUtilityModel?.(selection)}
-      />
+      <div class="settings-group">
+        <SettingsToggleRow
+          title={t("configView.sessionObserver.toggle")}
+          description={t("configView.sessionObserver.toggleHint")}
+          checked={props.sessionObserverEnabled !== false}
+          disabled={props.sessionObserverDisabled === true}
+          onChange={(enabled) => props.setSessionObserverEnabled?.(enabled)}
+        />
+        <SettingsRow
+          title={t("configView.sessionObserver.resolvedModel")}
+          description={resolvedModelLabel(props.sessionObserverResolvedModel)}
+        />
+        <SettingsRow
+          title={t("configView.sessionObserver.modelPicker")}
+          description={t(
+            props.sessionObserverModelsUnavailable === true
+              ? "configView.sessionObserver.modelCatalogUnavailable"
+              : "configView.sessionObserver.modelPickerHint",
+          )}
+          control={
+            <ModelPicker
+              label={t("configView.sessionObserver.modelPicker")}
+              value={selected()}
+              options={options()}
+              disabled={props.sessionObserverDisabled === true}
+              onChange={(value) =>
+                props.setSessionObserverUtilityModel?.(
+                  value === AUTO_VALUE
+                    ? { kind: "auto" }
+                    : value === ""
+                      ? { kind: "disabled" }
+                      : { kind: "model", model: value },
+                )
+              }
+            />
+          }
+        />
+      </div>
     </section>
   );
 }

@@ -100,7 +100,7 @@ type ActiveNodeInvoke = {
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
 
 function ensureNodePathEnv(): string {
-  ensureOpenClawCliOnPath({ pathEnv: process.env.PATH ?? "" });
+  ensureOpenClawCliOnPath();
   const current = process.env.PATH ?? "";
   if (current.trim()) {
     return current;

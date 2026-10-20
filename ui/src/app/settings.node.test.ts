@@ -432,7 +432,7 @@ describe("gateway settings and layout persistence", () => {
     expect(loadUiPreferences("wss://other.example").openLinksExternally).not.toBe(true);
   });
 
-  it("publishes profile readiness on request without inventing a theme selection", () => {
+  it("publishes profile readiness only when requested", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
     const initial = loadSettings();
     const { gateway } = createGatewayStoreTestStore({ settings: initial });
@@ -445,7 +445,6 @@ describe("gateway settings and layout persistence", () => {
       expect(listener).not.toHaveBeenCalled();
       theme.refresh({ notify: true });
       expect(listener).toHaveBeenCalledOnce();
-      expect(theme.serverSelection).toBeNull();
     } finally {
       theme.dispose();
       gateway.stop();

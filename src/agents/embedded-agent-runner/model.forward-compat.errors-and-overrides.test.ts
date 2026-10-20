@@ -6,7 +6,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { discoverModelsAsync } from "../agent-model-discovery.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   catalogCost,
   configuredPricingCases,
@@ -15,6 +14,7 @@ import {
 import { expectResolvedForwardCompatFallbackResult } from "./model.forward-compat.test-support.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+import { normalizeConfiguredProviderModel } from "./model.registry-resolution.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -240,7 +240,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
       for (const cfg of [runtime, structuredClone(runtime)]) {
         const result = await resolveModelForTest(provider, modelId, "/tmp/agent", cfg);
-        const fallback = buildConfiguredFallbackModel({
+        const fallback = normalizeConfiguredProviderModel({
           provider,
           modelId,
           cfg,

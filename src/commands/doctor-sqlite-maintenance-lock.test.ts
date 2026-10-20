@@ -199,19 +199,18 @@ describe("doctor SQLite maintenance lock", () => {
       const run = vi.fn(async () => fs.writeFile(marker, "reclaimed\n"));
 
       await expect(fixture.maintain(run, [marker])).rejects.toThrow(
-        /cannot verify Gateway ownership.*heartbeat is fresh.*inside the Gateway container/,
+        /cannot verify Gateway ownership.*heartbeat age does not prove.*inside the Gateway container/,
       );
 
       expect(run).not.toHaveBeenCalled();
       await expect(fs.readFile(marker, "utf8")).resolves.toBe("Gateway data\n");
       await expect(fs.readFile(owner.ownerLockPath, "utf8")).resolves.toBe(owner.raw);
-      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).toThrow(
-        /cannot verify Gateway ownership.*heartbeat is fresh.*inside the Gateway container/,
-      );
+      // Ordinary SQLite access does not grant the maintenance custody refused above.
+      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
     },
   );
 
-  it.each(["same namespace", "previous boot", "legacy record", "expired heartbeat"] as const)(
+  it.each(["same namespace", "previous boot"] as const)(
     "recovers a stopped Gateway's %s ownership through maintenance",
     async (kind) => {
       const fixture = await createLockFixture();
@@ -224,27 +223,45 @@ describe("doctor SQLite maintenance lock", () => {
                 digit === "1" ? "2" : "1",
               ),
             }
-          : kind === "expired heartbeat"
-            ? { ...namespace, pidNsInode: `${namespace.pidNsInode}-foreign` }
-            : namespace;
+          : namespace;
       const owner = await seedGatewayOwner(fixture, {
         pid: kind === "previous boot" ? process.pid : 2_147_483_647,
         ...(kind === "previous boot"
           ? { startTime: getFileLockProcessStartTime(process.pid) ?? undefined }
           : {}),
-        ...(kind === "legacy record" ? {} : { processNamespace }),
+        processNamespace,
       });
-      if (kind === "expired heartbeat") {
-        const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
-        await fs.utimes(owner.ownerLockPath, expired, expired);
-        expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
-      }
       const run = vi.fn(() => "done");
 
       await expect(fixture.maintain(run)).resolves.toBe("done");
 
       expect(run).toHaveBeenCalledOnce();
       await expect(fs.stat(owner.ownerLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["legacy record", "expired foreign heartbeat"] as const)(
+    "preserves unverifiable %s ownership before maintenance",
+    async (kind) => {
+      const fixture = await createLockFixture();
+      const namespace = mockLinuxNamespace(fixture.env.OPENCLAW_STATE_DIR);
+      const owner = await seedGatewayOwner(fixture, {
+        pid: 2_147_483_647,
+        ...(kind === "legacy record"
+          ? {}
+          : { processNamespace: { ...namespace, pidNsInode: `${namespace.pidNsInode}-foreign` } }),
+      });
+      const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
+      await fs.utimes(owner.ownerLockPath, expired, expired);
+      const run = vi.fn();
+
+      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
+      await expect(fixture.maintain(run)).rejects.toThrow(
+        /cannot verify Gateway ownership.*openclaw gateway recover-lock/,
+      );
+
+      expect(run).not.toHaveBeenCalled();
+      await expect(fs.readFile(owner.ownerLockPath, "utf8")).resolves.toBe(owner.raw);
     },
   );
 

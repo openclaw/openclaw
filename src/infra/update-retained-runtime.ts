@@ -78,6 +78,7 @@ async function runWithRetainedUpdateRuntime<T>(
       await operation((params) => {
         preparation = (async () => {
           const { mutationRoots, installTarget, env, timeoutMs } = params;
+          const temporaryRoot = (env ?? process.env).TMPDIR?.trim();
           const signal = resolveCommandProcessSignal(params.signal);
           const assertCurrent = () => {
             signal?.throwIfAborted();
@@ -131,12 +132,13 @@ async function runWithRetainedUpdateRuntime<T>(
           }
           await maintainRetainedUpdateRuntimes({
             packageRoots: [sourceRoot],
+            temporaryDirectories: temporaryRoot ? [temporaryRoot] : undefined,
             repair: true,
             assertCurrent,
           });
           assertCurrent();
           // Package inventories include their module owner, and native activation
-          // replaces its whole project. Scratch must be a sibling of both boundaries.
+          // replaces its whole project. Scratch must stay outside both boundaries.
           const boundaries = [sourceRoot, ...mutationBoundaries];
           const parent = resolveRetainedUpdateRuntimeParents(sourceRoot, mutationBoundaries).at(
             -1,
@@ -144,6 +146,7 @@ async function runWithRetainedUpdateRuntime<T>(
           const outsideMutation = (candidate: string) =>
             !boundaries.some((entry) => isPathInside(entry, candidate));
           if (
+            !temporaryRoot &&
             (installTarget || !sourceRoot.split(path.sep).includes("node_modules")) &&
             outsideMutation(parent)
           ) {
@@ -166,7 +169,9 @@ async function runWithRetainedUpdateRuntime<T>(
             }
           }
           if (!directory) {
-            const temporary = resolveIdentityPathViaExistingAncestorSync(path.resolve(os.tmpdir()));
+            const temporary = resolveIdentityPathViaExistingAncestorSync(
+              path.resolve(temporaryRoot || os.tmpdir()),
+            );
             if (!outsideMutation(temporary)) {
               throw new Error(
                 "Updater temporary directory is inside an installation being replaced",

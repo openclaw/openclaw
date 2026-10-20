@@ -18,7 +18,6 @@ import { DetachedDiscussionBindingRetention } from "./binding-retention.js";
 import {
   attachBindingToCurrentActiveSession,
   getClickClackDiscussionBindingStore,
-  MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
   readDiscussionSessionEntry,
   type ClickClackDiscussionBinding,
   type ClickClackDiscussionBindingStore,
@@ -83,7 +82,6 @@ export class ClickClackDiscussionService {
     this.#detachedBindings = new DetachedDiscussionBindingRetention({
       runtime,
       store: this.#store,
-      maxRetained: MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
     });
     this.provider = {
       id: "clickclack",
@@ -145,6 +143,10 @@ export class ClickClackDiscussionService {
 
   hasEnabledAccount(): boolean {
     return discussionAccounts(this.#currentConfig()).length === 1;
+  }
+
+  resolveBindingAccount(binding: ClickClackDiscussionBinding): DiscussionBindingAccountResolution {
+    return resolveDiscussionBindingAccount(this.#currentConfig(), binding);
   }
 
   async info(sessionKey: string): Promise<SessionDiscussionInfo> {
@@ -370,7 +372,7 @@ export class ClickClackDiscussionService {
       return;
     }
     const resolved = resolvedAccount
-      ? resolveDiscussionBindingAccount(this.#currentConfig(), activeBinding)
+      ? this.resolveBindingAccount(activeBinding)
       : await this.#resolveBindingForUse(activeBinding);
     if (resolved.state === "retargeted") {
       await this.#revokeAndDeleteBinding(sessionKey, activeBinding);
@@ -432,7 +434,7 @@ export class ClickClackDiscussionService {
           candidate.accountId === freshBinding.accountId,
       );
     }
-    const current = resolveDiscussionBindingAccount(this.#currentConfig(), bindingForAttachment);
+    const current = this.resolveBindingAccount(bindingForAttachment);
     if (current.state !== "active") {
       return;
     }
@@ -504,8 +506,7 @@ export class ClickClackDiscussionService {
           bound.channelId !== currentBinding.channelId ||
           sessionAuthority.entry?.sessionId !== currentBinding.sessionId ||
           sessionAuthority.entry.archivedAt !== undefined ||
-          resolveDiscussionBindingAccount(this.#currentConfig(), currentBinding).state !==
-            "active" ||
+          this.resolveBindingAccount(currentBinding).state !== "active" ||
           isRevoked(bound)
         ) {
           throw new Error("ClickClack discussion authority changed before channel update");
@@ -600,13 +601,13 @@ export class ClickClackDiscussionService {
   async #resolveBindingForUse(
     binding: ClickClackDiscussionBinding,
   ): Promise<DiscussionBindingUseResolution> {
-    const resolved = resolveDiscussionBindingAccount(this.#currentConfig(), binding);
+    const resolved = this.resolveBindingAccount(binding);
     if (resolved.state !== "active") {
       return resolved;
     }
     const workspaces = await this.#clientFactory(resolved.account).workspaces();
     const workspace = findClickClackWorkspace(workspaces, resolved.account.discussions.workspace);
-    const current = resolveDiscussionBindingAccount(this.#currentConfig(), binding);
+    const current = this.resolveBindingAccount(binding);
     if (current.state !== "active") {
       return current;
     }

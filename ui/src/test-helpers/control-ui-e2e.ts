@@ -620,7 +620,7 @@ export async function startControlUiE2eServer(
     define: controlUiRuntimeDefines("serve", resolvedBuildInfo),
     logLevel: "error",
     optimizeDeps: {
-      include: ["ipaddr.js", ...commonJsOptimizeDeps],
+      include: ["ipaddr.js", "@solidjs/testing-library", ...commonJsOptimizeDeps],
     },
     publicDir: path.join(uiRoot, "public"),
     plugins: [
@@ -798,12 +798,12 @@ async function runProductionControlUiBuild(
 export async function startBuiltControlUiE2eServer(
   outDir: string,
   bootstrapConfig?: Record<string, unknown>,
+  port?: number,
 ): Promise<ControlUiE2eProductionServer> {
   const [{ preview }, { default: controlUiViteConfig }] = await Promise.all([
     import("vite"),
     import("../../vite.config.ts"),
   ]);
-  const port = await resolveAvailableLoopbackPort();
   const sharedConfig = createBundledControlUiE2eConfig(controlUiViteConfig, outDir);
   const publication = createControlUiE2eBuildPublication(outDir);
   const server = await preview({
@@ -816,7 +816,7 @@ export async function startBuiltControlUiE2eServer(
     ],
     preview: {
       host: "127.0.0.1",
-      port,
+      port: port ?? (await resolveAvailableLoopbackPort()),
       strictPort: true,
     },
   });

@@ -1,159 +1,119 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Subagent task notice" });
 
+function footerBelow(details: Locator, footerSelector: string, margin = 0) {
+  return details.evaluate(
+    (element, { selector, tolerance }) => {
+      const bounds = element.getBoundingClientRect();
+      const footer = element
+        .closest("openclaw-chat-pane")!
+        .querySelector(selector)!
+        .getBoundingClientRect();
+      return bounds.height > 0 &&
+        footer.height > 0 &&
+        bounds.bottom <= footer.top + tolerance &&
+        footer.bottom <= innerHeight
+        ? footer.top
+        : null;
+    },
+    { selector: footerSelector, tolerance: margin },
+  );
+}
+
 suite.define(() => {
-  it.each([1440, 768])("keeps task progress above the view-only footer at %ipx", async (width) => {
-    await suite.withPage(
-      { viewport: { width, height: 900 }, colorScheme: "dark" },
-      async ({ page }) => {
-        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        const proofDir = artifactRoot
-          ? createControlUiE2eArtifactDir("subagent-task-notice", artifactRoot)
-          : undefined;
-        const parent = { key: "agent:main:task-parent", kind: "direct", label: "Workspace review" };
-        const child = {
-          key: "agent:main:subagent:task-child",
-          kind: "direct",
-          label: "Review report",
-          spawnedBy: parent.key,
-          parentSessionKey: parent.key,
-          status: "done",
-          hasActiveRun: false,
-          endedAt: Date.now() - 8 * 86_400_000,
-        };
-        const gateway = await installMockGateway(page, {
-          sessionKey: child.key,
-          communityInvite: false,
-          sessions: [parent, child],
-          historyMessages: [{ role: "assistant", content: "The workspace review is complete." }],
-          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-          methodResponses: {
-            "progressCard.get": {
-              cases: [child.key, parent.key].map((sessionKey) => ({
-                match: { sessionKey },
-                response: {
-                  card: {
-                    sessionKey,
-                    markdown: Array.from(
-                      { length: 12 },
-                      (_, index) => `## Area ${index + 1}\n\nThe review of this area is complete.`,
-                    ).join("\n\n"),
-                    revision: 1,
-                    updatedAt: child.endedAt,
-                  },
+  it.each([1440, 768])("keeps task progress above the view-only footer at %ipx", (width) =>
+    suite.withPage({ viewport: { width, height: 900 }, colorScheme: "dark" }, async ({ page }) => {
+      const parent = { key: "agent:main:task-parent", kind: "direct", label: "Workspace review" };
+      const child = {
+        key: "agent:main:subagent:task-child",
+        kind: "direct",
+        label: "Review report",
+        spawnedBy: parent.key,
+        parentSessionKey: parent.key,
+        status: "done",
+        hasActiveRun: false,
+        endedAt: Date.now() - 8 * 86_400_000,
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey: child.key,
+        sessions: [parent, child],
+        historyMessages: [{ role: "assistant", content: "The workspace review is complete." }],
+        featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+        methodResponses: {
+          "progressCard.get": {
+            cases: [child.key, parent.key].map((sessionKey) => ({
+              match: { sessionKey },
+              response: {
+                card: {
+                  sessionKey,
+                  markdown: "## Area reviewed\n\nThe review of this area is complete.\n\n".repeat(
+                    12,
+                  ),
+                  revision: 1,
+                  updatedAt: child.endedAt,
                 },
-              })),
-            },
+              },
+            })),
           },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, child.key));
-        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-        const shell = pane.locator(".agent-chat__composer-shell");
-        const notice = shell.locator(".agent-chat__disabled-banner--replacement");
-        const progress = pane.locator('[data-progress-card-placement="details"]');
-        await notice.getByText("View-only subagent", { exact: true }).waitFor();
-        await progress.waitFor({ state: "attached" });
-        expect(await progress.isVisible()).toBe(false);
-        const details = await openChatDetails(pane);
-        await progress.waitFor();
-        expect(await shell.locator(".session-progress-card").count()).toBe(0);
-        expect(await shell.locator("textarea").count()).toBe(0);
-        if (!(await progress.evaluate((element) => element.hasAttribute("open")))) {
-          await progress.locator("summary").click();
-        }
-        if (proofDir) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            pane,
-            [details, progress, notice],
-            {
-              animations: "disabled",
-            },
-          );
-          await writeFile(path.join(proofDir, `subagent-${width}.png`), frame.png);
-        }
-        // Capture the baseline with the layout check, before a reactive banner replacement.
-        let footerTop = 0;
-        await expect
-          .poll(async () => {
-            const top = await details.evaluate((element) => {
-              const bounds = element.getBoundingClientRect();
-              const footer = element
-                .closest("openclaw-chat-pane")!
-                .querySelector(".agent-chat__disabled-banner--replacement")!
-                .getBoundingClientRect();
-              return bounds.height > 0 &&
-                footer.height > 0 &&
-                bounds.bottom <= footer.top + 1 &&
-                footer.bottom <= innerHeight
-                ? footer.top
-                : null;
-            });
-            if (top === null) {
-              return false;
-            }
-            footerTop = top;
-            return true;
-          })
-          .toBe(true);
-        expect(await details.evaluate((element) => getComputedStyle(element).overflowY)).toBe(
-          "auto",
-        );
-        expect(
-          await details.evaluate((element) => element.scrollHeight > element.clientHeight),
-        ).toBe(true);
-        await details.hover();
-        await page.mouse.wheel(0, 1000);
-        await expect
-          .poll(() => details.evaluate((element) => element.scrollTop))
-          .toBeGreaterThan(0);
-        expect(await notice.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(
-          footerTop,
-          0,
-        );
-        await notice.getByRole("button", { name: "Open parent session", exact: true }).click({
-          trial: true,
-        });
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, child.key));
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      const shell = pane.locator(".agent-chat__composer-shell");
+      const notice = shell.locator(".agent-chat__disabled-banner--replacement");
+      const progress = pane.locator('[data-progress-card-placement="details"]');
+      await notice.getByText("View-only subagent", { exact: true }).waitFor();
+      await progress.waitFor({ state: "attached" });
+      expect(await progress.isVisible()).toBe(false);
+      const details = await openChatDetails(pane);
+      await progress.waitFor();
+      expect(await shell.locator(".session-progress-card, textarea").count()).toBe(0);
+      if (!(await progress.evaluate((element) => element.hasAttribute("open")))) {
         await progress.locator("summary").click();
-        await expect.poll(() => progress.getAttribute("open")).toBeNull();
-        await notice.getByRole("button", { name: "Open parent session", exact: true }).click();
-        const input = shell.locator(".agent-chat__input");
-        await input.locator("textarea").fill("Continue the review");
-        await openChatDetails(pane);
-        await progress.waitFor();
-        expect(await input.locator("textarea").inputValue()).toBe("Continue the review");
-        await expect
-          .poll(() =>
-            input.evaluate((element) => {
-              const inputBounds = element.getBoundingClientRect();
-              const detailsBounds = element
-                .closest("openclaw-chat-pane")!
-                .querySelector(".chat-details")!
-                .getBoundingClientRect();
-              return (
-                detailsBounds.height > 0 &&
-                detailsBounds.bottom <= inputBounds.top &&
-                inputBounds.bottom <= innerHeight
-              );
-            }),
-          )
-          .toBe(true);
-        await input.locator(".chat-send-btn--send:visible").click({ trial: true });
-        expect(await pane.getByText("View-only subagent", { exact: true }).count()).toBe(0);
-        expect(await gateway.getRequests("progressCard.get")).toContainEqual(
-          expect.objectContaining({
-            params: expect.objectContaining({ sessionKey: parent.key }),
-          }),
-        );
-      },
-    );
-  });
+      }
+      // Capture the baseline with the layout check, before a reactive banner replacement.
+      let footerTop = 0;
+      await expect
+        .poll(async () => {
+          const top = await footerBelow(details, ".agent-chat__disabled-banner--replacement", 1);
+          footerTop = top ?? 0;
+          return top !== null;
+        })
+        .toBe(true);
+      expect(
+        await details.evaluate((element) => ({
+          overflow: getComputedStyle(element).overflowY,
+          scrollable: element.scrollHeight > element.clientHeight,
+        })),
+      ).toEqual({ overflow: "auto", scrollable: true });
+      await details.hover();
+      await page.mouse.wheel(0, 1000);
+      await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      expect(await notice.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(
+        footerTop,
+        0,
+      );
+      const openParent = notice.getByRole("button", { name: "Open parent session", exact: true });
+      await openParent.click({ trial: true });
+      await progress.locator("summary").click();
+      await expect.poll(() => progress.getAttribute("open")).toBeNull();
+      await openParent.click();
+      const input = shell.locator(".agent-chat__input");
+      await input.locator("textarea").fill("Continue the review");
+      await openChatDetails(pane);
+      await progress.waitFor();
+      expect(await input.locator("textarea").inputValue()).toBe("Continue the review");
+      await expect.poll(() => footerBelow(details, ".agent-chat__input")).not.toBeNull();
+      await input.locator(".chat-send-btn--send:visible").click({ trial: true });
+      expect(await pane.getByText("View-only subagent", { exact: true }).count()).toBe(0);
+      expect(
+        (await gateway.getRequests("progressCard.get")).map(({ params }) => params),
+      ).toContainEqual(expect.objectContaining({ sessionKey: parent.key }));
+    }),
+  );
 });

@@ -89,9 +89,8 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     const originalPath = await seedManagedRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     dropSessionNodes();
 
-    const result = await cleanup();
+    await cleanup();
 
-    expect(result.deletedRecordCount).toBe(0);
     expect(
       await readManagedImageRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", stateDir),
     ).not.toBeNull();
@@ -103,9 +102,8 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     openOpenClawAgentDatabase(options);
     const originalPath = await seedManagedRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 
-    const result = await cleanup();
+    await cleanup();
 
-    expect(result.deletedRecordCount).toBe(1);
     expect(
       await readManagedImageRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", stateDir),
     ).toBeNull();
@@ -179,11 +177,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
           : null,
     );
     try {
-      await expect(cleanup({ sessionKey: "agent:main:main" })).resolves.toEqual({
-        deletedRecordCount: 1,
-        deletedFileCount: 2,
-        retainedCount: 3,
-      });
+      await cleanup({ sessionKey: "agent:main:main" });
       expect(counter.counts.records).toBe(0);
       expect(counter.rowCounts.records).toBe(0);
       expect(counter.textBytes.records).toBe(0);

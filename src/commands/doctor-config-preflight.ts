@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -14,6 +15,7 @@ import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import {
@@ -81,13 +83,18 @@ async function runDoctorConfigPreflightOperation(
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
   if (stateMigrationsRequested) {
-    await measurePreflightStep("state-write-admission", () =>
-      assertOpenClawStateWriteAllowedAtPath({
-        databasePath: resolveOpenClawStateSqlitePath(process.env),
+    await measurePreflightStep("state-write-admission", async () => {
+      const databasePath = resolveOpenClawStateSqlitePath(process.env);
+      await assertOpenClawStateWriteAllowedAtPath({
+        databasePath,
         env: process.env,
         recoverOrphanedSidecars: true,
-      }),
-    );
+      });
+      if (existsSync(databasePath)) {
+        // Harden before SQLite can retain a read-only handle for an owned 0444 file.
+        ensureOpenClawStatePermissions(databasePath, process.env);
+      }
+    });
   }
   await measurePreflightStep("stale-update-runs", () =>
     noteStaleUpdateRuns({ migrateState: stateMigrationsRequested }),

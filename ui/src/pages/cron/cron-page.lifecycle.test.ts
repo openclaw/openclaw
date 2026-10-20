@@ -541,8 +541,8 @@ it.each(["disconnect", "reconnect", "agent scope", "gateway source", "unmount"])
       await page.settle();
       await waitForCronPage(() =>
         expect(callsFor(request, "models.list")).toHaveLength(
-          // A replacement source invalidates the catalog, so its reader cannot join the old read.
-          change === "reconnect" || change === "gateway source" ? 2 : 1,
+          // Reconnection retires the client; another owner of the same client can share its read.
+          change === "reconnect" ? 2 : 1,
         ),
       );
       const count = request.mock.calls.length;

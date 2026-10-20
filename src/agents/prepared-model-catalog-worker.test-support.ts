@@ -8,6 +8,7 @@ import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
+import * as commandsRuntime from "../gateway/server-methods/commands-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
@@ -15,6 +16,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import * as auth from "./auth-profiles.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -22,7 +24,7 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
-import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
+import * as catalogRuntime from "./prepared-model-catalog.js";
 import {
   getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthLabels,
@@ -531,6 +533,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   const { snapshot } = build;
   const previousRegistry = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(createEmptyPluginRegistry());
+  const readAuthStore = vi.spyOn(auth, "getPreparedRuntimeAuthProfileStoreSnapshot");
+  const ownerSpy = vi.spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot");
+  const commandsSpy = vi.spyOn(commandsRuntime, "buildCommandsListResult");
   try {
     expect(snapshot.modelCatalog.entries).toContainEqual(catalogEntry("configured-dynamic-model"));
     const catalog = await refreshNativeCatalogDuringBoundedRead({
@@ -554,18 +559,13 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     } as unknown as GatewayRequestContext;
     expect(catalog.staticEntries).not.toContainEqual(catalogEntry("unresolved-configured-model"));
 
+    readAuthStore.mockReturnValue(fullAuth.authStore);
+    ownerSpy.mockReturnValue(snapshot);
+    commandsSpy.mockResolvedValue({ commands: [] });
     const chatMetadata = createGatewayChatMetadataRuntime({
       getConfig: () => config,
       getContext: () => context,
       log: context.logGateway,
-      deps: {
-        getPreparedOwner: () => snapshot,
-        getPreparedAuthStore: () => fullAuth.authStore,
-        getAuthStoreRevision: () => 1,
-        getSkillsVersion: () => 1,
-        getPluginRegistryVersion: () => 1,
-        buildCommands: async () => ({ commands: [] }),
-      },
     });
     await chatMetadata.refresh();
     const metadata = await chatMetadata.read({ agentId: "main" });
@@ -579,6 +579,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       ]),
     );
   } finally {
+    ownerSpy.mockRestore();
+    commandsSpy.mockRestore();
+    readAuthStore.mockRestore();
     restoreActivePluginRegistrySnapshot(previousRegistry);
   }
   for (const key of ["entries", "routeVariants", "staticEntries"] as const) {
@@ -592,7 +595,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
 }
 
 export function expectCatalogAuth(snapshot: PreparedModelRuntimeSnapshot, provider: string) {
-  const owner = materializePreparedModelCatalogOwner(snapshot);
+  const owner = catalogRuntime.materializePreparedModelCatalogOwner(snapshot);
   return expect(
     formatModelCatalogAuthLabel(
       getPreparedModelRuntimeAuthLabels(owner).get(provider)?.all ?? "missing",

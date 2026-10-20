@@ -4,7 +4,7 @@ import {
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
+import * as containerEnvironment from "../infra/container-environment.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const hooksWarn = vi.hoisted(() => vi.fn());
@@ -211,21 +211,20 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("container-aware bind default", () => {
+    beforeEach(() => {
+      vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(true);
+    });
+
     afterEach(() => {
-      resetContainerEnvironmentCacheForTest();
       vi.restoreAllMocks();
     });
 
     it("defaults to auto (0.0.0.0) inside a container with auth configured", async () => {
-      const fs = require("node:fs");
-      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
       const result = await resolve(gateway({ auth: TOKEN_AUTH, controlUi: { allowedOrigins } }));
       expect(result.bindHost).toBe("0.0.0.0");
     });
 
     it("rejects container auto-bind with auth but without allowedOrigins (origin check preserved)", async () => {
-      const fs = require("node:fs");
-      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
       await expect(
         resolveGatewayRuntimeConfig({
           cfg: { gateway: { auth: TOKEN_AUTH } },
@@ -235,8 +234,6 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
 
     it("rejects container auto-bind without auth (security invariant preserved)", async () => {
-      const fs = require("node:fs");
-      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
       await expect(
         resolveGatewayRuntimeConfig({
           cfg: { gateway: { auth: { mode: "none" } } },
@@ -252,8 +249,6 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
 
     it("respects explicit loopback config even inside a container", async () => {
-      const fs = require("node:fs");
-      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
       const result = await resolveGatewayRuntimeConfig({
         cfg: { gateway: { bind: "loopback", auth: { mode: "none" } } },
         port: 18789,
@@ -262,8 +257,6 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
 
     it("falls back to loopback inside a container when tailscale serve is enabled", async () => {
-      const fs = require("node:fs");
-      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
       const result = await resolveGatewayRuntimeConfig({
         cfg: {
           gateway: {
@@ -279,8 +272,6 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
 
     it("falls back to loopback inside a container when tailscale funnel is enabled", async () => {
-      const fs = require("node:fs");
-      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
       const result = await resolve(
         gateway({
           auth: { mode: "password", password: "test-pw" },
@@ -291,8 +282,6 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
 
     it("respects explicit lan config inside a container (requires auth)", async () => {
-      const fs = require("node:fs");
-      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
       const result = await resolveGatewayRuntimeConfig({
         cfg: {
           gateway: {

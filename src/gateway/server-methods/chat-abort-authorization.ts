@@ -229,10 +229,14 @@ export function writePreRegisteredChatAbort(params: {
   requestIdentity?: string;
   expectedPayload?: PreRegisteredAgentDedupePayload;
 }) {
+  const pendingKey = pendingChatSendDedupeKey(params.runId);
+  const pendingEntry = params.context.dedupe.get(pendingKey);
+  const pendingAttemptId = normalizeOptionalString(
+    (pendingEntry?.payload as PreRegisteredAgentDedupePayload | undefined)?.attemptId,
+  );
   if (
-    params.expectedPayload &&
-    params.context.dedupe.get(pendingChatSendDedupeKey(params.runId))?.payload !==
-      params.expectedPayload
+    (params.expectedPayload && pendingEntry?.payload !== params.expectedPayload) ||
+    (pendingEntry && params.attemptId && pendingAttemptId !== params.attemptId)
   ) {
     return false;
   }
@@ -244,21 +248,9 @@ export function writePreRegisteredChatAbort(params: {
   });
   params.context.chatRunState.getOrCreate(params.runId).abortMarker =
     createChatAbortMarker(endedAt);
-  const pendingKey = pendingChatSendDedupeKey(params.runId);
-  const pendingEntry = params.context.dedupe.get(pendingKey);
-  const pendingAttemptId = normalizeOptionalString(
-    (pendingEntry?.payload as PreRegisteredAgentDedupePayload | undefined)?.attemptId,
-  );
-  const ownsPendingAttempt = !params.attemptId || pendingAttemptId === params.attemptId;
   // Eviction removes the reservation, not the admission's immutable input identity.
-  const requestIdentity = pendingEntry
-    ? ownsPendingAttempt
-      ? pendingEntry.requestIdentity
-      : undefined
-    : params.requestIdentity;
-  if (ownsPendingAttempt) {
-    params.context.dedupe.delete(pendingKey);
-  }
+  const requestIdentity = pendingEntry ? pendingEntry.requestIdentity : params.requestIdentity;
+  params.context.dedupe.delete(pendingKey);
   setGatewayDedupeEntry({
     dedupe: params.context.dedupe,
     key: `chat:${params.runId}`,

@@ -20,7 +20,9 @@ import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
+  memoryPublicationGroup,
   memoryPublicationInline,
+  releaseMemoryPublication,
 } from "./manager-publication-transfer.js";
 import {
   bindSqliteWorkerBackend,
@@ -851,5 +853,21 @@ describe("bounded memory publication transfer", () => {
       (_, index) => numericCases[index % numericCases.length]![1],
     );
     expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: expectedVector })));
+  });
+
+  it("reuses printed fragments per prepared chunks array until it is released", () => {
+    const first = replacement();
+    const printed = memoryPublicationInline(first)?.fragments;
+    expect(printed).toBeDefined();
+    expect(memoryPublicationInline({ ...first })?.fragments).toBe(printed);
+    const other = replacement("second source text");
+    const group = memoryPublicationGroup([first, other])!;
+    const again = memoryPublicationGroup([first, other])!;
+    expect(group[0]?.fragments).toBe(printed);
+    again.forEach((source, index) => expect(source.fragments).toBe(group[index]?.fragments));
+    releaseMemoryPublication(first);
+    const released = memoryPublicationInline(first)?.fragments;
+    expect(released).not.toBe(printed);
+    expect(released).toEqual(printed);
   });
 });

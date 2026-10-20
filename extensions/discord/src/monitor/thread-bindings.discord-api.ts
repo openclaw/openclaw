@@ -13,9 +13,7 @@ import { resolveDiscordChannelId } from "../target-parsing.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 import { resolveThreadBindingPersonaFromRecord } from "./thread-bindings.persona.js";
 import {
-  BINDINGS_BY_THREAD_ID,
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL,
-  rememberReusableWebhook,
   toReusableWebhookKey,
 } from "./thread-bindings.state.js";
 import {
@@ -192,30 +190,7 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
   webhookId?: string;
   webhookToken?: string;
 } {
-  const reusableKey = toReusableWebhookKey(params);
-  const cached = REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.get(reusableKey);
-  if (cached) {
-    return {
-      webhookId: cached.webhookId,
-      webhookToken: cached.webhookToken,
-    };
-  }
-  for (const record of BINDINGS_BY_THREAD_ID.values()) {
-    if (
-      record.accountId !== params.accountId ||
-      record.channelId !== params.channelId ||
-      !record.webhookId ||
-      !record.webhookToken
-    ) {
-      continue;
-    }
-    rememberReusableWebhook(record);
-    return {
-      webhookId: record.webhookId,
-      webhookToken: record.webhookToken,
-    };
-  }
-  return {};
+  return REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.get(toReusableWebhookKey(params)) ?? {};
 }
 
 export async function resolveChannelIdForBinding(params: {

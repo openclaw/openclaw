@@ -230,6 +230,22 @@ it("releases pending connection waiters immediately when their relay is disposed
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it("returns false when the connection wait deadline expires", async () => {
+  const bridge = createBridge();
+  await expect(bridge.waitForExtensionConnection(new AbortController().signal, 0)).resolves.toBe(
+    false,
+  );
+});
+
+it("preserves caller cancellation of a pending connection wait", async () => {
+  const bridge = createBridge();
+  const controller = new AbortController();
+  const reason = new Error("connection wait cancelled");
+  const waiting = bridge.waitForExtensionConnection(controller.signal, 0);
+  controller.abort(reason);
+  await expect(waiting).rejects.toBe(reason);
+});
+
 it("gives a replacement extension its own heartbeat budget and ignores stale owners", async () => {
   vi.useFakeTimers();
   const bridge = createBridge();

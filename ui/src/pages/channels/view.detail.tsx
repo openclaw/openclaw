@@ -33,8 +33,8 @@ function ChannelStatusBody(params: {
   props: ChannelsProps;
   accountCount?: number;
 }) {
-  const presentation = createMemo(() => channelDetailPresentations.get(params.channelId));
-  const accountPresentation = createMemo(() => presentation()?.accounts);
+  const presentation = () => channelDetailPresentations.get(params.channelId);
+  const accountPresentation = () => presentation()?.accounts;
   const snapshot = createMemo(() => params.props.channels.channelsSnapshot);
   const status = createMemo(() => {
     const profile = presentation();
@@ -49,12 +49,12 @@ function ChannelStatusBody(params: {
   const accounts = createMemo(() =>
     resolveChannelAccounts(snapshot()?.channelAccounts, params.channelId),
   );
-  const showAccounts = createMemo(() => {
+  const showAccounts = () => {
     const policy = accountPresentation();
     return presentation()
       ? Boolean(policy && accounts().length >= policy.minimumCount)
       : accounts().length > 0;
-  });
+  };
   const extraRows = createMemo(() =>
     (presentation()?.extraFacts ?? []).map((fact) => {
       switch (fact) {
@@ -100,12 +100,11 @@ function ChannelStatusBody(params: {
         ]
       : [booleanChannelFact("connected", displayState().connected)]),
   ]);
-  const lastError = createMemo(() =>
+  const lastError = () =>
     readStringField(
       asNullableRecord(presentation() ? status() : displayState().status),
       "lastError",
-    ),
-  );
+    );
 
   return (
     <SettingsSection
@@ -123,14 +122,13 @@ function ChannelStatusBody(params: {
       {showAccounts() ? (
         <For each={accounts()} keyed={(account) => account.accountId}>
           {(account) => {
-            const username = createMemo(() =>
+            const username = () =>
               accountPresentation()?.titleSource === "botUsername"
                 ? readStringField(
                     asNullableRecord(asNullableRecord(account().probe)?.bot),
                     "username",
                   )
-                : undefined,
-            );
+                : undefined;
             return (
               <ChannelAccount
                 title={username() ? `@${username()}` : account().name || account().accountId}

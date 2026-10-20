@@ -33,7 +33,6 @@ import {
 import { createFaceTimeInitialGreeting } from "./talk-initial-greeting.js";
 
 export type FaceTimeTalkDriver = {
-  readonly callUUID: string;
   readonly recentTalkEvents: readonly TalkEvent[];
   readyForAudio(): Promise<void>;
   processOutputSuppressed(): boolean;
@@ -627,7 +626,6 @@ export async function startFaceTimeTalkDriver(params: {
     throw error;
   }
   return {
-    callUUID: params.callUUID,
     get recentTalkEvents() {
       return talk.recentEvents;
     },

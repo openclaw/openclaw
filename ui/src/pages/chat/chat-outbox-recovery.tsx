@@ -22,8 +22,6 @@ import { formatDateTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
@@ -43,10 +41,11 @@ const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
 type RecoveryProps = {
   host: RecoveryHost | undefined;
   identity: string;
+  onRestored?: () => void;
 };
 
 /** Recovery is owner-scoped and intentionally outside every automatic drain. */
-function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
+function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLElement) {
   const [entries, setEntries] = createSignal<ChatOutboxRecoveryEntry[]>([]);
   const [drafts, setDrafts] = createSignal<DurableComposerRecoveryEntry[]>([]);
   const [error, setError] = createSignal("");
@@ -57,7 +56,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
   let active = true;
   // Admission stays synchronous while Solid defers the busy presentation.
   let changeInFlight = false;
-  const isConnected = () => active && element.isConnected;
+  const isConnected = () => active && element().isConnected;
   const readOwner = () => {
     const host = props.host;
     const recoveryScope = host && readOfflineStorageScope(host);
@@ -255,7 +254,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
             ).status;
       if (result === "restored" || result === "persisted") {
         if (active && props.host === host && props.identity === identity) {
-          element.dispatchEvent(new CustomEvent("outbox-restored", { bubbles: true }));
+          props.onRestored?.();
         }
         await refresh();
       } else {
@@ -426,23 +425,28 @@ function RecoveryRow(props: {
     </div>
   );
 }
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-chat-outbox-recovery": SolidBridgeElement<RecoveryProps>;
-  }
-}
-
-defineSolidBridge<RecoveryProps>(
-  "openclaw-chat-outbox-recovery",
-  (props, element) => {
-    const scope = createMemo(() => ({ host: props.host, identity: props.identity }), {
+export function PaneOutboxRecovery(props: {
+  state: RecoveryHost;
+  identity: string;
+  onRestored: () => void;
+}) {
+  let element!: HTMLElement;
+  const scope = createMemo(
+    () => ({ host: props.state, identity: props.identity, onRestored: () => props.onRestored() }),
+    {
       equals: (previous, next) =>
         previous.host === next.host && previous.identity === next.identity,
-    });
-    return (
+    },
+  );
+  return (
+    <openclaw-chat-outbox-recovery
+      ref={(node) => {
+        element = node;
+      }}
+    >
       <For each={[scope()]}>
         {(current) => {
-          const recovery = createChatOutboxRecovery(current, element);
+          const recovery = createChatOutboxRecovery(current, () => element);
           return (
             <Show when={recovery.rows().length || recovery.error()}>
               <div class="chat-outbox-recovery">
@@ -472,41 +476,14 @@ defineSolidBridge<RecoveryProps>(
           );
         }}
       </For>
-    );
-  },
-  {
-    properties: {
-      host: { default: undefined, attribute: false },
-      identity: { default: "" },
-    },
-  },
-);
-
-export function PaneOutboxRecovery(props: {
-  state: RecoveryHost;
-  identity: string;
-  onRestored: () => void;
-}) {
-  return (
-    <openclaw-chat-outbox-recovery
-      prop:host={props.state}
-      prop:identity={props.identity}
-      onOutbox-restored={() => props.onRestored()}
-    />
+    </openclaw-chat-outbox-recovery>
   );
 }
 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-chat-outbox-recovery": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]
-      > &
-        ElementProperties<
-          Pick<HTMLElementTagNameMap["openclaw-chat-outbox-recovery"], "host" | "identity">
-        > & {
-          "onOutbox-restored"?: () => void;
-        };
+      "openclaw-chat-outbox-recovery": HTMLAttributes<HTMLElement>;
     }
   }
 }

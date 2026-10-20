@@ -17,7 +17,6 @@ import {
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { feishuPlugin } from "./channel.js";
-import { resetFeishuProxyAgentForTest } from "./client.js";
 import {
   AUTH_PATH,
   COMMENT_PATH,
@@ -159,13 +158,11 @@ function expectRetired(error: unknown) {
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
   resolveProxy.mockResolvedValue(undefined);
-  resetFeishuProxyAgentForTest();
 });
 
 afterEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
-  resetFeishuProxyAgentForTest();
   resolveProxy.mockReset();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();

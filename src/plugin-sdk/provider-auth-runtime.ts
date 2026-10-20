@@ -20,6 +20,9 @@ import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { renderOAuthPage } from "../shared/oauth-page.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { withPersonalAuthProfileStore } from "../agents/auth-profiles/personal-store.js";
+export { withAuthProfileStoreAtEffect } from "../agents/auth-profiles/store-runtime.js";
+export { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
 export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {

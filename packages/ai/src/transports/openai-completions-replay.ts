@@ -188,10 +188,22 @@ export function applyCompletionsReplay(
       sanitizeOpenRouterReasoningReplayFields(message);
     } else {
       const record: ReasoningReplayMessage = message;
+      const requiresReasoningContent =
+        model.compat?.requiresReasoningContentOnAssistantMessages === true;
+      if (preserveReasoningContent && requiresReasoningContent) {
+        // Only an explicit endpoint contract overrides the server's emitted field name.
+        for (const field of ["reasoning_content", "reasoning", "reasoning_text"] as const) {
+          if (typeof record[field] === "string" && record[field].length > 0) {
+            record.reasoning_content = record[field];
+            break;
+          }
+        }
+      }
       for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
         if (
           preserveReasoningContent &&
-          field === "reasoning_content" &&
+          field !== "reasoning_details" &&
+          (!requiresReasoningContent || field === "reasoning_content") &&
           typeof record[field] === "string"
         ) {
           continue;

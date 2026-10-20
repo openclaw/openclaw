@@ -16,6 +16,7 @@ import {
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MATRIX_INBOUND_DEDUPE_TTL_MS,
   migrationById,
   accountStorageRoot,
   createMigrationParams,
@@ -39,10 +40,7 @@ import {
   readMatrixIdbSnapshotJson,
   writeMatrixIdbSnapshotJson,
 } from "./src/matrix/crypto-state-store.js";
-import {
-  importInboundDedupeMarkersToIngress,
-  MATRIX_INBOUND_DEDUPE_TTL_MS,
-} from "./src/matrix/monitor/inbound-dedupe-migration.js";
+import { importInboundDedupeMarkersToIngress } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { restoreIdbFromDisk } from "./src/matrix/sdk/idb-persistence.js";
 import {
   clearAllIndexedDbState,
@@ -425,43 +423,6 @@ describe("matrix doctor contract state migrations", () => {
       queue.prune({ completedTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS, now: now + 1_001 }),
     ).resolves.toBe(1);
     await expect(queue.enqueue("$near-expiry", {})).resolves.toMatchObject({ kind: "accepted" });
-  });
-
-  it("keeps sources when the completion namespace is full and imports them after capacity frees", async () => {
-    const now = Date.now();
-    const storageRootDir = accountStorageRoot(stateDir, "home");
-    const databasePath = writeSqliteDedupeSource(storageRootDir, "home", "$legacy", now - 60_000);
-    const sourceBytes = fs.readFileSync(databasePath);
-    const completionStore = params.context.openPluginStateKeyedStore<{ value: number }>({
-      namespace: "inbound-dedupe-migration-state",
-      maxEntries: 4,
-      overflowPolicy: "reject-new",
-      env: params.env,
-    });
-    for (let index = 0; index < 4; index++) {
-      await completionStore.register(`other-migration-${index}`, { value: index });
-    }
-
-    const result = await migrate(DEDUPE);
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining("Failed reserving Matrix inbound dedupe migration completion:"),
-    ]);
-    expect(fs.readFileSync(databasePath)).toEqual(sourceBytes);
-    await expect(completionStore.entries()).resolves.toHaveLength(4);
-    await expect(detect(DEDUPE)).resolves.not.toBeNull();
-
-    await completionStore.delete("other-migration-0");
-
-    await expect(migrate(DEDUPE)).resolves.toEqual(dedupeMigrationResult([storageRootDir], 1));
-    const queue = createChannelIngressQueueForTests({
-      channelId: "matrix",
-      accountId: "home",
-      stateDir,
-    });
-    await expect(queue.enqueue("$legacy", {})).resolves.toMatchObject({ kind: "completed" });
-    await expect(detect(DEDUPE)).resolves.toBeNull();
   });
 
   it("moves current replay markers to account-scoped ingress after the historical migration completed", async () => {

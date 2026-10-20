@@ -134,11 +134,8 @@ export async function loadPersistedPluginModelCatalogs(
   let unregisterRoot: (() => void) | undefined;
   try {
     unregisterRoot = registerOpenClawStateDatabaseAsyncResource({
-      close: async (closedIdentity) => {
-        if (!closedIdentity || closedIdentity.key === root.admission.identity.key) {
-          await close();
-        }
-      },
+      admission: root.admission,
+      close,
     });
     reading = readPluginModelCatalogsInWorker(
       {

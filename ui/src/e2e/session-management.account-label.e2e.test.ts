@@ -164,24 +164,42 @@ suite.define(() => {
         await expect.poll(() => row.textContent()).not.toContain(`${generatedTitle} updated`);
         await openRename();
         await expect.poll(() => field.inputValue()).toBe(generatedTitle);
-        if (surface === "sidebar") {
-          const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+        if (surface === "sidebar" || surface === "header") {
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
           expect(await field.inputValue()).toBe(generatedTitle);
           expect(await field.isEnabled()).toBe(true);
-          await expect
-            .poll(() => dialog.getByRole("button", { name: "Save", exact: true }).isEnabled())
-            .toBe(false);
+          await field.fill(`${generatedTitle} queued`);
+          if (surface === "header") {
+            await field.press("Enter");
+          } else {
+            const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+            await expect
+              .poll(() => dialog.getByRole("button", { name: "Save", exact: true }).isEnabled())
+              .toBe(true);
+            await dialog.getByRole("button", { name: "Save", exact: true }).click();
+          }
+          await field.waitFor({ state: "detached" });
+          await expect.poll(() => row.textContent()).toContain(`${generatedTitle} queued`);
+          expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
           await gateway.setOnline(true);
           await waitForControlUiGatewayReady(page);
-          expect(await field.inputValue()).toBe(generatedTitle);
-          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+          await expect
+            .poll(async () => (await gateway.getRequests("sessions.patch")).length)
+            .toBe(3);
+          expect((await gateway.getRequests("sessions.patch"))[2]?.params).toMatchObject({
+            key,
+            expectedSessionId: original.sessionId,
+            label: `${generatedTitle} queued`,
+          });
+          await expect.poll(() => row.textContent()).toContain(`${generatedTitle} queued`);
         } else {
           await gateway.closeLatest();
         }
         await field.waitFor({ state: "detached" });
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(
+          surface === "sessions" ? 2 : 3,
+        );
       });
     },
   );

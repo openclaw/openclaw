@@ -80,7 +80,6 @@ export function createConnectedContext(
         assistantIdentity: {
           name: "OpenClaw",
           avatar: null,
-          avatarSource: null,
           avatarStatus: null,
           avatarReason: null,
         },

@@ -8,7 +8,7 @@ import type { GatewayServiceEnvArgs } from "../daemon/service-types.js";
 import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readServiceStatusSummary } from "./status.service-summary.js";
+import { readGatewayServiceStatusForTest } from "./status.service-summary.test-support.ts";
 import { getStatusOverviewRowValue } from "./status.test-support.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -22,24 +22,27 @@ function createService(overrides: Partial<GatewayService>): GatewayService {
   });
 }
 
-const readService = (overrides: Partial<GatewayService>) =>
-  readServiceStatusSummary(createService(overrides), "Daemon");
+afterEach(() => vi.restoreAllMocks());
+
+function readService(overrides: Partial<GatewayService>, activePackageRoot: string | null = null) {
+  return readGatewayServiceStatusForTest(createService(overrides), activePackageRoot);
+}
 
 it("reports installation facts with usable guidance", async () => {
   const serviceVersion = "2026.9.4";
   const root = await fs.realpath(tempDirs.make("openclaw-status-prefix-drift-"));
   const serviceRoot = path.join(root, "prefix-a", "lib", "node_modules", "openclaw");
   const activeRoot = path.join(root, "prefix-b", "lib", "node_modules", "openclaw");
-  for (const [packageRoot, version] of [
+  for (const [fixturePackageRoot, version] of [
     [serviceRoot, serviceVersion],
     [activeRoot, "2026.9.17"],
   ] as const) {
-    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+    await fs.mkdir(path.join(fixturePackageRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(packageRoot, "package.json"),
+      path.join(fixturePackageRoot, "package.json"),
       JSON.stringify({ name: "openclaw", version }),
     );
-    await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n");
+    await fs.writeFile(path.join(fixturePackageRoot, "dist", "index.js"), "export {};\n");
   }
   const service = createService({
     isLoaded: vi.fn(async () => true),
@@ -48,7 +51,15 @@ it("reports installation facts with usable guidance", async () => {
     })),
     readRuntime: vi.fn(async () => ({ status: "running" })),
   });
-  const accountHome = os.userInfo().homedir;
+  const accountHome = root;
+  vi.spyOn(os, "homedir").mockReturnValue(accountHome);
+  vi.spyOn(os, "userInfo").mockImplementation(() => ({
+    uid: 1000,
+    gid: 1000,
+    username: "status-fixture",
+    homedir: accountHome,
+    shell: "/bin/sh",
+  }));
   const summary = await withEnvAsync(
     {
       HOME: accountHome,
@@ -64,7 +75,7 @@ it("reports installation facts with usable guidance", async () => {
       OPENCLAW_SYSTEMD_UNIT: undefined,
       OPENCLAW_WINDOWS_TASK_NAME: undefined,
     },
-    () => readServiceStatusSummary(service, "Daemon", undefined, activeRoot),
+    () => readService(service, activeRoot),
   );
   const output = getStatusOverviewRowValue("Gateway service", {
     gatewayService: summary,
@@ -79,7 +90,7 @@ it("reports installation facts with usable guidance", async () => {
 
   const alias = path.join(root, "active-package");
   await fs.symlink(serviceRoot, alias, "dir");
-  const aligned = await readServiceStatusSummary(service, "Daemon", undefined, alias);
+  const aligned = await readService(service, alias);
   expect(aligned.installationDrift).toBeUndefined();
 });
 it.each([
@@ -124,7 +135,7 @@ it("reports load inspection failures without a readable definition", async () =>
 it("preserves running service state when optional layout diagnostics fail", async () => {
   using layoutSpy = vi
     .spyOn(gatewayServiceLayout, "summarizeGatewayServiceLayout")
-    .mockRejectedValueOnce(new Error("package metadata is unreadable"));
+    .mockRejectedValue(new Error("package metadata is unreadable"));
 
   const summary = await readService({
     isLoaded: vi.fn(async () => true),
@@ -132,7 +143,7 @@ it("preserves running service state when optional layout diagnostics fail", asyn
     readRuntime: vi.fn(async () => ({ status: "running", pid: 1234 })),
   });
 
-  expect(layoutSpy).toHaveBeenCalledOnce();
+  expect(layoutSpy).toHaveBeenCalledWith({ programArguments: ["openclaw", "gateway", "run"] });
   expect(summary).toMatchObject({
     label: "systemd",
     installed: true,

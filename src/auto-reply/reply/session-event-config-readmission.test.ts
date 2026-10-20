@@ -19,6 +19,7 @@ import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-ca
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -220,6 +221,7 @@ it.for([
         let storming = false;
         let revoked = false;
         let completion: ReturnType<typeof enqueueSessionEventForHost> | undefined;
+        let replay: ReturnType<typeof enqueueSessionEventForHost> | undefined;
         try {
           await expect(first.accepted).resolves.toEqual({ ok: true });
           await withinTest(firstStarted.promise, signal);
@@ -274,6 +276,35 @@ it.for([
           // Final effect: only the unrestricted control reaches the filesystem.
           const written = await fs.readFile(filePath, "utf8").catch(() => undefined);
           expect(written).toBe(scenario === "allow-control" ? "written\n" : undefined);
+          if (scenario === "allow-control") {
+            const completed = expectDefined(
+              await readSessionEntryInWorker(scope),
+              "completed source",
+            );
+            expect(completed.restartRecoveryTerminalRunIds).toContain("exec:readmission-process");
+            await fs.writeFile(filePath, "retained after completion\n");
+            replay = enqueueSessionEventForHost("Background exec completed", {
+              ...scope,
+              source: "exec",
+              sourceTurnId: "exec:readmission-process",
+              expectedTarget: await captureSessionEventTargetForHost(
+                scope.agentId,
+                scope.sessionKey,
+              ),
+              abortSignal: signal,
+              deliver: false,
+            });
+            await expect(replay.settled).resolves.toMatchObject({
+              executionStarted: false,
+              delivered: false,
+            });
+            expect(prompts).toHaveLength(2);
+            expect(await fs.readFile(filePath, "utf8")).toBe("retained after completion\n");
+            expect((await readSessionEntryInWorker(scope))?.restartRecoveryTerminalRunIds).toEqual(
+              completed.restartRecoveryTerminalRunIds,
+            );
+            expect(replay.cancel()).toBe(false);
+          }
           // Settled either way: nothing is left for a later ordinary turn to drain.
           expect(completion.cancel()).toBe(false);
           expect(sourceReferences).toBe(0);
@@ -282,7 +313,7 @@ it.for([
           storming = false;
           revoked = false;
           releaseFirst.resolve();
-          await Promise.allSettled([first.settled, completion?.settled]);
+          await Promise.allSettled([first.settled, completion?.settled, replay?.settled]);
           await drainGlobalSingletonLifecycleState("restart");
           resetSystemEventsForTest();
         }

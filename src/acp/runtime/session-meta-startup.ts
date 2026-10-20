@@ -46,9 +46,6 @@ export async function assertAcpSessionKeysMigratedForStartup(
   if (!result) {
     return;
   }
-  if (!result.ok || result.type !== "acpSessions.list") {
-    throw new Error("Could not inspect ACP metadata before session startup.");
-  }
   const candidateAgentIds = [...new Set([...listAgentIds(cfg), ...admittedAgentIds])];
   const admittedPath = admittedDatabase
     ? resolveOpenClawAgentSqlitePath(admittedDatabase)

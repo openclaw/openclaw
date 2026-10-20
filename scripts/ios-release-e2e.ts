@@ -12,12 +12,12 @@ export const IOS_RELEASE_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testKeyboardOpenPreservesTranscriptAndFollowsLiveEdgeAfterSend",
 ] as const;
 export const MODEL_REF = "openai/ios-e2e";
-export const IOS_RELEASE_CHAT_FAILURE =
+const IOS_RELEASE_CHAT_FAILURE =
   /IOS_RELEASE_CHAT_FAILURE (first|second|relaunch) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false) foreground=(true|false) input=(true|false) transcript=(true|false) send=(true|false)/u;
 export const IOS_RELEASE_TEST_FAILURE_LOCATION =
   /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
-export const SAMPLE_INTERVAL_MS = 1_000;
-export const MAX_SAMPLE_GAP_MS = 3_000;
+const SAMPLE_INTERVAL_MS = 1_000;
+const MAX_SAMPLE_GAP_MS = 3_000;
 export type Mode = "stock" | "compare";
 export type Arm = "stock" | "simslim";
 export type TestIdentity = (typeof IOS_RELEASE_TESTS)[number];
@@ -293,7 +293,7 @@ export function testRunnerEnv(setupCode: string): NodeJS.ProcessEnv {
   };
 }
 
-export type TrialResources = {
+type TrialResources = {
   prepare: () => Promise<void>;
   test: (test: TestIdentity) => Promise<unknown>;
   measure: () => Promise<unknown>;

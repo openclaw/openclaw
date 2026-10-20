@@ -7,7 +7,6 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import {
   createGatewayRequestMock,
@@ -149,7 +148,6 @@ export async function mountSearch<R>(options: {
   });
   const settle = async (includeTests = false) => {
     flush();
-    await settleModelCatalogRequests(client, { agentId: selection.state.selectedId });
     await Promise.allSettled(
       pending
         .filter(

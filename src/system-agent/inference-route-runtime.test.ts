@@ -98,7 +98,6 @@ function bindRoute(
       authFingerprint,
       ...(authProfileId ? { authProfileId } : {}),
     },
-    deps: { pluginMetadataPlugins: [] },
   });
 }
 
@@ -249,8 +248,7 @@ it("keeps protected credentials through a fresh setup read and verified-route re
       ?.apiKey,
   ).toBe(key);
   const binding = await bindRoute(route, fingerprintResolvedProviderAuth(await directAuth(route)));
-  const deps = { readConfigFileSnapshot: readSnapshot, pluginMetadataPlugins: [] };
-  expect(await resolveSystemAgentVerifiedInferenceRoute(binding, deps)).not.toBeNull();
+  expect(await resolveSystemAgentVerifiedInferenceRoute(binding)).not.toBeNull();
   // Neither the persisted input nor the configured-route fingerprint may contain the key.
   expect(source.models?.providers?.fixture?.apiKey).toEqual(secretRef);
   expect(JSON.stringify(binding.executionFingerprint)).not.toContain(key);
@@ -258,7 +256,7 @@ it("keeps protected credentials through a fresh setup read and verified-route re
 
   await storeKey("synthetic-rotated-key");
   await activate();
-  expect(await resolveSystemAgentVerifiedInferenceRoute(binding, deps)).toBeNull();
+  expect(await resolveSystemAgentVerifiedInferenceRoute(binding)).toBeNull();
 });
 
 it.each(["fixture", "Fixture", " Fixture "])(
@@ -378,7 +376,6 @@ it.each([
       },
     };
     vi.mocked(runEmbeddedAgentOwner).mockImplementation(runEmbeddedAgent);
-    const deps = { readConfigFileSnapshot: readSnapshot };
     const attemptedOwners: Array<string | undefined> = [];
     if (entrypoint === "fallback") {
       const verify = vi
@@ -413,16 +410,12 @@ it.each([
               kind: "existing-model",
               surface: "gateway",
               runtime,
-              deps,
             }));
     expect(result.ok, result.ok ? undefined : result.error).toBe(!rotateBeforeBinding);
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     if (boundVerification?.ok) {
       expect(
-        await resolveSystemAgentVerifiedInferenceRoute(boundVerification.binding, {
-          readConfigFileSnapshot: readSnapshot,
-          pluginMetadataPlugins: [],
-        }),
+        await resolveSystemAgentVerifiedInferenceRoute(boundVerification.binding),
       ).not.toBeNull();
       if (entrypoint === "fallback") {
         expect(attemptedOwners).toEqual(["main", "engineering"]);

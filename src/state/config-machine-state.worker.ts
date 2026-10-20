@@ -11,9 +11,11 @@ export const machineStateOperations = {
     input: { candidateKey: Uint8Array },
     context: WorkerWriteOperationContext,
   ) =>
-    context.write(({ db }) => loadOrCreateConfigRevisionKeyInDatabase(db, input.candidateKey), {
-      operationLabel: "gateway.config-revision-key.load",
-    }),
+    loadOrCreateConfigRevisionKeyInDatabase(
+      context.open(),
+      input.candidateKey,
+      context.stateOptions(),
+    ),
   "machineState.write": (
     input: { key: string; value: unknown },
     context: WorkerWriteOperationContext,

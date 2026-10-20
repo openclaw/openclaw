@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
@@ -53,12 +53,11 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       },
     },
   );
-  const copy = createMemo(() => WIZARD_COPY[props.mode]);
+  const copy = () => WIZARD_COPY[props.mode];
   const canCancel = () => props.state.phase === "starting" || props.state.phase === "step";
-  const stepState = createMemo(() => (props.state.phase === "step" ? props.state : undefined));
-  const errorState = createMemo(() =>
-    props.state.phase === "error" || props.state.phase === "cancelled" ? props.state : undefined,
-  );
+  const stepState = () => (props.state.phase === "step" ? props.state : undefined);
+  const errorState = () =>
+    props.state.phase === "error" || props.state.phase === "cancelled" ? props.state : undefined;
   return (
     <Show when={props.state.phase !== "idle"}>
       <openclaw-modal-dialog

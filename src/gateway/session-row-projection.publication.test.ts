@@ -236,6 +236,10 @@ it("accepts alias publications while another physical store keeps its own row", 
     await projection.ensureMaterialized();
     const captured = projection.capture(query);
     expect(captured).toBeDefined();
+    const physicalPaths = projection.physicalPaths(query.storePath, query.agentId);
+    expect(physicalPaths).toEqual([captured!.storeTarget.storePath]);
+    expect(projection.physicalPaths(otherPath, query.agentId)).not.toEqual(physicalPaths);
+    expect(projection.physicalPaths(query.storePath, query.agentId)).toBe(physicalPaths);
     replaceSessionEntrySync(
       { agentId: query.agentId, sessionKey: query.key, storePath: otherPath },
       {
@@ -262,6 +266,10 @@ it("accepts alias publications while another physical store keeps its own row", 
       "other-store-reset",
     );
     await projection.ensureMaterialized();
+    sessionChanges.emit({ all: true, scope: "stores" });
+    await projection.prepareMembership();
+    expect(projection.physicalPaths(query.storePath, query.agentId)).toEqual(physicalPaths);
+    expect(projection.physicalPaths(query.storePath, query.agentId)).not.toBe(physicalPaths);
   });
 });
 

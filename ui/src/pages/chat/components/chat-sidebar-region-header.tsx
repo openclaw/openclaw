@@ -58,24 +58,16 @@ export function sidebarPanelType(definitions: SidebarPanelDefinition[], slot: Si
   return definition;
 }
 
-export function PanelTypeOption(props: { type: SidebarPanelDefinition; slotted?: boolean }) {
+export function PanelTypeOption(props: { type: SidebarPanelDefinition }) {
   return (
     <>
-      <span
-        slot={props.slotted ? "icon" : undefined}
-        class="side-panel-type-option__icon"
-        aria-hidden="true"
-      >
+      <span class="side-panel-type-option__icon" aria-hidden="true">
         <Icon name={props.type.icon} />
       </span>
       <span class="side-panel-type-option__label">{props.type.label}</span>{" "}
       <Show when={props.type.shortcut}>
         {(shortcut) => (
-          <KeyboardShortcut
-            combo={shortcut()}
-            slot={props.slotted ? "details" : undefined}
-            class="side-panel-type-option__shortcut"
-          />
+          <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
         )}
       </Show>
     </>
@@ -124,7 +116,6 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       ),
     { lazy: true },
   );
-  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
       lazy="while-open"
@@ -136,7 +127,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       placement="bottom-start"
       label={t("chat.sidePanel.addTab")}
       trigger={<Icon name="plus" />}
-      items={items()}
+      items={entries()()}
       onSelect={(item) => {
         const slot = props.panelDefinitions.find(
           (type) => type.available && type.slot === item.id,

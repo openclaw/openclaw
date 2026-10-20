@@ -90,6 +90,18 @@ export async function reserveSubagentControllerSource(
   if (!requester.entry?.sessionId || !requester.storePath) {
     return undefined;
   }
+  // Recover the interrupted requester before another completion wave reserves its mailbox.
+  // An exact recovered receipt may still reconcile without starting replacement work.
+  if (
+    requester.entry.abortedLastRun === true &&
+    hasMainSessionRecoveryClaim(requester.entry) &&
+    !requester.entry.mainRestartRecovery?.tombstone &&
+    (!protocolRunId ||
+      resolveRequesterSettleRecoveryCustody(requester.entry, { runId: protocolRunId })?.status !==
+        "settled")
+  ) {
+    return undefined;
+  }
   const target = captureSessionTarget({
     storeScope: requester.storePath,
     physicalStorePath: requester.physicalStorePath,

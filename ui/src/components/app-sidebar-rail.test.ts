@@ -795,6 +795,30 @@ describe("personal navigation rail", () => {
     },
   );
 
+  it("discovers MCP apps only while Pages is mounted", async () => {
+    const { sidebar, gateway } = await fixture();
+    const request = vi.spyOn(gateway.gateway.snapshot.client!, "request").mockResolvedValue({
+      servers: [],
+    });
+    const discoveries = () =>
+      request.mock.calls.filter(([method]) => method === "mcp.app.discover");
+    gateway.publish({ hello: gatewayHelloForMethods(["mcp.app.discover"]) });
+    await sidebar.updateComplete;
+    gateway.publishEvent("config.changed", {});
+    await sidebar.updateComplete;
+    expect(discoveries()).toHaveLength(0);
+
+    await click(sidebar, '[data-navigation-view="pages"]');
+    await waitForSolid(() => expect(discoveries()).toHaveLength(1));
+    await click(sidebar, '[data-navigation-view="sessions"]');
+    gateway.publishEvent("config.changed", {});
+    await sidebar.updateComplete;
+    expect(discoveries()).toHaveLength(1);
+
+    await click(sidebar, '[data-navigation-view="pages"]');
+    await waitForSolid(() => expect(discoveries()).toHaveLength(2));
+  });
+
   it("does not recreate catalog observations in an update queued before removal", async () => {
     const { sidebar, sessions, gateway } = await fixture();
     const parent = sidebar.parentElement!;

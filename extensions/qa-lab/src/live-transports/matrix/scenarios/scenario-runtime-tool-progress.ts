@@ -4,7 +4,6 @@ import { QaSuiteScenarioSkipError } from "../../../errors.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { createCurrentScenarioEventPredicate } from "./scenario-runtime-event-scope.js";
 import {
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
@@ -84,15 +83,8 @@ async function runMatrixToolProgressScenario(
     final: MatrixQaObservedEvent;
     progress?: MatrixQaObservedEvent;
     previewEventId?: string;
-    since?: string;
     details: string[];
   }) => {
-    advanceMatrixQaActorCursor({
-      actorId: "driver",
-      syncState: context.syncState,
-      nextSince: result.since,
-      startSince,
-    });
     const finalReply = buildMatrixReplyArtifact(result.final, params.finalText);
     return {
       artifacts: {
@@ -213,7 +205,6 @@ async function runMatrixToolProgressScenario(
         final: preview.event,
         progress: progressAfterFinal.event,
         previewEventId: progressPreviewEventId,
-        since: progressAfterFinal.since,
         details: [
           `preview event: ${progressPreviewEventId}`,
           `preview kind: ${progressAfterFinal.event.kind}`,
@@ -227,7 +218,6 @@ async function runMatrixToolProgressScenario(
       assertProgressStaysInPreview(preview.event.eventId);
       return finish({
         final: preview.event,
-        since: preview.since,
         details: ["preview event: <none>; final delivered before observable tool-progress preview"],
       });
     }
@@ -317,7 +307,6 @@ async function runMatrixToolProgressScenario(
     final: finalized.event,
     progress: progress.event,
     previewEventId: previewRootEventId,
-    since: topLevelFinalBeforeProgress ? progress.since : finalized.since,
     details: [
       `preview event: ${preview.event.eventId}`,
       `preview kind: ${progress.event.kind}`,
@@ -436,12 +425,6 @@ export async function runToolProgressPreviewOptOutScenario(context: MatrixQaScen
       `Matrix tool-progress opt-out still emitted preview progress: ${unexpectedPreviewProgressEvents.map((event) => `${event.eventId}:${event.body ?? ""}`).join("; ")}`,
     );
   }
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: finalized.since,
-    startSince,
-  });
   const finalReply = buildMatrixReplyArtifact(finalized.event, finalText);
   return {
     artifacts: {

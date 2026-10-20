@@ -12,7 +12,6 @@ import {
   MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
 } from "./scenario-media-fixtures.js";
 import {
-  advanceMatrixQaActorCursor,
   assertNoSutReplyWindow,
   buildMatrixQaToken,
   buildMatrixReplyArtifact,
@@ -81,7 +80,7 @@ async function sendMatrixQaImageAttachment(context: MatrixQaScenarioContext, men
 }
 
 export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {
-  const { attachmentEvent, client, driverEventId, roomId, startSince, triggerBody } =
+  const { attachmentEvent, client, driverEventId, roomId, triggerBody } =
     await sendMatrixQaImageAttachment(context, true);
   const matched = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
@@ -95,12 +94,6 @@ export async function runImageUnderstandingAttachmentScenario(context: MatrixQaS
     roomId,
     since: attachmentEvent.since,
     timeoutMs: context.timeoutMs,
-  });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: matched.since,
-    startSince,
   });
   const reply = buildMatrixReplyArtifact(matched.event);
   return {
@@ -192,12 +185,6 @@ export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioCont
     );
   }
 
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: since,
-    startSince,
-  });
   return {
     artifacts: {
       attachments,
@@ -257,12 +244,6 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
       `Matrix voice-preflight scenario failed while waiting for the transcript echo; recent room events: ${JSON.stringify(describeRecentRoomEvents(context, roomId))}`,
     );
   }
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: matched.since,
-    startSince,
-  });
   const reply = buildMatrixReplyArtifact(matched.event, MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER);
   return {
     artifacts: {
@@ -283,15 +264,15 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
 }
 
 export async function runAttachmentOnlyIgnoredScenario(context: MatrixQaScenarioContext) {
-  const { attachmentEvent, client, driverEventId, roomId, startSince } =
-    await sendMatrixQaImageAttachment(context, false);
+  const { attachmentEvent, client, driverEventId, roomId } = await sendMatrixQaImageAttachment(
+    context,
+    false,
+  );
   const { noReplyWindowMs } = await assertNoSutReplyWindow({
-    actorId: "driver",
     client,
     context,
     roomId,
     since: attachmentEvent.since,
-    startSince,
     unexpectedMessage: "unexpected SUT reply to attachment-only group media",
   });
   return {
@@ -334,12 +315,6 @@ export async function runUnsupportedMediaSafeScenario(context: MatrixQaScenarioC
     roomId,
     since: startSince,
     timeoutMs: context.timeoutMs,
-  });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: matched.since,
-    startSince,
   });
   const reply = buildMatrixReplyArtifact(matched.event, token);
   return {
@@ -393,12 +368,6 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
     );
   }
   const matchedEvent = matched.event;
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: matched.since,
-    startSince,
-  });
   const attachment = matchedEvent.attachment;
   if (matchedEvent.msgtype !== "m.image" || attachment?.kind !== "image") {
     throw new Error(

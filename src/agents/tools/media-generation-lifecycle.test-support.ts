@@ -5,6 +5,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { loadWebMedia } from "../../media/web-media.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import type { AnyAgentTool } from "./common.js";
 import type { createImageGenerateTool } from "./image-generate-tool.js";
 
@@ -169,12 +170,12 @@ export function defineMediaGenerationDuplicateTests(
       {
         taskId,
         runId: createdTask.runId,
+        requestKey: findMediaGenerationOperation(String(createdTask.runId))?.requestKey,
         taskKind: `${kind}_generation`,
         sourceId: `${kind}_generate:google`,
         requesterSessionKey: agentSessionKey,
         task: testCase.request.prompt,
         status: "succeeded",
-        createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: testCase.progressSummary,
       },

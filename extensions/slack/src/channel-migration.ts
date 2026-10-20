@@ -4,12 +4,9 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 type SlackChannels = Record<string, SlackChannelConfig>;
 
-type MigrationScope = "account" | "global";
-
 type SlackChannelMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
-  scopes: MigrationScope[];
 };
 
 function resolveAccountChannels(
@@ -60,25 +57,16 @@ export function migrateSlackChannelConfig(params: {
   oldChannelId: string;
   newChannelId: string;
 }): SlackChannelMigrationResult {
-  const scopes: MigrationScope[] = [];
+  let migrated = false;
   let skippedExisting = false;
-  const channelScopes = {
-    account: resolveAccountChannels(params.cfg, params.accountId).channels,
-    global: params.cfg.channels?.slack?.channels,
-  };
-  for (const scope of ["account", "global"] as const) {
-    const result = migrateSlackChannelsInPlace(
-      channelScopes[scope],
-      params.oldChannelId,
-      params.newChannelId,
-    );
-    if (result.migrated) {
-      scopes.push(scope);
-    }
-    if (result.skippedExisting) {
-      skippedExisting = true;
-    }
+  for (const channels of [
+    resolveAccountChannels(params.cfg, params.accountId).channels,
+    params.cfg.channels?.slack?.channels,
+  ]) {
+    const result = migrateSlackChannelsInPlace(channels, params.oldChannelId, params.newChannelId);
+    migrated ||= result.migrated;
+    skippedExisting ||= result.skippedExisting;
   }
 
-  return { migrated: scopes.length > 0, skippedExisting, scopes };
+  return { migrated, skippedExisting };
 }

@@ -28,6 +28,7 @@ import type {
 } from "./main-session-recovery-types.js";
 import {
   MAX_RECOVERY_RETRIES,
+  readInterruptedRunId,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
@@ -304,7 +305,7 @@ export function transitionMainSessionRecovery(
       // Queued announcements add fences too. Retain the executing turn before
       // releasing its lifecycle identity so retries can join this recovery.
       entry.restartRecoveryDeliverySourceRunId ??=
-        entry.restartRecoveryDeliveryRunId ?? entry.lifecycleRunId;
+        entry.restartRecoveryDeliveryRunId ?? entry.lifecycleRunId ?? readInterruptedRunId(entry);
       const state = entry.mainRestartRecovery;
       if (!state) {
         entry.mainRestartRecovery = createCycle(command.cycleId);

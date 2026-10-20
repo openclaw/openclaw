@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
@@ -12,10 +13,7 @@ import {
   startQaBusServer,
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
-import {
-  FileSettingsStorage,
-  type Settings,
-} from "../../../../src/agents/sessions/settings-storage.js";
+import type { Settings } from "../../../../src/agents/sessions/settings-storage.js";
 import { startOpenAiResponsesModelServer } from "../../../helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -265,13 +263,15 @@ it.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
         }
         // Exhaust retries before exercising unanswered finalization.
         const agentDir = path.join(stateDir, "agents", "qa", "agent");
-        new FileSettingsStorage(process.cwd(), agentDir).withLock("global", (raw) => {
-          const settings: Settings = raw ? JSON.parse(raw) : {};
-          settings.retry ??= {};
-          settings.retry.provider ??= {};
-          settings.retry.provider.maxRetries = PROVIDER_MAX_RETRIES;
-          return JSON.stringify(settings);
-        });
+        const settingsPath = path.join(agentDir, "settings.json");
+        const settings: Settings = existsSync(settingsPath)
+          ? JSON.parse(readFileSync(settingsPath, "utf-8"))
+          : {};
+        settings.retry ??= {};
+        settings.retry.provider ??= {};
+        settings.retry.provider.maxRetries = PROVIDER_MAX_RETRIES;
+        mkdirSync(agentDir, { recursive: true });
+        writeFileSync(settingsPath, JSON.stringify(settings));
       },
       mutateConfig: (config) => {
         const providerConfig = config.models?.providers?.["mock-openai"];

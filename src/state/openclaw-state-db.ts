@@ -217,13 +217,19 @@ export async function prepareOpenClawStateDatabaseSchema(
         needsRepair = true;
       }
     }
-    return needsRepair ||
-      needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
-      ? withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
-          repairStarted = true;
-          return repairStateSchema(pathname, env, scope, options.integrityCheck);
-        })
-      : { changes: [], warnings: [] };
+    if (
+      !needsRepair &&
+      !needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
+    ) {
+      return { changes: [], warnings: [] };
+    }
+    repairStarted = true;
+    // Retire prior writers and publish their native-close receipts before the
+    // private repair handle validates its source and acquires exclusive custody.
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    return withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
+      repairStateSchema(pathname, env, scope, options.integrityCheck),
+    );
   } finally {
     // Readiness checks borrow the live generation; only admitted repair retires it.
     if (repairStarted) {

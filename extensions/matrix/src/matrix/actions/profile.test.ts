@@ -64,7 +64,6 @@ describe("matrix profile actions", () => {
         avatarPath: "  /tmp/avatar.png  ",
       },
       expect.any(Function),
-      "persist",
     );
     expect(syncMatrixOwnProfileMock).toHaveBeenCalledExactlyOnceWith({
       client: actionClient,

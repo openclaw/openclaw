@@ -82,6 +82,7 @@ vi.mock("../../cli/nodes-camera.js", async (importOriginal) => ({
 vi.mock("../../cli/nodes-screen.js", () => screenMocks);
 
 let createNodesTool: typeof import("./nodes-tool.js").createNodesTool;
+let extractToolResultMediaArtifact: typeof import("../embedded-agent-tool-media.js").extractToolResultMediaArtifact;
 
 function onNode(
   action: string,
@@ -132,6 +133,7 @@ beforeAll(async () => {
   // cached prior import before wiring this file's gateway/media mocks.
   vi.resetModules();
   ({ createNodesTool } = await import("./nodes-tool.js"));
+  ({ extractToolResultMediaArtifact } = await import("../embedded-agent-tool-media.js"));
 });
 
 beforeEach(() => {
@@ -324,7 +326,7 @@ it("invokes screen.snapshot with validated params and returns file details", asy
       screenIndex: 0,
       width: 1920,
       height: 1080,
-      media: { mediaUrl: "/tmp/screen-snapshot.png" },
+      media: { mediaUrl: "/tmp/screen-snapshot.png", outbound: false },
     },
   });
 });
@@ -438,9 +440,47 @@ it("returns latest photos via details.media.mediaUrls", async () => {
       { index: 0, path: "/tmp/photo-1.jpg", width: 800, height: 600, createdAt: "now" },
       { index: 1, path: "/tmp/photo-2.jpg", width: 1024, height: 768 },
     ],
-    media: { mediaUrls: ["/tmp/photo-1.jpg", "/tmp/photo-2.jpg"] },
+    media: { mediaUrls: ["/tmp/photo-1.jpg", "/tmp/photo-2.jpg"], outbound: false },
   });
   expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
+});
+
+it("keeps inspected photos private (not auto-attached to replies)", async () => {
+  gatewayPayload({
+    photos: [{ base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 }],
+  });
+  const tool = createNodesTool({ modelHasVision: true });
+
+  const result = await tool.execute("call-privacy", {
+    action: "photos_latest",
+    node: "macbook",
+  });
+
+  const serialized = JSON.stringify(result);
+  expect(serialized).not.toContain("MEDIA:");
+  // When image sanitization omits the dummy base64 block, the result text
+  // still carries the saved path without claiming images were loaded.
+  const texts = (result?.content ?? [])
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  expect(texts).toContain('Photo saved to "/tmp/camera.jpg"; not attached or sent to the user.');
+  expect(texts).not.toContain("loaded into private model context");
+  expect((result?.details as { media?: unknown })?.media).toMatchObject({ outbound: false });
+  expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+});
+
+it("does not claim photos were loaded into model context when modelHasVision is false", async () => {
+  gatewayPayload({
+    photos: [{ base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 }],
+  });
+  const result = await onNode("photos_latest", {}, { modelHasVision: false });
+
+  expect(result?.content).toEqual([
+    { type: "text", text: "Library photo saved to /tmp/camera.jpg." },
+  ]);
+  expect((result?.details as { media?: unknown })?.media).toMatchObject({ outbound: false });
+  expect(extractToolResultMediaArtifact(result)).toBeUndefined();
 });
 
 it("caps photos_latest limit at 20 before gateway invoke", async () => {

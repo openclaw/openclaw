@@ -112,13 +112,16 @@ describe("UsagePage detail requests", () => {
       }
       return { providers: [] };
     };
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client);
+    const page = await createPage(client, false, context);
     await page.refresh();
     expect(payload).toBeDefined();
-    page.context = contextWithClient({
-      request: async () => ({}),
-    } as unknown as GatewayBrowserClient);
+    context.setGatewaySnapshot({
+      client: { request: async () => ({}) } as unknown as GatewayBrowserClient,
+    });
     await page.updateComplete;
+    expect(page.usageResult).toBeNull();
     const collectionControl = new WeakRef({ unowned: true });
     await collectGarbageForTest();
     expect(collectionControl.deref()).toBeUndefined();

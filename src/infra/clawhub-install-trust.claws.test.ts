@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkClawHubPackageTrust } from "./clawhub-install-trust.js";
 
 const subject = { kind: "claw" as const, packageName: "@openclaw/research-briefing" };
@@ -12,11 +12,11 @@ function check(
   response: Response,
   options: Partial<Parameters<typeof checkClawHubPackageTrust>[0]> = {},
 ) {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => response);
   return checkClawHubPackageTrust({
     subject,
     version,
     expectedClawArtifact,
-    fetchImpl: async () => response,
     ...options,
   });
 }
@@ -52,15 +52,20 @@ function securityResponse(
   });
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("ClawHub Claw trust", () => {
   it("checks the exact Claw release through the current package security route", async () => {
     let requestedUrl = "";
-    const result = await check(securityResponse("claw"), {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requestedUrl = input instanceof Request ? input.url : String(input);
+      return securityResponse("claw");
+    });
+    const result = await checkClawHubPackageTrust({
+      subject,
+      version,
+      expectedClawArtifact,
       baseUrl: "https://clawhub.example",
-      fetchImpl: async (input) => {
-        requestedUrl = input instanceof Request ? input.url : String(input);
-        return securityResponse("claw");
-      },
     });
 
     expect(result).toMatchObject({

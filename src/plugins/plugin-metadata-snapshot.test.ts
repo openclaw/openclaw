@@ -346,7 +346,7 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
-  it("reuses frozen snapshots across module instances", async () => {
+  it("reuses finalized snapshots across module instances", async () => {
     const snapshot = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
     vi.resetModules();
     const reloaded = await import("./plugin-metadata-snapshot.js");
@@ -729,8 +729,8 @@ describe("plugin metadata snapshot", () => {
     plugin.providerRequest = {
       providers: {
         demo: {
-          family: " demo-family ",
-          compatibilityFamily: " moonshot " as never,
+          family: "demo-family",
+          compatibilityFamily: "moonshot",
           openAICompletions: { supportsStreamingUsage: true },
         },
       },

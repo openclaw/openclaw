@@ -8,6 +8,34 @@ import {
 import { createPendingResponse } from "./response-snippet.test-harness.js";
 
 describe("readMemoryHostResponseTextSnippet", () => {
+  it.each(["snippet", "json"] as const)(
+    "preserves non-Error abort messages for %s reads",
+    async (kind) => {
+      const controller = new AbortController();
+      controller.abort("stop");
+      const response = new Response("{}");
+      const operation =
+        kind === "snippet"
+          ? readMemoryHostResponseTextSnippet(response, { signal: controller.signal })
+          : readResponseJsonWithLimit(response, {
+              signal: controller.signal,
+              errorPrefix: "fixture",
+            });
+      await expect(operation).rejects.toThrow(
+        kind === "snippet"
+          ? "Response snippet body read aborted"
+          : "fixture: response body read aborted",
+      );
+      expect(response.body?.locked).toBe(false);
+    },
+  );
+
+  it("drops an incomplete UTF-8 tail at the byte cap", async () => {
+    await expect(
+      readMemoryHostResponseTextSnippet(new Response("abc€tail"), { maxBytes: 5 }),
+    ).resolves.toBe("abc... [truncated]");
+  });
+
   it.each(["prefix", "overflow", "length", "preabort"] as const)(
     "settles %s reads while a response clone remains open",
     async (kind) => {

@@ -185,7 +185,7 @@ describe("browser cookie-sync CLI", () => {
         },
         timeoutMs: 30_000,
       },
-      { progress: undefined, scopes: ["operator.admin"] },
+      { scopes: ["operator.admin"] },
     );
     expect(runtime.log.mock.calls.at(-1)?.[0]).toContain(
       "chrome/Default -> work via wss://gateway.example",

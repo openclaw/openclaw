@@ -1,6 +1,10 @@
 import { createServer, type RequestListener, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
+import { setImmediate } from "node:timers/promises";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
 import { fetchClawRouterUsage } from "./usage.js";
 
@@ -223,6 +227,59 @@ describe("ClawRouter usage", () => {
       headers: { "content-type": "application/json" },
     });
     await expect(fetchResponse(response)).rejects.toThrow("ClawRouter usage response exceeds");
+  });
+
+  it("bounds a native stalled body after headers and releases its request", async ({ signal }) => {
+    const closed = Promise.withResolvers<void>();
+    await withServer(
+      (_request, response) => {
+        response.once("close", closed.resolve);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"budget":');
+      },
+      async (baseUrl) => {
+        const headersReady = Promise.withResolvers<void>();
+        const released = vi.fn();
+        const fetchGuard: ClawRouterUsageFetchGuard = async (params) => {
+          const guarded = await fetchWithSsrFGuard(params).catch((error: unknown) => {
+            headersReady.reject(error);
+            throw error;
+          });
+          headersReady.resolve();
+          return {
+            ...guarded,
+            release: async () => {
+              await guarded.release();
+              released();
+            },
+          };
+        };
+        const controller = new AbortController();
+        // Keep HTTP/body reads native and advance only the request deadline clock.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const outcome = fetchClawRouterUsage({
+          token: "synthetic-proxy-key",
+          baseUrl,
+          timeoutMs: 1,
+          signal: controller.signal,
+          fetchGuard,
+        }).catch((error: unknown) => error);
+        try {
+          await withinTest(headersReady.promise, signal);
+          await setImmediate();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await withinTest(outcome, signal)).toMatchObject({
+            message: expect.stringMatching(/abort|timed out/i),
+          });
+          expect(released).toHaveBeenCalledOnce();
+          await withinTest(closed.promise, signal);
+        } finally {
+          controller.abort();
+          vi.useRealTimers();
+          await outcome;
+        }
+      },
+    );
   });
 
   it("preserves provider usage routing through the env proxy", async () => {

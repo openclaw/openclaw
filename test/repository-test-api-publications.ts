@@ -20,9 +20,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.contextEngineMaintenanceTestApi",
   ),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
-  "src/agents/media-generation-task-status-shared.ts": Symbol.for(
-    "openclaw.mediaGenerationDuplicateGuardTestApi",
-  ),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
   "src/agents/subagents/announce/subagent-announce-delivery.ts": Symbol.for(
@@ -36,7 +33,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
-  "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
   "src/auto-reply/reply/queue/enqueue.ts": Symbol.for("openclaw.queueEnqueueTestApi"),

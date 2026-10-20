@@ -129,6 +129,40 @@ describe("diagnostic recovery delegates only to a captured controller", () => {
     },
   );
 
+  it("reports accepted model recovery without treating early diagnostics as stop authority", async () => {
+    const operation = begin();
+    const cancel = vi.fn();
+    const recoverStalledModelCall = vi.fn(() => true);
+    operation.attachBackend({ kind: "embedded", cancel, recoverStalledModelCall });
+    const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+    attempt.beginRequest({ deadlineAtMs: 45_000 });
+    const request = { operation, sessionKey, sessionId, ageMs: 75_000, allowActiveAbort: true };
+
+    // The release fixture reports a stall here, but diagnostics cannot shorten
+    // the controller-owned semantic horizon or interrupt the current attempt.
+    vi.setSystemTime(request.ageMs);
+    expect(await recoverStuckDiagnosticSession(request)).toMatchObject({
+      status: "skipped",
+      action: "observe_only",
+      reason: "active_reply_work",
+    });
+    expect(recoverStalledModelCall).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+
+    vi.setSystemTime(6 * 60_000);
+    expect(await recoverStuckDiagnosticSession({ ...request, ageMs: Date.now() })).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "model_attempt_recovery",
+    });
+    expect(recoverStalledModelCall).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(operation.result).toBeNull();
+    expect(getSessionControllerOperation(sessionKey)).toBe(operation);
+    operation.complete();
+    await operation.ownerSettlement;
+  });
+
   it("deduplicates stop on the operation, not a keyed recovery set", async () => {
     const operation = begin();
     const cancel = vi.fn();

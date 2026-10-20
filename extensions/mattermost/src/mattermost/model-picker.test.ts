@@ -11,7 +11,6 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
-  buildMattermostAllowedModelRefs,
   parseMattermostModelPickerContext,
   renderMattermostModelSummaryView,
   renderMattermostModelsPickerView,
@@ -51,17 +50,6 @@ describe("Mattermost model picker", () => {
       provider: "openai",
     });
     expect(resolveMattermostModelPickerEntry("/model openai/gpt-5")).toBeNull();
-  });
-
-  it("builds the allowed model refs set", () => {
-    expect(buildMattermostAllowedModelRefs(data)).toEqual(
-      new Set([
-        "anthropic/claude-opus-4-5",
-        "anthropic/claude-sonnet-4-5",
-        "openai/gpt-4.1",
-        "openai/gpt-5",
-      ]),
-    );
   });
 
   it("trims accidental model spacing in Mattermost current-model text", () => {

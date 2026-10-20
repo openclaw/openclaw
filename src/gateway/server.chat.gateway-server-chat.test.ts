@@ -12,6 +12,7 @@ import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.type
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import * as gatewayActiveWork from "../infra/gateway-active-work.js";
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -752,6 +753,8 @@ describe("gateway server chat", () => {
           }
           return terminalizeAdmission(params);
         });
+      const createSnapshot = gatewayActiveWork.createGatewayActiveWorkSnapshot;
+      const snapshotSpy = vi.spyOn(gatewayActiveWork, "createGatewayActiveWorkSnapshot");
       const messagePromises: Promise<unknown>[] = [];
       const sessionChanged = await (async () => {
         try {
@@ -781,9 +784,11 @@ describe("gateway server chat", () => {
           });
           expect(res.ok).toBe(true);
           await withinTest(dispatchStarted.promise, signal);
-          markGatewayRestartDraining();
           rejectDispatch.resolve();
           await withinTest(persistenceEntered.promise, signal);
+          // Begin draining with the failure write already held. Restart cancels
+          // unclaimed inputs, which this dispatcher mock deliberately does not claim.
+          markGatewayRestartDraining();
           const restartInspectors = {
             getQueueSize: () => 0,
             getPendingReplies: () => 0,
@@ -794,7 +799,10 @@ describe("gateway server chat", () => {
             getAcpRuns: () => 0,
             getMediaRuns: () => 0,
           };
-          expect(createSafeGatewayRestartPreflight(restartInspectors)).toMatchObject({
+          snapshotSpy.mockImplementationOnce((inspectors, options) =>
+            createSnapshot({ ...inspectors, ...restartInspectors }, options),
+          );
+          expect(createSafeGatewayRestartPreflight()).toMatchObject({
             safe: false,
             counts: { rootRequests: 1 },
           });
@@ -805,13 +813,17 @@ describe("gateway server chat", () => {
             gatewaySuite.requestExecution.waitForCompletion("idem-dispatch-error-1"),
             signal,
           );
-          expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
+          snapshotSpy.mockImplementationOnce((inspectors, options) =>
+            createSnapshot({ ...inspectors, ...restartInspectors }, options),
+          );
+          expect(createSafeGatewayRestartPreflight().safe).toBe(true);
           return changed;
         } finally {
           rejectDispatch.resolve();
           releasePersistence.resolve();
           await Promise.allSettled(messagePromises);
           persistSpy.mockRestore();
+          snapshotSpy.mockRestore();
           resetGatewayWorkAdmission();
         }
       })();

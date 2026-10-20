@@ -287,9 +287,7 @@ describe("chat pane composer controls", () => {
       expect(container.textContent).toContain(failureLabel);
 
       const refresh =
-        entry === "automatic"
-          ? refreshChatMetadata(state, { automatic: true })
-          : refreshChatModelCatalogOnDemand(state);
+        entry === "automatic" ? refreshChatMetadata(state) : refreshChatModelCatalogOnDemand(state);
       expect(applyChatModelCatalogSnapshot(state)).toBe(false);
       flush();
       expect(state.chatModelsLoading).toBe(true);

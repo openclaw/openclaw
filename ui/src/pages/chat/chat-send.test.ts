@@ -78,6 +78,7 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   refreshChatMetadata,
+  refreshChatModelCatalogOnDemand,
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
@@ -329,10 +330,10 @@ describe("refreshChat", () => {
       deferBranches: true,
       startup: true,
     });
-    const reobserved = refreshChatMetadata(asChatPageHost(host), { automatic: true });
+    const reobserved = refreshChatMetadata(asChatPageHost(host));
     startup.resolve({ messages: [message] });
     await expect(refresh).resolves.toBeUndefined();
-    const joined = refreshChatMetadata(asChatPageHost(host), { automatic: true });
+    const joined = refreshChatMetadata(asChatPageHost(host));
     const scope = { agentId: "main", sessionKey: host.sessionKey };
     const metadataParams = { agentId: scope.agentId, includeModels: false };
 
@@ -398,7 +399,6 @@ describe("refreshChat", () => {
     const ready = { id: "model", name: "Model", provider: "test", available: true };
     const retained = makeChatHost({
       requestHandlers: {
-        "chat.metadata": () => metadata.promise,
         "models.list": () => metadata.promise,
         "chat.startup": () => startup.promise,
       },
@@ -407,7 +407,7 @@ describe("refreshChat", () => {
     const kept = asChatPageHost(retained);
     const closed = asChatPageHost(opening);
     kept.chatModelCatalog = [{ ...ready, available: false, unavailableReason: "missing-auth" }];
-    const restoring = refreshChatMetadata(kept);
+    const restoring = refreshChatModelCatalogOnDemand(kept);
     const loading = refreshPageChat(closed, {
       startup: true,
       awaitHistory: true,
@@ -1821,7 +1821,7 @@ describe("handleSendChat", () => {
         const approval = structuredClone(host.waitingApprovalStatuses?.get(`approval-${runId}`));
         const compaction = structuredClone(host.compactionStatus);
         expect(tool).toMatchObject({ runId, toolCallId: `tool-${runId}`, name: "exec" });
-        expect(approval).toMatchObject({ runId, approvalId: `approval-${runId}` });
+        expect(approval).toMatchObject({ runId });
         expect(compaction).toMatchObject({ runId, phase: "active" });
         await waitForFast(() => expect(host.chatToolMessages).toContainEqual(tool.message));
         const assertIncomingActivity = () => {

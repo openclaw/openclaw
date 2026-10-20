@@ -7,7 +7,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
-import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
+import {
+  ServiceOwnershipRefusalError,
+  SystemdInspectionTimeout,
+} from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { execBusctlUser as busctl, execSystemctlUser as systemctl } from "./systemd-exec.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
@@ -187,6 +190,16 @@ it("retains the failed probe at its deadline", async () => {
     ),
   });
   expect(execFileUtf8).toHaveBeenCalledOnce();
+});
+
+it("tries the next route after a private manager probe times out", async () => {
+  await privateSocket(home);
+  Object.assign(env, { USER: "service", LOGNAME: "service", SUDO_USER: undefined });
+  open.mockRejectedValue(new SystemdInspectionTimeout("native manager connection"));
+  exec.mockImplementation(async (_command, args) =>
+    args.includes("--machine") ? success(version) : missing,
+  );
+  await expect(resolveTransport(env)).resolves.toMatchObject({ kind: "machine", user: "service" });
 });
 
 it("stops probes when custody retires", async () => {

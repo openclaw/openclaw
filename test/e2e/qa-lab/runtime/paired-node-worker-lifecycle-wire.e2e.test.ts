@@ -64,46 +64,42 @@ type EnvironmentRead = {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function createSession(params: {
-  operator: GatewayClient;
-  published: PublishedWireWorkspace;
-  suffix: string;
-}): Promise<string> {
-  const key = `${SESSION_PREFIX}:${params.suffix}`;
-  await params.operator.request("sessions.create", {
+async function createSession(
+  operator: GatewayClient,
+  published: PublishedWireWorkspace,
+  suffix: string,
+): Promise<string> {
+  const key = `${SESSION_PREFIX}:${suffix}`;
+  await operator.request("sessions.create", {
     key,
     agentId: "qa",
     worktree: true,
-    worktreeName: `paired-node-${params.suffix}`,
+    worktreeName: `paired-node-${suffix}`,
     worktreeBaseRef: "main",
-    cwd: params.published.source,
+    cwd: published.source,
   });
   return key;
 }
 
-async function dispatchNodeSession(params: {
-  gateway: WireGateway;
-  key: string;
-  nodeId: string;
-}): Promise<Placement> {
-  const result = (await params.gateway.call(
+async function dispatchNodeSession(
+  gateway: WireGateway,
+  key: string,
+  nodeId: string,
+): Promise<Placement> {
+  const result = (await gateway.call(
     "sessions.dispatch",
-    { key: params.key, deviceId: params.nodeId },
+    { key, deviceId: nodeId },
     { timeoutMs: PROOF_TIMEOUT_MS },
   )) as { placement?: Placement };
   expect(result.placement).toMatchObject({ state: "active" });
   return result.placement!;
 }
 
-async function startTurn(params: {
-  operator: GatewayClient;
-  key: string;
-  marker: string;
-}): Promise<string> {
-  const runId = `${params.marker.toLowerCase()}-${Date.now()}`;
-  const started = await params.operator.request<TurnResult>("chat.send", {
-    sessionKey: params.key,
-    message: `Reply exactly: ${params.marker}`,
+async function startTurn(operator: GatewayClient, key: string, marker: string): Promise<string> {
+  const runId = `${marker.toLowerCase()}-${Date.now()}`;
+  const started = await operator.request<TurnResult>("chat.send", {
+    sessionKey: key,
+    message: `Reply exactly: ${marker}`,
     deliver: false,
     idempotencyKey: runId,
   });
@@ -119,30 +115,33 @@ async function waitForTurn(operator: GatewayClient, runId: string): Promise<Turn
   );
 }
 
-async function expectSuccessfulTurn(params: {
-  operator: GatewayClient;
-  key: string;
-  marker: string;
-}): Promise<void> {
-  const runId = await startTurn(params);
-  const completed = await waitForTurn(params.operator, runId);
+function hasMessage(messages: unknown[] | undefined, role: string, marker: string) {
+  return (
+    messages?.some(
+      (message) =>
+        (message as { role?: unknown }).role === role && wireMessageText(message).includes(marker),
+    ) ?? false
+  );
+}
+
+async function expectSuccessfulTurn(
+  operator: GatewayClient,
+  key: string,
+  marker: string,
+): Promise<void> {
+  const runId = await startTurn(operator, key, marker);
+  const completed = await waitForTurn(operator, runId);
   expect(
     completed,
-    `turn ${params.marker}: ${redactSensitiveText(JSON.stringify(completed)).slice(0, 8_000)}`,
+    `turn ${marker}: ${redactSensitiveText(JSON.stringify(completed)).slice(0, 8_000)}`,
   ).toMatchObject({ status: "ok" });
   await vi.waitFor(
     async () => {
-      const history = await params.operator.request<{ messages?: unknown[] }>("chat.history", {
-        sessionKey: params.key,
+      const history = await operator.request<{ messages?: unknown[] }>("chat.history", {
+        sessionKey: key,
         limit: 100,
       });
-      expect(
-        history.messages?.some(
-          (message) =>
-            (message as { role?: unknown }).role === "assistant" &&
-            wireMessageText(message).includes(params.marker),
-        ),
-      ).toBe(true);
+      expect(hasMessage(history.messages, "assistant", marker)).toBe(true);
     },
     { timeout: 30_000, interval: 100 },
   );
@@ -210,37 +209,8 @@ async function expectPublicBundleStatus(params: {
         JSON.stringify({
           phase: params.phase,
           expectedStatus: params.status,
-          node: node && {
-            connected: node.connected,
-            paired: node.paired,
-            sessionHost: node.sessionHost,
-            workerBundle: node.workerBundle,
-          },
-          environment: environment && {
-            type: environment.type,
-            workerState: environment.worker?.state,
-            tunnelStatus: environment.worker?.tunnelStatus,
-            workerBundle: environment.workerBundle,
-          },
-          retentionRequests: params.host.frames
-            .filter((frame) => frame.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND)
-            .slice(-4)
-            .map((frame) => {
-              const input = JSON.parse(frame.paramsJSON!) as {
-                sequence?: number;
-                acknowledgedBundleGeneration?: number;
-                bundleStatusHash?: string;
-                bundleHashes?: unknown[];
-                retain?: unknown[];
-              };
-              return {
-                sequence: input.sequence,
-                acknowledgedBundleGeneration: input.acknowledgedBundleGeneration,
-                bundleStatusHash: input.bundleStatusHash,
-                bundleCount: input.bundleHashes?.length,
-                workspaceCount: input.retain?.length,
-              };
-            }),
+          node: node?.workerBundle,
+          environment: environment?.workerBundle,
           bundleInstalls: bundleInstallFrames(params.host).length,
           invokeErrors: params.host.invokeErrors.map(String),
           gatewayLogTail: params.gateway.logs().slice(-4_000),
@@ -252,8 +222,6 @@ async function expectPublicBundleStatus(params: {
         expect(Object.keys(projection ?? {}).toSorted()).toEqual(
           params.status === "installed" ? ["status", "version"] : ["status"],
         );
-        expect(projection).not.toHaveProperty("bundleHash");
-        expect(projection).not.toHaveProperty("path");
       }
     },
     { timeout: 30_000, interval: 100 },
@@ -431,22 +399,14 @@ describe("paired node worker lifecycle wire", () => {
         });
         const nodeId = workerNode.identity.deviceId;
 
-        const revokedKey = await createSession({ operator, published, suffix: "revoked" });
-        await dispatchNodeSession({ gateway, key: revokedKey, nodeId });
-        const heldRunId = await startTurn({
-          operator,
-          key: revokedKey,
-          marker: HOLD_REVOKED,
-        });
+        const revokedKey = await createSession(operator, published, "revoked");
+        await dispatchNodeSession(gateway, revokedKey, nodeId);
+        const heldRunId = await startTurn(operator, revokedKey, HOLD_REVOKED);
         await vi.waitFor(() => expect(provider.hasHeld(HOLD_REVOKED)).toBe(true), {
           timeout: PROOF_TIMEOUT_MS,
           interval: 100,
         });
-        const revokedRunId = await startTurn({
-          operator,
-          key: revokedKey,
-          marker: "WIRE-REVOKED-BEFORE-DISPATCH",
-        });
+        const revokedRunId = await startTurn(operator, revokedKey, "WIRE-REVOKED-BEFORE-DISPATCH");
         await expect(
           operator.request("chat.abort", { sessionKey: revokedKey, runId: revokedRunId }),
         ).resolves.toMatchObject({ aborted: true });
@@ -457,21 +417,9 @@ describe("paired node worker lifecycle wire", () => {
         await workerNode.waitForInvokes();
         expect(launchFrameForRun(workerNode, revokedRunId)).toBeUndefined();
 
-        const unconfirmedKey = await createSession({
-          operator,
-          published,
-          suffix: "unconfirmed",
-        });
-        const originalPlacement = await dispatchNodeSession({
-          gateway,
-          key: unconfirmedKey,
-          nodeId,
-        });
-        const unconfirmedRunId = await startTurn({
-          operator,
-          key: unconfirmedKey,
-          marker: HOLD_UNCONFIRMED,
-        });
+        const unconfirmedKey = await createSession(operator, published, "unconfirmed");
+        const originalPlacement = await dispatchNodeSession(gateway, unconfirmedKey, nodeId);
+        const unconfirmedRunId = await startTurn(operator, unconfirmedKey, HOLD_UNCONFIRMED);
         await vi.waitFor(() => expect(provider.hasHeld(HOLD_UNCONFIRMED)).toBe(true), {
           timeout: PROOF_TIMEOUT_MS,
           interval: 100,
@@ -532,11 +480,7 @@ describe("paired node worker lifecycle wire", () => {
         const launchCountBeforeSuccessor = workerNode.frames.filter(
           (frame) => frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
         ).length;
-        const fencedRunId = await startTurn({
-          operator,
-          key: unconfirmedKey,
-          marker: "WIRE-FENCED-DURING-STOP",
-        });
+        const fencedRunId = await startTurn(operator, unconfirmedKey, "WIRE-FENCED-DURING-STOP");
         await expect(
           operator.request("agent.wait", { runId: fencedRunId, timeoutMs: 0 }),
         ).resolves.toMatchObject({ status: "timeout" });
@@ -575,11 +519,7 @@ describe("paired node worker lifecycle wire", () => {
         )) as { placement?: Placement };
         expect(reclaimed).toMatchObject({ placement: { state: "local" } });
 
-        const replacementPlacement = await dispatchNodeSession({
-          gateway,
-          key: unconfirmedKey,
-          nodeId,
-        });
+        const replacementPlacement = await dispatchNodeSession(gateway, unconfirmedKey, nodeId);
         expect(replacementPlacement).toMatchObject({
           state: "active",
           environmentId: expect.any(String),
@@ -587,11 +527,11 @@ describe("paired node worker lifecycle wire", () => {
         });
         expect(replacementPlacement.environmentId).not.toBe(originalPlacement.environmentId);
 
-        const successorRunId = await startTurn({
+        const successorRunId = await startTurn(
           operator,
-          key: unconfirmedKey,
-          marker: "WIRE-SUCCESSOR-AFTER-STOP",
-        });
+          unconfirmedKey,
+          "WIRE-SUCCESSOR-AFTER-STOP",
+        );
         const successorResult = waitForTurn(operator, successorRunId);
         await expect(successorResult).resolves.toMatchObject({
           status: "ok",
@@ -676,20 +616,16 @@ describe("paired node worker lifecycle wire", () => {
           await retainHost.waitForInvokes();
           expect(retainHost.invokeErrors).toEqual([]);
         };
-        const localKey = await createSession({ operator, published, suffix: "local-control" });
-        const retainedKey = await createSession({ operator, published, suffix: "retention" });
-        const retainedPlacement = await dispatchNodeSession({
-          gateway,
-          key: retainedKey,
-          nodeId,
-        });
+        const localKey = await createSession(operator, published, "local-control");
+        const retainedKey = await createSession(operator, published, "retention");
+        const retainedPlacement = await dispatchNodeSession(gateway, retainedKey, nodeId);
         const bundleHash = retainedPlacement.workerBundleHash;
         expect(bundleHash).toMatch(/^[a-f0-9]{64}$/u);
 
         // Local and node-placed sessions share the Gateway without sharing failure state.
-        await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-NODE-BASELINE" });
+        await expectSuccessfulTurn(operator, retainedKey, "WIRE-NODE-BASELINE");
         await settlement.wait(operator, retainedKey, signal);
-        await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-BASELINE" });
+        await expectSuccessfulTurn(operator, localKey, "WIRE-LOCAL-BASELINE");
 
         // Stop-and-continue moves reconcile the source before returning local, never pass through
         // reclaimed, and the same session can dispatch back to its paired node afterward.
@@ -733,20 +669,18 @@ describe("paired node worker lifecycle wire", () => {
             ownerEpoch: sourcePlacement.activeOwnerEpoch,
           }),
         );
-        await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-LOCAL" });
-        await dispatchNodeSession({ gateway, key: retainedKey, nodeId });
-        await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-BACK" });
+        await expectSuccessfulTurn(operator, retainedKey, "WIRE-MOVED-LOCAL");
+        await dispatchNodeSession(gateway, retainedKey, nodeId);
+        await expectSuccessfulTurn(operator, retainedKey, "WIRE-MOVED-BACK");
         await settlement.wait(operator, retainedKey, signal);
 
         // Bundle maintenance reports only the public status/version projection and repairs loss.
-        await expectPublicBundleStatus({
-          operator,
-          gateway,
-          host: workerNode,
-          nodeId,
-          phase: "before-loss",
-          status: "installed",
-        });
+        const expectBundle = (
+          phase: "before-loss" | "after-loss" | "after-repair",
+          status: "installed" | "missing",
+        ) =>
+          expectPublicBundleStatus({ operator, gateway, host: retainHost, nodeId, phase, status });
+        await expectBundle("before-loss", "installed");
         const installedBundle = await workerNode.installedBundleDirectory(bundleHash!);
         const installCountBeforeLoss = bundleInstallFrames(workerNode).length;
         await fs.rm(installedBundle, { recursive: true, force: true });
@@ -755,66 +689,48 @@ describe("paired node worker lifecycle wire", () => {
         const retainCountBeforeReconnect = retainCommandCount();
         await workerNode.connect();
         await waitForNewRetainCommand(retainCountBeforeReconnect);
-        await expectPublicBundleStatus({
-          operator,
-          gateway,
-          host: workerNode,
-          nodeId,
-          phase: "after-loss",
-          status: "missing",
-        });
-        await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-LOSS" });
+        await expectBundle("after-loss", "missing");
+        await expectSuccessfulTurn(operator, localKey, "WIRE-LOCAL-AFTER-LOSS");
 
-        const repairedKey = await createSession({ operator, published, suffix: "reinstalled" });
+        const repairedKey = await createSession(operator, published, "reinstalled");
         const retainCountBeforeRepair = retainCommandCount();
-        await dispatchNodeSession({ gateway, key: repairedKey, nodeId });
+        await dispatchNodeSession(gateway, repairedKey, nodeId);
         await vi.waitFor(
           () => expect(bundleInstallFrames(workerNode!).length).toBe(installCountBeforeLoss + 1),
           { timeout: 30_000, interval: 100 },
         );
         await waitForNewRetainCommand(retainCountBeforeRepair);
-        await expectPublicBundleStatus({
-          operator,
-          gateway,
-          host: workerNode,
-          nodeId,
-          phase: "after-repair",
-          status: "installed",
-        });
+        await expectBundle("after-repair", "installed");
 
         // An offline runner fails before handoff, leaves the active placement retryable, and
         // does not terminalize the independent local session.
         await workerNode.disconnect();
         await waitForNodeDisconnected(operator, nodeId);
-        const offlineRunId = await startTurn({
-          operator,
-          key: repairedKey,
-          marker: "WIRE-OFFLINE-ATTEMPT",
-        });
+        const offlineRunId = await startTurn(operator, repairedKey, "WIRE-OFFLINE-ATTEMPT");
         const offline = await waitForTurn(operator, offlineRunId);
-        expect(offline.status).toBe("error");
         expect(offline).toMatchObject({
+          status: "error",
           error:
             "⚠️ The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
         });
         expect(launchFrameForRun(workerNode, offlineRunId)).toBeUndefined();
         expect(await describePlacement(gateway, repairedKey)).toMatchObject({ state: "active" });
-        await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-OFFLINE" });
+        await expectSuccessfulTurn(operator, localKey, "WIRE-LOCAL-AFTER-OFFLINE");
         await workerNode.connect();
-        await expectSuccessfulTurn({ operator, key: repairedKey, marker: "WIRE-OFFLINE-RETRY" });
+        await expectSuccessfulTurn(operator, repairedKey, "WIRE-OFFLINE-RETRY");
         await settlement.wait(operator, repairedKey, signal);
         await workerNode.waitForWorkersIdle();
 
         // Two nonterminal real worker children consume both physical slots. The third turn
         // records a bounded capacity failure at the public RPC/history/placement boundaries.
-        const holdAKey = await createSession({ operator, published, suffix: "capacity-a" });
-        const holdBKey = await createSession({ operator, published, suffix: "capacity-b" });
-        const capacityKey = await createSession({ operator, published, suffix: "capacity-c" });
-        await dispatchNodeSession({ gateway, key: holdAKey, nodeId });
-        await dispatchNodeSession({ gateway, key: holdBKey, nodeId });
-        await dispatchNodeSession({ gateway, key: capacityKey, nodeId });
-        const holdARunId = await startTurn({ operator, key: holdAKey, marker: HOLD_A });
-        const holdBRunId = await startTurn({ operator, key: holdBKey, marker: HOLD_B });
+        const holdAKey = await createSession(operator, published, "capacity-a");
+        const holdBKey = await createSession(operator, published, "capacity-b");
+        const capacityKey = await createSession(operator, published, "capacity-c");
+        await dispatchNodeSession(gateway, holdAKey, nodeId);
+        await dispatchNodeSession(gateway, holdBKey, nodeId);
+        await dispatchNodeSession(gateway, capacityKey, nodeId);
+        const holdARunId = await startTurn(operator, holdAKey, HOLD_A);
+        const holdBRunId = await startTurn(operator, holdBKey, HOLD_B);
         await vi.waitFor(
           () => {
             expect(provider.hasHeld(HOLD_A)).toBe(true);
@@ -822,11 +738,7 @@ describe("paired node worker lifecycle wire", () => {
           },
           { timeout: 30_000, interval: 100 },
         );
-        const capacityRunId = await startTurn({
-          operator,
-          key: capacityKey,
-          marker: "WIRE-CAPACITY-ATTEMPT",
-        });
+        const capacityRunId = await startTurn(operator, capacityKey, "WIRE-CAPACITY-ATTEMPT");
         const capacity = await waitForTurn(operator, capacityRunId);
         expect(capacity.status).not.toBe("ok");
         expect(`${capacity.summary ?? ""} ${JSON.stringify(capacity)}`).toMatch(/capacity/iu);
@@ -837,33 +749,16 @@ describe("paired node worker lifecycle wire", () => {
               sessionKey: capacityKey,
               limit: 100,
             });
-            const messages = history.messages ?? [];
-            expect(
-              messages.some(
-                (message) =>
-                  (message as { role?: unknown }).role === "user" &&
-                  wireMessageText(message).includes("WIRE-CAPACITY-ATTEMPT"),
-              ),
-            ).toBe(true);
-            expect(
-              messages.some(
-                (message) =>
-                  (message as { role?: unknown }).role === "assistant" &&
-                  wireMessageText(message).includes("WIRE-CAPACITY-ATTEMPT"),
-              ),
-            ).toBe(false);
+            expect(hasMessage(history.messages, "user", "WIRE-CAPACITY-ATTEMPT")).toBe(true);
+            expect(hasMessage(history.messages, "assistant", "WIRE-CAPACITY-ATTEMPT")).toBe(false);
           },
           { timeout: 30_000, interval: 100 },
         );
-        await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AT-CAPACITY" });
+        await expectSuccessfulTurn(operator, localKey, "WIRE-LOCAL-AT-CAPACITY");
         provider.release(HOLD_A);
         await expect(waitForTurn(operator, holdARunId)).resolves.toMatchObject({ status: "ok" });
         await settlement.wait(operator, holdAKey, signal);
-        await expectSuccessfulTurn({
-          operator,
-          key: capacityKey,
-          marker: "WIRE-CAPACITY-RETRY",
-        });
+        await expectSuccessfulTurn(operator, capacityKey, "WIRE-CAPACITY-RETRY");
         await settlement.wait(operator, capacityKey, signal);
         provider.release(HOLD_B);
         await expect(waitForTurn(operator, holdBRunId)).resolves.toMatchObject({ status: "ok" });
@@ -871,8 +766,8 @@ describe("paired node worker lifecycle wire", () => {
 
         // Revocation fences placement before responding but cannot prove remote extinction.
         // Keep the exact attachment pending cleanup rather than invent a terminal environment.
-        const removalKey = await createSession({ operator, published, suffix: "role-removal" });
-        const removalPlacement = await dispatchNodeSession({ gateway, key: removalKey, nodeId });
+        const removalKey = await createSession(operator, published, "role-removal");
+        const removalPlacement = await dispatchNodeSession(gateway, removalKey, nodeId);
         const removalEnvironment = (await readEnvironments(operator)).find(
           (entry) => entry.id === removalPlacement.environmentId,
         );
@@ -945,7 +840,7 @@ describe("paired node worker lifecycle wire", () => {
           },
           { timeout: 30_000, interval: 100 },
         );
-        await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-REMOVAL" });
+        await expectSuccessfulTurn(operator, localKey, "WIRE-LOCAL-AFTER-REMOVAL");
         await workerNode.waitForInvokes();
         expect(workerNode.invokeErrors).toEqual([]);
       } catch (error) {

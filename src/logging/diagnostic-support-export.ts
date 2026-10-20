@@ -50,14 +50,9 @@ type SupportSnapshotReader = () => unknown;
 
 type DiagnosticSupportExportOptions = {
   outputPath?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  now?: Date;
   logLimit?: number;
   logMaxBytes?: number;
   stabilityBundle?: string | false;
-  readLogTail?: typeof readConfiguredLogTail;
   readStatusSnapshot?: SupportSnapshotReader;
   readHealthSnapshot?: SupportSnapshotReader;
 };
@@ -121,14 +116,6 @@ type BonjourLogSummary = {
 };
 
 type SupportSnapshotStatus = Awaited<ReturnType<typeof collectSupportSnapshot>>["summary"];
-
-function normalizePositiveInteger(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return Math.floor(parsed);
-}
 
 function safeScalar(value: unknown): unknown {
   if (typeof value === "boolean") {
@@ -460,13 +447,12 @@ function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
 }
 
 async function collectSupportLogTail(params: {
-  readLogTail: typeof readConfiguredLogTail;
   limit: number;
   maxBytes: number;
   redaction: SupportRedactionContext;
 }): Promise<SanitizedLogTail> {
   try {
-    const tail = await params.readLogTail({
+    const tail = await readConfiguredLogTail({
       limit: params.limit,
       maxBytes: params.maxBytes,
     });
@@ -571,22 +557,14 @@ function renderSummary(params: {
   ].join("\n");
 }
 
-function resolveOutputPath(options: {
-  outputPath?: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  now: Date;
-}): string {
+function resolveOutputPath(options: { outputPath?: string; stateDir: string; now: Date }): string {
   const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
   const raw = options.outputPath?.trim();
   if (!raw) {
     return path.join(options.stateDir, "logs", "support", filename);
   }
   const resolved =
-    path.isAbsolute(raw) || raw.startsWith("~")
-      ? resolveHomeRelativePath(raw, { env: options.env })
-      : path.resolve(options.cwd, raw);
+    path.isAbsolute(raw) || raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
   try {
     if (fs.statSync(resolved).isDirectory()) {
       return path.join(resolved, filename);
@@ -597,26 +575,22 @@ function resolveOutputPath(options: {
   return resolved;
 }
 
-export async function writeDiagnosticSupportExport(input: DiagnosticSupportExportOptions = {}) {
-  const env = input.env ?? process.env;
-  const stateDir = input.stateDir ?? resolveStateDir(env);
-  const now = input.now ?? new Date();
+export async function writeDiagnosticSupportExport(options: DiagnosticSupportExportOptions) {
+  const env = process.env;
+  const stateDir = resolveStateDir(env);
+  const now = new Date();
   const outputPath = resolveOutputPath({
-    outputPath: input.outputPath,
-    cwd: input.cwd ?? process.cwd(),
-    env,
+    outputPath: options.outputPath,
     stateDir,
     now,
   });
-  const options = { ...input, env, stateDir, now };
   const generatedAt = now.toISOString();
   const configPath = resolveConfigPath(env, stateDir);
   const stability = readStabilityBundle(options.stabilityBundle, stateDir);
   const redaction = { env, stateDir };
   const logTail = await collectSupportLogTail({
-    readLogTail: options.readLogTail ?? readConfiguredLogTail,
-    limit: normalizePositiveInteger(options.logLimit, DEFAULT_LOG_LIMIT),
-    maxBytes: normalizePositiveInteger(options.logMaxBytes, DEFAULT_LOG_MAX_BYTES),
+    limit: options.logLimit ?? DEFAULT_LOG_LIMIT,
+    maxBytes: options.logMaxBytes ?? DEFAULT_LOG_MAX_BYTES,
     redaction,
   });
   const config = readConfigExport(configPath, redaction);

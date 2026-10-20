@@ -1,6 +1,5 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
-import "./components/chat-details.tsx";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
@@ -9,21 +8,23 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { clawCreatorFlow } from "../claws/creator-flow.ts";
+import { canCreateClawDraft } from "../claws/draft-navigation.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
-import type { PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
+import { createSideChatModelControlProps } from "./chat-session-companion-model-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
-import type { ChatDetailsElements } from "./components/chat-details.tsx";
+import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
@@ -204,7 +205,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     };
-    const headerDetails: PaneDetailsProps | undefined = ownsSubagentsPanel
+    const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           chat: paneChatProps,
           elements: this.detailsElements,
@@ -308,6 +309,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopRefreshOnPresentation: !this.pendingPanelToggles.requests.has("desktop"),
       desktopAvailable,
       desktopSource,
+      desktopRuntimeConfig: this.context.runtimeConfig,
       portalPresented: slotPresentation("portal"),
       desktopFocusHref: desktopFocus.href,
       onDesktopFocusTargetChange: (target) => {
@@ -328,6 +330,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
+      companionModelControls: createSideChatModelControlProps({
+        state,
+        companion: companionThread,
+        onSelect: (patch) => this.sessionCompanionThreads.setModelSelection(currentAgentId, patch),
+      }),
       companionFocusRequest: this.companionIntents.focusRequest,
       companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
@@ -341,6 +348,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         ),
       connected: state.connected,
       onClearCompanion: () => void this.clearSessionCompanion(),
+      onCreateClaw:
+        currentAgentId && canCreateClawDraft(this.context)
+          ? () => void clawCreatorFlow(this.context).start(currentAgentId)
+          : undefined,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
