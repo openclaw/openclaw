@@ -43,9 +43,8 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     if (payload.rows[99_999].index !== 99_999) throw Error("native module unavailable");
     state.calls++;
     if (state.calls === 1 || state.calls === 5 || state.calls === 20) v8.queryObjects(WeakRef);
-    const memory = process.memoryUsage();
     fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({
-      calls: state.calls, memory,
+      memory: process.memoryUsage(),
       payloads: state.payloads.filter(ref => ref.deref()).length,
       callbacks: state.callbacks.filter(ref => ref.deref()).length,
       threadId: require("node:worker_threads").threadId,

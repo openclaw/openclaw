@@ -75,9 +75,11 @@ function sandboxFixture(source = "openclaw-managed") {
       },
     ],
   };
-  const capabilities = (skillsSnapshot = snapshot, assertCurrent = () => {}) =>
-    preparePluginToolExecutionCapabilities({ sandbox, skillsSnapshot })(assertCurrent);
-  return { sandbox, backend: sandbox.backend, snapshot, build, terminate, finalize, capabilities };
+  const capabilities = (skillsSnapshot = snapshot) =>
+    preparePluginToolExecutionCapabilities({ sandbox, skillsSnapshot })(() => {});
+  const installedRoots = (skillsSnapshot = snapshot) =>
+    capabilities(skillsSnapshot).sandbox?.installedSkillRoots;
+  return { sandbox, snapshot, build, terminate, finalize, capabilities, installedRoots };
 }
 
 function modelExecution(
@@ -118,55 +120,45 @@ it.each(["openclaw-managed", "openclaw-library", "openclaw-bundled", "agents-ski
       autoreview: "/guest/repo/skills/autoreview",
     });
     fixture.snapshot.resolvedSkills![0]!.source = "openclaw-workspace";
-    const shadow = fixture.capabilities();
-    expect(shadow.sandbox?.installedSkillRoots).toEqual({});
+    expect(fixture.installedRoots()).toEqual({});
     fixture.snapshot.resolvedSkills![0]!.source = source;
     fixture.sandbox.docker.binds = ["/untrusted:/guest/repo/skills/autoreview/scripts:rw"];
-    const overlaid = fixture.capabilities();
-    expect(overlaid.sandbox?.installedSkillRoots).toEqual({});
+    expect(fixture.installedRoots()).toEqual({});
   },
 );
 
 it("retains selected installation identity after sandbox prompt remapping and budgeting", () => {
-  const fixture = sandboxFixture();
-  fixture.snapshot.discoverySkills = fixture.snapshot.resolvedSkills;
-  fixture.snapshot.resolvedSkills = [];
+  const { sandbox, snapshot, installedRoots } = sandboxFixture();
+  snapshot.discoverySkills = snapshot.resolvedSkills;
+  snapshot.resolvedSkills = [];
   const prepared = resolveSandboxSkillRuntimeInputs({
-    sandbox: fixture.sandbox,
-    skillsAnchorWorkspace: fixture.sandbox.workspaceDir,
-    skillsSnapshot: fixture.snapshot,
+    sandbox,
+    skillsAnchorWorkspace: sandbox.workspaceDir,
+    skillsSnapshot: snapshot,
   });
   expect(prepared.skillsSnapshot?.discoverySkills?.[0]?.filePath).toBe(
     "/guest/repo/skills/autoreview/SKILL.md",
   );
-  const capability = fixture.capabilities(prepared.skillsSnapshot);
-  expect(capability.sandbox?.installedSkillRoots).toEqual({
+  expect(installedRoots(prepared.skillsSnapshot)).toEqual({
     autoreview: "/guest/repo/skills/autoreview",
   });
-  fixture.snapshot.skills[0]!.source!.fileHost = "workspace";
-  const shadow = fixture.capabilities(prepared.skillsSnapshot);
-  expect(shadow.sandbox?.installedSkillRoots).toEqual({});
+  snapshot.skills[0]!.source!.fileHost = "workspace";
+  expect(installedRoots(prepared.skillsSnapshot)).toEqual({});
 });
 
 it("withholds protected installations on the SSH backend's mutable upload view", async () => {
   const fixture = sandboxFixture();
+  const cfg = resolveSandboxConfigForAgent();
+  cfg.backend = "ssh";
+  cfg.ssh.target = "unused";
+  cfg.ssh.workspaceRoot = "/remote";
   fixture.sandbox.backend = await createRemoteShellSandboxBackend(
     {
       sessionKey: "review-fixture",
       scopeKey: "review-fixture",
       workspaceDir: fixture.sandbox.workspaceDir,
       agentWorkspaceDir: fixture.sandbox.agentWorkspaceDir,
-      cfg: resolveSandboxConfigForAgent({
-        agents: {
-          defaults: {
-            sandbox: {
-              backend: "ssh",
-              workspaceAccess: "none",
-              ssh: { target: "unused", workspaceRoot: "/remote" },
-            },
-          },
-        },
-      }),
+      cfg,
     },
     {
       createSession: async () => {
@@ -175,8 +167,7 @@ it("withholds protected installations on the SSH backend's mutable upload view",
       preprovisionedWorkdir: { runtimeId: "review-fixture", remoteWorkspaceDir: "/guest/repo" },
     },
   );
-  const capability = fixture.capabilities();
-  expect(capability.sandbox?.installedSkillRoots).toEqual({});
+  expect(fixture.installedRoots()).toEqual({});
 });
 
 it.each(["/guest/repo/skills", "/guest/repo/skills/autoreview/scripts"])(
@@ -184,8 +175,7 @@ it.each(["/guest/repo/skills", "/guest/repo/skills/autoreview/scripts"])(
   (overlay) => {
     const fixture = sandboxFixture();
     fixture.sandbox.docker.tmpfs = [`${overlay}:rw`];
-    const capability = fixture.capabilities();
-    expect(capability.sandbox?.installedSkillRoots).toEqual({});
+    expect(fixture.installedRoots()).toEqual({});
   },
 );
 
@@ -244,7 +234,7 @@ it("releases managed workspace admission while the helper waits for exchange com
   let admitted = false;
   let retained = 0;
   fixture.sandbox.fsBridge = createSandboxFsBridge({
-    sandbox: { ...fixture.sandbox, backend: fixture.backend },
+    sandbox: { ...fixture.sandbox, backend: fixture.sandbox.backend! },
   });
   bindLocalSandboxWorkspace(fixture.sandbox, {
     workspaceDir: fixture.sandbox.workspaceDir,
