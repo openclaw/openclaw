@@ -85,22 +85,19 @@ suite.define(() => {
         };
       });
       const row = await gateway.getSessionRow(sessionKey);
-      const requestsBefore = await gateway.getRequests();
-      for (const key of "abcdefghij") {
+      const updateRow = async (label: string) => {
         const now = await page.evaluate(() => Date.now());
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           sessionKey,
           reason: "patch",
           ancestorSessions: [],
-          session: {
-            ...row,
-            label: "Background update " + key,
-            displayName: "Background update " + key,
-            updatedAt: now,
-            snapshotAt: now,
-          },
+          session: { ...row, label, displayName: label, updatedAt: now, snapshotAt: now },
         });
+      };
+      const requestsBefore = await gateway.getRequests();
+      for (const key of "abcdefghij") {
+        await updateRow("Background update " + key);
         await input.press(key);
         await page.clock.runFor(32);
       }
@@ -119,26 +116,10 @@ suite.define(() => {
       await observation.dispose();
       // Reveal catches up from the current owner, not a retained mutable roster.
       await input.fill("");
-      await expect
-        .poll(() => page.locator(".agent-chat__recent-name").first().textContent())
-        .toBe("Background update j");
-      const visibleUpdatedAt = await page.evaluate(() => Date.now());
-      await gateway.emitGatewayEvent("sessions.changed", {
-        agentId: "main",
-        sessionKey,
-        reason: "patch",
-        ancestorSessions: [],
-        session: {
-          ...row,
-          label: "Visible recent update",
-          displayName: "Visible recent update",
-          updatedAt: visibleUpdatedAt,
-          snapshotAt: visibleUpdatedAt,
-        },
-      });
-      await expect
-        .poll(() => page.locator(".agent-chat__recent-name").first().textContent())
-        .toBe("Visible recent update");
+      const recent = page.locator(".agent-chat__recent-name").first();
+      await expect.poll(() => recent.textContent()).toBe("Background update j");
+      await updateRow("Visible recent update");
+      await expect.poll(() => recent.textContent()).toBe("Visible recent update");
     });
   });
 });

@@ -11,11 +11,17 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 
-async function takeScreenshot(page: Parameters<typeof openEnvironmentPicker>[0]) {
+async function capture(page: Parameters<typeof openEnvironmentPicker>[0], name: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
-  return page.screenshot({ animations: "disabled", scale: "css" });
+  await writeFile(
+    path.join(suite.artifactDir, name),
+    await page.screenshot({ animations: "disabled", scale: "css" }),
+  );
 }
 
 suite.define(() => {
@@ -41,12 +47,7 @@ suite.define(() => {
           .locator(".new-session-page__environment-skeleton-row")
           .evaluateAll((rows) => rows.map((row) => Math.round(row.getBoundingClientRect().width)));
         expect(new Set(skeletonWidths).size).toBe(1);
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "environment-picker-loading-after.png"),
-            await takeScreenshot(page),
-          );
-        }
+        await capture(page, "environment-picker-loading-after.png");
 
         await gateway.resolveDeferred("environments.list", {
           environments: [
@@ -103,12 +104,7 @@ suite.define(() => {
             ),
           ).toBeLessThanOrEqual(4);
         });
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "environment-picker-capabilities-after.png"),
-            await takeScreenshot(page),
-          );
-        }
+        await capture(page, "environment-picker-capabilities-after.png");
       },
     );
   });

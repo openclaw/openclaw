@@ -69,12 +69,11 @@ suite.define(() => {
         owner: { actor: viewer },
       };
       const created = {
+        ...old,
         key: "agent:main:sidebar-proof",
         sessionId: "sidebar-proof",
-        kind: "direct",
         label: "Investigate sidebar updates",
         updatedAt: 2,
-        owner: { actor: viewer },
         hasActiveRun: true,
         status: "running",
       };
@@ -112,7 +111,7 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "new?agent=main");
-      await page.locator('.sidebar-recent-session[data-session-key="' + old.key + '"]').waitFor();
+      await page.locator(`.sidebar-recent-session[data-session-key="${old.key}"]`).waitFor();
       await chooseSidebarOwner(page, "involving-me");
       await expect
         .poll(async () =>
@@ -134,7 +133,7 @@ suite.define(() => {
       // Only presentation frames may elapse: no collection window, cooldown,
       // manual refresh, or terminal message may make the new row appear.
       await page.clock.runFor(0);
-      const row = page.locator('.sidebar-recent-session[data-session-key="' + created.key + '"]');
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${created.key}"]`);
       const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactParent) {
         const directory = createControlUiE2eArtifactDir("new-session-sidebar", artifactParent);

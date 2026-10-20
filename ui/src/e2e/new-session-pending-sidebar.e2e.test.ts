@@ -89,13 +89,16 @@ suite.define(() => {
           const gateway = await installMockGateway(page, { sessionKey: old.key, sessions: [old] });
           await page.goto(new URL(controlUiSessionPath(old.key), suite.server.baseUrl).href);
           const oldRow = page.locator('[data-session-key="' + old.key + '"]');
-          if (mode === "chip") {
-            await oldRow.locator('.sidebar-recent-session__link[aria-current="page"]').waitFor();
-          } else if (pinned) {
-            await page.locator('[data-pinned-agent="main"]').waitFor();
-            expect(await oldRow.count()).toBe(0);
-          } else {
-            await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').waitFor();
+          const currentDestination =
+            mode === "chip"
+              ? oldRow.locator('.sidebar-recent-session__link[aria-current="page"]')
+              : page.locator(
+                  pinned
+                    ? '[data-pinned-agent="main"]'
+                    : '.sidebar-agent-roster__group[data-agent-group="main"]',
+                );
+          await currentDestination.waitFor();
+          if (mode !== "chip") {
             expect(await oldRow.count()).toBe(0);
           }
           await navigateInApp(page, "new-session", "?agent=main");
@@ -131,13 +134,10 @@ suite.define(() => {
           if (mode === "chip") {
             // The handoff occupies the slot its admitted row will take, not a detached
             // row above the list.
-            expect(
-              await page
-                .locator(
-                  ".sidebar-sessions .sidebar-recent-sessions .sidebar-recent-session--creating",
-                )
-                .count(),
-            ).toBe(1);
+            const handoffSlot = page.locator(
+              ".sidebar-sessions .sidebar-recent-sessions .sidebar-recent-session--creating",
+            );
+            expect(await handoffSlot.count()).toBe(1);
             const titleInset = (row: typeof provisional) =>
               row
                 .locator(".sidebar-recent-session__text")
@@ -171,10 +171,8 @@ suite.define(() => {
                 animation: getComputedStyle(element, "::after").animationName,
               };
             });
-            expect(style.radius).toBe("3px");
-            expect(style.transform).toBe("none");
+            expect(style).toMatchObject({ radius: "3px", transform: "none", animation: "shimmer" });
             expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
-            expect(style.animation).toBe("shimmer");
           }
           await page.emulateMedia({ reducedMotion: "reduce" });
           for (const bar of await bars.all()) {
@@ -201,12 +199,8 @@ suite.define(() => {
           await waitForCommittedChatRoute(page);
           if (mode === "chip") {
             await oldRow.locator('[aria-current="page"]').waitFor();
-          } else if (pinned) {
-            expect(await page.locator('[data-pinned-agent="main"]').count()).toBe(1);
           } else {
-            expect(
-              await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').count(),
-            ).toBe(1);
+            expect(await currentDestination.count()).toBe(1);
           }
         },
       );

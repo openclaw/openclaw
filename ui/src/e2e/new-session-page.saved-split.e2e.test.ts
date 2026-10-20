@@ -50,12 +50,8 @@ suite.define(() => {
     "preserves an existing split across pending creation, rejection and reload, then adopts only the confirmed key (unbound: %s)",
     async (unbound) => {
       const initialLayout = structuredClone(savedLayout);
-      for (const column of initialLayout.columns) {
-        for (const pane of column.panes) {
-          if (unbound && pane.id === "p1") {
-            pane.sessionKey = "global";
-          }
-        }
+      if (unbound) {
+        initialLayout.columns[0]!.panes[0]!.sessionKey = "global";
       }
       await suite.withPage({ viewport: { width: 1600, height: 1000 } }, async ({ page }) => {
         const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
@@ -89,6 +85,8 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}new?agent=main#saved-split`);
         const composer = page.locator(".new-session-page__message");
+        const pending = page.locator("openclaw-pending-session-create");
+        const start = page.getByRole("button", { name: "Start session", exact: true });
         await composer.fill("preserve my saved split");
         const before = {
           chatSplitLayout: initialLayout,
@@ -98,13 +96,13 @@ suite.define(() => {
         expect(await readSaved(page, storageKey)).toEqual(before);
         const draftUrl = page.url();
         await gateway.deferNext("sessions.create");
-        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        await start.click();
         await gateway.waitForRequest("sessions.create");
         await expect
           .poll(() => page.locator(".chat-thread").textContent())
           .toContain("preserve my saved split");
-        await page.locator("openclaw-pending-session-create .chat-group.user .chat-bubble").click();
-        expect(await page.locator("openclaw-pending-session-create").isVisible()).toBe(true);
+        await pending.locator(".chat-group.user .chat-bubble").click();
+        expect(await pending.isVisible()).toBe(true);
         expect(await readSaved(page, storageKey)).toEqual(before);
         expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
@@ -128,11 +126,11 @@ suite.define(() => {
         await navigateInApp(page, "new-session", "?agent=main");
         await composer.fill("adopt the confirmed session only");
         await gateway.deferNext("sessions.create");
-        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        await start.click();
         const request = await gateway.waitForRequest("sessions.create");
         expect(request.params).toHaveProperty("key", expect.not.stringContaining(confirmedKey));
         await expect
-          .poll(() => page.locator("openclaw-pending-session-create").textContent())
+          .poll(() => pending.textContent())
           .toContain("adopt the confirmed session only");
         expect(await readSaved(page, storageKey)).toEqual(before);
         await gateway.resolveDeferred("sessions.create", {

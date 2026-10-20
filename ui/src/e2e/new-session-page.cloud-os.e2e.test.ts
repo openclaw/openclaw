@@ -79,10 +79,9 @@ suite.define(() => {
         expect(await linux.evaluate((element) => element.tagName)).toBe("SPAN");
         expect(await linux.getAttribute("aria-pressed")).toBeNull();
         expect(await linux.textContent()).toBe("Linux");
-        for (const os of ["macos", "windows"]) {
-          const option = picker.locator(`[data-value="os:${os}"]`);
-          expect(await option.count()).toBe(0);
-        }
+        expect(
+          await picker.locator('[data-value="os:macos"], [data-value="os:windows"]').count(),
+        ).toBe(0);
         await capturePicker("02-after-unavailable-operating-systems.png");
         await page.keyboard.press("Escape");
         await page.locator(".new-session-page__message").fill("Continue on Linux");
