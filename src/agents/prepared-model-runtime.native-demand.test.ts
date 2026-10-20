@@ -1,7 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -18,21 +18,21 @@ import {
 } from "../gateway/server-model-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type {
-  AgentHarness,
-  AgentHarnessModelCatalogParams,
-  AgentHarnessModelCatalogResult,
-} from "./harness/types.js";
-import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
+import type { AgentHarness } from "./harness/types.js";
+import { harnessRegistry, snapshot } from "./model-catalog-fixtures.test-support.js";
 import { loadPreparedModelCatalogSnapshot as loadCatalog } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeSnapshot as readSnapshot,
   markPreparedModelRuntimeSnapshotsStale as invalidate,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import type { PreparedModelCatalogRefreshOptions } from "./prepared-model-runtime.types.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "native-demand" });
 const { mocks } = fixture;
+beforeEach(() => {
+  mocks.configuredAgentIds = ["pro"];
+});
 
 function installHarnesses(
   ...harnesses: (Pick<AgentHarness, "id" | "loadModelCatalog"> &
@@ -40,16 +40,9 @@ function installHarnesses(
 ) {
   mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
     const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push(
-      ...harnesses.flatMap(
-        (harness) =>
-          harnessRegistry(harness.id, {
-            label: "Native test",
-            runAttempt: vi.fn(),
-            ...harness,
-          }).agentHarnesses,
-      ),
-    );
+    for (const harness of harnesses) {
+      registry.agentHarnesses.push(...harnessRegistry(harness.id, harness).agentHarnesses);
+    }
     return registry;
   });
 }
@@ -85,10 +78,19 @@ function publish(config: OpenClawConfig) {
   });
 }
 
+async function prepareOwner(
+  config: OpenClawConfig,
+  options: PreparedModelCatalogRefreshOptions = { changedOnly: true },
+) {
+  await publish(config);
+  const owner = readSnapshot(fixture.agentInput("pro", config))!;
+  await owner.loadFullModelCatalog!(options);
+  return owner;
+}
+
 it("serves published models while single-flight native discovery is pending", async ({
   signal,
 }) => {
-  mocks.configuredAgentIds = ["pro"];
   const config: OpenClawConfig = {
     agents: {
       entries: { pro: {} },
@@ -105,13 +107,8 @@ it("serves published models while single-flight native discovery is pending", as
     return [discovered];
   });
   installHarnesses({ id: "native-test", loadModelCatalog: loadNative });
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [saved],
-    routeVariants: [saved],
-  });
-  await publish(config);
-  const owner = readSnapshot(fixture.agentInput("pro", config))!;
-  await owner.loadFullModelCatalog!({ changedOnly: true });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot([saved]));
+  const owner = await prepareOwner(config);
   const sessionKey = "agent:pro:catalog-reader";
   setRuntimeConfigSnapshot(config);
   await upsertSessionEntryCore(
@@ -185,9 +182,7 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
   const native = nativeModel("demo", "native-model", "native-test");
   mocks.resolveNativeModelPrimary.mockReturnValue("demo/native-model");
   const observed = new Set<string>();
-  const loadNative = vi.fn<
-    (params: AgentHarnessModelCatalogParams) => Promise<AgentHarnessModelCatalogResult>
-  >(async ({ agentDir }) => {
+  const loadNative = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async ({ agentDir }) => {
     observed.add(agentDir);
     return [native];
   });
@@ -199,10 +194,7 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
       observed.has(agentDir) ? { accountType: "apiKey" } : undefined,
   });
   const providerRows = [{ provider: "builtin", id: "known", name: "Known" }];
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: providerRows,
-    routeVariants: providerRows,
-  });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot(providerRows));
   await publish(config);
   for (const agentId of agentIds) {
     await readSnapshot(fixture.agentInput(agentId, config))!.loadFullModelCatalog!({
@@ -211,18 +203,15 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
   }
   expect(loadNative).not.toHaveBeenCalled();
   expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(agentIds.length);
-  const read = () =>
-    loadCatalog({
-      agentId: "pro",
-      config,
-    });
+  const read = () => loadCatalog({ agentId: "pro", config });
   const requestPicker = createPicker(config);
   const pick = async () => {
     const respond = await requestPicker();
-    const [ok, result, error] = respond.mock.calls[0] ?? [];
-    expect(error).toBeUndefined();
-    expect(ok).toBe(true);
-    expect(result).toEqual(modelsResult([{ provider: native.provider, id: native.id }]));
+    expect(respond.mock.calls[0]).toEqual([
+      true,
+      modelsResult([{ provider: native.provider, id: native.id }]),
+      undefined,
+    ]);
   };
   await Promise.all([pick(), pick()]);
   expect(loadNative).toHaveBeenCalledOnce();
@@ -255,7 +244,6 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
   "preserves the models.list publication contract after native %s",
   async (outcome) => {
     const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
-    mocks.configuredAgentIds = ["pro"];
     const failure = new Error("Native model/list unavailable");
     const loadNative = vi.fn(async () => {
       if (outcome === "superseded owner") {
@@ -267,36 +255,30 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
     });
     installHarnesses({ id: "native-test", loadModelCatalog: loadNative });
     const saved = { provider: "custom", id: "saved-model", name: "Saved model" };
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-      entries: [saved],
-      routeVariants: [saved],
-      providerOutcomes: [{ provider: saved.provider, status: "ready" }],
-    });
-    await publish(config);
-    const owner = readSnapshot(fixture.agentInput("pro", config))!;
-    await owner.loadFullModelCatalog!({ changedOnly: true });
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue(
+      snapshot([saved], {
+        providerOutcomes: [{ provider: saved.provider, status: "ready" }],
+      }),
+    );
+    const owner = await prepareOwner(config);
     expect(owner.readFullModelCatalog!()?.entries).toContainEqual(expect.objectContaining(saved));
     expect(loadNative).not.toHaveBeenCalled();
     const pick = createPicker(config);
     const respond = await pick();
     expect(loadNative).toHaveBeenCalledOnce();
     if (outcome !== "discovery failure") {
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          retryable: true,
-          retryAfterMs: 0,
-        }),
-      );
+      expect(respond.mock.calls).toEqual([
+        [
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 0 }),
+        ],
+      ]);
       return;
     }
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      true,
-      modelsResult([saved], { refreshFailed: true }),
-      undefined,
-    );
+    expect(respond.mock.calls).toEqual([
+      [true, modelsResult([saved], { refreshFailed: true }), undefined],
+    ]);
     await pick();
     expect(loadNative).toHaveBeenCalledOnce();
     await expect(
@@ -325,7 +307,6 @@ it.each([
         ...(sharedProvider ? { pickerRuntimes: ["failed-native"] } : {}),
       },
     });
-    mocks.configuredAgentIds = ["pro"];
     mocks.resolveNativeModelPrimary.mockReturnValue("demo/native-model");
     const native = nativeModel("demo", "native-model", runtime);
     let healthyReady = false;
@@ -354,9 +335,7 @@ it.each([
         readModelCatalogReadiness: () => (isReady() ? { accountType: "apiKey" } : undefined),
       })),
     );
-    await publish(config);
-    const owner = readSnapshot(fixture.agentInput("pro", config))!;
-    await owner.loadFullModelCatalog!({ changedOnly: true });
+    await prepareOwner(config);
     const pick = createPicker(config);
     await pick();
     if (sharedProvider) {
@@ -386,36 +365,30 @@ it("acquires remaining native runtimes after an initial provider-scoped refresh"
     "first/native-model": { agentRuntime: { id: "native-first" } },
     "second/configured-hint": { pickerRuntimes: ["native-second"] },
   });
-  mocks.configuredAgentIds = ["pro"];
   mocks.resolveNativeModelPrimary.mockReturnValue("first/native-model");
   const first = nativeModel("first", "native-model", "native-first", "First");
   const second = nativeModel("second", "discovered-model", "native-second", "Second");
   const loadFirst = vi.fn(async () => [first]);
   const loadSecond = vi.fn(async () => [second]);
   installHarnesses(
-    {
-      id: first.nativeRuntime,
-      label: first.name,
-      authBootstrap: "harness",
-      loadModelCatalog: loadFirst,
-    },
-    {
-      id: second.nativeRuntime,
-      label: second.name,
-      authBootstrap: "harness",
-      loadModelCatalog: loadSecond,
-    },
+    ...(
+      [
+        [first, loadFirst],
+        [second, loadSecond],
+      ] as const
+    ).map(([entry, loadModelCatalog]) => ({
+      id: entry.nativeRuntime,
+      label: entry.name,
+      authBootstrap: "harness" as const,
+      loadModelCatalog,
+    })),
   );
-  await publish(config);
-  const owner = readSnapshot(fixture.agentInput("pro", config))!;
-  await owner.loadFullModelCatalog!({ providerIds: ["first"], refresh: true, wait: true });
+  await prepareOwner(config, { providerIds: ["first"], refresh: true, wait: true });
   expect(loadFirst).toHaveBeenCalledOnce();
   expect(loadSecond).not.toHaveBeenCalled();
   const respond = await createPicker(config)();
   expect(loadSecond).toHaveBeenCalledOnce();
-  expect(respond).toHaveBeenCalledExactlyOnceWith(
-    true,
-    modelsResult([{ provider: second.provider, id: second.id }]),
-    undefined,
-  );
+  expect(respond.mock.calls).toEqual([
+    [true, modelsResult([{ provider: second.provider, id: second.id }]), undefined],
+  ]);
 });

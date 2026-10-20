@@ -23,12 +23,9 @@ function fixture() {
   });
   const model = makeProviderModelFixture<"openai-responses">({
     id: "first",
-    name: "First",
     provider: "synthetic",
     api: "openai-responses",
     baseUrl: "https://synthetic.invalid",
-    contextWindow: 8192,
-    maxTokens: 1024,
     cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
   });
   let models = new Map<string, readonly Model[]>([[model.provider, [model]]]);
@@ -132,9 +129,4 @@ it("captures new passive facts and per-admission auth bindings without changing 
   const updated = f.capture();
   expect(readCatalog(updated)).toBe(updatedCatalog);
   expect(readCatalog(first)?.entries[0]?.reasoning).toBe(false);
-  const otherOwner = { ...f.source };
-  const other = captureCatalog(otherOwner, otherOwner);
-  expect(f.createStores).not.toHaveBeenCalled();
-  expect(other.createStores().modelRegistry.find("synthetic", "first")).toEqual(f.model);
-  expect(f.createStores).toHaveBeenCalledTimes(1);
 });

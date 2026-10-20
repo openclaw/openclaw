@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
@@ -33,7 +32,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   const workspaceDir = fs.realpathSync(makePluginLoaderTempDir());
   const bundledRoot = path.resolve(import.meta.dirname, "../../extensions");
   const entrypoint = path.join(bundledRoot, "copilot", "index.ts");
-  const copilotModule = await loadBundledPluginFacade({
+  const plugin = await loadBundledPluginFacade({
     pluginId: "copilot",
     artifactBasename: "index.ts",
   });
@@ -42,7 +41,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   const loadModule = Object.assign(
     vi.fn((...[source]: Parameters<pluginModuleRuntime.PluginModuleLoader>) => {
       expect(source).toBe(entrypoint);
-      return copilotModule;
+      return plugin;
     }),
     {
       prepare: vi.fn(async () => {
@@ -57,45 +56,30 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
   };
+  const modelRef = "custom-proxy/test-model";
+  const worker = { model: modelRef, models: { [modelRef]: { agentRuntime: { id: "copilot" } } } };
   const config: OpenClawConfig = {
-    agents: {
-      ownership: "explicit",
-      entries: {
-        worker: {
-          model: "custom-proxy/test-model",
-          models: { "custom-proxy/test-model": { agentRuntime: { id: "copilot" } } },
-        },
-      },
-    },
+    agents: { ownership: "explicit", entries: { worker } },
     ...providerConfig("custom-proxy", {
       api: "openai-responses",
       baseUrl: "https://api.example.com/v1",
-      models: [model("test-model", "Test model", { maxTokens: 8192 })],
+      models: [model("test-model")],
     }),
     plugins: { allow: ["copilot"], slots: { memory: "none" } },
   };
-  const root = await activateRoot({
-    config,
-    env,
-    workspaceDir,
-    onlyPluginIds: [],
-    cache: false,
-  });
+  const options = { config, env, workspaceDir };
+  const root = await activateRoot({ ...options, onlyPluginIds: [], cache: false });
   const metadata = loadMetadata({
-    config,
-    env,
-    workspaceDir,
+    ...options,
     pluginIds: ["copilot"],
     allowCurrent: false,
     preferPersisted: false,
   });
   const selection = { agentId: "worker", provider: "custom-proxy", modelId: "test-model" };
-  const { runtimePluginRegistry } = await prepareRegistries(
+  const { runtimePluginRegistry: registry } = await prepareRegistries(
     {
-      config,
-      env,
+      ...options,
       agentDir: workspaceDir,
-      workspaceDir,
       loadRuntimePlugins: true,
       runtimePluginSelections: [selection],
     },
@@ -103,29 +87,21 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     vi.fn(),
   );
 
-  expect(runtimePluginRegistry).not.toBe(root);
+  expect(registry).not.toBe(root);
   expect(loadModule).toHaveBeenCalledOnce();
-  const [, owner] = expectDefined(loadModule.mock.calls[0], "Copilot module load");
-  expect(owner?.registry).toBe(runtimePluginRegistry);
-  expect(owner?.record).toBe(runtimePluginRegistry?.plugins[0]);
+  const owner = loadModule.mock.calls[0]?.[1];
+  expect(owner?.registry).toBe(registry);
+  expect(owner?.record).toBe(registry?.plugins[0]);
   expect(owner?.rootDir).toBe(path.dirname(entrypoint));
   expect(getActivePluginRegistry()).toBe(root);
   expect(root.agentHarnesses).toEqual([]);
-  expect(
-    runtimePluginRegistry?.plugins,
-    JSON.stringify(runtimePluginRegistry?.diagnostics),
-  ).toEqual([expect.objectContaining({ id: "copilot", status: "loaded", source: entrypoint })]);
+  expect(registry?.plugins).toEqual([
+    expect.objectContaining({ id: "copilot", status: "loaded", source: entrypoint }),
+  ]);
   await expect(
-    ensureHarness({
-      ...selection,
-      config,
-      workspaceDir,
-      pluginRegistry: runtimePluginRegistry,
-    }),
+    ensureHarness({ ...selection, config, workspaceDir, pluginRegistry: registry }),
   ).resolves.toBeUndefined();
-  const harness = runtimePluginRegistry?.agentHarnesses.find(
-    (entry) => entry.harness.id === "copilot",
-  )?.harness;
+  const harness = registry?.agentHarnesses.find((entry) => entry.harness.id === "copilot")?.harness;
   expect(
     harness?.supports({
       ...selection,

@@ -20,25 +20,25 @@ import {
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-runtime-plugin-drain" });
 
-async function publishConfigured(config: RuntimeInput["config"]) {
+async function publishConfigured(config: RuntimeInput["config"] = {}) {
   fixture.mocks.authStorage.getAll.mockReturnValue({});
   fixture.mocks.configuredAgentIds = ["default"];
   await refresh(config, { gatewayLifecycle: true });
+  return fixture.agentInput("default", config);
 }
 
 it.each(["draining", "replacing"] as const)(
   "keeps an admitted turn on its own generation while plugins are %s",
   async (phase) => {
-    const config = {};
     const { registry } = createTestPluginRegistry();
     const record = createPluginRecord({ id: "retained-model", status: "loaded" });
     registry.plugins.push(record);
     const instance = new PluginInstance(record.id, { record, registry });
     fixture.mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
-    await publishConfigured(config);
+    const configured = await publishConfigured();
     const published = (await loadDispatch({ agentId: "default" }))!;
     const input = {
-      ...fixture.agentInput("default", config),
+      ...configured,
       workspaceDir: published.workspaceDir,
     };
     await using parent = scopeLease(await acquire(input));
@@ -61,9 +61,7 @@ it.each(["draining", "replacing"] as const)(
         ).rejects.toMatchObject({ admissionBlocked: true });
         await parent[Symbol.asyncDispose]();
         await expect(
-          acquire(input, {
-            pluginGeneration: parent.pluginGeneration,
-          }),
+          acquire(input, { pluginGeneration: parent.pluginGeneration }),
         ).rejects.toMatchObject({ admissionBlocked: true });
       }),
     );
@@ -86,9 +84,7 @@ it.each(["draining", "replacing"] as const)(
 it.each(["call", "consumer"] as const)(
   "refuses a model wait from the %s an external reload is draining",
   async (kind) => {
-    const config = {};
-    await publishConfigured(config);
-    const input = fixture.agentInput("default", config);
+    const input = await publishConfigured();
     const instance = new PluginInstance("reloading-plugin");
     const scope = new PluginInvocationScope(createTestPluginRegistry().registry, [instance], {
       retained: true,
@@ -122,46 +118,43 @@ it.each(["call", "consumer"] as const)(
   },
 );
 
-it.each([
-  {
-    name: "model acquisition",
-    acquire: async (input: RuntimeInput) => {
+it.each(["model acquisition", "channel reply dispatch"])(
+  "lets unrelated admitted %s wait for a plugin drain",
+  async (kind) => {
+    const input = await publishConfigured();
+    const { config } = input;
+    const runAcquisition = async () => {
+      if (kind === "channel reply dispatch") {
+        return (await loadDispatch({ agentId: "default" }))?.config;
+      }
       await using lease = await acquire(input);
       return lease.snapshot.config;
-    },
+    };
+    const unrelated = new PluginInstance("unrelated-channel");
+    const drain = beginDrain();
+    let settled = false;
+    const acquisition = unrelated
+      .run(runAcquisition)
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      )
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      const metadata = await prepare(input, { readPublished: true });
+      expect(metadata.config).toBe(config);
+      expect(settled).toBe(false);
+      drain.release();
+      expect(await acquisition).toEqual({ value: config });
+    } finally {
+      drain.release();
+      await acquisition;
+      await unrelated.dispose();
+    }
   },
-  {
-    name: "channel reply dispatch",
-    acquire: async (_input: RuntimeInput) => (await loadDispatch({ agentId: "default" }))?.config,
-  },
-])("lets unrelated admitted $name wait for a plugin drain", async ({ acquire: runAcquisition }) => {
-  const config = {};
-  await publishConfigured(config);
-  const input = fixture.agentInput("default", config);
-  const unrelated = new PluginInstance("unrelated-channel");
-  const drain = beginDrain();
-  let settled = false;
-  const acquisition = unrelated
-    .run(() => runAcquisition(input))
-    .then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    )
-    .finally(() => {
-      settled = true;
-    });
-  try {
-    const metadata = await prepare(input, { readPublished: true });
-    expect(metadata.config).toBe(config);
-    expect(settled).toBe(false);
-    drain.release();
-    expect(await acquisition).toEqual({ value: config });
-  } finally {
-    drain.release();
-    await acquisition;
-    await unrelated.dispose();
-  }
-});
+);
 
 it("lets admitted plugin work join initial model-owner construction", async () => {
   fixture.mocks.authStorage.getAll.mockReturnValue({});

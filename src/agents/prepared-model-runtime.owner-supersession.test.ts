@@ -74,6 +74,57 @@ function observeSettlement(promise: Promise<void>) {
   };
 }
 
+function pendingWork(...gates: ReturnType<typeof createDeferred<void>>[]) {
+  const jobs: Promise<unknown>[] = [];
+  return {
+    track<T>(job: Promise<T>) {
+      jobs.push(job);
+      void job.catch(() => undefined);
+      return job;
+    },
+    async [Symbol.asyncDispose]() {
+      for (const gate of gates) {
+        gate.resolve();
+      }
+      await Promise.allSettled(jobs);
+    },
+  };
+}
+
+function holdInitialAcquisition(
+  acquireReplacement?: (signal: AbortSignal) => Promise<void>,
+  beforeAbort?: () => Promise<void>,
+) {
+  const started = createDeferred();
+  const release = createDeferred();
+  let cancellation: unknown;
+  mocks.prepareStaticCatalog.mockImplementation(async (input) => {
+    const { config, signal } = input as { config: OpenClawConfig; signal: AbortSignal };
+    if (config.messages?.responsePrefix === "initial") {
+      const aborted = createDeferred();
+      const onAbort = () => {
+        cancellation = signal.reason;
+        aborted.resolve();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      started.resolve();
+      try {
+        await Promise.race([aborted.promise, release.promise]);
+        if (beforeAbort) {
+          await beforeAbort();
+        }
+        signal.throwIfAborted();
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    } else if (acquireReplacement) {
+      await acquireReplacement(signal);
+    }
+    return { entries: [] };
+  });
+  return { started, release, cancellation: () => cancellation };
+}
+
 it.for(["success", "preserved admission", "failure before retired cleanup"] as const)(
   "follows an admitted hot reload through catalog pruning: %s",
   async (outcome, { signal }) => {
@@ -91,11 +142,9 @@ it.for(["success", "preserved admission", "failure before retired cleanup"] as c
       messages: { responsePrefix: "latest" },
     };
     setRuntimeConfigSnapshot(initial);
-    const started = createDeferred();
     const pruning = createDeferred();
     const releasePruning = createDeferred();
     const retiredCleanup = createDeferred();
-    const releaseAcquisition = createDeferred();
     const producerClosed = createDeferred();
     const pruningError = new Error("replacement catalog pruning failed");
     const refreshNow = configuredRefresh.refreshPreparedModelRuntimeSnapshotsNow;
@@ -121,25 +170,10 @@ it.for(["success", "preserved admission", "failure before retired cleanup"] as c
         }
         return false;
       });
-    mocks.prepareStaticCatalog.mockImplementation(async (input) => {
-      const options = input as { config: OpenClawConfig; signal: AbortSignal };
-      if (options.config.messages?.responsePrefix === "initial") {
-        const aborted = createDeferred();
-        const onAbort = () => aborted.resolve();
-        options.signal.addEventListener("abort", onAbort, { once: true });
-        started.resolve();
-        try {
-          await Promise.race([aborted.promise, releaseAcquisition.promise]);
-          if (fails) {
-            await retiredCleanup.promise;
-          }
-          options.signal.throwIfAborted();
-        } finally {
-          options.signal.removeEventListener("abort", onAbort);
-        }
-      }
-      return { entries: [] };
-    });
+    const acquisition = holdInitialAcquisition(
+      undefined,
+      fails ? () => retiredCleanup.promise : undefined,
+    );
     let state: ReturnType<GatewayReloadHandlerParams["getState"]> =
       createDefaultGatewayReloadState();
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -172,7 +206,7 @@ it.for(["success", "preserved admission", "failure before retired cleanup"] as c
     let reload: Promise<unknown> | undefined;
     let reader: ReturnType<typeof loadDispatch> | undefined;
     try {
-      await withinTest(started.promise, signal);
+      await withinTest(acquisition.started.promise, signal);
       reload = handlers
         .applyHotReload(createHotTailPlan({ changedPaths: ["models.providers.fixture"] }), latest)
         .catch((error: unknown) => error);
@@ -208,7 +242,7 @@ it.for(["success", "preserved admission", "failure before retired cleanup"] as c
       }
     } finally {
       releasePruning.resolve();
-      releaseAcquisition.resolve();
+      acquisition.release.resolve();
       retiredCleanup.resolve();
       await Promise.allSettled([startup, observed, reload, reader]);
       handlers.stopRestartRetries();
@@ -226,40 +260,19 @@ it.for(["success", "failure", "shutdown", "foreground grace"] as const)(
     mocks.configuredAgentIds = ["default", "deferred"];
     const initial = { messages: { responsePrefix: "initial" } };
     const latest = { messages: { responsePrefix: "latest" } };
-    const started = createDeferred();
     const successorStarted = createDeferred();
     const release = createDeferred();
-    const escape = createDeferred();
     const successorError = new Error("replacement catalog acquisition failed");
     if (outcome === "foreground grace") {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     }
-    let cancellation: unknown;
-    mocks.prepareStaticCatalog.mockImplementation(async (input) => {
-      const options = input as { config: OpenClawConfig; signal: AbortSignal };
-      if (options.config.messages?.responsePrefix === "initial") {
-        const aborted = createDeferred();
-        const onAbort = () => {
-          cancellation = options.signal.reason;
-          aborted.resolve();
-        };
-        options.signal.addEventListener("abort", onAbort, { once: true });
-        started.resolve();
-        try {
-          await Promise.race([aborted.promise, escape.promise]);
-          options.signal.throwIfAborted();
-        } finally {
-          options.signal.removeEventListener("abort", onAbort);
-        }
-      } else {
-        successorStarted.resolve();
-        await release.promise;
-        options.signal.throwIfAborted();
-        if (outcome === "failure") {
-          throw successorError;
-        }
+    const acquisition = holdInitialAcquisition(async (acquisitionSignal) => {
+      successorStarted.resolve();
+      await release.promise;
+      acquisitionSignal.throwIfAborted();
+      if (outcome === "failure") {
+        throw successorError;
       }
-      return { entries: [] };
     });
     const startup = publishConfiguredModelRuntimeSnapshots({ cfg: initial });
     const { result: observed, isSettled } = observeSettlement(startup);
@@ -267,7 +280,7 @@ it.for(["success", "failure", "shutdown", "foreground grace"] as const)(
     let closing: Promise<void> | undefined;
     let reader: ReturnType<typeof loadDispatch> | undefined;
     try {
-      await withinTest(started.promise, signal);
+      await withinTest(acquisition.started.promise, signal);
       expect(startupStatus()?.pendingAgents.length).toBeGreaterThan(0);
       if (outcome === "foreground grace") {
         await vi.advanceTimersByTimeAsync(1_000);
@@ -280,7 +293,9 @@ it.for(["success", "failure", "shutdown", "foreground grace"] as const)(
       void successor.catch(() => undefined);
       expect(startupStatus()).toBeUndefined();
       await withinTest(successorStarted.promise, signal);
-      expect(cancellation).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+      expect(acquisition.cancellation()).toBeInstanceOf(
+        PreparedModelRuntimePublicationSupersededError,
+      );
       const settledBeforeSuccessor = isSettled();
       if (outcome === "shutdown") {
         closing = closeSnapshots();
@@ -309,7 +324,7 @@ it.for(["success", "failure", "shutdown", "foreground grace"] as const)(
       expect(startupStatus()).toBeUndefined();
       expect(settledBeforeSuccessor).toBe(false);
     } finally {
-      escape.resolve();
+      acquisition.release.resolve();
       release.resolve();
       closing ??= closeSnapshots();
       await Promise.allSettled([startup, observed, successor, closing, reader]);
@@ -377,68 +392,58 @@ it.each([
 ] as const)("does not accept a joined refresh after %s", async (boundary) => {
   mocks.configuredAgentIds = ["default"];
   const { started, release } = holdNextCatalogWrite();
-  const first = refresh({}, { joinSupersedingPublication: true });
+  await using work = pendingWork(release);
+  const first = work.track(refresh({}, { joinSupersedingPublication: true }));
   const rejected = expect(first).rejects.toThrow(/superseded|closed/);
-  let successor: Promise<void> | undefined;
-  let closing: Promise<void> | undefined;
-  try {
-    await started.promise;
-    if (boundary === "invalidation" || boundary === "preserved invalidation") {
-      invalidate("publication owner retired", {
-        preserveReplacementWait: boundary === "preserved invalidation",
-      });
-    } else if (boundary.startsWith("unpublished replacement")) {
-      invalidate("replacement preparing", {
-        waitForReplacement: true,
-      });
-      if (boundary === "unpublished replacement close") {
-        closing = closeSnapshots();
-      } else {
-        invalidate("replacement cancelled");
-      }
+  await started.promise;
+  if (boundary === "invalidation" || boundary === "preserved invalidation") {
+    invalidate("publication owner retired", {
+      preserveReplacementWait: boundary === "preserved invalidation",
+    });
+  } else if (boundary.startsWith("unpublished replacement")) {
+    invalidate("replacement preparing", {
+      waitForReplacement: true,
+    });
+    if (boundary === "unpublished replacement close") {
+      work.track(closeSnapshots());
     } else {
-      let claimCurrent = true;
-      successor = refresh(
+      invalidate("replacement cancelled");
+    }
+  } else {
+    let claimCurrent = true;
+    work.track(
+      refresh(
         {},
         {
           isPublicationCurrent: () => claimCurrent,
         },
-      );
-      if (boundary === "lost claim") {
-        claimCurrent = false;
-      } else {
-        closing = closeSnapshots();
-      }
+      ),
+    );
+    if (boundary === "lost claim") {
+      claimCurrent = false;
+    } else {
+      work.track(closeSnapshots());
     }
-    release.resolve();
-    await rejected;
-  } finally {
-    release.resolve();
-    await Promise.allSettled([first, successor, closing]);
   }
+  release.resolve();
+  await rejected;
 });
 
 it("joins the latest of multiple replacements without rebuilding skipped config", async () => {
   mocks.configuredAgentIds = ["default"];
   const { started, release } = holdNextCatalogWrite();
-  const first = refresh({}, { joinSupersedingPublication: true });
-  let skipped: Promise<void> | undefined;
-  let latest: Promise<void> | undefined;
-  try {
-    await started.promise;
-    skipped = refresh({ messages: { responsePrefix: "skipped" } });
-    latest = refresh({ messages: { responsePrefix: "latest" } });
-    release.resolve();
-    await expect(first).resolves.toBeUndefined();
-    await Promise.all([skipped, latest]);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-    expect(mocks.ensureOpenClawModelsJson.mock.calls.at(-1)?.[0]).toEqual({
-      messages: { responsePrefix: "latest" },
-    });
-  } finally {
-    release.resolve();
-    await Promise.allSettled([first, skipped, latest]);
-  }
+  await using work = pendingWork(release);
+  const first = work.track(refresh({}, { joinSupersedingPublication: true }));
+  await started.promise;
+  const skipped = work.track(refresh({ messages: { responsePrefix: "skipped" } }));
+  const latest = work.track(refresh({ messages: { responsePrefix: "latest" } }));
+  release.resolve();
+  await expect(first).resolves.toBeUndefined();
+  await Promise.all([skipped, latest]);
+  expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+  expect(mocks.ensureOpenClawModelsJson.mock.calls.at(-1)?.[0]).toEqual({
+    messages: { responsePrefix: "latest" },
+  });
 });
 
 it("finishes config replacement after a second adopted auth mutation", async () => {
@@ -449,37 +454,32 @@ it("finishes config replacement after a second adopted auth mutation", async () 
   const input = fixture.agentInput("default", config);
   const configWrite = holdNextCatalogWrite();
   const authWrite = holdNextCatalogWrite();
-  const replacement = refresh(nextConfig, {
-    gatewayLifecycle: true,
-  });
+  await using work = pendingWork(configWrite.release, authWrite.release);
+  const replacement = work.track(
+    refresh(nextConfig, {
+      gatewayLifecycle: true,
+    }),
+  );
   const result = expect(replacement).resolves.toBeUndefined();
   void result.catch(() => undefined);
-  let reader: ReturnType<typeof prepare> | undefined;
-  try {
-    await configWrite.started.promise;
-    mocks.authStorage.getAll.mockReturnValue({
-      custom: { type: "api_key", key: "first-update" },
-    });
-    mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
-    configWrite.release.resolve();
-    await authWrite.started.promise;
-    reader = prepare(input);
-    void reader.catch(() => undefined);
-    const credentials = { custom: { type: "api_key" as const, key: "latest-update" } };
-    mocks.authStorage.getAll.mockReturnValue(credentials);
-    mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
-    authWrite.release.resolve();
+  await configWrite.started.promise;
+  mocks.authStorage.getAll.mockReturnValue({
+    custom: { type: "api_key", key: "first-update" },
+  });
+  mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+  configWrite.release.resolve();
+  await authWrite.started.promise;
+  const reader = work.track(prepare(input));
+  const credentials = { custom: { type: "api_key" as const, key: "latest-update" } };
+  mocks.authStorage.getAll.mockReturnValue(credentials);
+  mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+  authWrite.release.resolve();
 
-    await result;
-    await expect(reader).resolves.toMatchObject({ config: nextConfig });
-    const snapshot = await reader;
-    expect(snapshot.isCurrent()).toBe(true);
-    expect(snapshot.createStores().authStorage.getAll()).toEqual(credentials);
-  } finally {
-    configWrite.release.resolve();
-    authWrite.release.resolve();
-    await Promise.allSettled([reader, replacement]);
-  }
+  await result;
+  await expect(reader).resolves.toMatchObject({ config: nextConfig });
+  const snapshot = await reader;
+  expect(snapshot.isCurrent()).toBe(true);
+  expect(snapshot.createStores().authStorage.getAll()).toEqual(credentials);
 });
 
 it("keeps logged-out reply dispatch after the config operation cache retires", async ({
@@ -564,32 +564,30 @@ it("joins a scoped successor only after both configured agents are current", asy
   }
   const { started, release } = holdNextCatalogWrite();
   const { started: successorStarted, release: releaseSuccessor } = holdNextCatalogWrite();
-  const first = refresh(config, {
-    agentIds: new Set(["agent-a"]),
-    joinSupersedingPublication: true,
-  });
+  await using work = pendingWork(release, releaseSuccessor);
+  const first = work.track(
+    refresh(config, {
+      agentIds: new Set(["agent-a"]),
+      joinSupersedingPublication: true,
+    }),
+  );
   const { isSettled } = observeSettlement(first);
-  let successor: Promise<void> | undefined;
-  try {
-    await started.promise;
-    successor = refresh(config, {
+  await started.promise;
+  const successor = work.track(
+    refresh(config, {
       agentIds: new Set(["agent-b"]),
-    });
-    release.resolve();
-    await successorStarted.promise;
-    expect(isSettled()).toBe(false);
-    expect(read("agent-a")).toBeUndefined();
-    releaseSuccessor.resolve();
-    await first;
-    for (const agentId of mocks.configuredAgentIds) {
-      expect(read(agentId)?.isCurrent()).toBe(true);
-    }
-    await successor;
-  } finally {
-    release.resolve();
-    releaseSuccessor.resolve();
-    await Promise.allSettled([first, successor]);
+    }),
+  );
+  release.resolve();
+  await successorStarted.promise;
+  expect(isSettled()).toBe(false);
+  expect(read("agent-a")).toBeUndefined();
+  releaseSuccessor.resolve();
+  await first;
+  for (const agentId of mocks.configuredAgentIds) {
+    expect(read(agentId)?.isCurrent()).toBe(true);
   }
+  await successor;
 });
 
 it("stops a superseded same-directory batch before another catalog write", async () => {
@@ -600,6 +598,10 @@ it("stops a superseded same-directory batch before another catalog write", async
   }
   const staleConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
   const latestConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+  const writesFor = (config: OpenClawConfig) =>
+    mocks.ensureOpenClawModelsJson.mock.calls.filter(([written]) =>
+      isDeepStrictEqual(written, config),
+    );
   const releaseStaleWriteGate = createDeferred();
   const staleWriteStarted = createDeferred();
   mocks.ensureOpenClawModelsJson.mockImplementation(async (config) => {
@@ -610,28 +612,14 @@ it("stops a superseded same-directory batch before another catalog write", async
     return { agentDir: fixture.state.agentDir("shared-catalog-agent-dir"), wrote: false };
   });
 
-  let stale: ReturnType<typeof refresh> | undefined;
-  let latest: ReturnType<typeof refresh> | undefined;
-  try {
-    stale = refresh(staleConfig);
-    await staleWriteStarted.promise;
-    latest = refresh(latestConfig);
-    releaseStaleWriteGate.resolve();
+  await using work = pendingWork(releaseStaleWriteGate);
+  const stale = work.track(refresh(staleConfig));
+  await staleWriteStarted.promise;
+  const latest = work.track(refresh(latestConfig));
+  releaseStaleWriteGate.resolve();
 
-    await expect(stale).rejects.toThrow("superseded");
-    await latest;
-    expect(
-      mocks.ensureOpenClawModelsJson.mock.calls.filter(([config]) =>
-        isDeepStrictEqual(config, staleConfig),
-      ),
-    ).toHaveLength(1);
-    expect(
-      mocks.ensureOpenClawModelsJson.mock.calls.filter(([config]) =>
-        isDeepStrictEqual(config, latestConfig),
-      ),
-    ).toHaveLength(2);
-  } finally {
-    releaseStaleWriteGate.resolve();
-    await Promise.allSettled([stale, latest]);
-  }
+  await expect(stale).rejects.toThrow("superseded");
+  await latest;
+  expect(writesFor(staleConfig)).toHaveLength(1);
+  expect(writesFor(latestConfig)).toHaveLength(2);
 });
