@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   cancelExecRequestOwners,
@@ -59,9 +59,15 @@ beforeEach(() => {
   enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
 });
-afterEach(() => {
-  resetProcessRegistryForTests();
-});
+afterEach(resetProcessRegistryForTests);
+
+function completedReceipt(cancel = vi.fn(() => true)) {
+  return {
+    id: "exec-event",
+    cancel,
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  };
+}
 
 function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]>) {
   return runExecProcess({
@@ -356,199 +362,175 @@ it.each([
   },
 );
 
-describe("terminal execution-context release", () => {
-  it.each([
-    { path: "notify", trace: ["task", "enqueue"] },
-    { path: "quiet", trace: ["task"] },
-    { path: "unrouted", trace: ["task"] },
-    { path: "observed", trace: ["task"] },
-  ])(
-    "releases routing after $path without changing notification order",
-    async ({ path, trace }) => {
-      const exit = createDeferred<RunExit>();
-      const observed: string[] = [];
-      const removal = vi.fn(() => true);
-      const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
-      enqueueSessionEventMock.mockImplementation((_text, options) => {
-        observed.push("enqueue");
-        expect(options.deliveryContext).toEqual(deliveryContext);
-        return {
-          id: "exec-event",
-          cancel: removal,
-          settled: Promise.resolve({
-            status: "completed",
-            executionStarted: true,
-            delivered: false,
-          }),
-        };
-      });
-      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-        ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
-        wait: () => exit.promise,
-      }));
-      const run = await runTestExecProcess({
-        command: "context-release",
-        scopeKey: "global",
-        sessionKey: path === "unrouted" ? undefined : "agent:main:main",
-        agentId: "main",
-        eventRouting: { mainKey: "main", sessionScope: "per-sender" },
-        notifyDeliveryContext: deliveryContext,
-        notifyOnExit: true,
-        notifyOnExitEmptySuccess: false,
-        onSettledBeforeNotify: () => {
-          observed.push("task");
-        },
-      });
-      markBackgrounded(run.session);
-      const scope = { scopeKeys: ["global"], agentId: "main" };
-      const running = readBackgroundProcesses(scope).processes[0];
-      expect(running).toMatchObject({ processId: run.session.id, status: "running" });
-      if (path === "observed") {
-        acknowledgeNotifyOnExit(run.session);
-      }
-      exit.resolve(createRunExit());
-      const outcome = await run.promise;
-      expect(observed).toEqual(trace);
-      expect(outcome.status).toBe("completed");
-      const retained = getFinishedSession(run.session.id);
-      expect(retained).toMatchObject({ scopeKey: "global", terminalStatus: "completed" });
-      expect(readBackgroundProcesses(scope).processes).toEqual([
-        expect.objectContaining({
-          processId: run.session.id,
-          instanceId: running?.instanceId,
-          status: "completed",
-          canStop: false,
-        }),
-      ]);
-      expect(readBackgroundProcesses({ ...scope, agentId: "other" }).processes).toEqual([]);
-      expectRoutingReleased(retained);
-      expect(retained?.stdin).toBeUndefined();
-      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("enqueue") ? removal : undefined);
-      expect(removal).not.toHaveBeenCalled();
+it.each([
+  { path: "notify", trace: ["task", "enqueue"] },
+  { path: "quiet", trace: ["task"] },
+  { path: "unrouted", trace: ["task"] },
+  { path: "observed", trace: ["task"] },
+])("releases routing after $path without changing notification order", async ({ path, trace }) => {
+  const exit = createDeferred<RunExit>();
+  const observed: string[] = [];
+  const removal = vi.fn(() => true);
+  const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
+  enqueueSessionEventMock.mockImplementation((_text, options) => {
+    observed.push("enqueue");
+    expect(options.deliveryContext).toEqual(deliveryContext);
+    return completedReceipt(removal);
+  });
+  supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+    ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
+    wait: () => exit.promise,
+  }));
+  const run = await runTestExecProcess({
+    command: "context-release",
+    scopeKey: "global",
+    sessionKey: path === "unrouted" ? undefined : "agent:main:main",
+    agentId: "main",
+    eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+    notifyDeliveryContext: deliveryContext,
+    notifyOnExit: true,
+    notifyOnExitEmptySuccess: false,
+    onSettledBeforeNotify: () => {
+      observed.push("task");
     },
-  );
+  });
+  markBackgrounded(run.session);
+  const scope = { scopeKeys: ["global"], agentId: "main" };
+  const running = readBackgroundProcesses(scope).processes[0];
+  expect(running).toMatchObject({ processId: run.session.id, status: "running" });
+  if (path === "observed") {
+    acknowledgeNotifyOnExit(run.session);
+  }
+  exit.resolve(createRunExit());
+  const outcome = await run.promise;
+  expect(observed).toEqual(trace);
+  expect(outcome.status).toBe("completed");
+  const retained = getFinishedSession(run.session.id);
+  expect(retained).toMatchObject({ scopeKey: "global", terminalStatus: "completed" });
+  expect(readBackgroundProcesses(scope).processes).toEqual([
+    expect.objectContaining({
+      processId: run.session.id,
+      instanceId: running?.instanceId,
+      status: "completed",
+      canStop: false,
+    }),
+  ]);
+  expect(readBackgroundProcesses({ ...scope, agentId: "other" }).processes).toEqual([]);
+  expectRoutingReleased(retained);
+  expect(retained?.stdin).toBeUndefined();
+  expect(retained?.notifyOnExitRemoval).toBe(trace.includes("enqueue") ? removal : undefined);
+  expect(removal).not.toHaveBeenCalled();
 });
-
-describe("exec settlement recovery", () => {
-  it.each(["task", "persistent task", "stdin"])(
-    "settles asynchronous %s failure before releasing the exec scope",
-    async (boundary) => {
-      const exit = createDeferred<RunExit>();
-      const settlementStarted = createDeferred();
-      const settlement = createDeferred();
-      const correctionStarted = createDeferred();
-      const correction = createDeferred();
-      const observed: string[] = [];
-      const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
-      const scopeKey = `settlement-recovery:${boundary}:true`;
-      const failure = new Error("process settlement failed");
-      enqueueSessionEventMock.mockImplementation(() => {
-        observed.push("enqueue");
-        return {
-          id: "exec-event",
-          cancel: vi.fn(() => true),
-          settled: Promise.resolve({
-            status: "completed",
-            executionStarted: true,
-            delivered: false,
-          }),
-        };
-      });
-      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-        ...runtimeManagedRun(input, "process output\n"),
-        wait: () => exit.promise,
-      }));
-      const run = await withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
-        () =>
-          runTestExecProcess({
-            command: "settlement-recovery",
-            scopeKey,
-            sessionKey: "agent:main:settlement-recovery",
-            agentId: "main",
-            eventRouting: { mainKey: "main", sessionScope: "per-sender" },
-            notifyDeliveryContext: { channel: "telegram", to: "synthetic-chat" },
-            notifyOnExit: true,
-            notifyOnExitEmptySuccess: false,
-            onSettledBeforeNotify: (outcome) => {
-              observed.push(`task:${outcome.status}`);
-              identities.push(getGatewayToolCallerIdentity());
-              if (outcome.status === "failed") {
-                correctionStarted.resolve();
-                return correction.promise.then(() => {
-                  if (boundary === "persistent task") {
-                    throw failure;
-                  }
-                });
-              }
-              settlementStarted.resolve();
-              const pending = settlement.promise.then(() => {
-                if (boundary === "task" || boundary === "persistent task") {
+it.each(["task", "persistent task", "stdin"])(
+  "settles asynchronous %s failure before releasing the exec scope",
+  async (boundary) => {
+    const exit = createDeferred<RunExit>();
+    const settlementStarted = createDeferred();
+    const settlement = createDeferred();
+    const correctionStarted = createDeferred();
+    const correction = createDeferred();
+    const observed: string[] = [];
+    const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
+    const scopeKey = `settlement-recovery:${boundary}:true`;
+    const failure = new Error("process settlement failed");
+    enqueueSessionEventMock.mockImplementation(() => {
+      observed.push("enqueue");
+      return completedReceipt();
+    });
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+      ...runtimeManagedRun(input, "process output\n"),
+      wait: () => exit.promise,
+    }));
+    const run = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
+      () =>
+        runTestExecProcess({
+          command: "settlement-recovery",
+          scopeKey,
+          sessionKey: "agent:main:settlement-recovery",
+          agentId: "main",
+          eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+          notifyDeliveryContext: { channel: "telegram", to: "synthetic-chat" },
+          notifyOnExit: true,
+          notifyOnExitEmptySuccess: false,
+          onSettledBeforeNotify: (outcome) => {
+            observed.push(`task:${outcome.status}`);
+            identities.push(getGatewayToolCallerIdentity());
+            if (outcome.status === "failed") {
+              correctionStarted.resolve();
+              return correction.promise.then(() => {
+                if (boundary === "persistent task") {
                   throw failure;
                 }
               });
-              void pending.catch(() => {});
-              return pending;
-            },
-          }),
-      );
-      if (boundary === "stdin") {
-        run.session.stdin = {
-          write: vi.fn(),
-          end: vi.fn(),
-          destroy() {
-            observed.push("stdin");
-            throw failure;
+            }
+            settlementStarted.resolve();
+            const pending = settlement.promise.then(() => {
+              if (boundary === "task" || boundary === "persistent task") {
+                throw failure;
+              }
+            });
+            void pending.catch(() => {});
+            return pending;
           },
-        };
-      }
-      markBackgrounded(run.session);
-      const joined = waitForExecScope(scopeKey).then(() => observed.push("scope-released"));
-      exit.resolve(createRunExit());
-      try {
-        await settlementStarted.promise;
-        expect(run.session).toMatchObject({ finalizing: true, exited: false });
-        expect(getActiveBackgroundExecSessionCount()).toBe(1);
-        expect(observed).toEqual(["task:completed"]);
-        settlement.resolve();
-        await correctionStarted.promise;
-        expect(run.session.finalizing).toBe(true);
-        expect(getActiveBackgroundExecSessionCount()).toBe(1);
-        expect(observed).not.toContain("scope-released");
-        correction.resolve();
-        if (boundary === "persistent task") {
-          await expect(run.promise).rejects.toBe(failure);
-        } else {
-          await expect(run.promise).resolves.toMatchObject({
-            status: "failed",
-          });
-        }
-        await joined;
-        expect(observed).toEqual([
-          "task:completed",
-          ...(boundary === "stdin" ? ["stdin"] : []),
-          "task:failed",
-          "scope-released",
-        ]);
-        expect(identities).toEqual([undefined, undefined]);
-        expect(getActiveBackgroundExecSessionCount()).toBe(0);
-        expect(run.session).toMatchObject({
-          finalizing: false,
-          terminalStatus: "completed",
-          agentId: "main",
+        }),
+    );
+    if (boundary === "stdin") {
+      run.session.stdin = {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy() {
+          observed.push("stdin");
+          throw failure;
+        },
+      };
+    }
+    markBackgrounded(run.session);
+    const joined = waitForExecScope(scopeKey).then(() => observed.push("scope-released"));
+    exit.resolve(createRunExit());
+    try {
+      await settlementStarted.promise;
+      expect(run.session).toMatchObject({ finalizing: true, exited: false });
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+      expect(observed).toEqual(["task:completed"]);
+      settlement.resolve();
+      await correctionStarted.promise;
+      expect(run.session.finalizing).toBe(true);
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+      expect(observed).not.toContain("scope-released");
+      correction.resolve();
+      if (boundary === "persistent task") {
+        await expect(run.promise).rejects.toBe(failure);
+      } else {
+        await expect(run.promise).resolves.toMatchObject({
+          status: "failed",
         });
-        if (boundary !== "stdin") {
-          expect(getFinishedSession(run.session.id)).toMatchObject({
-            terminalStatus: "completed",
-            aggregated: "process output\n",
-          });
-        }
-        expectRoutingReleased(run.session);
-      } finally {
-        settlement.resolve();
-        correction.resolve();
-        await Promise.allSettled([run.promise, joined]);
       }
-    },
-  );
-});
+      await joined;
+      expect(observed).toEqual([
+        "task:completed",
+        ...(boundary === "stdin" ? ["stdin"] : []),
+        "task:failed",
+        "scope-released",
+      ]);
+      expect(identities).toEqual([undefined, undefined]);
+      expect(getActiveBackgroundExecSessionCount()).toBe(0);
+      expect(run.session).toMatchObject({
+        finalizing: false,
+        terminalStatus: "completed",
+        agentId: "main",
+      });
+      if (boundary !== "stdin") {
+        expect(getFinishedSession(run.session.id)).toMatchObject({
+          terminalStatus: "completed",
+          aggregated: "process output\n",
+        });
+      }
+      expectRoutingReleased(run.session);
+    } finally {
+      settlement.resolve();
+      correction.resolve();
+      await Promise.allSettled([run.promise, joined]);
+    }
+  },
+);

@@ -17,25 +17,21 @@ type ApplyPatchResult = {
   noOp?: boolean;
 };
 
-type ApplyPatchTestApi = {
-  applyPatch(input: string, options: ApplyPatchOptions): Promise<ApplyPatchResult>;
-};
-
-function getTestApi(): ApplyPatchTestApi {
+export async function applyPatch(
+  input: string,
+  options: ApplyPatchOptions,
+): Promise<ApplyPatchResult> {
   const api = (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.applyPatchTestApi")
   ];
   if (!api) {
     throw new Error("apply patch test API is unavailable");
   }
-  return api as ApplyPatchTestApi;
-}
-
-export async function applyPatch(
-  input: string,
-  options: ApplyPatchOptions,
-): Promise<ApplyPatchResult> {
-  return await getTestApi().applyPatch(input, options);
+  return await (
+    api as {
+      applyPatch(input: string, options: ApplyPatchOptions): Promise<ApplyPatchResult>;
+    }
+  ).applyPatch(input, options);
 }
 
 export function createMemoryPatchSandbox(
@@ -106,12 +102,6 @@ export function createMemoryPatchSandbox(
     createFileExclusive,
     remove,
     mkdirp,
-    options: {
-      cwd: "/local/workspace",
-      sandbox: {
-        root: "/local/workspace",
-        bridge,
-      },
-    },
+    options: { cwd: "/local/workspace", sandbox: { root: "/local/workspace", bridge } },
   };
 }
