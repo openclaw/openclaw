@@ -1,7 +1,6 @@
-import { addAbortListener } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -86,7 +85,6 @@ const expectChatText = async (text: string) => {
     return extractFirstTextBlock(event && "message" in event ? event.message : undefined);
   };
   const projected = createDeferred();
-  const cancelWait = addAbortListener(testSignal, () => projected.reject(testSignal.reason));
   const push = harness.chat.events.push.bind(harness.chat.events);
   const capture = vi.spyOn(harness.chat.events, "push").mockImplementation((...events) => {
     const count = push(...events);
@@ -97,29 +95,20 @@ const expectChatText = async (text: string) => {
   });
   try {
     if (latestText() !== text) {
-      await projected.promise;
+      await withinTest(projected.promise, testSignal);
     }
     expect(latestText()).toBe(text);
     expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer).toBe(text);
   } finally {
-    cancelWait[Symbol.dispose]();
     capture.mockRestore();
   }
 };
 
 it.each([
   ["exact silence", ["NO_", "REPLY"], []],
-  ["whitespace-wrapped exact silence", [" \nNO_", "REPLY \t"], []],
-  [
-    "a leading control line split across chunks",
-    ["NO", "_REPLY", "\n", "Visible answer."],
-    ["Visible answer."],
-  ],
-  [
-    "a visible suffix that literally spells NO_REPLY",
-    ["NO_REPLY", "\nNO_", "REPLY"],
-    ["NO_", "NO_REPLY"],
-  ],
+  ["padded silence", [" \nNO_", "REPLY \t"], []],
+  ["split control line", ["NO", "_REPLY", "\n", "Visible answer."], ["Visible answer."]],
+  ["literal NO_REPLY suffix", ["NO_REPLY", "\nNO_", "REPLY"], ["NO_", "NO_REPLY"]],
 ] as const)(
   "prepares %s before worker publication and Gateway projection",
   async (_name, chunks, published) => {

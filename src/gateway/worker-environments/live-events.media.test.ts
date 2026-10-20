@@ -52,6 +52,8 @@ afterEach(async () => {
 it.each([false, true])(
   "prepares buffered reply media before publishing and fences revoked readers (%s)",
   async (revoke) => {
+    const mediaUrl = "/managed/reply.txt";
+    const reply = { text: "ready", mediaUrl, mediaUrls: [mediaUrl] };
     const started = createDeferredCore();
     const prepared = createDeferredCore<ReplyPayload>();
     using reader = vi
@@ -77,11 +79,7 @@ it.each([false, true])(
     if (revoke) {
       rx.clearEnvironment(ID.environmentId);
     }
-    prepared.resolve({
-      text: "ready",
-      mediaUrl: "/managed/reply.txt",
-      mediaUrls: ["/managed/reply.txt"],
-    });
+    prepared.resolve(reply);
     const result = await applying;
     if (revoke) {
       expect(result.ok).toBe(false);
@@ -89,10 +87,10 @@ it.each([false, true])(
     } else {
       expect(result).toEqual({ ok: true, result: { ackedSeq: 2 } });
       expect(events.at(-1)?.data).toMatchObject({
-        text: "ready",
-        delta: "ready",
+        text: reply.text,
+        delta: reply.text,
         replace: true,
-        mediaUrls: ["/managed/reply.txt"],
+        mediaUrls: reply.mediaUrls,
       });
     }
   },

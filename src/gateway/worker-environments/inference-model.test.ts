@@ -39,41 +39,41 @@ const configured: OpenClawConfig = {
 };
 const requiredConfig = () => ({ ...config, cloudWorkers: { requiredProfile: "required" } });
 const target = () => ({ ...params(request(), vi.fn()).sessionTarget, sessionEntry });
-const acquire = (runtime: ReturnType<typeof setup>, runtimeConfig: OpenClawConfig) =>
-  runtime.acquireRuntimeLease({
-    config: runtimeConfig,
+type Approval = Parameters<typeof resolveApprovedWorkerModel>[0];
+async function modelFixture(
+  options: Parameters<typeof setup>[1] = {},
+  leaseConfig = options.config ?? requiredConfig(),
+) {
+  const runtime = setup(sessionEntry, { config: leaseConfig, ...options });
+  const lease = await runtime.acquireRuntimeLease({
+    config: leaseConfig,
     agentId: "runtime-agent",
     agentDir: "/gateway-agent",
     workspaceDir: WORKSPACE,
   });
-const approve = (
-  runtimeSnapshot: Parameters<typeof resolveApprovedWorkerModel>[0]["runtimeSnapshot"],
-  overrides: Partial<Parameters<typeof resolveApprovedWorkerModel>[0]> = {},
-) =>
-  resolveApprovedWorkerModel({
-    target: target(),
-    modelRef,
-    runtimeSnapshot,
-    assertCurrent: () => undefined,
-    ...overrides,
+  return Object.assign(lease, {
+    runtime,
+    approve: (overrides: Partial<Approval> = {}) =>
+      resolveApprovedWorkerModel({
+        target: target(),
+        modelRef: request().modelRef,
+        runtimeSnapshot: lease.snapshot,
+        assertCurrent: () => undefined,
+        ...overrides,
+      }),
   });
+}
 
 it("forwards current required worker authority through real model preparation", async () => {
-  const required = requiredConfig();
-  const runtime = setup(sessionEntry, { config: required });
+  await using fixture = await modelFixture();
+  const { runtime } = fixture;
   const reached = new Error("admitted selected-model resolver reached");
   const resolver = vi.fn(() => Promise.reject(reached));
   runtime.prepareModel.mockImplementation((input, assertCurrent) =>
     prepareSimpleCompletionModel({ ...input, modelResolver: resolver }, assertCurrent),
   );
-  await using lease = await acquire(runtime, required);
   const assertCurrent = vi.fn();
-  await expect(
-    approve(lease.snapshot, {
-      modelRef: request().modelRef,
-      assertCurrent,
-    }),
-  ).rejects.toBe(reached);
+  await expect(fixture.approve({ assertCurrent })).rejects.toBe(reached);
   expect(resolver).toHaveBeenCalledOnce();
   expect(runtime.prepareModel).toHaveBeenCalledWith(
     expect.objectContaining({ workerInferenceAuthority: { assertCurrent } }),
@@ -83,24 +83,19 @@ it("forwards current required worker authority through real model preparation", 
 it.each(["wrong session", "revoked selection"] as const)(
   "rejects required worker %s before provider preparation",
   async (state) => {
-    const required = requiredConfig();
-    const runtime = setup(sessionEntry, { config: required });
+    await using fixture = await modelFixture();
+    const { runtime } = fixture;
     const selected = createDeferred();
     let current = true;
     if (state === "revoked selection") {
-      runtime.resolveAuthSelection.mockImplementation(async () => {
-        await selected.promise;
-        return undefined;
-      });
+      runtime.resolveAuthSelection.mockImplementation(() => selected.promise.then(() => undefined));
     }
-    await using lease = await acquire(runtime, required);
-    const pending = approve(lease.snapshot, {
+    const pending = fixture.approve({
       target: {
         ...target(),
         sessionEntry:
           state === "wrong session" ? { ...sessionEntry, sessionId: "other" } : sessionEntry,
       },
-      modelRef: request().modelRef,
       assertCurrent: () => {
         if (!current) {
           throw new Error("worker claim revoked");
@@ -119,23 +114,25 @@ it.each(["wrong session", "revoked selection"] as const)(
 );
 
 it("approves a worker-local configured model without resolving Gateway credentials", async () => {
-  const runtime = setup(sessionEntry, {
-    config: { ...structuredClone(configured), cloudWorkers: { requiredProfile: "required" } },
-    configuredRuntimeModel: model,
-  });
-  await using lease = await acquire(runtime, configured);
+  await using fixture = await modelFixture(
+    {
+      config: { ...structuredClone(configured), cloudWorkers: { requiredProfile: "required" } },
+      configuredRuntimeModel: model,
+    },
+    configured,
+  );
   const approved = await prepareWorkerTurnModel({
     target: params(request(), vi.fn()).sessionTarget,
     modelRef,
-    runtimeSnapshot: lease.snapshot,
+    runtimeSnapshot: fixture.snapshot,
     inferencePlacement: "worker",
-    turn: { config: lease.snapshot.config, workspaceDir: WORKSPACE },
+    turn: { config: fixture.snapshot.config, workspaceDir: WORKSPACE },
     assertCurrent: () => undefined,
   });
   assert(approved && !("error" in approved));
   expect(approved.model).toBe(model);
-  expect(runtime.resolveAuthSelection).not.toHaveBeenCalled();
-  expect(runtime.prepareModel).not.toHaveBeenCalled();
+  expect(fixture.runtime.resolveAuthSelection).not.toHaveBeenCalled();
+  expect(fixture.runtime.prepareModel).not.toHaveBeenCalled();
 });
 
 it.each([false, true])(
@@ -145,10 +142,11 @@ it.each([false, true])(
     metadataSnapshot.owners.providerEndpoints = [
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
     ];
-    const runtime = setup(sessionEntry, {
+    await using fixture = await modelFixture({
       config: structuredClone(configured),
       metadataSnapshot,
     });
+    const { runtime } = fixture;
     runtime.prepareModel.mockResolvedValue({
       model,
       auth: {
@@ -158,8 +156,7 @@ it.each([false, true])(
         profileId: PROFILE,
       },
     });
-    await using lease = await acquire(runtime, configured);
-    const approved = await approve(lease.snapshot);
+    const approved = await fixture.approve({ modelRef });
     assert(approved && !("error" in approved));
     expect(approved.transcriptPolicy.inHistorySystemUpdates).toBe(!oauth);
     expect(runtime.resolveAuthSelection).toHaveBeenCalledOnce();

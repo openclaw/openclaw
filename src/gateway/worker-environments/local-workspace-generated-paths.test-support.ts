@@ -18,7 +18,10 @@ import {
   readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
-import { writeWorkspaceFiles } from "./workspace-sync-scripts.test-support.js";
+import {
+  expectWorkspaceFiles,
+  writeWorkspaceFiles,
+} from "./workspace-sync-scripts.test-support.js";
 
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
 const retainedWorker = ".artifacts/vitest-worker-cache/run-cache-0/outputs/dist/worker.js";
@@ -30,8 +33,6 @@ const packageCaches = [
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
   ".cache/bun-transpiler/compiled.pile",
 ];
-const contents = (directory: string, name: string) =>
-  fs.readFile(path.join(directory, name), "utf8");
 const missing = (directory: string, name: string) =>
   expect(fs.stat(path.join(directory, name))).rejects.toMatchObject({ code: "ENOENT" });
 const cacheFiles = (names: string[], content: string) =>
@@ -95,7 +96,7 @@ export async function proveGeneratedWorkspaceExpiry(owner: LocalWorkspaceOwner) 
   await withLocalWorkspaceProjection(owner, (state) => state.expire());
   expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
   await expect(fs.stat(projection)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await contents(owner.worktree.path, ".env.local")).toBe("host-only-secret");
+  await expectWorkspaceFiles(owner.worktree.path, { ".env.local": "host-only-secret" });
 }
 
 export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner, copied: boolean) {
@@ -174,20 +175,16 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   // The next ordinary turn must parse the accepted byte/digest pair and synchronize both copies.
   await withLocalWorkspaceProjection(owner, (state) => state.prepare());
   for (const directory of [projection, canonical]) {
-    for (const [name, content] of Object.entries(projectFiles)) {
-      expect(await contents(directory, name)).toBe(content);
-    }
+    await expectWorkspaceFiles(directory, projectFiles);
     for (const name of [lock, workerPackage]) {
       await missing(directory, name);
     }
   }
-  for (const name of caches) {
-    expect(await contents(canonical, name)).toBe("local cache churn\n");
-    expect(await contents(projection, name)).toBe("guest cache churn\n");
-  }
+  await expectWorkspaceFiles(canonical, cacheFiles(caches, "local cache churn\n"));
+  await expectWorkspaceFiles(projection, cacheFiles(caches, "guest cache churn\n"));
   await missing(canonical, retainedWorker);
-  expect(await contents(projection, retainedWorker)).toBe("next compiler output\n");
-  expect(await contents(canonical, ".env.local")).toBe("host-only-secret");
+  await expectWorkspaceFiles(projection, { [retainedWorker]: "next compiler output\n" });
+  await expectWorkspaceFiles(canonical, { ".env.local": "host-only-secret" });
   await missing(projection, ".env.local");
 
   await fs.writeFile(path.join(projection, "source.txt"), "next guest edit\n");
@@ -195,11 +192,11 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   await expect(
     withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical")),
   ).rejects.toThrow("conflict");
-  expect(await contents(canonical, "source.txt")).toBe("concurrent human edit\n");
+  await expectWorkspaceFiles(canonical, { "source.txt": "concurrent human edit\n" });
   expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeTruthy();
   await fs.writeFile(path.join(canonical, "source.txt"), "guest source edit\n");
   await withLocalWorkspaceProjection(owner, (state) => state.settle());
-  expect(await contents(canonical, "source.txt")).toBe("next guest edit\n");
+  await expectWorkspaceFiles(canonical, { "source.txt": "next guest edit\n" });
 
   if (!copied) {
     const invalidRef = workerWorkspaceResultRef("unexpected-artifact");

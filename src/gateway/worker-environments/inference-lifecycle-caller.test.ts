@@ -1,5 +1,6 @@
+import { addAbortListener } from "node:events";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   captureSessionTarget,
@@ -55,11 +56,7 @@ it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
         agentId: "main",
       };
       const identities = [sessionKey, REQUEST.sessionId];
-      const releaseRawDrain = () => drained.resolve();
-      signal.addEventListener("abort", releaseRawDrain, { once: true });
-      if (signal.aborted) {
-        releaseRawDrain();
-      }
+      const abortListener = addAbortListener(signal, () => drained.resolve());
       const preparing = prepareSessionLifecycleDrain({
         action: "delete",
         authorize: () => {
@@ -77,17 +74,19 @@ it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
       const settled = vi.fn();
       void preparing.then(settled, settled);
       const outcome = preparing.then(
-        (value) => ({ ok: true as const, value }),
-        (error: unknown) => ({ ok: false as const, error }),
+        (value) => {
+          value.release();
+          return value;
+        },
+        (error: unknown) => error,
       );
       let successor: Promise<void> | undefined;
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          outcome.then(() => {
-            throw new Error("Lifecycle caller returned before the selected worker boundary");
-          }),
-        ]);
+          outcome,
+          "Lifecycle caller returned before the selected worker boundary",
+        );
         if (failureMode !== "refusal") {
           const successorEntered = vi.fn(async () => {});
           successor = withSessionTurn(target, successorEntered);
@@ -115,35 +114,28 @@ it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
           await successor;
           expect(successorEntered).toHaveBeenCalledOnce();
         }
-        const result = await outcome;
-        if (result.ok) {
-          result.value.release();
-          throw new Error("Lifecycle caller discarded its worker failure");
-        }
+        const error = await outcome;
+        const callCount = failureMode === "refusal" ? 0 : 1;
+        expect(start).toHaveBeenCalledTimes(callCount);
+        expect(release).toHaveBeenCalledTimes(callCount);
         if (failureMode === "refusal") {
-          expect(result.error).toBe(refusal);
-          expect(start).not.toHaveBeenCalled();
-          expect(release).not.toHaveBeenCalled();
+          expect(error).toBe(refusal);
+        } else if (failureMode === "start") {
+          expect(error).toBe(startFailure);
         } else {
-          expect(start).toHaveBeenCalledOnce();
-          expect(release).toHaveBeenCalledOnce();
-          if (failureMode === "start") {
-            expect(result.error).toBe(startFailure);
-          } else {
-            expect(result.error).toMatchObject({
-              errors: [
-                startFailure,
-                drainFailure,
-                ...(failureMode === "start-drain-release" ? [releaseFailure] : []),
-              ],
-            });
-          }
+          expect(error).toMatchObject({
+            errors: [
+              startFailure,
+              drainFailure,
+              ...(failureMode === "start-drain-release" ? [releaseFailure] : []),
+            ],
+          });
         }
       } finally {
-        releaseRawDrain();
+        drained.resolve();
         await outcome;
         await successor;
-        signal.removeEventListener("abort", releaseRawDrain);
+        abortListener[Symbol.dispose]();
       }
     }),
 );

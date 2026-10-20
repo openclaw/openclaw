@@ -19,12 +19,11 @@ export const KEY = "agent:main:worker-live";
 export const EPOCH = 7;
 export const RUN = "run-worker-live";
 export const LOCAL = { agentId: "main", sessionId: SID, sessionKey: KEY };
-function connectionIdentity(
-  environmentId: string,
-  sessionId: string,
-  runId: string,
-  claimId: string,
-): Identity {
+function connectionIdentity(n?: number): Identity {
+  const suffix = n === undefined ? "worker-live" : `farm-${n}`;
+  const environmentId = n === undefined ? "environment-live" : `environment-${suffix}`;
+  const sessionId = n === undefined ? SID : `session-${suffix}`;
+  const runId = n === undefined ? RUN : `run-${suffix}`;
   return {
     environmentId,
     credentialHash: ["credential", "hash", "live"].join("-"),
@@ -33,7 +32,7 @@ function connectionIdentity(
     runId,
     turnClaim: {
       sessionId,
-      claimId,
+      claimId: `claim-${suffix}`,
       runId,
       placementGeneration: 4,
       owner: { kind: "worker", environmentId, ownerEpoch: EPOCH },
@@ -44,14 +43,8 @@ function connectionIdentity(
     credentialExpiresAtMs: 10_000,
   };
 }
-export const ID = connectionIdentity("environment-live", SID, RUN, "claim-worker-live");
-export const farmIdentity = (n: number) =>
-  connectionIdentity(
-    `environment-farm-${n}`,
-    `session-farm-${n}`,
-    `run-farm-${n}`,
-    `claim-farm-${n}`,
-  );
+export const ID = connectionIdentity();
+export const farmIdentity = (n: number) => connectionIdentity(n);
 
 export const msg = (seq: number, delta = "hello", ack = 0, runId = RUN, epoch = EPOCH): Params => ({
   ...live(seq, { kind: "assistant", payload: { text: delta, delta } }, runId),
