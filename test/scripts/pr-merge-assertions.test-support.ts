@@ -58,6 +58,26 @@ export function expectGraphqlSquash(f: Fixture, commitBody: string | null) {
   ]);
 }
 
+export function expectPinnedMerge(f: Fixture, route: string, withSubject = false) {
+  const state = f.state();
+  const submissions = state.calls.filter((call) => call[1] === "pr" && call[2] === "merge");
+  expect(submissions).toHaveLength(route === "immediate" ? 0 : 1);
+  if (route === "immediate") {
+    expect(state.graphqlMergePayloads[0]?.expectedHeadOid).toBe(f.head);
+    return;
+  }
+  const args = submissions[0]!;
+  expect(args[args.indexOf("--match-head-commit") + 1]).toBe(f.head);
+  if (withSubject) {
+    expect(args.includes("--auto")).toBe(route === "auto");
+    expect(args.includes("--admin")).toBe(route === "admin");
+    expect(args).toContain("--subject");
+    expect(args[args.indexOf("--subject") + 1]).toBe(state.previewHeadline);
+  } else {
+    expect(args).toContain(route === "auto" ? "--auto" : "--admin");
+  }
+}
+
 export function observeMerged(f: Fixture, landed: string, changes: Changes = {}) {
   configureMerge(f, {
     ...changes,

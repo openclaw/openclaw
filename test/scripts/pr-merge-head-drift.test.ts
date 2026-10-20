@@ -13,6 +13,7 @@ function mergedAfterPush(variant = "") {
     mode: variant === "unaccepted" ? "pending-error" : immediate ? "unapplied" : "pending",
     pr: { mergeStateStatus: immediate ? "CLEAN" : "BEHIND" },
   });
+  const push = (...args: string[]) => f.git(["push", "-q", ...args]);
   const first = proof.expectExit(f.run(!immediate), accepted ? 0 : 1);
   expect(f.record()).toMatchObject({
     phase: "intent",
@@ -38,14 +39,7 @@ function mergedAfterPush(variant = "") {
     variant === "non-descendant" ? [main1] : [f.head, main1],
     variant === "non-descendant" ? "Rebased\n" : "Merge main\n",
   );
-  f.git([
-    "push",
-    "-q",
-    "--force",
-    "origin",
-    `${pushed}:refs/heads/topic`,
-    `${pushed}:refs/pull/123/head`,
-  ]);
+  push("--force", "origin", `${pushed}:refs/heads/topic`, `${pushed}:refs/pull/123/head`);
   const landed = f.commit(
     variant === "tree"
       ? f.tree("partial\n", "main-advanced\n")
@@ -54,7 +48,7 @@ function mergedAfterPush(variant = "") {
     "Landed squash\n",
   );
   if (variant !== "not-on-main") {
-    f.git(["push", "-q", "origin", `${landed}:refs/heads/main`]);
+    push("origin", `${landed}:refs/heads/main`);
   }
   proof.configureMerge(f, {
     pr: {

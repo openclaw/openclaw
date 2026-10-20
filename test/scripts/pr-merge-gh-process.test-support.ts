@@ -53,8 +53,7 @@ const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { syncBuiltinESMExports } = require("node:module");
-const nativeExecFileSync = childProcess.execFileSync;
-const nativeSpawn = childProcess.spawn;
+const { execFileSync: nativeExecFileSync, spawn: nativeSpawn } = childProcess;
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
 function resolvesToFixture(file, args, options) {
@@ -100,16 +99,12 @@ childProcess.execFileSync = function(file, args, options = {}) {
 childProcess.spawn = function(file, args, options = {}) {
   if (!resolvesToFixture(file, args, options)) return nativeSpawn(file, args, options);
   const child = new EventEmitter();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  child.stdin = new PassThrough();
+  for (const stream of ["stdout", "stderr", "stdin"]) child[stream] = new PassThrough();
   child.kill = () => false;
-  // The existing fake server owns one JSON state. Run each in-process request
-  // in a microtask so concurrent transport reads cannot overwrite that state.
+  // Microtasks serialize requests against the fixture's single JSON state.
   queueMicrotask(() => {
     const result = runFixture(args, options, Buffer.alloc(0));
-    child.stdout.end(result.stdout);
-    child.stderr.end(result.stderr);
+    for (const stream of ["stdout", "stderr"]) child[stream].end(result[stream]);
     child.emit("close", result.status, null);
   });
   return child;

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -9,12 +9,11 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 const wrapper = join(process.cwd(), "scripts/pr");
 
 function executable(path: string, body: string) {
-  writeFileSync(path, `#!/bin/sh\n${body}\n`);
-  chmodSync(path, 0o755);
+  writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   return path;
 }
 
-function run(command: string, args: string[], env: NodeJS.ProcessEnv, timeout = 15_000) {
+function run(args: string[], env: NodeJS.ProcessEnv, command = "/bin/bash", timeout = 15_000) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
     timeout,
@@ -26,7 +25,7 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv, timeout = 
 
 describePosix("scripts/pr host tooling", () => {
   it("rejects a failing selected Git before reading wrapper code", () => {
-    const result = run("/bin/bash", [wrapper, "ls"], { OPENCLAW_PR_GIT: "/bin/false" }, 5000);
+    const result = run([wrapper, "ls"], { OPENCLAW_PR_GIT: "/bin/false" }, undefined, 5000);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("git preflight failed or exceeded 10 seconds: /bin/false");
     expect(result.stderr).toContain("xcode-select -p:");
@@ -40,7 +39,7 @@ describePosix("scripts/pr host tooling", () => {
     const root = tempDirs.make("openclaw-pr-hung-git-");
     const git = executable(join(root, "sleeping-git"), "sleep 60");
     const started = Date.now();
-    const result = run("/bin/bash", [wrapper, "ls"], { OPENCLAW_PR_GIT: git });
+    const result = run([wrapper, "ls"], { OPENCLAW_PR_GIT: git });
     expect(result.status).toBe(1);
     expect(Date.now() - started).toBeGreaterThanOrEqual(9000);
     expect(result.stderr).toContain(`git preflight failed or exceeded 10 seconds: ${git}`);
@@ -57,13 +56,13 @@ describePosix("scripts/pr host tooling", () => {
       "set -e\ngit --version\nprintf 'phase\\toperation-complete\\n' >&3",
     );
     const result = run(
-      process.execPath,
       [join(process.cwd(), "scripts/pr-lib/process-group-runner.mjs"), root, operation],
       {
         OPENCLAW_PR_GIT: git,
         PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
         TMPDIR: root,
       },
+      process.execPath,
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("selected Git: --version\n");
@@ -77,7 +76,6 @@ describePosix("scripts/pr host tooling", () => {
     executable(join(root, "python3"), "sleep 60");
     const started = Date.now();
     const result = run(
-      "/bin/bash",
       [
         "-c",
         'source "$1"; uname() { echo Darwin; }; pr_operation_lock_darwin_identity identity "$$"',

@@ -20,10 +20,10 @@ function missingAdminAudit(drift = false) {
   expect(existsSync(join(f.worktree, ".local/merge-crabbox-parent-audit.json"))).toBe(false);
   expect(f.recover()).toBe(false);
   proof.configureMerge(f, { audit: false });
-  return f;
+  return [f, f.git(["rev-parse", outcomeRef]), f.record()] as const;
 }
 
-function removeOwnedFixtureCheckout(f: ReturnType<typeof missingAdminAudit>) {
+function removeOwnedFixtureCheckout(f: ReturnType<typeof fixture>) {
   f.git(["worktree", "remove", "--force", f.worktree]);
   f.git(["branch", "-D", "pr-123-prep", "pr-123", "topic"]);
   f.git(["push", "-q", "origin", ":refs/heads/topic"]);
@@ -33,9 +33,7 @@ describePosix("delayed prior-CI admin completion", () => {
   it.each([false, true])(
     "reconstructs the historical audit without redispatching (parent drift=%s)",
     (drift) => {
-      const f = missingAdminAudit(drift);
-      const receipt = f.git(["rev-parse", outcomeRef]);
-      const original = f.record();
+      const [f, receipt, original] = missingAdminAudit(drift);
       removeOwnedFixtureCheckout(f);
       proof.expectExit(f.complete(receipt));
       expect(f.record()).toMatchObject({ phase: "complete", priorCiAdmin: original.priorCiAdmin });
@@ -57,9 +55,7 @@ describePosix("delayed prior-CI admin completion", () => {
   it.each(["present", "unavailable", "mismatched", "changed head"])(
     "checks the %s historical audit before requiring source cleanup",
     (audit) => {
-      const f = missingAdminAudit();
-      const receipt = f.git(["rev-parse", outcomeRef]);
-      const original = f.record();
+      const [f, receipt, original] = missingAdminAudit();
       proof.configureMerge(f, {
         audit: audit === "unavailable",
         auditParent: audit === "mismatched" ? f.head : "",
@@ -88,8 +84,7 @@ describePosix("delayed prior-CI admin completion", () => {
   );
 
   it("preserves a successor outcome instead of posting from a stale receipt", () => {
-    const f = missingAdminAudit();
-    const receipt = f.git(["rev-parse", outcomeRef]);
+    const [f, receipt] = missingAdminAudit();
     removeOwnedFixtureCheckout(f);
     proof.configureMerge(f, { crash: "successor" });
     proof.expectExit(f.complete(receipt), 1);
@@ -98,7 +93,7 @@ describePosix("delayed prior-CI admin completion", () => {
   });
 
   it.each(["rejected", "lost"])("never repeats a %s delayed admin comment", (comment) => {
-    const f = missingAdminAudit();
+    const [f] = missingAdminAudit();
     removeOwnedFixtureCheckout(f);
     proof.configureMerge(f, { comment });
     proof.expectExit(f.complete(f.git(["rev-parse", outcomeRef])), 1);
