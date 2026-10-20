@@ -21,25 +21,25 @@ import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function commandJob(id: string, argv = ["unused"]) {
+  return createIsolatedRegressionJob({
+    id,
+    name: id,
+    scheduledAt: Date.now(),
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "command", argv, timeoutSeconds: 1 },
+  });
+}
+
 describe("scheduled command timeouts", () => {
   it.each(["deadline", "operator cancellation"] as const)(
     "settles a real command after %s without late delivery",
     async (interruption) => {
-      const job = createIsolatedRegressionJob({
-        id: "command-timeout",
-        name: "command timeout",
-        scheduledAt: Date.now(),
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: {
-          kind: "command",
-          argv: [
-            process.execPath,
-            "-e",
-            "console.log('synthetic progress pid=' + process.pid); console.error('synthetic stderr'); setInterval(() => {}, 1000)",
-          ],
-          timeoutSeconds: 1,
-        },
-      });
+      const job = commandJob("command-timeout", [
+        process.execPath,
+        "-e",
+        "console.log('synthetic progress pid=' + process.pid); console.error('synthetic stderr'); setInterval(() => {}, 1000)",
+      ]);
       job.delivery = { mode: "webhook", to: "https://example.com/automation" };
       const sendCronWebhook = vi.fn();
       let command: ReturnType<typeof runCronCommandJob> | undefined;
@@ -95,13 +95,7 @@ describe("scheduled command timeouts", () => {
   it("bounds settlement while keeping an abort-ignoring command drain-visible", async () => {
     vi.useFakeTimers();
     const command = createDeferred<Awaited<ReturnType<typeof runCronCommandJob>>>();
-    const job = createIsolatedRegressionJob({
-      id: "stuck-command",
-      name: "stuck command",
-      scheduledAt: Date.now(),
-      schedule: { kind: "every", everyMs: 60_000 },
-      payload: { kind: "command", argv: ["unused"], timeoutSeconds: 1 },
-    });
+    const job = commandJob("stuck-command");
     job.delivery = { mode: "none" };
     const state = createCronRegressionState({
       storePath: path.join(tempDirs.make("cron-command-settlement-"), "jobs.json"),

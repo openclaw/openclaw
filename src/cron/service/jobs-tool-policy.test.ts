@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import type { CronStoredJob, CronToolsAllowExecTarget } from "../types.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
@@ -8,19 +9,9 @@ import {
 
 function toolJob(toolsAllow: string[] | undefined): CronStoredJob {
   return {
-    id: "job-1",
-    name: "job",
-    enabled: true,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    schedule: { kind: "every", everyMs: 60_000 },
-    payload: {
-      kind: "script",
-      script: "return {}",
-      ...(toolsAllow ? { toolsAllow } : {}),
-    },
-    state: {},
-  } as unknown as CronStoredJob;
+    ...createDueIsolatedJob({ id: "job-1", nowMs: 1, nextRunAtMs: 1 }),
+    payload: { kind: "script", script: "return {}", ...(toolsAllow ? { toolsAllow } : {}) },
+  };
 }
 
 describe("reconcileToolsAllowAuthority exec pin", () => {
@@ -58,17 +49,10 @@ describe("reconcileToolsAllowAuthority exec pin", () => {
       explicitlyMutatesToolsAllow: explicit,
       toolsAllowExecTarget: captured ? structuredClone(captured) : undefined,
     });
-    if (expected) {
-      expect(job.toolsAllowExecTarget).toEqual(expected);
-      expect(job.toolsAllowExecTargetRequirement).toEqual({
-        version: 1,
-        target: expected,
-        grantIndex: 0,
-      });
-    } else {
-      expect(job.toolsAllowExecTarget).toBeUndefined();
-      expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
-    }
+    expect([job.toolsAllowExecTarget, job.toolsAllowExecTargetRequirement]).toEqual([
+      expected,
+      expected ? { version: 1, target: expected, grantIndex: 0 } : undefined,
+    ]);
   });
 });
 
