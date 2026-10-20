@@ -55,9 +55,29 @@ writes checkpoint every 8 MiB and pause between batches; Linux generation stops
 if system dirty pages reach 2 GiB. A failed seed has no completion marker and
 must be regenerated in a new directory.
 
+To measure a mix of bundled and external plugins, pass
+`--bundled-plugin-fixture /path/to/plugins.json` to both the seed and run commands.
+The file is an OpenClaw config fragment with `plugins.allow` selecting 1–44
+bundled IDs and `plugins.entries.<id>.config` supplying any required synthetic
+configuration. For example, `{ "plugins": { "allow": ["openai", "google"] } }`
+uses plugin defaults. Optional `models`, `tools`, and `channels` sections select
+the corresponding startup capabilities; enabling a plugin alone does not
+override its lazy activation policy. Other root sections and `plugins.load`
+are rejected, preserving the benchmark's state, workspaces, auth, and disabled
+background jobs. Each bundled ID replaces one synthetic external plugin,
+keeping the total at 44. Include only synthetic configuration and credentials,
+disable scheduled external work, and deny external network access for the run.
+Channels remain suppressed even when configured for plugin activation.
+The fixture metadata and result contain the full config fragment and external
+count; a run rejects configuration that differs from its seed or a loaded
+inventory that is not 44 plugins including every requested bundled ID. Use the
+bundled IDs from the target deployment's startup log and build their artifacts
+before measuring. Omit the flag to retain the all-synthetic fixture.
+
 Startup results include spawn-to-`/readyz` and spawn-to-first-successful
-`sessions.list` timings. The authenticated protocol handshake uses the isolated
-Gateway's loopback `auth: none` policy. Session RPC probing starts when `/healthz`
+`sessions.list` timings. The `teamBoot` protocol handshake uses the isolated
+Gateway's synthetic shared token so access-policy plugins receive a real owner
+identity; other cases retain loopback `auth: none`. Session RPC probing starts when `/healthz`
 first responds, concurrently with `/readyz`, and retries startup refusals until
 the shared deadline. A healthy HTTP endpoint without a successful session RPC
 fails the measurement. The `teamBoot` case also requires the expected seeded
