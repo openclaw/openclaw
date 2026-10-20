@@ -36,7 +36,7 @@ const row: GatewaySessionRow = {
   },
 };
 
-function fixture(review = row.providerReview) {
+function fixture(review: Partial<NonNullable<GatewaySessionRow["providerReview"]>> = {}) {
   const outcome = createDeferred<unknown>();
   const request = makeRequestMock({ "sessions.providerReview.continue": () => outcome.promise });
   const state = makeChatHost({
@@ -44,7 +44,10 @@ function fixture(review = row.providerReview) {
     sessionKey: row.key,
     currentSessionId: row.sessionId,
   });
-  state.sessionsResult = sessionsResult([{ ...row, providerReview: review }], 1);
+  state.sessionsResult = sessionsResult(
+    [{ ...row, providerReview: { ...row.providerReview!, ...review } }],
+    1,
+  );
   const refresh = vi
     .spyOn(state.sessions, "reconcileMutation")
     .mockResolvedValue({ status: "refreshed" });
@@ -134,6 +137,16 @@ async function expectFreshRetry(f: ReturnType<typeof fixture>, first: Record<str
   await f.refresh.mock.results.at(-1)?.value;
 }
 
+function holdRefresh(f: ReturnType<typeof fixture>) {
+  const result = createDeferred<SessionRefreshOutcome>();
+  const started = createDeferred();
+  f.refresh.mockImplementationOnce(() => {
+    started.resolve();
+    return result.promise;
+  });
+  return { ...result, started: started.promise };
+}
+
 it.each(["connection", "session", "review", "disconnection"] as const)(
   "ignores a late continuation outcome after %s changes",
   async (replacement) => {
@@ -167,21 +180,17 @@ it.each(["connection", "session", "review", "disconnection"] as const)(
   },
 );
 
-it.each([
-  { canContinue: false, explanation: undefined, continuationMessage: undefined },
-  {
-    canContinue: false,
-    explanation: "Reviewable findings without a continuation.",
-    continuationMessage: undefined,
+it.each([undefined, "Reviewable findings without a continuation."])(
+  "keeps stopped findings non-continuable (%s)",
+  async (explanation) => {
+    const f = fixture({ canContinue: false, explanation, continuationMessage: undefined });
+    if (explanation) {
+      await f.open();
+    }
+    expect(f.text()).not.toContain("Acknowledge findings and continue");
+    expect(f.calls()).toHaveLength(0);
   },
-])("keeps stopped findings non-continuable ($explanation)", async (details) => {
-  const f = fixture({ ...row.providerReview!, ...details });
-  if (details.explanation) {
-    await f.open();
-  }
-  expect(f.text()).not.toContain("Acknowledge findings and continue");
-  expect(f.calls()).toHaveLength(0);
-});
+);
 
 it("rechecks rendered write permission before continuing a reviewed session", async () => {
   const f = fixture();
@@ -201,15 +210,8 @@ it("rechecks rendered write permission before continuing a reviewed session", as
 
 it("requires explicit safe review, retains the pause, and retries status without replaying ACK", async () => {
   const f = fixture();
-  const firstRefresh = createDeferred<SessionRefreshOutcome>();
-  const firstRefreshStarted = createDeferred();
-  const secondRefresh = createDeferred<SessionRefreshOutcome>();
-  f.refresh
-    .mockImplementationOnce(() => {
-      firstRefreshStarted.resolve();
-      return firstRefresh.promise;
-    })
-    .mockImplementationOnce(() => secondRefresh.promise);
+  const firstRefresh = holdRefresh(f);
+  const secondRefresh = holdRefresh(f);
   expect(f.calls()).toHaveLength(0);
   await f.open();
   const dialog = f.container.querySelector("openclaw-modal-dialog");
@@ -235,7 +237,7 @@ it("requires explicit safe review, retains the pause, and retries status without
     idempotencyKey: expect.any(String),
   });
   f.outcome.resolve({ runId: "resumed", status: "started" });
-  await firstRefreshStarted.promise;
+  await firstRefresh.started;
   firstRefresh.resolve({ status: "failed", error: "Disconnected during refresh" });
   await firstRefresh.promise;
   flush();
@@ -311,22 +313,17 @@ it.each(["acknowledgment", "refresh"] as const)(
   "waits for the pending %s before offering retry after a matching terminal event",
   async (phase) => {
     const f = fixture();
-    const refreshStarted = createDeferred();
-    const refresh = createDeferred<SessionRefreshOutcome>();
-    f.refresh.mockImplementationOnce(() => {
-      refreshStarted.resolve();
-      return refresh.promise;
-    });
+    const refresh = holdRefresh(f);
     const runId = String((await f.acknowledge()).idempotencyKey);
     if (phase === "refresh") {
       f.outcome.resolve({ runId, status: "started" });
-      await refreshStarted.promise;
+      await refresh.started;
     }
     f.setRow({ lastRunId: runId, status: "failed", hasActiveRun: false, activeRunIds: [] });
     f.publishSource();
     f.expectPaused(true);
     f.outcome.resolve({ runId, status: "started" });
-    await refreshStarted.promise;
+    await refresh.started;
     refresh.resolve({ status: "refreshed" });
     await refresh.promise;
     await Promise.resolve();

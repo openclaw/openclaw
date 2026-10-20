@@ -109,33 +109,26 @@ it.each(["restore", "preview"] as const)(
         "pasted file card",
       );
       expect(card.classList.contains("chat-selection-annotations__chip")).toBe(false);
-      expect(restore.closest(".chat-attachment-file__body")).not.toBeNull();
-      expect(
-        restore
-          .closest(".chat-attachment-file__body")
-          ?.firstElementChild?.classList.contains("chat-attachment-file__name"),
-      ).toBe(true);
+      const body = restore.closest(".chat-attachment-file__body");
+      expect(body?.firstElementChild?.classList.contains("chat-attachment-file__name")).toBe(true);
       expect(restore.closest("a, button button, [role=button]")).toBeNull();
       expect(card.querySelector(".chat-attachment-file__icon")).not.toBeNull();
       restore.click();
       restore.click();
-      expect(onDraftChange).toHaveBeenCalledTimes(1);
-      expect(onDraftChange).toHaveBeenCalledWith("Newer draft\n\n" + text);
+      expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Newer draft\n\n" + text);
       expect(f.props.getAttachments()).toEqual([]);
       expect(onOpenSidebar).not.toHaveBeenCalled();
     } else {
-      expect(
-        container.querySelector(".chat-attachment-file__open")?.closest("openclaw-tooltip"),
-      ).toBeNull();
+      const open = container.querySelector(".chat-attachment-file__open");
+      expect(open?.closest("openclaw-tooltip")).toBeNull();
       container
         .querySelector(".chat-attachment-file__icon svg")!
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(onOpenSidebar).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ kind: "attachment", plainText: true, mimeType: "text/plain" }),
       );
-      expect(
-        sidebar!.container.querySelector(".chat-attachment-text-action")?.textContent?.trim(),
-      ).toBe("Show in text field");
+      const sidebarRestore = button(sidebar!.container, ".chat-attachment-text-action");
+      expect(sidebarRestore.textContent?.trim()).toBe("Show in text field");
       sidebar!.container.querySelector<HTMLButtonElement>("button[aria-label^='Remove']")!.click();
       expect(f.props.getAttachments()).toEqual([]);
       expect(getChatAttachmentDataUrl(f.attachment)).toBeNull();
@@ -176,9 +169,11 @@ it.each(["disabled", "removed", "aborted"] as const)(
       expect(action.disabled).toBe(state === "disabled");
       action.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     }
-    expect(onDraftChange).not.toHaveBeenCalled();
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
-    expect(onOpenSidebar).not.toHaveBeenCalled();
+    expect([
+      onDraftChange.mock.calls,
+      onAttachmentsChange.mock.calls,
+      onOpenSidebar.mock.calls,
+    ]).toEqual([[], [], []]);
     expect(getChatAttachmentDataUrl(attachment)).not.toBeNull();
   },
 );
