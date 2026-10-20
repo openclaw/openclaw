@@ -1,10 +1,9 @@
-// Whatsapp tests cover login.coverage plugin behavior.
 import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { loginWeb } from "./login.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, formatError, waitForWaConnection } from "./session.js";
@@ -13,10 +12,6 @@ const rmMock = vi.spyOn(fs, "rm");
 const testState = vi.hoisted(() => ({
   authDir: `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/openclaw-wa-creds-${process.pid}-${Math.random().toString(16).slice(2)}`,
 }));
-
-function resolveTestAuthDir() {
-  return testState.authDir;
-}
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   const actual = await vi.importActual<
@@ -28,7 +23,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
       channels: {
         whatsapp: {
           accounts: {
-            default: { enabled: true, authDir: resolveTestAuthDir() },
+            default: { enabled: true, authDir: testState.authDir },
           },
         },
       },
@@ -38,7 +33,6 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const authDir = resolveTestAuthDir();
   const sockA = { ws: { close: vi.fn() } };
   const sockB = { ws: { close: vi.fn() } };
   const createWaSocketLocal = vi.fn(async () =>
@@ -63,7 +57,7 @@ vi.mock("./session.js", async () => {
       exists: true,
     })),
     logoutWeb: vi.fn(async (params: { authDir?: string }) => {
-      await fs.rm(params.authDir ?? authDir, {
+      await fs.rm(params.authDir ?? testState.authDir, {
         recursive: true,
         force: true,
       });
@@ -86,31 +80,16 @@ async function flushTasks() {
   await Promise.resolve();
 }
 
-function runtimeMessageCalls(fn: RuntimeEnv["log"]) {
-  const calls = (fn as unknown as { mock: { calls: Array<[unknown]> } }).mock.calls;
-  return calls.map((call) => sanitizeTerminalText(String(call[0])));
-}
-
-function createWaSocketCall(index: number) {
-  const call = createWaSocketMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected createWaSocket call ${index}`);
-  }
-  return call;
-}
-
-function createWaSocketOptions(index: number): { onQr?: (qr: string) => void } | undefined {
-  return createWaSocketCall(index)[2] as { onQr?: (qr: string) => void } | undefined;
+function runtimeMessageCalls(fn: ReturnType<typeof createRuntimeSpies>["log"]) {
+  return fn.mock.calls.map(([message]) => sanitizeTerminalText(String(message)));
 }
 
 describe("loginWeb coverage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
-    createWaSocketMock.mockClear();
     waitForWaConnectionMock.mockReset().mockResolvedValue(undefined);
     formatErrorMock.mockReset().mockImplementation((err: unknown) => `formatted:${String(err)}`);
-    rmMock.mockClear();
   });
   afterEach(() => {
     vi.runOnlyPendingTimers();
@@ -125,13 +104,13 @@ describe("loginWeb coverage", () => {
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
       .mockResolvedValueOnce(undefined);
 
-    const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeSpies();
     await loginWeb(false, waitForWaConnectionMock as never, runtime);
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(createWaSocketCall(0)[0]).toBe(false);
-    const initialOpts = createWaSocketOptions(0);
-    const restartOpts = createWaSocketOptions(1);
+    expect(createWaSocketMock.mock.calls[0]?.[0]).toBe(false);
+    const initialOpts = createWaSocketMock.mock.calls[0]?.[2];
+    const restartOpts = createWaSocketMock.mock.calls[1]?.[2];
     expect(initialOpts?.onQr).toBe(restartOpts?.onQr);
 
     const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -171,7 +150,7 @@ describe("loginWeb coverage", () => {
       })
       .mockResolvedValueOnce(undefined);
 
-    const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeSpies();
     await loginWeb(false, waitForWaConnectionMock as never, runtime);
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
@@ -187,7 +166,7 @@ describe("loginWeb coverage", () => {
 
   it("formats and rethrows generic errors", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce(new Error("boom"));
-    const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeSpies();
     await expect(loginWeb(false, waitForWaConnectionMock as never, runtime)).rejects.toThrow(
       "formatted:Error: boom",
     );

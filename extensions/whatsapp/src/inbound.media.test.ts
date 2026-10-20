@@ -1,9 +1,9 @@
-// Whatsapp tests cover inbound.media plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForLogTick } from "node:timers/promises";
+import type { proto } from "baileys";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
@@ -26,27 +26,24 @@ type InMemoryKeyedStoreEntry<T> = {
 
 function createInMemoryKeyedStore<T>() {
   const entries = new Map<string, InMemoryKeyedStoreEntry<T>>();
+  function store(key: string, value: T, opts?: { ttlMs?: number }) {
+    const createdAt = Date.now();
+    entries.set(key, {
+      key,
+      value,
+      createdAt,
+      ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+    });
+  }
   return {
     async register(key: string, value: T, opts?: { ttlMs?: number }) {
-      const createdAt = Date.now();
-      entries.set(key, {
-        key,
-        value,
-        createdAt,
-        ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
-      });
+      store(key, value, opts);
     },
     async registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }) {
       if (entries.has(key)) {
         return false;
       }
-      const createdAt = Date.now();
-      entries.set(key, {
-        key,
-        value,
-        createdAt,
-        ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
-      });
+      store(key, value, opts);
       return true;
     },
     async lookup(key: string) {
@@ -209,18 +206,10 @@ process.env.HOME = HOME;
 vi.mock("baileys", async () => {
   const actual = await vi.importActual<typeof import("baileys")>("baileys");
   const { Readable } = require("node:stream") as typeof import("node:stream");
-  const jpegBuffer = Buffer.from([
-    0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x02, 0x02,
-    0x02, 0x03, 0x03, 0x03, 0x03, 0x04, 0x06, 0x04, 0x04, 0x04, 0x04, 0x04, 0x08, 0x06, 0x06, 0x05,
-    0x06, 0x09, 0x08, 0x0a, 0x0a, 0x09, 0x08, 0x09, 0x09, 0x0a, 0x0c, 0x0f, 0x0c, 0x0a, 0x0b, 0x0e,
-    0x0b, 0x09, 0x09, 0x0d, 0x11, 0x0d, 0x0e, 0x0f, 0x10, 0x10, 0x11, 0x10, 0x0a, 0x0c, 0x12, 0x13,
-    0x12, 0x10, 0x13, 0x0f, 0x10, 0x10, 0x10, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01,
-    0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01, 0xff, 0xc4, 0x00, 0x14, 0x00, 0x01,
-    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
-    0xc4, 0x00, 0x14, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00,
-    0xff, 0xd9,
-  ]);
+  const jpegBuffer = Buffer.from(
+    "ffd8ffdb004300030202020202030202020303030304060404040404080606050609080a0a090809090a0c0f0c0a0b0e0b09090d110d0e0f101011100a0c12131210130f101010ffc00011080001000103011100021101031101ffc400140001010000000000000000000000000000ffc40014100100000000000000000000000000ffda000c03010002110311003f00ffd9",
+    "hex",
+  );
   return {
     ...actual,
     DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
@@ -352,6 +341,44 @@ async function createBaileysMediaHttpError(statusCode: number, details: string):
   throw new Error("expected Baileys to reject the failed media response");
 }
 
+const imageMessage = () => ({ imageMessage: { mimetype: "image/jpeg" } });
+function quotedReply(text: string, contextInfo: proto.IContextInfo): proto.IMessage {
+  return { extendedTextMessage: { text, contextInfo } };
+}
+
+function expectExcluded(text: string | undefined, values: string[]) {
+  for (const value of values) {
+    expect(text).not.toContain(value);
+  }
+}
+
+async function expectFailureDiagnostics(
+  messageId: string,
+  stage: "direct" | "quoted",
+  excluded: string[],
+  signal: AbortSignal,
+) {
+  const diagnostic = await waitForLogLine(messageId, signal);
+  for (const field of [
+    '"channel":"whatsapp"',
+    '"mediaKind":"image"',
+    '"mimeType":"image/jpeg"',
+    `"failureStage":"${stage}"`,
+    '"errorClass":"Error"',
+    '"statusCode":410',
+  ]) {
+    expect(diagnostic).toContain(field);
+  }
+  expectExcluded(diagnostic, excluded);
+  const terminal = observedConsoleWarnings.mock.calls.find(
+    ([message]) => message === "WhatsApp inbound media materialization failed",
+  )?.[1]?.consoleMessage;
+  expect(terminal).toBe(
+    `WhatsApp inbound media materialization failed (stage=${stage} class=Error kind=image status=410)`,
+  );
+  expectExcluded(terminal, excluded);
+}
+
 describe("web inbound media saves with extension", () => {
   async function getMockSocket() {
     return (await createWaSocket(false, false)) as unknown as {
@@ -371,6 +398,23 @@ describe("web inbound media saves with extension", () => {
       authDir: path.join(HOME, "wa-auth"),
       ...(mediaMaxMb === undefined ? {} : { mediaMaxMb }),
     });
+  }
+
+  async function startMediaCase(mediaMaxMb?: number) {
+    const onMessage = vi.fn();
+    const listener = await startMediaMonitor(onMessage, mediaMaxMb);
+    const sock = await getMockSocket();
+    const send = (
+      id: string,
+      message: proto.IMessage,
+      messageTimestamp: number,
+      remoteJid = "111@s.whatsapp.net",
+    ) =>
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [{ key: { id, fromMe: false, remoteJid }, message, messageTimestamp }],
+      });
+    return { onMessage, listener, send };
   }
 
   beforeEach(() => {
@@ -409,20 +453,9 @@ describe("web inbound media saves with extension", () => {
   });
 
   it("stores image extension and keeps document filename", async () => {
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage);
-    const realSock = await getMockSocket();
+    const { onMessage, listener, send } = await startMediaCase();
 
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "img1", fromMe: false, remoteJid: "111@s.whatsapp.net" },
-          message: { imageMessage: { mimetype: "image/jpeg" } },
-          messageTimestamp: 1_700_000_001,
-        },
-      ],
-    });
+    send("img1", imageMessage(), 1_700_000_001);
 
     const first = await waitForMessage(onMessage);
     const mediaPath = requireMediaPath(first.payload.media?.path);
@@ -432,16 +465,12 @@ describe("web inbound media saves with extension", () => {
 
     onMessage.mockClear();
     const fileName = "invoice.pdf";
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "doc1", fromMe: false, remoteJid: "333@s.whatsapp.net" },
-          message: { documentMessage: { mimetype: "application/pdf", fileName } },
-          messageTimestamp: 1_700_000_004,
-        },
-      ],
-    });
+    send(
+      "doc1",
+      { documentMessage: { mimetype: "application/pdf", fileName } },
+      1_700_000_004,
+      "333@s.whatsapp.net",
+    );
 
     const second = await waitForMessage(onMessage);
     expect(second.payload.media?.fileName).toBe(fileName);
@@ -453,32 +482,19 @@ describe("web inbound media saves with extension", () => {
   });
 
   it("stores quoted image media from reply context", async () => {
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage);
-    const realSock = await getMockSocket();
+    const { onMessage, listener, send } = await startMediaCase();
 
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "quote-img-reply", fromMe: false, remoteJid: "111@g.us" },
-          message: {
-            extendedTextMessage: {
-              text: "@bot what is this?",
-              contextInfo: {
-                stanzaId: "quoted-image",
-                participant: "222@s.whatsapp.net",
-                mentionedJid: ["me@s.whatsapp.net"],
-                quotedMessage: {
-                  imageMessage: { mimetype: "image/jpeg" },
-                },
-              },
-            },
-          },
-          messageTimestamp: 1_700_000_005,
-        },
-      ],
-    });
+    send(
+      "quote-img-reply",
+      quotedReply("@bot what is this?", {
+        stanzaId: "quoted-image",
+        participant: "222@s.whatsapp.net",
+        mentionedJid: ["me@s.whatsapp.net"],
+        quotedMessage: imageMessage(),
+      }),
+      1_700_000_005,
+      "111@g.us",
+    );
 
     const inbound = await waitForMessage(onMessage);
     expect(inbound.quote?.body).toBe("");
@@ -496,29 +512,17 @@ describe("web inbound media saves with extension", () => {
   });
 
   it("preserves self-authored quoted media through the real Baileys reupload boundary", async () => {
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage);
-    const realSock = await getMockSocket();
+    const { onMessage, listener, send } = await startMediaCase();
 
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "quote-own-image", fromMe: false, remoteJid: "111@s.whatsapp.net" },
-          message: {
-            extendedTextMessage: {
-              text: "what is in your image?",
-              contextInfo: {
-                stanzaId: "bot-image",
-                participant: "me@s.whatsapp.net",
-                quotedMessage: { imageMessage: { mimetype: "image/jpeg" } },
-              },
-            },
-          },
-          messageTimestamp: 1_700_000_007,
-        },
-      ],
-    });
+    send(
+      "quote-own-image",
+      quotedReply("what is in your image?", {
+        stanzaId: "bot-image",
+        participant: "me@s.whatsapp.net",
+        quotedMessage: imageMessage(),
+      }),
+      1_700_000_007,
+    );
 
     await waitForMessage(onMessage);
     const quoted = downloadMediaMessageMock.mock.calls[0]?.[0] as
@@ -541,20 +545,9 @@ describe("web inbound media saves with extension", () => {
   });
 
   it("delivers incoming video notes as normal video media", async () => {
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage);
-    const realSock = await getMockSocket();
+    const { onMessage, listener, send } = await startMediaCase();
 
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "video-note-1", fromMe: false, remoteJid: "111@s.whatsapp.net" },
-          message: { ptvMessage: { mimetype: "video/mp4" } },
-          messageTimestamp: 1_700_000_008,
-        },
-      ],
-    });
+    send("video-note-1", { ptvMessage: { mimetype: "video/mp4" } }, 1_700_000_008);
 
     const inbound = await waitForMessage(onMessage);
     expect(inbound.payload.media).toMatchObject({ kind: "video", type: "video/mp4" });
@@ -595,28 +588,21 @@ describe("web inbound media saves with extension", () => {
         );
       onTestFinished(() => fetchSpy.mockRestore());
 
-      const onMessage = vi.fn();
-      const listener = await startMediaMonitor(onMessage);
+      const { onMessage, listener, send } = await startMediaCase();
       onTestFinished(() => listener.close());
-      const realSock = await getMockSocket();
 
-      realSock.ev.emit("messages.upsert", {
-        type: "notify",
-        messages: [
-          {
-            key: { id: `sticker-${urlHost}`, fromMe: false, remoteJid: "111@s.whatsapp.net" },
-            message: {
-              stickerMessage: {
-                url: bareUrl ? `https://${urlHost}` : `https://${urlHost}${directPath}`,
-                directPath,
-                mediaKey,
-                mimetype: "image/webp",
-              },
-            },
-            messageTimestamp: 1_700_000_012,
+      send(
+        `sticker-${urlHost}`,
+        {
+          stickerMessage: {
+            url: bareUrl ? `https://${urlHost}` : `https://${urlHost}${directPath}`,
+            directPath,
+            mediaKey,
+            mimetype: "image/webp",
           },
-        ],
-      });
+        },
+        1_700_000_012,
+      );
 
       const inbound = await waitForMessage(onMessage);
       expect(fetchSpy.mock.calls.map(([input]) => resolveRequestUrl(input))).toEqual([fetchUrl]);
@@ -627,47 +613,26 @@ describe("web inbound media saves with extension", () => {
   );
 
   it("delivers native polls and preserves their questions when quoted", async () => {
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage);
-    const realSock = await getMockSocket();
+    const { onMessage, listener, send } = await startMediaCase();
     const poll = {
       name: "Lunch?",
       options: [{ optionName: "Pizza" }, { optionName: "Sushi" }],
     };
 
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "poll-1", fromMe: false, remoteJid: "111@s.whatsapp.net" },
-          message: { pollCreationMessageV3: poll },
-          messageTimestamp: 1_700_000_009,
-        },
-      ],
-    });
+    send("poll-1", { pollCreationMessageV3: poll }, 1_700_000_009);
 
     expect((await waitForMessage(onMessage)).payload.body).toBe("Lunch?\n- Pizza\n- Sushi");
     onMessage.mockClear();
 
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "poll-reply", fromMe: false, remoteJid: "111@s.whatsapp.net" },
-          message: {
-            extendedTextMessage: {
-              text: "Pizza, please",
-              contextInfo: {
-                stanzaId: "poll-1",
-                participant: "111@s.whatsapp.net",
-                quotedMessage: { pollCreationMessageV3: poll },
-              },
-            },
-          },
-          messageTimestamp: 1_700_000_010,
-        },
-      ],
-    });
+    send(
+      "poll-reply",
+      quotedReply("Pizza, please", {
+        stanzaId: "poll-1",
+        participant: "111@s.whatsapp.net",
+        quotedMessage: { pollCreationMessageV3: poll },
+      }),
+      1_700_000_010,
+    );
 
     expect((await waitForMessage(onMessage)).quote).toMatchObject({
       id: "poll-1",
@@ -678,22 +643,8 @@ describe("web inbound media saves with extension", () => {
   });
 
   it("passes mediaMaxMb to saveMediaStream", async () => {
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage, 1);
-    const realSock = await getMockSocket();
-
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "img3", fromMe: false, remoteJid: "222@s.whatsapp.net" },
-          message: { imageMessage: { mimetype: "image/jpeg" } },
-          messageTimestamp: 1_700_000_003,
-        },
-      ],
-    };
-
-    realSock.ev.emit("messages.upsert", upsert);
+    const { onMessage, listener, send } = await startMediaCase(1);
+    send("img3", imageMessage(), 1_700_000_003, "222@s.whatsapp.net");
 
     await waitForMessage(onMessage);
     expect(saveMediaStreamSpy).toHaveBeenCalled();
@@ -710,21 +661,10 @@ describe("web inbound media saves with extension", () => {
         `expired media reference +15551234567 111@s.whatsapp.net 789@hosted.lid 42@c.us Authorization: Bearer ${DIRECT_SYNTHETIC_BEARER} ${DEPLOYMENT_REDACTION_SENTINEL}`,
       ),
     );
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage);
+    const { onMessage, listener, send } = await startMediaCase();
     onTestFinished(() => listener.close());
-    const realSock = await getMockSocket();
 
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "img-failed", fromMe: false, remoteJid: "111@s.whatsapp.net" },
-          message: { imageMessage: { mimetype: "image/jpeg" } },
-          messageTimestamp: 1_700_000_006,
-        },
-      ],
-    });
+    send("img-failed", imageMessage(), 1_700_000_006);
 
     const inbound = await waitForMessage(onMessage);
     expect(inbound.payload.body).toBe("[whatsapp attachment unavailable]");
@@ -741,32 +681,21 @@ describe("web inbound media saves with extension", () => {
       type: "media",
       payload: { contentType: "image/jpeg", kind: "image" },
     });
-    const diagnostic = await waitForLogLine("img-failed", signal);
-    expect(diagnostic).toContain('"channel":"whatsapp"');
-    expect(diagnostic).toContain('"mediaKind":"image"');
-    expect(diagnostic).toContain('"mimeType":"image/jpeg"');
-    expect(diagnostic).toContain('"failureStage":"direct"');
-    expect(diagnostic).toContain('"errorClass":"Error"');
-    expect(diagnostic).toContain('"statusCode":410');
-    expect(diagnostic).not.toContain("expired media reference");
-    expect(diagnostic).not.toContain("media.example/private");
-    expect(diagnostic).not.toContain("+15551234567");
-    expect(diagnostic).not.toContain("111@s.whatsapp.net");
-    expect(diagnostic).not.toContain("789@hosted.lid");
-    expect(diagnostic).not.toContain("42@c.us");
-    expect(diagnostic).not.toContain(DIRECT_SYNTHETIC_BEARER);
-    expect(diagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
-    const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
-      ([message]) => message === "WhatsApp inbound media materialization failed",
-    )?.[1]?.consoleMessage;
-    expect(terminalDiagnostic).toBe(
-      "WhatsApp inbound media materialization failed (stage=direct class=Error kind=image status=410)",
+    await expectFailureDiagnostics(
+      "img-failed",
+      "direct",
+      [
+        "expired media reference",
+        "media.example/private",
+        "+15551234567",
+        "111@s.whatsapp.net",
+        "789@hosted.lid",
+        "42@c.us",
+        DIRECT_SYNTHETIC_BEARER,
+        DEPLOYMENT_REDACTION_SENTINEL,
+      ],
+      signal,
     );
-    expect(terminalDiagnostic).not.toContain("media.example/private");
-    expect(terminalDiagnostic).not.toContain("789@hosted.lid");
-    expect(terminalDiagnostic).not.toContain("42@c.us");
-    expect(terminalDiagnostic).not.toContain(DIRECT_SYNTHETIC_BEARER);
-    expect(terminalDiagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
   });
 
   it("logs quoted media failures without verbose logging", async ({ signal, onTestFinished }) => {
@@ -776,55 +705,33 @@ describe("web inbound media saves with extension", () => {
         `quoted media reference expired 7@hosted 88@newsletter api_key=${QUOTED_SYNTHETIC_API_KEY} ${DEPLOYMENT_REDACTION_SENTINEL}`,
       ),
     );
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage);
+    const { onMessage, listener, send } = await startMediaCase();
     onTestFinished(() => listener.close());
-    const realSock = await getMockSocket();
 
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "quoted-failed", fromMe: false, remoteJid: "111@s.whatsapp.net" },
-          message: {
-            extendedTextMessage: {
-              text: "inspect this",
-              contextInfo: {
-                stanzaId: "quoted-image-failed",
-                participant: "222@s.whatsapp.net",
-                quotedMessage: { imageMessage: { mimetype: "image/jpeg" } },
-              },
-            },
-          },
-          messageTimestamp: 1_700_000_011,
-        },
-      ],
-    });
+    send(
+      "quoted-failed",
+      quotedReply("inspect this", {
+        stanzaId: "quoted-image-failed",
+        participant: "222@s.whatsapp.net",
+        quotedMessage: imageMessage(),
+      }),
+      1_700_000_011,
+    );
 
     const inbound = await waitForMessage(onMessage);
     expect(inbound.payload.body).toBe("inspect this\n\n[whatsapp quoted attachment unavailable]");
     expect(inbound.payload.commandBody).toBe("inspect this");
-    const diagnostic = await waitForLogLine("quoted-failed", signal);
-    expect(diagnostic).toContain('"channel":"whatsapp"');
-    expect(diagnostic).toContain('"mediaKind":"image"');
-    expect(diagnostic).toContain('"mimeType":"image/jpeg"');
-    expect(diagnostic).toContain('"failureStage":"quoted"');
-    expect(diagnostic).toContain('"errorClass":"Error"');
-    expect(diagnostic).toContain('"statusCode":410');
-    expect(diagnostic).not.toContain("quoted media reference expired");
-    expect(diagnostic).not.toContain("7@hosted");
-    expect(diagnostic).not.toContain("88@newsletter");
-    expect(diagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);
-    expect(diagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
-    const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
-      ([message]) => message === "WhatsApp inbound media materialization failed",
-    )?.[1]?.consoleMessage;
-    expect(terminalDiagnostic).toBe(
-      "WhatsApp inbound media materialization failed (stage=quoted class=Error kind=image status=410)",
+    await expectFailureDiagnostics(
+      "quoted-failed",
+      "quoted",
+      [
+        "quoted media reference expired",
+        "7@hosted",
+        "88@newsletter",
+        QUOTED_SYNTHETIC_API_KEY,
+        DEPLOYMENT_REDACTION_SENTINEL,
+      ],
+      signal,
     );
-    expect(terminalDiagnostic).not.toContain("7@hosted");
-    expect(terminalDiagnostic).not.toContain("88@newsletter");
-    expect(terminalDiagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);
-    expect(terminalDiagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
   });
 });

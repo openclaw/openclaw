@@ -1,5 +1,4 @@
 // Whatsapp tests cover login plugin behavior.
-import { EventEmitter } from "node:events";
 import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
@@ -8,16 +7,9 @@ import { createWaSocket, type waitForWaConnection } from "./session.js";
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const ev = new EventEmitter();
-  const sock = {
-    ev,
-    ws: { close: vi.fn() },
-    sendPresenceUpdate: vi.fn(),
-    sendMessage: vi.fn(),
-  };
   return {
     ...actual,
-    createWaSocket: vi.fn().mockResolvedValue(sock),
+    createWaSocket: vi.fn().mockResolvedValue({ ws: { close: vi.fn() } }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
     readWebAuthExistsForDecision: vi.fn(async () => ({
       outcome: "stable" as const,
@@ -33,6 +25,18 @@ vi.mock("./auth-store.js", async () => {
     restoreCredsFromBackupIfNeeded: vi.fn(async () => false),
   };
 });
+
+async function startGuardedLogin(waiter: typeof waitForWaConnection) {
+  const pending = loginWeb(false, waiter, undefined, undefined, {
+    beforeCredentialPersistence: async () => {},
+  });
+  for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+  }
+  expect(createWaSocket).toHaveBeenCalled();
+  const options = vi.mocked(createWaSocket).mock.calls.at(-1)?.[2];
+  return { pending, options };
+}
 
 describe("web login", () => {
   beforeEach(() => {
@@ -78,58 +82,32 @@ describe("web login", () => {
   it("rejects a delayed credential write failure even when old auth is still readable", async () => {
     const persistenceError = new Error("credential write failed");
     const waiter: typeof waitForWaConnection = vi.fn(() => new Promise<void>(() => {}));
-    const pendingLogin = loginWeb(false, waiter, undefined, undefined, {
-      beforeCredentialPersistence: async () => {},
-    });
-    for (let index = 0; index < 5; index += 1) {
-      await Promise.resolve();
-    }
-    expect(vi.mocked(createWaSocket)).toHaveBeenCalled();
-    const socketOptions = vi.mocked(createWaSocket).mock.calls.at(-1)?.[2] as
-      | { onCredentialPersistenceError?: (error: unknown) => void }
-      | undefined;
-
-    socketOptions?.onCredentialPersistenceError?.(persistenceError);
-
-    await expect(pendingLogin).rejects.toBe(persistenceError);
+    const { pending, options } = await startGuardedLogin(waiter);
+    options?.onCredentialPersistenceError?.(persistenceError);
+    await expect(pending).rejects.toBe(persistenceError);
   });
 
   it("waits for Baileys post-open key persistence before reporting login success", async () => {
-    let releaseKeyRead = () => {};
-    let releaseKeyWrite = () => {};
-    const keyRead = new Promise<void>((resolve) => {
-      releaseKeyRead = resolve;
-    });
-    const keyWrite = new Promise<void>((resolve) => {
-      releaseKeyWrite = resolve;
-    });
+    const keyRead = Promise.withResolvers<void>();
+    const keyWrite = Promise.withResolvers<void>();
     const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
-    const pendingLogin = loginWeb(false, waiter, undefined, undefined, {
-      beforeCredentialPersistence: async () => {},
-    });
-    for (let index = 0; index < 5; index += 1) {
-      await Promise.resolve();
-    }
-    expect(vi.mocked(createWaSocket)).toHaveBeenCalled();
-    const socketOptions = vi.mocked(createWaSocket).mock.calls.at(-1)?.[2] as
-      | { onCredentialPersistenceTask?: (task: Promise<unknown>) => void }
-      | undefined;
-    socketOptions?.onCredentialPersistenceTask?.(keyRead);
-    void keyRead.then(() => socketOptions?.onCredentialPersistenceTask?.(keyWrite));
+    const { pending, options } = await startGuardedLogin(waiter);
+    options?.onCredentialPersistenceTask?.(keyRead.promise);
+    void keyRead.promise.then(() => options?.onCredentialPersistenceTask?.(keyWrite.promise));
     await vi.advanceTimersByTimeAsync(0);
     let settled = false;
-    void pendingLogin.then(() => {
+    void pending.then(() => {
       settled = true;
     });
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    releaseKeyRead();
+    keyRead.resolve();
     await Promise.resolve();
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    releaseKeyWrite();
-    await expect(pendingLogin).resolves.toBeUndefined();
+    keyWrite.resolve();
+    await expect(pending).resolves.toBeUndefined();
   });
 });
