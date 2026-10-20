@@ -28,7 +28,9 @@ describe("requester pause notices", () => {
     [false, true],
   ])("retries paused turnover (private=%s, replaced=%s)", async (parentOnly, replacedSession) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const requesterKey = "agent:main:subagent:requester";
     let requester = makeSettledChild({
       runId: "requester-turn",
