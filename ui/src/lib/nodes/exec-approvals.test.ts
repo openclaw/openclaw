@@ -1,21 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createInitialDevicesState,
   loadExecApprovals,
   saveExecApprovals,
   updateExecApprovalsFormValue,
-} from "./index.ts";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
+} from "./page-operations.ts";
 
 describe("host-native exec approvals state", () => {
+  it("keeps an edited policy on its original base when a refresh sees another writer", async () => {
+    let hash = "original";
+    const request = vi.fn().mockImplementation(async () => ({
+      path: "/synthetic/approvals",
+      exists: true,
+      hash,
+      file: { version: 1, defaults: { security: "deny" } },
+    }));
+    const state = createInitialDevicesState({ client: { request }, connected: true });
+    await loadExecApprovals(state);
+    updateExecApprovalsFormValue(state, ["defaults", "security"], "allowlist");
+    hash = "another-writer";
+    await loadExecApprovals(state);
+    expect(state.execApprovalsSnapshot).toMatchObject({ hash: "original" });
+    expect(state.execApprovalsForm?.defaults?.security).toBe("allowlist");
+    await saveExecApprovals(state);
+    expect(request).toHaveBeenCalledWith("exec.approvals.set", {
+      baseHash: "original",
+      file: { version: 1, defaults: { security: "allowlist" } },
+    });
+  });
+
   it("keeps native snapshots read-only", async () => {
     const request = vi.fn().mockResolvedValue({
       enabled: true,

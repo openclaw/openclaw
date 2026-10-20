@@ -18,29 +18,22 @@ export function resolveAutoMediaKeyProvidersFromRegistry(params: {
   capability: MediaUnderstandingCapability;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): string[] {
-  type AutoProviderEntry = {
-    provider: MediaUnderstandingProvider;
-    priority: number;
-  };
   return [...params.providerRegistry.values()]
     .filter(
       (provider) =>
         provider.capabilities?.includes(params.capability) ??
         providerSupportsCapability(provider, params.capability),
     )
-    .map((provider): AutoProviderEntry | null => {
+    .flatMap((provider) => {
       const priority = provider.autoPriority?.[params.capability];
       return typeof priority === "number" && Number.isFinite(priority)
-        ? { provider, priority }
-        : null;
+        ? [{ provider, priority }]
+        : [];
     })
-    .filter((entry): entry is AutoProviderEntry => entry !== null)
-    .toSorted((left, right) => {
-      if (left.priority !== right.priority) {
-        return left.priority - right.priority;
-      }
-      return left.provider.id.localeCompare(right.provider.id);
-    })
+    .toSorted(
+      (left, right) =>
+        left.priority - right.priority || left.provider.id.localeCompare(right.provider.id),
+    )
     .map((entry) => normalizeMediaProviderId(entry.provider.id))
     .filter(Boolean);
 }

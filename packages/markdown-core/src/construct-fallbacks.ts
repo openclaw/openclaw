@@ -1,4 +1,6 @@
 import type { FormatCapabilityProfile, FormatConstruct } from "./format-capabilities.js";
+import { copyHtmlTags } from "./ir-metadata.js";
+import { sliceMarkdownIRRanges } from "./ir-slice.js";
 import {
   createStyleSpan,
   mergeAnnotationSpans,
@@ -6,10 +8,9 @@ import {
   type MarkdownLinkSpan,
   type MarkdownStyle,
   type MarkdownStyleSpan,
+  type MarkdownTextEdit as TextEdit,
 } from "./ir-spans.js";
-import { appendMarkdownIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
-
-type TextEdit = { start: number; end: number; text: string };
+import { appendMarkdownIR, type MarkdownIR } from "./ir.js";
 
 const STYLE_CONSTRUCTS: Partial<Record<MarkdownStyle, FormatConstruct>> = {
   bold: "bold",
@@ -22,10 +23,6 @@ const STYLE_CONSTRUCTS: Partial<Record<MarkdownStyle, FormatConstruct>> = {
   blockquote: "blockquote",
 };
 
-function isHeading(style: MarkdownStyle): boolean {
-  return style.startsWith("heading_");
-}
-
 function projectStyles(
   styles: MarkdownStyleSpan[],
   profile: FormatCapabilityProfile,
@@ -33,7 +30,7 @@ function projectStyles(
   const projected: MarkdownStyleSpan[] = [];
   let synthesizedHeading = false;
   for (const span of styles) {
-    if (isHeading(span.style)) {
+    if (span.style.startsWith("heading_")) {
       if (profile.constructs.heading === "native") {
         projected.push(span);
       } else if (
@@ -112,20 +109,24 @@ function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
       return !previous || edit.start !== previous.start || edit.end !== previous.end;
     });
   // Edited output drops list metadata, so do not rebuild it for every slice.
-  const content: MarkdownIR = {
+  const content: MarkdownIR = copyHtmlTags(ir, {
     text: ir.text,
     styles: ir.styles,
     links: ir.links,
     annotations: ir.annotations,
-  };
-  const result: MarkdownIR = { text: "", styles: [], links: [] };
+  });
   let cursor = 0;
-  for (const edit of ordered) {
-    appendMarkdownIR(result, sliceMarkdownIR(content, cursor, edit.start));
-    result.text += edit.text;
+  const ranges = ordered.map((edit) => {
+    const range = { start: cursor, end: edit.start };
     cursor = edit.end;
+    return range;
+  });
+  ranges.push({ start: cursor, end: ir.text.length });
+  const result: MarkdownIR = { text: "", styles: [], links: [] };
+  for (const [index, slice] of sliceMarkdownIRRanges(content, ranges).entries()) {
+    appendMarkdownIR(result, slice);
+    result.text += ordered[index]?.text ?? "";
   }
-  appendMarkdownIR(result, sliceMarkdownIR(content, cursor, ir.text.length));
   result.styles = mergeStyleSpans(result.styles);
   if (result.annotations) {
     result.annotations = mergeAnnotationSpans(result.annotations);
@@ -140,11 +141,14 @@ export function applyConstructFallbacks(
 ): MarkdownIR {
   // Tables stay in convertMarkdownTables; images and mentions are already plain
   // text in this flat IR, so those constructs have no shared fallback work here.
-  const styled: MarkdownIR = {
+  const styled: MarkdownIR = copyHtmlTags(ir, {
     ...ir,
     styles: projectStyles(ir.styles, profile),
-  };
+  });
   const listProjected = applyTextEdits(styled, collectListFallbacks(styled, profile));
   const linkProjection = collectLinkFallbacks(listProjected, profile);
-  return applyTextEdits({ ...listProjected, links: linkProjection.links }, linkProjection.edits);
+  return applyTextEdits(
+    copyHtmlTags(listProjected, { ...listProjected, links: linkProjection.links }),
+    linkProjection.edits,
+  );
 }

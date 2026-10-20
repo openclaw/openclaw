@@ -2,72 +2,56 @@
 import { describe, expect, it } from "vitest";
 import {
   cacheAndRetainChatAudioBlob,
-  canDecodeChatAudioWaveform,
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   computeChatAudioWaveformPeaks,
+  retainCachedChatAudioBlob,
   shouldFetchChatAudioWaveform,
 } from "./chat-audio-waveform.ts";
 
 describe("chat audio waveform", () => {
   it("caps waveform decoding by byte size and duration", () => {
     expect(
-      canDecodeChatAudioWaveform({
+      shouldFetchChatAudioWaveform({
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
         durationSeconds: 300,
       }),
     ).toBe(true);
-    expect(canDecodeChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES + 1 })).toBe(
+    expect(shouldFetchChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES + 1 })).toBe(
       false,
     );
     expect(
-      canDecodeChatAudioWaveform({
+      shouldFetchChatAudioWaveform({
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
         durationSeconds: 301,
       }),
     ).toBe(false);
     expect(shouldFetchChatAudioWaveform({})).toBe(false);
-    expect(canDecodeChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES })).toBe(false);
+    expect(shouldFetchChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES })).toBe(false);
     expect(
-      canDecodeChatAudioWaveform({
+      shouldFetchChatAudioWaveform({
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
         durationSeconds: Number.NaN,
       }),
     ).toBe(false);
   });
 
-  it("computes normalized peak buckets", () => {
-    const channels = [new Float32Array([0.1, -0.5, 0.2, 0.4, -0.25, 0.75, 0, -1])];
-    const peaks = computeChatAudioWaveformPeaks(
-      {
-        length: channels[0]!.length,
-        numberOfChannels: channels.length,
-        getChannelData: (channel) => channels[channel]!,
-      },
-      4,
-    );
+  it("normalizes bucket peaks across every channel", () => {
+    const channels = [
+      [0.1, -0.5, 0.2, 0.4, -0.25, 0.75, 0, -1],
+      [0, 0, 1, 0, 0, 0, 0, 2],
+    ].map((samples) => Float32Array.from({ length: 192 }, (_, index) => samples[index % 8]!));
+    const peaks = computeChatAudioWaveformPeaks({
+      length: channels[0]!.length,
+      numberOfChannels: channels.length,
+      getChannelData: (channel) => channels[channel]!,
+    });
 
-    expect(peaks).toHaveLength(4);
-    expect(peaks[0]).toBeCloseTo(0.5);
-    expect(peaks[1]).toBeCloseTo(0.4);
-    expect(peaks[2]).toBeCloseTo(0.75);
-    expect(peaks[3]).toBe(1);
+    expect(peaks).toEqual(
+      Array.from({ length: 96 }, (_, index) => [0.25, 0.5, 0.375, 1][index % 4]),
+    );
   });
 
-  it("includes peaks carried only by a non-first channel", () => {
-    const channels = [new Float32Array([0, 0, 0, 0]), new Float32Array([0, 0.25, 0, 1])];
-    const peaks = computeChatAudioWaveformPeaks(
-      {
-        length: channels[0]!.length,
-        numberOfChannels: channels.length,
-        getChannelData: (channel) => channels[channel]!,
-      },
-      2,
-    );
-
-    expect(peaks).toEqual([0.25, 1]);
-  });
-
-  it("declines a new Blob when all 32 cache entries are retained", () => {
+  it("enforces the entry cap until the last lease releases an evictable Blob", () => {
     const releases: Array<() => void> = [];
     for (let index = 0; index < 32; index += 1) {
       const retained = cacheAndRetainChatAudioBlob(`retained-${index}`, {
@@ -87,6 +71,26 @@ describe("chat audio waveform", () => {
         sizeBytes: 1,
       }),
     ).toBeNull();
+
+    const shared = retainCachedChatAudioBlob("retained-0");
+    expect(shared).not.toBeNull();
+    releases[0]!();
+    releases[0]!();
+    expect(
+      cacheAndRetainChatAudioBlob("retained-overflow", {
+        blobUrl: "blob:retained-overflow",
+        sizeBytes: 1,
+      }),
+    ).toBeNull();
+
+    shared!.release();
+    const replacement = cacheAndRetainChatAudioBlob("retained-after-release", {
+      blobUrl: "blob:retained-after-release",
+      sizeBytes: 1,
+    });
+    expect(replacement).not.toBeNull();
+    expect(retainCachedChatAudioBlob("retained-0")).toBeNull();
+    replacement?.release();
 
     for (const release of releases) {
       release();

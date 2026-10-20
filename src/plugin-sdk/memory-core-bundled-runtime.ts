@@ -1,9 +1,24 @@
 // Manual facade. Keep loader boundary explicit.
+import path from "node:path";
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type {
+  DreamingArtifactsAuditSummary,
+  RepairDreamingArtifactsResult,
+  RepairShortTermPromotionArtifactsResult,
+  ShortTermAuditSummary,
+  ShortTermDreamingStats,
+} from "../memory-host-sdk/dreaming.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import type { PluginStateOperationModuleSource } from "../plugin-state/plugin-state-store.native-binding.js";
+import { isTypeScriptPackageEntry } from "../plugins/package-entrypoints.js";
+import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
+import { capturePluginStateOperationModuleSource } from "../plugins/plugin-state-operation-source.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
-import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
+import {
+  loadBundledPluginPublicSurfaceModuleSyncCore,
+  resolveBundledPublicSurfaceLocation,
+} from "./facade-loader.js";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderCreateOptions,
@@ -20,65 +35,7 @@ type EmbeddingProviderResult = {
   runtime?: MemoryEmbeddingProviderRuntime;
 };
 
-export type DreamingArtifactsAuditIssue = {
-  severity: "warn" | "error";
-  code:
-    | "dreaming-session-corpus-unreadable"
-    | "dreaming-session-corpus-self-ingested"
-    | "dreaming-session-ingestion-unreadable"
-    | "dreaming-diary-unreadable";
-  message: string;
-  fixable: boolean;
-};
-
-export type DreamingArtifactsAuditSummary = {
-  dreamsPath?: string;
-  sessionCorpusDir: string;
-  sessionCorpusFileCount: number;
-  suspiciousSessionCorpusFileCount: number;
-  suspiciousSessionCorpusLineCount: number;
-  sessionIngestionPath: string;
-  sessionIngestionExists: boolean;
-  issues: DreamingArtifactsAuditIssue[];
-};
-
-export type ShortTermAuditIssue = {
-  severity: "warn" | "error";
-  code:
-    | "recall-store-unreadable"
-    | "recall-store-empty"
-    | "recall-store-invalid"
-    | "recall-store-dangling"
-    | "recall-store-over-limit"
-    | "recall-lock-stale"
-    | "recall-lock-unreadable";
-  message: string;
-  fixable: boolean;
-};
-
-export type ShortTermAuditSummary = {
-  storePath: string;
-  lockPath: string;
-  updatedAt?: string;
-  exists: boolean;
-  entryCount: number;
-  promotedCount: number;
-  spacedEntryCount: number;
-  conceptTaggedEntryCount: number;
-  conceptTagScripts?: Record<string, unknown>;
-  invalidEntryCount: number;
-  danglingEntryCount?: number;
-  issues: ShortTermAuditIssue[];
-};
-
-export type RepairShortTermPromotionArtifactsResult = {
-  changed: boolean;
-  removedInvalidEntries: number;
-  removedDanglingEntries?: number;
-  removedOverflowEntries?: number;
-  rewroteStore: boolean;
-  removedStaleLock: boolean;
-};
+export type { DreamingArtifactsAuditSummary, ShortTermAuditSummary };
 
 type RuntimeFacadeModule = {
   configureMemoryCoreDreamingState: (
@@ -139,43 +96,6 @@ type GroundedRemPreviewResult = {
   files: GroundedRemFilePreview[];
 };
 
-export type ShortTermDreamingStatsEntry = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
-
-export type ShortTermDreamingStats = {
-  shortTermCount: number;
-  recallSignalCount: number;
-  dailySignalCount: number;
-  groundedSignalCount: number;
-  totalSignalCount: number;
-  phaseSignalCount: number;
-  lightPhaseHitCount: number;
-  remPhaseHitCount: number;
-  promotedTotal: number;
-  promotedToday: number;
-  storePath: string;
-  phaseSignalPath: string;
-  phaseSignalError?: string;
-  lastPromotedAt?: string;
-  shortTermEntries: ShortTermDreamingStatsEntry[];
-  signalEntries: ShortTermDreamingStatsEntry[];
-  promotedEntries: ShortTermDreamingStatsEntry[];
-};
-
 type ApiFacadeModule = {
   MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE: string;
   configureMemoryCoreDreamingState: (
@@ -202,37 +122,57 @@ type ApiFacadeModule = {
   }) => Promise<{ dreamsPath: string; removed: number }>;
 };
 
-export type RepairDreamingArtifactsResult = {
-  changed: boolean;
-  archiveDir?: string;
-  archivedDreamsDiary: boolean;
-  archivedSessionCorpus: boolean;
-  archivedSessionIngestion: boolean;
-  archivedPaths: string[];
-  warnings: string[];
+type FacadeModules = {
+  "api.js": ApiFacadeModule;
+  "runtime-api.js": RuntimeFacadeModule;
 };
 
-function loadApiFacadeModule(): ApiFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSyncCore<ApiFacadeModule>({
+function loadFacadeModule<Artifact extends keyof FacadeModules>(
+  artifactBasename: Artifact,
+): FacadeModules[Artifact] {
+  const module = loadBundledPluginPublicSurfaceModuleSyncCore<FacadeModules[Artifact]>({
     dirName: "memory-core",
-    artifactBasename: "api.js",
+    artifactBasename,
   });
-  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", options),
+  const instance = getPluginValueInstance(module);
+  const assertCurrent = instance ? () => instance.run(() => {}) : undefined;
+  let moduleSource: PluginStateOperationModuleSource | undefined;
+  if (instance && assertCurrent) {
+    moduleSource = capturePluginStateOperationModuleSource(instance, assertCurrent);
+  } else {
+    // CLI facades have process-stable code; capture their selected family before yielding.
+    const facade = resolveBundledPublicSurfaceLocation({
+      dirName: "memory-core",
+      artifactBasename,
+    });
+    const operation = resolveBundledPublicSurfaceLocation({
+      dirName: "memory-core",
+      artifactBasename: "recall-operation-api.js",
+    });
+    const operationModule =
+      facade?.origin === "bundled" &&
+      operation?.origin === "bundled" &&
+      path.dirname(facade.modulePath) === path.dirname(operation.modulePath) &&
+      isTypeScriptPackageEntry(facade.modulePath) === isTypeScriptPackageEntry(operation.modulePath)
+        ? { ...operation, pluginId: "memory-core", origin: "bundled" as const }
+        : undefined;
+    moduleSource = {
+      resolve(moduleName) {
+        if (moduleName !== "recall-operation-api.js" || !operationModule) {
+          throw new Error("Memory recall operation is absent from its selected facade family");
+        }
+        return operationModule;
+      },
+    };
+  }
+  module.configureMemoryCoreDreamingState(<Value>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStore<Value>("memory-core", options, assertCurrent, moduleSource),
   );
   return module;
 }
 
-function loadRuntimeFacadeModule(): RuntimeFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSyncCore<RuntimeFacadeModule>({
-    dirName: "memory-core",
-    artifactBasename: "runtime-api.js",
-  });
-  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", options),
-  );
-  return module;
-}
+const loadApiFacadeModule = () => loadFacadeModule("api.js");
+const loadRuntimeFacadeModule = () => loadFacadeModule("runtime-api.js");
 
 /** Returns the memory-core-owned recovery message for an absent local provider plugin. */
 export function getMissingLocalMemoryEmbeddingProviderMessage(): string {
@@ -242,7 +182,7 @@ export function getMissingLocalMemoryEmbeddingProviderMessage(): string {
 const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
 
 /** Create a memory embedding provider with built-in fallback metadata. */
-export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((
+export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = (
   options,
 ) => {
   const createOptions = {
@@ -250,67 +190,41 @@ export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvid
     acquireLocalService,
   };
   return loadRuntimeFacadeModule().createEmbeddingProvider(createOptions);
-}) as RuntimeFacadeModule["createEmbeddingProvider"];
+};
 
 /** Remove short-term recall candidates already grounded into durable memory. */
 export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroundedShortTermCandidates"] =
-  ((...args) =>
-    loadRuntimeFacadeModule().removeGroundedShortTermCandidates(
-      ...args,
-    )) as RuntimeFacadeModule["removeGroundedShortTermCandidates"];
+  (...args) => loadRuntimeFacadeModule().removeGroundedShortTermCandidates(...args);
 /** Load short-term dreaming stats for doctor/control status. */
 export const loadShortTermPromotionDreamingStats: RuntimeFacadeModule["loadShortTermPromotionDreamingStats"] =
-  ((...args) =>
-    loadRuntimeFacadeModule().loadShortTermPromotionDreamingStats(
-      ...args,
-    )) as RuntimeFacadeModule["loadShortTermPromotionDreamingStats"];
+  (...args) => loadRuntimeFacadeModule().loadShortTermPromotionDreamingStats(...args);
 /** Audit dreaming diary and session-corpus artifacts through the bundled runtime facade. */
-export const auditDreamingArtifacts: RuntimeFacadeModule["auditDreamingArtifacts"] = ((...args) =>
-  loadRuntimeFacadeModule().auditDreamingArtifacts(
-    ...args,
-  )) as RuntimeFacadeModule["auditDreamingArtifacts"];
+export const auditDreamingArtifacts: RuntimeFacadeModule["auditDreamingArtifacts"] = (...args) =>
+  loadRuntimeFacadeModule().auditDreamingArtifacts(...args);
 /** Audit short-term promotion artifacts through the bundled runtime facade. */
 export const auditShortTermPromotionArtifacts: RuntimeFacadeModule["auditShortTermPromotionArtifacts"] =
-  ((...args) =>
-    loadRuntimeFacadeModule().auditShortTermPromotionArtifacts(
-      ...args,
-    )) as RuntimeFacadeModule["auditShortTermPromotionArtifacts"];
+  (...args) => loadRuntimeFacadeModule().auditShortTermPromotionArtifacts(...args);
 /** Repair or archive problematic dreaming artifacts through the bundled runtime facade. */
-export const repairDreamingArtifacts: RuntimeFacadeModule["repairDreamingArtifacts"] = ((...args) =>
-  loadRuntimeFacadeModule().repairDreamingArtifacts(
-    ...args,
-  )) as RuntimeFacadeModule["repairDreamingArtifacts"];
+export const repairDreamingArtifacts: RuntimeFacadeModule["repairDreamingArtifacts"] = (...args) =>
+  loadRuntimeFacadeModule().repairDreamingArtifacts(...args);
 /** Repair short-term promotion artifacts through the bundled runtime facade. */
 export const repairShortTermPromotionArtifacts: RuntimeFacadeModule["repairShortTermPromotionArtifacts"] =
-  ((...args) =>
-    loadRuntimeFacadeModule().repairShortTermPromotionArtifacts(
-      ...args,
-    )) as RuntimeFacadeModule["repairShortTermPromotionArtifacts"];
+  (...args) => loadRuntimeFacadeModule().repairShortTermPromotionArtifacts(...args);
 
 /** Preview grounded REM markdown facts and candidates for selected input files. */
-export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMarkdown"] = ((
+export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMarkdown"] = (
   ...args
-) =>
-  loadApiFacadeModule().previewGroundedRemMarkdown(
-    ...args,
-  )) as ApiFacadeModule["previewGroundedRemMarkdown"];
+) => loadApiFacadeModule().previewGroundedRemMarkdown(...args);
 
 /** Remove duplicate dreaming diary entries while preserving canonical records. */
-export const dedupeDreamDiaryEntries: ApiFacadeModule["dedupeDreamDiaryEntries"] = ((...args) =>
-  loadApiFacadeModule().dedupeDreamDiaryEntries(
-    ...args,
-  )) as ApiFacadeModule["dedupeDreamDiaryEntries"];
+export const dedupeDreamDiaryEntries: ApiFacadeModule["dedupeDreamDiaryEntries"] = (...args) =>
+  loadApiFacadeModule().dedupeDreamDiaryEntries(...args);
 
 /** Write synthetic/backfill dreaming diary entries for harness or migration use. */
-export const writeBackfillDiaryEntries: ApiFacadeModule["writeBackfillDiaryEntries"] = ((...args) =>
-  loadApiFacadeModule().writeBackfillDiaryEntries(
-    ...args,
-  )) as ApiFacadeModule["writeBackfillDiaryEntries"];
+export const writeBackfillDiaryEntries: ApiFacadeModule["writeBackfillDiaryEntries"] = (...args) =>
+  loadApiFacadeModule().writeBackfillDiaryEntries(...args);
 
 /** Remove dreaming diary entries previously written by the backfill helper. */
-export const removeBackfillDiaryEntries: ApiFacadeModule["removeBackfillDiaryEntries"] = ((
+export const removeBackfillDiaryEntries: ApiFacadeModule["removeBackfillDiaryEntries"] = (
   ...args
-) =>
-  loadApiFacadeModule().removeBackfillDiaryEntries(
-    ...args,
-  )) as ApiFacadeModule["removeBackfillDiaryEntries"];
+) => loadApiFacadeModule().removeBackfillDiaryEntries(...args);

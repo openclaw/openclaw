@@ -80,12 +80,8 @@ export function diffInstalledPluginIndexInvalidationReasons(
       reasons.add("stale-package");
     }
   }
-  for (const pluginId of currentByPluginId.keys()) {
-    if (!previousByPluginId.has(pluginId)) {
-      const currentPlugin = currentByPluginId.get(pluginId);
-      if (currentPlugin?.enabled === false) {
-        continue;
-      }
+  for (const [pluginId, plugin] of currentByPluginId) {
+    if (!previousByPluginId.has(pluginId) && plugin.enabled) {
       reasons.add("source-changed");
     }
   }

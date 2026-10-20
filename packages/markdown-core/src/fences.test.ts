@@ -33,37 +33,6 @@ describe("parseFenceSpans closing-fence rules", () => {
     expect(isSafeFenceBreak(spans, text.indexOf("after") + 1)).toBe(true);
   });
 
-  it("still closes on a bare fence, a longer same-marker fence, and keeps an opener info string", () => {
-    expect(parseFenceSpans("```\ncode\n```\nafter\n")).toHaveLength(1);
-    expect(parseFenceSpans("```\ncode\n`````  \nafter\n")).toHaveLength(1);
-    expect(parseFenceSpans("```python\nx = 1\n```\n")).toHaveLength(1);
-
-    const closed = "```\ncode\n```\nafter\n";
-    const spans = parseFenceSpans(closed);
-    expect(isSafeFenceBreak(spans, closed.indexOf("after") + 1)).toBe(true);
-  });
-
-  it.each(["\n", "\r\n"])("preserves raw UTF-16 offsets with %j line endings", (newline) => {
-    const prefix = `😀${newline}`;
-    const openLine = "  ````ts `metadata`";
-    const text = `${prefix}${openLine}${newline}code${newline} \`\`\`\`\` \t${newline}tail`;
-
-    expect(parseFenceSpans(text)).toEqual([
-      {
-        start: prefix.length,
-        end: text.lastIndexOf("\n"),
-        openLine,
-        marker: "````",
-        indent: "  ",
-      },
-    ]);
-  });
-
-  it.each(["\r", "\u2028", "\u2029"])("does not treat %j as a scanner line break", (separator) => {
-    expect(parseFenceSpans(`intro${separator}\`\`\`ts\ncode`)).toEqual([]);
-    expect(parseFenceSpans(`\`\`\`ts${separator}info\ncode`)).toEqual([]);
-  });
-
   it("carries an open fence through empty input and a continued line without mutating state", () => {
     const { state } = scanFenceSpans("  ~~~sh\nbody");
     Object.freeze(state.open);

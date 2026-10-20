@@ -1,375 +1,252 @@
-// Signal tests cover accounts plugin behavior.
-import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expect, it } from "vitest";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
+  type ResolvedSignalTransport,
 } from "./accounts.js";
 
-describe("resolveSignalAccount", () => {
-  it("resolves an omitted transport to managed native defaults", () => {
-    const resolved = resolveSignalAccount({ cfg: { channels: { signal: {} } } as never });
+type Signal = NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>;
+type Transport = NonNullable<Signal["transport"]>;
+type Native = Omit<Extract<Transport, { kind: "managed-native" }>, "kind">;
+type Check = [expected: Partial<ResolvedSignalTransport>, accountId?: string, exact?: boolean];
+type Case = [name: string, signal: Signal, ...checks: Check[]];
+const phone = "+15555550123";
+const socketPath = "/tmp/signal private/a#b.sock";
+const socketUrl = "unix:///tmp/signal%20private/a%23b.sock";
+const baseUrl = "http://127.0.0.1:8080";
+const native = (options: Native = {}): Transport => ({ kind: "managed-native", ...options });
+const account = (options: Native = {}) => ({ account: phone, transport: native(options) });
+const endpoint = (kind: "container" | "external-native", url: string): Transport => ({ kind, url });
+const config = (signal: Signal): OpenClawConfig => ({ channels: { signal } });
+const accounts = (entries: NonNullable<Signal["accounts"]>): Signal => ({ accounts: entries });
+const http = (url: string, host: string, port: number, id?: string): Check => [
+  { kind: "managed-native", baseUrl: url, httpHost: host, httpPort: port },
+  id,
+];
+const defaults: ResolvedSignalTransport = {
+  kind: "managed-native",
+  baseUrl,
+  cliPath: "signal-cli",
+  httpHost: "127.0.0.1",
+  httpPort: 8080,
+  startupTimeoutMs: 30_000,
+};
+const port = (httpPort: number, id = "work"): Check => [{ kind: "managed-native", httpPort }, id];
 
-    expect(resolved.transport).toEqual({
-      kind: "managed-native",
-      baseUrl: "http://127.0.0.1:8080",
-      cliPath: "signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
-      startupTimeoutMs: 30_000,
-    });
-  });
-
-  it.each([
+it.each<Case>([
+  [
+    "socket encoding leaves HTTP port free",
+    { transport: native({ socketPath }), accounts: { http: { transport: native() } } },
+    [{ socketPath, baseUrl: socketUrl }],
+    [{ baseUrl }, "http"],
+  ],
+  [
+    "disabled socket sibling",
     {
-      name: "uses a managed native connection URL independently from its daemon bind",
-      transport: {
-        kind: "managed-native",
-        url: "http://127.0.0.1:8181",
-        httpHost: "0.0.0.0",
-        httpPort: 8181,
-      },
-      expected: { baseUrl: "http://127.0.0.1:8181", httpHost: "0.0.0.0", httpPort: 8181 },
+      transport: native({ socketPath }),
+      accounts: { work: { enabled: false, transport: native({ socketPath }) } },
     },
+    [{ baseUrl: socketUrl }],
+  ],
+  ["omitted transport defaults", {}, [defaults, undefined, true]],
+  [
+    "independent connection URL",
+    { transport: native({ url: "http://127.0.0.1:8181", httpHost: "0.0.0.0", httpPort: 8181 }) },
+    http("http://127.0.0.1:8181", "0.0.0.0", 8181),
+  ],
+  [
+    "bracketed IPv6 bind",
+    { transport: native({ httpHost: "[::1]", httpPort: 8181 }) },
+    http("http://[::1]:8181", "::1", 8181),
+  ],
+  [
+    "independent bind address",
+    { transport: native({ url: baseUrl, httpHost: "127.0.0.2" }) },
+    http(baseUrl, "127.0.0.2", 8081),
+  ],
+  [
+    "root transport is not inherited",
     {
-      name: "formats an IPv6 managed native bind as a valid connection URL",
-      transport: { kind: "managed-native", httpHost: "::1", httpPort: 8181 },
-      expected: { baseUrl: "http://[::1]:8181", httpHost: "::1", httpPort: 8181 },
+      transport: endpoint("container", "http://default-container:8080"),
+      accounts: { work: { account: phone } },
     },
+    [{ kind: "container", baseUrl: "http://default-container:8080" }, undefined, true],
+    [{ kind: "managed-native", baseUrl }, "work"],
+  ],
+  [
+    "root transport overrides accounts.default",
     {
-      name: "canonicalizes a bracketed IPv6 managed native bind",
-      transport: { kind: "managed-native", httpHost: "[::1]", httpPort: 8181 },
-      expected: { baseUrl: "http://[::1]:8181", httpHost: "::1", httpPort: 8181 },
-    },
-    {
-      name: "does not reserve a managed transport's own implicit connection endpoint",
-      transport: {
-        kind: "managed-native",
-        url: "http://127.0.0.1:8080",
-        httpHost: "0.0.0.0",
-      },
-      expected: { baseUrl: "http://127.0.0.1:8080", httpHost: "0.0.0.0", httpPort: 8080 },
-    },
-    {
-      name: "preserves a same-port connection URL on a different specific bind address",
-      transport: {
-        kind: "managed-native",
-        url: "http://127.0.0.1:8080",
-        httpHost: "127.0.0.2",
-      },
-      expected: { baseUrl: "http://127.0.0.1:8080", httpHost: "127.0.0.2", httpPort: 8081 },
-    },
-  ])("$name", ({ transport, expected }) => {
-    const cfg = { channels: { signal: { transport } } } as never;
-
-    expect(resolveSignalAccount({ cfg }).transport).toMatchObject({
-      kind: "managed-native",
-      ...expected,
-    });
-  });
-
-  it("does not inherit the default account transport into named accounts", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          transport: { kind: "container", url: "http://default-container:8080" },
-          accounts: { work: { account: "+15555550123" } },
-        },
-      },
-    } as never;
-
-    expect(resolveSignalAccount({ cfg }).transport).toEqual({
-      kind: "container",
-      baseUrl: "http://default-container:8080",
-    });
-    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
-      kind: "managed-native",
-      baseUrl: "http://127.0.0.1:8080",
-    });
-  });
-
-  it("keeps the root transport authoritative over accounts.default", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          transport: { kind: "external-native", url: "http://canonical-native:8181" },
-          accounts: {
-            default: {
-              account: "+15555550123",
-              transport: { kind: "container", url: "http://stale-container:8080" },
-            },
-          },
-        },
-      },
-    } as never;
-
-    expect(resolveSignalAccount({ cfg, accountId: "default" }).transport).toEqual({
-      kind: "external-native",
-      baseUrl: "http://canonical-native:8181",
-    });
-  });
-
-  it("allocates distinct default ports across managed native accounts", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            personal: { account: "+15555550123", transport: { kind: "managed-native" } },
-            work: { account: "+15555550124", transport: { kind: "managed-native" } },
-          },
-        },
-      },
-    } as never;
-
-    expect(resolveSignalAccount({ cfg, accountId: "personal" }).transport).toMatchObject({
-      kind: "managed-native",
-      httpPort: 8080,
-    });
-    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
-      kind: "managed-native",
-      httpPort: 8081,
-    });
-  });
-
-  it.each([
-    {
-      name: "matches case-preserving account keys while allocating implicit ports",
+      transport: endpoint("external-native", "http://canonical-native:8181"),
       accounts: {
-        alpha: {
-          account: "+15555550123",
-          transport: { kind: "managed-native", httpPort: 8080 },
+        default: {
+          account: phone,
+          transport: endpoint("container", "http://stale-container:8080"),
         },
-        Ops: { account: "+15555550124", transport: { kind: "managed-native" } },
       },
-      accountId: "Ops",
-      httpPort: 8081,
     },
+    [{ kind: "external-native", baseUrl: "http://canonical-native:8181" }, "default", true],
+  ],
+  [
+    "distinct implicit ports",
+    accounts({ personal: account(), work: account() }),
+    port(8080, "personal"),
+    port(8081),
+  ],
+  [
+    "case-preserving key",
+    accounts({ alpha: account({ httpPort: 8080 }), Ops: account() }),
+    port(8081, "Ops"),
+  ],
+  [
+    "disabled explicit reservation",
+    accounts({
+      dormant: { ...account({ httpPort: 8181 }), enabled: false },
+      work: account({ httpPort: 8181 }),
+    }),
+    port(8181),
+  ],
+  [
+    "unconfigured placeholder",
+    accounts({ placeholder: { enabled: false }, work: account() }),
+    port(8080),
+  ],
+  [
+    "bind and connection reservations",
+    accounts({
+      proxy: account({ url: "http://localhost:8080", httpPort: 8181 }),
+      work: account(),
+    }),
+    port(8081),
+  ],
+  [
+    "connection URL follows allocated bind",
     {
-      name: "does not let a disabled account block an active managed port",
-      accounts: {
-        dormant: {
-          enabled: false,
-          account: "+15555550123",
-          transport: { kind: "managed-native", httpPort: 8181 },
-        },
-        work: {
-          account: "+15555550124",
-          transport: { kind: "managed-native", httpPort: 8181 },
-        },
-      },
-      accountId: "work",
-      httpPort: 8181,
+      transport: native({ httpPort: 8080 }),
+      accounts: { work: account({ url: baseUrl, httpHost: "0.0.0.0" }) },
     },
+    http("http://127.0.0.1:8081", "0.0.0.0", 8081, "work"),
+  ],
+])("resolves %s", (_name, signal, ...checks) => {
+  for (const [expected, accountId, exact] of checks) {
+    const resolved = resolveSignalAccount({ cfg: config(signal), accountId });
+    if (exact) {
+      expect(resolved.transport).toEqual(expected);
+    } else {
+      expect(resolved.transport).toMatchObject(expected);
+    }
+    if (expected.baseUrl) {
+      expect(resolved.baseUrl).toBe(expected.baseUrl);
+    }
+  }
+});
+
+it.each<[string, Signal, string, string?]>([
+  [
+    "duplicate enabled sockets",
     {
-      name: "does not reserve an implicit managed port for a disabled account",
-      accounts: {
-        dormant: {
-          enabled: false,
-          account: "+15555550123",
-          transport: { kind: "managed-native" },
-        },
-        work: { account: "+15555550124", transport: { kind: "managed-native" } },
-      },
-      accountId: "work",
-      httpPort: 8080,
+      transport: native({ socketPath }),
+      accounts: { work: { transport: native({ socketPath }) } },
     },
+    "distinct socket path",
+  ],
+  [
+    "socket with HTTP options",
+    { transport: native({ socketPath, httpPort: 8080 }) },
+    "cannot be combined",
+  ],
+  [
+    "duplicate explicit ports",
+    accounts({
+      personal: account({ httpPort: 8181 }),
+      work: account({ httpPort: 8181 }),
+    }),
+    'Signal managed native accounts "work" and "personal" both bind port 8181.',
+    "work",
+  ],
+  [
+    "local external endpoint collision",
+    accounts({
+      proxy: { account: phone, transport: endpoint("container", "http://localhost:8181") },
+      work: account({ httpPort: 8181 }),
+    }),
+    'Signal managed native account "work" binds port 8181, which conflicts with account "proxy" local transport endpoint.',
+    "work",
+  ],
+  [
+    "own independent local endpoint collision",
     {
-      name: "does not let an unconfigured placeholder consume a managed port",
-      accounts: {
-        placeholder: { enabled: false },
-        work: { account: "+15555550124", transport: { kind: "managed-native" } },
-      },
-      accountId: "work",
-      httpPort: 8080,
+      account: phone,
+      transport: native({ url: "https://127.0.0.1:8181", httpPort: 8181 }),
     },
+    'Signal managed native account "default" binds port 8181, which conflicts with its local transport endpoint.',
+  ],
+])("rejects %s", (_name, signal, message, accountId) => {
+  expect(() => resolveSignalAccount({ cfg: config(signal), accountId })).toThrow(message);
+});
+
+it.each<[string, Signal, string[], string, string?, boolean?]>([
+  [
+    "top-level account",
+    { account: phone, accounts: { work: { enabled: false } } },
+    ["default", "work"],
+    "default",
+    phone,
+  ],
+  [
+    "case-preserving default",
     {
-      name: "reserves managed bind and local connection ports for implicit accounts",
-      accounts: {
-        proxy: {
-          account: "+15555550123",
-          transport: {
-            kind: "managed-native",
-            url: "http://localhost:8080",
-            httpPort: 8181,
-          },
-        },
-        work: { account: "+15555550124", transport: { kind: "managed-native" } },
-      },
-      accountId: "work",
-      httpPort: 8081,
+      transport: endpoint("container", "http://signal-container:8080"),
+      accounts: { Default: { account: phone } },
     },
-  ])("$name", ({ accounts, accountId, httpPort }) => {
-    const cfg = { channels: { signal: { accounts } } } as never;
-
-    expect(resolveSignalAccount({ cfg, accountId }).transport).toMatchObject({
-      kind: "managed-native",
-      httpPort,
-    });
-  });
-
-  it.each([
+    ["default"],
+    "default",
+    phone,
+  ],
+  [
+    "UUID with a named account",
     {
-      name: "rejects duplicate explicit managed native ports",
-      accounts: {
-        personal: {
-          account: "+15555550123",
-          transport: { kind: "managed-native", httpPort: 8181 },
-        },
-        work: {
-          account: "+15555550124",
-          transport: { kind: "managed-native", httpPort: 8181 },
-        },
-      },
-      message: 'Signal managed native accounts "work" and "personal" both bind port 8181.',
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+      accounts: { work: { account: phone } },
     },
-    {
-      name: "rejects an explicit managed port used by a local external endpoint",
-      accounts: {
-        proxy: {
-          account: "+15555550123",
-          transport: { kind: "container", url: "http://localhost:8181" },
-        },
-        work: {
-          account: "+15555550124",
-          transport: { kind: "managed-native", httpPort: 8181 },
-        },
-      },
-      message:
-        'Signal managed native account "work" binds port 8181, which conflicts with account "proxy" local transport endpoint.',
-    },
-  ])("$name", ({ accounts, message }) => {
-    const cfg = { channels: { signal: { accounts } } } as never;
+    ["work"],
+    "work",
+    undefined,
+    false,
+  ],
+])("selects the %s", (_name, signal, ids, accountId, expectedAccount, defaultConfigured) => {
+  const cfg = config(signal);
+  const resolved = resolveSignalAccount({ cfg });
+  expect(listSignalAccountIds(cfg)).toEqual(ids);
+  expect(resolveDefaultSignalAccountId(cfg)).toBe(accountId);
+  expect(resolved).toMatchObject({ accountId, configured: true });
+  if (expectedAccount) {
+    expect(resolved.config.account).toBe(expectedAccount);
+  }
+  if (defaultConfigured !== undefined) {
+    expect(resolveSignalAccount({ cfg, accountId: "default" }).configured).toBe(defaultConfigured);
+  }
+});
 
-    expect(() => resolveSignalAccount({ cfg, accountId: "work" })).toThrow(message);
+it("uses configured defaultAccount when accountId is omitted", () => {
+  const work = {
+    name: "Work",
+    account: phone,
+    transport: endpoint("external-native", "http://127.0.0.1:9999"),
+  };
+  const resolved = resolveSignalAccount({
+    cfg: config({ defaultAccount: "work", accounts: { work } }),
   });
-
-  it("rejects an explicit managed port used by its own independent local endpoint", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          account: "+15555550123",
-          transport: {
-            kind: "managed-native",
-            url: "https://127.0.0.1:8181",
-            httpPort: 8181,
-          },
-        },
-      },
-    } as never;
-
-    expect(() => resolveSignalAccount({ cfg })).toThrow(
-      'Signal managed native account "default" binds port 8181, which conflicts with its local transport endpoint.',
-    );
+  expect(resolved).toMatchObject({
+    accountId: "work",
+    name: "Work",
+    baseUrl: "http://127.0.0.1:9999",
+    configured: true,
+    config: { account: phone },
   });
-
-  it("keeps an implicit managed connection URL aligned with its allocated bind", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          transport: { kind: "managed-native", httpPort: 8080 },
-          accounts: {
-            work: {
-              account: "+15555550124",
-              transport: {
-                kind: "managed-native",
-                url: "http://127.0.0.1:8080",
-                httpHost: "0.0.0.0",
-              },
-            },
-          },
-        },
-      },
-    } as never;
-
-    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
-      kind: "managed-native",
-      baseUrl: "http://127.0.0.1:8081",
-      httpHost: "0.0.0.0",
-      httpPort: 8081,
-    });
-  });
-
-  it("preserves top-level default account when named accounts are configured", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          account: "+15555550123",
-          accounts: { work: { enabled: false } },
-        },
-      },
-    } as never;
-
-    expect(listSignalAccountIds(cfg)).toEqual(["default", "work"]);
-    expect(resolveDefaultSignalAccountId(cfg)).toBe("default");
-    expect(resolveSignalAccount({ cfg }).config.account).toBe("+15555550123");
-  });
-
-  it("deduplicates a case-preserving default account from the implicit root transport", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          transport: { kind: "container", url: "http://signal-container:8080" },
-          accounts: { Default: { account: "+15555550123" } },
-        },
-      },
-    } as never;
-
-    expect(listSignalAccountIds(cfg)).toEqual(["default"]);
-    expect(resolveSignalAccount({ cfg }).config.account).toBe("+15555550123");
-  });
-
-  it("does not treat accountUuid as an implicit configured default account", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
-          accounts: { work: { account: "+15555550123" } },
-        },
-      },
-    } as never;
-
-    expect(listSignalAccountIds(cfg)).toEqual(["work"]);
-    expect(resolveSignalAccount({ cfg, accountId: "default" }).configured).toBe(false);
-    expect(resolveSignalAccount({ cfg }).accountId).toBe("work");
-  });
-
-  it("keeps accountUuid supplemental when no E.164 account or transport exists", () => {
-    const cfg = {
-      channels: {
-        signal: { accountUuid: "123e4567-e89b-12d3-a456-426614174000" },
-      },
-    } as never;
-
-    expect(listSignalAccountIds(cfg)).toEqual(["default"]);
-    expect(resolveSignalAccount({ cfg }).configured).toBe(false);
-  });
-
-  it("uses configured defaultAccount when accountId is omitted", () => {
-    const resolved = resolveSignalAccount({
-      cfg: {
-        channels: {
-          signal: {
-            defaultAccount: "work",
-            accounts: {
-              work: {
-                name: "Work",
-                account: "+15555550123",
-                transport: { kind: "external-native", url: "http://127.0.0.1:9999" },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.name).toBe("Work");
-    expect(resolved.baseUrl).toBe("http://127.0.0.1:9999");
-    expect(resolved.transport).toEqual({
-      kind: "external-native",
-      baseUrl: "http://127.0.0.1:9999",
-    });
-    expect(resolved.config.account).toBe("+15555550123");
-    expect(resolved.configured).toBe(true);
+  expect(resolved.transport).toEqual({
+    kind: "external-native",
+    baseUrl: "http://127.0.0.1:9999",
   });
 });

@@ -34,6 +34,7 @@ private data class CachedMessageContent(
   val sizeBytes: Long? = null,
   val durationMs: Long? = null,
   val playback: String? = null,
+  val toolActivity: ChatToolActivity? = null,
 )
 
 @Serializable
@@ -42,6 +43,17 @@ private data class CachedMessagePayload(
   val provenance: ChatMessageProvenance? = null,
   @SerialName("__openclaw") val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
+  val provider: String? = null,
+  val model: String? = null,
+  val deliveryMirror: ChatDeliveryMirror? = null,
+  val usage: ChatMessageUsage? = null,
+  val cost: ChatMessageCost? = null,
+  val isSyntheticDisplay: Boolean = false,
+  val runId: String? = null,
+  val steerTargetRunId: String? = null,
+  val turnBoundary: Boolean = false,
+  val phase: String? = null,
+  val isError: Boolean = false,
 )
 
 /**
@@ -82,6 +94,7 @@ interface ChatTranscriptCache {
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry? = null,
   )
 
   /** Removes one session and its transcript, so gateway-side deletes also purge offline copies. */
@@ -221,17 +234,6 @@ internal interface ChatCacheDao {
     keep: Int,
   )
 
-  // Owner-local cleanup runs before the gateway-wide bound below; transcripts never outlive
-  // their corresponding session row.
-  @Query(
-    "DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND agentId = :agentId AND sessionKey NOT IN " +
-      "(SELECT sessionKey FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId)",
-  )
-  suspend fun evictOrphanedTranscripts(
-    gatewayId: String,
-    agentId: String,
-  )
-
   // A gateway can expose many agent owners. Cap their aggregate cache by recent writes so
   // switching owners cannot grow the disposable session/transcript tables without bound.
   @Query(
@@ -257,15 +259,18 @@ internal interface ChatCacheDao {
  * before their suspend point, so a connection switch cannot re-scope an old response.
  */
 class RoomChatTranscriptCache internal constructor(
-  private val database: GatewayCacheDatabase,
+  private val openDatabase: suspend () -> GatewayCacheDatabase,
 ) : ChatTranscriptCache {
+  internal constructor(database: GatewayCacheDatabase) : this({ database })
+
   private val json = Json { ignoreUnknownKeys = true }
   private val cachedPayloadSerializer = CachedMessagePayload.serializer()
   private val cachedContentSerializer = ListSerializer(CachedMessageContent.serializer())
   private val legacyTextPartsSerializer = ListSerializer(String.serializer())
 
   override suspend fun loadLastDefaultAgentId(gatewayId: String): String? {
-    val gateway = scopedGatewayId(gatewayId) ?: return null
+    val database = openDatabase()
+    val gateway = scopedCacheId(gatewayId) ?: return null
     return database
       .dao()
       .lastDefaultAgentId(gateway)
@@ -277,8 +282,9 @@ class RoomChatTranscriptCache internal constructor(
     gatewayId: String,
     agentId: String,
   ) {
-    val gateway = scopedGatewayId(gatewayId) ?: return
-    val agent = scopedAgentId(agentId) ?: return
+    val database = openDatabase()
+    val gateway = scopedCacheId(gatewayId) ?: return
+    val agent = scopedCacheId(agentId) ?: return
     database.dao().upsertGatewayOwner(CachedGatewayOwnerEntity(gatewayId = gateway, agentId = agent))
   }
 
@@ -286,8 +292,9 @@ class RoomChatTranscriptCache internal constructor(
     gatewayId: String,
     agentId: String,
   ): List<ChatSessionEntry> {
-    val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
-    val agent = scopedAgentId(agentId) ?: return emptyList()
+    val database = openDatabase()
+    val gateway = scopedCacheId(gatewayId) ?: return emptyList()
+    val agent = scopedCacheId(agentId) ?: return emptyList()
     return database.dao().sessions(gateway, agent).map { row ->
       ChatSessionEntry(
         key = row.sessionKey,
@@ -310,8 +317,9 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
   ): List<ChatMessage> {
-    val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
-    val agent = scopedAgentId(agentId) ?: return emptyList()
+    val database = openDatabase()
+    val gateway = scopedCacheId(gatewayId) ?: return emptyList()
+    val agent = scopedCacheId(agentId) ?: return emptyList()
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
     return database.dao().messages(gateway, agent, key).mapNotNull { row ->
       val role = normalizeVisibleChatMessageRole(row.role) ?: return@mapNotNull null
@@ -335,6 +343,7 @@ class RoomChatTranscriptCache internal constructor(
               sizeBytes = part.sizeBytes,
               durationMs = part.durationMs,
               playback = part.playback,
+              toolActivity = part.toolActivity,
             )
           },
         timestampMs = row.timestampMs,
@@ -344,6 +353,17 @@ class RoomChatTranscriptCache internal constructor(
         provenance = payload.provenance,
         transcriptMarker = payload.transcriptMarker,
         senderLabel = payload.senderLabel,
+        provider = payload.provider,
+        model = payload.model,
+        deliveryMirror = payload.deliveryMirror,
+        usage = payload.usage,
+        cost = payload.cost,
+        isSyntheticDisplay = payload.isSyntheticDisplay,
+        runId = payload.runId,
+        steerTargetRunId = payload.steerTargetRunId,
+        turnBoundary = payload.turnBoundary,
+        phase = payload.phase,
+        isError = payload.isError,
       )
     }
   }
@@ -354,8 +374,9 @@ class RoomChatTranscriptCache internal constructor(
     sessions: List<ChatSessionEntry>,
     retainedSessionKey: String?,
   ) {
-    val gateway = scopedGatewayId(gatewayId) ?: return
-    val agent = scopedAgentId(agentId) ?: return
+    val database = openDatabase()
+    val gateway = scopedCacheId(gatewayId) ?: return
+    val agent = scopedCacheId(agentId) ?: return
     val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
     val dao = database.dao()
     database.withWriteTransaction {
@@ -377,7 +398,6 @@ class RoomChatTranscriptCache internal constructor(
       dao.deleteSessions(gateway, agent)
       dao.insertSessions(rows)
       retainedRow?.let { dao.insertSessions(listOf(it.copy(rowOrder = rows.size))) }
-      dao.evictOrphanedTranscripts(gateway, agent)
       dao.evictGatewaySessionsBeyond(gateway, MAX_CACHED_SESSIONS)
       dao.evictGatewayOrphanedTranscripts(gateway)
     }
@@ -388,9 +408,11 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
-    val gateway = scopedGatewayId(gatewayId) ?: return
-    val agent = scopedAgentId(agentId) ?: return
+    val database = openDatabase()
+    val gateway = scopedCacheId(gatewayId) ?: return
+    val agent = scopedCacheId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     // Persist small managed-media references, never attachment bytes. Cards remain visible offline
     // even though their short-lived download capability must be reacquired after reconnecting.
@@ -404,6 +426,10 @@ class RoomChatTranscriptCache internal constructor(
               when {
                 part.type == "text" && !part.text.isNullOrBlank() -> {
                   CachedMessageContent(type = "text", text = part.text)
+                }
+
+                part.toolActivity != null -> {
+                  CachedMessageContent(type = part.type, toolActivity = part.toolActivity)
                 }
 
                 (isImage && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank()) ||
@@ -429,13 +455,30 @@ class RoomChatTranscriptCache internal constructor(
                 }
               }
             }
-          if (content.isEmpty() && message.provenance == null && message.transcriptMarker == null) return@mapNotNull null
+          val hasPersistedMetadata =
+            message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
+              message.usage != null || message.cost != null || message.turnBoundary
+          // An empty real call still ends the previous call’s usage snapshot.
+          val isRealAssistantBoundary =
+            message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant()
+          if (content.isEmpty() && !hasPersistedMetadata && !isRealAssistantBoundary) return@mapNotNull null
           val payload =
             CachedMessagePayload(
               content = content,
               provenance = message.provenance,
               transcriptMarker = message.transcriptMarker,
               senderLabel = message.senderLabel,
+              provider = message.provider,
+              model = message.model,
+              deliveryMirror = message.deliveryMirror,
+              usage = message.usage,
+              cost = message.cost,
+              isSyntheticDisplay = message.isSyntheticDisplay,
+              runId = message.runId,
+              steerTargetRunId = message.steerTargetRunId,
+              turnBoundary = message.turnBoundary,
+              phase = message.phase,
+              isError = message.isError,
             )
           Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)
@@ -460,22 +503,27 @@ class RoomChatTranscriptCache internal constructor(
       val currentSession = dao.session(gateway, agent, key)
       // REPLACE refreshes SQLite rowid, making the transcript's session the most recent gateway
       // row while preserving list metadata when that session was already cached.
+      // Persist the accepted history row with its transcript, including cleared usage.
+      // Otherwise a failed list refresh resurrects the previous run on offline reopen.
+      val session = sessionInfo?.copy(key = key) ?: ChatSessionEntry(key = key, updatedAtMs = null)
       dao.insertSessions(
         listOf(
-          currentSession
-            ?: ChatSessionEntry(key = key, updatedAtMs = null)
-              .toCachedSession(gateway, agent, rowOrder = dao.nextSessionRowOrder(gateway, agent)),
+          if (sessionInfo != null || currentSession == null) {
+            session.toCachedSession(gateway, agent, rowOrder = currentSession?.rowOrder ?: dao.nextSessionRowOrder(gateway, agent))
+          } else {
+            currentSession
+          },
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
-      dao.evictOrphanedTranscripts(gateway, agent)
       dao.evictGatewaySessionsBeyond(gateway, MAX_CACHED_SESSIONS)
       dao.evictGatewayOrphanedTranscripts(gateway)
     }
   }
 
   override suspend fun clearGateway(gatewayId: String) {
-    val gateway = scopedGatewayId(gatewayId) ?: return
+    val database = openDatabase()
+    val gateway = scopedCacheId(gatewayId) ?: return
     val dao = database.dao()
     database.withWriteTransaction {
       dao.deleteMessages(gateway)
@@ -489,8 +537,9 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
   ) {
-    val gateway = scopedGatewayId(gatewayId) ?: return
-    val agent = scopedAgentId(agentId) ?: return
+    val database = openDatabase()
+    val gateway = scopedCacheId(gatewayId) ?: return
+    val agent = scopedCacheId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.dao()
     database.withWriteTransaction {
@@ -499,9 +548,7 @@ class RoomChatTranscriptCache internal constructor(
     }
   }
 
-  private fun scopedGatewayId(gatewayId: String): String? = gatewayId.trim().takeIf { it.isNotEmpty() }
-
-  private fun scopedAgentId(agentId: String): String? = agentId.trim().takeIf { it.isNotEmpty() }
+  private fun scopedCacheId(value: String): String? = value.trim().takeIf { it.isNotEmpty() }
 
   private fun decodeCachedMessage(encoded: String): CachedMessagePayload =
     runCatching { json.decodeFromString(cachedPayloadSerializer, encoded) }.getOrElse {

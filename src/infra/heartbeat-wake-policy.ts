@@ -73,8 +73,13 @@ export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams)
   switch (params.source) {
     case "cron":
       return params.intent === "immediate" && (reason?.startsWith("cron:") ?? false);
-    case "manual":
     case "notifications-event":
+      return (
+        hasSessionTarget &&
+        ((params.intent === "immediate" && reason === "wake") ||
+          (params.intent === "event" && reason === "notifications-event"))
+      );
+    case "manual":
     case "restart-sentinel":
       return params.intent === "immediate" && hasSessionTarget && reason === "wake";
     case "hook":

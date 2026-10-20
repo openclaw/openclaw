@@ -5,9 +5,9 @@ import { compareOpenClawVersions } from "../config/version.js";
 import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-state.js";
 import {
   importConfigMachineState,
-  readConfigMachineState,
   updateConfigMachineState,
-} from "../state/config-machine-state.js";
+} from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 
 const BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION = "2026.7.2";
 
@@ -53,7 +53,11 @@ export function migrateLegacyConfigMachineState(params: {
       entries.push(["plugins.bundledDiscovery", "compat"]);
     }
   }
-  const tts = asOptionalRecord(raw.tts);
+  const canonicalTts = asOptionalRecord(raw.tts);
+  const tts =
+    canonicalTts && Object.hasOwn(canonicalTts, "prefsPath")
+      ? canonicalTts
+      : asOptionalRecord(asOptionalRecord(raw.messages)?.tts);
   if (tts && Object.hasOwn(tts, "prefsPath")) {
     entries.push(["tts.prefsPath", tts.prefsPath]);
   }

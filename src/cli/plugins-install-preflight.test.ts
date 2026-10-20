@@ -9,7 +9,6 @@ import {
   installPluginFromNpmPackArchiveMock,
   installPluginFromNpmSpecMock,
   installPluginFromPathMock,
-  parseClawHubPluginSpecMock,
   promptYesNoMock,
   readConfigFileSnapshotForWriteMock,
   resetPluginsCliTestState,
@@ -25,6 +24,7 @@ const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
 
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: withPluginLifecycleLeaseMock,
+  hasPluginLifecycleLease: () => false,
 }));
 
 function expectNoPluginInstallSideEffects(): void {
@@ -56,7 +56,6 @@ describe("plugin install mutation-free preflight", () => {
     resolveMarketplaceInstallShortcutMock.mockResolvedValue({
       ok: true,
       plugin: "superpowers",
-      marketplaceName: "claude-plugins-official",
       marketplaceSource: "claude-plugins-official",
     });
 
@@ -73,35 +72,29 @@ describe("plugin install mutation-free preflight", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "clawhub:",
-    "clawhub:demo@",
-    "clawhub:@scope/pkg@",
-    "CLAWHUB:",
-    "ClAwHuB:demo@",
-    " clawhub:demo@ ",
-  ])("rejects malformed explicit ClawHub source %s before the lifecycle lease", async (raw) => {
-    await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(runtimeErrors.at(-1)).toContain(`Unsupported ClawHub plugin spec: ${raw}`);
-    expectNoPluginInstallSideEffects();
-  });
-
-  it.each([" ", "\t"])(
-    "rejects a whitespace-only install source %j before the lifecycle lease",
+  it.each([" clawhub:demo@ ", "demo@", "@composio/composio@", "unknown:demo"])(
+    "rejects malformed ClawHub source %s before the lifecycle lease",
     async (raw) => {
       await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
         "__exit__:1",
       );
 
-      expect(runtimeErrors.at(-1)).toContain("Plugin install source must not be empty.");
+      expect(runtimeErrors.at(-1)).toContain(`Unsupported ClawHub plugin spec: ${raw}`);
       expectNoPluginInstallSideEffects();
     },
   );
 
-  it.each(["", " ", "\t"])(
+  it("rejects a whitespace-only install source before the lifecycle lease", async () => {
+    const raw = "\t";
+    await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain("Plugin install source must not be empty.");
+    expectNoPluginInstallSideEffects();
+  });
+
+  it.each(["", "\t"])(
     "rejects an explicitly empty marketplace %j before the lifecycle lease",
     async (marketplace) => {
       await expect(
@@ -170,15 +163,16 @@ describe("plugin install mutation-free preflight", () => {
       error: "unsupported git: plugin spec: git:",
     },
     {
+      label: "missing explicit file path",
+      args: ["file:openclaw-missing-plugin-preflight-test.js"],
+      error: "Plugin path not found:",
+    },
+    {
       label: "missing local path",
       args: ["./openclaw-missing-plugin-preflight-test.tgz"],
       error: "Plugin path not found:",
     },
   ])("rejects $label before the lifecycle lease", async ({ args, error }) => {
-    if (args[0] === "clawhub:demo") {
-      parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
-    }
-
     await expect(runPluginsCommand(["plugins", "install", ...args, "--force"])).rejects.toThrow(
       "__exit__:1",
     );

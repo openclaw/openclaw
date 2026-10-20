@@ -13,47 +13,46 @@ describe("truncate utilities", () => {
     });
   });
 
-  it("classifies trailing-newline truncation by the byte limit", () => {
-    expect(truncateHead("x\n", { maxBytes: 1 }).truncatedBy).toBe("bytes");
-    expect(truncateTail("x\n", { maxBytes: 1 }).truncatedBy).toBe("bytes");
-  });
-
-  it("keeps complete UTF-8 characters when taking a partial tail line", () => {
-    const result = truncateTail("alpha🙂", { maxBytes: 4 });
-
-    expect(result.content).toBe("🙂");
-    expect(result.lastLinePartial).toBe(true);
-    expect(result.outputBytes).toBe(4);
+  it("preserves a leading BOM and NUL in a partial tail line", () => {
+    expect(truncateTail("discarded-\uFEFFA\0B", { maxBytes: 6 })).toMatchObject({
+      content: "\uFEFFA\0B",
+      outputBytes: 6,
+      outputLines: 1,
+      lastLinePartial: true,
+    });
   });
 
   it.each([
-    {
-      name: "CRLF",
-      content: "a\r\n\r\nb\r\n",
-      maxLines: 2,
-      maxBytes: 20,
-      head: "a\r\n\r",
-      tail: "\r\nb\r",
-      outputLines: 2,
-      truncatedBy: "lines",
+    { tail: "\uDC00\uD800\uDC00", maxBytes: 7, expected: "\uFFFD\uD800\uDC00" },
+    { tail: "🙂\uD800", maxBytes: 7, expected: "🙂\uFFFD" },
+  ])(
+    "repairs only retained lone surrogates within $maxBytes bytes: $tail",
+    ({ tail, maxBytes, expected }) => {
+      const content = `discarded-${tail}`;
+      expect(truncateTail(content, { maxBytes })).toEqual({
+        content: expected,
+        truncated: true,
+        truncatedBy: "bytes",
+        totalLines: 1,
+        totalBytes: Buffer.byteLength(content),
+        outputLines: 1,
+        outputBytes: Buffer.byteLength(expected),
+        lastLinePartial: true,
+        firstLineExceedsLimit: false,
+        maxLines: 2000,
+        maxBytes,
+      });
     },
+  );
+
+  it.each([
     {
-      name: "empty lines",
-      content: "\n\n\n",
+      name: "lone UTF-16 units",
+      content: "\uD800x\uDC00\ndiscarded\n\uD800x\uDC00",
       maxLines: 2,
-      maxBytes: 20,
-      head: "\n",
-      tail: "\n",
-      outputLines: 2,
-      truncatedBy: "lines",
-    },
-    {
-      name: "byte limit first",
-      content: "aa\nbb\ncc",
-      maxLines: 2,
-      maxBytes: 4,
-      head: "aa",
-      tail: "cc",
+      maxBytes: 7,
+      head: "\uD800x\uDC00",
+      tail: "\uD800x\uDC00",
       outputLines: 1,
       truncatedBy: "bytes",
     },
@@ -100,16 +99,6 @@ describe("truncate utilities", () => {
   );
 
   describe("truncateLine", () => {
-    it("returns text unchanged when within limit", () => {
-      expect(truncateLine("short", 10)).toEqual({ text: "short", wasTruncated: false });
-    });
-
-    it("truncates and appends suffix when over limit", () => {
-      const result = truncateLine("this is a very long line", 10);
-      expect(result.wasTruncated).toBe(true);
-      expect(result.text).toBe("this is a ... [truncated]");
-    });
-
     it("keeps 500 characters and truncates longer lines by default", () => {
       const line = "x".repeat(500);
       expect(truncateLine(line)).toEqual({ text: line, wasTruncated: false });

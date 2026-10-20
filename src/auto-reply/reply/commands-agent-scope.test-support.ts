@@ -1,7 +1,9 @@
 // Shared command test mocks for resolving agent scope and directories.
 import { vi } from "vitest";
 
-export const resolveSessionAgentIdMock = vi.fn(() => "main");
+export const resolveSessionAgentIdMock = vi.fn<
+  (typeof import("../../agents/agent-scope.js"))["resolveSessionAgentId"]
+>(() => "main");
 export const resolveAgentDirMock = vi.fn(
   (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
 );

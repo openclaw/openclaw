@@ -1,16 +1,12 @@
-// Slack plugin module implements channel migration behavior.
 import type { OpenClawConfig, SlackChannelConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type SlackChannels = Record<string, SlackChannelConfig>;
 
-type MigrationScope = "account" | "global";
-
 type SlackChannelMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
-  scopes: MigrationScope[];
 };
 
 function resolveAccountChannels(
@@ -40,13 +36,7 @@ function migrateSlackChannelsInPlace(
   oldChannelId: string,
   newChannelId: string,
 ): { migrated: boolean; skippedExisting: boolean } {
-  if (!channels) {
-    return { migrated: false, skippedExisting: false };
-  }
-  if (oldChannelId === newChannelId) {
-    return { migrated: false, skippedExisting: false };
-  }
-  if (!Object.hasOwn(channels, oldChannelId)) {
+  if (!channels || oldChannelId === newChannelId || !Object.hasOwn(channels, oldChannelId)) {
     return { migrated: false, skippedExisting: false };
   }
   if (Object.hasOwn(channels, newChannelId)) {
@@ -67,41 +57,16 @@ export function migrateSlackChannelConfig(params: {
   oldChannelId: string;
   newChannelId: string;
 }): SlackChannelMigrationResult {
-  const scopes: MigrationScope[] = [];
   let migrated = false;
   let skippedExisting = false;
-
-  const accountChannels = resolveAccountChannels(params.cfg, params.accountId).channels;
-  if (accountChannels) {
-    const result = migrateSlackChannelsInPlace(
-      accountChannels,
-      params.oldChannelId,
-      params.newChannelId,
-    );
-    if (result.migrated) {
-      migrated = true;
-      scopes.push("account");
-    }
-    if (result.skippedExisting) {
-      skippedExisting = true;
-    }
+  for (const channels of [
+    resolveAccountChannels(params.cfg, params.accountId).channels,
+    params.cfg.channels?.slack?.channels,
+  ]) {
+    const result = migrateSlackChannelsInPlace(channels, params.oldChannelId, params.newChannelId);
+    migrated ||= result.migrated;
+    skippedExisting ||= result.skippedExisting;
   }
 
-  const globalChannels = params.cfg.channels?.slack?.channels;
-  if (globalChannels) {
-    const result = migrateSlackChannelsInPlace(
-      globalChannels,
-      params.oldChannelId,
-      params.newChannelId,
-    );
-    if (result.migrated) {
-      migrated = true;
-      scopes.push("global");
-    }
-    if (result.skippedExisting) {
-      skippedExisting = true;
-    }
-  }
-
-  return { migrated, skippedExisting, scopes };
+  return { migrated, skippedExisting };
 }

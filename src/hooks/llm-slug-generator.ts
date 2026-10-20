@@ -1,7 +1,3 @@
-/**
- * LLM-based slug generator for session memory filenames
- */
-
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -25,8 +21,7 @@ const PROVIDER_ERROR_DETAIL_RE =
   /\b(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|exceeded your current quota|payment required|insufficient credits|credit balance|insufficient[_ -]?(?:balance|funds)|rate[_ -]?limit(?:ed)?|too many requests|invalid[_ -]?api[_ -]?key|incorrect api key|authentication failed|oauth token refresh failed|missing (?:token|projectid|credentials)|google cloud credentials|re-?authenticate|unauthorized|forbidden|permission_error|billing hard limit|spend(?:ing)? limit)\b/i;
 
 function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
-  const configuredTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
-  if (typeof configuredTimeoutSeconds !== "number" || !Number.isFinite(configuredTimeoutSeconds)) {
+  if (cfg.agents?.defaults?.timeoutSeconds === undefined) {
     return DEFAULT_SLUG_GENERATOR_TIMEOUT_MS;
   }
   return resolveAgentTimeoutMs({ cfg });
@@ -63,9 +58,6 @@ function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | unde
   return PROVIDER_ERROR_PREFIX_RE.test(text) || PROVIDER_ERROR_DETAIL_RE.test(text);
 }
 
-/**
- * Generate a short 1-2 word filename slug from session content using LLM
- */
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
@@ -121,27 +113,18 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
         authProfileFailurePolicy: "local",
       });
 
-      // Extract text from payloads
-      if (result.payloads && result.payloads.length > 0) {
-        const payload = result.payloads[0];
-        const text = payload?.text;
-        if (text) {
-          if (isErrorSlugPayload(payload)) {
-            return null;
-          }
-          // Clean up the response - extract just the slug
-          const slug = normalizeLowercaseStringOrEmpty(text)
-            .replace(/[^a-z0-9-]/g, "-")
-            .replace(/-+/g, "-")
-            .replace(/^-+|-+$/g, "")
-            .slice(0, 30)
-            .replace(/^-+|-+$/g, ""); // Max 30 chars
-
-          return slug || null;
-        }
+      const payload = result.payloads?.[0];
+      const text = payload?.text;
+      if (!text || isErrorSlugPayload(payload)) {
+        return null;
       }
-
-      return null;
+      const slug = normalizeLowercaseStringOrEmpty(text)
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 30)
+        .replace(/^-+|-+$/g, "");
+      return slug || null;
     } finally {
       preparedRunAdmission.close();
     }

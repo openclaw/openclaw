@@ -1,4 +1,8 @@
-// Control UI module implements plugin activation behavior.
+import {
+  asNullableObjectRecord,
+  asNullableRecord,
+  isStringArray,
+} from "@openclaw/normalization-core/record-coerce";
 import type { ConfigSnapshot } from "../api/types.ts";
 
 type PluginActivationOptions = {
@@ -11,44 +15,27 @@ export function isPluginEnabledInConfigSnapshot(
   options?: PluginActivationOptions,
 ): boolean {
   const enabledByDefault = options?.enabledByDefault ?? true;
-  const config = configSnapshot?.config;
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
+  const config = asNullableRecord(configSnapshot?.config);
+  if (!config) {
     return enabledByDefault;
   }
 
-  const plugins =
-    "plugins" in config && config.plugins && typeof config.plugins === "object"
-      ? (config.plugins as Record<string, unknown>)
-      : null;
+  const plugins = asNullableObjectRecord(config.plugins);
   if (plugins?.enabled === false) {
     return false;
   }
 
-  const deny =
-    Array.isArray(plugins?.deny) && plugins.deny.every((entry) => typeof entry === "string")
-      ? plugins.deny
-      : [];
+  const deny = isStringArray(plugins?.deny) ? plugins.deny : [];
   if (deny.includes(pluginId)) {
     return false;
   }
 
-  const allow =
-    Array.isArray(plugins?.allow) && plugins.allow.every((entry) => typeof entry === "string")
-      ? plugins.allow
-      : [];
+  const allow = isStringArray(plugins?.allow) ? plugins.allow : [];
   if (allow.length > 0 && !allow.includes(pluginId)) {
     return false;
   }
 
-  const entries =
-    plugins && "entries" in plugins && plugins.entries && typeof plugins.entries === "object"
-      ? (plugins.entries as Record<string, unknown>)
-      : null;
-  const entry = entries?.[pluginId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return enabledByDefault;
-  }
-
-  const enabled = (entry as { enabled?: unknown }).enabled;
+  const entries = asNullableObjectRecord(plugins?.entries);
+  const enabled = asNullableRecord(entries?.[pluginId])?.enabled;
   return typeof enabled === "boolean" ? enabled : enabledByDefault;
 }

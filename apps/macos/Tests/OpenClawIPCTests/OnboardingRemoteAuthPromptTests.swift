@@ -63,54 +63,6 @@ struct OnboardingRemoteAuthPromptTests {
         #expect(RemoteGatewayAuthIssue(error: notConfigured) == .passwordRequired)
     }
 
-    @Test func `token field visibility follows onboarding rules`() {
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "",
-            remoteTokenUnsupported: false,
-            authIssue: nil) == false)
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: true,
-            remoteToken: "",
-            remoteTokenUnsupported: false,
-            authIssue: nil))
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "secret",
-            remoteTokenUnsupported: false,
-            authIssue: nil))
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "",
-            remoteTokenUnsupported: true,
-            authIssue: nil))
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "",
-            remoteTokenUnsupported: false,
-            authIssue: .tokenRequired))
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "",
-            remoteTokenUnsupported: false,
-            authIssue: .tokenMismatch))
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "",
-            remoteTokenUnsupported: false,
-            authIssue: .gatewayTokenNotConfigured) == false)
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "",
-            remoteTokenUnsupported: false,
-            authIssue: .setupCodeExpired) == false)
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "",
-            remoteTokenUnsupported: false,
-            authIssue: .pairingRequired) == false)
-    }
-
     @Test func `pairing required copy points users to pair approve`() {
         let issue = RemoteGatewayAuthIssue.pairingRequired
 
@@ -124,9 +76,23 @@ struct OnboardingRemoteAuthPromptTests {
         for issue in [RemoteGatewayAuthIssue.tokenRequired, .tokenMismatch] {
             #expect(issue.body.contains("`openclaw gateway auth-token --show`"))
             #expect(issue.body.contains("interactive terminal"))
+            #expect(issue.body.contains("Change connection"))
+            #expect(issue.body.contains("Gateway token"))
             #expect(!issue.body.contains("config get gateway.auth.token"))
             #expect(issue.statusMessage.contains("openclaw gateway auth-token --show"))
         }
+    }
+
+    @Test(arguments: [
+        (RemoteGatewayAuthIssue.passwordRequired, "Gateway password"),
+        (RemoteGatewayAuthIssue.setupCodeExpired, "Address or setup code"),
+    ])
+    func `remote auth recovery names the shared connection editor`(
+        issue: RemoteGatewayAuthIssue, field: String)
+    {
+        #expect(issue.body.contains("Change connection"))
+        #expect(issue.body.contains(field))
+        #expect(!issue.body.contains("Gateway token"))
     }
 
     @Test func `paired device success copy explains auth source`() {

@@ -42,7 +42,7 @@ vi.mock("../gateway/client.js", () => ({
       }
       const onHelloOk = this.options.onHelloOk;
       if (typeof onHelloOk === "function") {
-        onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
+        onHelloOk();
       }
     }
 
@@ -52,7 +52,7 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
     client.start();
     return {
@@ -97,34 +97,28 @@ describe("OpenClawChannelBridge startup", () => {
     await bridge.close();
   });
 
-  it("waits through retryable startup and updates lookup support after reconnect", async () => {
+  it("waits for the Gateway hello before completing startup", async () => {
     mockState.autoHello = false;
     const bridge = new OpenClawChannelBridge({} as never, {
       claudeChannelMode: "off",
       verbose: false,
     });
 
-    const started = bridge.start();
+    const onStarted = vi.fn();
+    const started = bridge.start().then(onStarted);
     await vi.waitFor(() => {
       expect(mockState.clientOptions).not.toBeNull();
     });
+    expect(onStarted).not.toHaveBeenCalled();
     expect(mockState.clientOptions?.notifyOnStartupRetry).not.toBe(true);
 
     const onHelloOk = mockState.clientOptions?.onHelloOk;
     if (typeof onHelloOk !== "function") {
       throw new Error("Expected Gateway hello callback");
     }
-    onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
+    onHelloOk();
 
     await expect(started).resolves.toBeUndefined();
-    expect(
-      (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
-    ).toBe(true);
-
-    onHelloOk({ features: { methods: [], events: [] } });
-    expect(
-      (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
-    ).toBe(false);
     await bridge.close();
   });
 });

@@ -1,11 +1,12 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { normalizeBasePath } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { buildChatMarkdown } from "../../pages/chat/export.ts";
-import type { SessionSplitHost } from "../../pages/chat/split-layout-types.ts";
 import { nativeHistoryMessageIdentity } from "../chat/history-message-identity.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError } from "../format-error.ts";
@@ -19,9 +20,12 @@ import {
 } from "./route-navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
 
+registerSessionOrganizationEnglish();
+
 type SessionNavigationActionKind =
   | "copy-session-id"
   | "copy-session-link"
+  | "copy-session-preview-link"
   | "copy-markdown"
   | "open-new-tab"
   | "open-new-window"
@@ -36,16 +40,25 @@ type SessionNavigationTarget<TRouteId extends string> = {
   isCurrent: () => boolean;
 };
 
+const sessionSplitHosts = new Map<HTMLElement, () => boolean>();
+
+/** Chat publishes its mounted capability without exposing its DOM to menu callers. */
+export function registerSessionSplitHost(host: HTMLElement, available: () => boolean) {
+  sessionSplitHosts.set(host, available);
+  return () => {
+    sessionSplitHosts.delete(host);
+  };
+}
+
 export function canSplitSessionView(): boolean {
-  return (
-    document.querySelector<SessionSplitHost>("openclaw-chat-page")?.sessionSplitAvailable === true
-  );
+  return [...sessionSplitHosts].some(([host, available]) => host.isConnected && available());
 }
 
 export function canCopySessionMarkdown(snapshot: ApplicationGatewaySnapshot | undefined): boolean {
   return readSessionMethodAccess(snapshot, {
     method: "chat.history",
     requiredScope: "operator.read",
+    sessionScope: true,
   }).allowed;
 }
 
@@ -58,6 +71,7 @@ async function copySessionMarkdown<TRouteId extends string>(
   const access = readSessionMethodAccess(gateway.snapshot, {
     method: "chat.history",
     requiredScope: "operator.read",
+    sessionScope: true,
   });
   if (!access.allowed || !client) {
     throw new Error(access.allowed ? t("sessionsView.actionRequiresConnection") : access.reason);
@@ -153,6 +167,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
         !window.dispatchEvent(
           new CustomEvent(UI_COMMAND_EVENT, {
             detail: {
+              agentId: params.agentId,
               command: {
                 kind: "split",
                 direction: kind === "split-right" ? "right" : "down",
@@ -182,26 +197,28 @@ export async function runSessionNavigationAction<TRouteId extends string>(
       params.agentId,
     );
     const gateway = params.context.gateway;
+    const copyLink = kind === "copy-session-link" || kind === "copy-session-preview-link";
     // Shared links belong to the Gateway; the UI document may be a local SSH
     // tunnel or a dev server with a different mount path. New windows stay local.
-    const linkBase =
-      kind === "copy-session-link"
-        ? (gateway.snapshot.hello?.controlUiUrl ??
-          gateway.snapshot.client?.gatewayUrl ??
-          gateway.connection.gatewayUrl)
-        : undefined;
+    const linkBase = copyLink
+      ? (gateway.snapshot.hello?.controlUiUrl ??
+        gateway.snapshot.client?.gatewayUrl ??
+        gateway.connection.gatewayUrl)
+      : undefined;
     const url = new URL(linkBase || window.location.href);
     url.protocol = url.protocol.replace(/^ws/u, "http");
+    const basePath = linkBase ? url.pathname : params.context.basePath;
     const navigation = sessionNavigationTarget({
       context: params.context,
-      basePath: linkBase ? url.pathname : undefined,
+      basePath:
+        kind === "copy-session-preview-link" ? `${normalizeBasePath(basePath)}/share` : basePath,
       face,
       sessionKey: params.session.key,
       agentId: params.agentId,
       exactKey: true,
     });
     const href = new URL(navigation.href, url.origin).href;
-    if (kind === "copy-session-link") {
+    if (copyLink) {
       const copied = await copyToClipboard(href);
       showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
       return;

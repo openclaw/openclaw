@@ -1,12 +1,47 @@
-// Memory Core tests cover manager session sync state plugin behavior.
 import { describe, expect, it } from "vitest";
+import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
+  isMemorySessionIndexable,
   resolveMemorySessionStartupState,
   resolveMemorySessionSyncPlan,
 } from "./manager-session-sync-state.js";
 
+describe("memory session indexability", () => {
+  it("skips Active Memory recall runs, by session id or key", () => {
+    expect(
+      isMemorySessionIndexable({
+        sessionKind: "interactive",
+        sessionId: "active-memory-mvd4zk3v-d58af102",
+      }),
+    ).toBe(false);
+    expect(
+      isMemorySessionIndexable({
+        sessionKind: "interactive",
+        sessionId: "4c9e2b83-4dd0-43af-87df-4cc3ea75aedf",
+        sessionKey: "agent:main:explicit:portal-1:active-memory:0123456789ab",
+      }),
+    ).toBe(false);
+    expect(
+      isMemorySessionIndexable(
+        { sessionKind: "interactive" },
+        "agent:main:telegram:direct:owner:active-memory:0123456789ab",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps ordinary conversations, including ones that mention active memory", () => {
+    expect(
+      isMemorySessionIndexable({
+        sessionKind: "interactive",
+        sessionId: "4c9e2b83-4dd0-43af-87df-4cc3ea75aedf",
+        sessionKey: "agent:main:explicit:active-memory-notes",
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("memory session sync state", () => {
-  it("tracks active paths and bulk hashes without rebuilding unchanged full scans", () => {
+  it("tracks active paths and source state without rebuilding unchanged full scans", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
       files: ["/tmp/a.jsonl", "/tmp/b.jsonl"],
@@ -24,12 +59,6 @@ describe("memory session sync state", () => {
       { path: "sessions/a.jsonl", hash: "hash-a" },
       { path: "sessions/b.jsonl", hash: "hash-b" },
     ]);
-    expect(plan.existingHashes).toEqual(
-      new Map([
-        ["sessions/a.jsonl", "hash-a"],
-        ["sessions/b.jsonl", "hash-b"],
-      ]),
-    );
   });
 
   it("treats targeted session syncs as refresh-only and skips unrelated pruning", () => {
@@ -47,66 +76,33 @@ describe("memory session sync state", () => {
     expect(plan.indexAll).toBe(true);
     expect(plan.activePaths).toBeNull();
     expect(plan.existingRows).toBeNull();
-    expect(plan.existingHashes).toBeNull();
   });
 
-  it("marks identity-targeted syncs as session work", async () => {
-    const { shouldSyncSessionsForReindex } = await import("./manager-session-reindex.js");
-
+  it("marks identity-targeted syncs as session work", () => {
     expect(
-      shouldSyncSessionsForReindex({
-        hasSessionSource: true,
-        sessionsDirty: false,
-        sync: { sessions: [{ agentId: "main", sessionId: "targeted" }] },
-      }),
+      MemoryManagerSessionSyncOps.prototype["shouldSyncSessions"].call(
+        { sources: new Set(["sessions"]), sessionsDirty: false },
+        { sessions: [{ agentId: "main", sessionId: "targeted" }] },
+      ),
     ).toBe(true);
   });
 
   it("marks missing and changed startup session files dirty", () => {
+    const file = (name: string, mtimeMs: number, size: number) => ({
+      absPath: `/tmp/sessions/${name}.jsonl`,
+      path: `sessions/${name}.jsonl`,
+      mtimeMs,
+      size,
+    });
     const { dirtyFiles } = resolveMemorySessionStartupState({
       files: [
-        {
-          absPath: "/tmp/sessions/unchanged.jsonl",
-          path: "sessions/unchanged.jsonl",
-          mtimeMs: 100.75,
-          size: 10,
-        },
-        {
-          absPath: "/tmp/sessions/sub-ms-newer.jsonl",
-          path: "sessions/sub-ms-newer.jsonl",
-          mtimeMs: 100.75,
-          size: 10,
-        },
-        {
-          absPath: "/tmp/sessions/invalidated.jsonl",
-          path: "sessions/invalidated.jsonl",
-          mtimeMs: 200,
-          size: 20,
-        },
-        {
-          absPath: "/tmp/sessions/newer.jsonl",
-          path: "sessions/newer.jsonl",
-          mtimeMs: 250,
-          size: 20,
-        },
-        {
-          absPath: "/tmp/sessions/rolled-back.jsonl",
-          path: "sessions/rolled-back.jsonl",
-          mtimeMs: 150,
-          size: 20,
-        },
-        {
-          absPath: "/tmp/sessions/resized.jsonl",
-          path: "sessions/resized.jsonl",
-          mtimeMs: 300,
-          size: 31,
-        },
-        {
-          absPath: "/tmp/sessions/missing.jsonl",
-          path: "sessions/missing.jsonl",
-          mtimeMs: 400,
-          size: 40,
-        },
+        file("unchanged", 100.75, 10),
+        file("sub-ms-newer", 100.75, 10),
+        file("invalidated", 200, 20),
+        file("newer", 250, 20),
+        file("rolled-back", 150, 20),
+        file("resized", 300, 31),
+        file("missing", 400, 40),
       ],
       existingRows: [
         { path: "sessions/unchanged.jsonl", hash: "hash-unchanged", mtime: 100.75, size: 10 },

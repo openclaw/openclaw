@@ -1,5 +1,6 @@
 {
   "id": "qa-channel",
+  "categories": ["developer-tools"],
   "name": "QA Channel",
   "description": "OpenClaw QA synthetic channel plugin.",
   "activation": {

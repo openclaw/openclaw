@@ -58,7 +58,7 @@ function readSyncWatchPaths(workflowText) {
     if (inPaths) {
       const item = line.match(/^\s+-\s+(\S+)\s*$/);
       if (item) {
-        paths.push(item[1]);
+        paths.push(item[1].replace(/^(['"])(.*)\1$/, "$2"));
         continue;
       }
       inPaths = false;
@@ -75,30 +75,73 @@ function readSyncWatchPaths(workflowText) {
 // The commits API takes plain file/directory paths, so only the trailing-glob
 // directory form used by the sync trigger is translatable; any other glob means
 // the filter shape changed and this check must be updated, not silently skipped.
-function toCommitApiPath(pattern) {
-  const bare = pattern.endsWith("/**") ? pattern.slice(0, -3) : pattern;
-  if (/[*?[\]]/.test(bare)) {
+function parseWatchPath(pattern) {
+  const excluded = pattern.startsWith("!");
+  const value = excluded ? pattern.slice(1) : pattern;
+  const directory = value.endsWith("/**");
+  const path = directory ? value.slice(0, -3) : value;
+  if (!path || /[*?[\]]/.test(path) || (excluded && directory)) {
     throw new Error(`unsupported glob in sync path filter: ${pattern}`);
   }
-  return bare;
+  return { path, directory, excluded };
 }
 
-async function newestWatchedCommit(watchPaths) {
+function matchesWatchPath(pattern, path) {
+  return path === pattern.path || (pattern.directory && path.startsWith(`${pattern.path}/`));
+}
+
+async function commitTouchesWatchPaths(sha, watchPaths) {
+  const commit = await githubJson(`/repos/${SOURCE_REPO}/commits/${sha}?per_page=100`);
+  // A full page may omit a watched file. Keep the commit unless the inventory
+  // proves it contains only excluded or unwatched changes.
+  if (!Array.isArray(commit.files) || commit.files.length === 0 || commit.files.length >= 100) {
+    return true;
+  }
+  return commit.files.some((file) =>
+    [file.filename, file.previous_filename].filter(Boolean).some((path) => {
+      let included = false;
+      for (const pattern of watchPaths) {
+        if (matchesWatchPath(pattern, path)) {
+          included = !pattern.excluded;
+        }
+      }
+      return included;
+    }),
+  );
+}
+
+async function newestWatchedCommit(watchPaths, until = "") {
   let newest = null;
-  for (const watchPath of watchPaths) {
-    const commits = await githubJson(
-      `/repos/${SOURCE_REPO}/commits?sha=main&path=${encodeURIComponent(watchPath)}&per_page=1`,
+  const untilQuery = until ? `&until=${encodeURIComponent(until)}` : "";
+  for (const watchPath of watchPaths.filter((pattern) => !pattern.excluded)) {
+    const inspectFiles = watchPaths.some(
+      (pattern) => pattern.excluded && matchesWatchPath(watchPath, pattern.path),
     );
-    const head = commits[0];
+    const perPage = inspectFiles ? 100 : 1;
+    let head;
+    for (let page = 1; !head; page++) {
+      const commits = await githubJson(
+        `/repos/${SOURCE_REPO}/commits?sha=main&path=${encodeURIComponent(watchPath.path)}&per_page=${perPage}&page=${page}${untilQuery}`,
+      );
+      for (const commit of commits) {
+        if (!inspectFiles || (await commitTouchesWatchPaths(commit.sha, watchPaths))) {
+          head = commit;
+          break;
+        }
+      }
+      if (commits.length < perPage) {
+        break;
+      }
+    }
     if (!head) {
       continue;
     }
     const committedAt = Date.parse(head.commit.committer.date);
     if (!newest || committedAt > newest.committedAt) {
-      newest = { sha: head.sha, committedAt, path: watchPath };
+      newest = { sha: head.sha, committedAt, path: watchPath.path };
     }
   }
-  if (!newest) {
+  if (!newest && !until) {
     throw new Error("no commits found for any watched docs path on main");
   }
   return newest;
@@ -148,24 +191,31 @@ async function dispatchRecoverySync() {
 
 async function main() {
   const watchPaths = readSyncWatchPaths(fs.readFileSync(SYNC_WORKFLOW_FILE, "utf8")).map(
-    toCommitApiPath,
+    parseWatchPath,
   );
   const [newest, mirroredSha] = await Promise.all([
     newestWatchedCommit(watchPaths),
     readMirroredSourceSha(),
   ]);
-  const ageMinutes = Math.round((Date.now() - newest.committedAt) / 60_000);
+  const now = Date.now();
+  const ageMinutes = Math.round((now - newest.committedAt) / 60_000);
   const summary = `newest docs-touching main commit ${newest.sha} (${newest.path}, ${ageMinutes}m ago); mirror at ${mirroredSha}`;
 
   if (await mirrorCoversCommit(newest.sha, mirroredSha)) {
     console.log(`docs mirror fresh: ${summary}`);
     return;
   }
-  if (ageMinutes < STALE_MINUTES) {
-    console.log(
-      `docs mirror trailing within ${STALE_MINUTES}m grace (sync in flight?): ${summary}`,
-    );
-    return;
+  let stale = newest;
+  const cutoff = now - STALE_MINUTES * 60_000;
+  if (newest.committedAt > cutoff) {
+    // Recent edits must not renew grace for older changes the mirror still lacks.
+    stale = await newestWatchedCommit(watchPaths, new Date(cutoff).toISOString());
+    if (!stale || (await mirrorCoversCommit(stale.sha, mirroredSha))) {
+      console.log(
+        `docs mirror trailing within ${STALE_MINUTES}m grace (sync in flight?): ${summary}`,
+      );
+      return;
+    }
   }
 
   const activeSyncRuns = await countActiveSyncRuns();
@@ -177,7 +227,10 @@ async function main() {
       `${activeSyncRuns} ${SYNC_WORKFLOW} run(s) already queued/in progress; not dispatching another`,
     );
   }
-  fail(`docs mirror stale for ${ageMinutes}m (threshold ${STALE_MINUTES}m): ${summary}`);
+  const staleMinutes = Math.round((now - stale.committedAt) / 60_000);
+  fail(
+    `docs mirror stale for ${staleMinutes}m (threshold ${STALE_MINUTES}m): unmirrored docs-touching main commit ${stale.sha} (${stale.path}); mirror at ${mirroredSha}`,
+  );
 }
 
 try {

@@ -3,7 +3,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -17,7 +17,7 @@ import { trackConnectChallengeNonce } from "./test-helpers.js";
 
 export function resolveDeviceIdentityPath(name: string): string {
   const root = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(root, "test-device-identities", `${name}.sqlite`);
+  return path.join(root, "test-device-identities", name, "client", "credentials.sqlite");
 }
 
 export function loadDeviceIdentity(name: string): {

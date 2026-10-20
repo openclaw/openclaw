@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { AdmittedRunContext } from "../../admitted-run-context.js";
 import {
@@ -6,7 +7,10 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
-import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
+import {
+  completeEmbeddedAttemptResult,
+  type EmbeddedRunAttemptWithReceiptEvidence,
+} from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
@@ -24,14 +28,7 @@ export function createSettledProviderFailureAttempt(
         stopReason: "toolUse",
         content: [{ type: "toolCall", id: "call-write", name: "write", arguments: {} }],
       }),
-      {
-        role: "toolResult",
-        toolCallId: "call-write",
-        toolName: "write",
-        content: [{ type: "text", text: "Note saved" }],
-        isError: false,
-        timestamp: 1,
-      },
+      makeTextToolResult("call-write", "write", "Note saved", false, 1),
       buildEmbeddedRunnerAssistant({
         stopReason: "error",
         errorMessage: "503 upstream connection refused",
@@ -81,7 +78,6 @@ export function createSettledFinalizationTestInput(
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => ({ ...runParams, sessionFile: "/tmp/session-settled.jsonl" }),
     globalLane: "settled-finalization-global",
-    sessionLane: "settled-finalization-session",
     initialQueuedLifecycleGeneration: lifecycleGeneration,
     setLifecycleGeneration: (value) => {
       lifecycleGeneration = value;
@@ -120,7 +116,6 @@ export function createSettledFinalizationTestInput(
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
       resolvedToolResultFormat: "markdown",
     },
-    lastRunPromptUsage: undefined,
     finalization: {
       preparedAttempt: { ...runParams },
       harness: {
@@ -131,10 +126,101 @@ export function createSettledFinalizationTestInput(
         finalizeSettledTurn: vi.fn(),
       },
       modelApi: "openai-responses",
-      executionContract: undefined,
       hasTerminalToolPresentation: false,
       createAttemptControls: vi.fn(laneController.createAttemptControls),
       abortSignal: laneController.abortSignal,
     },
   } as unknown as Parameters<typeof prepareTerminalWithSettledTurnFinalization>[0];
+}
+
+export function projectSettledProviderFailureAttempt(
+  base: EmbeddedRunAttemptResult,
+): EmbeddedRunAttemptResult {
+  const assistant = base.currentAttemptCompletedAssistant;
+  if (!assistant) {
+    throw new Error("Missing failed assistant");
+  }
+  const transcript = { sessionIdUsed: base.sessionIdUsed, messagesSnapshot: base.messagesSnapshot };
+  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = {
+    promptError: null,
+    promptErrorSource: null,
+    timedOutDuringCompaction: false,
+    compactionOccurredThisAttempt: false,
+    ...transcript,
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptCompletedAssistant: assistant,
+    successfulNestedToolNames: [],
+    attemptUsage: undefined,
+    lastCallUsage: undefined,
+    promptCache: undefined,
+  };
+  const prompt: Parameters<typeof completeEmbeddedAttemptResult>[2] = {
+    preflightRecovery: undefined,
+    contextBudgetStatus: undefined,
+    yieldAborted: false,
+    ...transcript,
+    sessionFileUsed: undefined,
+  };
+  const subscription = {
+    assistantTexts: base.assistantTexts,
+    didSendDeterministicApprovalPrompt: () => false,
+    didSendViaMessagingTool: () => false,
+    getAcceptedSessionSpawns: () => [],
+    getAssistantTurnCount: () => 1,
+    hasSuccessfulModelResponse: () => false,
+    getCompactionCount: () => 0,
+    getHeartbeatToolResponse: () => undefined,
+    getItemLifecycle: () => base.itemLifecycle,
+    getLastAssistantTextMessageIndex: () => undefined,
+    getKeptAnswer: () => undefined,
+    getLastCompactionTokensAfter: () => undefined,
+    getLastToolError: () => undefined,
+    getLatestMcpAppChannelView: () => undefined,
+    getLatestMcpConnectAction: () => undefined,
+    getMessagingToolSentMediaUrls: () => [],
+    getMessagingToolSentTargets: () => [],
+    getMessagingToolSentTexts: () => [],
+    getMessagingToolSourceReplyPayloads: () => [],
+    getSourceReplyDelivered: () => undefined,
+    getSourceReplyDeliveryState: () => undefined,
+    endsWithSourceProgress: () => false,
+    getPendingToolMediaReply: () => undefined,
+    getToolAutoDeliveryMediaUrls: () => [],
+    getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: true }),
+    getSuccessfulCronAdds: () => 0,
+    getVisibleBlockReplyCount: () => 0,
+    hasToolMediaBlockReply: () => false,
+    setTerminalLifecycleMeta: () => {},
+    toolMetas: base.toolMetas,
+  };
+  const input = {
+    attempt: {
+      runId: "run-settled",
+      admittedRunContext: { operationalRunInstance: { runId: "run-settled" } },
+      sessionId: base.sessionIdUsed,
+      provider: assistant.provider,
+      modelId: assistant.model,
+      model: { api: assistant.api },
+      trigger: "user",
+    },
+    state: { terminal: base.terminal },
+    diagnostics: { diagnosticTrace: { traceId: "trace-settled", spanId: "span-settled" } },
+    setup: { sessionAgentId: "main" },
+    lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
+    prepared: {
+      bootstrap: { bootstrapPromptWarning: {} },
+      systemPrompt: {},
+      sessionRuntime: {
+        agentSession: {
+          clientToolCallSlots: [],
+          hasDeliveredSourceReply: () => false,
+          hookRunner: null,
+        },
+        state: {},
+      },
+    },
+    preparedStreamRuntime: { stream: { subscription } },
+  };
+  return completeEmbeddedAttemptResult(input as never, settled, prompt);
 }

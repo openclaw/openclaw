@@ -1,14 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
 const streamSignalEvents = vi.hoisted(() => vi.fn());
 
 vi.mock("./client-adapter.js", () => ({ streamSignalEvents }));
 
 import { runSignalSseLoop } from "./sse-reconnect.js";
-
-function createRuntime() {
-  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-}
 
 describe("runSignalSseLoop lifecycle", () => {
   beforeEach(() => {
@@ -29,7 +26,7 @@ describe("runSignalSseLoop lifecycle", () => {
     await runSignalSseLoop({
       baseUrl: "http://signal.test",
       abortSignal: abort.signal,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       onEvent: vi.fn(),
       statusSink,
     });
@@ -56,7 +53,7 @@ describe("runSignalSseLoop lifecycle", () => {
     await runSignalSseLoop({
       baseUrl: "http://signal.test",
       abortSignal: abort.signal,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       onEvent: vi.fn(),
       statusSink,
     });

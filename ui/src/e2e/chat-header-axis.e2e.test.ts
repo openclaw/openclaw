@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   captureUiProofEnabled,
@@ -16,6 +17,7 @@ suite.define(() => {
     for (const viewport of [
       { label: "desktop", width: 800 },
       { label: "mobile", width: 760 },
+      { label: "phone", width: 390 },
     ] as const) {
       it(`lays out and navigates the ${viewport.label} project-parent-child trail in ${colorScheme} mode`, async () => {
         const context = await suite.newBrowserContext({
@@ -54,9 +56,24 @@ suite.define(() => {
 
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-          const header = page.locator(".chat-pane__header").first();
+          const header = page.locator(
+            "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__header",
+          );
           await header.waitFor();
           await header.locator(".workspace-icon").waitFor();
+
+          if (captureUiProofEnabled) {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              header,
+              [header.locator(".workspace-icon"), header.locator(".chat-pane__session-title-text")],
+              { animations: "disabled" },
+            );
+            await writeFile(
+              path.join(suite.artifactDir, `project-icon-${viewport.label}-${colorScheme}.png`),
+              frame.png,
+            );
+          }
 
           const geometry = await header.evaluate((root) => {
             const main = root
@@ -83,7 +100,7 @@ suite.define(() => {
             return {
               nav: centerY(".chat-pane__nav-toggle svg"),
               projectIcon: centerY(".workspace-icon"),
-              projectText: centerY(".chat-pane__workspace-chip span"),
+              projectText: centerY(".chat-pane__workspace-chip > .oc-menu-item__label > span"),
               menu: centerY(".chat-header-session-menu__trigger svg"),
               parentText: centerY(".chat-pane__parent-session-text"),
               sessionText: centerY(".chat-pane__session-title-text"),
@@ -93,6 +110,8 @@ suite.define(() => {
                 ...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep"),
               ].map((node) => getComputedStyle(node).display),
               headerBottom: root.getBoundingClientRect().bottom,
+              headerOverflow: root.scrollWidth - root.clientWidth,
+              titleWidth: rect(".chat-pane__session-title-text").width,
               contentTop: main.getBoundingClientRect().top,
             };
           });
@@ -102,6 +121,12 @@ suite.define(() => {
             JSON.stringify(geometry),
           ).toBeLessThanOrEqual(0.1);
           expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
+          expect(geometry.headerOverflow).toBeLessThanOrEqual(1);
+          expect(geometry.titleWidth).toBeGreaterThan(0);
+          expect(geometry.projectIcon, JSON.stringify(geometry)).toBeCloseTo(
+            geometry.projectText,
+            1,
+          );
           if (viewport.label === "desktop") {
             for (const center of [
               geometry.projectIcon,
@@ -170,7 +195,7 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".agent-chat__composer-combobox > textarea").focus();
-        await page.keyboard.press("Control+f");
+        await page.keyboard.press("ControlOrMeta+f");
         const search = page.locator(".agent-chat__search-bar input");
         await search.waitFor();
         const [headerBox, searchBox] = await Promise.all([
@@ -201,14 +226,30 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}new`);
-        await page.addStyleTag({ content: ":root { --safe-area-bottom: 34px !important; }" });
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });
         const composer = page.locator(".new-session-page__composer");
         await composer.waitFor();
-        const margins = await composer.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { bottom: style.marginBottom, left: style.marginLeft, right: style.marginRight };
+        await composer.scrollIntoViewIfNeeded();
+        const bounds = await composer.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            left: rect.left,
+            right: rect.right,
+            bottom: rect.bottom,
+            draftBottom: element.closest(".new-session-page__draft")!.getBoundingClientRect()
+              .bottom,
+            shellBottom: element.closest(".shell")!.getBoundingClientRect().bottom,
+          };
         });
-        expect(margins).toEqual({ bottom: "48px", left: "4px", right: "4px" });
+        // New Session remains in its scrollable draft flow, not docked like
+        // Chat. Its local 6px gap must not reserve the app's physical inset again.
+        expect(bounds.shellBottom).toBeCloseTo(viewport.height - 34, 0);
+        expect(bounds.draftBottom - bounds.bottom).toBeCloseTo(6, 0);
+        expect(bounds.bottom).toBeLessThanOrEqual(bounds.shellBottom);
+        expect(bounds.left).toBeGreaterThanOrEqual(20);
+        expect(bounds.right).toBeLessThanOrEqual(viewport.width - 20);
+        expect(bounds.left).toBeCloseTo(viewport.width - bounds.right, 0);
       } finally {
         await suite.closeBrowserContext(context);
       }

@@ -31,6 +31,7 @@ export type NodeListNode = {
   computerUse?: ComputerUseCapabilityDescriptor;
   /** Node has explicitly enabled session hosting; live slots own current capacity. */
   sessionHost?: boolean;
+  workerHost?: { deviceFolders?: true };
   workerSlots?: WorkerSlotSummary;
   hostStats?: NodeHostStats;
   workerBundle?: NodeWorkerBundleStatus;

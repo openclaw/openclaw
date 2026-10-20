@@ -1,4 +1,5 @@
-import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
+import { resolveCurrentDiagnosticRun } from "./diagnostic-embedded-run-index.js";
 
 // A semantic-stall clock remains continuous across short model/tool handoffs,
 // but later model progress wins once no churn observation refreshes this lease.
@@ -18,16 +19,12 @@ export type DiagnosticArgumentChurnActivity = {
 // same-millisecond ties between progress, churn observations, and merged refs.
 let diagnosticActivitySequence = 0;
 
-function nextDiagnosticActivitySequence(): number {
-  diagnosticActivitySequence += 1;
-  return diagnosticActivitySequence;
-}
-
 export function recordDiagnosticActivityProgress(activity: DiagnosticArgumentChurnActivity): void {
-  activity.lastProgressSequence = nextDiagnosticActivitySequence();
+  activity.lastProgressSequence = ++diagnosticActivitySequence;
 }
 
 export type DiagnosticArgumentChurnObservationParams = {
+  watchdogAttempt?: SessionControllerWatchdogAttempt;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -39,19 +36,16 @@ export type DiagnosticArgumentChurnObservationParams = {
 };
 
 function hasArgumentChurnContinuityExpired(
-  activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
+  activity: DiagnosticArgumentChurnActivity,
   now: number,
 ): boolean {
   const observationAt = activity.argumentChurnObservationAt;
-  const lastProgressAt = activity.lastProgressAt;
   const observationSequence = activity.argumentChurnObservationSequence;
   const lastProgressSequence = activity.lastProgressSequence;
   const progressFollowedObservation =
-    observationSequence !== undefined && lastProgressSequence !== undefined
-      ? lastProgressSequence > observationSequence
-      : lastProgressAt !== undefined &&
-        observationAt !== undefined &&
-        lastProgressAt > observationAt;
+    observationSequence !== undefined &&
+    lastProgressSequence !== undefined &&
+    lastProgressSequence > observationSequence;
   return (
     observationAt !== undefined &&
     progressFollowedObservation &&
@@ -77,13 +71,7 @@ export function resolveArgumentChurnProgress(
   const startedAt = activity.argumentChurnStartedAt;
   const belongsToOwner =
     startedAt !== undefined && currentOwnerRunId === activity.argumentChurnRunId;
-  if (!belongsToOwner) {
-    return {
-      lastProgressAt: activity.lastProgressAt,
-      lastProgressReason: activity.lastProgressReason,
-    };
-  }
-  if (hasArgumentChurnContinuityExpired(activity, now)) {
+  if (!belongsToOwner || hasArgumentChurnContinuityExpired(activity, now)) {
     return {
       lastProgressAt: activity.lastProgressAt,
       lastProgressReason: activity.lastProgressReason,
@@ -96,7 +84,7 @@ export function resolveArgumentChurnProgress(
 }
 
 function recordArgumentChurnActivityObservation(
-  activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
+  activity: DiagnosticArgumentChurnActivity,
   params: {
     runId?: string;
     active: boolean;
@@ -126,7 +114,7 @@ function recordArgumentChurnActivityObservation(
     activity.argumentChurnRunId = params.runId;
   }
   activity.argumentChurnObservationAt = params.now;
-  activity.argumentChurnObservationSequence = nextDiagnosticActivitySequence();
+  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
 }
 
 function updateArgumentChurnPolicyWait(
@@ -175,7 +163,7 @@ export function applyArgumentChurnObservation<T extends { runId: string; sequenc
 ): void {
   const now = params.now ?? Date.now();
   const runId = params.runId?.trim() || undefined;
-  const currentOwnerRunId = resolveCurrentDiagnosticRunId(owners);
+  const currentOwnerRunId = resolveCurrentDiagnosticRun(owners)?.runId;
   if (currentOwnerRunId !== undefined && currentOwnerRunId !== runId) {
     return;
   }
@@ -203,22 +191,10 @@ export function mergeArgumentChurnActivity(
 ): void {
   const sourceObservationSequence = source.argumentChurnObservationSequence;
   const targetObservationSequence = target.argumentChurnObservationSequence;
-  const sourceClearsAtSameTime =
-    sourceObservationSequence === undefined &&
-    targetObservationSequence === undefined &&
-    source.argumentChurnObservationAt !== undefined &&
-    source.argumentChurnObservationAt === target.argumentChurnObservationAt &&
-    source.argumentChurnStartedAt === undefined &&
-    target.argumentChurnStartedAt !== undefined;
+  // Observations and clears always record their process-local sequence together.
   const sourceIsNewer =
-    sourceObservationSequence !== undefined
-      ? targetObservationSequence === undefined ||
-        sourceObservationSequence > targetObservationSequence
-      : targetObservationSequence === undefined &&
-        source.argumentChurnObservationAt !== undefined &&
-        (target.argumentChurnObservationAt === undefined ||
-          source.argumentChurnObservationAt > target.argumentChurnObservationAt ||
-          sourceClearsAtSameTime);
+    sourceObservationSequence !== undefined &&
+    sourceObservationSequence > (targetObservationSequence ?? 0);
 
   if (
     source.argumentChurnStartedAt !== undefined &&
@@ -229,12 +205,7 @@ export function mergeArgumentChurnActivity(
       target.argumentChurnStartedAt,
       source.argumentChurnStartedAt,
     );
-    if (
-      source.argumentChurnObservationAt !== undefined &&
-      (sourceIsNewer ||
-        (sourceObservationSequence === undefined &&
-          source.argumentChurnObservationAt >= (target.argumentChurnObservationAt ?? 0)))
-    ) {
+    if (sourceIsNewer) {
       target.argumentChurnObservationAt = source.argumentChurnObservationAt;
       target.argumentChurnObservationSequence = sourceObservationSequence;
     }
@@ -268,7 +239,7 @@ export function clearArgumentChurnActivity(
   const cleared = activity.argumentChurnStartedAt !== undefined;
   activity.argumentChurnStartedAt = undefined;
   activity.argumentChurnObservationAt = params.now ?? Date.now();
-  activity.argumentChurnObservationSequence = nextDiagnosticActivitySequence();
+  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
   activity.argumentChurnRunId = params.runId;
   return cleared;
 }

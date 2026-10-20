@@ -1,11 +1,6 @@
 import "./usage.js";
 
-type UsageDeps = {
-  updateAuthProfileStoreWithLock: typeof import("./store.js").updateAuthProfileStoreWithLock;
-};
-
 type AuthProfileUsageTestApi = {
-  setDepsForTest(overrides: Partial<UsageDeps> | null): void;
   resetWhamReprobeStateForTest(): void;
 };
 
@@ -16,6 +11,5 @@ function getTestApi(): AuthProfileUsageTestApi {
 }
 
 export const testing: AuthProfileUsageTestApi = {
-  setDepsForTest: (overrides) => getTestApi().setDepsForTest(overrides),
   resetWhamReprobeStateForTest: () => getTestApi().resetWhamReprobeStateForTest(),
 };

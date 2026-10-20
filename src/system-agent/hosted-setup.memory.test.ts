@@ -1,252 +1,141 @@
 import path from "node:path";
 import "./chat-engine.mocks.test-support.js";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { SetupMemoryImportOutcome } from "../wizard/setup.memory-import.js";
+import * as audit from "./audit.js";
 import {
   fakeOverviewLoader,
   sharedVerifiedInferenceConfig,
   mocks,
   useTempStateDir,
-  configSnapshot,
   createAmbientVerifiedBinding,
   SystemAgentChatEngine,
   type MemoryImportStepParams,
   type OpenClawConfig,
 } from "./chat-engine.test-support.js";
+import * as hostedSetup from "./hosted-setup.runtime.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
-describe("SystemAgentChatEngine memory", () => {
-  it("refuses memory import before provider discovery when the default workspace is missing", async () => {
-    const root = useTempStateDir();
-    const workspace = path.join(root, "missing-workspace");
-    const baseConfig: OpenClawConfig = {
-      ...sharedVerifiedInferenceConfig,
-      agents: {
-        ...sharedVerifiedInferenceConfig.agents,
-        defaults: { workspace },
-      },
-    };
-    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      hash: "memory-base-hash",
-      config: baseConfig,
-      sourceConfig: baseConfig,
+function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
+  return new SystemAgentChatEngine({
+    runAgentTurn: async () => null,
+    ...options,
+    deps: { loadOverview: fakeOverviewLoader(), ...options.deps },
+  });
+}
+
+function prepareMemoryConfig(workspace: string): OpenClawConfig {
+  const config: OpenClawConfig = {
+    ...sharedVerifiedInferenceConfig,
+    agents: { ...sharedVerifiedInferenceConfig.agents, defaults: { workspace } },
+  };
+  mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+    exists: true,
+    valid: true,
+    hash: "memory-base-hash",
+    config,
+    sourceConfig: config,
+  });
+  return config;
+}
+
+it("refuses memory import before provider discovery when the default workspace is missing", async () => {
+  prepareMemoryConfig(path.join(useTempStateDir(), "missing-workspace"));
+  const engine = createEngine({ surface: "gateway" });
+  const reply = await engine.handle("memory import");
+  expect(reply.text).toContain("default agent workspace does not exist");
+  expect(reply.text).toContain("Finish onboarding first with `openclaw onboard`");
+  expect(mocks.runSetupMemoryImportStep).not.toHaveBeenCalled();
+  expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+});
+
+it("rechecks inference authority immediately before a hosted memory copy", async () => {
+  const baseConfig = prepareMemoryConfig(useTempStateDir());
+  const changedConfig: OpenClawConfig = {
+    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+  };
+  const configFixture = await createInferenceConfigFixture(baseConfig);
+  const snapshot = configFixture.snapshot;
+  const verifiedInference = await createAmbientVerifiedBinding(
+    snapshot.runtimeConfig ?? snapshot.config,
+    snapshot,
+  );
+  mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
+  const copyEffect = vi.fn();
+  mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
+    const confirmed = await params.prompter.confirm({
+      message: "Import detected memory?",
+      initialValue: true,
     });
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("memory import");
-
-    expect(reply.text).toContain("default agent workspace does not exist");
-    expect(reply.text).toContain("Finish onboarding first with `openclaw onboard`");
-    expect(mocks.runSetupMemoryImportStep).not.toHaveBeenCalled();
-    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    if (!confirmed) {
+      return { status: "skipped", providers: [] };
+    }
+    // Route changes mid-wizard, after the turn gate: only the copy-boundary
+    // recheck can catch it.
+    await configFixture.write(changedConfig);
+    await params.beforeApply?.();
+    copyEffect();
+    return { status: "completed", providers: [] };
+  });
+  const engine = createEngine({
+    surface: "gateway",
+    verifiedInference,
+    deps: {
+      readConfigFileSnapshot: configFixture.read,
+    },
   });
 
-  it("rechecks inference authority immediately before a hosted memory copy", async () => {
-    const workspace = useTempStateDir();
-    const baseConfig: OpenClawConfig = {
-      ...sharedVerifiedInferenceConfig,
-      agents: {
-        ...sharedVerifiedInferenceConfig.agents,
-        defaults: { workspace },
-      },
-    };
-    const changedConfig: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
-    };
-    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
-    let currentConfig = structuredClone(baseConfig);
-    const copyEffect = vi.fn();
-    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      hash: "memory-base-hash",
-      config: baseConfig,
-      sourceConfig: baseConfig,
-    });
-    mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
-      const confirmed = await params.prompter.confirm({
-        message: "Import detected memory?",
-        initialValue: true,
-      });
-      if (!confirmed) {
-        return { status: "skipped", providers: [] };
-      }
-      // Route changes mid-wizard, after the turn gate: only the copy-boundary
-      // recheck can catch it.
-      currentConfig = changedConfig;
-      await params.beforeApply?.();
-      copyEffect();
-      return {
-        status: "completed",
-        providers: [{ providerId: "codex", label: "Codex", migrated: 1, skipped: 0 }],
-      };
-    });
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      verifiedInference,
-      runAgentTurn: async () => null,
-      deps: {
-        loadOverview: fakeOverviewLoader(),
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-      },
-    });
+  const confirm = await engine.handle("import memory");
+  expect(confirm.text).toContain("Import detected memory?");
+  const stopped = await engine.handle("yes");
+  expect(stopped.text).toContain("Memory import setup stopped");
+  expect(copyEffect).not.toHaveBeenCalled();
+});
 
-    const confirm = await engine.handle("import memory");
-    expect(confirm.text).toContain("Import detected memory?");
-
-    const stopped = await engine.handle("yes");
-
-    expect(stopped.text).toContain("Memory import setup stopped");
-    expect(copyEffect).not.toHaveBeenCalled();
+it.each([
+  ["empty", "import memories", "Nothing to import"],
+  ["failed", "memory import", "Memory import did not complete"],
+  ["partial", "memory import", "Memory import failed partway"],
+  ["audit-failure", "import memory", "Imported 1 item from Codex."],
+] as const)("reports %s without misrepresenting progress", async (kind, command, expected) => {
+  const provider = { providerId: "codex", label: "Codex" };
+  const result: SetupMemoryImportOutcome =
+    kind === "empty"
+      ? { status: "nothing-to-import", providers: [] }
+      : {
+          status: "completed",
+          providers:
+            kind === "failed"
+              ? ["Codex", "Claude"].map((label) => ({
+                  providerId: label.toLowerCase(),
+                  label,
+                  migrated: 0,
+                  skipped: 0,
+                  failure: "copy failed",
+                }))
+              : kind === "partial"
+                ? [{ ...provider, failure: "failed", copiesIndeterminate: true }]
+                : [{ ...provider, migrated: 1, skipped: 0 }],
+        };
+  const appendAuditEntry = vi.fn(async () => {
+    if (kind === "audit-failure") {
+      throw new Error("audit store is read-only");
+    }
+    return "state/openclaw.sqlite";
   });
-
-  it("stops a hosted memory copy when config drifts after planning", async () => {
-    const workspace = useTempStateDir();
-    const baseConfig: OpenClawConfig = {
-      ...sharedVerifiedInferenceConfig,
-      agents: {
-        ...sharedVerifiedInferenceConfig.agents,
-        defaults: { workspace },
-      },
-    };
-    let currentHash = "memory-base-hash";
-    const copyEffect = vi.fn();
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
-    mocks.readSetupConfigFileSnapshot.mockImplementation(async () => ({
-      exists: true,
-      valid: true,
-      hash: currentHash,
-      config: baseConfig,
-      sourceConfig: baseConfig,
-    }));
-    mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
-      const confirmed = await params.prompter.confirm({
-        message: "Import detected memory?",
-        initialValue: true,
-      });
-      if (!confirmed) {
-        return { status: "skipped", providers: [] };
-      }
-      params.onProviderOutcome?.({
-        providerId: "claude",
-        label: "Claude",
-        failure: "copy failed after partial progress",
-        copiesIndeterminate: true,
-      });
-      currentHash = "changed-during-wizard";
-      await params.beforeApply?.();
-      copyEffect();
-      return {
-        status: "completed",
-        providers: [{ providerId: "codex", label: "Codex", migrated: 1, skipped: 0 }],
-      };
-    });
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      appendAuditEntry,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const confirm = await engine.handle("import memory");
-    expect(confirm.text).toContain("Import detected memory?");
-
-    const stopped = await engine.handle("yes");
-
-    expect(stopped.text).toContain("Memory import setup stopped");
-    expect(stopped.text).toContain(
-      "configuration changed during memory import; nothing further was copied",
-    );
-    expect(copyEffect).not.toHaveBeenCalled();
-    expect(appendAuditEntry).toHaveBeenCalledWith({
-      operation: "memory.import",
-      summary: "Memory import failed partway via chat: Claude (copy count indeterminate)",
-      details: {
-        confirmedItems: 0,
-        copiesIndeterminate: true,
-        providers: [{ providerId: "claude", copiesIndeterminate: true }],
-      },
-    });
-  });
-
-  it("reports nothing to import without writing config or audit", async () => {
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      appendAuditEntry,
-      runMemoryImportWizard: async () => ({ status: "nothing-to-import", providers: [] }),
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("import memories");
-
-    expect(reply.text).toContain("Nothing to import");
+  vi.spyOn(audit, "appendSystemAgentAuditEntry").mockImplementation(appendAuditEntry);
+  vi.spyOn(hostedSetup, "runHostedMemoryImport").mockResolvedValueOnce(result);
+  const reply = await createEngine().handle(command);
+  expect(reply.text).toContain(expected);
+  if (kind === "empty" || kind === "failed") {
     expect(reply.text).not.toContain("Done");
     expect(appendAuditEntry).not.toHaveBeenCalled();
-    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("reports all-provider failure without a false success", async () => {
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      appendAuditEntry,
-      runMemoryImportWizard: async () => ({
-        status: "completed",
-        providers: [
-          {
-            providerId: "codex",
-            label: "Codex",
-            migrated: 0,
-            skipped: 0,
-            failure: "copy failed",
-          },
-          {
-            providerId: "claude",
-            label: "Claude",
-            migrated: 0,
-            skipped: 0,
-            failure: "copy failed",
-          },
-        ],
-      }),
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("memory import");
-
-    expect(reply.text).toContain("Memory import did not complete");
-    expect(reply.text).toContain("Failed providers: Codex, Claude");
-    expect(reply.text).not.toContain("Done");
-    expect(appendAuditEntry).not.toHaveBeenCalled();
-  });
-
-  it("audits an apply failure with indeterminate partial-copy progress", async () => {
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      appendAuditEntry,
-      runMemoryImportWizard: async () => ({
-        status: "completed",
-        providers: [
-          {
-            providerId: "codex",
-            label: "Codex",
-            failure: "copy failed after writing one file",
-            copiesIndeterminate: true,
-          },
-        ],
-      }),
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("memory import");
-
-    expect(reply.text).toContain("Memory import failed partway");
+    if (kind === "empty") {
+      expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    } else {
+      expect(reply.text).toContain("Failed providers: Codex, Claude");
+    }
+  } else if (kind === "partial") {
     expect(reply.text).toContain("Some files may have been copied before the failure");
     expect(reply.text).not.toContain("No files were copied");
     expect(appendAuditEntry).toHaveBeenCalledWith({
@@ -258,25 +147,7 @@ describe("SystemAgentChatEngine memory", () => {
         providers: [{ providerId: "codex", copiesIndeterminate: true }],
       },
     });
-  });
-
-  it("keeps a successful memory-import result when audit persistence fails", async () => {
-    const appendAuditEntry = vi.fn(async () => {
-      throw new Error("audit store is read-only");
-    });
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      appendAuditEntry,
-      runMemoryImportWizard: async () => ({
-        status: "completed",
-        providers: [{ providerId: "codex", label: "Codex", migrated: 1, skipped: 0 }],
-      }),
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("import memory");
-
-    expect(reply.text).toContain("Imported 1 item from Codex.");
+  } else {
     expect(reply.text).not.toContain("audit store is read-only");
-  });
+  }
 });

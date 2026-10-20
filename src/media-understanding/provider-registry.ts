@@ -1,8 +1,7 @@
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
-import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
+import { listImageCapableConfiguredProviders } from "./config-provider-models.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 function mergeProviderIntoRegistry(
@@ -23,27 +22,9 @@ function mergeProviderIntoRegistry(
         documentModels: provider.documentModels ?? existing.documentModels,
       }
     : provider;
-  // Own undefined hooks reset earlier owners; absent hooks inherit. Hydrate after
-  // merging so providers sharing a normalized id retain that distinction.
-  registry.set(normalizedKey, hydrateModelBackedMediaProvider(merged));
-}
-
-function hydrateModelBackedMediaProvider(
-  provider: MediaUnderstandingProvider,
-): MediaUnderstandingProvider {
-  // Manifest-only image providers can still route through the generic model
-  // runtime when they declare image capability but no plugin hook.
-  if (!provider.capabilities?.includes("image")) {
-    return provider;
-  }
-  if (provider.describeImage && provider.describeImages) {
-    return provider;
-  }
-  return {
-    ...provider,
-    describeImage: provider.describeImage ?? describeImageWithModel,
-    describeImages: provider.describeImages ?? describeImagesWithModel,
-  };
+  // Own undefined hooks reset earlier owners; absent hooks inherit. Dispatch
+  // supplies model-backed fallbacks without hiding the provider's native hooks.
+  registry.set(normalizedKey, merged);
 }
 
 export { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
@@ -65,7 +46,8 @@ export function buildMediaUnderstandingRegistry(
     mergeProviderIntoRegistry(registry, provider);
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
-  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
+  for (const providerId of listImageCapableConfiguredProviders(cfg)) {
+    const normalizedKey = normalizeMediaProviderId(providerId);
     if (!registry.has(normalizedKey)) {
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,

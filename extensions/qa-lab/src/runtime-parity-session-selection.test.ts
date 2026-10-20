@@ -1,26 +1,23 @@
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   appendSqliteTrajectoryRuntimeEvents,
-  closeOpenClawAgentDatabasesForTest,
   formatSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { captureRuntimeParityCell } from "./runtime-parity.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const tempDirs = createTempDirHarness();
+const tempDirs = createTempDirHarness({ beforeCleanup: closeQaRuntimeStores });
 
-afterEach(async () => {
-  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
-  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
-  // releases its leases through shared state and reopens it, so the store is released second.
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await tempDirs.cleanup();
+afterEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
 });
+
+afterAll(() => tempDirs.cleanup());
 
 async function seedSession(params: {
   messages: Array<Record<string, unknown>>;

@@ -1,4 +1,3 @@
-// Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -6,12 +5,14 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
+import { hasUnresolvedConfigPath, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -33,16 +34,14 @@ export function collectGatewayConfigFindings(
 
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+  const auth = resolveGatewayAuthForConfig({
+    config: cfg,
     authOverride: options.gatewayAuthOverride,
     tailscaleMode,
     env,
   });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
-  const controlUiAllowedOrigins = normalizeStringEntries(
-    cfg.gateway?.controlUi?.allowedOrigins ?? [],
-  );
+  const controlUiAllowedOrigins = normalizeStringEntries(resolveControlUiAllowedOrigins(cfg));
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
@@ -109,7 +108,7 @@ export function collectGatewayConfigFindings(
       title: "Gateway HTTP /tools/invoke re-enables dangerous tools",
       detail:
         `gateway.tools.allow includes ${reenabledOverHttp.join(", ")} which removes them from the default HTTP deny list. ` +
-        "This can allow remote session spawning / control-plane actions via HTTP and increases RCE blast radius if the gateway is reachable.",
+        "This can allow remote session spawning / control-plane actions via HTTP and increases the damage from remote code execution if the gateway is reachable.",
       remediation:
         "Remove these entries from gateway.tools.allow (recommended). " +
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
@@ -170,12 +169,12 @@ export function collectGatewayConfigFindings(
     findings.push({
       checkId: "gateway.control_ui.allowed_origins_required",
       severity: "critical",
-      title: "Non-loopback Control UI missing explicit allowed origins",
+      title: "Non-loopback Control UI missing allowed origins",
       detail:
-        "Control UI is enabled on a non-loopback bind but gateway.controlUi.allowedOrigins is empty. " +
-        "Strict origin policy requires explicit allowed origins for non-loopback deployments.",
+        "Control UI is enabled on a non-loopback bind without an effective browser-origin allowlist. " +
+        "Set explicit allowed origins, or omit the list to use gateway.publicOrigin.",
       remediation:
-        "Set gateway.controlUi.allowedOrigins to full trusted origins (for example https://control.example.com). " +
+        "Set gateway.publicOrigin with gateway.controlUi.allowedOrigins omitted, or configure a list of full trusted origins (for example https://control.example.com). " +
         "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
     });
   }
@@ -281,15 +280,46 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  const token =
-    typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
-  if (auth.mode === "token" && token && token.length < 24) {
-    findings.push({
-      checkId: "gateway.token_too_short",
-      severity: "warn",
-      title: "Gateway token looks short",
-      detail: `gateway auth token is ${token.length} chars; prefer a long random token.`,
-    });
+  for (const credential of ["token", "password"] as const) {
+    if (auth.mode !== credential) {
+      continue;
+    }
+    const configValue = cfg.gateway?.auth?.[credential];
+    const override = options.gatewayAuthOverride?.[credential];
+    const localPlan = credential === "token" ? plan.localToken : plan.localPassword;
+    let input = auth[credential] ?? override ?? configValue;
+    if (override === undefined && localPlan.refPath) {
+      // An unavailable reference cannot lend its ambient fallback to strength checks.
+      const pendingRef =
+        hasUnresolvedConfigPath(cfg, localPlan.refPath) ||
+        resolveConfigSecretRef({
+          config: cfg,
+          path: localPlan.refPath,
+          value: configValue,
+          defaults: cfg.secrets?.defaults,
+        });
+      input = pendingRef ? undefined : configValue;
+    }
+    const value = typeof input === "string" ? input.trim() : null;
+    if (isInvalidGatewaySecret(input)) {
+      findings.push({
+        checkId: `gateway.${credential}_placeholder_value`,
+        severity: "critical",
+        title: `Gateway ${credential} is a blank or undefined/null placeholder`,
+        detail: `The selected Gateway ${credential} is a known non-secret value. Gateway startup rejects it.`,
+        remediation:
+          credential === "token"
+            ? "Run `openclaw doctor --fix --generate-gateway-token` for an inline token; otherwise rotate its external secret source. Restart the Gateway afterward."
+            : "Generate a real secret (for example, `openssl rand -hex 32`) and update OPENCLAW_GATEWAY_PASSWORD or gateway.auth.password (or its external source). Restart the Gateway afterward.",
+      });
+    } else if (value && value.length < 24) {
+      findings.push({
+        checkId: `gateway.${credential}_too_short`,
+        severity: "warn",
+        title: `Gateway ${credential} looks short`,
+        detail: `gateway auth ${credential} is ${value.length} chars; prefer a long random ${credential}.`,
+      });
+    }
   }
 
   if (auth.mode === "trusted-proxy") {
@@ -301,7 +331,7 @@ export function collectGatewayConfigFindings(
       title: "Trusted-proxy auth mode enabled",
       detail:
         'gateway.auth.mode="trusted-proxy" delegates authentication to a reverse proxy. ' +
-        "Ensure your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
+        "Check that your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
         "only contains IPs of your actual proxy servers.",
       remediation:
         "Verify: (1) Your proxy terminates TLS and authenticates users. " +

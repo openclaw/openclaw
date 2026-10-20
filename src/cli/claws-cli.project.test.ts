@@ -45,8 +45,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Claw project CLI", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     mocks.payloads.length = 0;
+  });
+
+  it("previews a Claw with ordinary sessions_spawn authority", async () => {
+    mocks.runtime.log.mockClear();
+    await runClawsDevCommand("src/claws/fixtures/delegating-agent", {
+      workspace: join(tempDirs.make("openclaw-claw-delegation-preview-"), "workspace"),
+    });
+    expect(mocks.runtime.log).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^Model:|^Delegation:/),
+    );
+    expect(mocks.runtime.log).toHaveBeenCalledWith("Blocked actions: 0");
   });
 
   it("runs create, validate, build, and offline dev against the built artifact", async () => {

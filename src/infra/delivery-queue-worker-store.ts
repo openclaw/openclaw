@@ -1,0 +1,27 @@
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+} from "./delivery-queue-state-context.js";
+import type { DeliveryQueueWorkerOperations } from "./delivery-queue.worker-contract.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
+
+export async function executeDeliveryQueueOperation<
+  Key extends keyof DeliveryQueueWorkerOperations,
+>(
+  context: DeliveryQueueStateContext | undefined,
+  stateDir: string | undefined,
+  command: SqliteWorkerCommand<DeliveryQueueWorkerOperations> & {
+    type: Key;
+    input: DeliveryQueueWorkerOperations[Key]["input"];
+  },
+  options?: { createAdmission: SqliteWorkerAdmissionFactory },
+): Promise<DeliveryQueueWorkerOperations[Key]["output"]> {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  return await runOpenClawStateWorkerOperation(
+    captured.workerContext,
+    (scope) => scope.execute<Key>(command),
+    options,
+  );
+}

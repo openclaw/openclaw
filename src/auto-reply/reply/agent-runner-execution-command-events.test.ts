@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
@@ -85,18 +86,8 @@ describe("executeAgentTurn: command events", () => {
         onPatchSummary,
       } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
+      ...createAgentTurnExecutionDefaults(),
       pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     expect(onPlanUpdate).toHaveBeenCalledWith({
@@ -151,6 +142,68 @@ describe("executeAgentTurn: command events", () => {
     });
   });
 
+  it("projects transient model waits and clears them across later model calls", async () => {
+    const onItemEvent = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      for (const data of [
+        { phase: "waiting_for_model", reason: "response" },
+        { phase: "waiting_for_model", reason: "slot" },
+        { phase: "starting_model" },
+        { phase: "waiting_for_model", reason: "response" },
+        { phase: "starting_model" },
+      ]) {
+        await params.onAgentEvent?.({ stream: "run_status", data });
+      }
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: { Provider: "whatsapp", MessageSid: "msg" } as TemplateContext,
+      opts: { onItemEvent },
+      typingSignals: createMockTypingSignaler(),
+      ...createAgentTurnExecutionDefaults(),
+    });
+
+    expect(onItemEvent.mock.calls.map(([payload]) => payload)).toEqual([
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "update",
+        progressText: "Waiting for the local model to respond",
+      },
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "update",
+        progressText: "Waiting for a free model slot",
+      },
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "end",
+      },
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "update",
+        progressText: "Waiting for the local model to respond",
+      },
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "end",
+      },
+    ]);
+  });
+
   it("forwards Codex command tool results as command output completion", async () => {
     const onCommandOutput = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -181,18 +234,7 @@ describe("executeAgentTurn: command events", () => {
       } as unknown as TemplateContext,
       opts: { onCommandOutput } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onCommandOutput).toHaveBeenCalledWith({
@@ -238,18 +280,7 @@ describe("executeAgentTurn: command events", () => {
       } as unknown as TemplateContext,
       opts: { onCommandOutput } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onCommandOutput).toHaveBeenCalledWith(
@@ -300,18 +331,7 @@ describe("executeAgentTurn: command events", () => {
       } as unknown as TemplateContext,
       opts: { onCommandOutput } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onCommandOutput).toHaveBeenCalledTimes(1);

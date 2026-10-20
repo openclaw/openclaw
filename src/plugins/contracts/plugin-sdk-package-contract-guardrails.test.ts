@@ -13,6 +13,7 @@ import {
   publicPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
 } from "../../../scripts/lib/plugin-sdk-entries.mts";
+import * as memoryCoreRuntime from "../../plugin-sdk/memory-core-host-runtime-core.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -27,7 +28,17 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
-const TYPED_PUBLIC_CONTRACT_REFERENCE_FILES = ["docs/plugins/sdk-entrypoints.md"] as const;
+const TYPED_PUBLIC_CONTRACT_REFERENCE_FILES = [
+  "docs/plugins/sdk-entrypoints.md",
+  "docs/plugins/sdk-entrypoints/tool-policy-and-sandbox.md",
+  "docs/plugins/sdk-entrypoints/package-entries.md",
+  "docs/plugins/sdk-entrypoints/define-tool-plugin.md",
+  "docs/plugins/sdk-entrypoints/define-plugin-entry.md",
+  "docs/plugins/sdk-entrypoints/native-providers.md",
+  "docs/plugins/sdk-entrypoints/define-channel-plugin-entry.md",
+  "docs/plugins/sdk-entrypoints/define-setup-plugin-entry.md",
+  "docs/plugins/sdk-entrypoints/registration-mode.md",
+] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
 const BUNDLED_PLUGIN_FACADE_LOADER_PATTERN =
   /\bload(?:Activated)?BundledPluginPublicSurfaceModuleSync\b/;
@@ -566,23 +577,13 @@ describe("plugin-sdk package contract guardrails", () => {
     ).toBe(true);
   });
 
-  it("keeps configured local-origin fetch helpers out of deprecated infra-runtime", () => {
-    const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk/infra-runtime.ts"), "utf8");
-
-    expect(source).not.toMatch(/export\s+\*\s+from\s+["']\.\.\/infra\/net\/fetch-guard\.js["']/);
-    expect(source).not.toContain("fetchConfiguredLocalOriginWithSsrFGuard");
-    expect(source).not.toContain("GuardedFetchConfiguredLocalOriginOptions");
-  });
-
   it("keeps configured local-origin fetch helpers out of the public SSRF runtime", async () => {
     const ssrfRuntime = await import("../../plugin-sdk/ssrf-runtime.js");
 
     expect(ssrfRuntime).not.toHaveProperty("fetchConfiguredLocalOriginWithSsrFGuard");
   });
 
-  it("keeps memory provenance mutation out of the packaged Memory Core facade", async () => {
-    const memoryCoreRuntime = await import("../../plugin-sdk/memory-core-host-runtime-core.js");
-
+  it("keeps memory provenance mutation out of the packaged Memory Core facade", () => {
     expect(memoryCoreRuntime).not.toHaveProperty("recordMemoryArtifactWriteProvenance");
   });
 

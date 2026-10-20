@@ -3,6 +3,7 @@ import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  navigateInApp,
   pastePng,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
@@ -102,29 +103,14 @@ suite.define(() => {
             })
             .toEqual({ active, duplicateRevocations: 0, unknownRevocations: 0 });
         };
-        const navigate = (routeId: string, search = "") =>
-          page.evaluate(
-            ({ targetRouteId, targetSearch }) => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime?: {
-                  context: {
-                    navigate: (routeId: string, options?: { search?: string }) => void;
-                  };
-                };
-              };
-              if (!app.runtime) {
-                throw new Error("OpenClaw application runtime is unavailable");
-              }
-              app.runtime.context.navigate(targetRouteId, { search: targetSearch });
-            },
-            { targetRouteId: routeId, targetSearch: search },
-          );
+        const navigate = (routeId: Parameters<typeof navigateInApp>[1], search = "") =>
+          navigateInApp(page, routeId, search);
         await page.goto(`${suite.server.baseUrl}new`);
         const composer = page.locator(".new-session-page__message");
 
         await pastePng(composer);
         await page.getByRole("img", { name: "pixel.png" }).waitFor();
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
@@ -132,25 +118,19 @@ suite.define(() => {
         await waitForCommittedNewSessionDraft(page, "", 1);
         // Synthetic paste leaves the pointer over the replacement remove button.
         await page.mouse.move(0, 0);
-        const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
+        const agentMenu = page.locator(".new-session-page__select--agent .agent-select__menu");
         await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
         await expect
-          .poll(() =>
-            agentDropdown.evaluate(
-              (dropdown) => (dropdown as HTMLElement & { open: boolean }).open,
-            ),
-          )
+          .poll(() => agentMenu.evaluate((menu) => menu.matches(":popover-open")))
           .toBe(true);
         await navigate("new-session", "?agent=main&catalog=missing");
         await expect
           .poll(() =>
             page.evaluate(
               () =>
-                (
-                  document.querySelector(".new-session-page__select--agent wa-dropdown") as
-                    | (HTMLElement & { open: boolean })
-                    | null
-                )?.open ?? false,
+                document
+                  .querySelector(".new-session-page__select--agent .agent-select__menu")
+                  ?.matches(":popover-open") ?? false,
             ),
           )
           .toBe(false);
@@ -174,7 +154,7 @@ suite.define(() => {
           unknownRevocations: 0,
         });
         await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
@@ -187,7 +167,7 @@ suite.define(() => {
         await navigate("new-session");
         await composer.waitFor();
         await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);

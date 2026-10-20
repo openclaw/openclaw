@@ -19,12 +19,8 @@
   margin-left: var(--shell-chrome-safe-area-left);
 }
 
-/* Native hosts hide the web cluster; onboarding never mounts it. */
-html.openclaw-native-nav
-  .shell:not(.shell--mobile-nav)
-  .sidebar-update-card--floating
-  .sidebar-update-card,
-html.openclaw-native-web-chrome
+/* Legacy native hosts hide the web cluster; onboarding never mounts it. */
+html.openclaw-native-nav:not(.openclaw-native-web-chrome)
   .shell:not(.shell--mobile-nav)
   .sidebar-update-card--floating
   .sidebar-update-card,
@@ -33,8 +29,8 @@ html.openclaw-native-web-chrome
   margin-left: 16px;
 }
 
-/* Native dashboard actions must also clear AppKit's drag strip. */
-html.openclaw-native-macos
+/* Native dashboard actions must also clear the window's titlebar. */
+html:is(.openclaw-native-macos, .openclaw-native-desktop)
   .shell:not(.shell--mobile-nav)
   .sidebar-update-card--floating
   .sidebar-update-card {
@@ -113,13 +109,7 @@ html.openclaw-native-macos
 
 /* Keep the card moving while its install outlives the initiating request. */
 .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
-  animation: sidebar-update-card-spin 1s linear infinite;
-}
-
-@keyframes sidebar-update-card-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 1s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

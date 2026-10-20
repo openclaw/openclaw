@@ -3,11 +3,10 @@ import type {
   CreateGhosttyTerminalOptions,
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
-import type { ReactiveControllerHost } from "lit";
-import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
-import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
+import type { TerminalPanelTab } from "./terminal-panel-tabs.tsx";
+import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
 
@@ -19,25 +18,55 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
     controller: GhosttyTerminalController;
     shell: string;
     host: HTMLDivElement;
+    pendingOpen?: TerminalPanelOpenAction;
+    /** Retires only the queued intent that booted this placeholder. */
+    cancelPendingIntent?: () => void;
     /** Why an in-flight open/attach must not adopt this disposed terminal. */
     cancelled?: "close" | "lifecycle";
   };
+
+export type TerminalRouteTarget = { sessionId: string } | { catalog: CatalogSessionKey } | null;
+
+export type TerminalInputs = {
+  gatewayConnected: boolean;
+  client: TerminalGatewayClient | null;
+  agentId: string | null;
+  sessionKey: string | null;
+  available: boolean;
+  suppressed: boolean;
+  themeMode: "dark" | "light";
+  basePath: string;
+  fullscreen: boolean;
+  embedded: boolean;
+  onClose: (() => void) | undefined;
+  tabsInHeader: boolean;
+  page: boolean;
+  routeTarget: TerminalRouteTarget;
+  createTerminalController: (
+    options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
+  ) => Promise<GhosttyTerminalController>;
+  catalogReadyTimeoutMs: number;
+};
 
 export type TerminalOperation = {
   generation: number;
   client: TerminalGatewayClient;
   signal: AbortSignal;
+  cancelIntent?: () => void;
 };
 
-export type TerminalPanelCatalogReference = {
-  catalogId: string;
-  hostId: string;
-  threadId: string;
+export type TerminalRestoreBatch = {
+  operation: TerminalOperation;
+  pending: Map<string, TerminalPanelSessionTab | undefined>;
+  userClosedTab: boolean;
+  input: { interacted: boolean; stop: () => void };
+  cancelIntent?: () => void;
 };
 
 export function resolveTerminalPanelOwnerSessionKey(
   sessionKey: string | null,
-  catalog?: TerminalPanelCatalogReference,
+  catalog?: CatalogSessionKey,
 ): string | undefined {
   const key = sessionKey?.trim();
   return !catalog && key && !parseCatalogSessionKey(key) ? key : undefined;
@@ -47,30 +76,31 @@ export function resolveTerminalPanelOwnerSessionKey(
 export type TerminalPanelAction =
   | { kind: "restore"; agentId: string | null }
   | { kind: "open"; agentId: string | null }
-  | { kind: "catalog"; agentId: string | null; catalog: TerminalPanelCatalogReference }
+  | { kind: "catalog"; agentId: string | null; catalog: CatalogSessionKey }
   | { kind: "attach"; sessionId: string; agentOwned: boolean };
 
-export type TerminalPanelSessionControllerState = {
+export type TerminalPanelOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;
+
+export type TerminalPanelError = {
+  text: string;
+  retryAction?: TerminalPanelOpenAction | { kind: "resume" };
+};
+
+export type TerminalPanelSessionState = {
   tabs: TerminalPanelSessionTab[];
   activeId: string | null;
   booting: boolean;
+  error: TerminalPanelError | null;
 };
 
-export interface TerminalPanelSessionControllerHost extends ReactiveControllerHost {
+export interface TerminalPanelSessionHost {
+  readonly inputs: HTMLElement & TerminalInputs;
+  readonly updateComplete: Promise<unknown>;
+  publish(): void;
   readonly isConnected: boolean;
-  readonly client: TerminalGatewayClient | null;
-  readonly agentId: string | null;
-  readonly sessionKey: string | null;
-  readonly available: boolean;
-  readonly themeMode: "dark" | "light";
-  readonly fullscreen: boolean;
+  readonly terminalFontFamily: string;
   readonly terminalPanelOpen: boolean;
-  readonly catalogReadyTimeoutMs: number;
-  terminalPanelErrorText: string | null;
-  readonly terminalPanelUploadController: TerminalPanelUploadController;
-  createTerminalController(
-    options: CreateGhosttyTerminalOptions,
-  ): Promise<GhosttyTerminalController>;
+  readonly terminalPanelUploadController: TerminalPanelUpload;
   closeTerminalPanel(): void;
   findTerminalPanelViewport(): Element | null;
   hideTerminalPanelForUnavailableSurface(): void;
@@ -78,14 +108,10 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   restoreTerminalPanelOpenState(): boolean;
 }
 
-export const TERMINAL_FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 export const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
 
-/** Reduces a shell path to a tab label, e.g. "/bin/zsh" -> "zsh". */
 export function shellBasename(shell: string): string {
-  const base = shell.split(/[\\/]/).pop()?.trim();
-  return base && base.length > 0 ? base : "shell";
+  return shell.split(/[\\/]/).pop()?.trim() || "shell";
 }
 
 export function forceTerminalRender(controller: GhosttyTerminalController): void {

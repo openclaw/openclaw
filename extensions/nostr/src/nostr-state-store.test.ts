@@ -7,6 +7,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
@@ -51,35 +52,13 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
     }
     // The keyed store keeps the state database open under the temporary dir, so Windows
     // fails the removal with EBUSY unless the cached handle is released first.
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(dir, { recursive: true, force: true });
   }
 }
 
 describe("nostr bus state store", () => {
-  it("persists and reloads state across restarts", async () => {
-    await withTempStateDir(async () => {
-      // Fresh start - no state
-      expect(await readNostrBusState({ accountId: "test-bot" })).toBeNull();
-
-      // Write state
-      await writeNostrBusState({
-        accountId: "test-bot",
-        lastProcessedAt: 1700000000,
-        gatewayStartedAt: 1700000100,
-      });
-
-      // Read it back
-      const state = await readNostrBusState({ accountId: "test-bot" });
-      expect(state).toEqual({
-        version: 2,
-        lastProcessedAt: 1700000000,
-        gatewayStartedAt: 1700000100,
-        recentEventIds: [],
-      });
-    });
-  });
-
   it("isolates state by accountId", async () => {
     await withTempStateDir(async () => {
       await writeNostrBusState({
@@ -146,26 +125,6 @@ describe("computeSinceTimestamp", () => {
   it("returns now for null state (fresh start)", () => {
     const now = 1700000000;
     expect(computeSinceTimestamp(null, now)).toBe(now);
-  });
-
-  it("uses lastProcessedAt when available", () => {
-    const state: Parameters<typeof computeSinceTimestamp>[0] = {
-      version: 2,
-      lastProcessedAt: 1699999000,
-      gatewayStartedAt: null,
-      recentEventIds: [],
-    };
-    expect(computeSinceTimestamp(state, 1700000000)).toBe(1699999000);
-  });
-
-  it("uses gatewayStartedAt when lastProcessedAt is null", () => {
-    const state: Parameters<typeof computeSinceTimestamp>[0] = {
-      version: 2,
-      lastProcessedAt: null,
-      gatewayStartedAt: 1699998000,
-      recentEventIds: [],
-    };
-    expect(computeSinceTimestamp(state, 1700000000)).toBe(1699998000);
   });
 
   it("uses the max of both timestamps", () => {

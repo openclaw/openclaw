@@ -1,4 +1,4 @@
-import { detectLineEnding } from "../../line-endings.js";
+import { countNewlines, detectLineEnding } from "../../line-endings.js";
 
 export interface TextReplacement {
   matchIndex: number;
@@ -11,87 +11,57 @@ interface LineSpan {
   end: number;
 }
 
-interface ReplacementGroup {
-  startLine: number;
-  endLine: number;
-  replacements: TextReplacement[];
-}
-
-function splitLinesWithEndings(content: string): string[] {
-  return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
-}
-
 function getLineSpans(content: string): LineSpan[] {
   let offset = 0;
-  return splitLinesWithEndings(content).map((line) => {
+  return (content.match(/[^\n]*\n|[^\n]+/g) ?? []).map((line) => {
     const span = { start: offset, end: offset + line.length };
     offset = span.end;
     return span;
   });
 }
 
-function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement) {
-  const replacementStart = replacement.matchIndex;
-  const replacementEnd = replacement.matchIndex + replacement.matchLength;
-  const startLine = lines.findIndex(
-    (line) => replacementStart >= line.start && replacementStart < line.end,
-  );
-  if (startLine === -1) {
-    throw new Error("Replacement range is outside the base content.");
-  }
-
-  let endLine = startLine;
-  while (endLine < lines.length) {
-    const line = lines.at(endLine);
-    if (!line || line.end >= replacementEnd) {
-      break;
+function findReplacementLine(lines: LineSpan[], offset: number, includeEnd: boolean): number {
+  let lower = 0;
+  let upper = lines.length;
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    const line = lines[middle]!;
+    if (line.end < offset || (!includeEnd && line.end === offset)) {
+      lower = middle + 1;
+    } else {
+      upper = middle;
     }
-    endLine++;
   }
-  if (endLine >= lines.length) {
+  return lower;
+}
+
+function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement) {
+  const startLine = findReplacementLine(lines, replacement.matchIndex, false);
+  const endLine = findReplacementLine(
+    lines,
+    replacement.matchIndex + replacement.matchLength,
+    true,
+  );
+  if (
+    !lines[startLine] ||
+    replacement.matchIndex < lines[startLine].start ||
+    endLine >= lines.length
+  ) {
     throw new Error("Replacement range is outside the base content.");
   }
   return { startLine, endLine: endLine + 1 };
 }
 
-export function applyReplacements(
-  content: string,
-  replacements: TextReplacement[],
-  offset = 0,
-): string {
-  let result = content;
-  for (const replacement of replacements.toReversed()) {
-    const matchIndex = replacement.matchIndex - offset;
-    result =
-      result.slice(0, matchIndex) +
-      replacement.newText +
-      result.slice(matchIndex + replacement.matchLength);
+export function applyReplacements(content: string, replacements: TextReplacement[]): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const replacement of replacements) {
+    const matchIndex = replacement.matchIndex;
+    parts.push(content.slice(cursor, matchIndex), replacement.newText);
+    cursor = matchIndex + replacement.matchLength;
   }
-  return result;
-}
-
-function groupReplacementsByLine(
-  baseContent: string,
-  replacements: TextReplacement[],
-): { lines: LineSpan[]; groups: ReplacementGroup[] } {
-  const lines = getLineSpans(baseContent);
-  const groups: ReplacementGroup[] = [];
-  const sortedReplacements = replacements.toSorted((a, b) => a.matchIndex - b.matchIndex);
-  for (const replacement of sortedReplacements) {
-    const range = getReplacementLineRange(lines, replacement);
-    const current = groups.at(-1);
-    if (current && range.startLine < current.endLine) {
-      current.endLine = Math.max(current.endLine, range.endLine);
-      current.replacements.push(replacement);
-    } else {
-      groups.push({ ...range, replacements: [replacement] });
-    }
-  }
-  return { lines, groups };
-}
-
-function splitLinesWithTerminators(content: string): string[] {
-  return content.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
+  parts.push(content.slice(cursor));
+  return parts.join("");
 }
 
 type LineTerminator = "\r\n" | "\r" | "\n";
@@ -122,17 +92,13 @@ function restoreNormalizedLineEndings(
   });
 }
 
-function countLineBreaks(content: string): number {
-  return content.match(/\n/g)?.length ?? 0;
-}
-
 export function applyReplacementsPreservingLineEndings(
   originalContent: string,
   baseContent: string,
   replacements: TextReplacement[],
 ): string {
-  const originalLines = splitLinesWithTerminators(originalContent);
-  const { lines: baseLines, groups } = groupReplacementsByLine(baseContent, replacements);
+  const originalLines = originalContent.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
+  const baseLines = getLineSpans(baseContent);
   if (originalLines.length !== baseLines.length) {
     throw new Error(
       "Cannot preserve original line endings because the base content has a different line count.",
@@ -140,64 +106,40 @@ export function applyReplacementsPreservingLineEndings(
   }
 
   const fileFallback = detectLineEnding(originalContent);
-  let originalIndex = 0;
-  let result = "";
-  for (const group of groups) {
-    result += originalLines.slice(originalIndex, group.startLine).join("");
-    const firstLine = baseLines.at(group.startLine);
-    const lastLine = baseLines.at(group.endLine - 1);
-    if (!firstLine || !lastLine) {
-      throw new Error("Replacement group is outside the base content.");
-    }
-
-    const groupStartOffset = firstLine.start;
-    const normalizedGroup = baseContent.slice(groupStartOffset, lastLine.end);
-    const sourceGroup = originalLines.slice(group.startLine, group.endLine);
-    const groupFallback =
-      getLineTerminator(sourceGroup[0]) ??
-      getLineTerminator(originalLines[group.startLine - 1]) ??
-      fileFallback;
-    const restoredGroup = restoreNormalizedLineEndings(normalizedGroup, sourceGroup, groupFallback);
-    const restoredReplacements = group.replacements.map((replacement) => {
-      const relativeStart = replacement.matchIndex - groupStartOffset;
-      const relativeEnd = relativeStart + replacement.matchLength;
-      const restoredStart = restoreNormalizedLineEndings(
-        normalizedGroup.slice(0, relativeStart),
-        sourceGroup,
-        groupFallback,
-      ).length;
-      const restoredEnd = restoreNormalizedLineEndings(
-        normalizedGroup.slice(0, relativeEnd),
-        sourceGroup,
-        groupFallback,
-      ).length;
-      const range = getReplacementLineRange(baseLines, replacement);
-      const replacementSource = originalLines.slice(range.startLine, range.endLine);
-      const replacementFallback =
-        getLineTerminator(replacementSource[0]) ??
-        getLineTerminator(originalLines[range.startLine - 1]) ??
-        fileFallback;
-      const consumedTerminatorCount = countLineBreaks(
-        normalizedGroup.slice(relativeStart, relativeEnd),
-      );
-      const replacementTerminatorCount = countLineBreaks(replacement.newText);
-      const terminatorSources =
-        consumedTerminatorCount > 0
-          ? replacementSource.slice(0, consumedTerminatorCount)
-          : replacementSource.slice(0, 1);
-      const sourceOffset = Math.max(0, terminatorSources.length - replacementTerminatorCount);
-      return {
-        matchIndex: restoredStart,
-        matchLength: restoredEnd - restoredStart,
-        newText: restoreNormalizedLineEndings(
-          replacement.newText,
-          terminatorSources.slice(sourceOffset),
-          replacementFallback,
-        ),
-      };
-    });
-    result += applyReplacements(restoredGroup, restoredReplacements);
-    originalIndex = group.endLine;
+  const originalOffsets = [0];
+  for (const line of originalLines) {
+    originalOffsets.push(originalOffsets.at(-1)! + line.length);
   }
-  return result + originalLines.slice(originalIndex).join("");
+  const restoredReplacements = replacements.map((replacement) => {
+    const { startLine, endLine } = getReplacementLineRange(baseLines, replacement);
+    const matchEnd = replacement.matchIndex + replacement.matchLength;
+    const restoredStart =
+      originalOffsets[startLine]! + replacement.matchIndex - baseLines[startLine]!.start;
+    // A consumed newline includes the whole original terminator, including CRLF's extra byte.
+    const restoredEnd =
+      matchEnd === baseLines[endLine - 1]!.end
+        ? originalOffsets[endLine]!
+        : originalOffsets[endLine - 1]! + matchEnd - baseLines[endLine - 1]!.start;
+    const replacementSource = originalLines.slice(startLine, endLine);
+    const replacementFallback =
+      getLineTerminator(replacementSource[0]) ??
+      getLineTerminator(originalLines[startLine - 1]) ??
+      fileFallback;
+    const consumedTerminatorCount = countNewlines(
+      baseContent.slice(replacement.matchIndex, matchEnd),
+    );
+    const replacementTerminatorCount = countNewlines(replacement.newText);
+    const terminatorSources = replacementSource.slice(0, Math.max(1, consumedTerminatorCount));
+    const sourceOffset = Math.max(0, terminatorSources.length - replacementTerminatorCount);
+    return {
+      matchIndex: restoredStart,
+      matchLength: restoredEnd - restoredStart,
+      newText: restoreNormalizedLineEndings(
+        replacement.newText,
+        terminatorSources.slice(sourceOffset),
+        replacementFallback,
+      ),
+    };
+  });
+  return applyReplacements(originalContent, restoredReplacements);
 }

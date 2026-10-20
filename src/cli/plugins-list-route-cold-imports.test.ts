@@ -1,4 +1,5 @@
 // The default plugin inventory route must render manifest facts without executing plugin code.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,13 +19,13 @@ const testState = vi.hoisted(() => ({
 vi.mock("./command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
-  resolveCliExecutionStartupContext: vi.fn(() => ({
-    startupPolicy: { loadPlugins: false, suppressDoctorStdout: true },
-  })),
 }));
 
+// mock-isolation: Cold-route fixtures keep config and plugin discovery independent of operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => testState.config,
+  loadConfig: () => testState.config,
+  captureRuntimeConfigAsyncReader: () => async () => testState.config,
 }));
 
 vi.mock("../runtime.js", () => ({

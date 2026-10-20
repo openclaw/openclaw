@@ -1,13 +1,10 @@
-// Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   findCodeRegions,
   isInsideCode,
   stripReasoningTagsFromText,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { TelegramReasoningStepState } from "./bot-message-dispatch.types.js";
 
 // A durable reasoning message already marked channel-side: 🧠 + italic body
 // (see markReasoningMessage). Detect it so a re-split passes it through
@@ -17,7 +14,6 @@ const REASONING_MESSAGE_RE = /^🧠\s+_/u;
 // "Thinking" header. Telegram renders durable thoughts with the 🧠 marker
 // (Discord parity), so this header must be rewritten channel-side.
 const CORE_THINKING_HEADER_RE = /^Thinking\.{0,3}\s*\n+/u;
-const LEGACY_REASONING_MESSAGE_PREFIX = "Reasoning:\n";
 
 // Rewrite core's "Thinking\n\n_body_" into "🧠 _body_": strip the header word
 // and prefix the first italic line with 🧠. Keeps the italic body intact so
@@ -27,31 +23,21 @@ function markReasoningMessage(formatted: string): string {
   return withoutHeader.replace(/^_/u, "🧠 _");
 }
 const REASONING_TAG_PREFIXES = [
-  "<think",
-  "<thinking",
-  "<thought",
-  "<internal",
-  "<antthinking",
-  "<mm:think",
-  "</think",
-  "</thinking",
-  "</thought",
-  "</internal",
-  "</antthinking",
-  "</mm:think",
-];
+  "think",
+  "thinking",
+  "thought",
+  "internal",
+  "antthinking",
+  "mm:think",
+].flatMap((name) => [`<${name}`, `</${name}`]);
 const THINKING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
 function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
-  if (!text) {
-    return "";
-  }
   const codeRegions = findCodeRegions(text);
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
-  THINKING_TAG_RE.lastIndex = 0;
   for (const match of text.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
     if (isInsideCode(idx, codeRegions)) {
@@ -60,8 +46,7 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
     if (inThinking) {
       result += text.slice(lastIndex, idx);
     }
-    const isClose = match[1] === "/";
-    inThinking = !isClose;
+    inThinking = match[1] !== "/";
     lastIndex = idx + match[0].length;
   }
   if (inThinking) {
@@ -71,20 +56,18 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
 }
 
 function isPartialReasoningTagPrefix(text: string): boolean {
-  const trimmed = normalizeLowercaseStringOrEmpty(text.trimStart());
-  if (!trimmed.startsWith("<")) {
-    return false;
-  }
-  if (trimmed.includes(">")) {
-    return false;
-  }
-  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
+  const trimmed = text
+    .trim()
+    .replace(/^<\s*(\/?)\s+/u, "<$1")
+    .toLowerCase();
+  return (
+    trimmed.startsWith("<") && REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed))
+  );
 }
 
-type TelegramReasoningSplit = {
-  reasoningText?: string;
-  answerText?: string;
-};
+type TelegramReasoningSplit =
+  | { reasoningText?: string; answerText?: never }
+  | { reasoningText?: never; answerText: string };
 
 export function splitTelegramReasoningText(
   text?: string,
@@ -110,13 +93,6 @@ export function splitTelegramReasoningText(
   if (CORE_THINKING_HEADER_RE.test(trimmed)) {
     return { reasoningText: markReasoningMessage(trimmed) };
   }
-  if (
-    trimmed.startsWith(LEGACY_REASONING_MESSAGE_PREFIX) &&
-    trimmed.length > LEGACY_REASONING_MESSAGE_PREFIX.length
-  ) {
-    return { reasoningText: trimmed };
-  }
-
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
   const reasoningText = taggedReasoning || strippedAnswer;
@@ -129,45 +105,31 @@ export function splitTelegramReasoningText(
   };
 }
 
-export function createTelegramReasoningStepState(): TelegramReasoningStepState {
+export function createTelegramReasoningStepState() {
   let reasoningStatus: "none" | "hinted" | "delivered" = "none";
   let bufferedFinalAnswer: ReplyPayload | undefined;
 
-  const noteReasoningHint = () => {
-    if (reasoningStatus === "none") {
-      reasoningStatus = "hinted";
-    }
-  };
-
-  const noteReasoningDelivered = () => {
-    reasoningStatus = "delivered";
-  };
-
-  const shouldBufferFinalAnswer = () => {
-    return reasoningStatus === "hinted" && !bufferedFinalAnswer;
-  };
-
-  const bufferFinalAnswer = (value: ReplyPayload) => {
-    bufferedFinalAnswer = value;
-  };
-
-  const takeBufferedFinalAnswer = (): ReplyPayload | undefined => {
-    const value = bufferedFinalAnswer;
-    bufferedFinalAnswer = undefined;
-    return value;
-  };
-
-  const resetForNextStep = () => {
-    reasoningStatus = "none";
-    bufferedFinalAnswer = undefined;
-  };
-
   return {
-    noteReasoningHint,
-    noteReasoningDelivered,
-    shouldBufferFinalAnswer,
-    bufferFinalAnswer,
-    takeBufferedFinalAnswer,
-    resetForNextStep,
+    noteReasoningHint() {
+      if (reasoningStatus === "none") {
+        reasoningStatus = "hinted";
+      }
+    },
+    noteReasoningDelivered() {
+      reasoningStatus = "delivered";
+    },
+    shouldBufferFinalAnswer: () => reasoningStatus === "hinted" && !bufferedFinalAnswer,
+    bufferFinalAnswer(value: ReplyPayload) {
+      bufferedFinalAnswer = value;
+    },
+    takeBufferedFinalAnswer() {
+      const value = bufferedFinalAnswer;
+      bufferedFinalAnswer = undefined;
+      return value;
+    },
+    resetForNextStep() {
+      reasoningStatus = "none";
+      bufferedFinalAnswer = undefined;
+    },
   };
 }

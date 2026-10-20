@@ -404,7 +404,11 @@ export async function closeContext(context: BrowserContext): Promise<void> {
   await context.close().catch(() => {});
 }
 
-export async function renderLoginGate(page: Page, baseUrl: string): Promise<void> {
+export async function renderLoginGate(
+  page: Page,
+  baseUrl: string,
+  { lastError = "unauthorized: gateway token required" }: { lastError?: string | null } = {},
+) {
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(baseUrl);
   if (response?.status() !== 200) {
@@ -417,40 +421,22 @@ export async function renderLoginGate(page: Page, baseUrl: string): Promise<void
     details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
   });
   await page.locator(".login-gate").waitFor();
-  await mountLoginGate(page);
+  await mountLoginGate(page, lastError);
+  return gateway;
 }
 
-async function mountLoginGate(page: Page): Promise<void> {
-  await page.evaluate(async () => {
+async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+  await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
+  await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
-    const gate = document.createElement("openclaw-login-gate") as HTMLElement & {
-      props: Record<string, unknown>;
-      updateComplete: Promise<unknown>;
-    };
-    document.body.dataset.connectCount = "0";
-    gate.props = {
-      resourceBasePath: "",
-      connected: false,
-      lastError: "unauthorized: gateway token required",
-      lastErrorCode: null,
-      hasToken: false,
-      hasPassword: false,
-      gatewayUrl: "ws://127.0.0.1:18789",
-      token: "",
-      password: "",
-      showGatewayToken: false,
-      showGatewayPassword: false,
-      onGatewayUrlChange: () => {},
-      onTokenChange: () => {},
-      onPasswordChange: () => {},
-      onToggleGatewayToken: () => {},
-      onToggleGatewayPassword: () => {},
-      onConnect: () => {
-        const current = Number.parseInt(document.body.dataset.connectCount ?? "0", 10);
-        document.body.dataset.connectCount = String(current + 1);
-      },
-    };
-    document.body.replaceChildren(gate);
+    // This remaining Lit component owns its fixture props; keep all real root callbacks.
+    const gate = document.querySelector("openclaw-login-gate") as
+      | (HTMLElement & { props: Record<string, unknown>; updateComplete: Promise<unknown> })
+      | null;
+    if (!gate) {
+      throw new Error("Missing mounted login gate");
+    }
+    gate.props = { ...gate.props, lastError: failureMessage, lastErrorCode: null };
     await gate.updateComplete;
-  });
+  }, lastError);
 }

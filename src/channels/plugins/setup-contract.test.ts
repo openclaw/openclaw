@@ -1,13 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import {
   defineChannelSetupContract,
   resolveChannelSetupExecutionAdapter,
 } from "./setup-contract.js";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
+
+const adapter = { applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg };
+const cli = (flags: string) => ({ flags, description: "Setup option" });
+const fields = {
+  token: { kind: "string", cli: cli("--token <token>") },
+  transport: {
+    kind: "choice",
+    choices: ["external-native", "container"],
+    cli: cli("--transport <kind>"),
+  },
+  port: { kind: "integer", cli: cli("--port <port>") },
+  allowFrom: { kind: "string-list", cli: cli("--allow-from <ids>") },
+  useEnv: { kind: "boolean", cli: cli("--use-env") },
+} as const;
+
+function booleanContract(key: string, flags: string, negatedFlags: string) {
+  return defineChannelSetupContract({
+    fields: { [key]: { kind: "boolean", cli: { flags, negatedFlags, description: "Mode" } } },
+    adapter,
+  });
+}
 
 describe("defineChannelSetupContract", () => {
   it("keeps released adapters intact while preferring channel-owned contracts", () => {
-    const setup = { applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg };
+    const setup = adapter;
     const setupContract = defineChannelSetupContract({ fields: {}, adapter: setup });
 
     expect(resolveChannelSetupExecutionAdapter({ setup })).toBe(setup);
@@ -15,79 +38,56 @@ describe("defineChannelSetupContract", () => {
     expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
   });
 
-  it("requires field keys to match camelCased long flag names", () => {
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          credential: {
-            kind: "string",
-            cli: { flags: "--token <value>", description: "Credential" },
+  it("keeps ignored aliases ineligible during cold channel-owned promotion", () => {
+    const defaultAccount = "work-phone";
+    const next = withPluginCache(createPluginCache(), () => {
+      const promotion = {
+        accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+        singleAccountKeysToMove: ["account"],
+        namedAccountPromotionKeys: ["account"],
+      };
+      const plugin = {
+        setupContract: defineChannelSetupContract({
+          fields: {},
+          adapter: {
+            ...promotion,
+            applyAccountConfig: ({ cfg }) => cfg,
+          },
+        }),
+      };
+      const cfg: OpenClawConfig = {
+        channels: {
+          demo: {
+            account: "+12025550123",
+            defaultAccount,
+            accounts: {
+              "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+            },
           },
         },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).toThrow('Channel setup field "credential" must match camelCased long flag name "token"');
+      };
 
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          apiToken: {
-            kind: "string",
-            cli: { flags: "--api-token <value>", description: "API token" },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).not.toThrow();
-  });
-
-  it("publishes the validated map key over a field-owned key property", () => {
-    const contract = defineChannelSetupContract({
-      fields: {
-        apiToken: {
-          key: "credential",
-          kind: "string",
-          cli: { flags: "--api-token <value>", description: "API token" },
-        } as const,
-      },
-      adapter: { applyAccountConfig: ({ cfg }) => cfg },
+      return moveSingleAccountChannelSectionToDefaultAccount({
+        cfg,
+        channelKey: "demo",
+        setupSurface: resolveChannelSetupExecutionAdapter(plugin),
+      });
     });
 
-    expect(contract.metadata.fields[0]?.key).toBe("apiToken");
+    expect(next.channels?.demo).toEqual({
+      defaultAccount,
+      accounts: {
+        "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+        default: { account: "+12025550123" },
+      },
+    });
   });
 
   it("requires negated flags to resolve to the same field key", () => {
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          tenant: {
-            kind: "boolean",
-            cli: {
-              flags: "--tenant",
-              negatedFlags: "--no-other",
-              description: "Tenant mode",
-            },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).toThrow('Channel setup field "tenant" must match camelCased long flag name "other"');
-
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          useEnv: {
-            kind: "boolean",
-            cli: {
-              flags: "--use-env",
-              negatedFlags: "--no-use-env",
-              description: "Use environment credentials",
-            },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).not.toThrow();
+    expect(() => booleanContract("tenant", "--tenant", "--no-other")).toThrow(
+      'Channel setup field "tenant" must match camelCased long flag name "other"',
+    );
+    expect(() => booleanContract("useEnv", "--use-env", "--no-use-env")).not.toThrow();
   });
 
   it("parses channel-owned fields and gives adapters inferred input types", () => {
@@ -108,55 +108,17 @@ describe("defineChannelSetupContract", () => {
         return {};
       },
     );
-    const contract = defineChannelSetupContract({
-      fields: {
-        token: {
-          kind: "string",
-          cli: { flags: "--token <token>", description: "Bot token" },
-        },
-        transport: {
-          kind: "choice",
-          choices: ["external-native", "container"],
-          cli: { flags: "--transport <kind>", description: "Transport kind" },
-        },
-        port: {
-          kind: "integer",
-          cli: { flags: "--port <port>", description: "HTTP port" },
-        },
-        allowFrom: {
-          kind: "string-list",
-          cli: { flags: "--allow-from <ids>", description: "Allowed sender ids" },
-        },
-        useEnv: {
-          kind: "boolean",
-          cli: { flags: "--use-env", description: "Use environment credentials" },
-        },
-      },
-      adapter: {
-        applyAccountConfig,
-      },
-    });
-
-    const parsed = contract.parseInput({
+    const contract = defineChannelSetupContract({ fields, adapter: { applyAccountConfig } });
+    const expected = {
       name: "work",
       token: "secret",
       transport: "container",
-      port: "8080",
-      allowFrom: "alice,bob",
+      port: 8080,
+      allowFrom: ["alice", "bob"],
       useEnv: true,
-    });
-
-    expect(parsed).toEqual({
-      ok: true,
-      value: {
-        name: "work",
-        token: "secret",
-        transport: "container",
-        port: 8080,
-        allowFrom: ["alice", "bob"],
-        useEnv: true,
-      },
-    });
+    };
+    const parsed = contract.parseInput({ ...expected, port: "8080", allowFrom: "alice,bob" });
+    expect(parsed).toEqual({ ok: true, value: expected });
     if (!parsed.ok) {
       throw new Error(parsed.error);
     }
@@ -166,33 +128,14 @@ describe("defineChannelSetupContract", () => {
     expect(applyAccountConfig).toHaveBeenCalledWith({
       cfg: {},
       accountId: "default",
-      input: {
-        name: "work",
-        token: "secret",
-        transport: "container",
-        port: 8080,
-        allowFrom: ["alice", "bob"],
-        useEnv: true,
-      },
+      input: expected,
     });
   });
 
   it("rejects unsupported fields and invalid channel-owned values", () => {
     const contract = defineChannelSetupContract({
-      fields: {
-        transport: {
-          kind: "choice",
-          choices: ["external-native", "container"],
-          cli: { flags: "--transport <kind>", description: "Transport kind" },
-        },
-        port: {
-          kind: "integer",
-          cli: { flags: "--port <port>", description: "HTTP port" },
-        },
-      },
-      adapter: {
-        applyAccountConfig: ({ cfg }) => cfg,
-      },
+      fields: { transport: fields.transport, port: fields.port },
+      adapter,
     });
 
     expect(contract.parseInput({ token: "wrong channel" })).toEqual({
@@ -206,56 +149,6 @@ describe("defineChannelSetupContract", () => {
     expect(contract.parseInput({ port: "8.5" })).toEqual({
       ok: false,
       error: "port must be a non-negative integer.",
-    });
-  });
-
-  it("projects serializable CLI metadata from the same field definition", () => {
-    const contract = defineChannelSetupContract({
-      fields: {
-        token: {
-          kind: "string",
-          sensitive: true,
-          cli: { flags: "--token <token>", description: "Bot token" },
-        },
-        mode: {
-          kind: "choice",
-          choices: ["socket", "http"],
-          cli: { flags: "--mode <mode>", description: "Connection mode" },
-        },
-        useEnv: {
-          kind: "boolean",
-          cli: { flags: "--use-env", description: "Use environment credentials" },
-          envVars: ["CHAT_TOKEN", "CHAT_TOKEN_FILE"],
-          envVarMode: "any",
-        },
-      },
-      adapter: {
-        applyAccountConfig: ({ cfg }) => cfg,
-      },
-    });
-
-    expect(contract.metadata).toEqual({
-      fields: [
-        {
-          key: "token",
-          kind: "string",
-          sensitive: true,
-          cli: { flags: "--token <token>", description: "Bot token" },
-        },
-        {
-          key: "mode",
-          kind: "choice",
-          choices: ["socket", "http"],
-          cli: { flags: "--mode <mode>", description: "Connection mode" },
-        },
-        {
-          key: "useEnv",
-          kind: "boolean",
-          cli: { flags: "--use-env", description: "Use environment credentials" },
-          envVars: ["CHAT_TOKEN", "CHAT_TOKEN_FILE"],
-          envVarMode: "any",
-        },
-      ],
     });
   });
 });

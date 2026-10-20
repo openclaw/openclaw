@@ -1,14 +1,12 @@
-// Googlechat plugin module owns raw webhook durable admission and draining.
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
-  type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { GoogleChatEventPayloadError, parseGoogleChatInboundPayload } from "./monitor-event.js";
+import { parseGoogleChatInboundPayload } from "./monitor-event.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import type { GoogleChatEvent } from "./types.js";
 
@@ -22,12 +20,13 @@ export type GoogleChatIngressLifecycle = Omit<
   "onAdoptionFinalizing"
 >;
 
-type GoogleChatIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
-
 type GoogleChatIngressDispatch = (
   event: GoogleChatEvent,
   lifecycle: GoogleChatIngressLifecycle,
-) => Promise<GoogleChatIngressDispatchResult | void> | GoogleChatIngressDispatchResult | void;
+) =>
+  | Promise<ChannelIngressMonitorDeliveryResult | void>
+  | ChannelIngressMonitorDeliveryResult
+  | void;
 
 const GoogleChatIngressPermanentError = createChannelIngressError<
   "invalid-event" | "googlechat-auth"
@@ -93,12 +92,7 @@ function deserializeGoogleChatIngressEvent(rawEvent: string, claimedId: string):
 
 function normalizeClaimedGoogleChatEvent(raw: unknown, claimedId: string): GoogleChatEvent {
   try {
-    const parsed = parseGoogleChatInboundPayload(raw);
-    const eventType = parsed.event.type ?? parsed.event.eventType;
-    if (eventType !== "MESSAGE") {
-      throw new GoogleChatEventPayloadError();
-    }
-    return parsed.event;
+    return parseGoogleChatInboundPayload(raw);
   } catch (error) {
     throw new GoogleChatIngressPermanentError(
       "invalid-event",
@@ -128,14 +122,11 @@ function resolveGoogleChatIngressNonRetryableFailure(error: unknown) {
 
 export function createGoogleChatIngressMonitor(options: {
   accountId: string;
-  queue?: ChannelIngressQueue<GoogleChatIngressPayload>;
   dispatch: GoogleChatIngressDispatch;
   runtime: {
     error?: (message: string) => void;
     log?: (message: string) => void;
   };
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }) {
   const serializeForIngress = (rawEvent: unknown): string => {
@@ -159,13 +150,11 @@ export function createGoogleChatIngressMonitor(options: {
   };
 
   return createStandardRawEventIngressMonitor({
-    queue:
-      options.queue ??
-      (() =>
-        getGoogleChatRuntime().state.openChannelIngressQueue<GoogleChatIngressPayload>({
-          accountId: options.accountId,
-        })),
-    inspect: (rawEvent) => inspectGoogleChatIngressEvent(rawEvent),
+    queue: () =>
+      getGoogleChatRuntime().state.openChannelIngressQueue<GoogleChatIngressPayload>({
+        accountId: options.accountId,
+      }),
+    inspect: inspectGoogleChatIngressEvent,
     payload: {
       serialize: serializeForIngress,
       deserialize: (rawEvent, { claim }) => deserializeGoogleChatIngressEvent(rawEvent, claim.id),
@@ -179,13 +168,9 @@ export function createGoogleChatIngressMonitor(options: {
     },
     deliver: (rawEvent, lifecycle, claim) =>
       options.dispatch(normalizeClaimedGoogleChatEvent(rawEvent, claim.id), lifecycle),
-    pollIntervalMs: options.pollIntervalMs,
     // The webhook retry horizon must fit beneath the standard 30-day / 20k cap.
     drain: {
       resolveNonRetryableFailure: resolveGoogleChatIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       onLog: (message) => options.runtime.error?.(`googlechat: ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

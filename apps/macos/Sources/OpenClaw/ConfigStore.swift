@@ -2,6 +2,22 @@ import Foundation
 import OpenClawKit
 import OpenClawProtocol
 
+struct ConfigSnapshot: Codable {
+    struct Issue: Codable {
+        let path: String
+        let message: String
+    }
+
+    let path: String?
+    let exists: Bool?
+    let raw: String?
+    let hash: String?
+    let parsed: AnyCodable?
+    let valid: Bool?
+    let config: [String: AnyCodable]?
+    let issues: [Issue]?
+}
+
 enum ConfigStore {
     /// A revision token is useful only with the document and Gateway that issued it.
     @MainActor
@@ -29,13 +45,13 @@ enum ConfigStore {
             self.gateway = gateway
             self.revision = gateway.selectedEndpointRevision
             self.mode = AppStateStore.shared.connectionMode
-            self.localURL = OpenClawConfigFile.url()
+            self.localURL = OpenClawPaths.configURL
             self.allowsLocalFallback = self.mode != .remote
         }
 
         var selectionIsCurrent: Bool {
             self.gateway.selectedEndpointRevision == self.revision &&
-                AppStateStore.shared.connectionMode == self.mode && OpenClawConfigFile.url() == self.localURL
+                AppStateStore.shared.connectionMode == self.mode && OpenClawPaths.configURL == self.localURL
         }
 
         var isCurrent: Bool {
@@ -56,19 +72,11 @@ enum ConfigStore {
         #endif
     }
 
-    private actor OverrideStore {
-        var overrides = Overrides()
-
-        func setOverride(_ overrides: Overrides) {
-            self.overrides = overrides
-        }
-    }
-
-    private static let overrideStore = OverrideStore()
+    @MainActor private static var overrides = Overrides()
     @MainActor
     static func load(gateway: GatewayConnection = .shared) async -> Document {
         let origin = Origin(gateway: gateway)
-        let overrides = await self.overrideStore.overrides
+        let overrides = self.overrides
         if let isRemoteMode = overrides.isRemoteMode {
             origin.allowsLocalFallback = await !isRemoteMode()
         }
@@ -107,27 +115,11 @@ enum ConfigStore {
     }
 
     @MainActor
-    static func document(
-        snapshot: ConfigSnapshot,
-        gateway: GatewayConnection,
-        lease: GatewayConnection.ServerLease) -> Document
-    {
-        let origin = Origin(gateway: gateway)
-        origin.lease = lease
-        return Document(
-            root: snapshot.config?.mapValues { $0.foundationValue } ?? [:],
-            origin: origin,
-            hash: snapshot.hash,
-            readError: nil)
-    }
-
-    @MainActor
     static func save(_ document: Document, allowGatewayAuthMutation: Bool = false) async throws {
         let origin = document.origin
         guard origin.isCurrent else { throw self.sourceChanged() }
         if let error = document.readError { throw error }
-        let overrides = await self.overrideStore.overrides
-        guard origin.isCurrent else { throw self.sourceChanged() }
+        let overrides = self.overrides
         if !origin.allowsLocalFallback {
             if let save = overrides.saveRemote {
                 try await save(document.root)
@@ -208,11 +200,7 @@ enum ConfigStore {
         }
         guard let lease = document.origin.lease, document.isCurrent else { throw self.sourceChanged() }
         let data = try JSONSerialization.data(withJSONObject: document.root, options: [.prettyPrinted, .sortedKeys])
-        guard let raw = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "ConfigStore", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode config.",
-            ])
-        }
+        let raw = String(bytes: data, encoding: .utf8)!
         var params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
         if let hash = document.hash { params["baseHash"] = AnyCodable(hash) }
         _ = try await document.origin.gateway.request(
@@ -223,12 +211,12 @@ enum ConfigStore {
     }
 
     #if DEBUG
-    static func _testSetOverrides(_ overrides: Overrides) async {
-        await self.overrideStore.setOverride(overrides)
+    @MainActor static func _testSetOverrides(_ overrides: Overrides) async {
+        self.overrides = overrides
     }
 
-    static func _testClearOverrides() async {
-        await self.overrideStore.setOverride(.init())
+    @MainActor static func _testClearOverrides() async {
+        self.overrides = .init()
     }
 
     #endif

@@ -1,17 +1,21 @@
 /* @vitest-environment jsdom */
 
-import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
+import type {
+  CreateGhosttyTerminalOptions,
+  GhosttyTerminalController,
+} from "@openclaw/libterminal/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import {
   disposeTerminalController,
   replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
-import { createTerminalController } from "./terminal-panel.test-support.ts";
+import { createTerminalController } from "./terminal-controller.test-support.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
 const runtimeMocks = vi.hoisted(() => ({
   create: vi.fn(),
+  fontReady: vi.fn<() => Promise<void>>(),
   load: vi.fn(),
   activate: vi.fn(),
   proposeDimensions: vi.fn<() => { cols: number; rows: number } | undefined>(),
@@ -49,9 +53,24 @@ function terminalRoot() {
   return { external, previousHost, root };
 }
 
+const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+
 describe("terminal controller lifecycle", () => {
   beforeEach(() => {
     runtimeMocks.load.mockResolvedValue({ FitAddon: MeasurementAddon });
+    runtimeMocks.fontReady.mockReturnValue(new Promise(() => {}));
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { add: vi.fn() }),
+    });
+    vi.stubGlobal(
+      "FontFace",
+      class {
+        load() {
+          return runtimeMocks.fontReady();
+        }
+      },
+    );
     vi.stubGlobal(
       "ResizeObserver",
       class implements ResizeObserver {
@@ -67,6 +86,11 @@ describe("terminal controller lifecycle", () => {
 
   afterEach(() => {
     document.body.replaceChildren();
+    if (originalFonts) {
+      Object.defineProperty(document, "fonts", originalFonts);
+    } else {
+      Reflect.deleteProperty(document, "fonts");
+    }
     runtimeMocks.create.mockReset();
     runtimeMocks.load.mockReset();
     runtimeMocks.proposeDimensions.mockReset();
@@ -106,6 +130,52 @@ describe("terminal controller lifecycle", () => {
     expect(host.isConnected).toBe(false);
   });
 
+  it.each([true, false])(
+    "owns automatic opening focus without blocking explicit focus (allowed=%s)",
+    async (allowed) => {
+      vi.useFakeTimers();
+      const focus = vi.fn();
+      // Match the pinned renderer's immediate focus and zero-delay repeat without real sleeps.
+      class FakeTerminal {
+        open(_parent: HTMLElement) {
+          this.focus();
+        }
+        focus() {
+          focus();
+          setTimeout(focus, 0);
+        }
+      }
+      const opened: Array<Pick<GhosttyTerminalController["terminal"], "focus">> = [];
+      runtimeMocks.load.mockResolvedValue({ Terminal: FakeTerminal, FitAddon: MeasurementAddon });
+      const underlying = terminalController();
+      runtimeMocks.create.mockImplementation(async (options: CreateGhosttyTerminalOptions) => {
+        if (!options.runtime) {
+          throw new Error("isolated runtime missing");
+        }
+        const terminal = new options.runtime.Terminal();
+        terminal.open(options.parent);
+        opened.push(terminal);
+        return underlying;
+      });
+      const parent = document.body.appendChild(document.createElement("div"));
+      try {
+        const controller = await createIsolatedGhosttyTerminal({ parent }, () => allowed);
+        expect(focus).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        vi.runOnlyPendingTimers();
+        expect(focus).toHaveBeenCalledTimes(allowed ? 2 : 0);
+        focus.mockClear();
+        expect(opened).toHaveLength(1);
+        opened[0]?.focus();
+        expect(focus).toHaveBeenCalledOnce();
+        vi.runOnlyPendingTimers();
+        expect(focus).toHaveBeenCalledTimes(2);
+        controller.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("applies the final terminal dimensions through rapid fit and resize notifications", async () => {
     const underlying = terminalController();
     underlying.resize.mockImplementation(({ columns, rows }: { columns: number; rows: number }) => {
@@ -137,25 +207,26 @@ describe("terminal controller lifecycle", () => {
     expect(underlying.resize).toHaveBeenCalledTimes(3);
   });
 
-  it.each([true, false])(
-    "preserves explicit terminal size with autoFit=%s and allows manual fitting",
-    async (autoFit) => {
+  it.each([false, true])(
+    "remeasures loaded fonts only while the controller is live (disposed=%s)",
+    async (disposed) => {
+      const ready = createDeferred();
+      runtimeMocks.fontReady.mockReturnValue(ready.promise);
       const underlying = terminalController();
       runtimeMocks.create.mockResolvedValue(underlying);
-      runtimeMocks.proposeDimensions.mockReturnValue({ cols: 51, rows: 25 });
       const parent = document.body.appendChild(document.createElement("div"));
-      const size = { columns: 80, rows: 24 };
-      const signal = new AbortController().signal;
-      const controller = await createIsolatedGhosttyTerminal({ parent, size, autoFit, signal });
-
-      expect(runtimeMocks.create).toHaveBeenCalledWith(
-        expect.objectContaining({ parent, size, signal, autoFit: false }),
-      );
+      const controller = await createIsolatedGhosttyTerminal({ parent, autoFit: false });
+      if (disposed) {
+        controller.dispose();
+      }
+      ready.resolve();
+      await ready.promise;
+      document.fonts.dispatchEvent(new Event("loadingdone"));
+      expect(underlying.terminal.renderer.remeasureFont).toHaveBeenCalledTimes(disposed ? 0 : 2);
       expect(runtimeMocks.proposeDimensions).not.toHaveBeenCalled();
-      expect(runtimeMocks.observe).toHaveBeenCalledTimes(autoFit ? 1 : 0);
-      controller.fit();
-      expect(underlying.resize).toHaveBeenCalledWith({ columns: 51, rows: 25 });
       controller.dispose();
+      document.fonts.dispatchEvent(new Event("loadingdone"));
+      expect(underlying.terminal.renderer.remeasureFont).toHaveBeenCalledTimes(disposed ? 0 : 2);
     },
   );
 

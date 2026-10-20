@@ -2,12 +2,13 @@ import Foundation
 import Testing
 @testable import OpenClawChatUI
 
-private func pickerModel(_ selectionID: String) -> OpenClawChatModelChoice {
+private func pickerModel(_ selectionID: String, manualSelectionAllowed: Bool? = nil) -> OpenClawChatModelChoice {
     let parts = selectionID.split(separator: "/", maxSplits: 1).map(String.init)
     return OpenClawChatModelChoice(
         modelID: parts.count == 2 ? parts[1] : selectionID,
         name: selectionID,
         provider: parts.count == 2 ? parts[0] : "test",
+        manualSelectionAllowed: manualSelectionAllowed,
         contextWindow: nil)
 }
 
@@ -76,11 +77,14 @@ private func withPickerStore(_ body: (ChatModelPickerStore, UserDefaults) throws
     }
 
     @Test func `ordering preserves sections and skips missing models`() {
-        let choices = [pickerModel("a/one"), pickerModel("b/two"), pickerModel("c/three"), pickerModel("d/four")]
+        let choices = [
+            pickerModel("a/one"), pickerModel("b/two"), pickerModel("c/three"), pickerModel("d/four"),
+            pickerModel("e/automatic", manualSelectionAllowed: false),
+        ]
         let sections = ChatModelPickerStore.sections(
             choices: choices,
-            favorites: ["c/three", "missing/model", "a/one"],
-            recents: ["a/one", "d/four", "missing/recent"],
+            favorites: ["e/automatic", "c/three", "missing/model", "a/one"],
+            recents: ["a/one", "e/automatic", "d/four", "missing/recent"],
             defaultProvider: "b")
 
         #expect(sections.pinned.map(\.selectionID) == ["c/three", "a/one"])

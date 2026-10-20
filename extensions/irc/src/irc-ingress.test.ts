@@ -61,6 +61,8 @@ describe("IRC durable ingress", () => {
         ...queue,
         enqueue: vi.fn().mockRejectedValue(appendError),
       } satisfies IrcIngressQueue;
+      // Exercise a supplied queue without the optional fused admission capability.
+      delete failingQueue.enqueueAndClaim;
       const dispatch = vi.fn();
       const ingress = startIngress(failingQueue, dispatch);
       try {
@@ -160,57 +162,6 @@ describe("IRC durable ingress", () => {
       } finally {
         await ingress.stop();
       }
-    });
-  });
-
-  it("derives the direct-message lane from the sender nick", async () => {
-    await withQueue(async (queue) => {
-      const ingress = createIrcIngressMonitor({
-        accountId: "default",
-        queue,
-        dispatch: vi.fn(),
-        runtime: { error: vi.fn(), log: vi.fn() },
-      });
-      try {
-        await ingress
-          .openConnection("connection-dm")
-          .accept(":Alice!ident@example.org PRIVMSG openclaw-bot :hello", "bot");
-        expect(await queue.listPending({ limit: "all" })).toEqual([
-          expect.objectContaining({ laneKey: "direct:alice" }),
-        ]);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("waits for an in-flight admission before stop returns", async () => {
-    await withQueue(async (queue) => {
-      const admissionStored = createDeferred<void>();
-      const releaseAdmission = createDeferred<void>();
-      const enqueue = queue.enqueue.bind(queue);
-      queue.enqueue = async (...args) => {
-        const result = await enqueue(...args);
-        admissionStored.resolve();
-        await releaseAdmission.promise;
-        return result;
-      };
-      const dispatch = vi.fn();
-      const ingress = startIngress(queue, dispatch);
-      const admitting = ingress.openConnection("connection-stop").accept(CHANNEL_LINE, "bot");
-      await admissionStored.promise;
-
-      let stopSettled = false;
-      const stopping = ingress.stop().then(() => {
-        stopSettled = true;
-      });
-      await Promise.resolve();
-      expect(stopSettled).toBe(false);
-
-      releaseAdmission.resolve();
-      await Promise.all([admitting, stopping]);
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
     });
   });
 

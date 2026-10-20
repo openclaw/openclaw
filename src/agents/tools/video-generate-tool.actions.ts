@@ -1,12 +1,5 @@
-/**
- * video_generate action result helpers.
- *
- * Formats provider listing, active-task status, and duplicate-guard responses for the tool.
- */
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildVideoGenerationTaskStatusDetails,
   buildVideoGenerationTaskStatusText,
@@ -14,12 +7,9 @@ import {
   findDuplicateGuardVideoGenerationTaskForSession,
 } from "../media-generation-task-status.js";
 import {
-  createMediaGenerateProviderListActionResult,
+  createMediaGenerateProviderListAction,
   createMediaGenerateTaskActions,
-  type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
-
-type VideoGenerateActionResult = MediaGenerateActionResult;
 
 function summarizeVideoGenerationCapabilities(
   provider: ReturnType<typeof listRuntimeVideoGenerationProviders>[number],
@@ -43,23 +33,13 @@ function summarizeVideoGenerationCapabilities(
   const supportedDurationSecondsByModel = activeModeCapabilities
     .map((capabilities) => capabilities.supportedDurationSecondsByModel)
     .find((value) => value && Object.keys(value).length > 0);
-  // providerOptions may be declared at the mode level (generate) or at the flat
-  // provider-capabilities level. The runtime checks both; surface the union so
-  // the agent sees a single merged view of which opaque keys each provider
-  // actually accepts.
-  const declaredProviderOptions: Record<string, string> = {};
-  for (const [key, type] of Object.entries(provider.capabilities.providerOptions ?? {})) {
-    declaredProviderOptions[key] = type;
-  }
-  for (const [key, type] of Object.entries(generate?.providerOptions ?? {})) {
-    declaredProviderOptions[key] = type;
-  }
-  for (const [key, type] of Object.entries(imageToVideo?.providerOptions ?? {})) {
-    declaredProviderOptions[key] = type;
-  }
-  for (const [key, type] of Object.entries(videoToVideo?.providerOptions ?? {})) {
-    declaredProviderOptions[key] = type;
-  }
+  // Match the runtime's union of provider-level and mode-level options.
+  const declaredProviderOptions = {
+    ...provider.capabilities.providerOptions,
+    ...generate?.providerOptions,
+    ...imageToVideo?.providerOptions,
+    ...videoToVideo?.providerOptions,
+  };
   const maxInputAudios =
     generate?.maxInputAudios ??
     imageToVideo?.maxInputAudios ??
@@ -84,21 +64,17 @@ function summarizeVideoGenerationCapabilities(
           .map(([modelId, durations]) => `${modelId}:${durations.join("/")}`)
           .join("; ")}`
       : null,
-    activeModeCapabilities.some((modeCapabilities) => modeCapabilities.supportsResolution)
-      ? "resolution"
-      : null,
-    activeModeCapabilities.some((modeCapabilities) => modeCapabilities.supportsAspectRatio)
-      ? "aspectRatio"
-      : null,
-    activeModeCapabilities.some((modeCapabilities) => modeCapabilities.supportsSize)
-      ? "size"
-      : null,
-    activeModeCapabilities.some((modeCapabilities) => modeCapabilities.supportsAudio)
-      ? "audio"
-      : null,
-    activeModeCapabilities.some((modeCapabilities) => modeCapabilities.supportsWatermark)
-      ? "watermark"
-      : null,
+    ...(
+      [
+        ["supportsResolution", "resolution"],
+        ["supportsAspectRatio", "aspectRatio"],
+        ["supportsSize", "size"],
+        ["supportsAudio", "audio"],
+        ["supportsWatermark", "watermark"],
+      ] as const
+    ).flatMap(([key, label]) =>
+      activeModeCapabilities.some((modeCapabilities) => modeCapabilities[key]) ? [label] : [],
+    ),
     Object.keys(declaredProviderOptions).length > 0
       ? `providerOptions={${Object.entries(declaredProviderOptions)
           .map(([key, type]) => `${key}:${type}`)
@@ -110,23 +86,13 @@ function summarizeVideoGenerationCapabilities(
   return capabilities;
 }
 
-export function createVideoGenerateListActionResult(
-  config?: OpenClawConfig,
-  options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
-): VideoGenerateActionResult {
-  const providers = listRuntimeVideoGenerationProviders({ config });
-  return createMediaGenerateProviderListActionResult({
-    kind: "video_generation",
-    providers,
-    emptyText: "No video-generation providers are registered.",
-    cfg: config,
-    workspaceDir: options?.workspaceDir,
-    agentDir: options?.agentDir,
-    authStore: options?.authStore,
-    listModes: listSupportedVideoGenerationModes,
-    summarizeCapabilities: summarizeVideoGenerationCapabilities,
-  });
-}
+export const createVideoGenerateListActionResult = createMediaGenerateProviderListAction({
+  kind: "video_generation",
+  listProviders: (params) => listRuntimeVideoGenerationProviders(params),
+  emptyText: "No video-generation providers are registered.",
+  listModes: listSupportedVideoGenerationModes,
+  summarizeCapabilities: summarizeVideoGenerationCapabilities,
+});
 
 export const {
   createStatusActionResult: createVideoGenerateStatusActionResult,

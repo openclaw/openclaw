@@ -1,4 +1,3 @@
-// Defines Discord presence-event configuration.
 export type DiscordPresenceEventsConfig = {
   /** Enable online-presence system events for this guild. Default: true when configured. */
   enabled?: boolean;

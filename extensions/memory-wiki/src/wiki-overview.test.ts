@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
+import { loadMemoryWikiCompiledDashboards } from "./compiled-cache.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { listMemoryWikiOverview } from "./wiki-overview.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
-describe("listMemoryWikiOverview", () => {
+describe("compiled wiki overview", () => {
   it("groups wiki pages by kind and surfaces claims, questions, and contradictions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-overview-",
@@ -82,7 +82,7 @@ describe("listMemoryWikiOverview", () => {
       fs.unlink(path.join(rootDir, "entities", "mariano.md")),
     ]);
 
-    const result = await listMemoryWikiOverview(config);
+    const { overview: result } = await loadMemoryWikiCompiledDashboards(config);
 
     expect(result.totalItems).toBe(2);
     expect(result.totalPages).toBe(3);

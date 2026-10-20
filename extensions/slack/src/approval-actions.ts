@@ -46,7 +46,9 @@ export function decodeSlackApprovalAction(value: unknown): SlackApprovalAction |
       Object.keys(record).length !== 3 ||
       typeof record.approvalId !== "string" ||
       record.approvalId.length === 0 ||
-      (record.approvalKind !== "exec" && record.approvalKind !== "plugin") ||
+      (record.approvalKind !== "exec" &&
+        record.approvalKind !== "plugin" &&
+        record.approvalKind !== "system-agent") ||
       !isApprovalDecision(record.decision)
     ) {
       return null;

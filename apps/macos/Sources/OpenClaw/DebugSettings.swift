@@ -6,24 +6,24 @@ struct DebugSettings: View {
     @Bindable var state: AppState
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let labelColumnWidth: CGFloat = 140
+    @AppStorage(nativeConversationForcedKey) private var useNativeConversation = false
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
     @State private var launchAgentWriteError: String?
-    @State private var gatewayRootInput: String = GatewayProcessManager.shared.projectRootPath()
+    @State private var gatewayRootInput: String = CommandResolver.projectRootPath()
     @State private var sessionStorePath: String = SessionLoader.defaultStorePath
     @State private var sessionStoreSaveError: String?
     @State private var debugSendInFlight = false
-    @State private var debugSendStatus: String?
-    @State private var debugSendError: String?
+    @State private var debugSendResult: Result<String, DebugActionError>?
     @State private var testNotificationOutcome: TestNotificationOutcome?
     @State private var portCheckInFlight = false
-    @State private var portReports: [DebugActions.PortReport] = []
+    @State private var portReports: [PortGuardian.PortReport] = []
     @State private var portKillStatus: String?
     @State private var tunnelResetInFlight = false
     @State private var tunnelResetStatus: String?
-    @State private var pendingKill: DebugActions.PortListener?
+    @State private var pendingKill: PortGuardian.ReportListener?
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
     @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
 
@@ -36,26 +36,19 @@ struct DebugSettings: View {
     }
 
     var body: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 14) {
-                self.header
-
-                self.overviewSection
-                self.launchdSection
-                self.appInfoSection
-                self.gatewaySection
-                self.logsSection
-                self.portsSection
-                self.pathsSection
-                self.quickActionsSection
-                self.canvasSection
-                self.experimentsSection
-
-                Spacer(minLength: 0)
-            }
-            .settingsDetailContent()
-            .groupBoxStyle(PlainSettingsGroupBoxStyle())
+        Form {
+            self.overviewSection
+            self.launchdSection
+            self.appInfoSection
+            self.gatewaySection
+            self.logsSection
+            self.portsSection
+            self.pathsSection
+            self.quickActionsSection
+            self.canvasSection
+            self.experimentsSection
         }
+        .formStyle(.grouped)
         .task {
             guard !self.isPreview else { return }
             self.loadSessionStorePath()
@@ -73,7 +66,7 @@ struct DebugSettings: View {
     }
 
     private var launchdSection: some View {
-        GroupBox("Gateway startup") {
+        Section("Gateway startup") {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Attach only (skip launchd install)", isOn: self.$launchAgentWriteDisabled)
                     .onChange(of: self.launchAgentWriteDisabled) { _, newValue in
@@ -102,38 +95,32 @@ struct DebugSettings: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Debug")
-                .font(.title3.weight(.semibold))
-            Text("Tools for diagnosing local issues (Gateway, ports, logs, Canvas).")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private var overviewSection: some View {
-        HStack(spacing: 12) {
-            DebugMetricCard(
-                title: "App Health",
-                value: self.healthStore.state.debugTitle,
-                icon: "heart.text.square",
-                tint: self.healthStore.state.tint,
-                subtitle: self.healthStore.summaryLine)
+        Section {
+            HStack(spacing: 12) {
+                DebugMetricCard(
+                    title: "App Health",
+                    value: self.healthStore.state.debugTitle,
+                    icon: "heart.text.square",
+                    tint: self.healthStore.state.tint,
+                    subtitle: self.healthStore.summaryLine)
 
-            DebugMetricCard(
-                title: "Gateway",
-                value: self.gatewayManager.status.label,
-                icon: "antenna.radiowaves.left.and.right",
-                tint: self.gatewayManager.status.debugTint,
-                subtitle: self.canRestartGateway ? "Local process" : "Remote connection")
+                DebugMetricCard(
+                    title: "Gateway",
+                    value: self.gatewayManager.status.label,
+                    icon: "antenna.radiowaves.left.and.right",
+                    tint: self.gatewayManager.status.debugTint,
+                    subtitle: self.canRestartGateway ? "Local process" : "Remote connection")
 
-            DebugMetricCard(
-                title: "App PID",
-                value: "\(ProcessInfo.processInfo.processIdentifier)",
-                icon: "number.square",
-                tint: .blue,
-                subtitle: Bundle.main.bundleURL.lastPathComponent)
+                DebugMetricCard(
+                    title: "App PID",
+                    value: "\(ProcessInfo.processInfo.processIdentifier)",
+                    icon: "number.square",
+                    tint: .blue,
+                    subtitle: Bundle.main.bundleURL.lastPathComponent)
+            }
+        } footer: {
+            Text("Tools for diagnosing local issues (Gateway, ports, logs, Canvas).")
         }
     }
 
@@ -143,8 +130,17 @@ struct DebugSettings: View {
             .frame(width: self.labelColumnWidth, alignment: .leading)
     }
 
+    private func pathLabel(_ path: String) -> some View {
+        Text(path)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
     private var appInfoSection: some View {
-        GroupBox("App") {
+        Section("App") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                 GridRow {
                     self.gridLabel("Health")
@@ -169,29 +165,15 @@ struct DebugSettings: View {
                     Text(verbatim: "\(ProcessInfo.processInfo.processIdentifier)")
                 }
                 GridRow {
-                    self.gridLabel("Settings")
-                    VStack(alignment: .leading, spacing: 4) {
-                        Toggle("Show native settings panes", isOn: self.$state.nativeSettingsPanesEnabled)
-                        Text("These panes are being retired in favor of the Dashboard.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                GridRow {
                     self.gridLabel("Binary path")
-                    Text(Bundle.main.bundlePath)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    self.pathLabel(Bundle.main.bundlePath)
                 }
             }
         }
     }
 
     private var gatewaySection: some View {
-        GroupBox("Gateway") {
+        Section("Gateway") {
             VStack(alignment: .leading, spacing: 10) {
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow {
@@ -208,12 +190,7 @@ struct DebugSettings: View {
                     Text("Key")
                         .foregroundStyle(.secondary)
                         .frame(width: self.labelColumnWidth, alignment: .leading)
-                    Text(key)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    self.pathLabel(key)
                     Button("Copy") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(key, forType: .string)
@@ -264,7 +241,7 @@ struct DebugSettings: View {
     }
 
     private var logsSection: some View {
-        GroupBox("Logs") {
+        Section("Logs") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                 GridRow {
                     self.gridLabel("Pino log")
@@ -272,12 +249,7 @@ struct DebugSettings: View {
                         HStack(spacing: 8) {
                             Button("Open") { DebugActions.openLog() }
                                 .buttonStyle(.bordered)
-                            Text(DebugActions.pinoLogPath())
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            self.pathLabel(DebugActions.pinoLogPath())
                         }
                     }
                 }
@@ -302,7 +274,7 @@ struct DebugSettings: View {
 
                         HStack(spacing: 8) {
                             Button("Open folder") {
-                                NSWorkspace.shared.open(DiagnosticsFileLog.logDirectoryURL())
+                                AppActivation.shared.open(DiagnosticsFileLog.logDirectoryURL())
                             }
                             .buttonStyle(.bordered)
                             Button("Clear") {
@@ -310,12 +282,7 @@ struct DebugSettings: View {
                             }
                             .buttonStyle(.bordered)
                         }
-                        Text(DiagnosticsFileLog.logFileURL().path)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        self.pathLabel(DiagnosticsFileLog.logFileURL().path)
                     }
                 }
             }
@@ -323,7 +290,7 @@ struct DebugSettings: View {
     }
 
     private var portsSection: some View {
-        GroupBox("Ports") {
+        Section("Ports") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Text("Port diagnostics")
@@ -339,7 +306,10 @@ struct DebugSettings: View {
                         Task { await self.resetGatewayTunnel() }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(self.tunnelResetInFlight || !self.isRemoteMode)
+                    .disabled(
+                        self.tunnelResetInFlight ||
+                            self.state.connectionMode != .remote ||
+                            self.state.remoteTransport != .ssh)
                 }
 
                 if let portKillStatus {
@@ -356,9 +326,10 @@ struct DebugSettings: View {
                 }
 
                 if self.portReports.isEmpty, !self.portCheckInFlight {
-                    Text(String(
-                        format: String(localized: "Check which process owns %lld and suggest fixes."),
-                        GatewayEnvironment.gatewayPort()))
+                    Text(self.state.connectionMode == .remote && self.state.remoteTransport == .direct &&
+                        !self.state.hostsLocalGatewayWithRemotePrimary
+                        ? String(localized: "Direct Gateway connectivity is checked by the connection health check.")
+                        : String(localized: "Check which processes own the local Gateway and SSH tunnel ports."))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
@@ -404,7 +375,7 @@ struct DebugSettings: View {
     }
 
     private var pathsSection: some View {
-        GroupBox("Paths") {
+        Section("Paths") {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("OpenClaw project root")
@@ -460,7 +431,7 @@ struct DebugSettings: View {
     }
 
     private var quickActionsSection: some View {
-        GroupBox("Quick actions") {
+        Section("Quick actions") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Button("Send Test Notification") {
@@ -505,12 +476,12 @@ struct DebugSettings: View {
                     .disabled(self.debugSendInFlight)
 
                     if !self.debugSendInFlight {
-                        if let debugSendStatus {
-                            Text(debugSendStatus)
+                        if case let .success(message) = self.debugSendResult {
+                            Text(message)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        } else if let debugSendError {
-                            Text(debugSendError)
+                        } else if case let .failure(error) = self.debugSendResult {
+                            Text(error.localizedDescription)
                                 .font(.caption)
                                 .foregroundStyle(.red)
                         } else {
@@ -538,7 +509,7 @@ struct DebugSettings: View {
                             .foregroundStyle(.secondary)
                     } else {
                         Button {
-                            LaunchdManager.startOpenClaw()
+                            LaunchAgentManager.shared.restart()
                         } label: {
                             Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
                         }
@@ -550,7 +521,7 @@ struct DebugSettings: View {
                 HStack(spacing: 8) {
                     Button("Restart app") { DebugActions.restartApp() }
                     Button("Restart onboarding") { DebugActions.restartOnboarding() }
-                    Button("Reveal app in Finder") { self.revealApp() }
+                    Button("Reveal app in Finder") { AppActivation.shared.revealFiles([Bundle.main.bundleURL]) }
                     Spacer(minLength: 0)
                 }
                 .buttonStyle(.bordered)
@@ -559,7 +530,7 @@ struct DebugSettings: View {
     }
 
     private var canvasSection: some View {
-        GroupBox("Canvas") {
+        Section("Canvas") {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Enable/disable Canvas in General settings.")
                     .font(.caption)
@@ -581,7 +552,7 @@ struct DebugSettings: View {
                     }
                     .buttonStyle(.bordered)
                     Button("Write sample page") {
-                        Task { await self.canvasWriteSamplePage() }
+                        Task { await self.canvasPresent(writeSample: true) }
                     }
                     .buttonStyle(.bordered)
                     Spacer(minLength: 0)
@@ -607,7 +578,7 @@ struct DebugSettings: View {
     }
 
     private var experimentsSection: some View {
-        GroupBox("Experiments") {
+        Section("Experiments") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                 GridRow {
                     self.gridLabel("Icon override")
@@ -621,9 +592,8 @@ struct DebugSettings: View {
                 }
                 GridRow {
                     self.gridLabel("Chat")
-                    Text("Native SwiftUI")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    Toggle("Use native conversation view", isOn: self.$useNativeConversation)
+                        .help("Use the Swift conversation view in newly opened chat windows.")
                 }
             }
         }
@@ -633,8 +603,7 @@ struct DebugSettings: View {
     private func runPortCheck() async {
         self.portCheckInFlight = true
         self.portKillStatus = nil
-        let reports = await DebugActions.checkGatewayPorts()
-        self.portReports = reports
+        self.portReports = await DebugActions.checkGatewayPorts()
         self.portCheckInFlight = false
     }
 
@@ -642,19 +611,18 @@ struct DebugSettings: View {
     private func resetGatewayTunnel() async {
         self.tunnelResetInFlight = true
         self.tunnelResetStatus = nil
-        let result = await DebugActions.resetGatewayTunnel()
-        switch result {
+        self.tunnelResetStatus = switch await DebugActions.resetGatewayTunnel() {
         case let .success(message):
-            self.tunnelResetStatus = message
+            message
         case let .failure(err):
-            self.tunnelResetStatus = err.localizedDescription
+            err.localizedDescription
         }
         await self.runPortCheck()
         self.tunnelResetInFlight = false
     }
 
     @MainActor
-    private func requestKill(_ listener: DebugActions.PortListener) {
+    private func requestKill(_ listener: PortGuardian.ReportListener) {
         if listener.expected {
             self.pendingKill = listener
         } else {
@@ -675,53 +643,29 @@ struct DebugSettings: View {
     }
 
     private func sendVoiceDebug() async {
-        await MainActor.run {
-            self.debugSendInFlight = true
-            self.debugSendError = nil
-            self.debugSendStatus = nil
-        }
+        self.debugSendInFlight = true
+        self.debugSendResult = nil
 
         let result = await DebugActions.sendDebugVoice()
 
-        await MainActor.run {
-            self.debugSendInFlight = false
-            switch result {
-            case let .success(message):
-                self.debugSendStatus = message
-                self.debugSendError = nil
-            case let .failure(error):
-                self.debugSendStatus = nil
-                self.debugSendError = error.localizedDescription
-            }
-        }
+        self.debugSendInFlight = false
+        self.debugSendResult = result
     }
 
     @MainActor
     private func sendTestNotification() async {
         guard self.testNotificationOutcome != .pending else { return }
         self.testNotificationOutcome = .pending
-        self.testNotificationOutcome = await DebugActions.sendTestNotification()
-    }
-
-    private func revealApp() {
-        let url = Bundle.main.bundleURL
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        self.testNotificationOutcome = await TestNotificationAction.send()
     }
 
     private func saveRelayRoot() {
-        GatewayProcessManager.shared.setProjectRoot(path: self.gatewayRootInput)
+        CommandResolver.setProjectRoot(self.gatewayRootInput)
     }
 
     private func loadSessionStorePath() {
-        let parsed = OpenClawConfigFile.loadDict()
-        guard
-            let session = parsed["session"] as? [String: Any],
-            let path = session["store"] as? String
-        else {
-            self.sessionStorePath = SessionLoader.defaultStorePath
-            return
-        }
-        self.sessionStorePath = path
+        let session = OpenClawConfigFile.loadDict()["session"] as? [String: Any]
+        self.sessionStorePath = session?["store"] as? String ?? SessionLoader.defaultStorePath
     }
 
     private func saveSessionStorePath() {
@@ -753,10 +697,6 @@ struct DebugSettings: View {
         }
     }
 
-    private var isRemoteMode: Bool {
-        CommandResolver.connectionSettings().mode == .remote
-    }
-
     private var canRestartGateway: Bool {
         self.state.connectionMode == .local
     }
@@ -766,23 +706,15 @@ extension DebugSettings {
     // MARK: - Canvas debug actions
 
     @MainActor
-    private func canvasPresent() async {
+    private func canvasPresent(writeSample: Bool = false) async {
         self.canvasError = nil
         let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let dir = try CanvasManager.shared.show(sessionKey: session.isEmpty ? "main" : session, path: "/")
-            self.canvasStatus = "dir: \(dir)"
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func canvasWriteSamplePage() async {
-        self.canvasError = nil
-        let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            let dir = try CanvasManager.shared.show(sessionKey: session.isEmpty ? "main" : session, path: "/")
+            guard writeSample else {
+                self.canvasStatus = "dir: \(dir)"
+                return
+            }
             let url = URL(fileURLWithPath: dir).appendingPathComponent("index.html", isDirectory: false)
             let now = ISO8601DateFormatter().string(from: Date())
             let html = """
@@ -850,24 +782,6 @@ extension DebugSettings {
     }
 }
 
-struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            configuration.label
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            configuration.content
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.055))
-        }
-    }
-}
-
 private struct DebugMetricCard: View {
     let title: String
     let value: String
@@ -898,13 +812,8 @@ private struct DebugMetricCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.055))
-        }
     }
 }
 
@@ -934,7 +843,7 @@ extension GatewayProcessManager.Status {
 struct DebugSettings_Previews: PreviewProvider {
     static var previews: some View {
         DebugSettings(state: .preview)
-            .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
+            .frame(width: ConnectionWindow.width, height: 720)
     }
 }
 #endif

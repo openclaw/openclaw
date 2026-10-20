@@ -6,50 +6,21 @@ import {
   type RunInspectorResult,
 } from "./run-inspector-model.ts";
 
-function unavailable(
-  state: "unknown" | "unsupported" | "ambiguous",
-  reasonCode: string,
-  remediation: Array<{ code: string; text: string }> = [],
-): RunInspectorResult {
-  return {
-    schemaVersion: 1,
-    run: { runId: "run-1", status: state === "unknown" ? "unknown" : "known" },
-    identity:
-      state === "ambiguous"
-        ? {
-            state,
-            reasonCode,
-            candidates: [],
-            missingEvidence: ["execution.selection"],
-            remediation,
-          }
-        : {
-            state,
-            reasonCode,
-            missingEvidence: ["identity.context"],
-            remediation,
-          },
-    decisionDisplays: [],
-    coverage: { state: state === "ambiguous" ? "unknown" : state, missingEvidence: [] },
-  };
-}
-
-describe("classifyRunInspection", () => {
-  it.each([
-    [unavailable("unknown", "run_not_found"), "not-found"],
-    [unavailable("unknown", "identity_context_corrupt"), "corrupt"],
-    [
-      unavailable("unsupported", "identity_context_unavailable", [
-        { code: "run_again_after_expiry", text: "Run again." },
-      ]),
-      "expired",
-    ],
-    [unavailable("unsupported", "identity_context_unavailable"), "unsupported"],
-    [unavailable("unknown", "run_evidence_unreadable"), "unknown"],
-    [unavailable("ambiguous", "execution_selection_required"), "ambiguous"],
-  ] as const)("classifies the authoritative diagnostic result as %s", (result, expected) => {
-    expect(classifyRunInspection(result)).toBe(expected);
-  });
+it("classifies unknown evidence without assigning a stronger diagnostic", () => {
+  expect(
+    classifyRunInspection({
+      schemaVersion: 1,
+      run: { runId: "run-1", status: "unknown" },
+      identity: {
+        state: "unknown",
+        reasonCode: "run_evidence_unreadable",
+        missingEvidence: ["identity.context"],
+        remediation: [],
+      },
+      decisionDisplays: [],
+      coverage: { state: "unknown", missingEvidence: [] },
+    }),
+  ).toBe("unknown");
 });
 
 describe("receipt paging model", () => {

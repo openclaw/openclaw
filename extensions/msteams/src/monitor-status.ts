@@ -18,13 +18,6 @@ export function publishMSTeamsReady(statusSink: MSTeamsStatusSink | undefined, n
   statusSink?.(channelReadyPatch({ lastConnectedAt: now }));
 }
 
-export function publishMSTeamsRecovering(
-  statusSink: MSTeamsStatusSink | undefined,
-  lastError: string,
-) {
-  statusSink?.({ connected: false, lifecycle: "recovering", lastError });
-}
-
 export function publishMSTeamsStopped(statusSink: MSTeamsStatusSink | undefined) {
   statusSink?.(channelStoppedPatch());
 }

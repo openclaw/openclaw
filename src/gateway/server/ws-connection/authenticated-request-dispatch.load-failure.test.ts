@@ -1,3 +1,4 @@
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -41,6 +42,7 @@ describe("authenticated request dispatcher load failures", () => {
       client,
     );
 
+    expect([...harness.clients.authorityClients]).toEqual([]);
     expect(await harness.awaitResponseFrame("stale-install")).toMatchObject({
       id: "stale-install",
       ok: false,

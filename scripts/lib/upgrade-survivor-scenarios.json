@@ -1,0 +1,42 @@
+{
+  "oldestSupportedBaseline": "2026.6.34",
+  "scenarios": [
+    "base",
+    "backup-schedule",
+    "abandoned-update",
+    "package-publication-recovery",
+    "package-verification-recovery",
+    "package-stranded-first-hop",
+    "legacy-operator-state",
+    "workshop-doctor-recovery",
+    "update-report-recovery",
+    "dreaming-cron-doctor",
+    "cron-owner-doctor",
+    "mobile-pairing-reconnect",
+    "acpx-openclaw-tools-bridge",
+    "feishu-channel",
+    "bootstrap-persona",
+    "channel-post-core-restore",
+    "plugin-deps-cleanup",
+    "configured-plugin-installs",
+    "missing-configured-plugin-migration",
+    "missing-load-path",
+    "custom-plugin-siblings",
+    "projects-doctor",
+    "channel-owner-policy",
+    "projects-startup-migration",
+    "stale-source-plugin-shadow",
+    "prerelease-plugin-registry",
+    "tilde-log-path",
+    "meeting-transcripts-sqlite",
+    "versioned-runtime-deps",
+    "cron-scheduled-authority",
+    "sqlite-volume",
+    "recovery-cleanup",
+    "auth-profile-v2026-7-2-beta-5",
+    "watchos-direct-node"
+  ],
+  "assertionOnlyScenarios": [
+    "codex-allowlist-survival"
+  ]
+}

@@ -5,7 +5,8 @@ import type {
   RealtimeVoiceResponseOutcome,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
-import { ChannelType } from "../internal/discord.js";
+import { ChannelType, type APIVoiceState } from "../internal/discord.js";
+import { DiscordGatewayVoiceStateCache } from "../internal/gateway-voice-state-cache.js";
 import type { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 export type MockCallSource = {
@@ -19,6 +20,7 @@ export type TestRealtimeBridgeParams = {
   cfg?: unknown;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
+  providerConfig: RealtimeVoiceBridgeCreateRequest["providerConfig"];
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onClose?: RealtimeVoiceBridgeCreateRequest["onClose"];
   onReady?: () => void;
@@ -29,6 +31,7 @@ export type TestRealtimeBridgeParams = {
   ) => Promise<void> | void;
   onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
   tools?: Array<{ name: string }>;
+  runAgentConsult?: RealtimeVoiceBridgeCreateRequest["runAgentConsult"];
 };
 
 export function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -95,19 +98,35 @@ export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<t
   });
   type VoiceChannelInfo = ReturnType<typeof createVoiceChannelInfo>;
 
-  const createClient = () => ({
-    rest: { get: vi.fn() as Mock },
-    fetchChannel: vi.fn(async (channelId: string): Promise<VoiceChannelInfo | null> =>
-      createVoiceChannelInfo(channelId),
-    ),
-    fetchGuild: vi.fn(async (guildId: string) => ({ id: guildId, name: "Guild One" })),
-    getPlugin: vi.fn((_id?: string): unknown => ({
-      getGatewayAdapterCreator: vi.fn(() => vi.fn() as Mock),
-      getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
-    })),
-    fetchMember: vi.fn() as Mock,
-    fetchUser: vi.fn() as Mock,
-  });
+  const createClient = () => {
+    const voiceStateCache = new DiscordGatewayVoiceStateCache();
+    return {
+      rest: { get: vi.fn() as Mock },
+      fetchChannel: vi.fn(async (channelId: string): Promise<VoiceChannelInfo | null> =>
+        createVoiceChannelInfo(channelId),
+      ),
+      fetchGuild: vi.fn(async (guildId: string) => ({ id: guildId, name: "Guild One" })),
+      getPlugin: vi.fn((id?: string): unknown =>
+        id === "gateway"
+          ? {
+              listVoiceChannelStates: (guildId: string, channelId: string) =>
+                voiceStateCache.listVoiceChannelStates(guildId, channelId),
+              takeVoiceStateTransition: (state: APIVoiceState) =>
+                voiceStateCache.takeTransition(state),
+            }
+          : id === "voice"
+            ? {
+                getGatewayAdapterCreator: vi.fn(() =>
+                  vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
+                ),
+                getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+              }
+            : undefined,
+      ),
+      fetchMember: vi.fn() as Mock,
+      fetchUser: vi.fn() as Mock,
+    };
+  };
 
   const createClientWithMember = (
     id: string,
@@ -133,7 +152,9 @@ export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<t
         return { listVoiceChannelStates: vi.fn(listVoiceChannelStates) };
       }
       return {
-        getGatewayAdapterCreator: vi.fn(() => vi.fn() as Mock),
+        getGatewayAdapterCreator: vi.fn(() =>
+          vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
+        ),
         getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
       };
     });

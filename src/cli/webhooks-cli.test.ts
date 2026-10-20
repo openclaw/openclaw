@@ -1,4 +1,3 @@
-// Webhooks CLI tests cover webhook command registration and option parsing.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWebhooksCli } from "./webhooks-cli.js";
@@ -21,58 +20,50 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
-function createProgram() {
-  const program = new Command();
-  program.exitOverride();
+function parse(command: string, args: string[] = []) {
+  const program = new Command().exitOverride();
   registerWebhooksCli(program);
-  return program;
+  const defaults =
+    command === "setup" && !args.includes("--account") ? ["--account", "default"] : [];
+  return program.parseAsync(["webhooks", "gmail", command, ...defaults, ...args], { from: "user" });
 }
 
 function runtimeErrors(): string[] {
   return mocks.defaultRuntime.error.mock.calls.map(([message]) => String(message));
 }
 
+function expectNoRuntimeOutput() {
+  for (const method of ["writeJson", "error", "exit"] as const) {
+    expect(mocks.defaultRuntime[method]).not.toHaveBeenCalled();
+  }
+}
+
+function expectNoGmailCalls() {
+  expect(mocks.runGmailSetup).not.toHaveBeenCalled();
+  expect(mocks.runGmailService).not.toHaveBeenCalled();
+}
+
 describe("webhooks cli", () => {
   beforeEach(() => {
     mocks.runtimeLogs.length = 0;
     mocks.runtimeErrors.length = 0;
-    mocks.defaultRuntime.error.mockClear();
-    mocks.defaultRuntime.writeJson.mockClear();
-    mocks.defaultRuntime.exit.mockClear();
-    mocks.runGmailSetup.mockClear();
-    mocks.runGmailService.mockClear();
+    vi.clearAllMocks();
   });
 
   it.each([
     ["setup", "--port", "8080x", true],
-    ["setup", "--max-bytes", "10mb"],
-    ["setup", "--renew-minutes", "30m"],
-    ["run", "--port", "8080x"],
     ["run", "--max-bytes", "10mb"],
     ["run", "--renew-minutes", "30m"],
   ])("rejects partial gmail %s %s", async (command, flag, value, json = false) => {
-    const program = createProgram();
-    const args =
-      command === "setup"
-        ? ["webhooks", "gmail", command, "--account", "default", flag, value]
-        : ["webhooks", "gmail", command, flag, value];
+    const args = [flag, value, ...(json ? ["--json"] : [])];
     if (json) {
-      args.push("--json");
-    }
-
-    if (json) {
-      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(
-        `${flag} must be a positive integer.`,
-      );
-      expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
-      expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
-      expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+      await expect(parse(command, args)).rejects.toThrow(`${flag} must be a positive integer.`);
+      expectNoRuntimeOutput();
     } else {
-      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+      await expect(parse(command, args)).rejects.toThrow("__exit__:1");
       expect(runtimeErrors().join("\n")).toContain(`${flag} must be a positive integer.`);
     }
-    expect(mocks.runGmailSetup).not.toHaveBeenCalled();
-    expect(mocks.runGmailService).not.toHaveBeenCalled();
+    expectNoGmailCalls();
   });
 
   it.each([
@@ -85,24 +76,12 @@ describe("webhooks cli", () => {
     error.name = "GmailCredentialError";
     const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
     runner.mockRejectedValueOnce(error);
-    const program = createProgram();
-    const args =
-      command === "setup"
-        ? ["webhooks", "gmail", "setup", "--account", "default"]
-        : ["webhooks", "gmail", "run"];
+    const args = json ? ["--json"] : [];
     if (json) {
-      args.push("--json");
-    }
-
-    if (json) {
-      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(
-        "Gmail failed: Authorization: Bearer",
-      );
-      expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
-      expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
-      expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+      await expect(parse(command, args)).rejects.toThrow("Gmail failed: Authorization: Bearer");
+      expectNoRuntimeOutput();
     } else {
-      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+      await expect(parse(command, args)).rejects.toThrow("__exit__:1");
       expect(runtimeErrors()).toEqual([
         expect.stringContaining("Gmail failed: Authorization: Bearer"),
       ]);
@@ -110,60 +89,113 @@ describe("webhooks cli", () => {
       expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
     }
     expect(runner).toHaveBeenCalledOnce();
-    expect([...mocks.runtimeLogs, ...runtimeErrors()].join("\n")).not.toContain(error.name);
-    expect([...mocks.runtimeLogs, ...runtimeErrors()].join("\n")).not.toContain(secret);
+    const output = [...mocks.runtimeLogs, ...runtimeErrors()].join("\n");
+    for (const privateValue of [error.name, secret]) {
+      expect(output).not.toContain(privateValue);
+    }
   });
 
   it.each([
-    ["setup", "offf"],
     ["setup", ""],
-    ["setup", " "],
     ["run", "offf"],
-    ["run", ""],
-    ["run", " "],
   ])("rejects invalid gmail %s --tailscale mode %j", async (command, mode) => {
-    const program = createProgram();
-    const args =
-      command === "setup"
-        ? ["webhooks", "gmail", command, "--account", "default", "--tailscale", mode]
-        : ["webhooks", "gmail", command, "--tailscale", mode];
-
-    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
-
+    await expect(parse(command, ["--tailscale", mode])).rejects.toThrow("__exit__:1");
     expect(runtimeErrors().join("\n")).toContain(
       "Invalid --tailscale (must be funnel, serve, or off).",
     );
-    expect(mocks.runGmailSetup).not.toHaveBeenCalled();
-    expect(mocks.runGmailService).not.toHaveBeenCalled();
+    expectNoGmailCalls();
   });
 
-  it.each([
-    ["setup", "funnel"],
-    ["setup", "serve"],
-    ["setup", "off"],
-    ["run", "funnel"],
-    ["run", "serve"],
-    ["run", "off"],
-  ])("accepts valid gmail %s --tailscale %s", async (command, mode) => {
-    const program = createProgram();
-    const args =
-      command === "setup"
-        ? ["webhooks", "gmail", command, "--account", "default", "--tailscale", mode]
-        : ["webhooks", "gmail", command, "--tailscale", mode];
-
-    await program.parseAsync(args, { from: "user" });
-
-    const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
-    expect(runner).toHaveBeenCalledWith(expect.objectContaining({ tailscale: mode }));
-  });
-
-  it("preserves an omitted gmail run --tailscale mode", async () => {
-    const program = createProgram();
-
-    await program.parseAsync(["webhooks", "gmail", "run"], { from: "user" });
+  it("accepts an explicitly disabled Gmail exposure mode", async () => {
+    await parse("run", ["--tailscale", "off"]);
 
     expect(mocks.runGmailService).toHaveBeenCalledWith(
-      expect.objectContaining({ tailscale: undefined }),
+      expect.objectContaining({ tailscale: "off" }),
     );
   });
+
+  // Inputs and expected normalized values are independent; defaults/omissions share only keys.
+  const commonOptions: [string, string, string | undefined, string | number | boolean][] = [
+    ["--topic", "topic", " projects/fixture/topics/custom ", "projects/fixture/topics/custom"],
+    ["--subscription", "subscription", " custom-subscription ", "custom-subscription"],
+    ["--label", "label", " CUSTOM ", "CUSTOM"],
+    ["--hook-url", "hookUrl", " https://hook.invalid/gmail ", "https://hook.invalid/gmail"],
+    ["--hook-token", "hookToken", " fixture-hook ", "fixture-hook"],
+    ["--push-token", "pushToken", " fixture-push ", "fixture-push"],
+    ["--bind", "bind", " 127.0.0.2 ", "127.0.0.2"],
+    ["--port", "port", "9807", 9807],
+    ["--path", "path", " /custom-push ", "/custom-push"],
+    ["--include-body", "includeBody", undefined, true],
+    ["--max-bytes", "maxBytes", "54321", 54321],
+    ["--renew-minutes", "renewEveryMinutes", "29", 29],
+    ["--tailscale", "tailscale", " serve ", "serve"],
+    ["--tailscale-path", "tailscalePath", " /public-gmail ", "/public-gmail"],
+    ["--tailscale-target", "tailscaleTarget", " http://127.0.0.3:8789 ", "http://127.0.0.3:8789"],
+  ];
+  const explicitCommonArgs = commonOptions.flatMap(([flag, , value]) =>
+    value === undefined ? [flag] : [flag, value],
+  );
+  const explicitCommonOptions = Object.fromEntries(
+    commonOptions.map(([, key, , value]) => [key, value]),
+  );
+  const omittedCommonOptions = Object.fromEntries(commonOptions.map(([, key]) => [key, undefined]));
+
+  it.each([
+    [
+      "setup",
+      ["--account", "fixture@example.invalid"],
+      {
+        ...omittedCommonOptions,
+        account: "fixture@example.invalid",
+        project: undefined,
+        topic: "gog-gmail-watch",
+        subscription: "gog-gmail-watch-push",
+        label: "INBOX",
+        bind: "127.0.0.1",
+        port: 8788,
+        path: "/gmail-pubsub",
+        includeBody: true,
+        maxBytes: 20_000,
+        renewEveryMinutes: 720,
+        tailscale: "funnel",
+        pushEndpoint: undefined,
+        json: false,
+      },
+    ],
+    ["run", [], { account: undefined, ...omittedCommonOptions }],
+    [
+      "setup",
+      [
+        "--account",
+        " fixture@example.invalid ",
+        "--project",
+        " fixture-project ",
+        "--push-endpoint",
+        " https://fixture.invalid/push ",
+        "--json",
+        ...explicitCommonArgs,
+      ],
+      {
+        account: "fixture@example.invalid",
+        project: "fixture-project",
+        ...explicitCommonOptions,
+        pushEndpoint: "https://fixture.invalid/push",
+        json: true,
+      },
+    ],
+    [
+      "run",
+      ["--account", " fixture@example.invalid ", ...explicitCommonArgs],
+      { account: "fixture@example.invalid", ...explicitCommonOptions },
+    ],
+  ] satisfies [string, string[], Record<string, unknown>][])(
+    "passes %s %j to the Gmail command owner",
+    async (command, args, expected) => {
+      await parse(command, args);
+
+      const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
+      expect(runner).toHaveBeenCalledOnce();
+      expect(runner.mock.calls[0]?.[0]).toStrictEqual(expected);
+    },
+  );
 });

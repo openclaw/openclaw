@@ -102,13 +102,13 @@ describe("createGatewayKernel", () => {
           throw new Error("Expected the real Gateway kernel");
         }
         const activeKernel = kernel;
-        activeKernel.registerConnectionDependentSidecars([sidecar]);
+        activeKernel.registerConnectionDependentSidecars(sidecar);
         const closeTransport = vi.fn(() => releaseConnection());
         const releaseConnection = activeKernel.connectionWork.registerConnection(closeTransport);
         const dependencyStop = vi.fn(async () => {
           dependencyStopEntered.resolve();
         });
-        activeKernel.registerGatewayLifetimeSidecars([{ stop: dependencyStop }]);
+        activeKernel.registerGatewayLifetimeSidecars({ stop: dependencyStop });
         const terminalDispose = vi.spyOn(activeKernel.terminalSessions, "disposeAll");
         const closePrelude = vi.spyOn(activeKernel.watchNodeHttpRuntime, "close");
         const gatewayStop = vi.spyOn(activeKernel.shutdownRuntime, "runGlobalGatewayStopSafely");
@@ -124,7 +124,7 @@ describe("createGatewayKernel", () => {
             await releaseLateStop.promise;
           }),
         };
-        activeKernel.registerConnectionDependentSidecars([lateSidecar]);
+        activeKernel.registerConnectionDependentSidecars(lateSidecar);
         expect(closeTransport).not.toHaveBeenCalled();
         releaseStop.resolve();
         await lateStopEntered.promise;
@@ -139,7 +139,7 @@ describe("createGatewayKernel", () => {
         expect(gatewayStop).not.toHaveBeenCalled();
         expect(getActiveSecretsRuntimeConfigSnapshot()).toEqual(secrets);
         expect(await closing).toMatchObject({ errors: [{ cause: stopError }] });
-        expect(sidecar.stop).toHaveBeenCalledTimes(2);
+        expect(sidecar.stop).toHaveBeenCalledOnce();
         expect(lateSidecar.stop).toHaveBeenCalledOnce();
         // The public close retains its failure; only the retained kernel owner may retry.
         failStop = false;
@@ -147,7 +147,7 @@ describe("createGatewayKernel", () => {
         cleanupComplete = true;
         expect(closeTransport).toHaveBeenCalledOnce();
         expect(dependencyStop).toHaveBeenCalledOnce();
-        expect(sidecar.stop).toHaveBeenCalledTimes(3);
+        expect(sidecar.stop).toHaveBeenCalledTimes(2);
       } finally {
         // Join the original failure before changing its fault or releasing fixture state.
         releaseStop.resolve();

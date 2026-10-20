@@ -35,13 +35,13 @@ function registerWithPluginConfig(
     vi.fn<(harness: ReturnType<typeof createCopilotAgentHarness>) => void>();
   const entries = new Map<string, CopilotSessionBinding>();
   const sessionStore = {
-    register: vi.fn((key: string, value: CopilotSessionBinding) => {
+    register: vi.fn(async (key: string, value: CopilotSessionBinding) => {
       entries.set(key, value);
     }),
-    lookup: vi.fn((key: string) => entries.get(key)),
-    delete: vi.fn((key: string) => entries.delete(key)),
+    lookup: vi.fn(async (key: string) => entries.get(key)),
+    delete: vi.fn(async (key: string) => entries.delete(key)),
   };
-  const openSyncKeyedStore = vi.fn(() => sessionStore);
+  const openKeyedStore = vi.fn(() => sessionStore);
   plugin.register(
     createTestPluginApi({
       id: "copilot",
@@ -50,12 +50,12 @@ function registerWithPluginConfig(
       config: {},
       pluginConfig,
       registrationMode,
-      runtime: { state: { openSyncKeyedStore } } as never,
+      runtime: { state: { openKeyedStore } } as never,
       registerAgentHarness,
     }),
   );
   const harness = registerAgentHarness.mock.calls[0]?.[0];
-  return { registerAgentHarness, harness, openSyncKeyedStore, sessionStore, entries };
+  return { registerAgentHarness, harness, openKeyedStore, sessionStore, entries };
 }
 
 describe("copilot plugin", () => {
@@ -88,7 +88,7 @@ describe("copilot plugin", () => {
       const registerNodeInvokePolicy = vi.fn();
       const on = vi.fn();
       const onConversationBindingResolved = vi.fn();
-      const openSyncKeyedStore = vi.fn(() => {
+      const openKeyedStore = vi.fn(() => {
         throw new Error("registration must not open state");
       });
 
@@ -100,7 +100,7 @@ describe("copilot plugin", () => {
           config: {},
           pluginConfig: {},
           registrationMode,
-          runtime: { state: { openSyncKeyedStore } } as never,
+          runtime: { state: { openKeyedStore } } as never,
           registerAgentHarness,
           registerProvider,
           registerModelCatalogProvider,
@@ -127,7 +127,7 @@ describe("copilot plugin", () => {
       expect(registerNodeInvokePolicy).not.toHaveBeenCalled();
       expect(on).not.toHaveBeenCalled();
       expect(onConversationBindingResolved).not.toHaveBeenCalled();
-      expect(openSyncKeyedStore).not.toHaveBeenCalled();
+      expect(openKeyedStore).not.toHaveBeenCalled();
       expect(createCopilotClientPool).not.toHaveBeenCalled();
     },
   );
@@ -135,13 +135,13 @@ describe("copilot plugin", () => {
   it.each(["cli-metadata", "setup-only", "setup-runtime"] as const)(
     "skips harness and state registration in %s mode",
     (registrationMode) => {
-      const { registerAgentHarness, openSyncKeyedStore } = registerWithPluginConfig(
+      const { registerAgentHarness, openKeyedStore } = registerWithPluginConfig(
         {},
         registrationMode,
       );
 
       expect(registerAgentHarness).not.toHaveBeenCalled();
-      expect(openSyncKeyedStore).not.toHaveBeenCalled();
+      expect(openKeyedStore).not.toHaveBeenCalled();
       expect(createCopilotAgentHarness).not.toHaveBeenCalled();
       expect(createCopilotClientPool).not.toHaveBeenCalled();
     },
@@ -185,12 +185,12 @@ describe("copilot plugin", () => {
   });
 
   it("lazily opens and reuses the durable store when a discovered harness resets a stored session", async () => {
-    const { harness, openSyncKeyedStore, sessionStore, entries } = registerWithPluginConfig(
+    const { harness, openKeyedStore, sessionStore, entries } = registerWithPluginConfig(
       {},
       "discovery",
     );
     expect(harness).toBeDefined();
-    expect(openSyncKeyedStore).not.toHaveBeenCalled();
+    expect(openKeyedStore).not.toHaveBeenCalled();
     entries.set("stored-session", {
       schemaVersion: 2,
       sdkSessionId: "sdk-session",
@@ -202,7 +202,7 @@ describe("copilot plugin", () => {
 
     await harness!.reset!({ sessionId: "stored-session" });
 
-    expect(openSyncKeyedStore).toHaveBeenCalledWith({
+    expect(openKeyedStore).toHaveBeenCalledWith({
       namespace: "sdk-sessions",
       maxEntries: 5000,
       defaultTtlMs: 90 * 24 * 60 * 60 * 1000,
@@ -213,7 +213,7 @@ describe("copilot plugin", () => {
 
     await harness!.reset!({ sessionId: "stored-session" });
     await harness!.dispose?.();
-    expect(openSyncKeyedStore).toHaveBeenCalledTimes(1);
+    expect(openKeyedStore).toHaveBeenCalledTimes(1);
     expect(sessionStore.delete).toHaveBeenCalledTimes(1);
     expect(createCopilotClientPool).not.toHaveBeenCalled();
   });

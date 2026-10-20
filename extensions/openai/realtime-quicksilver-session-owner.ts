@@ -1,6 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
-import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 
 const OPENAI_QUICKSILVER_SESSION_OWNER_KEY = Symbol.for(
@@ -9,10 +8,10 @@ const OPENAI_QUICKSILVER_SESSION_OWNER_KEY = Symbol.for(
 
 type BrokerSession = ReturnType<typeof createOpenAIQuicksilverBrowserSessionBroker>;
 
-type BrokerParams = {
-  getConfig: () => OpenClawConfig | undefined;
-  logger: Pick<PluginLogger, "debug" | "warn">;
-};
+type BrokerParams = Pick<
+  Parameters<typeof createOpenAIQuicksilverBrowserSessionBroker>[0],
+  "getConfig" | "logger"
+>;
 
 type BrokerOwner = {
   retiring: Set<BrokerSession>;
@@ -28,9 +27,13 @@ function resolveBrokerOwner(): BrokerOwner {
   }));
 }
 
-export function acquireOpenAIQuicksilverBrowserSessionBroker(params: BrokerParams): BrokerSession {
+export function acquireOpenAIQuicksilverBrowserSessionBroker(
+  params: BrokerParams,
+  context: OpenAIRealtimeHost,
+): BrokerSession {
   const owner = resolveBrokerOwner();
   if (owner.current) {
+    // Re-registration refreshes live presentation/config, not the broker's native operation table.
     owner.current.params.getConfig = params.getConfig;
     owner.current.params.logger = params.logger;
     return owner.current.session;
@@ -44,7 +47,7 @@ export function acquireOpenAIQuicksilverBrowserSessionBroker(params: BrokerParam
       owner.retiring.delete(session);
     },
   };
-  const session = createOpenAIQuicksilverBrowserSessionBroker(mutableParams);
+  const session = createOpenAIQuicksilverBrowserSessionBroker(mutableParams, context);
   owner.current = { params: mutableParams, session };
   return session;
 }

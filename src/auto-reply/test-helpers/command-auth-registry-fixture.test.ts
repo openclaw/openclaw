@@ -13,7 +13,9 @@ import { installDiscordRegistryHooks } from "./command-auth-registry-fixture.js"
 describe.each(["cold", "populated"])("command-auth fixture with a %s predecessor", (mode) => {
   beforeEach(({ onTestFinished }) => {
     const ambient = captureActivePluginRegistrySnapshot();
-    onTestFinished(() => rollbackStagedPluginRegistry(ambient));
+    onTestFinished(() => {
+      rollbackStagedPluginRegistry(ambient);
+    });
     const registry = createEmptyPluginRegistry();
     const entries = registry.embeddingProviders;
     const entry = {

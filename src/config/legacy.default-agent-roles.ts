@@ -18,8 +18,8 @@ function isChannelWideBinding(binding: AgentRouteBinding, channelId: string): bo
     ) === channelId &&
     (typeof match.accountId === "string" ? match.accountId.trim() : undefined) === "*" &&
     match.peer === undefined &&
-    !normalizeOptionalString(typeof match.guildId === "string" ? match.guildId : undefined) &&
-    !normalizeOptionalString(typeof match.teamId === "string" ? match.teamId : undefined) &&
+    !normalizeOptionalString(match.guildId) &&
+    !normalizeOptionalString(match.teamId) &&
     (!Array.isArray(match.roles) || match.roles.length === 0)
   );
 }

@@ -1,9 +1,5 @@
 const QA_LAB_API_REQUEST_TIMEOUT_MS = 30_000;
 
-function createRequestSignal(): AbortSignal {
-  return AbortSignal.timeout(QA_LAB_API_REQUEST_TIMEOUT_MS);
-}
-
 async function readJsonResponse<T>(response: Response, label: string): Promise<T> {
   const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType && contentType !== "application/json" && !contentType.endsWith("+json")) {
@@ -20,18 +16,10 @@ async function readJsonResponse<T>(response: Response, label: string): Promise<T
   }
 }
 
-export async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { signal: createRequestSignal() });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return await readJsonResponse<T>(response, path);
-}
-
-export async function getJsonNoStore<T>(path: string): Promise<T> {
+export async function getJson<T>(path: string, cache?: RequestCache): Promise<T> {
   const response = await fetch(path, {
-    cache: "no-store",
-    signal: createRequestSignal(),
+    cache,
+    signal: AbortSignal.timeout(QA_LAB_API_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
@@ -44,7 +32,7 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-    signal: createRequestSignal(),
+    signal: AbortSignal.timeout(QA_LAB_API_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     const payload: { error?: string } = await readJsonResponse<{ error?: string }>(

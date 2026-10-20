@@ -1,21 +1,35 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, vi } from "vitest";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 
 const { close, configureSqliteConnectionPragmas } = vi.hoisted(() => ({
   close: vi.fn(),
   configureSqliteConnectionPragmas: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", () => ({
-  openNodeSqliteDatabase: vi.fn(() => ({ close })),
-}));
+// mock-isolation: Inject filesystem-policy rejection while retaining real schema admission.
+vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
+  return {
+    ...actual,
+    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
+      const db = actual.openNodeSqliteDatabase(...args);
+      const closeDatabase = db.close.bind(db);
+      vi.spyOn(db, "close").mockImplementation(() => {
+        closeDatabase();
+        close();
+      });
+      return db;
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/plugin-state-runtime", () => ({
   configureSqliteConnectionPragmas,
 }));
 
-import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { createWorkboardSqliteKernel } from "./test/database-config.js";
 
 describe("Workboard SQLite policy", () => {
   beforeEach(() => {
@@ -23,7 +37,8 @@ describe("Workboard SQLite policy", () => {
     configureSqliteConnectionPragmas.mockReset();
   });
 
-  it("closes a newly opened database when filesystem policy refuses it", () => {
+  // Injects rejection through the SQLite filesystem-policy and open boundary.
+  test("closes a newly opened database when filesystem policy refuses it", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-policy-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     configureSqliteConnectionPragmas.mockImplementation(() => {
@@ -31,7 +46,7 @@ describe("Workboard SQLite policy", () => {
     });
 
     try {
-      expect(() => createWorkboardSqliteStores({ dbPath })).toThrow(/SSHFS/);
+      expect(() => createWorkboardSqliteKernel(dbPath)).toThrow(/SSHFS/);
       expect(close).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

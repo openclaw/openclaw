@@ -2,19 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  normalizeSessionDeliveryState,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { applyDockerOpenAiProviderConfig, type OpenClawConfig } from "./docker-openai-seed.ts";
 
 async function main() {
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
   const configPath =
     process.env.OPENCLAW_CONFIG_PATH?.trim() || path.join(stateDir, "openclaw.json");
-  const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   const now = Date.now();
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -41,6 +34,17 @@ async function main() {
   );
 
   await fs.writeFile(configPath, JSON.stringify(seededConfig, null, 2), "utf-8");
+
+  const [
+    { normalizeSessionDeliveryState, upsertSessionEntry },
+    { appendSessionTranscriptMessagesByIdentity },
+    { resolveOpenClawAgentSqlitePath },
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/session-store-runtime"),
+    import("openclaw/plugin-sdk/session-transcript-runtime"),
+    import("openclaw/plugin-sdk/sqlite-runtime"),
+  ]);
+  const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
 
   await upsertSessionEntry({
     agentId: "main",

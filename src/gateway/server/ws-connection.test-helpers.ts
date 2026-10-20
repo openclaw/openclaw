@@ -2,30 +2,19 @@
  * Shared WebSocket connection fixtures for gateway server tests.
  */
 import { EventEmitter } from "node:events";
+import type { Socket } from "node:net";
 import { expect, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
 
-export type GatewayWsTestSocket = EventEmitter & {
-  _socket: {
-    remoteAddress: string;
-    remotePort: number;
-    localAddress: string;
-    localPort: number;
-  };
-  readyState: number;
-  bufferedAmount: number;
-  send: ReturnType<typeof vi.fn>;
-  ping?: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-  terminate: ReturnType<typeof vi.fn>;
-};
+export type GatewayWsTestSocket = ReturnType<typeof createGatewayWsTestSocket>;
 
 export function createGatewayWsTestLogger() {
   return {
@@ -47,6 +36,7 @@ export function createResolvedGatewayTokenAuth(token: string): ResolvedGatewayAu
 export function createGatewayWsTestRequestContext(
   overrides: {
     nodeRegistry?: { unregister: ReturnType<typeof vi.fn> };
+    publishPresence?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   return {
@@ -54,8 +44,7 @@ export function createGatewayWsTestRequestContext(
     nodeRegistry: overrides.nodeRegistry ?? { unregister: vi.fn() },
     nodeUnsubscribeAll: vi.fn(),
     broadcast: vi.fn(),
-    incrementPresenceVersion: vi.fn(() => 1),
-    getHealthVersion: vi.fn(() => 1),
+    publishPresence: overrides.publishPresence ?? vi.fn(),
   };
 }
 
@@ -65,7 +54,7 @@ export function createGatewayWsTestSocket(
     onSend?: (data: string) => void;
     ping?: boolean;
   } = {},
-): GatewayWsTestSocket {
+) {
   const socket = Object.assign(new EventEmitter(), {
     _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     _socket: {
@@ -76,10 +65,16 @@ export function createGatewayWsTestSocket(
     },
     readyState: 1,
     bufferedAmount: 0,
-    send: vi.fn((data: string, cb?: (err?: Error) => void) => {
-      params.onSend?.(data);
-      cb?.();
-    }),
+    send: vi.fn(
+      (
+        data: string | Buffer,
+        options?: { binary: false } | ((err?: Error) => void),
+        cb?: (err?: Error) => void,
+      ) => {
+        params.onSend?.(String(data));
+        (typeof options === "function" ? options : cb)?.();
+      },
+    ),
     ...(params.ping ? { ping: vi.fn() } : {}),
     close: vi.fn((code?: number, reason?: string) => {
       if (params.closeEmits) {
@@ -93,11 +88,12 @@ export function createGatewayWsTestSocket(
 
 export function attachGatewayWsForTest(params: {
   attach: typeof attachGatewayWsConnectionHandler;
-  clients?: Set<unknown>;
+  clients?: GatewayClientRegistry;
   headers?: Record<string, string>;
   host?: string;
   options?: Partial<AttachGatewayWsConnectionParams>;
   prepareIngressAttribution?: typeof prepareGatewayIngressAttribution;
+  requestSocket?: Socket;
   socket?: GatewayWsTestSocket;
   trustedProxies?: string[];
 }) {
@@ -108,23 +104,39 @@ export function attachGatewayWsForTest(params: {
     }),
   } as unknown as WebSocketServer;
   const socket = params.socket ?? createGatewayWsTestSocket();
+  const transportEvents = new EventEmitter();
   const upgradeReq = {
     headers: { host: params.host ?? "127.0.0.1:19001", ...params.headers },
-    socket: {
-      remoteAddress: socket["_socket"].remoteAddress,
-      localAddress: socket["_socket"].localAddress,
-      localPort: socket["_socket"].localPort,
-    },
+    socket:
+      params.requestSocket ??
+      Object.assign(transportEvents, {
+        write: vi.fn(() => true),
+        cork: vi.fn(),
+        uncork: vi.fn(),
+        remoteAddress: socket["_socket"].remoteAddress,
+        localAddress: socket["_socket"].localAddress,
+        localPort: socket["_socket"].localPort,
+        timeout: 0,
+        timeoutTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+        setTimeout(ms: number) {
+          clearTimeout(this.timeoutTimer);
+          this.timeout = ms;
+          this.timeoutTimer = ms
+            ? setTimeout(() => transportEvents.emit("timeout"), ms)
+            : undefined;
+          return this;
+        },
+      }),
   };
   (params.prepareIngressAttribution ?? prepareGatewayIngressAttribution)({
     req: upgradeReq as never,
     trustedProxies: params.trustedProxies,
   });
-  const clients = params.clients ?? new Set<unknown>();
+  const clients = params.clients ?? new GatewayClientRegistry();
 
   params.attach({
     wss,
-    clients: clients as never,
+    clients,
     connectionWork: new GatewayConnectionWork(),
     bootId: "ws-test-boot",
     preauthConnectionBudget: { release: vi.fn() } as never,

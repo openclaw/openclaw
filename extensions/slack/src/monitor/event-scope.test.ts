@@ -1,17 +1,17 @@
 import { WebClient } from "@slack/web-api";
 import { describe, expect, it } from "vitest";
-import { resolveSlackListenerEventScope } from "./event-scope.js";
+import { resolveSlackMonitorEventScope } from "./event-scope.js";
 
 const identity = { kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" } as const;
 const client = new WebClient("listener-token");
 
-describe("resolveSlackListenerEventScope", () => {
+describe("resolveSlackMonitorEventScope", () => {
   it.each(["T111", "workspace/Mixed Case"])(
     "preserves authorized workspace %s in the same org",
     (teamId) => {
       const listenerClient = new WebClient(`listener-token-${teamId.toLowerCase()}`);
-      const result = resolveSlackListenerEventScope({
-        identity,
+      const result = resolveSlackMonitorEventScope({
+        ctx: { installationIdentity: identity, app: {} },
         body: { api_app_id: "A123" },
         context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId },
         client: listenerClient,
@@ -27,8 +27,8 @@ describe("resolveSlackListenerEventScope", () => {
   );
 
   it("accepts a Bolt-authenticated payload that does not carry api_app_id", () => {
-    const result = resolveSlackListenerEventScope({
-      identity,
+    const result = resolveSlackMonitorEventScope({
+      ctx: { installationIdentity: identity, app: {} },
       body: {},
       context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
       client,
@@ -46,12 +46,7 @@ describe("resolveSlackListenerEventScope", () => {
       retryConfig: { retries: 0 },
       fetch: (_input, init) => {
         encodedRequestBody = typeof init?.body === "string" ? init.body : "";
-        return Promise.resolve(
-          new Response(JSON.stringify({ ok: true, ts: "123.456", channel: "C123" }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-        );
+        return Promise.resolve(Response.json({ ok: true, ts: "123.456", channel: "C123" }));
       },
     });
     const methodPayload = { channel: "C123", text: "hello" };
@@ -75,8 +70,8 @@ describe("resolveSlackListenerEventScope", () => {
       teamId: "T111",
     };
     let droppedReason: string | undefined;
-    const result = resolveSlackListenerEventScope({
-      identity,
+    const result = resolveSlackMonitorEventScope({
+      ctx: { installationIdentity: identity, app: {} },
       body: { api_app_id: "A123" },
       client,
       ...override,
@@ -99,8 +94,8 @@ describe("resolveSlackListenerEventScope", () => {
     ]) {
       let droppedReason: string | undefined;
       expect(
-        resolveSlackListenerEventScope({
-          identity: workspaceIdentity,
+        resolveSlackMonitorEventScope({
+          ctx: { installationIdentity: workspaceIdentity, app: {} },
           body: { api_app_id: "A123" },
           context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
           client,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 
 const inventoryMocks = vi.hoisted(() => {
   const runtimeModel = {
@@ -11,7 +12,8 @@ const inventoryMocks = vi.hoisted(() => {
   };
   return {
     runtimeModel,
-    resolveRuntimeModelContext: vi.fn(async () => ({
+    release: vi.fn(async () => {}),
+    resolveRuntimeModelContext: vi.fn(async (_params: unknown) => ({
       modelApi: runtimeModel.api,
       runtimeModel,
     })),
@@ -45,17 +47,23 @@ const inventoryMocks = vi.hoisted(() => {
 
 vi.mock("../../agents/tools-effective-inventory.js", () => ({
   resolveEffectiveToolInventory: inventoryMocks.resolveInventory,
-  resolveEffectiveToolInventoryRuntimeModelContextAsync: inventoryMocks.resolveRuntimeModelContext,
+  acquireEffectiveToolInventoryRuntimeModelContext: async (params: unknown) => {
+    const context = await inventoryMocks.resolveRuntimeModelContext(params);
+    return {
+      run: <T>(project: (value: typeof context) => T): T => project(context),
+      [Symbol.asyncDispose]: inventoryMocks.release,
+    };
+  },
 }));
 
 describe("resolveBareResetBootstrapFileAccess runtime model ownership", () => {
   beforeEach(() => {
+    inventoryMocks.release.mockClear();
     inventoryMocks.resolveInventory.mockClear();
     inventoryMocks.resolveRuntimeModelContext.mockClear();
   });
 
-  it("resolves runtime model context once and passes explicit facts to sync inventory", async () => {
-    const { resolveBareResetBootstrapFileAccess } = await import("./session-reset-prompt.js");
+  it("resolves runtime model context once and passes explicit facts to inventory", async () => {
     const cfg = {} as OpenClawConfig;
     const params = {
       cfg,
@@ -85,5 +93,16 @@ describe("resolveBareResetBootstrapFileAccess runtime model ownership", () => {
     });
     expect(Object.hasOwn(inventoryParams ?? {}, "modelApi")).toBe(true);
     expect(Object.hasOwn(inventoryParams ?? {}, "runtimeModel")).toBe(true);
+    expect(inventoryMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it("releases the model context when bootstrap inventory projection fails", async () => {
+    const failure = new Error("inventory projection failed");
+    inventoryMocks.resolveInventory.mockImplementationOnce(() => {
+      expect(inventoryMocks.release).not.toHaveBeenCalled();
+      throw failure;
+    });
+    await expect(resolveBareResetBootstrapFileAccess({ cfg: {} })).rejects.toBe(failure);
+    expect(inventoryMocks.release).toHaveBeenCalledOnce();
   });
 });

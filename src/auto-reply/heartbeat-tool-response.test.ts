@@ -1,8 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   createHeartbeatToolResponsePayload,
-  resolveHeartbeatScratchProposalFromReplyResult,
+  selectHeartbeatToolResponse,
 } from "./heartbeat-tool-response.js";
+import { getReplyPayloadMetadata } from "./reply-payload.js";
 
 describe("heartbeat scratch proposal resolution", () => {
   it("lets a later heartbeat response clear an earlier scratch proposal", () => {
@@ -18,6 +20,11 @@ describe("heartbeat scratch proposal resolution", () => {
       summary: "corrected",
     });
 
-    expect(resolveHeartbeatScratchProposalFromReplyResult([first, corrected])).toBeUndefined();
+    const selected = expectDefined(
+      selectHeartbeatToolResponse([first, corrected]),
+      "expected the corrected heartbeat response",
+    );
+    expect(selected.response.summary).toBe("corrected");
+    expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBeUndefined();
   });
 });

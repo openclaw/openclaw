@@ -5,39 +5,24 @@
  * config files, so callers store credentials only for the current process.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserControlAuth } from "./control-auth.js";
 
-type BridgeAuth = {
-  token?: string;
-  password?: string;
-};
+const authByPort = new Map<number, BrowserControlAuth>();
 
-const authByPort = new Map<number, BridgeAuth>();
-
-/** Store auth material for a loopback bridge port in the current process. */
-export function setBridgeAuthForPort(port: number, auth: BridgeAuth): void {
+export function setBridgeAuthForPort(port: number, auth: BrowserControlAuth): void {
   if (!Number.isFinite(port) || port <= 0) {
     return;
   }
-  const token = normalizeOptionalString(auth.token) ?? "";
-  const password = normalizeOptionalString(auth.password) ?? "";
   authByPort.set(port, {
-    token: token || undefined,
-    password: password || undefined,
+    token: normalizeOptionalString(auth.token),
+    password: normalizeOptionalString(auth.password),
   });
 }
 
-/** Read auth material for a loopback bridge port. */
-export function getBridgeAuthForPort(port: number): BridgeAuth | undefined {
-  if (!Number.isFinite(port) || port <= 0) {
-    return undefined;
-  }
+export function getBridgeAuthForPort(port: number): BrowserControlAuth | undefined {
   return authByPort.get(port);
 }
 
-/** Drop auth material when a bridge server closes or changes port. */
 export function deleteBridgeAuthForPort(port: number): void {
-  if (!Number.isFinite(port) || port <= 0) {
-    return;
-  }
   authByPort.delete(port);
 }

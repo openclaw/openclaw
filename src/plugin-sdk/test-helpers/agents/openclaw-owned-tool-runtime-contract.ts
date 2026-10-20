@@ -1,4 +1,3 @@
-// OpenClaw-owned tool runtime contract helpers mock agent tool runtimes in SDK tests.
 import { vi } from "vitest";
 import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
 import {
@@ -9,17 +8,20 @@ import {
   recordNotifyOnExitRemoval,
 } from "../../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../../agents/bash-process-registry.test-helpers.js";
+import { createExecTool } from "../../../agents/bash-tools.exec-run.js";
+import { createRunExit } from "../../../agents/bash-tools.exec-runtime.test-support.js";
 import { createProcessTool } from "../../../agents/bash-tools.process.js";
+import { resolveCurrentAttemptAssistant } from "../../../agents/embedded-agent-runner/run/attempt-terminal-evidence.js";
+import { createEmbeddedRunContextRecoveryState } from "../../../agents/embedded-agent-runner/run/context-recovery-state.js";
 import { buildEmbeddedRunPayloads } from "../../../agents/embedded-agent-runner/run/payloads.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "../../../agents/embedded-agent-runner/run/terminal-outcome.js";
+import { prepareEmbeddedRunTerminal } from "../../../agents/embedded-agent-runner/run/terminal-preparation.js";
 import { mergeAttemptToolMediaPayloads } from "../../../agents/embedded-agent-runner/run/tool-media-payloads.js";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../../../agents/embedded-agent-runner/run/types.js";
+import type { EmbeddedRunAttemptResult } from "../../../agents/embedded-agent-runner/run/types.js";
+import { createUsageAccumulator } from "../../../agents/embedded-agent-runner/usage-accumulator.js";
 import { createAdmittedHostCapabilityTestFixture } from "../../../agents/harness/host-capability.test-support.js";
 import type { AgentToolResult } from "../../../agents/runtime/index.js";
 import type { ToolErrorSummary } from "../../../agents/tool-error-summary.js";
-import { createToolTerminalObserver } from "../../../agents/tool-terminal-outcome.js";
 import { setToolTerminalPresentation } from "../../../agents/tool-terminal-presentation.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../../agents/tools/tts-tool-result-provenance.js";
@@ -41,7 +43,12 @@ import {
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { getProcessSupervisor } from "../../../process/supervisor/index.js";
+import type { RunExit, SpawnInput } from "../../../process/supervisor/types.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import * as ttsRuntime from "../../../tts/tts.js";
+
+export { createToolTerminalObserver as createContractToolTerminalObserver } from "../../../agents/tool-terminal-outcome.js";
 
 /** Real process poll producer and notification queue, with a synthetic completed process. */
 export function createProcessPollDeliveryContract(sessionId: string) {
@@ -68,88 +75,151 @@ export function createProcessPollDeliveryContract(sessionId: string) {
   };
 }
 
+/** Real exec producer; only OS execution is controlled for native adapter proof. */
+export function createRequiredExecRuntimeContract() {
+  const started = createDeferredCore();
+  const exit = createDeferredCore<RunExit>();
+  let input: SpawnInput | undefined;
+  let settled = false;
+  const finish = (reason: RunExit["reason"] = "exit") => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    input?.onStdout?.("REQUIRED_NATIVE_RESULT");
+    exit.resolve(
+      createRunExit({
+        reason,
+        exitCode: reason === "exit" ? 0 : null,
+        stdout: "REQUIRED_NATIVE_RESULT",
+      }),
+    );
+  };
+  const spawn = vi.spyOn(getProcessSupervisor(), "spawn").mockImplementation(async (next) => {
+    input = next;
+    return {
+      runId: next.runId ?? "required-native-command",
+      startedAtMs: Date.now(),
+      activity: {
+        get resultSettled() {
+          return settled;
+        },
+        lastOutputAtMs: Date.now(),
+      },
+      wait: () => {
+        started.resolve();
+        return exit.promise;
+      },
+      cancel: () => finish("manual-cancel"),
+    };
+  });
+  return {
+    tool: createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      bypassHostApprovalFloors: true,
+      allowBackground: true,
+      notifyOnExit: false,
+    }),
+    started: started.promise,
+    finish,
+    spawn,
+    close: () => {
+      finish();
+      spawn.mockRestore();
+    },
+  };
+}
+
 export function textToolResult(
   text: string,
   details: Record<string, unknown> = {},
 ): AgentToolResult<unknown> {
-  return {
-    content: [{ type: "text", text }],
-    details,
-  };
+  return { content: [{ type: "text", text }], details };
 }
 
-export function mediaToolResult(
-  text: string,
-  mediaUrl: string,
-  audioAsVoice = false,
-): AgentToolResult<unknown> {
-  return textToolResult(text, {
-    media: {
-      mediaUrl,
-      ...(audioAsVoice ? { audioAsVoice } : {}),
-    },
+type ContractToolParams = {
+  name: string;
+  result: AgentToolResult<unknown>;
+};
+
+function createContractTool(
+  params: ContractToolParams,
+  label = `${params.name} contract tool`,
+): AnyAgentTool {
+  return {
+    name: params.name,
+    label,
+    description: label,
+    parameters: {},
+    execute: vi.fn(async () => params.result),
+  } as AnyAgentTool;
+}
+
+export function createTerminalPresentationContractTool(
+  params: ContractToolParams & {
+    format: (params: unknown, result: AgentToolResult<unknown>) => string | undefined;
+  },
+): AnyAgentTool {
+  return setToolTerminalPresentation(createContractTool(params), (toolParams, result) => {
+    const text = params.format(toolParams, result);
+    return text ? { text } : undefined;
   });
 }
 
-export function createTerminalPresentationContractTool(params: {
-  name: string;
-  result: AgentToolResult<unknown>;
-  format: (params: unknown, result: AgentToolResult<unknown>) => string | undefined;
-}): AnyAgentTool {
-  return setToolTerminalPresentation(
-    {
-      name: params.name,
-      label: `${params.name} contract tool`,
-      description: `${params.name} contract tool`,
-      parameters: {},
-      execute: vi.fn(async () => params.result),
-    } as AnyAgentTool,
-    (toolParams, result) => {
-      const text = params.format(toolParams, result);
-      return text ? { text } : undefined;
-    },
-  );
-}
-
-export function createOwnerBackedContractTool(params: {
-  pluginId: string;
-  name: string;
-  result: AgentToolResult<unknown>;
-}): AnyAgentTool {
-  const tool = {
-    name: params.name,
-    label: `${params.name} owner contract tool`,
-    description: `${params.name} owner contract tool`,
-    parameters: { type: "object", properties: {}, additionalProperties: true },
-    execute: vi.fn(async () => params.result),
-  } as AnyAgentTool;
+export function createOwnerBackedContractTool(
+  params: ContractToolParams & { pluginId: string; trustedLocalMedia?: boolean },
+): AnyAgentTool {
+  const tool = createContractTool(params, `${params.name} owner contract tool`);
+  tool.parameters = { type: "object", properties: {}, additionalProperties: true };
   setPluginToolMeta(tool, {
     pluginId: params.pluginId,
     optional: false,
     sideEffecting: true,
+    ...(params.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
   });
   return tool;
 }
 
-export function createContractToolTerminalObserver(
-  runId: string,
-): NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]> {
-  return createToolTerminalObserver(runId);
-}
-
-export function buildContractReplyPayloads(params: {
-  assistantText: string;
-  lastToolError?: ToolErrorSummary;
-}) {
+export function buildContractReplyPayloads(
+  params:
+    | { assistantText: string; lastToolError?: ToolErrorSummary }
+    | Pick<Parameters<typeof prepareEmbeddedRunTerminal>[0], "attempt" | "runParams">,
+) {
+  if ("attempt" in params) {
+    const { attempt, runParams } = params;
+    const provider = runParams.provider ?? "codex";
+    const model = runParams.model ?? "runtime-contract";
+    // Use the terminal owner so canonical assistant/segment selection and tool
+    // media merging stay identical to ordinary final delivery.
+    return (
+      prepareEmbeddedRunTerminal({
+        attempt,
+        runParams,
+        currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
+        provider,
+        model,
+        activeErrorContext: { provider, model },
+        authProfileStore: { version: 1, profiles: {} },
+        sessionIdUsed: attempt.sessionIdUsed,
+        outerContextTokenMeta: {},
+        usageAccumulator: createUsageAccumulator(),
+        contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+        resolvedToolResultFormat: "plain",
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: resolveCurrentAttemptAssistant(attempt),
+          abortSignal: runParams.abortSignal,
+        }),
+      }).payloadsWithToolMedia ?? []
+    );
+  }
   return buildEmbeddedRunPayloads({
     assistantTexts: [params.assistantText],
     lastAssistant: undefined,
     lastToolError: params.lastToolError,
-    isCronTrigger: false,
     sessionKey: "session:runtime-contract",
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    toolResultFormat: "plain",
   });
 }
 
@@ -159,10 +229,7 @@ export function installOpenClawOwnedToolHooks(params?: {
 }) {
   const beforeToolCall = vi.fn(async () => {
     if (params?.blockReason) {
-      return {
-        block: true,
-        blockReason: params.blockReason,
-      };
+      return { block: true, blockReason: params.blockReason };
     }
     return params?.adjustedParams ? { params: params.adjustedParams } : {};
   });
@@ -176,10 +243,7 @@ export function installOpenClawOwnedToolHooks(params?: {
   return { beforeToolCall, afterToolCall };
 }
 
-/**
- * Installs only the Codex app-server `tool_result` middleware fixture.
- * Pair with `installOpenClawOwnedToolHooks()` when a test asserts before/after hook behavior.
- */
+/** Installs result middleware only; use installOpenClawOwnedToolHooks for before/after hooks. */
 export function installCodexToolResultMiddleware(
   handler: (event: AgentToolResultMiddlewareEvent) => AgentToolResult<unknown>,
 ) {
@@ -209,8 +273,9 @@ export function resetOpenClawOwnedToolHooks(): void {
 export async function createHostTtsRuntimeContract(
   attempt: Parameters<typeof createAdmittedHostCapabilityTestFixture>[0],
   audioPath: string,
+  options: { nativeModelPolicySupport?: "exact" } = {},
 ) {
-  const host = await createAdmittedHostCapabilityTestFixture(attempt);
+  const host = await createAdmittedHostCapabilityTestFixture(attempt, options);
   const synthesis = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue({
     success: true,
     audioPath,

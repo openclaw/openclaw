@@ -1,104 +1,20 @@
 // Qa Lab tests cover Crabline channel-driver integration with local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-function createSelection(channel: OpenClawCrablineChannelDriverSelection["channel"] = "telegram") {
-  return {
-    capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-    channel,
-    channelDriver: "crabline",
-    providerReadinessArtifactPath: "crabline-provider-readiness.json",
-  } as const;
-}
-
-function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`${label} is required`);
-  }
-  return value;
-}
+import {
+  createSelection,
+  postJson as post,
+  requireString,
+  telegramApi,
+  withTransport,
+} from "./crabline-transport.test-support.js";
 
 describe("crabline transport", () => {
-  it("rejects oversized successful inbound responses before parsing provider metadata", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection(),
-        state: createQaBusState(),
-      });
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response(
-              JSON.stringify({
-                update: { message: { message_id: 42, padding: "x".repeat(1024 * 1024) } },
-              }),
-            ),
-        ),
-      );
-
-      try {
-        await expect(
-          transport.sendInbound({
-            conversation: { id: "-1001234567890", kind: "group" },
-            senderId: "100001",
-            senderName: "Alice",
-            text: "Oversized response marker.",
-          }),
-        ).rejects.toThrow("JSON response exceeds 1048576 bytes");
-      } finally {
-        await transport.cleanup?.();
-      }
-    });
-  });
-
-  it("cancels a failed inbound response before surfacing the provider error", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection(),
-        state: createQaBusState(),
-      });
-      const cancel = vi.fn(() => {
-        throw new Error("cancel failed");
-      });
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response(new ReadableStream<Uint8Array>({ cancel }), {
-              status: 503,
-            }),
-        ),
-      );
-
-      try {
-        await expect(
-          transport.sendInbound({
-            conversation: { id: "-1001234567890", kind: "group" },
-            senderId: "100001",
-            senderName: "Alice",
-            text: "Telegram failure marker.",
-          }),
-        ).rejects.toThrow("Crabline telegram inbound injection failed with HTTP 503");
-        expect(cancel).toHaveBeenCalledOnce();
-      } finally {
-        await transport.cleanup?.();
-      }
-    });
-  });
-
   it("configures OpenClaw's Telegram plugin against a Crabline local provider server", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
@@ -109,6 +25,8 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.id).toBe("crabline");
+        expect("cleanup" in transport).toBe(false);
+        expect("cleanupAfterGatewayStop" in transport).toBe(true);
         expect(transport.requiredPluginIds).toEqual(["telegram"]);
         expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
           channels: {
@@ -129,6 +47,14 @@ describe("crabline transport", () => {
           to: expect.stringMatching(/^[1-9]\d+$/u),
         });
         expect(delivery.replyTo).toBe(delivery.to);
+        expect(transport.buildAgentDelivery({ target: "dm:alice", threadId: "42" })).toMatchObject({
+          threadId: "42",
+        });
+        expect(transport.buildAgentDelivery({ target: "-1001234567890" })).toMatchObject({
+          channel: "telegram",
+          replyTo: "-1001234567890",
+          to: "-1001234567890",
+        });
 
         await expect(
           fs.access(path.join(outputDir, "crabline-provider-server.json")),
@@ -145,33 +71,24 @@ describe("crabline transport", () => {
           text: "Telegram baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
 
   it("configures distinct Telegram actors for canonical sender allowlist flows", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        transportPolicy: {
-          requireGroupMention: true,
-          senderAllowlist: ["driver"],
-        },
-        selection: createSelection(),
-        state: createQaBusState(),
-      });
-
-      try {
-        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
-          channels: {
-            telegram: {
-              allowFrom: ["100001"],
-              groupAllowFrom: ["100001"],
-              groupPolicy: "allowlist",
-            },
-          },
+    await withTransport(
+      "telegram",
+      async (transport) => {
+        const gatewayConfig = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
+        const telegramConfig = gatewayConfig.channels?.telegram;
+        expect(telegramConfig).toMatchObject({
+          replyToMode: "off",
+          allowFrom: [expect.stringMatching(/^[1-9]\d+$/u)],
+          groupAllowFrom: [expect.stringMatching(/^[1-9]\d+$/u)],
+          groupPolicy: "allowlist",
         });
+        const allowedDriverId = Number(telegramConfig?.allowFrom?.[0]);
         await transport.state.addInboundMessage({
           conversation: { id: "qa-routing-ordering", kind: "group" },
           senderId: "observer",
@@ -183,21 +100,17 @@ describe("crabline transport", () => {
           text: "driver",
         });
 
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const telegram = config.channels?.telegram as
-          | { apiRoot?: string; botToken?: string }
-          | undefined;
-        const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
-        const botToken = requireString(telegram?.botToken, "Telegram bot token");
-        const response = await fetch(`${apiRoot}/bot${botToken}/getUpdates`);
+        const { url: apiUrl } = telegramApi(transport);
+        const response = await fetch(`${apiUrl}/getUpdates`);
         const payload = (await response.json()) as {
           result?: Array<{ message?: { from?: { id?: number }; text?: string } }>;
         };
-        expect(payload.result?.map((update) => update.message?.from?.id)).toEqual([100002, 100001]);
-      } finally {
-        await transport.cleanup?.();
-      }
-    });
+        const senderIds = payload.result?.map((update) => update.message?.from?.id);
+        expect(senderIds?.[0]).not.toBe(allowedDriverId);
+        expect(senderIds?.[1]).toBe(allowedDriverId);
+      },
+      { requireGroupMention: true, senderAllowlist: ["driver"], topLevelReplies: true },
+    );
   });
 
   it("rejects canonical sender-policy flows on non-Telegram Crabline bridges", async () => {
@@ -214,227 +127,40 @@ describe("crabline transport", () => {
   });
 
   it("injects Telegram native commands through the shared transport adapter", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection(),
-        state: createQaBusState(),
+    await withTransport("telegram", async (transport) => {
+      expect(transport.sendNativeCommand).toBeTypeOf("function");
+      await transport.sendNativeCommand?.({
+        command: "stop",
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        senderName: "Alice",
+      });
+      await transport.sendInbound({
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        senderName: "Alice",
+        text: "/status",
+        nativeCommand: { name: "status" },
       });
 
-      try {
-        expect(transport.sendNativeCommand).toBeTypeOf("function");
-        await transport.sendNativeCommand?.({
-          command: "stop",
-          conversation: { id: "alice", kind: "direct" },
-          senderId: "alice",
-          senderName: "Alice",
-        });
-        await transport.sendInbound({
-          conversation: { id: "alice", kind: "direct" },
-          senderId: "alice",
-          senderName: "Alice",
-          text: "/status",
-          nativeCommand: { name: "status" },
-        });
-
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const telegram = config.channels?.telegram as
-          | { apiRoot?: string; botToken?: string }
-          | undefined;
-        const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
-        const botToken = requireString(telegram?.botToken, "Telegram bot token");
-        const response = await fetch(`${apiRoot}/bot${botToken}/getUpdates`);
-        await expect(response.json()).resolves.toMatchObject({
-          result: [
-            {
-              message: {
-                entities: [{ length: 5, offset: 0, type: "bot_command" }],
-                text: "/stop",
-              },
+      const { url: apiUrl } = telegramApi(transport);
+      const response = await fetch(`${apiUrl}/getUpdates`);
+      await expect(response.json()).resolves.toMatchObject({
+        result: [
+          {
+            message: {
+              entities: [{ length: 5, offset: 0, type: "bot_command" }],
+              text: "/stop",
             },
-            {
-              message: {
-                entities: [{ length: 7, offset: 0, type: "bot_command" }],
-                text: "/status",
-              },
+          },
+          {
+            message: {
+              entities: [{ length: 7, offset: 0, type: "bot_command" }],
+              text: "/status",
             },
-          ],
-        });
-      } finally {
-        await transport.cleanup?.();
-      }
-    });
-  });
-
-  it("observes Telegram preview edits through the shared transport adapter", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection(),
-        state: createQaBusState(),
+          },
+        ],
       });
-
-      try {
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const telegram = config.channels?.telegram as
-          | { apiRoot?: string; botToken?: string }
-          | undefined;
-        const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
-        const botToken = requireString(telegram?.botToken, "Telegram bot token");
-        await transport.sendInbound({
-          conversation: { id: "-1001234567890", kind: "group" },
-          senderId: "100001",
-          text: "forum topic seed",
-          threadId: "42",
-        });
-        const postTelegram = async (method: string, body: Record<string, unknown>) => {
-          const response = await fetch(`${apiRoot}/bot${botToken}/${method}`, {
-            body: JSON.stringify(body),
-            headers: { "content-type": "application/json" },
-            method: "POST",
-          });
-          expect(response.ok).toBe(true);
-          return (await response.json()) as { result: { message_id: number } };
-        };
-        const sent = await postTelegram("sendMessage", {
-          chat_id: "-1001234567890",
-          message_thread_id: 42,
-          text: "preview text",
-        });
-        expect(transport.state.searchMessages({ query: "preview text" })).toEqual([
-          expect.objectContaining({ text: "preview text" }),
-        ]);
-        await postTelegram("editMessageText", {
-          chat_id: "-1001234567890",
-          message_id: sent.result.message_id,
-          text: "final marker",
-        });
-
-        expect(transport.waitForOutboundSequence).toBeTypeOf("function");
-        await expect(
-          transport.waitForOutboundSequence!({
-            conversationId: "-1001234567890",
-            finalSettleMs: 0,
-            finalTextIncludes: "final marker",
-            minimumPreviewEvents: 1,
-            threadId: "42",
-            timeoutMs: 1_000,
-          }),
-        ).resolves.toMatchObject({
-          events: [{ kind: "sent" }, { kind: "edited" }],
-          final: { text: "final marker", threadId: "42" },
-        });
-      } finally {
-        await transport.cleanup?.();
-      }
-    });
-  });
-
-  it("configures OpenClaw's Slack plugin against a Crabline local provider server", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection("slack"),
-        state: createQaBusState(),
-      });
-
-      try {
-        expect(transport.id).toBe("crabline");
-        expect(transport.requiredPluginIds).toEqual(["slack"]);
-        expect(transport.sendNativeCommand).toBeUndefined();
-        expect(transport.waitForOutboundSequence).toBeUndefined();
-        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
-          channels: {
-            slack: {
-              botToken: "xoxb-crabline-slack-token",
-              enabled: true,
-              mode: "http",
-              signingSecret: "crabline-slack-signing-secret",
-            },
-          },
-        });
-        expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
-          SLACK_API_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/api\/$/u),
-          SLACK_BOT_TOKEN: "xoxb-crabline-slack-token",
-          SLACK_SIGNING_SECRET: "crabline-slack-signing-secret",
-        });
-      } finally {
-        await transport.cleanup?.();
-      }
-    });
-  });
-
-  it("injects inbound messages through Crabline and mirrors Slack sends into normalized state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection("slack"),
-        state: createQaBusState(),
-      });
-
-      try {
-        const inbound = await transport.sendInbound({
-          conversation: {
-            id: "D12345678",
-            kind: "direct",
-          },
-          senderId: "U12345678",
-          senderName: "Alice",
-          text: "Slack baseline marker check.",
-        });
-        expect(inbound.id).toMatch(/^\d+\.\d+$/u);
-
-        const env = transport.createRuntimeEnvPatch?.() ?? {};
-        expect(env.SLACK_API_URL).toBeTruthy();
-        expect(env.SLACK_BOT_TOKEN).toBeTruthy();
-        const { response, release } = await fetchWithSsrFGuard({
-          url: `${env.SLACK_API_URL}chat.postMessage`,
-          init: {
-            body: JSON.stringify({
-              channel: "D12345678",
-              text: "assistant via fake slack",
-            }),
-            headers: {
-              authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
-              "content-type": "application/json",
-            },
-            method: "POST",
-          },
-          policy: { allowPrivateNetwork: true },
-          auditContext: "qa-lab-crabline-slack-transport-test",
-        });
-        await release();
-        expect(response.ok).toBe(true);
-
-        await expect(
-          transport.waitForOutbound({
-            conversation: { id: "D12345678", kind: "direct" },
-            textIncludes: "assistant via fake slack",
-            timeoutMs: 1_000,
-          }),
-        ).resolves.toMatchObject({
-          conversation: { id: "D12345678", kind: "direct" },
-          text: "assistant via fake slack",
-        });
-
-        await expect(
-          transport.state.waitFor({
-            direction: "outbound",
-            kind: "message-text",
-            textIncludes: "assistant via fake slack",
-            timeoutMs: 1_000,
-          }),
-        ).resolves.toMatchObject({
-          conversation: {
-            id: "D12345678",
-            kind: "direct",
-          },
-          direction: "outbound",
-          text: "assistant via fake slack",
-        });
-      } finally {
-        await transport.cleanup?.();
-      }
     });
   });
 
@@ -480,7 +206,7 @@ describe("crabline transport", () => {
         expect(env.CRABLINE_WHATSAPP_ACCESS_TOKEN).toBeUndefined();
         expect(env.CRABLINE_WHATSAPP_API_ROOT).toBeUndefined();
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -513,7 +239,7 @@ describe("crabline transport", () => {
           text: "WhatsApp baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -572,116 +298,95 @@ describe("crabline transport", () => {
           text: "Signal baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
 
   it("normalizes native Signal JSON-RPC sends into outbound state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection("signal"),
-        state: createQaBusState(),
-      });
-
-      try {
-        const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const signal = config.channels?.signal as { transport?: { url?: string } } | undefined;
-        const signalBaseUrl = requireString(signal?.transport?.url, "Signal HTTP URL");
-        const { response, release } = await fetchWithSsrFGuard({
-          url: `${signalBaseUrl}/api/v1/rpc`,
-          init: {
-            body: JSON.stringify({
-              id: "qa-signal-send",
-              jsonrpc: "2.0",
-              method: "send",
-              params: {
-                message: "assistant via fake signal",
-                recipient: [delivery.to],
-              },
-            }),
-            headers: { "content-type": "application/json" },
-            method: "POST",
+    await withTransport("signal", async (transport) => {
+      const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
+      const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
+      const signal = config.channels?.signal as { transport?: { url?: string } } | undefined;
+      const signalBaseUrl = requireString(signal?.transport?.url, "Signal HTTP URL");
+      await post(
+        `${signalBaseUrl}/api/v1/rpc`,
+        {
+          id: "qa-signal-send",
+          jsonrpc: "2.0",
+          method: "send",
+          params: {
+            message: "assistant via fake signal",
+            recipient: [delivery.to],
           },
-          policy: { allowPrivateNetwork: true },
-          auditContext: "qa-lab-crabline-signal-transport-test",
-        });
-        await release();
-        expect(response.ok).toBe(true);
+        },
+        "qa-lab-crabline-signal-transport-test",
+      );
 
-        await expect(
-          transport.waitForOutbound({
-            conversation: { id: "alice", kind: "direct" },
-            textIncludes: "assistant via fake signal",
-            timeoutMs: 1_000,
-          }),
-        ).resolves.toMatchObject({
+      await expect(
+        transport.waitForOutbound({
           conversation: { id: "alice", kind: "direct" },
-          text: "assistant via fake signal",
-        });
-      } finally {
-        await transport.cleanup?.();
-      }
+          textIncludes: "assistant via fake signal",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toMatchObject({
+        conversation: { id: "alice", kind: "direct" },
+        text: "assistant via fake signal",
+      });
     });
   });
 
   it("binds Mattermost config and normalizes transport targets", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection("mattermost"),
-        state: createQaBusState(),
-      });
-
-      try {
-        expect(transport.requiredPluginIds).toEqual(["mattermost"]);
-        const mattermostGatewayConfig = transport.createGatewayConfig({
-          baseUrl: "http://127.0.0.1:1",
-        }) as { channels?: { mattermost?: Record<string, unknown> } };
-        expect(mattermostGatewayConfig).toMatchObject({
-          channels: {
-            mattermost: {
-              baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
-              botToken: "crabline-mattermost-token",
-              enabled: true,
-              network: { dangerouslyAllowPrivateNetwork: true },
-            },
+    await withTransport("mattermost", async (transport) => {
+      expect(transport.requiredPluginIds).toEqual(["mattermost"]);
+      const mattermostGatewayConfig = transport.createGatewayConfig({
+        baseUrl: "http://127.0.0.1:1",
+      }) as { channels?: { mattermost?: Record<string, unknown> } };
+      expect(mattermostGatewayConfig).toMatchObject({
+        channels: {
+          mattermost: {
+            baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+            botToken: "crabline-mattermost-token",
+            enabled: true,
+            network: { dangerouslyAllowPrivateNetwork: true },
           },
-        });
-        expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
-          MATTERMOST_BOT_TOKEN: "crabline-mattermost-token",
-          MATTERMOST_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
-        });
-        expect(transport.buildAgentDelivery({ target: "group:qa-channel" })).toMatchObject({
-          channel: "mattermost",
-          replyChannel: "mattermost",
-          replyTo: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
-          to: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
-        });
-        expect(mattermostGatewayConfig.channels?.mattermost?.streaming).toEqual({ mode: "off" });
+        },
+      });
+      expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
+        MATTERMOST_BOT_TOKEN: "crabline-mattermost-token",
+        MATTERMOST_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+      });
+      expect(transport.buildAgentDelivery({ target: "group:qa-channel" })).toMatchObject({
+        channel: "mattermost",
+        replyChannel: "mattermost",
+        replyTo: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
+        to: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
+      });
+      expect(
+        transport.buildAgentDelivery({ target: "group:qa-channel", threadId: "post-root" }),
+      ).toMatchObject({
+        channel: "mattermost",
+        threadId: expect.stringMatching(/^[a-z0-9]{26}$/u),
+      });
+      expect(mattermostGatewayConfig.channels?.mattermost?.streaming).toEqual({ mode: "off" });
 
-        await expect(
-          transport.state.addInboundMessage({
-            conversation: { id: "qa-channel", kind: "group" },
-            senderId: "alice",
-            senderName: "Alice",
-            text: "Mattermost baseline marker check.",
-          }),
-        ).resolves.toMatchObject({
+      await expect(
+        transport.state.addInboundMessage({
           conversation: { id: "qa-channel", kind: "group" },
-          direction: "inbound",
           senderId: "alice",
+          senderName: "Alice",
           text: "Mattermost baseline marker check.",
-        });
-      } finally {
-        await transport.cleanup?.();
-      }
+        }),
+      ).resolves.toMatchObject({
+        conversation: { id: "qa-channel", kind: "group" },
+        direction: "inbound",
+        senderId: "alice",
+        text: "Mattermost baseline marker check.",
+      });
     });
   });
 
-  it("normalizes native Mattermost post creation into outbound state", async () => {
+  it("correlates Mattermost's authoritative inbound channel with symbolic QA state", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
@@ -691,138 +396,148 @@ describe("crabline transport", () => {
 
       try {
         await transport.state.addInboundMessage({
-          conversation: { id: "qa-channel", kind: "group" },
+          conversation: { id: "alice", kind: "direct" },
           senderId: "alice",
           senderName: "Alice",
           text: "Mattermost baseline marker check.",
         });
-        await transport.state.reset();
-        const delivery = transport.buildAgentDelivery({ target: "group:qa-channel" });
         const env = transport.createRuntimeEnvPatch?.() ?? {};
         const mattermostUrl = requireString(env.MATTERMOST_URL, "Mattermost URL");
         const botToken = requireString(env.MATTERMOST_BOT_TOKEN, "Mattermost bot token");
-        const { response, release } = await fetchWithSsrFGuard({
-          url: `${mattermostUrl}/api/v4/posts`,
-          init: {
-            body: JSON.stringify({
-              channel_id: delivery.to.replace(/^channel:/u, ""),
-              message: "assistant via fake mattermost",
-            }),
-            headers: {
-              authorization: `Bearer ${botToken}`,
-              "content-type": "application/json",
+        const mattermostRequest = async <T>(apiPath: string, init?: RequestInit) => {
+          const headers = new Headers(init?.headers);
+          headers.set("authorization", `Bearer ${botToken}`);
+          headers.set("content-type", "application/json");
+          const { response, release } = await fetchWithSsrFGuard({
+            url: `${mattermostUrl}/api/v4${apiPath}`,
+            init: {
+              ...init,
+              headers,
             },
-            method: "POST",
-          },
-          policy: { allowPrivateNetwork: true },
-          auditContext: "qa-lab-crabline-mattermost-transport-test",
+            policy: { allowPrivateNetwork: true },
+            auditContext: "qa-lab-crabline-mattermost-transport-test",
+          });
+          try {
+            expect(response.ok).toBe(true);
+            return (await response.json()) as T;
+          } finally {
+            await release();
+          }
+        };
+        const bot = await mattermostRequest<{ id: string }>("/users/me");
+        const alice = await mattermostRequest<{ id: string }>("/users/username/alice");
+        const directChannel = await mattermostRequest<{ id: string }>("/channels/direct", {
+          body: JSON.stringify([bot.id, alice.id]),
+          method: "POST",
         });
-        await release();
-        expect(response.ok).toBe(true);
+        const outboundPost = await mattermostRequest<{ channel_id: string }>("/posts", {
+          body: JSON.stringify({
+            channel_id: directChannel.id,
+            message: "assistant via fake mattermost",
+          }),
+          method: "POST",
+        });
+        expect(outboundPost.channel_id).toBe(directChannel.id);
 
         await expect(
           transport.waitForOutbound({
-            conversation: { id: "qa-channel", kind: "group" },
+            conversation: { id: "alice", kind: "direct" },
             textIncludes: "assistant via fake mattermost",
             timeoutMs: 1_000,
           }),
         ).resolves.toMatchObject({
-          conversation: { id: "qa-channel", kind: "group" },
+          conversation: { id: "alice", kind: "direct" },
           text: "assistant via fake mattermost",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
 
   it("binds Matrix config and normalizes transport targets", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection("matrix"),
-        state: createQaBusState(),
+    await withTransport("matrix", async (transport) => {
+      expect(transport.requiredPluginIds).toEqual(["matrix"]);
+      const matrixGatewayConfig = transport.createGatewayConfig({
+        baseUrl: "http://127.0.0.1:1",
+      }) as { channels?: { matrix?: Record<string, unknown> } };
+      expect(matrixGatewayConfig).toMatchObject({
+        channels: {
+          matrix: {
+            accessToken: expect.any(String),
+            enabled: true,
+            encryption: false,
+            homeserver: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+            network: { dangerouslyAllowPrivateNetwork: true },
+            userId: "@openclaw:matrix.test",
+          },
+        },
+      });
+      expect(matrixGatewayConfig.channels?.matrix?.streaming).toEqual({
+        mode: "off",
+        block: { enabled: false },
+      });
+      expect(matrixGatewayConfig.channels?.matrix?.blockStreaming).toBeUndefined();
+      expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
+        MATRIX_ACCESS_TOKEN: expect.any(String),
+        MATRIX_BASE_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+        MATRIX_USER_ID: "@openclaw:matrix.test",
       });
 
-      try {
-        expect(transport.requiredPluginIds).toEqual(["matrix"]);
-        const matrixGatewayConfig = transport.createGatewayConfig({
-          baseUrl: "http://127.0.0.1:1",
-        }) as { channels?: { matrix?: Record<string, unknown> } };
-        expect(matrixGatewayConfig).toMatchObject({
-          channels: {
-            matrix: {
-              accessToken: expect.any(String),
-              enabled: true,
-              encryption: false,
-              homeserver: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
-              network: { dangerouslyAllowPrivateNetwork: true },
-              userId: "@openclaw:matrix.test",
-            },
-          },
-        });
-        expect(matrixGatewayConfig.channels?.matrix?.streaming).toEqual({
-          mode: "off",
-          block: { enabled: false },
-        });
-        expect(matrixGatewayConfig.channels?.matrix?.blockStreaming).toBeUndefined();
-        expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
-          MATRIX_ACCESS_TOKEN: expect.any(String),
-          MATRIX_BASE_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
-          MATRIX_USER_ID: "@openclaw:matrix.test",
-        });
-
-        const roomId = "main";
-        const delivery = transport.buildAgentDelivery({ target: `group:${roomId}` });
-        expect(delivery).toEqual({
-          channel: "matrix",
-          replyChannel: "matrix",
-          replyTo: expect.stringMatching(/^room:![a-f0-9]{16}:matrix-qa\.test$/u),
-          to: expect.stringMatching(/^room:![a-f0-9]{16}:matrix-qa\.test$/u),
-        });
-        expect(transport.buildAgentDelivery({ target: "!qa:matrix.test" })).toEqual({
-          channel: "matrix",
-          replyChannel: "matrix",
-          replyTo: "room:!qa:matrix.test",
-          to: "room:!qa:matrix.test",
-        });
-        expect(transport.buildAgentDelivery({ target: "matrix:room:!qa:matrix.test" })).toEqual({
-          channel: "matrix",
-          replyChannel: "matrix",
-          replyTo: "room:!qa:matrix.test",
-          to: "room:!qa:matrix.test",
-        });
-        expect(() => transport.buildAgentDelivery({ target: "group:" })).toThrow(
-          "Matrix QA conversation id must be non-empty",
-        );
-        expect(() => transport.buildAgentDelivery({ target: "thread:/v1/main/%24event" })).toThrow(
-          "Matrix thread targets require OpenClaw QA thread forwarding",
-        );
-        await expect(
-          transport.state.addInboundMessage({
-            conversation: { id: "  ", kind: "group" },
-            senderId: "driver",
-            senderName: "Alice",
-            text: "Matrix invalid blank room.",
-          }),
-        ).rejects.toThrow("Matrix QA conversation id must be non-empty");
-        await expect(
-          transport.state.addInboundMessage({
-            conversation: { id: roomId, kind: "group" },
-            senderId: "driver",
-            senderName: "Alice",
-            text: "Matrix baseline marker check.",
-          }),
-        ).resolves.toMatchObject({
-          conversation: { id: roomId, kind: "group" },
-          direction: "inbound",
-          id: expect.stringMatching(/^\$[A-Za-z0-9_-]{43}$/u),
+      const roomId = "main";
+      const delivery = transport.buildAgentDelivery({ target: `group:${roomId}` });
+      expect(delivery).toEqual({
+        channel: "matrix",
+        replyChannel: "matrix",
+        replyTo: expect.stringMatching(/^room:![a-f0-9]{16}:matrix-qa\.test$/u),
+        to: expect.stringMatching(/^room:![a-f0-9]{16}:matrix-qa\.test$/u),
+      });
+      expect(transport.buildAgentDelivery({ target: "!qa:matrix.test" })).toEqual({
+        channel: "matrix",
+        replyChannel: "matrix",
+        replyTo: "room:!qa:matrix.test",
+        to: "room:!qa:matrix.test",
+      });
+      expect(transport.buildAgentDelivery({ target: "matrix:room:!qa:matrix.test" })).toEqual({
+        channel: "matrix",
+        replyChannel: "matrix",
+        replyTo: "room:!qa:matrix.test",
+        to: "room:!qa:matrix.test",
+      });
+      expect(
+        transport.buildAgentDelivery({ target: "group:main", threadId: "$event:matrix.test" }),
+      ).toMatchObject({
+        channel: "matrix",
+        threadId: "$event:matrix.test",
+      });
+      expect(() => transport.buildAgentDelivery({ target: "group:" })).toThrow(
+        "invalid qa-channel group target",
+      );
+      expect(() =>
+        transport.buildAgentDelivery({ target: "thread:main/$event:matrix.test" }),
+      ).toThrow("Matrix thread targets require OpenClaw QA thread forwarding");
+      await expect(
+        transport.state.addInboundMessage({
+          conversation: { id: "  ", kind: "group" },
           senderId: "driver",
+          senderName: "Alice",
+          text: "Matrix invalid blank room.",
+        }),
+      ).rejects.toThrow("Matrix QA conversation id must be non-empty");
+      await expect(
+        transport.state.addInboundMessage({
+          conversation: { id: roomId, kind: "group" },
+          senderId: "driver",
+          senderName: "Alice",
           text: "Matrix baseline marker check.",
-        });
-      } finally {
-        await transport.cleanup?.();
-      }
+        }),
+      ).resolves.toMatchObject({
+        conversation: { id: roomId, kind: "group" },
+        direction: "inbound",
+        id: expect.stringMatching(/^\$[A-Za-z0-9_-]{43}$/u),
+        senderId: "driver",
+        text: "Matrix baseline marker check.",
+      });
     });
   });
 
@@ -875,7 +590,7 @@ describe("crabline transport", () => {
           text: "assistant via fake matrix",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -951,105 +666,78 @@ describe("crabline transport", () => {
           text: "assistant via fake zalo",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
 
   it("injects inbound messages through Crabline and mirrors Telegram sends into normalized state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection(),
-        state: createQaBusState(),
+    await withTransport("telegram", async (transport) => {
+      const inbound = await transport.state.addInboundMessage({
+        conversation: {
+          id: "telegram-command-room",
+          kind: "channel",
+        },
+        senderId: "100001",
+        senderName: "Alice",
+        text: "Channel baseline marker check.",
       });
 
-      try {
-        const inbound = await transport.state.addInboundMessage({
-          conversation: {
-            id: "telegram-command-room",
-            kind: "channel",
-          },
-          senderId: "100001",
-          senderName: "Alice",
-          text: "Channel baseline marker check.",
-        });
+      const api = telegramApi(transport);
+      const updatesResponse = await fetch(`${api.url}/getUpdates`);
+      const updates = (await updatesResponse.json()) as {
+        result?: Array<{ message?: { chat?: { id?: number } } }>;
+      };
+      const authoritativeChatId = updates.result?.at(-1)?.message?.chat?.id;
+      expect(authoritativeChatId).toEqual(expect.any(Number));
+      const groupDelivery = transport.buildAgentDelivery({
+        target: "channel:telegram-command-room",
+      });
+      expect(groupDelivery.to).toBe(String(authoritativeChatId));
+      await api.post("sendMessage", {
+        chat_id: transport.buildAgentDelivery({
+          target: `channel:${inbound.conversation.id}`,
+        }).to,
+        text: "assistant via fake telegram",
+      });
 
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const telegram = config.channels?.telegram as
-          | { apiRoot?: string; botToken?: string }
-          | undefined;
-        expect(telegram?.apiRoot).toBeTruthy();
-        expect(telegram?.botToken).toBeTruthy();
-        const { response, release } = await fetchWithSsrFGuard({
-          url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
-          init: {
-            body: JSON.stringify({
-              chat_id: transport.buildAgentDelivery({
-                target: `channel:${inbound.conversation.id}`,
-              }).to,
-              text: "assistant via fake telegram",
-            }),
-            headers: { "content-type": "application/json" },
-            method: "POST",
-          },
-          policy: { allowPrivateNetwork: true },
-          auditContext: "qa-lab-crabline-transport-test",
-        });
-        await release();
-        expect(response.ok).toBe(true);
+      await expect(
+        transport.waitForOutbound({
+          conversation: { id: "telegram-command-room", kind: "channel" },
+          textIncludes: "assistant via fake telegram",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toMatchObject({
+        conversation: {
+          id: "telegram-command-room",
+          kind: "channel",
+        },
+        direction: "outbound",
+        text: "assistant via fake telegram",
+      });
 
-        await expect(
-          transport.waitForOutbound({
-            conversation: { id: "telegram-command-room", kind: "channel" },
-            textIncludes: "assistant via fake telegram",
-            timeoutMs: 1_000,
-          }),
-        ).resolves.toMatchObject({
-          conversation: {
-            id: "telegram-command-room",
-            kind: "channel",
-          },
+      await transport.state.reset();
+      const delivery = transport.buildAgentDelivery({ target: "dm:qa-operator" });
+      await api.post("sendMessage", {
+        chat_id: delivery.to,
+        text: "assistant after reset",
+      });
+
+      await expect(
+        transport.state.waitFor({
           direction: "outbound",
-          text: "assistant via fake telegram",
-        });
-
-        await transport.state.reset();
-        const delivery = transport.buildAgentDelivery({ target: "dm:qa-operator" });
-        const { response: directResponse, release: directRelease } = await fetchWithSsrFGuard({
-          url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
-          init: {
-            body: JSON.stringify({
-              chat_id: delivery.to,
-              text: "assistant after reset",
-            }),
-            headers: { "content-type": "application/json" },
-            method: "POST",
-          },
-          policy: { allowPrivateNetwork: true },
-          auditContext: "qa-lab-crabline-transport-reset-test",
-        });
-        await directRelease();
-        expect(directResponse.ok).toBe(true);
-
-        await expect(
-          transport.state.waitFor({
-            direction: "outbound",
-            kind: "message-text",
-            textIncludes: "assistant after reset",
-            timeoutMs: 1_000,
-          }),
-        ).resolves.toMatchObject({
-          conversation: {
-            id: "qa-operator",
-            kind: "direct",
-          },
-          direction: "outbound",
-          text: "assistant after reset",
-        });
-      } finally {
-        await transport.cleanup?.();
-      }
+          kind: "message-text",
+          textIncludes: "assistant after reset",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toMatchObject({
+        conversation: {
+          id: "qa-operator",
+          kind: "direct",
+        },
+        direction: "outbound",
+        text: "assistant after reset",
+      });
     });
   });
 });

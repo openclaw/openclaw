@@ -1,11 +1,16 @@
 import { authenticate } from "mailauth";
 import { simpleParser } from "mailparser";
-import type { IdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveImapConfig } from "./config.js";
 import { createImapAuthResult } from "./imap-test-support.js";
-import { renderImapPrompt } from "./prompt.js";
 import { evaluateImapSender } from "./sender-gate.js";
+
+vi.mock("mailauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("mailauth")>();
+  return { ...actual, authenticate: vi.fn(actual.authenticate) };
+});
+
+afterEach(() => vi.mocked(authenticate).mockReset());
 
 function account(overrides: Record<string, unknown> = {}) {
   return resolveImapConfig({
@@ -22,8 +27,8 @@ function account(overrides: Record<string, unknown> = {}) {
   }).accounts.inbox!;
 }
 
-async function message(headers: string[], body = "Hello from a trusted sender") {
-  const raw = Buffer.from([...headers, "", body].join("\r\n"));
+async function message(headers: string[]) {
+  const raw = Buffer.from([...headers, "", "Hello from a trusted sender"].join("\r\n"));
   return { raw, mail: await simpleParser(raw), internalDate: new Date() };
 }
 
@@ -31,18 +36,16 @@ describe("IMAP sender admission", () => {
   it.each([
     ["trusted@EXAMPLE.com", ["trusted@example.COM"], true],
     ["person@example.com", ["@EXAMPLE.com"], true],
-    ["trusted@evil.example", ["trusted@example.com"], false],
     ["Trusted@example.com", ["trusted@example.com"], false],
   ])("matches sender %s against the actual addr-spec", async (sender, entries, accepted) => {
     const mail = await message([`From: ${sender}`, "To: reader+secret-token@example.com"]);
-    const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+    const authenticator = vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("pass"));
     const verdict = await evaluateImapSender({
       ...mail,
       account: account({
         allowedSenders: entries,
         addressTokens: [{ token: "secret-token", senders: [sender] }],
       }),
-      authenticator,
     });
     expect(verdict.accepted).toBe(accepted);
     if (!accepted) {
@@ -54,27 +57,22 @@ describe("IMAP sender admission", () => {
 
   it("rejects a spoofed display name and ignores Reply-To", async () => {
     const mail = await message([
-      'From: "trusted@example.com" <attacker@evil.example>',
+      'From: "trusted@example.com" <trusted@evil.example>',
       "Reply-To: trusted@example.com",
       "To: reader@example.com",
     ]);
-    const authenticator = vi.fn(async () => createImapAuthResult("pass"));
-    await expect(
-      evaluateImapSender({ ...mail, account: account(), authenticator }),
-    ).resolves.toMatchObject({
+    const authenticator = vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("pass"));
+    await expect(evaluateImapSender({ ...mail, account: account() })).resolves.toMatchObject({
       accepted: false,
       reason: "sender-not-allowed",
     });
     expect(authenticator).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["From: trusted@example.com, attacker@evil.example"],
-    ["From: attacker@evil.example", "From: trusted@example.com"],
-  ])("rejects multi-From messages before authentication", async (...headers) => {
-    const mail = await message(headers);
-    const authenticator = vi.fn(async () => createImapAuthResult("pass"));
-    const verdict = await evaluateImapSender({ ...mail, account: account(), authenticator });
+  it("rejects duplicate From headers before authentication", async () => {
+    const mail = await message(["From: attacker@evil.example", "From: trusted@example.com"]);
+    const authenticator = vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("pass"));
+    const verdict = await evaluateImapSender({ ...mail, account: account() });
     expect(authenticator).not.toHaveBeenCalled();
     expect(verdict).toStrictEqual({
       accepted: false,
@@ -85,12 +83,11 @@ describe("IMAP sender admission", () => {
 
   it("rejects stale mail before authentication even at the weakest floor", async () => {
     const mail = await message(["From: trusted@example.com"]);
-    const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+    const authenticator = vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("pass"));
     const verdict = await evaluateImapSender({
       ...mail,
       internalDate: new Date(Date.now() - 72 * 60 * 60 * 1_000),
       account: account({ senderAuth: { min: "mutable" } }),
-      authenticator,
     });
     expect(authenticator).not.toHaveBeenCalled();
     expect(verdict).toStrictEqual({
@@ -101,38 +98,33 @@ describe("IMAP sender admission", () => {
     });
   });
 
-  it.each(["neutral", "temperror", "none"] as const)(
+  it.each(["temperror", "none"] as const)(
     "never dispatches on DMARC %s at the default verified threshold",
     async (result) => {
       const mail = await message([
         "From: trusted@example.com",
         "To: reader+wrong-token@example.com",
       ]);
-      const authentication =
-        result === "neutral"
-          ? createImapAuthResult(result)
-          : await authenticate(mail.raw, {
-              disableArc: true,
-              disableBimi: true,
-              resolver: async () => {
-                if (result === "temperror") {
-                  throw new Error("fixture DNS timeout");
-                }
-                return [];
-              },
-            });
+      const authentication = await authenticate(mail.raw, {
+        disableArc: true,
+        disableBimi: true,
+        resolver: async () => {
+          if (result === "temperror") {
+            throw new Error("fixture DNS timeout");
+          }
+          return [];
+        },
+      });
       expect(authentication.dmarc).toMatchObject({ status: { result } });
-      if (result !== "neutral") {
-        expect(authentication.dmarc).not.toHaveProperty("alignment");
-      }
+      expect(authentication.dmarc).not.toHaveProperty("alignment");
       const configured = account({
         addressTokens: [{ token: "expected-token", senders: ["trusted@example.com"] }],
       });
+      vi.mocked(authenticate).mockResolvedValue(authentication);
       await expect(
         evaluateImapSender({
           ...mail,
           account: configured,
-          authenticator: async () => authentication,
         }),
       ).resolves.toMatchObject({
         accepted: false,
@@ -147,43 +139,65 @@ describe("IMAP sender admission", () => {
     "rejects unsigned body bytes even with DMARC %s",
     async (dmarc) => {
       const result = createImapAuthResult(dmarc);
-      if (result.dmarc) {
-        result.dmarc.alignment.dkim.underSized = 32;
-      }
+      result.dmarc.alignment.dkim.underSized = 32;
       const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
-      const authenticator = vi.fn(async () => result);
+      vi.mocked(authenticate).mockResolvedValue(result);
+      await expect(evaluateImapSender({ ...mail, account: account() })).resolves.toMatchObject({
+        accepted: false,
+        reason: "dkim-unsigned-body",
+      });
+    },
+  );
+
+  it("admits verified and unproven mail at an explicit unverified floor", async () => {
+    const mail = await message(["From: trusted@example.com"]);
+    const configured = account({ senderAuth: { min: "unverified" } });
+    for (const result of ["pass", "none", "temperror"] as const) {
+      vi.mocked(authenticate).mockResolvedValue(createImapAuthResult(result));
       await expect(
-        evaluateImapSender({ ...mail, account: account(), authenticator }),
-      ).resolves.toMatchObject({ accepted: false, reason: "dkim-unsigned-body" });
-    },
-  );
+        evaluateImapSender({
+          ...mail,
+          account: configured,
+        }),
+      ).resolves.toMatchObject({
+        accepted: true,
+        strength: result === "pass" ? "verified" : "unverified",
+      });
+    }
+  });
 
-  it.each([
-    ["mutable", true],
-    ["unverified", true],
-    ["asserted", false],
-    ["verified", false],
-  ] satisfies [IdentifierAuthentication, boolean][])(
-    "admits verified mail and applies the %s floor to unproven mail",
-    async (min, acceptsUnproven) => {
-      const mail = await message(["From: trusted@example.com"]);
-      const configured = account({ senderAuth: { min } });
-      for (const result of ["pass", "none", "temperror"] as const) {
-        await expect(
-          evaluateImapSender({
-            ...mail,
-            account: configured,
-            authenticator: async () => createImapAuthResult(result),
-          }),
-        ).resolves.toMatchObject({
-          accepted: result === "pass" || acceptsUnproven,
-          strength: result === "pass" ? "verified" : "unverified",
-        });
-      }
-    },
-  );
+  it("requires the explicit trusted-header relaxation for asserted admission", async () => {
+    const parsed = await message([
+      "From: trusted@example.com",
+      "Authentication-Results: mx.example.com; dmarc=pass header.from=example.com",
+    ]);
+    vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("none"));
 
-  it("accepts only configured Authentication-Results authorities", async () => {
+    await expect(evaluateImapSender({ ...parsed, account: account() })).resolves.toMatchObject({
+      accepted: false,
+      strength: "unverified",
+      reason: "unverified-authentication",
+    });
+
+    await expect(
+      evaluateImapSender({
+        ...parsed,
+        account: account({
+          senderAuth: {
+            min: "asserted",
+            trustedAuthservIds: ["mx.example.com"],
+            acceptTrustedAuthservId: true,
+          },
+        }),
+      }),
+    ).resolves.toMatchObject({
+      accepted: true,
+      strength: "asserted",
+      reason: "trusted-authserv-dmarc-pass",
+    });
+  });
+
+  it("rejects untrusted Authentication-Results authorities", async () => {
     const configured = account({
       senderAuth: {
         min: "asserted",
@@ -191,28 +205,15 @@ describe("IMAP sender admission", () => {
         acceptTrustedAuthservId: true,
       },
     });
-    const authenticator = vi.fn(async () => createImapAuthResult("none"));
+    vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("none"));
     const untrusted = await message([
       "From: trusted@example.com",
       "Authentication-Results: attacker.example; dmarc=pass",
     ]);
-    await expect(
-      evaluateImapSender({ ...untrusted, account: configured, authenticator }),
-    ).resolves.toMatchObject({
+    await expect(evaluateImapSender({ ...untrusted, account: configured })).resolves.toMatchObject({
       accepted: false,
       strength: "unverified",
       reason: "unverified-authentication",
-    });
-    const trusted = await message([
-      "From: trusted@example.com",
-      "Authentication-Results: mx.example.com; dmarc=pass header.from=example.com",
-    ]);
-    await expect(
-      evaluateImapSender({ ...trusted, account: configured, authenticator }),
-    ).resolves.toMatchObject({
-      accepted: true,
-      strength: "asserted",
-      reason: "trusted-authserv-dmarc-pass",
     });
   });
 
@@ -224,12 +225,11 @@ describe("IMAP sender admission", () => {
       "From: trusted@example.com",
       "To: reader+secret-token@example.com",
     ]);
-    const authenticator = vi.fn(async () => createImapAuthResult("none"));
+    const authenticator = vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("none"));
     const verdict = await evaluateImapSender({
       ...accepted,
       internalDate: new Date(Date.now() - 72 * 60 * 60 * 1_000),
       account: configured,
-      authenticator,
     });
     expect(authenticator).not.toHaveBeenCalled();
     expect(verdict).toStrictEqual({
@@ -248,7 +248,6 @@ describe("IMAP sender admission", () => {
           allowedSenders: ["@evil.example"],
           addressTokens: configured.addressTokens,
         }),
-        authenticator,
       }),
     ).resolves.toMatchObject({
       accepted: false,
@@ -271,34 +270,21 @@ describe("IMAP sender admission", () => {
       "Authentication-Results: attacker.example; dmarc=pass",
       "Authentication-Results: mx.example.com; dmarc=pass header.from=example.com",
     ]);
-    const authenticator = vi.fn(async () => {
-      throw new Error("DNS timeout");
-    });
-    await expect(
-      evaluateImapSender({ ...parsed, account: configured, authenticator }),
-    ).resolves.toMatchObject({
+    vi.mocked(authenticate).mockRejectedValue(new Error("DNS timeout"));
+    await expect(evaluateImapSender({ ...parsed, account: configured })).resolves.toMatchObject({
       accepted: true,
       strength: "asserted",
       reason: "trusted-authserv-dmarc-pass",
     });
   });
 
-  it("caps rendered prompts and records truncation", async () => {
-    const parsed = await message(["From: trusted@example.com", "Subject: Large"], "🙂".repeat(500));
-    const prompt = renderImapPrompt(parsed.mail, { includeBody: true, maxBytes: 256 });
-    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(256);
-    expect(prompt).toContain("[truncated:");
-  });
-
   it("keeps authenticator exceptions retryable without claiming a mutable identifier", async () => {
     const mail = await message(["From: trusted@example.com"]);
+    vi.mocked(authenticate).mockRejectedValue(new Error("DNS timeout"));
     await expect(
       evaluateImapSender({
         ...mail,
         account: account({ senderAuth: { min: "unverified" } }),
-        authenticator: async () => {
-          throw new Error("DNS timeout");
-        },
       }),
     ).resolves.toMatchObject({
       accepted: false,

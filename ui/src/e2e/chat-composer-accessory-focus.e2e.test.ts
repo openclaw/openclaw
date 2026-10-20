@@ -75,6 +75,7 @@ suite.define(() => {
           ? createControlUiE2eArtifactDir("chat-composer-accessory-focus", artifactRoot)
           : undefined;
         if (artifactDir && triggerSelector.startsWith(".context-usage")) {
+          await composer.locator(".context-usage__popover").waitFor({ state: "visible" });
           const composerBox = await composer.boundingBox();
           const popoverBox = await composer.locator(".context-usage__popover").boundingBox();
           if (!composerBox || !popoverBox) {
@@ -119,14 +120,13 @@ suite.define(() => {
       const modelTrigger = composer.locator(".chat-controls__model-picker > summary");
       await outside.focus();
       await modelTrigger.click();
-      expect(await modelTrigger.evaluate((element) => document.activeElement === element)).toBe(
-        true,
-      );
-      expect(
-        await page
-          .locator(".chat-controls__model-search")
-          .evaluate((element) => document.activeElement === element),
-      ).toBe(false);
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat-controls__model-search")
+            .evaluate((element) => document.activeElement === element),
+        )
+        .toBe(true);
       await page.keyboard.press("Escape");
 
       await outside.focus();

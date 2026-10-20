@@ -10,7 +10,7 @@ import {
   type Event,
   type Filter,
 } from "nostr-tools";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 
 /** Signed protocol fixture, not an implementation of the upstream Buzz service. */
 export async function createBuzzRelayFixture() {
@@ -47,6 +47,7 @@ export async function createBuzzRelayFixture() {
     }),
   ];
   const received: Event[] = [];
+  const requests: Array<{ id: string; filters: Filter[] }> = [];
   const sessions = new Map<
     WebSocket,
     { challenge: string; publicKey?: string; subscriptions: Map<string, Filter[]> }
@@ -54,6 +55,9 @@ export async function createBuzzRelayFixture() {
   let presenceMode: "accept" | "reject" | "silent" = "accept";
   let authenticatedSessions = 0;
   let pauseMembershipQuery: ((respond: () => void) => void) | undefined;
+  let pauseRoomHistory:
+    | ((respond: () => void, close: (reason: string) => void) => void)
+    | undefined;
   const heldSnapshots = new Set<string>();
   const server = createServer((_request, response) => {
     response.setHeader("content-type", "application/nostr+json");
@@ -63,11 +67,18 @@ export async function createBuzzRelayFixture() {
   });
   const sockets = new WebSocketServer({ server });
   const send = (socket: WebSocket, frame: unknown[]) => socket.send(JSON.stringify(frame));
-  const storedRoom = (event: Event) =>
-    event.tags.find((tag) => tag[0] === "h")?.[1] ??
-    ([39000, 39002].includes(event.kind)
-      ? event.tags.find((tag) => tag[0] === "d")?.[1]
-      : undefined);
+  const storedRoom = (event: Event) => {
+    // Membership notifications carry a room tag but Buzz stores them globally.
+    if (event.kind === 44100 || event.kind === 44101) {
+      return undefined;
+    }
+    return (
+      event.tags.find((tag) => tag[0] === "h")?.[1] ??
+      ([39000, 39002].includes(event.kind)
+        ? event.tags.find((tag) => tag[0] === "d")?.[1]
+        : undefined)
+    );
+  };
   const matchesStored = (filter: Filter, event: Event) => {
     const { "#h": rooms, ...signedFilter } = filter;
     return rooms
@@ -128,8 +139,12 @@ export async function createBuzzRelayFixture() {
           return;
         }
         session.subscriptions.set(value, filters);
+        requests.push({ id: value, filters });
         const snapshot = [...events];
         const respond = () => {
+          if (socket.readyState !== WebSocket.OPEN) {
+            return;
+          }
           const sent = new Set<string>();
           for (const filter of filters) {
             const matching = snapshot
@@ -153,6 +168,25 @@ export async function createBuzzRelayFixture() {
             respond();
             heldSnapshots.delete(value);
           });
+        } else if (
+          pauseRoomHistory &&
+          filters.some((filter) => filter.kinds?.includes(39002)) &&
+          filters.some((filter) => filter.kinds?.includes(9))
+        ) {
+          const pause = pauseRoomHistory;
+          pauseRoomHistory = undefined;
+          heldSnapshots.add(value);
+          pause(
+            () => {
+              respond();
+              heldSnapshots.delete(value);
+            },
+            (reason) => {
+              send(socket, ["CLOSED", value, reason]);
+              session.subscriptions.delete(value);
+              heldSnapshots.delete(value);
+            },
+          );
         } else {
           respond();
         }
@@ -196,6 +230,7 @@ export async function createBuzzRelayFixture() {
     relayPublicKey,
     roomId,
     received,
+    requests,
     events,
     authenticatedSessions: () => authenticatedSessions,
     pauseNextMembershipQuery: () => {
@@ -214,6 +249,25 @@ export async function createBuzzRelayFixture() {
         },
       };
     },
+    pauseNextRoomHistory: () => {
+      let respond: (() => void) | undefined;
+      let close: ((reason: string) => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        pauseRoomHistory = (sendSnapshot, closeSubscription) => {
+          respond = sendSnapshot;
+          close = closeSubscription;
+          resolve();
+        };
+      });
+      return {
+        started,
+        release: () => {
+          respond?.();
+          respond = undefined;
+        },
+        close: (reason: string) => close?.(reason),
+      };
+    },
     setPresenceMode: (mode: typeof presenceMode) => {
       presenceMode = mode;
     },
@@ -228,9 +282,13 @@ export async function createBuzzRelayFixture() {
         }
       }
     },
-    sendMessage: (content: string, createdAt = Math.floor(Date.now() / 1000)) => {
+    sendMessage: (
+      content: string,
+      createdAt = Math.floor(Date.now() / 1000),
+      channelId = roomId,
+    ) => {
       const event = finalizeEvent(
-        { kind: 9, created_at: createdAt, content, tags: [["h", roomId]] },
+        { kind: 9, created_at: createdAt, content, tags: [["h", channelId]] },
         senderKey,
       );
       broadcast(event);

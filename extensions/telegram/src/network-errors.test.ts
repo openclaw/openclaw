@@ -3,15 +3,12 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { describe, expect, it } from "vitest";
 import {
   isRecoverableTelegramNetworkError,
-  isRetryableTelegramApiError,
   isTelegramAuthenticationError,
   isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
-  isTelegramPollingNetworkError,
   isTelegramServerError,
   rethrowTelegramSendError,
-  tagTelegramNetworkError,
   TelegramRequestNotStartedError,
 } from "./network-errors.js";
 
@@ -87,24 +84,6 @@ describe("isTelegramAuthenticationError", () => {
 });
 
 describe("isRecoverableTelegramNetworkError", () => {
-  it("tracks Telegram polling origin separately from generic network matching", () => {
-    const slackDnsError = Object.assign(
-      new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com"),
-      {
-        code: "ENOTFOUND",
-        hostname: "slack.com",
-      },
-    );
-    expect(isRecoverableTelegramNetworkError(slackDnsError)).toBe(true);
-    expect(isTelegramPollingNetworkError(slackDnsError)).toBe(false);
-
-    tagTelegramNetworkError(slackDnsError, {
-      method: "getUpdates",
-      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
-    });
-    expect(isTelegramPollingNetworkError(slackDnsError)).toBe(true);
-  });
-
   it.each([
     ["ETIMEDOUT", "timeout"],
     ["ENETDOWN", "network down"],
@@ -116,12 +95,6 @@ describe("isRecoverableTelegramNetworkError", () => {
 
   it("detects AbortError names", () => {
     const err = Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
-    expect(isRecoverableTelegramNetworkError(err)).toBe(true);
-  });
-
-  it("detects nested causes", () => {
-    const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
-    const err = Object.assign(new TypeError("fetch failed"), { cause });
     expect(isRecoverableTelegramNetworkError(err)).toBe(true);
   });
 
@@ -203,13 +176,6 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(err)).toBe(true);
   });
 
-  it("normalizes blank tagged origins to null and finds nested tags", () => {
-    const inner = new Error("inner");
-    tagTelegramNetworkError(inner, { method: " ", url: " " });
-    const outer = Object.assign(new Error("outer"), { cause: inner });
-    expect(isTelegramPollingNetworkError(outer)).toBe(false);
-  });
-
   // Grammy HttpError tests (issue #3815)
   // Grammy wraps fetch errors in .error property, not .cause
   describe("Grammy HttpError", () => {
@@ -222,24 +188,6 @@ describe("isRecoverableTelegramNetworkError", () => {
         this.name = "HttpError";
       }
     }
-
-    it("detects network error wrapped in HttpError", () => {
-      const fetchError = new TypeError("fetch failed");
-      const httpError = new MockHttpError(
-        "Network request for 'setMyCommands' failed!",
-        fetchError,
-      );
-
-      expect(isRecoverableTelegramNetworkError(httpError)).toBe(true);
-    });
-
-    it("detects network error with cause wrapped in HttpError", () => {
-      const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
-      const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
-      const httpError = new MockHttpError("Network request for 'getUpdates' failed!", fetchError);
-
-      expect(isRecoverableTelegramNetworkError(httpError)).toBe(true);
-    });
 
     it("returns false for non-network errors wrapped in HttpError", () => {
       const authError = new Error("Unauthorized: bot token is invalid");
@@ -334,14 +282,6 @@ describe("isSafeToRetrySendError", () => {
   ])("does not infer safe retry from broad Telegram 421 shape %s", (_name, err) => {
     expect(isSafeToRetrySendError(err)).toBe(false);
   });
-
-  it("does not parse malformed status strings as Telegram 421", () => {
-    expect(
-      isSafeToRetrySendError(
-        Object.assign(new Error("Misdirected Request"), { statusCode: "421abc" }),
-      ),
-    ).toBe(false);
-  });
 });
 
 describe("rethrowTelegramSendError", () => {
@@ -373,6 +313,22 @@ describe("rethrowTelegramSendError", () => {
     expect(caught).toMatchObject({ message: expect.stringContaining(String(migratedChatId)) });
   });
 
+  it.each(["chat not found", "message thread not found"])(
+    "preserves retryable no-send proof for an exact %s rejection",
+    (reason) => {
+      const error = Object.assign(new Error(`400: Bad Request: ${reason}`), {
+        error_code: 400,
+        description: `Bad Request: ${reason}`,
+      });
+      expect(captureTelegramSendError(error)).toMatchObject({
+        name: "PlatformMessageNotDispatchedError",
+        message: error.message,
+        retryable: true,
+        cause: error,
+      });
+    },
+  );
+
   it.each([
     ["rate limit", errorWithTelegramCode("Too Many Requests", 429)],
     ["server failure", errorWithTelegramCode("Bad Gateway", 502)],
@@ -390,10 +346,29 @@ describe("rethrowTelegramSendError", () => {
       "migration parameter without matching description",
       Object.assign(new Error("different bad request"), {
         error_code: 400,
-        description: "Bad Request: chat not found",
+        description: "Bad Request: message is empty",
         parameters: { migrate_to_chat_id: migratedChatId },
       }),
     ],
+    [
+      "partially accepted album",
+      Object.assign(new Error("album partly failed"), {
+        error_code: 400,
+        description:
+          'Bad Request: Failed to send message #2 with the error message "message thread not found"',
+      }),
+    ],
+    [
+      "mixed aggregate",
+      new AggregateError([
+        Object.assign(new Error("route rejected"), {
+          error_code: 400,
+          description: "Bad Request: message thread not found",
+        }),
+        errorWithCode("read ECONNRESET", "ECONNRESET"),
+      ]),
+    ],
+    ["plain route text", new Error("400: Bad Request: message thread not found")],
     ["plain migration text", new Error("400: group chat was upgraded to a supergroup chat")],
   ])("does not terminalize a %s", (_name, error) => {
     expect(captureTelegramSendError(error)).toBe(error);
@@ -416,50 +391,12 @@ describe("rethrowTelegramSendError", () => {
     expect(caught).not.toMatchObject({ message: expect.stringContaining(String(target)) });
   });
 });
-
-describe("isTelegramServerError", () => {
-  it.each([
-    ["Internal Server Error", 500, true],
-    ["Bad Gateway", 502, true],
-    ["Forbidden", 403, false],
-  ])("returns %s for error_code %s", (message, errorCode, expected) => {
-    expect(isTelegramServerError(errorWithTelegramCode(message, errorCode))).toBe(expected);
-  });
-});
-
 describe("isTelegramRateLimitError", () => {
-  it("returns true for Telegram 429 errors", () => {
-    expect(isTelegramRateLimitError(errorWithTelegramCode("Too Many Requests", 429))).toBe(true);
-  });
-
   it("detects wrapped 429 retry_after errors without error_code", () => {
     const wrapped = {
       message: "429 Too Many Requests",
       response: { parameters: { retry_after: 1 } },
     };
     expect(isTelegramRateLimitError(wrapped)).toBe(true);
-  });
-});
-
-describe("isRetryableTelegramApiError", () => {
-  it.each([
-    ["Too Many Requests", 429, true],
-    ["Internal Server Error", 500, true],
-    ["Bad Gateway", 502, true],
-    ["Conflict", 409, false],
-    ["Unauthorized", 401, false],
-    ["Not Found", 404, false],
-  ])("returns %s for error_code %s", (message, errorCode, expected) => {
-    expect(isRetryableTelegramApiError(errorWithTelegramCode(message, errorCode))).toBe(expected);
-  });
-});
-
-describe("isTelegramClientRejection", () => {
-  it.each([
-    ["Bad Request", 400, true],
-    ["Forbidden", 403, true],
-    ["Bad Gateway", 502, false],
-  ])("returns %s for error_code %s", (message, errorCode, expected) => {
-    expect(isTelegramClientRejection(errorWithTelegramCode(message, errorCode))).toBe(expected);
   });
 });

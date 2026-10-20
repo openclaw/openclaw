@@ -78,9 +78,38 @@ export async function outboxChatUrl(
     await context.route(`${url.origin}/**`, async (route) => {
       const target = new URL(route.request().url());
       target.hostname = "127.0.0.1";
-      const response = await route.fetch({ url: target.href });
-      await route.fulfill({ response });
+      await route.continue({ url: target.href });
     });
   }
   return url.href;
+}
+
+/** Pause native Blob decoding in the next document until reconnect has parked the source. */
+export async function holdOutboxPreviewReads(page: Page): Promise<() => Promise<number>> {
+  await page.addInitScript(() => {
+    const NativeFileReader = FileReader;
+    const pending: Array<() => void> = [];
+    let released = false;
+    globalThis.FileReader = class extends NativeFileReader {
+      override readAsDataURL(blob: Blob): void {
+        if (released) {
+          super.readAsDataURL(blob);
+        } else {
+          pending.push(() => super.readAsDataURL(blob));
+        }
+      }
+    };
+    Object.assign(window, {
+      releaseOutboxPreviewRead() {
+        released = true;
+        const reads = pending.splice(0);
+        reads.forEach((resume) => resume());
+        return reads.length;
+      },
+    });
+  });
+  return () =>
+    page.evaluate(() =>
+      (window as unknown as { releaseOutboxPreviewRead(): number }).releaseOutboxPreviewRead(),
+    );
 }

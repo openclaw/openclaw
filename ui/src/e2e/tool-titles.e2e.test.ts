@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -14,6 +15,11 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
         const command = "set -euo pipefail\npnpm test";
+        const parentArgs = {
+          code: "await tools.read({ path: 'README.md' })",
+          title: "Inspect the workspace guide",
+        };
+        const childArgs = { command: "printf '\n--- workspace ---\n'\nls" };
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {
@@ -54,15 +60,25 @@ suite.define(() => {
           sessionKey,
           seq: 1,
           ts: Date.now(),
+          stream: "item",
+          data: projectAgentToolActivity({
+            phase: "start",
+            toolCallId: "live-check",
+            name: "exec",
+            args: parentArgs,
+          }),
+        });
+        await gateway.emitGatewayEvent("agent", {
+          runId,
+          sessionKey,
+          seq: 2,
+          ts: Date.now(),
           stream: "tool",
           data: {
             phase: "start",
             toolCallId: "live-check",
             name: "exec",
-            args: {
-              code: "await tools.read({ path: 'README.md' })",
-              title: "Inspect the workspace guide",
-            },
+            args: parentArgs,
           },
         });
         await page
@@ -70,6 +86,79 @@ suite.define(() => {
             hasText: "Inspect the workspace guide",
           })
           .waitFor();
+        await gateway.emitGatewayEvent("agent", {
+          runId,
+          sessionKey,
+          seq: 3,
+          ts: Date.now(),
+          stream: "item",
+          data: projectAgentToolActivity({
+            phase: "start",
+            toolCallId: "live-child",
+            name: "exec",
+            args: childArgs,
+          }),
+        });
+        await gateway.emitGatewayEvent("agent", {
+          runId,
+          sessionKey,
+          seq: 4,
+          ts: Date.now(),
+          stream: "tool",
+          data: {
+            phase: "start",
+            toolCallId: "live-child",
+            parentToolCallId: "live-check",
+            name: "exec",
+            args: childArgs,
+          },
+        });
+        const activity = page.locator(".chat-activity-group", {
+          hasText: "Inspect the workspace guide",
+        });
+        const summary = activity.locator(":scope > .chat-activity-group__summary");
+        await summary.waitFor();
+        expect(await summary.textContent()).toContain("Inspect the workspace guide");
+        expect(await summary.textContent()).not.toContain("printf");
+        await summary.click();
+        const operation = activity.locator(".chat-tool-row", {
+          hasText: "Inspect the workspace guide",
+        });
+        expect(await activity.locator(".chat-tool-row").count()).toBe(1);
+        await operation.click();
+        await activity.locator(".chat-tool-children .chat-tool-row--running").waitFor();
+        await gateway.emitGatewayEvent("agent", {
+          runId,
+          sessionKey,
+          seq: 5,
+          ts: Date.now(),
+          stream: "tool",
+          data: {
+            phase: "result",
+            toolCallId: "live-child",
+            parentToolCallId: "live-check",
+            name: "exec",
+            result: { content: [{ type: "text", text: "README.md" }] },
+          },
+        });
+        await gateway.emitGatewayEvent("agent", {
+          runId,
+          sessionKey,
+          seq: 6,
+          ts: Date.now(),
+          stream: "item",
+          data: projectAgentToolActivity({
+            phase: "result",
+            toolCallId: "live-child",
+            name: "exec",
+            args: childArgs,
+            isError: false,
+          }),
+        });
+        await expect
+          .poll(() => activity.locator(".chat-tool-children .chat-tool-row--running").count())
+          .toBe(0);
+        expect(await operation.getAttribute("aria-expanded")).toBe("true");
         expect(await gateway.getRequests("chat.toolTitles")).toHaveLength(0);
       },
     );

@@ -17,20 +17,6 @@ function assistantEvent(ts: number, text: string, delta: string): AgentEventPayl
 }
 
 describe("session activity assistant buffering", () => {
-  it("defers cumulative rescans inside the throttle and flushes the exact latest text", () => {
-    const state = createSessionActivityNoteState();
-    noteSessionActivityEvent(state, assistantEvent(1_000, "first", "first"));
-    noteSessionActivityEvent(state, assistantEvent(1_050, "first second", " second"));
-
-    expect(state.assistantBuffer).toBe("first");
-    expect(state.assistantBufferDirty).toBe(true);
-
-    flushSessionActivityAssistantNote(state);
-
-    expect(state.assistantBuffer).toBe("first second");
-    expect(state.notes.at(-1)?.text).toBe("Assistant: first second");
-  });
-
   it("preserves split internal-context filtering when the forced flush follows a burst", () => {
     const state = createSessionActivityNoteState();
     noteSessionActivityEvent(
@@ -51,15 +37,15 @@ describe("session activity assistant buffering", () => {
     expect(state.notes.at(-1)?.text).toBe("Assistant: visible after");
   });
 
-  it.each(["HEARTBEAT_OK", "NO_REPLY"])(
-    "does not record the internal acknowledgement %s as assistant activity",
+  it.each(["NO_REPLY"])(
+    "records prepared literal text %s as assistant activity",
     (acknowledgement) => {
       const state = createSessionActivityNoteState();
       noteSessionActivityEvent(state, assistantEvent(1_000, acknowledgement, acknowledgement));
 
       flushSessionActivityAssistantNote(state);
 
-      expect(state.notes).toEqual([]);
+      expect(state.notes.at(-1)?.text).toBe(`Assistant: ${acknowledgement}`);
     },
   );
 
@@ -71,6 +57,24 @@ describe("session activity assistant buffering", () => {
     expect(state.assistantBuffer).toHaveLength(4_096);
     expect(state.assistantBuffer.endsWith("tail")).toBe(true);
     expect(state.assistantBufferDirty).toBe(false);
+  });
+
+  it("releases cumulative text after retaining its bounded activity tail", () => {
+    const state = createSessionActivityNoteState();
+    const text = `${"a".repeat(64 * 1024)}😀\ud800tail`;
+    noteSessionActivityEvent(state, assistantEvent(1_000, text, ""));
+    flushSessionActivityAssistantNote(state);
+
+    expect(
+      Object.values(state)
+        .filter((value) => typeof value === "string")
+        .every((value) => value.length <= 4_096),
+    ).toBe(true);
+    expect(state.notes.at(-1)?.text).toBe(`Assistant: ${"a".repeat(233)}😀\ud800tail`);
+
+    noteSessionActivityEvent(state, assistantEvent(1_001, "", " continued"));
+    flushSessionActivityAssistantNote(state);
+    expect(state.notes.at(-1)?.text).toBe(`Assistant: ${"a".repeat(223)}😀\ud800tail continued`);
   });
 
   it("does not report a signal-only aborted lifecycle end as done", () => {

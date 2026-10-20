@@ -112,7 +112,8 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
     expect(rerun).toEqual({
       detected: [],
       changes: [],
-      configOwnerMigrationApplied: false,
+      migratedProfileIds: new Set<string>(),
+      blockedProfileIds: new Set<string>(),
       warnings: [],
     });
     expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
@@ -153,7 +154,8 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
     expect(result).toEqual({
       detected: [authPath],
       changes: [],
-      configOwnerMigrationApplied: false,
+      migratedProfileIds: new Set<string>(),
+      blockedProfileIds: new Set<string>(),
       warnings: [],
     });
     expect(fs.readFileSync(authPath)).toEqual(original);

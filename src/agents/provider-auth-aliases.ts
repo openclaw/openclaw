@@ -4,6 +4,7 @@
  * providers, with trusted workspace plugin handling and snapshot-owned metadata.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -25,6 +26,8 @@ export type ProviderAuthAliasLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  /** Stored credentials keep their provider realm when a model route changes endpoint. */
+  storedCredential?: boolean;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins"> & {
     owners?: Pick<PluginMetadataSnapshot["owners"], "providerAuthAliases">;
   };
@@ -67,6 +70,71 @@ function resolveProviderAuthAliasCandidates(
   );
 }
 
+function resolveProviderAuthEndpoint(provider: string, config: OpenClawConfig | undefined) {
+  return resolveMergedModelProviderConfig(config, provider)?.baseUrl?.trim().replace(/\/+$/, "");
+}
+
+function matchesProviderAuthEndpoint(
+  provider: string,
+  candidate: PluginProviderAuthAliasCandidate,
+  params: ProviderAuthAliasLookupParams | undefined,
+): boolean {
+  if (!candidate.baseUrls) {
+    return true;
+  }
+  if (params?.storedCredential) {
+    return false;
+  }
+  const baseUrl = resolveProviderAuthEndpoint(provider, params?.config);
+  return baseUrl !== undefined && candidate.baseUrls.includes(baseUrl);
+}
+
+/** A migration guard cannot select a credential realm without the route's endpoint. */
+export function hasUnresolvedProviderAuthEndpoint(
+  provider: string,
+  params?: ProviderAuthAliasLookupParams,
+): boolean {
+  const normalized = normalizeProviderId(provider);
+  if (resolveProviderAuthEndpoint(normalized, params?.config)) {
+    return false;
+  }
+  return (
+    resolveProviderAuthAliasCandidates(params)
+      .get(normalized)
+      ?.some(
+        (candidate) =>
+          candidate.baseUrls !== undefined && shouldUsePluginAuthAliases(candidate.plugin, params),
+      ) ?? false
+  );
+}
+
+/** Limit missing-endpoint ambiguity to realms an eligible alias can actually select. */
+export function couldResolveProviderIdForAuth(
+  provider: string,
+  target: string,
+  params?: ProviderAuthAliasLookupParams,
+): boolean {
+  if (resolveProviderIdForAuth(provider, params) === target) {
+    return true;
+  }
+  const normalized = normalizeProviderId(provider);
+  if (params?.storedCredential || resolveProviderAuthEndpoint(normalized, params?.config)) {
+    return false;
+  }
+  for (const candidate of resolveProviderAuthAliasCandidates(params).get(normalized) ?? []) {
+    if (!shouldUsePluginAuthAliases(candidate.plugin, params)) {
+      continue;
+    }
+    if (candidate.target === target && (!candidate.baseUrls || candidate.baseUrls.length > 0)) {
+      return true;
+    }
+    if (!candidate.baseUrls) {
+      break;
+    }
+  }
+  return false;
+}
+
 /** Resolve canonical auth provider aliases from plugin metadata. */
 export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
@@ -80,7 +148,7 @@ export function resolveProviderAuthAliasMap(
       const { plugin } = candidate;
       const allowed = allowedPlugins.get(plugin) ?? shouldUsePluginAuthAliases(plugin, params);
       allowedPlugins.set(plugin, allowed);
-      if (allowed) {
+      if (allowed && matchesProviderAuthEndpoint(alias, candidate, params)) {
         preferred ??= candidate;
         order = Math.min(order, candidate.order);
       }
@@ -109,7 +177,10 @@ export function resolveProviderIdForAuth(
   const candidates = resolveProviderAuthAliasCandidates(params).get(normalized);
   // Package facts are stable; workspace trust follows the current call's config.
   return (
-    candidates?.find((candidate) => shouldUsePluginAuthAliases(candidate.plugin, params))?.target ??
-    normalized
+    candidates?.find(
+      (candidate) =>
+        shouldUsePluginAuthAliases(candidate.plugin, params) &&
+        matchesProviderAuthEndpoint(normalized, candidate, params),
+    )?.target ?? normalized
   );
 }

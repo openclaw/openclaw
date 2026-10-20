@@ -1,163 +1,193 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { RouteLocation } from "@openclaw/uirouter";
-import { expect, it, vi } from "vitest";
-import type { RouteId } from "../app-routes.ts";
-import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { AgentsListResult } from "../api/types.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
+import { makeLocation, makeRoutingGateway } from "./bootstrap.test-support.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
-import type { ApplicationContext } from "./context.ts";
-import { loadGatewaySessionSelection, loadSettings, saveSettings } from "./settings.ts";
+import {
+  loadGatewaySessionSelection,
+  loadSettings,
+  saveSettings,
+  setSettingsChangeListener,
+} from "./settings.ts";
+
+const hello = (defaultAgentId = "main", global = false) => ({
+  snapshot: {
+    sessionDefaults: {
+      defaultAgentId,
+      mainKey: "main",
+      ...(global ? { mainSessionKey: "global", scope: "global" } : {}),
+    },
+  },
+});
+function roster(
+  ids: readonly [string, ...string[]],
+  defaultId = ids[0],
+  scope: AgentsListResult["scope"] = "per-sender",
+): AgentsListResult {
+  return { defaultId, mainKey: "main", scope, agents: ids.map((id) => ({ id, kind: "agent" })) };
+}
+function readyGateway(client: object) {
+  return makeRoutingGateway({ client, hello: hello() });
+}
+function saveSelection(
+  sessionKey: string,
+  overrides: Partial<ReturnType<typeof loadSettings>> = {},
+) {
+  saveSettings({ ...previousSettings, sessionKey, lastActiveSessionKey: sessionKey, ...overrides });
+}
+function resolveLocation(
+  overrides: Partial<Parameters<typeof resolveInitialApplicationLocation>[0]>,
+  subscribe = vi.fn(() => () => undefined),
+) {
+  return resolveInitialApplicationLocation({
+    location: makeLocation("/"),
+    basePath: "",
+    sessionKey: "global",
+    gateway: {
+      ...makeRoutingGateway({ sessionKey: "global", hello: hello("dummy", true) }).gateway,
+      subscribe,
+    },
+    agentsList: () => roster(["dummy"], "dummy", "global"),
+    signal: new AbortController().signal,
+    ...overrides,
+  });
+}
+let previousSettings: ReturnType<typeof loadSettings>;
+let previousUrl: string;
+let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+beforeEach(() => {
+  previousSettings = loadSettings();
+  previousUrl = window.location.href;
+});
+afterEach(() => {
+  runtime?.stop();
+  runtime = undefined;
+  setSettingsChangeListener(null);
+  window.history.replaceState({}, "", previousUrl);
+  saveSettings(previousSettings);
+});
 
 it.each([
-  { agentId: "main", savedAgentId: "work", basePath: "", suffix: "" },
-  { agentId: "work", savedAgentId: "main", basePath: "", suffix: "" },
-  { agentId: "main", savedAgentId: "work", basePath: "/openclaw", suffix: "/" },
-  { agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" },
-])(
-  "keeps cold explicit $agentId over saved $savedAgentId at $basePath (suffix '$suffix')",
-  async ({ agentId, savedAgentId, basePath, suffix }) => {
-    const pathname = buildControlUiSessionPath({
-      namespace: "chat",
-      sessionKey: `agent:${agentId}:main`,
-      exactKey: true,
-      basePath,
-    });
-    expect(pathname).toBe(`${basePath}/chat/${agentId}`);
-    const requested = { pathname: `${pathname}${suffix}`, search: "?draft=keep", hash: "#pane" };
-    let currentLocation: RouteLocation = requested;
-    const replace = vi.fn((location: RouteLocation) => {
-      currentLocation = location;
-    });
-    const gateway = {
-      snapshot: { phase: "connecting", client: null, hello: null },
-      subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext<RouteId>["gateway"];
-    const initialLocationReady = resolveInitialApplicationLocation({
-      location: requested,
-      basePath,
-      sessionKey: `agent:${savedAgentId}:main`,
-      selectedAgentId: savedAgentId,
-      gateway,
-      agentsList: () => null,
-      signal: new AbortController().signal,
-    });
+  ["openclaw", ["dummy", "openclaw"], "/chat/openclaw"],
+  ["removed", ["dummy"], "/chat/dummy"],
+] as const)(
+  "routes a global session remembering %s through the live roster",
+  async (selectedAgentId, ids, pathname) => {
+    const subscribe = vi.fn(() => () => undefined);
 
-    await startModelSetupFirstRunRedirectAfterLocation({
-      context: { gateway } as ApplicationContext<RouteId>,
-      enabled: false,
-      history: { location: () => currentLocation, replace },
-      initialLocationReady,
-    });
-
-    expect(currentLocation).toEqual(requested);
-    expect(replace).not.toHaveBeenCalled();
-    expect(gateway.subscribe).not.toHaveBeenCalled();
+    await expect(
+      resolveLocation(
+        {
+          location: makeLocation("/chat"),
+          selectedAgentId,
+          agentsList: () => roster(ids, "dummy", "global"),
+        },
+        subscribe,
+      ),
+    ).resolves.toEqual({ pathname, search: "", hash: "" });
+    expect(subscribe).not.toHaveBeenCalled();
   },
 );
 
-it("routes a canonical global session through its persisted agent owner", async () => {
-  const subscribe = vi.fn(() => () => undefined);
+it("refreshes a cached roster and its default before accepting a remembered agent", async () => {
+  const cachedList = roster(["retired"]);
+  const liveList = roster(["next"]);
+  const ensureAgentsList = vi.fn(async () => liveList);
 
   await expect(
-    resolveInitialApplicationLocation({
-      location: { pathname: "/chat", search: "", hash: "" },
-      basePath: "",
-      sessionKey: "global",
-      selectedAgentId: "openclaw",
-      gateway: {
-        snapshot: {
-          phase: "connected",
-          client: {},
-          sessionKey: "global",
-          hello: {
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "dummy",
-                mainKey: "main",
-                mainSessionKey: "global",
-                scope: "global",
-              },
-            },
-          },
-        },
-        subscribe,
-      } as unknown as ApplicationContext<RouteId>["gateway"],
-      agentsList: () => ({
-        defaultId: "dummy",
-        mainKey: "main",
-        scope: "global",
-        agents: [
-          { id: "dummy", kind: "agent" },
-          { id: "openclaw", kind: "agent" },
-        ],
-      }),
-      signal: new AbortController().signal,
+    resolveLocation({
+      sessionKey: "agent:retired:main",
+      gateway: readyGateway({ request: vi.fn() }).gateway,
+      agentsList: () => cachedList,
+      ensureAgentsList,
     }),
-  ).resolves.toEqual({ pathname: "/chat/openclaw", search: "", hash: "" });
-  expect(subscribe).not.toHaveBeenCalled();
+  ).resolves.toEqual(makeLocation("/chat/next"));
+  expect(ensureAgentsList).toHaveBeenCalledOnce();
 });
 
-it("falls back when the persisted agent is absent from the Gateway roster", async () => {
-  await expect(
-    resolveInitialApplicationLocation({
-      location: { pathname: "/chat", search: "", hash: "" },
-      basePath: "",
-      sessionKey: "global",
-      selectedAgentId: "removed",
-      gateway: {
-        snapshot: {
-          phase: "connected",
-          client: {},
-          sessionKey: "global",
-          hello: {
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "dummy",
-                mainKey: "main",
-                mainSessionKey: "global",
-                scope: "global",
-              },
-            },
-          },
-        },
-        subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext<RouteId>["gateway"],
-      agentsList: () => ({
-        defaultId: "dummy",
-        mainKey: "main",
-        scope: "global",
-        agents: [{ id: "dummy", kind: "agent" }],
-      }),
-      signal: new AbortController().signal,
-    }),
-  ).resolves.toEqual({ pathname: "/chat/dummy", search: "", hash: "" });
+it("validates a remembered session again after the Gateway client changes", async () => {
+  const first = createDeferred<{ ok: boolean; key?: string; agentId?: string }>();
+  const firstRequest = vi.fn(() => first.promise);
+  const replacementRequest = vi.fn(
+    async (): Promise<{ ok: boolean; key?: string; agentId?: string }> => ({ ok: false }),
+  );
+  const gatewayState = readyGateway({ request: firstRequest });
+  const gateway = gatewayState.gateway;
+  const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
+
+  const pending = resolveLocation({
+    location: makeLocation("/", "?draft=hello"),
+    sessionKey: rememberedKey,
+    gateway,
+    agentsList: () => roster(["main", "research"]),
+  });
+  await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce());
+  gatewayState.publish({
+    client: { request: replacementRequest },
+    hello: hello(),
+  });
+  first.resolve({ ok: true, key: rememberedKey, agentId: "research" });
+
+  await expect(pending).resolves.toEqual(makeLocation("/chat/research", "?draft=hello"));
+  expect(replacementRequest).toHaveBeenCalledExactlyOnceWith(
+    "sessions.resolve",
+    { key: rememberedKey, agentId: "research", allowMissing: true },
+    { signal: expect.any(AbortSignal) },
+  );
+});
+
+it("loads the agent roster again after the Gateway client changes", async () => {
+  const first = createDeferred<AgentsListResult>();
+  const currentList = roster(["main"]);
+  const oldList = { ...currentList, agents: [{ id: "main" }, { id: "research" }] };
+  const ensureAgentsList = vi
+    .fn<() => Promise<AgentsListResult>>()
+    .mockReturnValueOnce(first.promise)
+    .mockResolvedValue(currentList);
+  const gatewayState = readyGateway({});
+  const gateway = gatewayState.gateway;
+
+  const pending = resolveLocation({
+    sessionKey: "agent:research:main",
+    gateway,
+    agentsList: () => null,
+    ensureAgentsList,
+  });
+  await vi.waitFor(() => expect(ensureAgentsList).toHaveBeenCalledOnce());
+  gatewayState.publish({
+    client: {},
+    hello: hello(),
+  });
+  first.resolve(oldList);
+
+  await expect(pending).resolves.toEqual(makeLocation("/chat/main"));
+  expect(ensureAgentsList).toHaveBeenCalledTimes(2);
+});
+
+it("starts routing an agent-scoped remembered session while the Gateway is offline", async () => {
+  saveSelection("agent:research:thread:12345678-0000-4000-8000-000000000001");
+  window.history.replaceState({}, "", "/");
+  runtime = bootstrapApplication();
+  const routerStart = vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
+
+  const start = runtime.start();
+  await vi.waitFor(() => expect(routerStart).toHaveBeenCalledOnce());
+  runtime.stop();
+  await start;
 });
 
 it.each([
   { name: "saved target agent", selectedAgentId: "research" },
   { name: "unsaved target agent", selectedAgentId: undefined },
 ])("hydrates the $name during native Gateway handoff", ({ selectedAgentId }) => {
-  const previousSettings = loadSettings();
-  const previousUrl = window.location.href;
   const targetGatewayUrl = `wss://native-${selectedAgentId ?? "unset"}.example`;
   const targetSettingsKey = `openclaw.control.settings.v1:${gatewayOriginScope(targetGatewayUrl)}`;
-  let runtime: ReturnType<typeof bootstrapApplication> | undefined;
 
   try {
-    saveSettings({
-      ...previousSettings,
-      gatewayUrl: targetGatewayUrl,
-      sessionKey: "global",
-      lastActiveSessionKey: "global",
-      selectedAgentId,
-    });
-    saveSettings({
-      ...previousSettings,
-      sessionKey: "agent:dummy:main",
-      lastActiveSessionKey: "agent:dummy:main",
-      selectedAgentId: "dummy",
-    });
+    saveSelection("global", { gatewayUrl: targetGatewayUrl, selectedAgentId });
+    saveSelection("agent:dummy:main", { selectedAgentId: "dummy" });
     window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
       gatewayUrl: targetGatewayUrl,
       token: "native-token",
@@ -177,7 +207,35 @@ it.each([
     runtime?.stop();
     delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
     localStorage.removeItem(targetSettingsKey);
-    window.history.replaceState({}, "", previousUrl);
-    saveSettings(previousSettings);
   }
+});
+
+describe("initial sidebar visibility", () => {
+  it.each(["/dashboard/research/conversation", "/chat/research/conversation?nav=collapsed"])(
+    "starts expanded without rewriting the route at %s",
+    (initialUrl) => {
+      window.history.replaceState({}, "", initialUrl);
+      runtime = bootstrapApplication();
+      expect(runtime.context.navigation.snapshot.navCollapsed).toBe(false);
+      expect(window.location.pathname + window.location.search + window.location.hash).toBe(
+        initialUrl,
+      );
+    },
+  );
+
+  it("keeps sidebar visibility in memory without rewriting persisted settings", () => {
+    const onPersistedSettingsChanged = vi.fn();
+    runtime = bootstrapApplication();
+    setSettingsChangeListener(onPersistedSettingsChanged);
+
+    runtime.context.navigation.update({ navCollapsed: true });
+
+    expect(runtime.context.navigation.snapshot.navCollapsed).toBe(true);
+    expect(onPersistedSettingsChanged).not.toHaveBeenCalled();
+
+    runtime.context.navigation.update({ navWidth: previousSettings.navWidth + 1 });
+
+    expect(onPersistedSettingsChanged).toHaveBeenCalledOnce();
+    expect(loadSettings().navWidth).toBe(previousSettings.navWidth + 1);
+  });
 });

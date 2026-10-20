@@ -1,49 +1,41 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
-import type { ChatWorkspaceDock, UiSettings } from "../../../app/settings.ts";
+import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type {
+  FileSidebarNavigation,
+  SidebarContent,
+  SidebarSelection,
+} from "./chat-sidebar-content-types.ts";
 
-export type SessionWorkspaceProps = {
-  collapsed: boolean;
-  sessionKey: string;
-  list: SessionWorkspaceListResult | null;
-  loading: boolean;
-  error: string | null;
-  activeId: string | null;
-  dock: ChatWorkspaceDock;
-  /** Pane too narrow for a side rail: presentation forces the bottom dock
-   * (the persisted dock preference still applies once the pane widens). */
-  narrowLayout: boolean;
-  onToggleCollapsed: () => void;
-  onSetDock: (dock: ChatWorkspaceDock) => void;
-  onRefresh: () => void;
-  onBrowsePath: (path: string) => void;
-  onOpenFile: (path: string, origin: "session" | "workspace") => void;
-  onSearch: (search: string) => void;
-  onOpenArtifact: (artifactId: string) => void;
-  onToggleTerminal?: () => void;
-  onToggleBrowser?: () => void;
-  onToggleDesktop?: () => void;
-  onToggleCustodian?: () => void;
-  /** Opens the session diff panel; absent until a usable checkout is known. */
-  onOpenDiff?: () => void;
+export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
+
+export type SessionWorkspacePreview = {
+  id: string;
+  label: string;
+  content: SidebarSelection;
+  canonicalKey?: string;
+  requestIds?: string[];
+  navigation?: FileSidebarNavigation;
+  navigationOrder?: number;
 };
 
 export type SessionWorkspaceState = {
+  navigationOrder?: number;
+  previews: SessionWorkspacePreview[];
+  activePreviewId: string | null;
+  filter: SessionWorkspaceFilter;
   activeId: string | null;
   agentId: string;
   browserPath: string;
   browserSearch: string;
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
-  collapsed: boolean;
   connectionEpoch: number;
-  dock: ChatWorkspaceDock;
   diffContent?: SidebarContent;
   error: string | null;
+  errorOwner?: object;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
-  openRequest?: object;
   pendingReload: boolean;
   sessionKey: string;
 };
@@ -57,6 +49,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   connectionEpoch: number;
   hello: GatewayHelloOk | null;
+  resourceBasePath?: string;
   terminalAvailable?: boolean;
   browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;
@@ -64,10 +57,7 @@ export type SessionWorkspaceHost = {
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceDraftScope?: string;
-  sidebarContent: SidebarContent | null;
-  requestUpdate?: () => void;
-  handleOpenSidebar: (content: SidebarContent | null) => void;
+  sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
+  sidebarContent: SidebarSelection | null;
+  handleOpenSidebar: (content: SidebarSelection | null) => void;
 };
-
-/** Agent owning the pane's current session: explicit key scope first, then the
- * assistant/default agent. */

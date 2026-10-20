@@ -67,20 +67,30 @@ describe("Control UI doctor repair owner", () => {
     await fs.rm(mocks.root, { recursive: true, force: true });
   });
 
-  it("uses the canonical asset owner for missing UI assets", async () => {
+  it("routes missing app-owned assets to the host without package or git commands", async () => {
+    await fs.writeFile(
+      path.join(mocks.root, "openclaw-install-owner.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      }),
+    );
     const prompter = createPrompter();
 
     await maybeRepairUiProtocolFreshness(runtime, prompter);
 
-    expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      ),
+      "UI",
+    );
+    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
-    expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
-      root: mocks.root,
-      expectedBuildId: mocks.buildId,
-      force: false,
-      onBuildStart: expect.any(Function),
-    });
-    expect(mocks.note).toHaveBeenCalledWith("UI build complete.", "UI");
+    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("repairs an existing dashboard whose startup JavaScript is missing", async () => {
@@ -101,19 +111,12 @@ describe("Control UI doctor repair owner", () => {
     expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it.each(["incomplete", "markerless", "different-build", "current-build", "dev-build"])(
+  it.each(["incomplete", "markerless", "dev-build"])(
     "checks packaged UI identity without rebuilding it: %s",
     async (failure) => {
       const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
       await fs.mkdir(path.dirname(indexPath), { recursive: true });
-      const buildId =
-        failure === "different-build"
-          ? "older-build"
-          : failure === "current-build"
-            ? mocks.buildId
-            : failure === "dev-build"
-              ? "dev"
-              : null;
+      const buildId = failure === "dev-build" ? "dev" : null;
       const marker = buildId
         ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${buildId}-${"a".repeat(64)}"`
         : "";
@@ -127,7 +130,7 @@ describe("Control UI doctor repair owner", () => {
 
       await maybeRepairUiProtocolFreshness(runtime, createPrompter());
 
-      if (failure === "current-build" || failure === "dev-build") {
+      if (failure === "dev-build") {
         expect(mocks.note).not.toHaveBeenCalled();
       } else {
         expect(mocks.note).toHaveBeenCalledWith(
@@ -141,37 +144,29 @@ describe("Control UI doctor repair owner", () => {
     },
   );
 
-  it.each(["markerless", "different-build", "protocol-changes"])(
-    "forces the canonical owner to rebuild stale source assets: %s",
-    async (reason) => {
-      const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
-      await fs.mkdir(path.dirname(indexPath), { recursive: true });
-      const buildId = reason === "protocol-changes" ? mocks.buildId : "older-build";
-      await fs.writeFile(
-        indexPath,
-        reason === "markerless"
-          ? "<html></html>"
-          : `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${buildId}-${"a".repeat(64)}"></html>`,
-      );
-      const prompter = createPrompter();
+  it("forces the canonical owner to rebuild source assets after protocol changes", async () => {
+    const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
+    await fs.mkdir(path.dirname(indexPath), { recursive: true });
+    await fs.writeFile(
+      indexPath,
+      `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${mocks.buildId}-${"a".repeat(64)}"></html>`,
+    );
+    const prompter = createPrompter();
 
-      await maybeRepairUiProtocolFreshness(runtime, prompter);
+    await maybeRepairUiProtocolFreshness(runtime, prompter);
 
-      expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-      expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
-      expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
-        root: mocks.root,
-        expectedBuildId: mocks.buildId,
-        force: true,
-        onBuildStart: expect.any(Function),
-      });
-      expect(mocks.note).toHaveBeenCalledWith("UI rebuild complete.", "UI");
-      expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("ui:build"), "UI Freshness");
-      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(
-        reason === "protocol-changes" ? 1 : 0,
-      );
-    },
-  );
+    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+    expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
+    expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
+      root: mocks.root,
+      expectedBuildId: mocks.buildId,
+      force: true,
+      onBuildStart: expect.any(Function),
+    });
+    expect(mocks.note).toHaveBeenCalledWith("UI rebuild complete.", "UI");
+    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("ui:build"), "UI Freshness");
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
+  });
 
   it("reports owner-normalized build failures instead of claiming repair success", async () => {
     mocks.ensureControlUiAssetsBuilt.mockResolvedValueOnce({

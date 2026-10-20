@@ -1,9 +1,8 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-/** Removes retired provider profiles and repairs legacy OAuth profile ids. */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { repairOAuthProfileIdMismatch } from "../agents/auth-profiles/repair.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { applyProviderConfigDefaultsForConfig } from "../config/provider-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

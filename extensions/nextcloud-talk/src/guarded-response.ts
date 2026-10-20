@@ -13,6 +13,7 @@ export async function releaseNextcloudTalkGuardedResponse(params: {
   }
   await params.release();
 }
+
 export async function readNextcloudTalkErrorBody(
   response: Response,
   ...credentials: string[]

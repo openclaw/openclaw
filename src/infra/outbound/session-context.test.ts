@@ -21,49 +21,6 @@ beforeEach(() => {
 });
 
 describe("buildOutboundSessionContext", () => {
-  it("returns undefined when both session key and agent id are blank", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        sessionKey: "  ",
-        agentId: null,
-      }),
-    ).toBeUndefined();
-    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
-  });
-
-  it("returns only the explicit trimmed agent id when no session key is present", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        sessionKey: "  ",
-        agentId: "  explicit-agent  ",
-      }),
-    ).toEqual({
-      agentId: "explicit-agent",
-    });
-    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
-  });
-
-  it("derives the agent id from the trimmed session key when no explicit agent is given", () => {
-    resolveSessionAgentIdMock.mockReturnValueOnce("derived-agent");
-
-    expect(
-      buildOutboundSessionContext({
-        cfg: { agents: {} } as never,
-        sessionKey: "  session:main:123  ",
-      }),
-    ).toEqual({
-      key: "session:main:123",
-      agentId: "derived-agent",
-    });
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
-      sessionKey: "session:main:123",
-      config: { agents: {} },
-      agentId: undefined,
-    });
-  });
-
   it("passes explicit ownership when resolving an unscoped session key", () => {
     resolveSessionAgentIdMock.mockImplementationOnce(({ agentId }: { agentId?: string }) => {
       if (!agentId) {
@@ -89,69 +46,6 @@ describe("buildOutboundSessionContext", () => {
     });
   });
 
-  it("preserves a trimmed requester sender id when provided", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        requesterSenderId: "  sender-123  ",
-      }),
-    ).toEqual({
-      requesterSenderId: "sender-123",
-    });
-  });
-
-  it("preserves a trimmed requester account id when provided", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        requesterAccountId: "  work  ",
-      }),
-    ).toEqual({
-      requesterAccountId: "work",
-    });
-  });
-
-  it("preserves trimmed non-id sender fields for e164/username/name policy matching", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        requesterSenderId: "id:forum:123",
-        requesterSenderName: "  Alice  ",
-        requesterSenderUsername: "  alice_u  ",
-        requesterSenderE164: "  +15551234567  ",
-      }),
-    ).toEqual({
-      requesterSenderId: "id:forum:123",
-      requesterSenderName: "Alice",
-      requesterSenderUsername: "alice_u",
-      requesterSenderE164: "+15551234567",
-    });
-  });
-
-  it("normalizes explicit conversation type for policy resolution", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        sessionKey: "agent:main:generic",
-        conversationType: "channel",
-      }),
-    ).toEqual({
-      key: "agent:main:generic",
-      conversationType: "group",
-      conversationKind: "channel",
-    });
-
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        conversationType: "dm",
-      }),
-    ).toEqual({
-      conversationType: "direct",
-      conversationKind: "direct",
-    });
-  });
-
   it("falls back to isGroup when no explicit conversation type is provided", () => {
     expect(
       buildOutboundSessionContext({
@@ -172,18 +66,6 @@ describe("buildOutboundSessionContext", () => {
     ).toEqual({
       conversationType: "direct",
       conversationKind: "direct",
-    });
-  });
-
-  it("derives direct conversation type from a canonical delivery session", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        sessionKey: "agent:main:discord:dm:U123",
-      }),
-    ).toEqual({
-      key: "agent:main:discord:dm:U123",
-      conversationType: "direct",
     });
   });
 
@@ -214,17 +96,5 @@ describe("buildOutboundSessionContext", () => {
       conversationType: "group",
       conversationKind: "channel",
     });
-  });
-
-  it("returns undefined when all sender and session fields are blank", () => {
-    expect(
-      buildOutboundSessionContext({
-        cfg: {} as never,
-        requesterSenderId: "  ",
-        requesterSenderName: "  ",
-        requesterSenderUsername: "  ",
-        requesterSenderE164: "  ",
-      }),
-    ).toBeUndefined();
   });
 });

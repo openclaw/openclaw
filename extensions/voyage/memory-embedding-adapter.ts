@@ -1,10 +1,9 @@
-// Voyage plugin module implements memory embedding adapter behavior.
 import {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
-  type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+} from "openclaw/plugin-sdk/embedding-provider-adapter";
+import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
 import {
   createVoyageEmbeddingProvider,
@@ -37,17 +36,12 @@ export const voyageMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
         },
         batchEmbed: async (batch) => {
           const byCustomId = await runVoyageEmbeddingBatches({
+            ...batch,
             client,
-            agentId: batch.agentId,
             requests: batch.chunks.map((chunk, index) => ({
               custom_id: String(index),
               body: { input: chunk.text },
             })),
-            wait: batch.wait,
-            concurrency: batch.concurrency,
-            pollIntervalMs: batch.pollIntervalMs,
-            timeoutMs: batch.timeoutMs,
-            debug: batch.debug,
           });
           return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
         },

@@ -12,7 +12,7 @@ const URL_PATH_WITH_PARENS =
  *  URLs, while preserving balanced parentheses and exact authored Markdown
  *  destinations. `(see https://example.com/path).` must link only the URL,
  *  but `[label](https://example.com/path.)` must retain its authored dot. */
-function trimUrlTrailingPunctuation(url: string, knownUrls?: string[]): string {
+function trimUrlTrailingPunctuation(url: string, knownUrls?: ReadonlySet<string>): string {
   let open = 0;
   for (let index = 0; index < url.length; index++) {
     const ch = url[index];
@@ -21,7 +21,7 @@ function trimUrlTrailingPunctuation(url: string, knownUrls?: string[]): string {
     } else if (ch === ")") {
       if (open === 0) {
         const authoredUrl = url.slice(0, index);
-        return knownUrls?.includes(authoredUrl)
+        return knownUrls?.has(authoredUrl)
           ? authoredUrl
           : trimUrlTrailingPunctuation(authoredUrl, knownUrls);
       }
@@ -29,7 +29,7 @@ function trimUrlTrailingPunctuation(url: string, knownUrls?: string[]): string {
     }
   }
   const trimmed = url.replace(/[?!.,:;*_~]+$/u, "");
-  return knownUrls?.includes(url) && !knownUrls.includes(trimmed) ? url : trimmed;
+  return knownUrls?.has(url) && !knownUrls.has(trimmed) ? url : trimmed;
 }
 
 function hasUrlContent(url: string): boolean {
@@ -40,11 +40,7 @@ function hasUrlContent(url: string): boolean {
   return /[\p{L}\p{N}]/u.test(authority) || /^\[[0-9a-f:.]+\](?::\d+)?$/i.test(authority);
 }
 
-/**
- * Extract all unique URLs from raw markdown text.
- * Finds both bare URLs and markdown link hrefs [text](url).
- */
-export function extractUrls(markdown: string): string[] {
+export function extractUrls(markdown: string): ReadonlySet<string> {
   const urls = new Set<string>();
 
   // Markdown link hrefs: [text](url), with optional <...> and optional title.
@@ -52,15 +48,15 @@ export function extractUrls(markdown: string): string[] {
     `\\[(?:[^\\]]*)\\]\\(\\s*<?(${URL_PATH_WITH_PARENS.source})>?(?:\\s+["'][^"']*["'])?\\s*\\)`,
     "g",
   );
-  let m: RegExpExecArray | null;
-  while ((m = mdLinkRe.exec(markdown)) !== null) {
-    if (hasUrlContent(expectDefined(m[1], "m capture group 1"))) {
-      urls.add(expectDefined(m[1], "m capture group 1"));
+  const stripped = markdown.replace(mdLinkRe, (_match, url: string) => {
+    if (hasUrlContent(url)) {
+      urls.add(url);
     }
-  }
+    return "";
+  });
 
-  // Bare URLs (remove markdown links first to avoid double-matching)
-  const stripped = markdown.replace(mdLinkRe, "");
+  // Bare URLs (markdown links were removed above to avoid double-matching)
+  let m: RegExpExecArray | null;
   const bareRe =
     /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+)/gi;
   while ((m = bareRe.exec(stripped)) !== null) {
@@ -70,21 +66,18 @@ export function extractUrls(markdown: string): string[] {
     }
   }
 
-  return [...urls];
+  return urls;
 }
 
 interface UrlRange {
   start: number; // visible text start index
   end: number; // visible text end index (exclusive)
-  url: string; // full URL to link to
+  url: string;
 }
 
-/**
- * Find URL ranges in a line's visible text, handling cross-line URL splits.
- */
 function findUrlRanges(
   visibleText: string,
-  knownUrls: string[],
+  knownUrls: ReadonlySet<string>,
   pending: { url: string; consumed: number } | null,
   nextVisibleText?: string,
 ): { ranges: UrlRange[]; pending: { url: string; consumed: number } | null } {
@@ -92,7 +85,6 @@ function findUrlRanges(
   let newPending: { url: string; consumed: number } | null = null;
   let searchFrom = 0;
 
-  // Handle continuation of a URL broken from the previous line
   if (pending) {
     const remaining = pending.url.slice(pending.consumed);
     const trimmed = visibleText.trimStart();
@@ -121,7 +113,6 @@ function findUrlRanges(
     }
   }
 
-  // Find new URL starts in visible text
   const urlRe =
     /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)/gi;
   urlRe.lastIndex = searchFrom;
@@ -131,7 +122,6 @@ function findUrlRanges(
     const fragment = trimUrlTrailingPunctuation(match[0], knownUrls);
     const start = match.index;
 
-    // Resolve fragment to a known URL (exact > prefix > superstring)
     let resolvedUrl = fragment;
     let found = false;
 
@@ -165,32 +155,22 @@ function findUrlRanges(
       }
     }
 
-    if (!found && knownUrls.includes(fragment)) {
-      found = true;
-    }
-    if (!found) {
-      let bestLen = 0;
+    if (!found && !knownUrls.has(fragment)) {
+      let prefix = "";
+      let parent = "";
       for (const known of knownUrls) {
-        if (known.startsWith(fragment) && known.length > bestLen) {
-          resolvedUrl = known;
-          bestLen = known.length;
-          found = true;
+        if (known.startsWith(fragment) && known.length > prefix.length) {
+          prefix = known;
+        }
+        if (fragment.startsWith(known) && known.length > parent.length) {
+          parent = known;
         }
       }
-    }
-    if (!found) {
-      let bestLen = 0;
-      for (const known of knownUrls) {
-        if (fragment.startsWith(known) && known.length > bestLen) {
-          resolvedUrl = known;
-          bestLen = known.length;
-        }
-      }
+      resolvedUrl = prefix || parent || fragment;
     }
 
     ranges.push({ start, end: start + fragment.length, url: resolvedUrl });
 
-    // If fragment is a strict prefix of the resolved URL, it may be split
     if (resolvedUrl.length > fragment.length && resolvedUrl.startsWith(fragment)) {
       newPending = { url: resolvedUrl, consumed: fragment.length };
     }
@@ -199,10 +179,6 @@ function findUrlRanges(
   return { ranges, pending: newPending };
 }
 
-/**
- * Apply OSC 8 hyperlink sequences to a line based on visible-text URL ranges.
- * Preserve renderer-owned hyperlinks while linking remaining visible URL ranges.
- */
 function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
   if (ranges.length === 0) {
     return line;
@@ -232,7 +208,8 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
       continue;
     }
 
-    for (const char of segment.value) {
+    let offset = 0;
+    while (offset < segment.value.length) {
       while (range && visiblePos >= range.end) {
         range = ranges[++rangeIndex];
       }
@@ -246,8 +223,23 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
         }
         activeUrl = targetUrl;
       }
-      result += char;
-      visiblePos += char.length;
+      let end =
+        rendererLink || !range
+          ? segment.value.length
+          : Math.min(
+              segment.value.length,
+              offset + (visiblePos < range.start ? range.start : range.end) - visiblePos,
+            );
+      // UTF-16 range boundaries must keep whole code points, even when a wrapped
+      // continuation matched only a leading surrogate.
+      const last = segment.value.charCodeAt(end - 1);
+      const next = segment.value.charCodeAt(end);
+      if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+        end += 1;
+      }
+      result += segment.value.slice(offset, end);
+      visiblePos += end - offset;
+      offset = end;
     }
   }
 
@@ -258,15 +250,8 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
   return result;
 }
 
-/**
- * Add OSC 8 hyperlinks to rendered lines using a pre-extracted URL list.
- *
- * For each line, finds URL-like substrings in the visible text, matches them
- * against known URLs, and wraps each fragment with OSC 8 escape sequences.
- * Handles URLs broken across multiple lines by pi-tui's word wrapping.
- */
-export function addOsc8Hyperlinks(lines: string[], urls: string[]): string[] {
-  if (urls.length === 0) {
+export function addOsc8Hyperlinks(lines: string[], urls: ReadonlySet<string>): string[] {
+  if (urls.size === 0) {
     return lines;
   }
 

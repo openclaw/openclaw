@@ -1,9 +1,9 @@
-// Openrouter provider module implements model/runtime integration.
 import { normalizeOpenRouterModelPricing } from "openclaw/plugin-sdk/model-catalog-pricing";
 import {
   buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { normalizeOpenRouterModelReasoning } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   normalizeBaseUrl,
   resolveProviderHttpRequestConfig,
@@ -66,7 +66,7 @@ export function resolveOpenRouterApiBaseUrl(baseUrl: string | undefined): string
   // Credentialed catalog, inference, and usage paths must share one validated provider destination.
   const normalized =
     normalizeOpenRouterBaseUrl(baseUrl) ?? normalizeBaseUrl(baseUrl, OPENROUTER_BASE_URL);
-  const parsed = URL.canParse(normalized) ? new URL(normalized) : undefined;
+  const parsed = URL.parse(normalized);
   if (
     !parsed ||
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
@@ -97,9 +97,6 @@ export function resolveOpenRouterSsrfPolicy(
 
 export function isOpenRouterProxyReasoningUnsupportedModel(modelId: string | undefined): boolean {
   const normalized = (modelId ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
   return (
     OPENROUTER_PROXY_REASONING_UNSUPPORTED_MODEL_IDS.has(normalized) ||
     normalized.startsWith("openrouter/hunter-alpha:")
@@ -142,15 +139,11 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
   };
 }
 
-function readStringArray(record: Record<string, unknown> | undefined, key: string): string[] {
-  return filterStringEntries(record?.[key]);
-}
-
 function readOpenRouterModalities(
   architecture: Record<string, unknown> | undefined,
   direction: "input" | "output",
 ): string[] {
-  const explicit = readStringArray(architecture, `${direction}_modalities`);
+  const explicit = filterStringEntries(architecture?.[`${direction}_modalities`]);
   if (explicit.length > 0) {
     return explicit;
   }
@@ -171,15 +164,20 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
     return undefined;
   }
   const inputModalities = readOpenRouterModalities(architecture, "input");
-  const supportedParameters = readStringArray(record, "supported_parameters");
+  const supportedParameters = filterStringEntries(record?.supported_parameters);
   const topProvider = asOptionalRecord(record?.top_provider);
+  const reasoning = normalizeOpenRouterModelReasoning(record?.reasoning);
   return {
     id,
     name: normalizeOptionalString(record?.name) ?? id,
     reasoning:
       supportedParameters.includes("reasoning") ||
       supportedParameters.includes("include_reasoning"),
+    ...reasoning,
     input: inputModalities.includes("image") ? ["text", "image"] : ["text"],
+    ...(Array.isArray(record?.supported_parameters)
+      ? { compat: { ...reasoning?.compat, supportsTools: supportedParameters.includes("tools") } }
+      : {}),
     cost: normalizeOpenRouterModelPricing(record?.pricing) ?? { ...OPENROUTER_DEFAULT_COST },
     contextWindow:
       asPositiveSafeInteger(topProvider?.context_length) ??
@@ -219,6 +217,7 @@ export async function buildOpenrouterLiveProvider(params: {
   const requestConfig = resolveRequest();
   const endpoint = `${requestConfig.baseUrl}/models`;
   return await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: "openrouter",
     endpoint,
     providerConfig: {

@@ -1,6 +1,6 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import type { ActionDownloadCapture } from "./pw-session-contracts.js";
 import { ensurePageState } from "./pw-session-state.js";

@@ -5,15 +5,20 @@ import type {
 } from "../../channels/message/types.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 
-export function resolveDeferredDeliveryAdmission(
+export async function prepareDeferredDeliveryAdmission(
   params: ChannelMessageDeferredDeliveryAdmissionContext,
-  owner?: { agentId?: string },
-): ChannelMessageDeferredDeliveryAdmissionResult {
-  const adapter = resolveOutboundChannelMessageAdapter({
+  owner?: { agentId?: string; assertCurrent?: () => void },
+): Promise<() => ChannelMessageDeferredDeliveryAdmissionResult> {
+  const adapter = await resolveOutboundChannelMessageAdapter({
     channel: params.channel,
     cfg: params.cfg,
     agentId: owner?.agentId,
     allowBootstrap: true,
+    assertCurrent: owner?.assertCurrent,
   });
-  return adapter?.durableFinal?.admitDeferredDelivery?.(params) ?? { status: "allowed" };
+  // Recovery rechecks its continuation fence after preparation and before provider policy runs.
+  return () => {
+    owner?.assertCurrent?.();
+    return adapter?.durableFinal?.admitDeferredDelivery?.(params) ?? { status: "allowed" };
+  };
 }

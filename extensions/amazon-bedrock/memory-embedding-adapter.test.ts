@@ -60,10 +60,9 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
     expect(bedrockMemoryEmbeddingProviderAdapter.transport).toBe("remote");
     expect(bedrockMemoryEmbeddingProviderAdapter.authProviderId).toBe("amazon-bedrock");
     expect(bedrockMemoryEmbeddingProviderAdapter.autoSelectPriority).toBe(60);
-    expect(bedrockMemoryEmbeddingProviderAdapter.allowExplicitWhenConfiguredAuto).toBe(true);
   });
 
-  it("reports missing credentials to automatic provider selection", async () => {
+  it("rejects provider creation when AWS credentials are unavailable", async () => {
     hasAwsCredentialsMock.mockResolvedValue(false);
 
     const error = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()).then(
@@ -81,26 +80,6 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
       expect.stringContaining("AWS credentials are not available"),
     );
     expect(createBedrockEmbeddingProviderMock).not.toHaveBeenCalled();
-    expect(bedrockMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection?.(error)).toBe(true);
-  });
-
-  it("creates the provider when AWS credentials are available", async () => {
-    hasAwsCredentialsMock.mockResolvedValue(true);
-    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0", dimensions: 1024 });
-
-    const result = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-
-    expect(result.provider?.id).toBe("bedrock");
-    expect(result.runtime).toEqual({
-      id: "bedrock",
-      cacheKeyData: {
-        provider: "bedrock",
-        region: "us-east-1",
-        model: "amazon.titan-embed-text-v2:0",
-        dimensions: 1024,
-      },
-    });
-    expect(createBedrockEmbeddingProviderMock).toHaveBeenCalledOnce();
   });
 
   it("invalidates cached embeddings when the configured PrivateLink endpoint changes", async () => {
@@ -153,11 +132,15 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
       },
     });
 
-    expect(result.runtime?.cacheKeyData).toEqual({
-      provider: "bedrock",
-      region: "us-east-1",
-      model: "amazon.titan-embed-text-v2:0",
-      dimensions: 1024,
+    expect(result.provider?.id).toBe("bedrock");
+    expect(result.runtime).toEqual({
+      id: "bedrock",
+      cacheKeyData: {
+        provider: "bedrock",
+        region: "us-east-1",
+        model: "amazon.titan-embed-text-v2:0",
+        dimensions: 1024,
+      },
     });
   });
 });

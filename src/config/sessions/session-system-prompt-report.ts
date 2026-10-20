@@ -40,6 +40,10 @@ export type SessionSystemPromptReport = {
     {
       name: string;
       path: string;
+      origin?: {
+        kind: "agent-workspace" | "execution-project" | "personal" | "other";
+        rootPath?: string;
+      };
       missing: boolean;
       rawChars: number;
     } & (
@@ -65,11 +69,26 @@ export type SessionSystemPromptReport = {
     schemaChars: number;
     entries: Array<{
       name: string;
+      source?: "openclaw" | "mcp" | "client";
+      sourceName?: string;
+      serverName?: string;
       summaryChars: number;
       summaryHash?: string;
       schemaChars: number;
       schemaHash?: string;
       propertiesCount?: number | null;
     }>;
+    /** Available schemas, not part of the consumed schemaChars total. */
+    deferred?: {
+      /** Sum of known sizes; entries with null sizes remain unmeasured. */
+      schemaChars: number;
+      entries: Array<{
+        name: string;
+        source: "openclaw" | "mcp" | "client";
+        sourceName?: string;
+        serverName?: string;
+        schemaChars: number | null;
+      }>;
+    };
   };
 };

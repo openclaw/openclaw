@@ -1,9 +1,9 @@
 // Delivery queue health tests cover independent inbound and outbound diagnostic reads.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as deliveryQueueState from "../../infra/delivery-queue-sqlite.js";
 
 const countOutbound = vi.fn();
-const countIngressFailed = vi.fn();
-const countIngressPressure = vi.fn();
+const countIngress = vi.fn();
 
 vi.mock("../../infra/delivery-queue-sqlite.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/delivery-queue-sqlite.js")>();
@@ -18,8 +18,7 @@ vi.mock("../../channels/message/ingress-queue-health.js", async (importOriginal)
     await importOriginal<typeof import("../../channels/message/ingress-queue-health.js")>();
   return {
     ...actual,
-    countFailedChannelIngressQueueEntries: () => countIngressFailed(),
-    countChannelIngressQueuePressure: () => countIngressPressure(),
+    countChannelIngressQueueHealth: () => countIngress(),
   };
 });
 
@@ -42,38 +41,34 @@ const ingressPressure = [
 
 describe("buildDeliveryQueueHealthSummary", () => {
   beforeEach(() => {
-    countOutbound.mockReset().mockReturnValue([]);
-    countIngressFailed.mockReset().mockReturnValue([]);
-    countIngressPressure.mockReset().mockReturnValue([]);
+    countOutbound.mockReset().mockResolvedValue([]);
+    countIngress.mockReset().mockResolvedValue({ failed: [], pressure: [] });
   });
 
   it.each([
     {
       name: "outbound failures when the ingress dead-letter read fails",
       arrange: () => {
-        countOutbound.mockReturnValue(outboundFailed);
-        countIngressFailed.mockImplementation(() => {
-          throw new Error("ingress database unavailable");
-        });
+        countOutbound.mockResolvedValue(outboundFailed);
+        countIngress.mockRejectedValue(new Error("ingress database unavailable"));
       },
       expected: { failed: outboundFailed },
     },
     {
       name: "ingress failures when the outbound read fails",
       arrange: () => {
-        countOutbound.mockImplementation(() => {
-          throw new Error("outbound database unavailable");
-        });
-        countIngressFailed.mockReturnValue(ingressFailed);
+        countOutbound.mockRejectedValue(new Error("outbound database unavailable"));
+        countIngress.mockResolvedValue({ failed: ingressFailed, pressure: [] });
       },
       expected: { failed: [], ingressFailed },
     },
     {
       name: "dead letters when the ingress pressure read fails",
       arrange: () => {
-        countIngressFailed.mockReturnValue(ingressFailed);
-        countIngressPressure.mockImplementation(() => {
-          throw new Error("ingress pressure read unavailable");
+        countIngress.mockResolvedValue({
+          failed: ingressFailed,
+          pressure: [],
+          errors: { pressure: "ingress pressure read unavailable" },
         });
       },
       expected: { failed: [], ingressFailed },
@@ -81,23 +76,36 @@ describe("buildDeliveryQueueHealthSummary", () => {
     {
       name: "ingress pressure when the dead-letter read fails",
       arrange: () => {
-        countIngressFailed.mockImplementation(() => {
-          throw new Error("ingress failed read unavailable");
+        countIngress.mockResolvedValue({
+          failed: [],
+          pressure: ingressPressure,
+          errors: { failed: "ingress failed read unavailable" },
         });
-        countIngressPressure.mockReturnValue(ingressPressure);
       },
       expected: { failed: [], ingressPressure },
     },
-  ])("preserves $name", ({ arrange, expected }) => {
+  ])("preserves $name", async ({ arrange, expected }) => {
     arrange();
-    expect(buildDeliveryQueueHealthSummary()).toEqual(expected);
+    expect(await buildDeliveryQueueHealthSummary()).toEqual(expected);
   });
 
-  it("uses cached ingress pressure without rerunning its reader", () => {
-    expect(buildDeliveryQueueHealthSummary(ingressPressure)).toEqual({
-      failed: [],
-      ingressPressure,
-    });
-    expect(countIngressPressure).not.toHaveBeenCalled();
+  it("preserves ingress diagnostics when outbound admission capture fails", async () => {
+    const capture = vi
+      .spyOn(deliveryQueueState, "captureDeliveryQueueStateContext")
+      .mockImplementation(() => {
+        throw new Error("outbound admission unavailable");
+      });
+    countIngress.mockResolvedValue({ failed: ingressFailed, pressure: ingressPressure });
+    try {
+      expect(await buildDeliveryQueueHealthSummary()).toEqual({
+        failed: [],
+        ingressFailed,
+        ingressPressure,
+      });
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(countOutbound).not.toHaveBeenCalled();
+    } finally {
+      capture.mockRestore();
+    }
   });
 });

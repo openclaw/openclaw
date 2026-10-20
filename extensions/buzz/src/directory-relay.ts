@@ -13,15 +13,8 @@ const PROFILE_SUBSCRIPTION_REPLACED_REASON = "directory profile subscription rep
 const PROFILE_SUBSCRIPTION_FAILED_REASON = "directory profile subscription generation failed";
 const DIRECTORY_SHUTDOWN_REASON = "directory shutdown";
 const DIRECTORY_QUERY_COMPLETE_REASON = "directory query complete";
-const PROFILE_SUBSCRIPTION_READY_TIMEOUT_MS = 10_000;
 
 type BuzzSubscription = ReturnType<Relay["prepareSubscription"]>;
-type ProfileSubscriptionGeneration = {
-  subscriptions: BuzzSubscription[];
-  pendingReady: number;
-  opening: boolean;
-  readyTimeout?: ReturnType<typeof setTimeout>;
-};
 
 async function queryBuzzDirectoryBatch(params: {
   relay: Relay;
@@ -44,7 +37,6 @@ async function queryBuzzDirectoryBatch(params: {
     result: () => {},
     onTimeout: params.onTimeout,
     closeRelayOnTimeout: !params.onTimeout,
-    checkAbortAfterSubscribe: true,
   });
 }
 
@@ -52,7 +44,6 @@ export async function queryBuzzDirectoryProfiles(params: {
   relay: Relay;
   state: BuzzDirectoryState;
   publicKeys: string[];
-  onTimeout?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<void> {
   for (const authors of chunkItems(params.publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE)) {
@@ -66,7 +57,6 @@ export async function queryBuzzDirectoryProfiles(params: {
       onEvent: (event) => {
         params.state.applyProfileEvent(event);
       },
-      onTimeout: params.onTimeout,
       signal: params.signal,
     });
   }
@@ -113,14 +103,9 @@ export function startBuzzDirectoryRelay(params: {
   onError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
   onRoomChanged?: () => void;
-}): {
-  replaceProfilePublicKeys: (publicKeys: string[]) => void;
-  refreshRooms: (channelIds: string[]) => Promise<void>;
-  close: () => void;
-} {
+}) {
   let closed = false;
-  let profileGeneration: ProfileSubscriptionGeneration | undefined;
-  let queuedProfilePublicKeys: string[] | undefined;
+  let profileSubscriptions: BuzzSubscription[] = [];
   const pendingRoomIds = new Set<string>();
   let refreshInFlight: Promise<void> | undefined;
   let fatalErrorReported = false;
@@ -142,117 +127,13 @@ export function startBuzzDirectoryRelay(params: {
     params.relay.close();
   };
 
-  const closeProfileGeneration = (reason: string, skip?: BuzzSubscription) => {
-    const current = profileGeneration;
-    profileGeneration = undefined;
-    if (!current) {
-      return;
-    }
-    if (current.readyTimeout) {
-      clearTimeout(current.readyTimeout);
-    }
-    for (const subscription of current.subscriptions) {
+  const closeProfileSubscriptions = (reason: string, skip?: BuzzSubscription) => {
+    const current = profileSubscriptions;
+    profileSubscriptions = [];
+    for (const subscription of current) {
       if (subscription !== skip && !subscription.closed) {
         subscription.close(reason);
       }
-    }
-  };
-
-  const applyQueuedProfilePublicKeys = () => {
-    if (
-      closed ||
-      params.signal?.aborted ||
-      queuedProfilePublicKeys === undefined ||
-      profileGeneration?.opening ||
-      (profileGeneration?.pendingReady ?? 0) > 0
-    ) {
-      return;
-    }
-    const publicKeys = queuedProfilePublicKeys;
-    queuedProfilePublicKeys = undefined;
-    closeProfileGeneration(PROFILE_SUBSCRIPTION_REPLACED_REASON);
-    const authorChunks = chunkItems(publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE);
-    if (authorChunks.length === 0) {
-      return;
-    }
-    const generation: ProfileSubscriptionGeneration = {
-      subscriptions: [],
-      pendingReady: authorChunks.length,
-      opening: true,
-    };
-    generation.readyTimeout = setTimeout(() => {
-      if (profileGeneration !== generation || generation.pendingReady === 0) {
-        return;
-      }
-      reportFatalError(new Error("Timed out loading Buzz profile subscriptions"));
-    }, PROFILE_SUBSCRIPTION_READY_TIMEOUT_MS);
-    profileGeneration = generation;
-    try {
-      for (const authors of authorChunks) {
-        let ready = false;
-        const markReady = () => {
-          if (ready || profileGeneration !== generation) {
-            return;
-          }
-          ready = true;
-          generation.pendingReady -= 1;
-          if (generation.pendingReady === 0 && generation.readyTimeout) {
-            clearTimeout(generation.readyTimeout);
-            generation.readyTimeout = undefined;
-          }
-          if (!generation.opening && generation.pendingReady === 0) {
-            applyQueuedProfilePublicKeys();
-          }
-        };
-        const subscription = openBuzzRelaySubscription(
-          params.relay,
-          [
-            {
-              kinds: [BUZZ_PROFILE_KIND],
-              authors,
-              limit: authors.length,
-            },
-          ],
-          {
-            onevent: (event) => {
-              params.state.applyProfileEvent(event);
-            },
-            oneose: markReady,
-            onclose: (reason) => {
-              if (profileGeneration === generation) {
-                queuedProfilePublicKeys = undefined;
-                if (reason === "relay connection closed by us") {
-                  if (generation.readyTimeout) {
-                    clearTimeout(generation.readyTimeout);
-                  }
-                  profileGeneration = undefined;
-                } else {
-                  closeProfileGeneration(PROFILE_SUBSCRIPTION_FAILED_REASON, subscription);
-                }
-              }
-              if (
-                reason !== PROFILE_SUBSCRIPTION_REPLACED_REASON &&
-                reason !== PROFILE_SUBSCRIPTION_FAILED_REASON &&
-                reason !== DIRECTORY_SHUTDOWN_REASON &&
-                reason !== "relay connection closed by us"
-              ) {
-                reportError(new Error(`Buzz profile subscription closed: ${reason}`));
-              }
-            },
-          },
-        );
-        generation.subscriptions.push(subscription);
-      }
-    } catch (error) {
-      if (profileGeneration === generation) {
-        closeProfileGeneration(PROFILE_SUBSCRIPTION_REPLACED_REASON);
-      }
-      reportError(error);
-      return;
-    }
-    generation.opening = false;
-    if (generation.pendingReady === 0) {
-      applyQueuedProfilePublicKeys();
     }
   };
 
@@ -260,8 +141,37 @@ export function startBuzzDirectoryRelay(params: {
     if (closed || params.signal?.aborted) {
       return;
     }
-    queuedProfilePublicKeys = publicKeys.slice();
-    applyQueuedProfilePublicKeys();
+    // Profile labels are best-effort; new keys replace unfinished profile reads.
+    closeProfileSubscriptions(PROFILE_SUBSCRIPTION_REPLACED_REASON);
+    for (const authors of chunkItems(publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE)) {
+      const subscription = openBuzzRelaySubscription(
+        params.relay,
+        [
+          {
+            kinds: [BUZZ_PROFILE_KIND],
+            authors,
+            limit: authors.length,
+          },
+        ],
+        {
+          onevent: (event) => {
+            params.state.applyProfileEvent(event);
+          },
+          onclose: (reason) => {
+            if (
+              reason !== PROFILE_SUBSCRIPTION_REPLACED_REASON &&
+              reason !== PROFILE_SUBSCRIPTION_FAILED_REASON &&
+              reason !== DIRECTORY_SHUTDOWN_REASON &&
+              reason !== "relay connection closed by us"
+            ) {
+              closeProfileSubscriptions(PROFILE_SUBSCRIPTION_FAILED_REASON, subscription);
+              reportError(new Error(`Buzz profile subscription closed: ${reason}`));
+            }
+          },
+        },
+      );
+      profileSubscriptions.push(subscription);
+    }
   };
 
   const refreshRooms = (channelIds: string[]): Promise<void> => {
@@ -315,8 +225,7 @@ export function startBuzzDirectoryRelay(params: {
     refreshRooms,
     close: () => {
       closed = true;
-      queuedProfilePublicKeys = undefined;
-      closeProfileGeneration(DIRECTORY_SHUTDOWN_REASON);
+      closeProfileSubscriptions(DIRECTORY_SHUTDOWN_REASON);
       pendingRoomIds.clear();
     },
   };

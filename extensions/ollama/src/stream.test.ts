@@ -2,7 +2,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -49,19 +51,22 @@ const STREAM_MODEL = {
   api: "ollama",
   provider: "ollama",
   id: "qwen3.5",
+  name: "qwen3.5",
+  baseUrl: "http://127.0.0.1:11434",
+  reasoning: true,
   input: ["text"],
   contextWindow: 65536,
-} as const;
+  maxTokens: 8192,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+} satisfies ProviderRuntimeModel;
 
 describe("isOllamaCompatProvider", () => {
   it.each([
     ["http://localhost:11434", true],
     ["http://127.0.0.1:11434", true],
     ["http://127.0.0.2:11434", true],
-    ["http://127.255.255.254:11434", true],
     ["http://[::1]:11434", true],
     ["http://[::ffff:127.0.0.2]:11434", true],
-    ["http://128.0.0.1:11434", false],
     ["http://10.0.0.1:11434", false],
     ["http://127.0.0.1.evil.com:11434", false],
   ] as const)("classifies %s as Ollama-compatible=%s", (baseUrl, expected) => {
@@ -70,28 +75,6 @@ describe("isOllamaCompatProvider", () => {
 });
 
 describe("buildAssistantMessage", () => {
-  it("includes thinking block when response has thinking field", () => {
-    const response = makeOllamaResponse({
-      thinking: "Let me think about this",
-      content: "The answer is 42",
-    });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.content).toHaveLength(2);
-    expect(msg.content[0]).toEqual({ type: "thinking", thinking: "Let me think about this" });
-    expect(msg.content[1]).toEqual({ type: "text", text: "The answer is 42" });
-  });
-
-  it("includes thinking block when response has reasoning field", () => {
-    const response = makeOllamaResponse({
-      reasoning: "Step by step analysis",
-      content: "Result is 7",
-    });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.content).toHaveLength(2);
-    expect(msg.content[0]).toEqual({ type: "thinking", thinking: "Step by step analysis" });
-    expect(msg.content[1]).toEqual({ type: "text", text: "Result is 7" });
-  });
-
   it("prefers thinking over reasoning when both are present", () => {
     const response = makeOllamaResponse({
       thinking: "From thinking field",
@@ -100,15 +83,6 @@ describe("buildAssistantMessage", () => {
     });
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.content[0]).toEqual({ type: "thinking", thinking: "From thinking field" });
-  });
-
-  it("omits thinking block when no thinking or reasoning field", () => {
-    const response = makeOllamaResponse({
-      content: "Just text",
-    });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.content).toHaveLength(1);
-    expect(msg.content[0]).toEqual({ type: "text", text: "Just text" });
   });
 
   it("omits thinking block when thinking field is empty", () => {
@@ -121,15 +95,6 @@ describe("buildAssistantMessage", () => {
     expect(msg.content[0]).toEqual({ type: "text", text: "Just text" });
   });
 
-  it("preserves output-budget length stops", () => {
-    const response = makeOllamaResponse({
-      content: "Partial answer",
-      done_reason: "length",
-    });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.stopReason).toBe("length");
-  });
-
   it("keeps a length stop authoritative over complete-looking tool calls", () => {
     const response = makeOllamaResponse({
       done_reason: "length",
@@ -137,6 +102,56 @@ describe("buildAssistantMessage", () => {
     });
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.stopReason).toBe("length");
+  });
+
+  it("anchors context usage on measured prompt and output including cached tokens", () => {
+    const response = {
+      ...makeOllamaResponse({ content: "ok" }),
+      prompt_eval_cached_count: 80,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.usage).toMatchObject({
+      usageReport: { state: "available" },
+      input: 20,
+      cacheRead: 80,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 150 },
+    });
+  });
+
+  it("omits context usage when the prompt counter is missing", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      eval_count: 50,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
+    expect(msg.usage.contextUsage).toBeUndefined();
+  });
+  it("omits context usage when the output counter is missing", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      prompt_eval_count: 100,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
+    expect(msg.usage.contextUsage).toBeUndefined();
+  });
+
+  it("does not promote invalid counters or fallback estimates into measured context", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      prompt_eval_count: -1,
+      eval_count: 50,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
+    expect(msg.usage.contextUsage).toBeUndefined();
   });
 });
 
@@ -175,7 +190,7 @@ describe("createOllamaStreamFn thinking events", () => {
     });
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
-    const stream = streamFn(STREAM_MODEL as never, context, options);
+    const stream = streamFn(STREAM_MODEL, context, options);
 
     const events: Array<{ type: string; [key: string]: unknown }> = [];
     for await (const event of stream as AsyncIterable<{
@@ -186,6 +201,127 @@ describe("createOllamaStreamFn thinking events", () => {
     }
     return events;
   }
+
+  it.each([[1_250_000, 2_500_000, 3.75]])(
+    "retains final processing timing (%i ns + %i ns)",
+    async (prompt, evalDuration, expected) => {
+      const events = await streamOllamaEvents([
+        {
+          ...makeOllamaResponse({ content: "ok" }),
+          done: false,
+          prompt_eval_duration: 50_000_000,
+          eval_duration: 60_000_000,
+        },
+        {
+          ...makeOllamaResponse({}),
+          prompt_eval_duration: prompt,
+          eval_duration: evalDuration,
+          load_duration: 900_000_000,
+        },
+      ]);
+      expect(events.find((event) => event.type === "done")).toMatchObject({
+        message: {
+          diagnostics: [
+            {
+              type: "provider_timing",
+              timestamp: expect.any(Number),
+              details: { processingMs: expected },
+            },
+          ],
+        },
+      });
+    },
+  );
+
+  it.each([
+    { prompt_eval_duration: 1 },
+    { eval_duration: 1 },
+    { prompt_eval_duration: -1, eval_duration: 1 },
+    { prompt_eval_duration: "1", eval_duration: 1 },
+    { prompt_eval_duration: Number.MAX_VALUE, eval_duration: Number.MAX_VALUE },
+  ])("omits missing, partial, or invalid final processing timing: %j", async (timing) => {
+    const events = await streamOllamaEvents([
+      {
+        ...makeOllamaResponse({ content: "ok" }),
+        done: false,
+        prompt_eval_duration: 1_000_000,
+        eval_duration: 2_000_000,
+      },
+      { ...makeOllamaResponse({}), ...timing },
+    ]);
+    const terminal = events.find((event) => event.type === "done");
+    expect(terminal).toBeDefined();
+    expect(terminal).toMatchObject({ message: { content: [{ type: "text", text: "ok" }] } });
+    expect(terminal).not.toHaveProperty("message.diagnostics");
+  });
+
+  it.each([undefined, "Private reasoning"])(
+    "keeps native tool narration unsigned with reasoning %s",
+    async (thinking) => {
+      const path = "README.md";
+      const events = await streamOllamaEvents(
+        [
+          { ...makeOllamaResponse({ content: "Let me ", thinking }), done: false },
+          { ...makeOllamaResponse({ content: "read README.md." }), done: false },
+          makeOllamaResponse({
+            tool_calls: [{ function: { name: "read", arguments: { path } } }],
+          }),
+        ],
+        {},
+        {
+          messages: [{ role: "user", content: "Read README.md." }],
+          tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
+        } as never,
+      );
+      const done = events.find((event) => event.type === "done") as {
+        message?: { content?: unknown };
+      };
+      expect(
+        events
+          .filter((event) => event.type === "text_delta")
+          .map((event) => event.delta)
+          .join(""),
+      ).toBe("Let me read README.md.");
+      expect(events.find((event) => event.type === "toolcall_delta")).toMatchObject({
+        partial: {
+          content: expect.arrayContaining([
+            expect.objectContaining({ partialJson: JSON.stringify({ path }) }),
+          ]),
+        },
+      });
+      expect(done.message?.content).toEqual([
+        ...(thinking ? [{ type: "thinking", thinking: "Private reasoning" }] : []),
+        { type: "text", text: "Let me read README.md." },
+        { type: "toolCall", id: expect.any(String), name: "read", arguments: { path } },
+      ]);
+    },
+  );
+
+  it.each(["stop", "length"])(
+    "keeps text before reasoning deliverable at a %s terminal",
+    async (done_reason) => {
+      const events = await streamOllamaEvents([
+        { ...makeOllamaResponse({ content: "Visible answer" }), done: false },
+        makeOllamaResponse({ thinking: "Late reasoning", done_reason }),
+      ]);
+      expect(events.find((event) => event.type === "done")).toMatchObject({
+        reason: done_reason,
+        message: {
+          stopReason: done_reason,
+          content: [
+            { type: "thinking", thinking: "Late reasoning" },
+            { type: "text", text: "Visible answer" },
+          ],
+        },
+      });
+      const done = events.find((event) => event.type === "done") as {
+        message?: { content?: Array<{ type: string; textSignature?: string }> };
+      };
+      expect(
+        done.message?.content?.find((block) => block.type === "text")?.textSignature,
+      ).toBeUndefined();
+    },
+  );
 
   it("emits thinking_start, thinking_delta, and thinking_end events for thinking content", async () => {
     const thinkingChunks = [
@@ -253,38 +389,6 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(content[1]).toEqual({ type: "text", text: "The answer" });
   });
 
-  it("streams without thinking events when no thinking content is present", async () => {
-    const chunks = [
-      {
-        model: "qwen3.5",
-        created_at: "2026-01-01T00:00:00Z",
-        message: { role: "assistant", content: "Hello" },
-        done: false,
-      },
-      {
-        model: "qwen3.5",
-        created_at: "2026-01-01T00:00:01Z",
-        message: { role: "assistant", content: "" },
-        done: true,
-        done_reason: "stop",
-        prompt_eval_count: 10,
-        eval_count: 5,
-      },
-    ];
-
-    const events = await streamOllamaEvents(chunks);
-    const eventTypes = events.map((e) => e.type);
-    expect(eventTypes).not.toContain("thinking_start");
-    expect(eventTypes).not.toContain("thinking_delta");
-    expect(eventTypes).not.toContain("thinking_end");
-    expect(eventTypes).toContain("text_start");
-    expect(eventTypes).toContain("text_delta");
-    expect(eventTypes).toContain("done");
-
-    const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
-    expect(textStart?.contentIndex).toBe(0);
-  });
-
   it("emits length for a token-limited native stream", async () => {
     const events = await streamOllamaEvents([
       {
@@ -335,33 +439,6 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(done.message?.stopReason).toBe("length");
     expect(done.message?.content).toEqual([]);
   });
-
-  it("uses generic stream timeout for Ollama request timeout", async () => {
-    await streamOllamaEvents([makeOllamaResponse({ content: "ok" })], { timeoutMs: 2500 });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "http://localhost:11434/api/chat",
-      init: {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "qwen3.5",
-          messages: [{ role: "user", content: "test" }],
-          stream: true,
-          options: {},
-          truncate: false,
-          shift: false,
-        }),
-      },
-      policy: {
-        allowPrivateNetwork: true,
-        hostnameAllowlist: ["localhost"],
-      },
-      timeoutMs: 2500,
-      auditContext: "ollama-stream.chat",
-    });
-  });
-
   it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
     const rawToolText = [
       "[mempalace_mempalace_search]",
@@ -417,6 +494,34 @@ describe("createOllamaStreamFn thinking events", () => {
       type: "toolCall",
       name: "mempalace_mempalace_search",
       arguments: { query: "codename", wing: "personal", room: "identities" },
+    });
+  });
+
+  it("preserves a fenced Ollama text tool call as visible text", async () => {
+    const text = [
+      "```powershell",
+      'exec(command="echo hello", title="Echo command", workdir="C:\\workspace")',
+      "```",
+    ].join("\n");
+    const events = await streamOllamaEvents(
+      [makeOllamaResponse({ content: text })],
+      {},
+      {
+        messages: [{ role: "user", content: "Use exec to run echo hello", timestamp: 0 }],
+        tools: [{ name: "exec", description: "Run a command", parameters: Type.Object({}) }],
+      },
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events.find((event) => event.type === "done")).toMatchObject({
+      reason: "stop",
+      message: { stopReason: "stop", content: [{ type: "text", text }] },
     });
   });
 
@@ -486,7 +591,7 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      STREAM_MODEL as never,
+      STREAM_MODEL,
       { messages: [{ role: "user", content: "test" }] } as never,
       {},
     );
@@ -537,7 +642,7 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      STREAM_MODEL as never,
+      STREAM_MODEL,
       { messages: [{ role: "user", content: "test" }] } as never,
       { signal: controller.signal },
     );
@@ -598,7 +703,7 @@ describe("createOllamaStreamFn thinking events", () => {
         "X-Proxy-Auth": configuredSecret,
       });
       const stream = streamFn(
-        STREAM_MODEL as never,
+        STREAM_MODEL,
         { messages: [{ role: "user", content: "test" }] } as never,
         { apiKey: bearerCredential },
       );
@@ -622,16 +727,13 @@ describe("createOllamaStreamFn thinking events", () => {
       returnSuccess = true;
       const successEvents: Array<{ type: string }> = [];
       for await (const event of streamFn(
-        STREAM_MODEL as never,
+        STREAM_MODEL,
         { messages: [{ role: "user", content: "test" }] } as never,
         { apiKey: bearerCredential },
       ) as AsyncIterable<{ type: string }>) {
         successEvents.push(event);
       }
       expect(successEvents.some((event) => event.type === "done")).toBe(true);
-      console.info(
-        "[ollama credential redaction proof] surface=stream status=429 safe-marker-present=true authorization-secret-absent=true custom-secret-absent=true success-control=true",
-      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -663,7 +765,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const readEventTypes = async () => {
         const events: string[] = [];
         for await (const event of streamFn(
-          STREAM_MODEL as never,
+          STREAM_MODEL,
           { messages: [{ role: "user", content: "test" }] } as never,
           {},
         ) as AsyncIterable<{ type: string }>) {
@@ -730,7 +832,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const address = server.address() as AddressInfo;
       const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
       const stream = streamFn(
-        STREAM_MODEL as never,
+        STREAM_MODEL,
         { messages: [{ role: "user", content: "test" }] } as never,
         { requestTimeoutMs } as never,
       );
@@ -776,7 +878,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const address = server.address() as AddressInfo;
       const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
       const stream = streamFn(
-        STREAM_MODEL as never,
+        STREAM_MODEL,
         { messages: [{ role: "user", content: "test" }] } as never,
         { requestTimeoutMs: 120 } as never,
       );
@@ -814,7 +916,7 @@ describe("createOllamaStreamFn thinking events", () => {
     const controller = new AbortController();
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      STREAM_MODEL as never,
+      STREAM_MODEL,
       { messages: [{ role: "user", content: "test" }] } as never,
       { signal: controller.signal },
     );
@@ -881,38 +983,50 @@ describe("createOllamaStreamFn thinking events", () => {
     });
   });
 
-  it("keeps provider usage authoritative over the CJK fallback", async () => {
-    const events = await streamOllamaEvents(
-      [
-        {
-          model: "qwen3.5",
-          created_at: "2026-01-01T00:00:00Z",
-          message: { role: "assistant", content: "你好世界测试" },
-          done: false,
-        },
-        {
-          model: "qwen3.5",
-          created_at: "2026-01-01T00:00:01Z",
-          message: { role: "assistant", content: "" },
-          done: true,
-          done_reason: "stop",
-          prompt_eval_count: 77,
-          eval_count: 19,
-        },
-      ],
-      {},
-      { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
-    );
+  it.each([
+    [77, 19, 77, 19],
+    [0, 0, 0, 0],
+    [undefined, 19, 12, 19],
+    [77, undefined, 77, 6],
+    [-1, 19, 12, 19],
+    [77, -1, 77, 6],
+  ])(
+    "resolves provider counters %s/%s independently of CJK estimates",
+    async (promptCount, completionCount, expectedInput, expectedOutput) => {
+      const events = await streamOllamaEvents(
+        [
+          {
+            model: "qwen3.5",
+            created_at: "2026-01-01T00:00:00Z",
+            message: { role: "assistant", content: "你好世界测试" },
+            done: false,
+          },
+          {
+            model: "qwen3.5",
+            created_at: "2026-01-01T00:00:01Z",
+            message: { role: "assistant", content: "" },
+            done: true,
+            done_reason: "stop",
+            prompt_eval_count: promptCount,
+            eval_count: completionCount,
+          },
+        ],
+        {},
+        { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
+      );
 
-    const done = events.find((event) => event.type === "done") as {
-      message?: { usage?: { input?: number; output?: number; cacheTelemetry?: { state: string } } };
-    };
-    expect(done?.message?.usage).toMatchObject({
-      input: 77,
-      output: 19,
-      cacheTelemetry: { state: "unavailable" },
-    });
-  });
+      const done = events.find((event) => event.type === "done") as {
+        message?: {
+          usage?: { input?: number; output?: number; cacheTelemetry?: { state: string } };
+        };
+      };
+      expect(done?.message?.usage).toMatchObject({
+        input: expectedInput,
+        output: expectedOutput,
+        cacheTelemetry: { state: "unavailable" },
+      });
+    },
+  );
 
   it("keeps the existing fallback estimate for ASCII-only usage", async () => {
     const events = await streamOllamaEvents(

@@ -1,16 +1,13 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  CodexHistoryRejection,
+  codexHistoryRejectionReason,
+  type CodexHistoryRejectionReason,
+} from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
+import type { CodexBindingWithCurrent } from "./session-binding.js";
 import type { CodexMirroredSessionHistoryTarget } from "./session-history.js";
 import type { SettledTurnMessages } from "./settled-turn-evidence.js";
-
-function freezeProjection(value: JsonValue): void {
-  if (value !== null && typeof value === "object") {
-    for (const child of Object.values(value)) {
-      freezeProjection(child);
-    }
-    Object.freeze(value);
-  }
-}
 
 type CodexSettledTurnSelection = {
   model: string;
@@ -25,40 +22,45 @@ export class CodexSettledTurnContext {
   constructor(
     readonly data: JsonValue[],
     readonly selection: CodexSettledTurnSelection,
-  ) {
-    freezeProjection(data);
-    Object.freeze(selection);
-    Object.freeze(this);
-  }
+  ) {}
 }
 
-/** Verifies and freezes a complete replay projection while reading the active branch. */
+/** Verifies and captures a detached replay projection while reading the active branch. */
 export async function captureCodexSettledTurnFinalizationContext(
   params: CodexMirroredSessionHistoryTarget &
     SettledTurnMessages &
-    Partial<CodexSettledTurnSelection> & { signal?: AbortSignal; assertActive?: () => void },
+    Partial<CodexSettledTurnSelection> & {
+      signal?: AbortSignal;
+      assertActive?: () => void;
+      withCurrent?: CodexBindingWithCurrent;
+    },
 ): Promise<CodexSettledTurnContext | undefined> {
+  let reason: CodexHistoryRejectionReason;
   try {
     params.signal?.throwIfAborted();
     params.assertActive?.();
     const { model, modelProvider, authProfileId } = params;
     if (!model) {
-      throw new Error("Codex settled-turn model selection is unavailable");
+      throw new CodexHistoryRejection("model_unavailable");
     }
     const { projectCodexSettledHistoryInWorker } =
       await import("../../session-history-worker-runtime.js");
-    const data = await projectCodexSettledHistoryInWorker(params, params.signal);
+    const result = await projectCodexSettledHistoryInWorker(params, params.signal);
     params.signal?.throwIfAborted();
     params.assertActive?.();
-    return data === undefined
-      ? undefined
-      : new CodexSettledTurnContext(data, { model, modelProvider, authProfileId });
+    if (result.status === "ok") {
+      const consume = () => {
+        params.signal?.throwIfAborted();
+        params.assertActive?.();
+        return new CodexSettledTurnContext(result.value, { model, modelProvider, authProfileId });
+      };
+      return params.withCurrent ? await params.withCurrent(consume) : consume();
+    }
+    reason = result.reason;
   } catch (error) {
-    // Capture follows settled side effects; any failure must preserve the incomplete-turn result.
-    embeddedAgentLog.warn("codex settled-turn finalization context capture failed", {
-      error: formatErrorMessage(error),
-      turnId: params.turnId,
-    });
-    return undefined;
+    reason = params.signal?.aborted ? "cancelled" : codexHistoryRejectionReason(error);
   }
+  // Capture follows settled side effects; a rejected read must preserve the incomplete turn.
+  embeddedAgentLog.warn("codex settled-turn finalization context capture failed", { reason });
+  return undefined;
 }

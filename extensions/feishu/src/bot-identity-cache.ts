@@ -1,4 +1,3 @@
-// Feishu plugin module implements provider-verified bot identity cache behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getFeishuRuntime } from "./runtime.js";
@@ -13,11 +12,7 @@ type FeishuBotIdentityCacheState = {
   fetchedAt: string;
 };
 
-type CachedFeishuBotIdentity = {
-  botOpenId: string;
-  botName?: string;
-  fetchedAt: string;
-};
+type CachedFeishuBotIdentity = Pick<FeishuBotIdentityCacheState, "botOpenId" | "botName">;
 
 function openFeishuBotIdentityCache() {
   return getFeishuRuntime().state.openKeyedStore<FeishuBotIdentityCacheState>({
@@ -60,7 +55,6 @@ export async function readCachedFeishuBotIdentity(params: {
   return {
     botOpenId: cached.botOpenId,
     botName: cached.botName,
-    fetchedAt: cached.fetchedAt,
   };
 }
 

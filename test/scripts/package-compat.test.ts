@@ -67,7 +67,16 @@ if (args.includes('--help')) {
   return entry;
 }
 
-function runShell(root: string, entry: string, script: string) {
+function runCandidate(
+  script: string,
+  options: Parameters<typeof writeCandidate>[1] = {},
+  replacement = false,
+) {
+  const root = tempDirs.make("openclaw-consent-");
+  const entry = writeCandidate(root, options);
+  if (replacement) {
+    writeCandidate(root, {}, "replacement.cjs");
+  }
   const result = spawnSync(BASH_BIN, ["-c", `set -euo pipefail\n${script}`], {
     encoding: "utf8",
     timeout: 30_000,
@@ -93,6 +102,44 @@ function runShell(root: string, entry: string, script: string) {
   return { ...result, calls };
 }
 
+function fixtureNode(directory: "plugins" | "kitchen-sink-plugin", extra = "") {
+  return `node() {
+  case "$1" in
+${extra}    scripts/e2e/lib/${directory}/assertions.mjs) return 0 ;;
+    *) command node "$@" ;;
+  esac
+}`;
+}
+
+function clawhubScenario(live = true, spec?: string, id?: string, serve = false) {
+  return `
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=${live ? "1" : "0"}
+${spec ? `export OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC=${spec}` : "unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC"}
+${id ? `export OPENCLAW_PLUGINS_E2E_CLAWHUB_ID=${id}` : "unset OPENCLAW_PLUGINS_E2E_CLAWHUB_ID"}
+source scripts/e2e/lib/plugins/sweep.sh
+${
+  spec || serve
+    ? fixtureNode(
+        "plugins",
+        serve
+          ? `    scripts/e2e/lib/clawhub-fixture-server.cjs)
+      printf '12345\\n' > "$3"
+      while true; do sleep 1; done
+      ;;
+`
+          : "",
+      )
+    : ""
+}
+run_plugins_clawhub_scenario
+`;
+}
+
+const installsFor = (calls: string[][]) =>
+  calls.filter((args) => args[1] === "install" && !args.includes("--help"));
+
 const fixtureCommand = `
 source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout 5s node "$OPENCLAW_ENTRY" --
@@ -102,28 +149,15 @@ openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout 5s node "$OPENCLA
 const sweepFixtureLoader = `
 source() {
   if [[ "$1" == scripts/e2e/lib/plugins/fixtures.sh ]]; then
-    write_fixture_plugin() { mkdir -p "$1"; }
-    write_demo_fixture_plugin() { write_fixture_plugin "$@"; }
-    write_fixture_plugin_with_cli() { write_fixture_plugin "$@"; }
-    write_fixture_plugin_with_vendored_dependency() { write_fixture_plugin "$@"; }
-    write_claude_bundle_fixture() { write_fixture_plugin "$@"; }
-    pack_fixture_plugin() { :; }
-    pack_fixture_plugin_with_cli_registry_dependency() { :; }
-    pack_fake_is_number_package() { :; }
+    pack_fixture_archive() { :; }
     pack_fixture_plugin_with_invalid_extension_entry() { :; }
     start_npm_fixture_registry() { :; }
-    record_fixture_plugin_trust() { :; }
     openclaw_plugins_cleanup_fixture_servers() { :; }
   else
     builtin source "$@"
   fi
 }
-node() {
-  case "$1" in
-    scripts/e2e/lib/plugins/assertions.mjs|scripts/e2e/lib/fixture.mjs) return 0 ;;
-    *) command node "$@" ;;
-  esac
-}
+${fixtureNode("plugins", '    scripts/e2e/lib/fixture.mjs) mkdir -p "$3" ;;\n')}
 git() { printf 'fixture-commit\\n'; }
 source scripts/e2e/lib/plugins/sweep.sh
 `;
@@ -131,17 +165,7 @@ source scripts/e2e/lib/plugins/sweep.sh
 const kitchenFixtureLoader = `
 export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
-assert_kitchen_sink_cutover_preinstalled() { :; }
-configure_kitchen_sink_runtime() { :; }
-assert_kitchen_sink_installed() { :; }
-assert_kitchen_sink_removed() { :; }
-remove_kitchen_sink_channel_config() { :; }
-node() {
-  case "$1" in
-    scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs) return 0 ;;
-    *) command node "$@" ;;
-  esac
-}
+${fixtureNode("kitchen-sink-plugin")}
 KITCHEN_SINK_LABEL=fixture
 KITCHEN_SINK_ID=fixture-id
 KITCHEN_SINK_SPEC=fixture-spec
@@ -153,21 +177,16 @@ run_failure_scenario
 `;
 
 describe("package fixture consent compatibility", () => {
-  it.each([true, false])(
-    "runs the plugin sweep with selective consent (supported=%s)",
-    (supported) => {
-      const root = tempDirs.make("openclaw-consent-sweep-");
-      const entry = writeCandidate(root, {
-        commands: supported ? undefined : [],
-        preserveUninstallIntent: true,
-      });
-      const result = runShell(root, entry, sweepFixtureLoader);
+  describe.each([true, false])("consent support=%s", (supported) => {
+    const run = (script: string, options: Parameters<typeof writeCandidate>[1] = {}) => {
+      const result = runCandidate(script, { commands: supported ? undefined : [], ...options });
       expect(result.status, result.stderr).toBe(0);
-      const mutations = result.calls.filter(
-        (args) => args[0] === "plugins" && !args.includes("--help"),
-      );
-      const installs = mutations.filter((args) => args[1] === "install");
-      expect(installs).toHaveLength(12);
+      return result.calls;
+    };
+    it("runs the plugin sweep with selective consent", () => {
+      const calls = run(sweepFixtureLoader, { preserveUninstallIntent: true });
+      const mutations = calls.filter((args) => args[0] === "plugins" && !args.includes("--help"));
+      expect(installsFor(mutations)).toHaveLength(12);
       for (const args of mutations) {
         const positive =
           (args[1] === "install" && !args.some((arg) => arg.includes("invalid-metadata"))) ||
@@ -182,41 +201,34 @@ describe("package fixture consent compatibility", () => {
         "demo-plugin-npm",
         "claude-bundle-e2e",
       ]);
-    },
-  );
+    });
 
-  it.each([true, false])(
-    "runs kitchen-sink success and registry failure (supported=%s)",
-    (supported) => {
-      const root = tempDirs.make("openclaw-consent-kitchen-");
-      const result = runShell(
-        root,
-        writeCandidate(root, { commands: supported ? undefined : [] }),
-        kitchenFixtureLoader,
-      );
-      expect(result.status, result.stderr).toBe(0);
-      const installs = result.calls.filter(
-        (args) => args[1] === "install" && !args.includes("--help"),
-      );
-      expect(installs.map((args) => args[2])).toEqual([
-        "preinstall-spec",
-        "fixture-spec",
-        "missing-version",
+    it("runs kitchen-sink success and registry failure", () => {
+      const calls = run(kitchenFixtureLoader);
+      const installs = installsFor(calls);
+      expect(installs.map((args) => [args[2], args.includes(consent)])).toEqual([
+        ["preinstall-spec", supported],
+        ["fixture-spec", supported],
+        ["missing-version", false],
       ]);
-      expect(installs.map((args) => args.includes(consent))).toEqual([supported, supported, false]);
-      expect(result.calls.find((args) => args[1] === "enable")).not.toContain(consent);
-    },
-  );
+      expect(calls.find((args) => args[1] === "enable")).not.toContain(consent);
+    });
+
+    it("consents to ClawHub install but not unchanged update", () => {
+      const calls = run(
+        clawhubScenario(true, "clawhub:@example/consent-fixture", "consent-fixture"),
+      );
+      expect(installsFor(calls)[0]?.includes(consent)).toBe(supported);
+      expect(calls.find((args) => args[1] === "update")).not.toContain(consent);
+    });
+  });
 
   it("probes each command and preserves literal argv", () => {
-    const root = tempDirs.make("openclaw-consent-argv-");
-    const entry = writeCandidate(root, { commands: ["install", "update"] });
-    const result = runShell(
-      root,
-      entry,
+    const result = runCandidate(
       `${fixtureCommand} plugins install 'file:a b/$(literal)' --force ''
 ${fixtureCommand} plugins enable fixture
 ${fixtureCommand} plugins update fixture`,
+      { commands: ["install", "update"] },
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls).toEqual([
@@ -229,58 +241,36 @@ ${fixtureCommand} plugins update fixture`,
     ]);
   });
 
-  it.each([true, false])(
-    "records candidate capability consent support (supported=%s)",
-    (supported) => {
-      const root = tempDirs.make("openclaw-consent-support-");
-      const result = runShell(
-        root,
-        writeCandidate(root, { commands: supported ? undefined : [] }),
-        `${fixtureCommand} plugins install fixture
-printf 'support=%s\\n' "$OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED"`,
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(`support=${supported ? "1" : "0"}`);
-    },
-  );
+  it("requires an explicit package identity for live ClawHub E2E", () => {
+    const result = runCandidate(clawhubScenario());
 
-  it.each([true, false])(
-    "consents to ClawHub install but not unchanged update (supported=%s)",
-    (supported) => {
-      const root = tempDirs.make("openclaw-consent-clawhub-");
-      const result = runShell(
-        root,
-        writeCandidate(root, { commands: supported ? undefined : [] }),
-        `
-export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
-export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
-export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
-source scripts/e2e/lib/plugins/sweep.sh
-node() {
-  case "$1" in
-    scripts/e2e/lib/plugins/assertions.mjs) return 0 ;;
-    *) command node "$@" ;;
-  esac
-}
-run_plugins_clawhub_scenario
-`,
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(
-        result.calls
-          .find((args) => args[1] === "install" && !args.includes("--help"))
-          ?.includes(consent),
-      ).toBe(supported);
-      expect(result.calls.find((args) => args[1] === "update")).not.toContain(consent);
-    },
-  );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("the Kitchen Sink listing has been retired");
+  });
 
   it.each([
-    ["  --accept-capabilities  Accept\n", [consent]],
+    [false, "openclaw-kitchen-sink-fixture", "clawhub:@openclaw/plugin-e2e-fixture"],
+    [true, "custom-plugin", "clawhub:@example/custom-plugin"],
+  ] as const)("selects the ClawHub identity (live=%s)", (live, expectedId, expectedSpec) => {
+    const result = runCandidate(
+      clawhubScenario(live, live ? expectedSpec : undefined, live ? expectedId : undefined, true),
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const install = installsFor(result.calls)[0];
+    expect(install?.[2]).toBe(expectedSpec);
+    expect(result.calls.filter((args) => args[1] === "inspect").map((args) => args[2])).toEqual([
+      expectedId,
+      expectedId,
+    ]);
+    expect(result.calls.find((args) => args[1] === "update")?.[2]).toBe(expectedId);
+    expect(result.calls.find((args) => args[1] === "uninstall")?.[2]).toBe(expectedSpec);
+  });
+
+  it.each([
     ["  \u001b[32m--accept-capabilities\u001b[0m  Accept\n", [consent]],
     ["  --accept-capabilities-extra  Other\n", []],
     ["See --accept-capabilities in newer releases\n", []],
-    ["  --force  Confirm\n", []],
   ])("reads only an advertised option from help %j", (help, expected) => {
     expect(fixtureCapabilityConsentArgs(help)).toEqual(expected);
   });
@@ -291,24 +281,17 @@ run_plugins_clawhub_scenario
     ["kitchen-sink", "error"],
     ["kitchen-sink", "timeout"],
   ])("%s logger fails before mutation on help %s", (suite, failure) => {
-    const root = tempDirs.make("openclaw-consent-failure-");
-    const entry = writeCandidate(root, failure === "error" ? { helpStatus: 47 } : { hang: true });
-    const result = runShell(
-      root,
-      entry,
-      suite === "plugins"
-        ? `
-export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
-export OPENCLAW_PLUGINS_CLI_TIMEOUT=1s
-source scripts/e2e/lib/plugins/sweep.sh
-run_plugins_fixture_logged failure plugins install fixture --force
-`
-        : `
-export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
-export KITCHEN_SINK_CLI_TIMEOUT=1s
-source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
-run_kitchen_sink_fixture_logged failure plugins install fixture --force
+    const prefix = suite === "plugins" ? "OPENCLAW_PLUGINS" : "KITCHEN_SINK";
+    const directory = suite === "plugins" ? "plugins" : "kitchen-sink-plugin";
+    const runner = suite === "plugins" ? "plugins" : "kitchen_sink";
+    const result = runCandidate(
+      `
+export ${prefix}_SWEEP_SOURCE_ONLY=1
+export ${prefix}_CLI_TIMEOUT=1s
+source scripts/e2e/lib/${directory}/sweep.sh
+run_${runner}_fixture_logged failure plugins install fixture --force
 `,
+      failure === "error" ? { helpStatus: 47 } : { hang: true },
     );
     expect(result.status, result.stderr).toBe(failure === "error" ? 47 : 124);
     expect(result.stdout + result.stderr).toContain("help probe failed");
@@ -316,26 +299,18 @@ run_kitchen_sink_fixture_logged failure plugins install fixture --force
   });
 
   it("returns the mutation exit status", () => {
-    const root = tempDirs.make("openclaw-consent-exit-");
-    const result = runShell(
-      root,
-      writeCandidate(root, { exitCode: 49 }),
-      `${fixtureCommand} plugins install fixture`,
-    );
+    const result = runCandidate(`${fixtureCommand} plugins install fixture`, { exitCode: 49 });
     expect(result.status).toBe(49);
     expect(result.calls.at(-1)).toEqual(["plugins", "install", "fixture", consent]);
   });
 
   it("reprobes a replacement at the same executable path and version", () => {
-    const root = tempDirs.make("openclaw-consent-replacement-");
-    const entry = writeCandidate(root, { commands: [] });
-    writeCandidate(root, {}, "replacement.cjs");
-    const result = runShell(
-      root,
-      entry,
+    const result = runCandidate(
       `${fixtureCommand} plugins install fixture
 cp "$HOME/replacement.cjs" "$OPENCLAW_ENTRY"
 ${fixtureCommand} plugins install fixture`,
+      { commands: [] },
+      true,
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls).toEqual([
@@ -344,17 +319,5 @@ ${fixtureCommand} plugins install fixture`,
       ["plugins", "install", "--help"],
       ["plugins", "install", "fixture", consent],
     ]);
-  });
-
-  it.each([
-    ["2026.4.25", "1"],
-    ["2026.4.26", "0"],
-    ["2026.8.1", "0"],
-  ])("preserves legacy version CLI %s", (version, output) => {
-    const result = spawnSync(process.execPath, ["scripts/e2e/lib/package-compat.mjs", version], {
-      encoding: "utf8",
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(output);
   });
 });

@@ -1,4 +1,4 @@
-// Pure helpers for HTTP Accept media-range parsing.
+import { splitHttpHeaderValue } from "./http-header-value.js";
 
 const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 const HTTP_QVALUE_PATTERN = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/u;
@@ -6,45 +6,6 @@ const HTTP_OPTIONAL_WHITESPACE_PATTERN = /^[\t ]+|[\t ]+$/gu;
 
 function trimHttpOptionalWhitespace(value: string): string {
   return value.replace(HTTP_OPTIONAL_WHITESPACE_PATTERN, "");
-}
-
-function splitOutsideQuotedStrings(value: string, delimiter: string): string[] | null {
-  const parts: string[] = [];
-  let start = 0;
-  let quoted = false;
-  let escaped = false;
-
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (quoted) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (character === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (character === '"') {
-        quoted = false;
-      }
-      continue;
-    }
-    if (character === '"') {
-      quoted = true;
-      continue;
-    }
-    if (character === delimiter) {
-      parts.push(value.slice(start, index));
-      start = index + 1;
-    }
-  }
-
-  if (quoted || escaped) {
-    return null;
-  }
-  parts.push(value.slice(start));
-  return parts;
 }
 
 function parseParameterValue(value: string): string | null {
@@ -75,19 +36,10 @@ function parseParameterValue(value: string): string | null {
   return escaped ? null : parsed;
 }
 
-function normalizeParameterValue(name: string, value: string): string {
-  return name === "charset" ? value.toLowerCase() : value;
-}
+type ParsedMediaType = NonNullable<ReturnType<typeof parseMediaType>>;
 
-type ParsedMediaType = {
-  type: string;
-  subtype: string;
-  parameters: Map<string, string>;
-  quality: number;
-};
-
-function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType | null {
-  const segments = splitOutsideQuotedStrings(value, ";");
+function parseMediaType(value: string, allowQuality: boolean) {
+  const segments = splitHttpHeaderValue(value, ";", "quoted-string");
   if (!segments) {
     return null;
   }
@@ -140,7 +92,7 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
     if (parameterValue === null || parameters.has(name)) {
       return null;
     }
-    parameters.set(name, normalizeParameterValue(name, parameterValue));
+    parameters.set(name, name === "charset" ? parameterValue.toLowerCase() : parameterValue);
   }
   return { type, subtype, parameters, quality };
 }
@@ -180,7 +132,7 @@ export function acceptsMediaType(
     return false;
   }
 
-  const ranges = splitOutsideQuotedStrings(accept, ",");
+  const ranges = splitHttpHeaderValue(accept, ",", "quoted-string");
   if (!ranges) {
     return false;
   }

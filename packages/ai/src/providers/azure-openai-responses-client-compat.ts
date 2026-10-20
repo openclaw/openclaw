@@ -5,14 +5,8 @@ export function isTraditionalAzureOpenAIHost(hostname: string): boolean {
 }
 
 export function isOpenAICompatibleAzureResponsesBaseUrl(baseUrl: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    return false;
-  }
-
-  if (isTraditionalAzureOpenAIHost(url.hostname)) {
+  const url = URL.parse(baseUrl);
+  if (!url || isTraditionalAzureOpenAIHost(url.hostname)) {
     return false;
   }
 

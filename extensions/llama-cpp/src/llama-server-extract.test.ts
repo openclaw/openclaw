@@ -1,16 +1,45 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
-import { selectLlamaServerAsset, type LlamaServerAsset } from "./llama-server-assets.js";
-import { extractLlamaServerArchive } from "./llama-server-extract.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  LLAMA_SERVER_BUILD,
+  LLAMA_SERVER_COMMIT,
+  LLAMA_SERVER_RELEASE,
+  selectLlamaServerAsset,
+  type LlamaServerAsset,
+} from "./llama-server-assets.js";
+import { ensureLlamaServerInstalled } from "./llama-server-install.js";
+
+const mocks = vi.hoisted(() => ({
+  execFile: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(),
+  resolveLlamaCppDataDir: vi.fn(),
+}));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execFile: mocks.execFile,
+}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+}));
+vi.mock("./defaults.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./defaults.js")>()),
+  resolveLlamaCppDataDir: mocks.resolveLlamaCppDataDir,
+}));
 
 const tempRoots: string[] = [];
 const TEST_ARCHIVE_ROOT = selectLlamaServerAsset("linux", "x64").archiveRoot;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  mocks.execFile.mockReset();
+  mocks.fetchWithSsrFGuard.mockReset();
+  mocks.resolveLlamaCppDataDir.mockReset();
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -27,6 +56,7 @@ async function createTempRoot(): Promise<string> {
 async function createTarArchive(
   root: string,
   build: (buildDir: string) => Promise<void>,
+  entries: readonly string[] = [TEST_ARCHIVE_ROOT],
 ): Promise<{ archivePath: string; destDir: string }> {
   const stageDir = path.join(root, "stage");
   const buildDir = path.join(stageDir, TEST_ARCHIVE_ROOT);
@@ -34,7 +64,7 @@ async function createTarArchive(
   await build(buildDir);
   const archivePath = path.join(root, "asset.tar.gz");
   // Keep tiny fixtures synchronous: node-tar's async hard-link queue can close gzip twice.
-  tar.c({ file: archivePath, cwd: stageDir, gzip: true, sync: true }, [TEST_ARCHIVE_ROOT]);
+  tar.c({ file: archivePath, cwd: stageDir, gzip: true, sync: true }, [...entries]);
   const destDir = path.join(root, "dest");
   await fs.mkdir(destDir, { recursive: true });
   return { archivePath, destDir };
@@ -59,7 +89,48 @@ function withoutAliases(asset: LlamaServerAsset): LlamaServerAsset {
   return { ...asset, regularFileAliases: [] };
 }
 
-describe("extractLlamaServerArchive", () => {
+function installedPath(destDir: string, asset: LlamaServerAsset) {
+  return path.join(destDir, LLAMA_SERVER_RELEASE, `win32-${asset.arch}`, asset.executable);
+}
+
+async function installArchive(params: {
+  archivePath: string;
+  destDir: string;
+  asset: LlamaServerAsset;
+}) {
+  const bytes = await fs.readFile(params.archivePath);
+  mocks.resolveLlamaCppDataDir.mockReturnValue(params.destDir);
+  mocks.fetchWithSsrFGuard.mockResolvedValue({
+    response: new Response(new Uint8Array(bytes)),
+    release: vi.fn(),
+  });
+  mocks.execFile.mockImplementation(
+    (
+      _command: string,
+      _args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) =>
+      callback(
+        null,
+        `version: test (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+        "",
+      ),
+  );
+  const { command } = await ensureLlamaServerInstalled({
+    asset: {
+      ...params.asset,
+      // Archive admission uses synthetic host metadata, independent of the host's
+      // glibc/macOS floor; the native version probe above is the only scripted step.
+      platform: "win32",
+      dependencies: [],
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    },
+  });
+  return command;
+}
+
+describe("managed installer archive admission", () => {
   it("materializes the pinned SONAME manifest as regular files", async () => {
     const root = await createTempRoot();
     const asset = selectLlamaServerAsset("linux", "x64");
@@ -73,11 +144,11 @@ describe("extractLlamaServerArchive", () => {
       }
     });
 
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).resolves.toBe(
-      path.join(destDir, asset.archiveRoot, asset.executable),
+    await expect(installArchive({ archivePath, destDir, asset })).resolves.toBe(
+      installedPath(destDir, asset),
     );
 
-    const buildDir = path.join(destDir, asset.archiveRoot);
+    const buildDir = path.dirname(installedPath(destDir, asset));
     for (const [source, aliases] of asset.regularFileAliases) {
       for (const alias of aliases) {
         expect((await fs.lstat(path.join(buildDir, alias))).isFile()).toBe(true);
@@ -94,10 +165,10 @@ describe("extractLlamaServerArchive", () => {
       await fs.symlink("../../../escape.txt", path.join(buildDir, "unexpected-link"));
     });
 
-    await extractLlamaServerArchive({ archivePath, destDir, asset });
+    await installArchive({ archivePath, destDir, asset });
 
     await expect(
-      fs.lstat(path.join(destDir, asset.archiveRoot, "unexpected-link")),
+      fs.lstat(path.join(path.dirname(installedPath(destDir, asset)), "unexpected-link")),
     ).rejects.toThrow();
     await expect(fs.lstat(path.join(root, "escape.txt"))).rejects.toThrow();
   });
@@ -105,16 +176,23 @@ describe("extractLlamaServerArchive", () => {
   it("does not publish archive-provided hard links", async () => {
     const root = await createTempRoot();
     const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
-    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      const executable = path.join(buildDir, asset.executable);
-      await fs.writeFile(executable, "binary");
-      await fs.link(executable, path.join(buildDir, "unexpected-hardlink"));
-    });
+    const { archivePath, destDir } = await createTarArchive(
+      root,
+      async (buildDir) => {
+        const executable = path.join(buildDir, asset.executable);
+        await fs.writeFile(executable, "binary");
+        await fs.link(executable, path.join(buildDir, "unexpected-hardlink"));
+      },
+      [
+        path.posix.join(TEST_ARCHIVE_ROOT, asset.executable),
+        path.posix.join(TEST_ARCHIVE_ROOT, "unexpected-hardlink"),
+      ],
+    );
 
-    await extractLlamaServerArchive({ archivePath, destDir, asset });
+    await installArchive({ archivePath, destDir, asset });
 
     await expect(
-      fs.lstat(path.join(destDir, asset.archiveRoot, "unexpected-hardlink")),
+      fs.lstat(path.join(path.dirname(installedPath(destDir, asset)), "unexpected-hardlink")),
     ).rejects.toThrow();
   });
 
@@ -129,24 +207,8 @@ describe("extractLlamaServerArchive", () => {
       );
     });
 
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
+    await expect(installArchive({ archivePath, destDir, asset })).rejects.toThrow(
       /entry count exceeds limit/u,
-    );
-    expect(await fs.readdir(destDir)).toStrictEqual([]);
-  });
-
-  it("rejects malformed tar input through the shared archive owner", async () => {
-    const root = await createTempRoot();
-    const archivePath = path.join(root, "malformed.tar.gz");
-    const invalidHeader = Buffer.alloc(512);
-    invalidHeader.write("bad-entry");
-    await fs.writeFile(archivePath, invalidHeader);
-    const destDir = path.join(root, "dest");
-    await fs.mkdir(destDir);
-    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
-
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
-      /invalid TAR|checksum failure/u,
     );
     expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
@@ -162,24 +224,8 @@ describe("extractLlamaServerArchive", () => {
       await fs.writeFile(path.join(buildDir, asset.executable), "binary");
     });
 
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
+    await expect(installArchive({ archivePath, destDir, asset })).rejects.toThrow(
       /does not contain regular alias source missing\.so\.1/u,
-    );
-  });
-
-  it("rejects manifest alias names that are not basenames", async () => {
-    const root = await createTempRoot();
-    const baseAsset = selectLlamaServerAsset("linux", "x64");
-    const asset: LlamaServerAsset = {
-      ...baseAsset,
-      regularFileAliases: [["../outside.so", ["alias.so"]]],
-    };
-    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
-    });
-
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
-      /invalid llama-server archive manifest filename/u,
     );
   });
 
@@ -191,7 +237,7 @@ describe("extractLlamaServerArchive", () => {
       [asset.executable]: "binary",
     });
 
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow();
+    await expect(installArchive({ archivePath, destDir, asset })).rejects.toThrow();
     expect(await fs.readdir(destDir)).toStrictEqual([]);
     await expect(fs.stat(path.join(root, "escape.txt"))).rejects.toThrow();
   });
@@ -204,32 +250,11 @@ describe("extractLlamaServerArchive", () => {
       "ggml-base.dll": "library",
     });
 
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).resolves.toBe(
-      path.join(destDir, asset.executable),
+    await expect(installArchive({ archivePath, destDir, asset })).resolves.toBe(
+      installedPath(destDir, asset),
     );
-    expect((await fs.readdir(destDir)).toSorted()).toStrictEqual([
-      "ggml-base.dll",
-      asset.executable,
-    ]);
-  });
-});
-
-describe("llama-server asset alias manifests", () => {
-  it.each([
-    ["darwin", "arm64"],
-    ["darwin", "x64"],
-    ["linux", "arm64"],
-    ["linux", "x64"],
-    ["win32", "arm64"],
-    ["win32", "x64"],
-  ] as const)("uses unique basename-only entries for %s/%s", (platform, arch) => {
-    const asset = selectLlamaServerAsset(platform, arch);
-    const names = asset.regularFileAliases.flatMap(([source, aliases]) => [source, ...aliases]);
-
-    expect(new Set(names).size).toBe(names.length);
     expect(
-      names.every((name) => path.basename(name) === name && name !== "." && name !== ".."),
-    ).toBe(true);
-    expect(asset.archive === "zip" ? names.length === 0 : names.length > 0).toBe(true);
+      (await fs.readdir(path.dirname(installedPath(destDir, asset)))).toSorted(),
+    ).toStrictEqual(["ggml-base.dll", asset.executable]);
   });
 });

@@ -1,10 +1,29 @@
-// Shared by the QA mock providers and the fixtures that consume their debug logs.
-export function parseQaDebugRequestCursor(value: string): number | null {
-  if (!/^(?:0|[1-9]\d*)$/u.test(value)) {
-    return null;
+export function resolveQaDebugRequestCursor(
+  value: string,
+  oldestCursor: number,
+  latestCursor: number,
+) {
+  const after = Number(value);
+  if (!/^(?:0|[1-9]\d*)$/u.test(value) || !Number.isSafeInteger(after)) {
+    return { status: 400, body: { error: "after must be a non-negative safe integer" } };
   }
-  const cursor = Number(value);
-  return Number.isSafeInteger(cursor) ? cursor : null;
+  if (after > latestCursor) {
+    return {
+      status: 409,
+      body: {
+        error: "request cursor is ahead of the latest recorded request",
+        after,
+        latestCursor,
+      },
+    };
+  }
+  if (after < oldestCursor - 1) {
+    return {
+      status: 409,
+      body: { error: "request cursor expired", after, oldestCursor, latestCursor },
+    };
+  }
+  return after;
 }
 
 export function readQaMockRequestCursor(value: unknown): number {

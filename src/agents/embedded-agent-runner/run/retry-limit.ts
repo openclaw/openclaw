@@ -1,6 +1,4 @@
-/**
- * Converts retry-limit exhaustion into failover errors or terminal replies.
- */
+import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import type {
   EmbeddedRunLivenessState,
@@ -9,12 +7,6 @@ import type {
 } from "../types.js";
 import type { RetryLimitFailoverDecision } from "./failover-policy.js";
 
-/**
- * Converts retry-limit exhaustion into either a failover escalation or a local
- * user-visible error payload. Replay-safe provider failures throw FailoverError
- * so the outer run loop can switch models; non-escalating reasons preserve
- * retry metadata on the returned run result.
- */
 export function handleRetryLimitExhaustion(params: {
   message: string;
   decision: RetryLimitFailoverDecision;
@@ -35,19 +27,22 @@ export function handleRetryLimitExhaustion(params: {
       status: resolveFailoverStatus(params.decision.reason),
     });
   }
+  const text =
+    "Request failed after repeated internal retries. " +
+    "Please try again, or use /new to start a fresh session.";
 
   return {
     payloads: [
       {
-        text:
-          "Request failed after repeated internal retries. " +
-          "Please try again, or use /new to start a fresh session.",
+        text,
         isError: true,
       },
     ],
     meta: {
       durationMs: params.durationMs,
       agentMeta: params.agentMeta,
+      terminalReply: sanitizeAgentRunTerminalReply(text),
+      finalAssistantVisibleText: text,
       ...(params.replayInvalid ? { replayInvalid: true } : {}),
       ...(params.livenessState ? { livenessState: params.livenessState } : {}),
       error: { kind: "retry_limit", message: params.message },

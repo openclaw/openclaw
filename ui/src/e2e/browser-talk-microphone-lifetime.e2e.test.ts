@@ -5,7 +5,9 @@ import {
   captureMicrophoneLossProof,
   installMicrophoneLossWebRtcFixture,
   type MicrophoneLossE2eProof,
+  TALK_READY_HISTORY_MESSAGE,
   videoTalkCatalog,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -20,6 +22,7 @@ suite.define(() => {
   it("guides a pending microphone request and clears guidance when voice connects", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -45,6 +48,7 @@ suite.define(() => {
         };
       });
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await expect
         .poll(() =>
@@ -84,6 +88,7 @@ suite.define(() => {
   it("surfaces microphone loss and closes native browser call resources", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -96,6 +101,7 @@ suite.define(() => {
       });
       await installMicrophoneLossWebRtcFixture(page);
       await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       try {
         await expect

@@ -2,29 +2,49 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
+import { MAX_THEME_DEFINITION_BYTES } from "../packages/gateway-protocol/src/theme.ts";
+import { loadPluginControlUiDeclaration } from "../src/plugins/control-ui-build-manifest.ts";
+import { createPluginCache, withPluginCache } from "../src/plugins/plugin-cache.ts";
+import {
+  isPluginActivityToolName,
+  MAX_PLUGIN_ACTIVITY_TOOL_ICONS,
+  PLUGIN_ACTIVITY_ICON_PATH,
+  PLUGIN_ACTIVITY_ICON_MAX_BYTES,
+  PLUGIN_TOOL_ACTIVITY_ICON_DIR,
+  PORTABLE_PLUGIN_ICON_PATH,
+} from "../src/plugins/portable-icon-paths.ts";
 import {
   collectSourceCheckoutPluginBuildEntries,
   mapPluginCatalogEntries,
 } from "./lib/bundled-plugin-build-entries.mjs";
+import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
   readGeneratedBundledChannelConfigs,
   resolvePluginRuntimeChannelMetadata,
 } from "./lib/plugin-npm-package-manifest.mts";
+import { collectPluginThemeAssetPaths } from "./lib/plugin-theme-assets.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   removeFileIfExists,
   removePathIfExists,
   writeTextFileIfChanged,
 } from "./runtime-postbuild-shared.mjs";
+import { ensureOpenClawExtensionAlias } from "./stage-bundled-plugin-runtime.mts";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
-const PACKAGE_ICON_PATH = path.join("assets", "icon.png");
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
-type CopyMetadataParams = { cwd?: string; repoRoot?: string; env?: NodeJS.ProcessEnv };
+type CopyMetadataParams = {
+  cwd?: string;
+  repoRoot?: string;
+  env?: NodeJS.ProcessEnv;
+  /** Additive preparation: leave every unselected distribution untouched. */
+  pluginIds?: ReadonlySet<string>;
+};
 type SkillPathParams = {
   distPluginDir: string;
   manifest: Record<string, unknown>;
@@ -62,6 +82,15 @@ function ensurePathInsideRoot(rootDir: string, rawPath: string): string {
     return resolved;
   }
   throw new Error(`path escapes plugin root: ${rawPath}`);
+}
+
+function assertRealOutputParents(targetPath: string, rootDir: string): void {
+  const stopAt = path.dirname(path.resolve(rootDir));
+  let directory = path.dirname(path.resolve(targetPath));
+  while (directory !== stopAt) {
+    assertRealOutputRoot(directory);
+    directory = path.dirname(directory);
+  }
 }
 
 function normalizeManifestRelativePath(rawPath: string): string {
@@ -163,6 +192,7 @@ function copyDeclaredPluginSkillPaths(params: SkillPathParams): string[] {
       continue;
     }
     const targetPath = ensurePathInsideRoot(params.distPluginDir, target.outputPath);
+    assertRealOutputParents(targetPath, params.distPluginDir);
     const shouldExcludeNestedNodeModules = /^node_modules(?:\/|$)/u.test(
       normalizeManifestRelativePath(raw),
     );
@@ -192,38 +222,14 @@ function copyDeclaredPluginSkillPaths(params: SkillPathParams): string[] {
   return copiedSkills;
 }
 
-function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string) {
-  const sourceModules = path.join(pluginDir, "node_modules");
-  if (!fs.existsSync(sourceModules)) {
-    return;
-  }
-  const packages = fs.readdirSync(sourceModules).flatMap((name) => {
-    if (name.startsWith(".") && name !== ".bin") {
-      return [];
-    }
-    return name.startsWith("@")
-      ? fs.readdirSync(path.join(sourceModules, name)).map((child) => path.join(name, child))
-      : [name];
-  });
-  // An outer node_modules junction misresolves pnpm's relative links on Windows.
-  // Link canonical package roots individually; keep scopes real and payloads source-owned.
-  // Preserve .bin for managed launchers that resolve the plugin's private CLI shim.
-  for (const name of packages) {
-    const target = path.join(distNodeModules, name);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const canonical = fs.realpathSync(path.join(sourceModules, name));
-    // POSIX release checkouts relocate as a unit; Windows junctions require absolute targets.
-    fs.symlinkSync(
-      process.platform === "win32" ? canonical : path.relative(path.dirname(target), canonical),
-      target,
-      "junction",
-    );
-  }
-}
-
-function copyPackageIcon(pluginDir: string, distPluginDir: string): void {
-  const source = path.join(pluginDir, PACKAGE_ICON_PATH);
-  const target = path.join(distPluginDir, PACKAGE_ICON_PATH);
+function copyPresentationAsset(
+  pluginDir: string,
+  distPluginDir: string,
+  relativePath: string,
+): void {
+  const source = path.join(pluginDir, relativePath);
+  const target = path.join(distPluginDir, relativePath);
+  assertRealOutputParents(target, distPluginDir);
   let sourceIsFile = false;
   try {
     sourceIsFile = fs.lstatSync(source).isFile();
@@ -239,10 +245,50 @@ function copyPackageIcon(pluginDir: string, distPluginDir: string): void {
   fs.copyFileSync(source, target);
 }
 
+function copyPluginIcons(pluginDir: string, distPluginDir: string): void {
+  copyPresentationAsset(pluginDir, distPluginDir, PORTABLE_PLUGIN_ICON_PATH);
+  copyPresentationAsset(pluginDir, distPluginDir, PLUGIN_ACTIVITY_ICON_PATH);
+  const sourceDir = path.join(pluginDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR);
+  removePathIfExists(path.join(distPluginDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR));
+  let entries: fs.Dirent[];
+  try {
+    if (!fs.lstatSync(sourceDir).isDirectory()) {
+      return;
+    }
+    entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  if (entries.length > MAX_PLUGIN_ACTIVITY_TOOL_ICONS) {
+    return;
+  }
+  const toolIcons = entries
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.endsWith(".svg") &&
+        isPluginActivityToolName(entry.name.slice(0, -4)),
+    )
+    .map((entry) => entry.name)
+    .toSorted();
+  for (const fileName of toolIcons) {
+    copyPresentationAsset(
+      pluginDir,
+      distPluginDir,
+      path.join(PLUGIN_TOOL_ACTIVITY_ICON_DIR, fileName),
+    );
+  }
+}
+
 /**
  * Copies bundled plugin metadata and package extension files.
  */
 export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void {
+  // Publication observes completed build hooks, independently of an earlier inventory.
+  withPluginCache(createPluginCache(), () => copyMetadata(params));
+}
+
+function copyMetadata(params: CopyMetadataParams): void {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const env = params.env ?? process.env;
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -253,6 +299,8 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
   // Fail closed before any dist/extensions removal: a symlinked dist root
   // would redirect recursive deletes into the link target.
   assertRealOutputRoot(path.join(repoRoot, "dist"));
+  assertRealOutputRoot(distExtensionsRoot);
+  ensureOpenClawExtensionAlias({ repoRoot, distExtensionsRoot });
 
   const buildEntries = new Map(
     collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => [
@@ -261,15 +309,16 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     ]),
   );
   const generatedChannelConfigsByPlugin = readGeneratedBundledChannelConfigs(repoRoot);
-  const sourcePluginDirs = new Set<string>();
+  const sourcePluginDirs = new Set<string>(["node_modules"]);
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) {
+    if (!dirent.isDirectory() || (params.pluginIds && !params.pluginIds.has(dirent.name))) {
       continue;
     }
 
     const pluginDir = path.join(extensionsRoot, dirent.name);
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
+    assertRealOutputRoot(distPluginDir);
     const packageJsonPath = path.join(pluginDir, "package.json");
     const parsedPackageJson: unknown = fs.existsSync(packageJsonPath)
       ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
@@ -286,9 +335,12 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     fs.rmSync(distNodeModules, { recursive: true, force: true });
 
     sourcePluginDirs.add(dirent.name);
+    copyPresentationAsset(pluginDir, distPluginDir, "README.md");
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
+    assertRealOutputRoot(distManifestPath);
+    assertRealOutputRoot(distPackageJsonPath);
 
     if (fs.existsSync(manifestPath)) {
       const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -296,9 +348,19 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         throw new Error(`invalid plugin manifest: ${manifestPath}`);
       }
       const pluginId = typeof manifest.id === "string" ? manifest.id : undefined;
+      const controlUi = loadPluginControlUiDeclaration({
+        rootDir: pluginDir,
+        controlUi: manifest.controlUi,
+        channels: manifest.channels,
+        rejectHardlinks: false,
+      });
+      if (!controlUi.ok) {
+        throw new Error(`${manifestPath}: ${controlUi.error}`);
+      }
       const mergedManifest = mergeGeneratedChannelConfigs(
-        mapPluginCatalogEntries(manifest, (entry: string) =>
-          rewritePackageEntry(entry, buildEntry.runtimeExtension),
+        mapPluginCatalogEntries(
+          { ...manifest, ...(controlUi.value ? { controlUi: controlUi.value } : {}) },
+          (entry: string) => rewritePackageEntry(entry, buildEntry.runtimeExtension),
         ),
         pluginId ? generatedChannelConfigsByPlugin.get(pluginId) : undefined,
       );
@@ -314,10 +376,45 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         ? { ...mergedManifest, skills: copiedSkills }
         : mergedManifest;
       writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
-      copyPackageIcon(pluginDir, distPluginDir);
+      copyPluginIcons(pluginDir, distPluginDir);
+      const pluginRoot = fs.realpathSync(pluginDir);
+      for (const relativePath of collectPluginThemeAssetPaths(bundledManifest)) {
+        const maxBytes = relativePath.toLowerCase().endsWith(".svg")
+          ? PLUGIN_ACTIVITY_ICON_MAX_BYTES
+          : MAX_THEME_DEFINITION_BYTES * 4;
+        const file = openRootFileSync({
+          absolutePath: path.resolve(pluginRoot, relativePath),
+          rootPath: pluginRoot,
+          rootRealPath: pluginRoot,
+          boundaryLabel: "plugin root",
+          rejectHardlinks: false,
+          maxBytes,
+        });
+        let contents: Buffer | undefined;
+        if (file.ok) {
+          try {
+            contents = readFileDescriptorBoundedSync(file.fd, maxBytes);
+          } catch {
+            // Unreadable presentation assets must not invalidate the plugin package.
+          } finally {
+            fs.closeSync(file.fd);
+          }
+        }
+        const target = path.join(distPluginDir, relativePath);
+        // Declared paths are relative; reject generated directory links as well.
+        assertRealOutputParents(target, distPluginDir);
+        removePathIfExists(target);
+        if (contents) {
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, contents);
+        }
+      }
     } else {
       removeFileIfExists(distManifestPath);
-      removeFileIfExists(path.join(distPluginDir, PACKAGE_ICON_PATH));
+      assertRealOutputParents(path.join(distPluginDir, PORTABLE_PLUGIN_ICON_PATH), distPluginDir);
+      removeFileIfExists(path.join(distPluginDir, PORTABLE_PLUGIN_ICON_PATH));
+      removePathIfExists(path.join(distPluginDir, PLUGIN_ACTIVITY_ICON_PATH));
+      removePathIfExists(path.join(distPluginDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR));
     }
 
     if (!fs.existsSync(packageJsonPath)) {
@@ -347,7 +444,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     }
   }
 
-  if (!fs.existsSync(distExtensionsRoot)) {
+  if (params.pluginIds || !fs.existsSync(distExtensionsRoot)) {
     return;
   }
 

@@ -17,7 +17,7 @@ not replace maintainer judgment.
 
 ## Barnacle
 
-Barnacle is deterministic GitHub triage. It looks for known queue-management
+Barnacle applies fixed rules to GitHub triage. It looks for known queue-management
 cases and responds with labels, comments, or closures.
 
 Barnacle may act when:
@@ -48,14 +48,14 @@ Maintainers still decide whether and when a PR is ready to merge.
 ClawSweeper is queue-based. When you open a non-draft PR or mark a draft ready
 for review, it posts a short receipt comment right away, but the review itself
 still waits for a queue slot. Do not expect an immediate review after opening a
-PR, pushing a commit, or adding a review request. Label updates after a
-ClawSweeper run can also take time.
+PR or adding a review request. Label updates after a ClawSweeper run can also
+take time.
 
-New PRs enter the ClawSweeper review queue. Maintainers can also queue review,
-repair, or automerge flows with labels or commands. For ordinary contributor
-updates, ask ClawSweeper for another review only after you have updated the
-branch, PR description, proof, or code. Then request a fresh review with a new
-PR comment:
+ClawSweeper reviews each PR automatically once. Later pushes, description edits,
+and reopens do not start another review on their own. Maintainers can also queue
+review, repair, or automerge flows with labels or commands. After you have
+updated the branch, PR description, proof, or code, request a fresh review with
+a new PR comment:
 
 ```text
 @clawsweeper re-review
@@ -108,6 +108,9 @@ For proof files, prefer linking CI artifacts, GitHub-uploaded screenshots or
 recordings, or a short redacted log excerpt. Do not commit generated proof files
 unless they are part of the actual docs, tests, or product change.
 
+For behavioral changes, use the [boundary-proof guide](/help/testing/writing-tests#prove-behavior-at-the-owning-boundary)
+to review production-path, provider-request, and failure/reconstruction evidence.
+
 Redacting sensitive data is the contributor's responsibility. Remove secrets,
 tokens, private URLs, user data, and unrelated logs before posting proof.
 
@@ -116,6 +119,54 @@ marked stale after 14 days of inactivity, then closed after 7 more idle days.
 Assigned PRs are marked stale 27 days after opening, regardless of later
 updates, then closed after 7 stale days without activity. If an assigned PR is
 still active, coordinate with the maintainer working on it.
+
+## Maintainer review artifacts
+
+`scripts/pr review-artifacts-init <PR>` writes `.local/review.json` for the
+current reviewed head. Its defaults are structurally valid and explicitly
+unfinished: `NEEDS WORK`, `performed: false`, empty evidence arrays, and
+`tests.result: "not_run"`. Initialization preserves an existing artifact stamped
+for the same PR and head, so it does not rewrite an older or partially filled
+review.
+
+Fill the JSON with review findings and evidence, then run
+`scripts/pr review-validate-artifacts <PR>`. JSON owns the review; validation
+prints its summary, and an existing `.local/review.md` is not authoritative.
+Keep enum values bare, without annotations such as `(allowed: ...)`:
+
+| Field                              | Accepted values                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------- |
+| `recommendation`                   | `READY FOR /prepare-pr`, `NEEDS WORK`, `NEEDS DISCUSSION`, `NOT USEFUL (CLOSE)` |
+| `findings[].severity`              | `BLOCKER`, `IMPORTANT`, `NIT`                                                   |
+| `nitSweep.status` (optional sweep) | `none`, `has_nits`                                                              |
+| `issueValidation.source`           | `linked_issue`, `pr_body`, `both`                                               |
+| `issueValidation.status`           | `valid`, `unclear`, `invalid`, `already_fixed_on_main`                          |
+| `behavioralSweep.status`           | `pass`, `needs_work`, `not_applicable`                                          |
+| `behavioralSweep.silentDropRisk`   | `none`, `present`, `unknown`                                                    |
+| `tests.result`                     | `pass`, `fail`, `not_run`                                                       |
+| `docs`                             | `up_to_date`, `missing`, `not_applicable`                                       |
+| `changelog`                        | `required`, `not_required`                                                      |
+
+`nitSweep` is optional and omitted from a fresh template. If supplied, it requires
+`performed: true`, a status consistent with the NIT findings, and a non-empty
+summary. Required issue and behavior summaries must also be non-empty, and each
+finding needs a severity. Structural validity does not authorize preparation:
+`READY FOR /prepare-pr` still requires completed issue and behavior review,
+resolved substantive findings, and the applicable runtime proof.
+
+When a bounded investigation cannot establish or complete a safe fix for a local
+test failure, preserve `tests.result: "fail"` and record
+`tests.investigatedLocalFailures`. Its `head` must be the exact reviewed commit.
+Its nonempty `failures` array records each original `failure`, nonempty string
+arrays of `reproductionAttempts` and `evidence`, and a nonempty
+`remainingUncertainty`. Describe the commands and observed outcomes, and reference
+the evidence recorded in the PR. A passing replay does not prove a fix.
+
+This completed investigation can accompany a READY recommendation without
+turning the failed proof into a pass. Substantive findings, behavioral review,
+required CI, security checks, and enforced reviews remain independent gates.
+Use `tests.preExistingCi` only for its separate, attributed CI-failure workflow;
+local investigation does not authorize a CI exception.
 
 ## When automation stays quiet
 
@@ -128,6 +179,24 @@ contributor code. In that case, maintainers use normal review or a safer
 workflow instead.
 
 ## Troubleshooting
+
+Maintainers can set `OPENCLAW_PR_TOOLING_ROOT` to a full checkout of this repository
+to source materialized `scripts/pr` dependencies independently of a primary checkout parked
+on another branch. The environment setting takes precedence over
+`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the primary
+checkout; without either, dependency sourcing stays unchanged. Versions must
+match the wrapper's trust-anchor manifest. On mismatch, a separate clean `main`
+tooling checkout is fetched, fast-forwarded, and installed with
+`pnpm install --frozen-lockfile` once, then rechecked. Dirty or non-main tooling
+checkouts are refused with repair guidance; the primary checkout is never
+refreshed. The setting applies at both dependency materialization handoffs;
+in-place wrappers keep their checkout's dependency context. Wrapper code selection
+and trust stay unchanged.
+
+Set `OPENCLAW_PR_GIT` to an absolute Git executable path if the host's default Git
+is broken. The wrapper checks Git with a 10-second deadline and prints the selected
+path and Xcode recovery hint on failure. API rate-limit failures identify the
+resource used and show both GraphQL and REST core balances and reset times.
 
 If ClawSweeper does not respond immediately, wait before retrying. The service is
 queue-based, and repeated comments or label changes can make the thread harder

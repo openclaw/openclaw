@@ -23,11 +23,22 @@ process.once("message", () => {
   } else {
     recordUpdateRunVerification(
       runId,
-      { booted: true, serviceRunning: true, versionMatch: true, channelsReady: true },
+      {
+        booted: true,
+        serviceRunning: true,
+        versionMatch: true,
+        channelsReady: true,
+        settled: true,
+        readyz: true,
+        pluginErrors: [],
+      },
       options,
     );
   }
-  closeOpenClawStateDatabase();
-  process.disconnect?.();
+  process.once("message", () => {
+    closeOpenClawStateDatabase();
+    process.disconnect?.();
+  });
+  process.send?.("written");
 });
 process.send?.("ready");

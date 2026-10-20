@@ -12,9 +12,10 @@ import type {
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildBraveWebSearchProviderBase } from "../web-search-shared.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildBraveWebSearchProviderBase, resolveBraveMode } from "../web-search-shared.js";
 
 const loadBraveWebSearchRuntime = createLazyRuntimeModule(
   () => import("./brave-web-search-provider.runtime.js"),
@@ -23,13 +24,7 @@ const loadBraveWebSearchRuntime = createLazyRuntimeModule(
 const BraveSearchSchema = {
   type: "object",
   properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
     country: {
       type: "string",
       description:
@@ -64,16 +59,11 @@ const BraveSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-function resolveBraveMode(searchConfig?: Record<string, unknown>): "web" | "llm-context" {
-  const brave = isRecord(searchConfig?.brave) ? searchConfig.brave : undefined;
-  return brave?.mode === "llm-context" ? "llm-context" : "web";
-}
-
 function createBraveToolDefinition(
   searchConfig?: SearchConfigRecord,
   config?: Parameters<typeof isDiagnosticFlagEnabled>[1],
 ): WebSearchProviderToolDefinition {
-  const braveMode = resolveBraveMode(searchConfig);
+  const braveMode = resolveBraveMode(asOptionalRecord(searchConfig?.brave));
   const diagnosticsEnabled = isDiagnosticFlagEnabled("brave.http", config);
 
   return {
@@ -93,7 +83,6 @@ function createBraveToolDefinition(
   };
 }
 
-/** Create the runtime Brave Search provider descriptor. */
 export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
   return {
     ...buildBraveWebSearchProviderBase(),

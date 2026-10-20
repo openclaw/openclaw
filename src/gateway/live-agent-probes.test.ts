@@ -1,18 +1,39 @@
 /**
  * Tests helper logic for live agent probe configuration and result handling.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const runExecMock = vi.hoisted(() => vi.fn());
+// mock-isolation: Child execution is the external I/O boundary; this fixture must not spawn a CLI.
+vi.mock("../process/exec.js", () => ({ runExec: runExecMock }));
+
 import {
   assertCronJobMatches,
   assertLiveImageProbeReply,
   buildLiveCronProbeMessage,
   createLiveCronProbeSpec,
-  isClaudeLikeLiveAgent,
   resolveOpenClawCliProcessArgs,
+  runOpenClawCliJson,
   shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("live-agent-probes", () => {
+  it("runs CLI probes through standalone identity without a loose entry", async () => {
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
+    runExecMock.mockResolvedValueOnce({ stdout: '{"ok":true}', stderr: "" });
+
+    await expect(runOpenClawCliJson(["cron", "list"], {})).resolves.toEqual({ ok: true });
+    expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+      process.execPath,
+      ["cron", "list", "--timeout", "30000"],
+      expect.objectContaining({ cwd: process.cwd(), baseEnv: {} }),
+    );
+  });
+
   it("uses the source runner when packaged CLI output is absent", () => {
     expect(resolveOpenClawCliProcessArgs(["cron", "list"], false)).toEqual([
       "scripts/run-node.mjs",
@@ -26,15 +47,6 @@ describe("live-agent-probes", () => {
     ]);
   });
 
-  it("only special-cases Claude-like retry prompts", () => {
-    expect(isClaudeLikeLiveAgent("claude")).toBe(true);
-    expect(isClaudeLikeLiveAgent("claude-cli")).toBe(true);
-    expect(isClaudeLikeLiveAgent("codex")).toBe(false);
-    expect(isClaudeLikeLiveAgent("google-gemini-cli")).toBe(false);
-    expect(isClaudeLikeLiveAgent("opencode-ai")).toBe(false);
-    expect(isClaudeLikeLiveAgent("future-agent")).toBe(false);
-  });
-
   it("accepts only cat for the shared image probe reply", () => {
     expect(assertLiveImageProbeReply("cat")).toBeUndefined();
     expect(
@@ -42,8 +54,8 @@ describe("live-agent-probes", () => {
         "model metadata for `gpt-5.5` not found. defaulting to fallback metadata; this can degrade performance and cause issues.cat",
       ),
     ).toBeUndefined();
-    expect(() => assertLiveImageProbeReply("horse")).toThrow("image probe expected 'cat'");
-    expect(() => assertLiveImageProbeReply("caterpillar")).toThrow("image probe expected 'cat'");
+    expect(() => assertLiveImageProbeReply("horse")).toThrow("image check expected 'cat'");
+    expect(() => assertLiveImageProbeReply("caterpillar")).toThrow("image check expected 'cat'");
   });
 
   it("skips the shared image probe for text-only live agents unless forced", () => {
@@ -57,6 +69,7 @@ describe("live-agent-probes", () => {
     const spec = createLiveCronProbeSpec({
       agentId: "codex",
       sessionKey: "agent:codex:acp:test",
+      model: "openai/gpt-5.6-luna@openai:manual",
     });
     const claudeRetryPrompt = buildLiveCronProbeMessage({
       agent: "claude-cli",
@@ -95,12 +108,14 @@ describe("live-agent-probes", () => {
         agentId?: string;
         sessionKey?: string;
         delivery?: { mode?: string };
+        payload?: { model?: string };
       };
     };
     expect(args.job?.sessionTarget).toBe("session:agent:codex:acp:test");
     expect(args.job?.agentId).toBe("codex");
     expect(args.job?.sessionKey).toBe("agent:codex:acp:test");
     expect(args.job?.delivery).toEqual({ mode: "none" });
+    expect(args.job?.payload?.model).toBe("openai/gpt-5.6-luna@openai:manual");
   });
 
   it("builds a cron probe spec when the process clock is outside the Date range", () => {

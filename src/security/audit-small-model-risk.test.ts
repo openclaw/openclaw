@@ -35,7 +35,6 @@ describe("security audit small-model risk findings", () => {
           agents: {
             entries: {
               ops: {
-                default: true,
                 model: { primary: "ollama/mistral-8b" },
                 tools: { deny: ["web_search", "web_fetch", "browser"] },
               },

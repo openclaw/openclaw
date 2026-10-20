@@ -53,28 +53,32 @@ describe("plugins search command", () => {
 
   it.each([
     {
-      context: "default",
-      profile: undefined,
-      container: undefined,
-      command: "openclaw plugins install clawhub:openclaw-calendar",
-    },
-    {
       context: "profile",
       profile: "work",
       container: undefined,
-      command: "openclaw --profile work plugins install clawhub:openclaw-calendar",
+      packageName: "openclaw-calendar",
+      command: "openclaw --profile work plugins install openclaw-calendar@latest",
     },
     {
-      context: "container",
+      context: "official package",
       profile: undefined,
-      container: "staging",
-      command: "openclaw --container staging plugins install clawhub:openclaw-calendar",
+      container: undefined,
+      packageName: "@openclaw/diffs",
+      command: "openclaw plugins install @openclaw/diffs",
+    },
+    {
+      context: "short ID collision",
+      profile: undefined,
+      container: undefined,
+      packageName: "discord",
+      command: "openclaw plugins install discord@latest",
     },
     {
       context: "container over profile",
       profile: "work",
       container: "staging",
-      command: "openclaw --container staging plugins install clawhub:openclaw-calendar",
+      packageName: "@composio/composio",
+      command: "openclaw --container staging plugins install @composio/composio",
     },
   ])("searches ClawHub plugin families with the $context install context", async (scenario) => {
     mocks.searchClawHubPackages
@@ -82,7 +86,7 @@ describe("plugins search command", () => {
         {
           score: 12,
           package: {
-            name: "openclaw-calendar",
+            name: scenario.packageName,
             displayName: "Calendar",
             family: "code-plugin",
             channel: "community",
@@ -129,16 +133,44 @@ describe("plugins search command", () => {
       family: "bundle-plugin",
       limit: 5,
     });
-    expect(mocks.logs.join("\n")).toContain("openclaw-calendar");
+    expect(mocks.logs.join("\n")).toContain(scenario.packageName);
     expect(mocks.logs.join("\n")).toContain(`Install: ${scenario.command}`);
   });
 
-  it("writes JSON results when requested", async () => {
-    mocks.searchClawHubPackages.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+  it("formats catalog version labels while preserving raw JSON values", async () => {
+    const results = ["1.2.3", "v1.2.3", "V1.2.3", "canary", "  v1.2.3  ", undefined].map(
+      (latestVersion, index) => ({
+        score: 1,
+        package: {
+          name: `plugin-${index}`,
+          displayName: "Plugin",
+          family: "bundle-plugin",
+          channel: "community",
+          isOfficial: false,
+          createdAt: 1,
+          updatedAt: 1,
+          latestVersion,
+        },
+      }),
+    );
+    mocks.searchClawHubPackages.mockResolvedValue(results);
 
-    await runPluginsSearchCommand("calendar", { json: true }, mocks.runtime);
-
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({ results: [] }, 2);
+    const program = new Command();
+    registerPluginsCli(program);
+    await program.parseAsync(["plugins", "search", "version"], { from: "user" });
+    const output = mocks.logs.join("\n");
+    for (const line of [
+      "plugin-0  bundle-plugin | community | v1.2.3\n",
+      "plugin-1  bundle-plugin | community | v1.2.3\n",
+      "plugin-2  bundle-plugin | community | V1.2.3\n",
+      "plugin-3  bundle-plugin | community | canary\n",
+      "plugin-4  bundle-plugin | community | v1.2.3\n",
+      "plugin-5  bundle-plugin | community\n",
+    ]) {
+      expect(output).toContain(line);
+    }
+    await program.parseAsync(["plugins", "search", "version", "--json"], { from: "user" });
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ results }, 2);
   });
 
   it("leaves missing-query JSON failures to the root renderer", async () => {

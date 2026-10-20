@@ -1,24 +1,14 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type {
   FileEntry,
   SessionEntry,
   SessionHeader,
+  SessionMessageEntry,
 } from "../../agents/sessions/session-manager-types.js";
-import { CURRENT_SESSION_VERSION } from "./version.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
-const sessionEntryTypeSchema = z.enum([
-  "message",
-  "thinking_level_change",
-  "model_change",
-  "compaction",
-  "reset",
-  "branch_summary",
-  "custom",
-  "custom_message",
-  "label",
-  "session_info",
-]);
 const readableContentSchema = z.union([z.string(), z.array(z.looseObject({ type: z.string() }))]);
 const readableMessageSchema = z.discriminatedUnion("role", [
   z.looseObject({ role: z.literal("user"), content: readableContentSchema }),
@@ -106,6 +96,9 @@ const indexedSessionEntrySchema = z.discriminatedUnion("type", [
     name: z.string().optional(),
   }),
 ]);
+const sessionEntryTypeSchema = z.enum(
+  indexedSessionEntrySchema.options.flatMap((entry) => [...entry.shape.type.values]),
+);
 const parentLinkedOpaqueEntrySchema = z.looseObject({
   type: z
     .unknown()
@@ -124,6 +117,14 @@ const opaqueLeafEntrySchema = z.looseObject({
 });
 const sessionHeaderSchema = z.looseObject({ type: z.literal("session"), id: z.string() });
 
+/** Legacy writers could repeat the same header with a different timestamp. */
+export function equivalentLegacySessionHeaders(
+  first: Record<string, unknown>,
+  next: Record<string, unknown>,
+): boolean {
+  return isDeepStrictEqual({ ...first, timestamp: undefined }, { ...next, timestamp: undefined });
+}
+
 export function findSessionTranscriptHeader(entries: Iterable<unknown>): SessionHeader | undefined {
   for (const entry of entries) {
     if (sessionHeaderSchema.safeParse(entry).success) {
@@ -135,15 +136,20 @@ export function findSessionTranscriptHeader(entries: Iterable<unknown>): Session
 }
 
 export function assertCurrentSessionTranscriptHeader(header: SessionHeader | undefined): void {
-  if ((header?.version ?? 1) < CURRENT_SESSION_VERSION) {
+  if ((header?.version ?? 1) < MIN_READABLE_SESSION_VERSION) {
     throw new Error(
       "Persisted legacy session transcripts require doctor/import migration before runtime use",
     );
   }
 }
 
-function isSessionEntryType(type: unknown): boolean {
-  return sessionEntryTypeSchema.safeParse(type).success;
+export function isReadableSessionMessage(
+  message: unknown,
+): message is Extract<
+  SessionMessageEntry["message"],
+  { role: z.infer<typeof readableMessageSchema>["role"] }
+> {
+  return readableMessageSchema.safeParse(message).success;
 }
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
@@ -154,19 +160,15 @@ function isReadableContent(value: unknown): boolean {
   return readableContentSchema.safeParse(value).success;
 }
 
-function isReadableMessage(value: unknown): boolean {
-  return readableMessageSchema.safeParse(value).success;
-}
-
 function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
   const message = isRecord(value) && value.type === "message" ? value.message : undefined;
   return (
     isRecord(value) &&
-    isSessionEntryType(value.type) &&
+    sessionEntryTypeSchema.safeParse(value.type).success &&
     (value.type !== "message" ||
       (isRecord(message) && message.role === "hookMessage"
         ? isReadableContent(message.content)
-        : isReadableMessage(message)))
+        : readableMessageSchema.safeParse(message).success))
   );
 }
 
@@ -219,7 +221,7 @@ export function classifySessionFileEntry(rawEntry: unknown, sourceVersion: numbe
   const entry = normalizePersistedLegacyHookMessage(rawEntry);
   // Legacy rows can lack modern IDs; avoid constructing a discarded validation error for each one.
   if (
-    (sourceVersion < CURRENT_SESSION_VERSION && isReadableLegacySessionEntry(entry)) ||
+    (sourceVersion < MIN_READABLE_SESSION_VERSION && isReadableLegacySessionEntry(entry)) ||
     isIndexedSessionEntry(entry)
   ) {
     return { entry, recognized: true as const };
@@ -227,7 +229,7 @@ export function classifySessionFileEntry(rawEntry: unknown, sourceVersion: numbe
   return { entry, recognized: false as const };
 }
 
-export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
+export function partitionSessionFileEntries(entries: readonly unknown[]): {
   fileEntries: FileEntry[];
   opaqueEntries: Array<{ index: number; record: unknown }>;
   fileEntriesByOriginalIndex: Array<FileEntry | undefined>;
@@ -239,9 +241,9 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   const sourceVersion = header?.version ?? 1;
   let hasHeader = false;
   for (const [originalIndex, rawEntry] of entries.entries()) {
-    if (!hasHeader && sessionHeaderSchema.safeParse(rawEntry).success) {
-      fileEntries.push(rawEntry);
-      fileEntriesByOriginalIndex[originalIndex] = rawEntry;
+    if (!hasHeader && header !== undefined && rawEntry === header) {
+      fileEntries.push(header);
+      fileEntriesByOriginalIndex[originalIndex] = header;
       hasHeader = true;
       continue;
     }

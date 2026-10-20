@@ -7,8 +7,10 @@ const mocks = await vi.hoisted(async () => {
   return createOpenAIRealtimeMockState();
 });
 vi.mock("ws", () => ({ default: mocks.FakeWebSocket }));
+// mock-isolation: Outgoing-response ordering uses synthetic credentials, independent of host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
@@ -77,7 +79,7 @@ describe("OpenAI realtime outgoing response ownership", () => {
         delta: Buffer.alloc(320).toString("base64"),
       });
       expect(onAudio).toHaveBeenCalledTimes(1);
-      bridge.close();
+      await bridge.close();
     },
   );
 
@@ -130,7 +132,7 @@ describe("OpenAI realtime outgoing response ownership", () => {
           1,
         );
       }
-      bridge.close();
+      await bridge.close();
     },
   );
   it("finishes history truncation and sink clearing before a truncate observer's replacement response", async () => {
@@ -162,7 +164,7 @@ describe("OpenAI realtime outgoing response ownership", () => {
     });
     bridge.handleBargeIn?.({ force: true });
     expect(trace).toEqual(["conversation.item.truncate", "sink.clear", "response.create"]);
-    bridge.close();
+    await bridge.close();
   });
   it("does not drain a replacement when preparing-response cleanup throws", async () => {
     let cancelSuppression = false;
@@ -184,6 +186,6 @@ describe("OpenAI realtime outgoing response ownership", () => {
     expect(parseSent(socket).filter((event) => event.type.startsWith("response."))).toEqual([]);
     bridge.sendUserMessage?.("Explicit follow-up after the failed clear.");
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
-    bridge.close();
+    await bridge.close();
   });
 });

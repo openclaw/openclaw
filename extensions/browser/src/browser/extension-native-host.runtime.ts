@@ -1,14 +1,15 @@
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readBrowserHostConfig } from "./extension-host-config.js";
 import { buildBrowserExtensionPairing } from "./extension-pairing.js";
 import { ensureExtensionRelayDaemonProcess } from "./extension-relay-daemon-spawn.js";
 
-export function buildBrowserNativeHostPairing() {
+export async function buildBrowserNativeHostPairing(profile?: string) {
   return buildBrowserExtensionPairing({
-    cfg: getRuntimeConfig(),
+    cfg: await readBrowserHostConfig(),
     localTransport: "gateway",
+    profile,
   });
 }
 
-export function ensureBrowserNativeRelay(port: number, entryPath: string) {
-  return ensureExtensionRelayDaemonProcess({ port, cfg: getRuntimeConfig(), entryPath });
+export async function ensureBrowserNativeRelay(port: number, entryPath: string) {
+  return ensureExtensionRelayDaemonProcess({ port, cfg: await readBrowserHostConfig(), entryPath });
 }

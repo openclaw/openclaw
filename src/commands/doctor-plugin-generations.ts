@@ -10,6 +10,7 @@ import {
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -39,12 +40,7 @@ export async function listStaleManagedNpmInstallGenerations(
   // deterministic recovery choice when that authority is absent or dangling.
   const activeRecords = await loadInstalledPluginIndexInstallRecords(params);
   const candidates = listRecoveredManagedNpmInstallCandidates(params);
-  const candidatesByPluginId = new Map<string, typeof candidates>();
-  for (const candidate of candidates) {
-    const entries = candidatesByPluginId.get(candidate.pluginId) ?? [];
-    entries.push(candidate);
-    candidatesByPluginId.set(candidate.pluginId, entries);
-  }
+  const candidatesByPluginId = groupRecords(candidates, (candidate) => candidate.pluginId);
 
   const stale: StaleManagedNpmInstallGenerationIssue[] = [];
   for (const [pluginId, pluginCandidates] of candidatesByPluginId) {
@@ -88,14 +84,13 @@ export async function maybeRepairStaleManagedNpmInstallGenerations(
   if (stale.length === 0) {
     return false;
   }
+  const formatGeneration = (generation: StaleManagedNpmInstallGenerationIssue) =>
+    `- ${generation.pluginId}: ${shortenHomePath(generation.packageDir)}${generation.version ? ` (${generation.version})` : ""}`;
   if (!params.prompter.shouldRepair) {
     note(
       [
         "Managed npm plugin installs have stale non-authoritative generations:",
-        ...stale.map(
-          (generation) =>
-            `- ${generation.pluginId}: ${shortenHomePath(generation.packageDir)}${generation.version ? ` (${generation.version})` : ""}`,
-        ),
+        ...stale.map(formatGeneration),
         `Repair with ${formatCliCommand("openclaw doctor --fix")} to retire stale generations after the gateway restarts.`,
       ].join("\n"),
       "Plugin registry",
@@ -122,10 +117,7 @@ export async function maybeRepairStaleManagedNpmInstallGenerations(
   note(
     [
       "Retired stale managed npm plugin generation(s); they will be pruned after the gateway restarts:",
-      ...retired.map(
-        (generation) =>
-          `- ${generation.pluginId}: ${shortenHomePath(generation.packageDir)}${generation.version ? ` (${generation.version})` : ""}`,
-      ),
+      ...retired.map(formatGeneration),
     ].join("\n"),
     "Plugin registry",
   );

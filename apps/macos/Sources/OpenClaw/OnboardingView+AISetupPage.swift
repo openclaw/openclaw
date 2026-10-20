@@ -5,14 +5,11 @@ struct GatewayAuthenticationReturnDecision: Equatable {
     let authIssue: RemoteGatewayAuthIssue
     let probeState: RemoteOnboardingProbeState
     let showRemoteChoices: Bool
-    let showAdvancedConnection: Bool
 }
 
 extension OnboardingView {
-    /// Structured AI setup: detect what's already available on the Gateway, test the
-    /// best option live, fall through automatically, offer an API-key form
-    /// when nothing works. OpenClaw becomes available only after inference
-    /// has completed a live round-trip.
+    /// Detect available AI access, then wait for the user to select a connection.
+    /// OpenClaw becomes available after that choice completes a live round-trip.
     func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
             Group {
@@ -84,14 +81,13 @@ extension OnboardingView {
     @discardableResult
     func resumePendingSystemAgent(
         modelRef: String,
+        modelTarget: OnboardingAISetupModel.ModelTarget? = nil,
         intent: OnboardingAISetupModel.SetupIntent = .resumePending) -> Task<Void, Never>
     {
         self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
-        aiSetup.resumeConfiguredInference(modelRef: modelRef)
-        if let page = pageOrder.firstIndex(of: aiPageIndex) {
-            currentPage = page
-        }
+        aiSetup.resumeConfiguredInference(modelRef: modelRef, modelTarget: modelTarget)
+        self.selectAISetupPage()
         return Task {
             let outcome = await self.aiSetup.verifyPendingConfiguredInference()
             if case let .freshSetupAllowed(context) = outcome {
@@ -113,9 +109,7 @@ extension OnboardingView {
 
     func waitForPendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
-        if let page = pageOrder.firstIndex(of: aiPageIndex) {
-            currentPage = page
-        }
+        self.selectAISetupPage()
         aiSetup.waitForPendingActivationDeadline()
     }
 
@@ -143,7 +137,6 @@ extension OnboardingView {
         remoteAuthIssue = decision.authIssue
         remoteProbeState = decision.probeState
         showRemoteChoices = decision.showRemoteChoices
-        showAdvancedConnection = decision.showAdvancedConnection
         withAnimation { currentPage = decision.connectionPage }
     }
 
@@ -162,15 +155,18 @@ extension OnboardingView {
             connectionPage: connectionPage,
             authIssue: authIssue,
             probeState: .failed(probeInput, authIssue.statusMessage),
-            showRemoteChoices: true,
-            showAdvancedConnection: true)
+            showRemoteChoices: true)
     }
 
     func resumePendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
+        self.selectAISetupPage()
+        aiSetup.resumeSetup()
+    }
+
+    private func selectAISetupPage() {
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
-        aiSetup.resumeSetup()
     }
 }

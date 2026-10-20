@@ -13,8 +13,9 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import type { CronJob } from "../../../../src/cron/types.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
-import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db-cache.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { proveHotReloadBrowserSettings } from "./gateway-config-hot-reload-browser.js";
 import { proveHotReloadChannels } from "./gateway-config-hot-reload-channels.js";
@@ -32,7 +33,6 @@ import { proveHotReloadPluginPolicy } from "./gateway-config-hot-reload-plugin-p
 import { proveHotReloadPolicyAdmission } from "./gateway-config-hot-reload-policy-admission.js";
 import { proveHotReloadPolicy } from "./gateway-config-hot-reload-policy.js";
 import { proveHotReloadRequests } from "./gateway-config-hot-reload-requests.js";
-import { startHotReloadAttachmentRetention } from "./gateway-config-hot-reload-retention.js";
 import { proveHotReloadSecurity } from "./gateway-config-hot-reload-security.js";
 import { proveHotReloadServicePolicy } from "./gateway-config-hot-reload-service-policy.js";
 import { proveHotReloadTerminalDeferredRestart } from "./gateway-config-hot-reload-terminal-deferred.js";
@@ -69,9 +69,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
   let passedChecks = 0;
   let channels: Awaited<ReturnType<typeof proveHotReloadChannels>> | undefined;
   let security: Awaited<ReturnType<typeof proveHotReloadSecurity>> | undefined;
-  let retention: Awaited<ReturnType<typeof startHotReloadAttachmentRetention>> | undefined;
-  const pluginPolicyAbort = new AbortController();
-  let pluginPolicy: Promise<void> | undefined;
   await runQaGatewayFixture(
     async () => {
       await fs.access(path.join(repoRoot, "dist/control-ui/index.html"));
@@ -94,6 +91,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         providerMode: "mock-openai",
         providerBaseUrl: `${fixture.baseUrl}/v1`,
+        mockSessionObserverUrl: mock.sessionObserverUrl,
         primaryModel: MODEL,
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
         controlUiEnabled: true,
@@ -113,7 +111,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         mutateConfig: (cfg) => ({
           ...cfg,
-          attachments: { ...cfg.attachments, ttlHours: 24 },
           agents: {
             ...cfg.agents,
             defaults: { ...cfg.agents?.defaults, utilityModel: MODEL },
@@ -304,13 +301,30 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         verifyContinuity,
         proveGroup,
       };
-      retention = await startHotReloadAttachmentRetention({
-        gateway: activeGateway,
-        patch,
-        verifyContinuity,
-        appendLog,
+      await proveGroup("heartbeat monitor", async () => {
+        for (const every of ["1h", "0m", "2h"] as const) {
+          await patch({ agents: { entries: { qa: { heartbeat: { every } } } } });
+          await waitForHotReloadFact("accepted system monitor config", async () => {
+            const { jobs } = await rpc<{
+              jobs: CronJob[];
+            }>("cron.list", { includeDisabled: true, includeDeliveryPreviews: false });
+            const heartbeat = jobs.find(
+              (job) => job.agentId === "qa" && job.payload.kind === "heartbeat",
+            );
+            return heartbeat?.enabled === (every !== "0m") &&
+              heartbeat.schedule.kind === "every" &&
+              (every === "0m" ||
+                heartbeat.schedule.everyMs === (every === "1h" ? 3_600_000 : 7_200_000))
+              ? true
+              : undefined;
+          });
+        }
+        await patch({ agents: { entries: { qa: { heartbeat: { every: "0m" } } } } });
+        await verifyContinuity(
+          "heartbeat monitor",
+          "Real config.patch writes changed persisted monitor cadence and enablement on the same Gateway boot",
+        );
       });
-      void retention.completion.catch(() => {});
       await proveHotReloadTerminalStartup(terminalProof);
 
       await proveHotReloadRequests({
@@ -330,7 +344,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
 
       // Node identities and relay grants are generated for this isolated fixture only.
       const nodeIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+        env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
         identityKey: "browser-node",
       });
       let node: HotReloadConnection | undefined;
@@ -463,7 +477,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           ["gateway.nodes.pairing.autoApproveCidrs", "gateway.nodes.pairing.sshVerify.cidrs"],
         );
         const pendingIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: "pending-node",
         });
         await assert.rejects(
@@ -475,7 +489,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         assert.equal(node.closes, 0);
         await patch({ gateway: { nodes: { pairing: { autoApproveLocal: true } } } });
         const nextIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: "next-node",
         });
         const nextNode = await connectHotReloadClient(activeGateway, { identity: nextIdentity });
@@ -483,7 +497,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         const pairingObservation = await pairingFixture.run({
           gateway: activeGateway,
           operator: primary.client,
-          patchConfig: patch,
           existingNode: node,
         });
         await verifyContinuity(
@@ -626,7 +639,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         proveGroup,
         verifyContinuity,
       });
-      pluginPolicy = proveHotReloadPluginPolicy({
+      await proveHotReloadPluginPolicy({
         gateway: activeGateway,
         unaffectedNode: node,
         temporaryRoot,
@@ -637,11 +650,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         http,
         proveGroup,
         verifyContinuity,
-        appendLog,
-        signal: pluginPolicyAbort.signal,
       });
-      // Join this owner below; real cleanup intervals overlap independent Gateway fixtures.
-      void pluginPolicy.catch(() => {});
       channels = await proveHotReloadChannels({ repoRoot, outputDir, appendLog });
       failures.push(...channels.failures);
       security = await proveHotReloadSecurity({ repoRoot, outputDir, appendLog });
@@ -656,8 +665,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       failures.push(...servicePolicy.failures);
       const otel = await proveHotReloadOtel({ repoRoot, outputDir, appendLog });
       failures.push(...otel.failures);
-      await pluginPolicy;
-      await proveGroup("attachments.ttlHours", () => retention!.completion);
       await checkContinuity();
       passedChecks =
         evidence.length +
@@ -721,11 +728,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           "SSH remote identity command with real isolated sshd",
         ],
       };
-    },
-    async () => {
-      pluginPolicyAbort.abort();
-      await pluginPolicy?.catch(() => {});
-      await retention?.stop();
     },
     () => {
       if (gateway) {

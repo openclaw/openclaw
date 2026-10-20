@@ -3,25 +3,18 @@ import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import type { AssistantMessage, Context, Model, ToolCall } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createRequesterYieldCallback } from "../../../src/agents/openclaw-tools.requester-yield.js";
+import { isToolResultError } from "../../../src/agents/tool-result-error.js";
+import { createSessionsYieldTool } from "../../../src/agents/tools/sessions-yield-tool.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { runAgentLoop } from "./agent-loop.js";
+import { makeAssistantMessage, model as baseModel } from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
 import { attachInternalToolBatchLifecycle } from "./internal-hooks.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
-import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "./types.js";
+import type { AgentEvent, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from "./types.js";
 
-const model: Model = {
-  id: "async-model",
-  name: "Async Model",
-  api: "test-api",
-  provider: "test-provider",
-  baseUrl: "https://example.test",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1000,
-  maxTokens: 1000,
-};
+const model: Model = { ...baseModel, id: "async-model", name: "Async Model", reasoning: true };
 const usage = {
   input: 4,
   output: 3,
@@ -33,16 +26,14 @@ const usage = {
 function assistant(
   content: AssistantMessage["content"],
   stopReason: AssistantMessage["stopReason"] = "stop",
+  responseId?: string,
 ): AssistantMessage {
   return {
-    role: "assistant",
-    content,
+    ...makeAssistantMessage(content),
     stopReason,
-    api: model.api,
-    provider: model.provider,
     model: model.id,
-    usage,
-    timestamp: 1,
+    usage: responseId ? { ...usage, input: 1, output: 1, cacheRead: 0, totalTokens: 2 } : usage,
+    ...(responseId ? { responseId } : {}),
   };
 }
 function tool(name: string, execute: AgentTool["execute"]): AgentTool {
@@ -51,189 +42,214 @@ function tool(name: string, execute: AgentTool["execute"]): AgentTool {
 function call(id: string, async = true): ToolCall {
   return { type: "toolCall", name: id, id, arguments: {}, ...(async ? { async: true } : {}) };
 }
-function recordMessage(event: AgentEvent, messages: AgentMessage[]) {
-  if (event.type === "message_end") {
-    messages.push(event.message);
-  }
+function pushCall(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  toolCall: ToolCall,
+  contentIndex: number,
+  partial: AssistantMessage,
+) {
+  stream.push({ type: "toolcall_end", contentIndex, toolCall, partial });
 }
 
-it.each(["replace", "remove"] as const)(
-  "honors a message finalization hook that %ss an async call",
-  async (change) => {
-    const source = { ...call("lookup"), arguments: { text: "original" } };
-    const execute = vi.fn(async () => ({ content: [], details: {}, terminate: true }));
-    const response = createAssistantMessageEventStream();
-    response.push({ type: "start", partial: assistant([]) });
-    response.push({
-      type: "toolcall_end",
-      contentIndex: 0,
-      toolCall: source,
-      partial: assistant([source]),
-    });
-    response.push({ type: "done", reason: "stop", message: assistant([source]) });
-    response.end();
-    const persisted: AgentMessage[] = [];
-    await runAgentLoop(
-      [{ role: "user", content: "look up", timestamp: 0 }],
-      {
-        systemPrompt: "",
-        messages: [],
-        tools: [{ ...tool("lookup", execute), parameters: Type.Object({ text: Type.String() }) }],
-      },
-      { model, convertToLlm: (messages) => messages as Context["messages"] },
-      async (event) => {
-        if (event.type === "message_end" && event.message.role === "assistant") {
-          await setImmediate();
-          event.message.content = event.message.content.flatMap(
-            (block): AssistantMessage["content"] =>
-              block.type !== "toolCall"
-                ? [block]
-                : change === "remove"
-                  ? []
-                  : [{ ...block, arguments: { text: "corrected" } }],
-          );
-        }
-        recordMessage(event, persisted);
-      },
-      undefined,
-      () => response,
-    );
-    if (change === "remove") {
-      expect(execute).not.toHaveBeenCalled();
-      expect(persisted.filter((message) => message.role === "toolResult")).toHaveLength(0);
-    } else {
-      expect(execute).toHaveBeenCalledExactlyOnceWith(
-        "lookup",
-        { text: "corrected" },
-        expect.any(AbortSignal),
-        expect.any(Function),
-      );
-    }
-  },
-);
+function finish(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  message: AssistantMessage,
+  reason: "stop" | "toolUse" | "length" = "stop",
+) {
+  stream.push({ type: "done", reason, message });
+  stream.end();
+}
 
-it.each([
-  "default",
-  "parallel",
-  "mixed-parallel",
-  "sequential",
-  "exclusive",
-  "deferred-exclusive",
-] as const)("preserves %s scheduling for streamed async calls", async (mode) => {
+function fail(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  error: AssistantMessage,
+  reason: "error" | "aborted" = "error",
+) {
+  stream.push({ type: "error", reason, error });
+  stream.end();
+}
+
+function completedResponse() {
+  const stream = createAssistantMessageEventStream();
+  finish(stream, assistant([{ type: "text", text: "done" }]));
+  return stream;
+}
+
+const assistants = (messages: AgentMessage[]) => messages.filter((m) => m.role === "assistant");
+const results = (messages: AgentMessage[]) => messages.filter((m) => m.role === "toolResult");
+const resultFor = (messages: AgentMessage[], id: string) =>
+  results(messages).find((m) => m.toolCallId === id);
+const isTextDelta = (event: AgentEvent) =>
+  event.type === "message_update" && event.assistantMessageEvent.type === "text_delta";
+const wait = (signal: Promise<void>, message: string) => withTestTimeout(signal, 1_000, message);
+
+function startCalls(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  calls: ToolCall[],
+  message = assistant,
+) {
+  stream.push({ type: "start", partial: message([]) });
+  calls.forEach((toolCall, index) =>
+    pushCall(stream, toolCall, index, message(calls.slice(0, index + 1))),
+  );
+}
+
+function runFixture(options: {
+  tools: AgentTool[];
+  config?: Partial<AgentLoopConfig>;
+  onEvent?: (event: AgentEvent) => void | Promise<void>;
+  onMessage?: (message: AgentMessage) => void | Promise<void>;
+  signal?: AbortSignal;
+  streamFn?: StreamFn;
+}) {
   const response = createAssistantMessageEventStream();
-  const preparing = createDeferred();
-  const prepared = createDeferred();
-  const firstDone = createDeferred();
-  const secondDone = createDeferred();
-  const preparedNames: string[] = [];
-  const started: string[] = [];
   const persisted: AgentMessage[] = [];
-  const make = (name: string, gate = Promise.resolve()) =>
-    tool(name, async () => {
-      started.push(name);
-      await gate;
-      return { content: [], details: {}, terminate: true };
-    });
-  const firstTool = make("first", firstDone.promise);
-  const secondTool = make("second", secondDone.promise);
-  const thirdTool = make("third");
-  if (mode.endsWith("exclusive")) {
-    secondTool.executionMode = "sequential";
-  }
-  const calls = [call("first"), call("second", mode !== "mixed-parallel"), call("third")];
+  const events: AgentEvent[] = [];
   const run = runAgentLoop(
     [{ role: "user", content: "start", timestamp: 0 }],
-    {
-      systemPrompt: "",
-      messages: [],
-      tools:
-        mode === "deferred-exclusive" ? [firstTool, thirdTool] : [firstTool, secondTool, thirdTool],
-    },
-    {
-      model,
-      toolExecution:
-        mode === "sequential" ? "sequential" : mode === "parallel" ? "parallel" : undefined,
-      convertToLlm: (messages) => messages as Context["messages"],
-      resolveDeferredTool: ({ toolCall }) => (toolCall.name === "second" ? secondTool : undefined),
-      beforeToolCall: async ({ toolCall }) => {
-        preparedNames.push(toolCall.name);
-        if (toolCall.name === "first") {
-          preparing.resolve();
-          await prepared.promise;
+    { systemPrompt: "", messages: [], tools: options.tools },
+    { model, convertToLlm: (messages) => messages as Context["messages"], ...options.config },
+    (event) => {
+      events.push(event);
+      if (event.type === "message_end") {
+        persisted.push(event.message);
+        if (options.onMessage) {
+          return options.onMessage(event.message);
         }
-        return undefined;
-      },
+      }
+      return options.onEvent?.(event);
     },
-    (event) => recordMessage(event, persisted),
-    undefined,
-    () => response,
+    options.signal,
+    options.streamFn ?? (() => response),
   );
-  try {
-    response.push({ type: "start", partial: assistant([]) });
-    calls.forEach((toolCall, contentIndex) =>
-      response.push({
-        type: "toolcall_end",
-        contentIndex,
-        toolCall,
-        partial: assistant(calls.slice(0, contentIndex + 1)),
-      }),
-    );
-    if (mode === "mixed-parallel") {
-      response.push({ type: "done", reason: "toolUse", message: assistant(calls, "toolUse") });
-      response.end();
+  return { response, persisted, events, run };
+}
+
+function outputLimitFailure(content: AssistantMessage["content"]): AssistantMessage {
+  return {
+    ...assistant(content, "error"),
+    errorCode: "incomplete_tool_call",
+    diagnostics: [
+      {
+        type: "openai_responses_terminal",
+        timestamp: 1,
+        details: {
+          eventType: "response.incomplete",
+          stopReason: "length",
+          incompleteReason: "max_output_tokens",
+        },
+      },
+    ],
+  };
+}
+
+it.each(["mixed-parallel", "deferred-exclusive"] as const)(
+  "preserves %s scheduling for streamed async calls",
+  async (mode) => {
+    const parallel = mode === "mixed-parallel";
+    const fragmentCount = parallel ? 2 : 3;
+    const preparing = createDeferred();
+    const prepared = createDeferred();
+    const firstDone = createDeferred();
+    const secondDone = createDeferred();
+    const toolStarted = {
+      first: createDeferred(),
+      second: createDeferred(),
+      third: createDeferred(),
+    };
+    const assistantFragmentsPersisted = createDeferred();
+    const secondResultPersisted = createDeferred();
+    const preparedNames: string[] = [];
+    const started: string[] = [];
+    const make = (name: keyof typeof toolStarted, gate = Promise.resolve()) =>
+      tool(name, async () => {
+        started.push(name);
+        toolStarted[name].resolve();
+        await gate;
+        return { content: [], details: {}, terminate: true };
+      });
+    const firstTool = make("first", firstDone.promise);
+    const secondTool = make("second", secondDone.promise);
+    const thirdTool = make("third");
+    if (!parallel) {
+      secondTool.executionMode = "sequential";
     }
-    await preparing.promise;
-    await vi.waitFor(() =>
-      expect(persisted.filter((message) => message.role === "assistant")).toHaveLength(
-        mode === "mixed-parallel" ? 2 : 3,
-      ),
-    );
-    expect(preparedNames).toEqual(["first"]);
-    prepared.resolve();
-    await vi.waitFor(() => expect(started).toContain("first"));
-    if (mode === "default" || mode === "parallel" || mode === "mixed-parallel") {
-      await vi.waitFor(() => expect(started).toEqual(["first", "second", "third"]));
-      secondDone.resolve();
-      await vi.waitFor(() =>
-        expect(
-          persisted.some(
-            (message) => message.role === "toolResult" && message.toolCallId === "second",
-          ),
-        ).toBe(true),
-      );
-      expect(
-        persisted.some(
-          (message) => message.role === "toolResult" && message.toolCallId === "first",
-        ),
-      ).toBe(false);
+    const calls = [call("first"), call("second", !parallel), call("third")];
+    const { response, persisted, run } = runFixture({
+      tools: parallel ? [firstTool, secondTool, thirdTool] : [firstTool, thirdTool],
+      config: {
+        resolveDeferredTool: ({ toolCall }) =>
+          toolCall.name === "second" ? secondTool : undefined,
+        beforeToolCall: async ({ toolCall }) => {
+          preparedNames.push(toolCall.name);
+          if (toolCall.name === "first") {
+            preparing.resolve();
+            await prepared.promise;
+          }
+        },
+      },
+      onMessage: (message) => {
+        if (message.role === "assistant" && assistants(persisted).length === fragmentCount) {
+          assistantFragmentsPersisted.resolve();
+        }
+        if (message.role === "toolResult" && message.toolCallId === "second") {
+          secondResultPersisted.resolve();
+        }
+      },
+    });
+    try {
+      startCalls(response, calls);
+      if (parallel) {
+        finish(response, assistant(calls, "toolUse"), "toolUse");
+      }
+      await preparing.promise;
+      await wait(assistantFragmentsPersisted.promise, "Assistant fragments not persisted");
+      expect(assistants(persisted)).toHaveLength(fragmentCount);
+      expect(preparedNames).toEqual(["first"]);
+      prepared.resolve();
+      await wait(toolStarted.first.promise, "First tool did not start");
+      expect(started).toContain("first");
+      if (parallel) {
+        await wait(toolStarted.third.promise, "Third tool did not start");
+        expect(started).toEqual(["first", "second", "third"]);
+        secondDone.resolve();
+        await wait(secondResultPersisted.promise, "Second tool result not persisted");
+        expect(resultFor(persisted, "second")).toBeDefined();
+        expect(resultFor(persisted, "first")).toBeUndefined();
+        firstDone.resolve();
+      } else {
+        await setImmediate();
+        expect(started).toEqual(["first"]);
+        firstDone.resolve();
+        await wait(toolStarted.second.promise, "Second tool did not start");
+        expect(started).toEqual(["first", "second"]);
+        await setImmediate();
+        expect(started).not.toContain("third");
+        secondDone.resolve();
+        await wait(toolStarted.third.promise, "Third tool did not start");
+        expect(started).toEqual(["first", "second", "third"]);
+      }
+    } finally {
+      prepared.resolve();
       firstDone.resolve();
-    } else {
-      await setImmediate();
-      expect(started).toEqual(["first"]);
-      firstDone.resolve();
-      await vi.waitFor(() => expect(started).toEqual(["first", "second"]));
-      await setImmediate();
-      expect(started).not.toContain("third");
       secondDone.resolve();
-      await vi.waitFor(() => expect(started).toEqual(["first", "second", "third"]));
+      finish(response, assistant(calls));
+      await run;
     }
-  } finally {
-    prepared.resolve();
-    firstDone.resolve();
-    secondDone.resolve();
-    response.push({ type: "done", reason: "stop", message: assistant(calls) });
-    response.end();
-    await run;
-  }
-  expect(persisted.filter((message) => message.role === "toolResult")).toHaveLength(3);
-});
+    expect(results(persisted)).toHaveLength(3);
+  },
+);
 
 it("keeps the live assistant visible while an async tool result starts and ends", async () => {
   const response = createAssistantMessageEventStream();
   const gate = createDeferred();
+  const lookupStarted = createDeferred();
+  const textUpdated = createDeferred();
+  const resultEnded = createDeferred();
   const source = call("lookup");
   const text = { type: "text" as const, text: "independent answer" };
   const execute = vi.fn(async () => {
+    lookupStarted.resolve();
     await gate.promise;
     return { content: [{ type: "text" as const, text: "found" }], details: {} };
   });
@@ -241,103 +257,72 @@ it("keeps the live assistant visible while an async tool result starts and ends"
   const agent = new Agent({
     initialState: { model, tools: [tool("lookup", execute)] },
     streamFn: () => {
-      if (++requests === 1) {
-        return response;
-      }
-      const final = createAssistantMessageEventStream();
-      final.push({
-        type: "done",
-        reason: "stop",
-        message: assistant([{ type: "text", text: "done" }]),
-      });
-      final.end();
-      return final;
+      return ++requests === 1 ? response : completedResponse();
     },
   });
   const resultStates: Array<AgentMessage | undefined> = [];
   agent.subscribe((event) => {
+    if (isTextDelta(event)) {
+      textUpdated.resolve();
+    }
     if (
       (event.type === "message_start" || event.type === "message_end") &&
       event.message.role === "toolResult"
     ) {
       resultStates.push(agent.state.streamingMessage);
+      if (event.type === "message_end") {
+        resultEnded.resolve();
+      }
     }
   });
   const run = agent.prompt("look up");
   try {
-    response.push({ type: "start", partial: assistant([]) });
-    response.push({
-      type: "toolcall_end",
-      contentIndex: 0,
-      toolCall: source,
-      partial: assistant([source]),
-    });
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    startCalls(response, [source]);
+    await wait(lookupStarted.promise, "Lookup did not start");
+    expect(execute).toHaveBeenCalledTimes(1);
     response.push({
       type: "text_delta",
       contentIndex: 1,
       delta: text.text,
       partial: assistant([source, text]),
     });
-    await vi.waitFor(() =>
-      expect(agent.state.streamingMessage).toMatchObject({ role: "assistant", content: [text] }),
-    );
+    await wait(textUpdated.promise, "Assistant text not updated");
+    expect(agent.state.streamingMessage).toMatchObject({ role: "assistant", content: [text] });
     const activeAssistant = agent.state.streamingMessage;
     gate.resolve();
-    await vi.waitFor(() => expect(resultStates).toHaveLength(2));
+    await wait(resultEnded.promise, "Tool result did not end");
     expect(resultStates).toEqual([activeAssistant, activeAssistant]);
     expect(agent.state.streamingMessage).toBe(activeAssistant);
   } finally {
     gate.resolve();
-    response.push({ type: "done", reason: "stop", message: assistant([source, text]) });
-    response.end();
+    finish(response, assistant([source, text]));
     await run;
   }
   expect(agent.state.streamingMessage).toBeUndefined();
 });
 
-it.each(["stop", "length"] as const)(
-  "persists an execution identity for a done-only async %s response",
-  async (stopReason) => {
-    const persisted: AgentMessage[] = [];
-    const execute = vi.fn(async () => {
-      const owner = getAgentToolExecutionContext()?.assistantMessage;
-      expect(owner?.turnId).toBeTruthy();
-      expect(persisted).toContain(owner);
-      return { content: [], details: {}, terminate: true };
-    });
-    const response = createAssistantMessageEventStream();
-    response.push({
-      type: "done",
-      reason: stopReason,
-      message: assistant([call("lookup")], stopReason),
-    });
-    response.end();
-    const result = await runAgentLoop(
-      [{ role: "user", content: "look up", timestamp: 0 }],
-      { systemPrompt: "", messages: [], tools: [tool("lookup", execute)] },
-      { model, convertToLlm: (messages) => messages as Context["messages"] },
-      (event) => recordMessage(event, persisted),
-      undefined,
-      () => response,
-    );
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(result).toEqual(persisted);
-    expect(result.at(-1)).toMatchObject({
-      role: "toolResult",
-      toolCallId: "lookup",
-      isError: false,
-    });
-  },
-);
+it("persists an execution identity for a done-only async length response", async () => {
+  const execute = vi.fn(async () => {
+    const owner = getAgentToolExecutionContext()?.assistantMessage;
+    expect(owner?.turnId).toBeTruthy();
+    expect(persisted).toContain(owner);
+    return { content: [], details: {}, terminate: true };
+  });
+  const { response, persisted, run } = runFixture({ tools: [tool("lookup", execute)] });
+  finish(response, assistant([call("lookup")], "length"), "length");
+  const result = await run;
+  expect(execute).toHaveBeenCalledTimes(1);
+  expect(result).toEqual(persisted);
+  expect(result.at(-1)).toMatchObject({ role: "toolResult", toolCallId: "lookup", isError: false });
+});
 
 it("persists async calls before admission, streams the remaining answer, and executes each call once", async () => {
-  const response = createAssistantMessageEventStream();
   const gate = createDeferred();
+  const lookupStarted = createDeferred();
+  const textUpdated = createDeferred();
+  const resultPersisted = createDeferred();
   const source = call("lookup");
   const ordinary = call("ordinary", false);
-  const persisted: AgentMessage[] = [];
-  const events: AgentEvent[] = [];
   const executionOrder: string[] = [];
   const contexts: Context[] = [];
   const lookup = vi.fn(async () => {
@@ -345,6 +330,7 @@ it("persists async calls before admission, streams the remaining answer, and exe
     expect(persisted).toContain(owner);
     expect(owner?.turnId).toBeTruthy();
     executionOrder.push("lookup");
+    lookupStarted.resolve();
     await gate.promise;
     return { content: [{ type: "text" as const, text: "lookup result" }], details: {} };
   });
@@ -354,28 +340,11 @@ it("persists async calls before admission, streams the remaining answer, and exe
   });
   const streamFn: StreamFn = (_model, context) => {
     contexts.push({ messages: structuredClone(context.messages) });
-    if (contexts.length === 1) {
-      return response;
-    }
-    const final = createAssistantMessageEventStream();
-    final.push({
-      type: "done",
-      reason: "stop",
-      message: assistant([{ type: "text", text: "done" }]),
-    });
-    final.end();
-    return final;
+    return contexts.length === 1 ? response : completedResponse();
   };
-  const run = runAgentLoop(
-    [{ role: "user", content: "look up", timestamp: 0 }],
-    {
-      systemPrompt: "",
-      messages: [],
-      tools: [tool("lookup", lookup), tool("ordinary", ordinaryExecute)],
-    },
-    {
-      model,
-      convertToLlm: (messages) => messages as Context["messages"],
+  const { response, persisted, events, run } = runFixture({
+    tools: [tool("lookup", lookup), tool("ordinary", ordinaryExecute)],
+    config: {
       beforeToolBatch: async ({ calls }) =>
         attachInternalToolBatchLifecycle(
           {},
@@ -385,169 +354,181 @@ it("persists async calls before admission, streams the remaining answer, and exe
           },
         ),
     },
-    (event) => {
-      events.push(event);
-      recordMessage(event, persisted);
+    onEvent: (event) => {
+      if (isTextDelta(event)) {
+        textUpdated.resolve();
+      }
+      if (event.type === "message_end" && event.message.role === "toolResult") {
+        resultPersisted.resolve();
+      }
     },
-    undefined,
     streamFn,
-  );
+  });
   let closed = false;
   try {
-    const prefix = assistant([source], "toolUse");
-    response.push({ type: "start", partial: assistant([]) });
-    response.push({ type: "toolcall_end", contentIndex: 0, toolCall: source, partial: prefix });
-    await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(1));
+    startCalls(response, [source], (content) =>
+      assistant(content, content.length ? "toolUse" : "stop"),
+    );
+    await wait(lookupStarted.promise, "Lookup did not start");
+    expect(lookup).toHaveBeenCalledTimes(1);
     const text = { type: "text" as const, text: "independent answer" };
-    const progress = assistant([source, text]);
-    response.push({ type: "text_delta", contentIndex: 1, delta: text.text, partial: progress });
     response.push({
-      type: "toolcall_end",
-      contentIndex: 2,
-      toolCall: ordinary,
-      partial: assistant([source, text, ordinary]),
+      type: "text_delta",
+      contentIndex: 1,
+      delta: text.text,
+      partial: assistant([source, text]),
     });
-    await vi.waitFor(() =>
-      expect(
-        events.some(
-          (event) =>
-            event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
-        ),
-      ).toBe(true),
-    );
+    pushCall(response, ordinary, 2, assistant([source, text, ordinary]));
+    await wait(textUpdated.promise, "Assistant text not updated");
+    // Let the queued ordinary call reach the scheduler before checking it stayed deferred.
+    await setImmediate();
     expect(ordinaryExecute).not.toHaveBeenCalled();
-    const textEvent = events.find(
-      (event) =>
-        event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
-    );
-    expect(textEvent).toMatchObject({
+    expect(events.find(isTextDelta)).toMatchObject({
       assistantMessageEvent: { contentIndex: 0 },
       message: { content: [text] },
     });
     gate.resolve();
-    await vi.waitFor(() =>
-      expect(persisted.some((message) => message.role === "toolResult")).toBe(true),
-    );
-    response.push({
-      type: "done",
-      reason: "toolUse",
-      message: assistant([source, text, ordinary], "toolUse"),
-    });
-    response.end();
+    await wait(resultPersisted.promise, "Tool result not persisted");
+    expect(results(persisted).length).toBeGreaterThan(0);
+    finish(response, assistant([source, text, ordinary], "toolUse"), "toolUse");
     closed = true;
     const result = await run;
     expect(result).toEqual(persisted);
     expect(executionOrder).toEqual(["admit:lookup", "lookup", "admit:ordinary", "ordinary"]);
     expect(
-      result
-        .filter((message) => message.role === "assistant")
+      assistants(result)
         .flatMap((message) => message.content)
         .filter((item) => item.type === "toolCall")
         .map((item) => item.id),
     ).toEqual(["lookup", "ordinary"]);
     expect(contexts[1]?.messages).toEqual(persisted.slice(0, -1));
-    expect(
-      persisted
-        .filter((message) => message.role === "assistant")
-        .map((message) => message.usage.totalTokens),
-    ).toEqual([0, 9, 9]);
+    expect(assistants(persisted).map((message) => message.usage.totalTokens)).toEqual([0, 9, 9]);
   } finally {
     gate.resolve();
     if (!closed) {
-      response.push({ type: "done", reason: "toolUse", message: assistant([source], "toolUse") });
-      response.end();
+      finish(response, assistant([source], "toolUse"), "toolUse");
     }
     await run;
   }
 });
 
-it.each(["error", "aborted"] as const)(
-  "settles running async tools and fences queued source starts when the response is %s",
-  async (stopReason) => {
-    const response = createAssistantMessageEventStream();
+it("preserves external cancellation when an output-limited async batch hits the critical loop limit", async () => {
+  const beforeBatch = createDeferred();
+  const releaseBatch = createDeferred();
+  const controller = new AbortController();
+  const execute = vi.fn(async () => ({ content: [], details: {} }));
+  const loop = call("loop");
+  const { response, events, run } = runFixture({
+    tools: [tool("loop", execute)],
+    config: {
+      toolLoopRecoveryState: { criticalToolLoopSeen: true },
+      beforeToolBatch: async () => {
+        beforeBatch.resolve();
+        await releaseBatch.promise;
+        return {
+          intervention: {
+            kind: "critical-tool-loop",
+            toolCallId: loop.id,
+            toolName: loop.name,
+            actionKey: "loop:same-action",
+            detector: "generic_repeat",
+            count: 20,
+            reason: "Repeated critical tool loop",
+          },
+        };
+      },
+    },
+    onEvent: (event) => {
+      if (event.type === "tool_execution_end") {
+        controller.abort(new Error("Operator stopped the run"));
+      }
+    },
+    signal: controller.signal,
+  });
+  try {
+    startCalls(response, [loop]);
+    await beforeBatch.promise;
+    fail(response, outputLimitFailure([loop]));
+    releaseBatch.resolve();
+    const messages = await run;
+    expect(execute).not.toHaveBeenCalled();
+    expect(assistants(messages).at(-1)).toMatchObject({ stopReason: "aborted", usage });
+    expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
+  } finally {
+    releaseBatch.resolve();
+    controller.abort();
+    response.end();
+    await run;
+  }
+});
+
+it.each(["aborted", "output-limit"] as const)(
+  "settles running async tools with queued source starts after %s",
+  async (failureKind) => {
+    const stopReason = failureKind === "aborted" ? "aborted" : "error";
+    const outputLimit = failureKind === "output-limit";
     const gate = createDeferred();
     const persistTerminal = createDeferred();
+    const firstStarted = createDeferred();
+    const terminalRecorded = createDeferred();
+    const resultsPersisted = createDeferred();
     const first = call("first");
     const second = call("second");
-    const persisted: AgentMessage[] = [];
-    const events: AgentEvent[] = [];
-    const firstExecute = vi.fn(async () => {
+    const firstExecute = vi.fn<AgentTool["execute"]>(async (_id, _args, signal) => {
+      firstStarted.resolve();
       await gate.promise;
+      expect(signal?.aborted).toBe(!outputLimit);
       return { content: [], details: {} };
     });
     const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
     const streamFn = vi.fn(() => response);
-    const run = runAgentLoop(
-      [{ role: "user", content: "start", timestamp: 0 }],
-      {
-        systemPrompt: "",
-        messages: [],
-        tools: [tool("first", firstExecute), tool("second", secondExecute)],
-      },
-      {
-        model,
-        toolExecution: "sequential",
-        convertToLlm: (messages) => messages as Context["messages"],
-      },
-      async (event) => {
-        events.push(event);
-        recordMessage(event, persisted);
-        if (
-          event.type === "message_end" &&
-          event.message.role === "assistant" &&
-          event.message.stopReason === stopReason
-        ) {
+    const { response, persisted, events, run } = runFixture({
+      tools: [tool("first", firstExecute), tool("second", secondExecute)],
+      config: { toolExecution: "sequential" },
+      onMessage: async (message) => {
+        if (message.role === "toolResult" && results(persisted).length === 2) {
+          resultsPersisted.resolve();
+        }
+        if (message.role === "assistant" && message.stopReason === stopReason) {
+          terminalRecorded.resolve();
           await persistTerminal.promise;
         }
       },
-      undefined,
       streamFn,
-    );
+    });
     let closed = false;
     try {
-      response.push({ type: "start", partial: assistant([]) });
-      response.push({
-        type: "toolcall_end",
-        contentIndex: 0,
-        toolCall: first,
-        partial: assistant([first]),
-      });
-      response.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: second,
-        partial: assistant([first, second]),
-      });
-      await vi.waitFor(() => expect(firstExecute).toHaveBeenCalledTimes(1));
-      const failure = { ...assistant([first, second], stopReason), errorMessage: "stream failed" };
-      response.push({ type: "error", reason: stopReason, error: failure });
-      response.end();
+      startCalls(response, [first, second]);
+      await wait(firstStarted.promise, "First tool did not start");
+      expect(firstExecute).toHaveBeenCalledTimes(1);
+      const failure = {
+        ...(outputLimit
+          ? outputLimitFailure([first, second])
+          : assistant([first, second], stopReason)),
+        errorMessage: "stream failed",
+      };
+      fail(response, failure, stopReason);
       closed = true;
-      await vi.waitFor(() =>
-        expect(
-          persisted.some(
-            (message) => message.role === "assistant" && message.stopReason === stopReason,
-          ),
-        ).toBe(true),
-      );
+      if (outputLimit) {
+        gate.resolve();
+      }
+      await wait(terminalRecorded.promise, "Assistant terminal not recorded");
+      expect(assistants(persisted).some((m) => m.stopReason === stopReason)).toBe(true);
+      // Give finalization a turn to expose a missing persistence await while the gate is held.
+      await setImmediate();
       expect(events.at(-1)?.type).not.toBe("agent_end");
       gate.resolve();
-      await vi.waitFor(() =>
-        expect(persisted.filter((message) => message.role === "toolResult")).toHaveLength(2),
-      );
-      expect(secondExecute).not.toHaveBeenCalled();
+      await wait(resultsPersisted.promise, "Tool results not persisted");
+      expect(results(persisted)).toHaveLength(2);
+      expect(secondExecute).toHaveBeenCalledTimes(outputLimit ? 1 : 0);
       persistTerminal.resolve();
       const result = await run;
       expect(result).toEqual(persisted);
-      expect(secondExecute).not.toHaveBeenCalled();
+      expect(secondExecute).toHaveBeenCalledTimes(outputLimit ? 1 : 0);
       expect(streamFn).toHaveBeenCalledTimes(1);
-      expect(
-        result
-          .filter((message) => message.role === "toolResult")
-          .map((message) => ({ id: message.toolCallId, isError: message.isError })),
-      ).toEqual([
-        { id: "first", isError: false },
-        { id: "second", isError: true },
+      expect(results(result)).toMatchObject([
+        { toolCallId: "first", isError: false },
+        { toolCallId: "second", isError: !outputLimit },
       ]);
       expect(events.at(-1)?.type).toBe("agent_end");
     } finally {
@@ -558,8 +539,135 @@ it.each(["error", "aborted"] as const)(
           ...assistant([first, second], stopReason),
           errorMessage: "stream failed",
         };
-        response.push({ type: "error", reason: stopReason, error: failure });
-        response.end();
+        fail(response, failure, stopReason);
+      }
+      await run;
+    }
+  },
+);
+
+it.each([
+  { priorResult: "completed", asyncYield: true },
+  { priorResult: "pending", asyncYield: true },
+  { priorResult: "completed", asyncYield: false },
+] as const)(
+  "delivers $priorResult async output before yielding (async yield: $asyncYield)",
+  async ({ priorResult, asyncYield }) => {
+    const controller = new AbortController();
+    const lookupStarted = createDeferred();
+    const lookupRelease = createDeferred();
+    const lookupPersisted = createDeferred();
+    const firstYieldPersisted = createDeferred();
+    const first = createAssistantMessageEventStream();
+    const second = createAssistantMessageEventStream();
+    const inputs: Context["messages"][] = [];
+    const lookupCall = call("lookup");
+    const yieldCall: ToolCall = {
+      ...call("yield-first", asyncYield),
+      name: "sessions_yield",
+      arguments: { waitFor: "message" },
+    };
+    const lookup = tool("lookup", async () => {
+      lookupStarted.resolve();
+      await lookupRelease.promise;
+      return { content: [{ type: "text", text: "already completed" }], details: {} };
+    });
+    const claimYield = vi.fn(
+      createRequesterYieldCallback({
+        requesterAgentId: "diagnostic",
+        // This loop fixture owns a runtime completion; native child admission
+        // is covered at the requester boundary, not inferred from a fake key.
+        claimYieldCompletion: () => true,
+      }),
+    );
+    const onYield = vi.fn(() => {
+      controller.abort(new Error("sessions_yield"));
+      fail(
+        inputs.length === 1 ? first : second,
+        {
+          ...assistant([], "aborted", "yielded"),
+          errorMessage: "sessions_yield",
+        },
+        "aborted",
+      );
+    });
+    const yieldTool = createSessionsYieldTool({
+      sessionId: "diagnostic-child",
+      claimYield,
+      onYield,
+    });
+    const streamFn: StreamFn = (_model, context) => {
+      inputs.push(structuredClone(context.messages));
+      if (inputs.length === 1) {
+        return first;
+      }
+      const nextCall = { ...yieldCall, id: "yield-next", async: true as const };
+      startCalls(second, [nextCall], (content) => assistant(content, "stop", "second"));
+      return second;
+    };
+    const { persisted, run } = runFixture({
+      tools: [lookup, yieldTool],
+      config: {
+        // Mirror the production session hook that classifies structured tool errors.
+        afterToolCall: async ({ result }) => ({ isError: isToolResultError(result) }),
+      },
+      onMessage: (message) => {
+        if (message.role !== "toolResult") {
+          return;
+        }
+        if (message.toolCallId === "lookup") {
+          lookupPersisted.resolve();
+        }
+        if (message.toolCallId === "yield-first") {
+          firstYieldPersisted.resolve();
+        }
+      },
+      signal: controller.signal,
+      streamFn,
+    });
+    try {
+      startCalls(first, [lookupCall], (content) => assistant(content, "stop", "first"));
+      await lookupStarted.promise;
+      if (priorResult !== "pending") {
+        lookupRelease.resolve();
+        await lookupPersisted.promise;
+      }
+      pushCall(first, yieldCall, 1, assistant([lookupCall, yieldCall], "stop", "first"));
+      if (!asyncYield) {
+        finish(first, assistant([lookupCall, yieldCall], "toolUse", "first"), "toolUse");
+      }
+      await firstYieldPersisted.promise;
+      expect(claimYield).not.toHaveBeenCalled();
+      expect(onYield).not.toHaveBeenCalled();
+      expect(resultFor(persisted, "yield-first")).toMatchObject({
+        isError: false,
+        details: { status: "deferred" },
+      });
+      if (priorResult === "pending") {
+        expect(resultFor(persisted, "lookup")).toBeUndefined();
+        lookupRelease.resolve();
+        await lookupPersisted.promise;
+      }
+      if (asyncYield) {
+        finish(first, assistant([lookupCall, yieldCall], "stop", "first"));
+      }
+      await run;
+      expect(claimYield).toHaveBeenCalledTimes(1);
+      expect(onYield).toHaveBeenCalledTimes(1);
+      expect(inputs).toHaveLength(2);
+      const nextInput = inputs[1];
+      if (!nextInput) {
+        throw new Error("Expected a second model request");
+      }
+      expect(resultFor(nextInput, "lookup")).toMatchObject({
+        isError: false,
+        content: [{ type: "text", text: "already completed" }],
+      });
+    } finally {
+      lookupRelease.resolve();
+      controller.abort();
+      for (const response of [first, second]) {
+        response.end(assistant([], "aborted", "cleanup"));
       }
       await run;
     }

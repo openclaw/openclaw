@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSmsRuntime } from "./runtime.js";
+import { resolveTwilioMessageSid } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsSendResult } from "./types.js";
 
 const DELIVERY_NAMESPACE = "twilio-delivery-observations-v1";
@@ -42,26 +43,13 @@ export type SmsDeliveryRecord = {
   observations: SmsDeliveryObservation[];
 };
 
-export type SmsDeliveryRecorder = {
-  record: (params: {
-    account: ResolvedSmsAccount;
-    form: Record<string, string>;
-  }) => Promise<{ duplicate: boolean; record: SmsDeliveryRecord }>;
-};
+export type SmsDeliveryRecorder = ReturnType<typeof createSmsDeliveryRecorder>;
 
 let deliveryStore: PluginStateKeyedStore<SmsDeliveryRecord> | undefined;
 let deliveryStoreRuntime: ReturnType<typeof getSmsRuntime> | undefined;
 
 function firstTrimmed(form: Record<string, string>, key: string): string {
   return form[key]?.trim() ?? "";
-}
-
-function resolveMessageSid(form: Record<string, string>): string {
-  return (
-    firstTrimmed(form, "MessageSid") ||
-    firstTrimmed(form, "SmsSid") ||
-    firstTrimmed(form, "SmsMessageSid")
-  );
 }
 
 function normalizeDeliveryStatus(rawStatus: string): string {
@@ -75,10 +63,6 @@ function resolveDeliveryStatus(form: Record<string, string>): string {
   );
 }
 
-function hashAccountSid(accountSid: string): string {
-  return createHash("sha256").update(accountSid).digest("hex");
-}
-
 function fingerprintObservation(params: {
   source: SmsDeliveryObservationSource;
   messageSid: string;
@@ -86,17 +70,15 @@ function fingerprintObservation(params: {
   errorCode?: string;
   rawDlrDoneDate?: string;
 }): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        params.source,
-        params.messageSid,
-        params.status,
-        params.errorCode ?? "",
-        params.rawDlrDoneDate ?? "",
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      params.source,
+      params.messageSid,
+      params.status,
+      params.errorCode ?? "",
+      params.rawDlrDoneDate ?? "",
+    ]),
+  );
 }
 
 function deliveryRecordKey(params: {
@@ -104,9 +86,7 @@ function deliveryRecordKey(params: {
   accountSidHash: string;
   messageSid: string;
 }): string {
-  return createHash("sha256")
-    .update(`${params.accountId}\n${params.accountSidHash}\n${params.messageSid}`)
-    .digest("hex");
+  return sha256Hex(`${params.accountId}\n${params.accountSidHash}\n${params.messageSid}`);
 }
 
 function openDeliveryStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
@@ -133,7 +113,7 @@ function parseSmsDeliveryObservation(
   form: Record<string, string>,
   nowMs = Date.now(),
 ): { messageSid: string; observation: SmsDeliveryObservation } | null {
-  const messageSid = resolveMessageSid(form);
+  const messageSid = resolveTwilioMessageSid(form);
   const status = resolveDeliveryStatus(form);
   if (!messageSid || !status) {
     return null;
@@ -163,21 +143,14 @@ function reduceDeliveryStatus(
   current: SmsDeliveryRecord | undefined,
   observation: SmsDeliveryObservation,
 ): Pick<SmsDeliveryRecord, "status" | "errorCode" | "conflict"> {
-  if (!current) {
-    return {
-      status: observation.status,
-      ...(observation.errorCode ? { errorCode: observation.errorCode } : {}),
-    };
-  }
-  if (current.status === "conflicted") {
+  if (current?.status === "conflicted") {
     return {
       status: current.status,
       ...(current.errorCode ? { errorCode: current.errorCode } : {}),
       conflict: true,
     };
   }
-
-  if (current.status === observation.status) {
+  if (current?.status === observation.status) {
     const errorCode = current.errorCode ?? observation.errorCode;
     return {
       status: current.status,
@@ -186,9 +159,9 @@ function reduceDeliveryStatus(
     };
   }
 
-  const currentTerminal = TERMINAL_DELIVERY_STATUSES.has(current.status);
+  const currentTerminal = current && TERMINAL_DELIVERY_STATUSES.has(current.status);
   const nextTerminal = TERMINAL_DELIVERY_STATUSES.has(observation.status);
-  if (currentTerminal && nextTerminal && current.status !== observation.status) {
+  if (currentTerminal && nextTerminal) {
     const errorCode = observation.errorCode ?? current.errorCode;
     return {
       status: "conflicted",
@@ -196,32 +169,18 @@ function reduceDeliveryStatus(
       conflict: true,
     };
   }
-  if (currentTerminal) {
-    return {
-      status: current.status,
-      ...(current.errorCode ? { errorCode: current.errorCode } : {}),
-      ...(current.conflict ? { conflict: true } : {}),
-    };
-  }
-  if (nextTerminal) {
-    return {
-      status: observation.status,
-      ...(observation.errorCode ? { errorCode: observation.errorCode } : {}),
-    };
-  }
-
-  const currentRank = DELIVERY_STATUS_RANK[current.status] ?? -1;
-  const nextRank = DELIVERY_STATUS_RANK[observation.status] ?? -1;
-  if (nextRank > currentRank) {
-    return {
-      status: observation.status,
-      ...(observation.errorCode ? { errorCode: observation.errorCode } : {}),
-    };
-  }
+  const selected =
+    !current ||
+    (!currentTerminal &&
+      (nextTerminal ||
+        (DELIVERY_STATUS_RANK[observation.status] ?? -1) >
+          (DELIVERY_STATUS_RANK[current.status] ?? -1)))
+      ? observation
+      : current;
   return {
-    status: current.status,
-    ...(current.errorCode ? { errorCode: current.errorCode } : {}),
-    ...(current.conflict ? { conflict: true } : {}),
+    status: selected.status,
+    ...(selected.errorCode ? { errorCode: selected.errorCode } : {}),
+    ...(selected === current && current.conflict ? { conflict: true } : {}),
   };
 }
 
@@ -260,45 +219,50 @@ async function recordSmsDeliveryObservation(params: {
   messageSid: string;
   observation: SmsDeliveryObservation;
   store: PluginStateKeyedStore<SmsDeliveryRecord>;
-}): Promise<{ duplicate: boolean; record: SmsDeliveryRecord }> {
-  if (!params.store.update) {
-    throw new Error("SMS delivery observations require atomic plugin state updates.");
+}) {
+  if (!params.store.observe || !params.store.compareAndApply) {
+    throw new Error("SMS delivery observations require plugin state comparisons.");
   }
-  const accountSidHash = hashAccountSid(params.account.accountSid);
+  const accountId = params.account.accountId;
+  const accountSidHash = sha256Hex(params.account.accountSid);
   const key = deliveryRecordKey({
-    accountId: params.account.accountId,
+    accountId,
     accountSidHash,
     messageSid: params.messageSid,
   });
-  let record: SmsDeliveryRecord | undefined;
-  let duplicate = false;
-  await params.store.update(key, (current) => {
+  let observed = await params.store.observe(key);
+  while (true) {
     const next = mergeSmsDeliveryObservation({
-      accountId: params.account.accountId,
+      accountId,
       accountSidHash,
       messageSid: params.messageSid,
-      current,
+      current: observed.value,
       observation: params.observation,
     });
-    if (!next) {
-      duplicate = true;
-      record = current;
-      return undefined;
+    const result = await params.store.compareAndApply(
+      key,
+      observed.comparison,
+      next
+        ? { operation: "update", action: "set", value: next }
+        : { operation: "update", action: "keep" },
+    );
+    if (result.status === "conflict") {
+      observed = result.current;
+      continue;
     }
-    record = next;
-    return next;
-  });
-  if (!record) {
-    throw new Error("SMS delivery observation was not persisted.");
+    const record = next ?? observed.value;
+    if (!record) {
+      throw new Error("SMS delivery observation was not persisted.");
+    }
+    return { duplicate: !next, record };
   }
-  return { duplicate, record };
 }
 
 export function createSmsDeliveryRecorder(
   store: PluginStateKeyedStore<SmsDeliveryRecord> = openDeliveryStore(),
-): SmsDeliveryRecorder {
+) {
   return {
-    async record({ account, form }) {
+    async record({ account, form }: { account: ResolvedSmsAccount; form: Record<string, string> }) {
       const parsed = parseSmsDeliveryObservation(form);
       if (!parsed) {
         throw new Error("Invalid Twilio delivery status callback.");
@@ -318,7 +282,7 @@ export async function recordInitialSmsDeliveryResult(params: {
   result: SmsSendResult;
   nowMs?: number;
   store?: PluginStateKeyedStore<SmsDeliveryRecord>;
-}): Promise<{ duplicate: boolean; record: SmsDeliveryRecord } | null> {
+}) {
   const messageSid = params.result.sid.trim();
   const status = normalizeDeliveryStatus(params.result.status ?? "");
   if (!messageSid || !status) {
@@ -349,7 +313,7 @@ export async function listRecentSmsDeliveryRecords(
   if (limit <= 0) {
     return [];
   }
-  const accountSidHash = hashAccountSid(account.accountSid);
+  const accountSidHash = sha256Hex(account.accountSid);
   return (await store.entries())
     .map((entry) => entry.value)
     .filter(

@@ -4,38 +4,8 @@ import { normalizeMeetUrl } from "./meet-url.js";
 import type {
   GoogleMeetChromeHealth,
   GoogleMeetJoinRequest,
-  GoogleMeetJoinResult,
   GoogleMeetSession,
 } from "./transports/types.js";
-
-export type GoogleMeetRuntimeProbeContext = {
-  config: GoogleMeetConfig;
-  resolveAgentId(request: GoogleMeetJoinRequest): string;
-  list(): GoogleMeetSession[];
-  join(request: GoogleMeetJoinRequest): Promise<GoogleMeetJoinResult>;
-  isReusable(
-    session: GoogleMeetSession,
-    resolved: {
-      url: string;
-      transport: GoogleMeetTransport;
-      mode: GoogleMeetMode;
-      agentId: string;
-    },
-  ): boolean;
-  hasHealthHandle(sessionId: string): boolean;
-  refreshHealth(sessionId: string): void;
-  refreshCaptionHealth(session: GoogleMeetSession): Promise<void>;
-};
-
-function resolveProbeTimeoutMs(input: number | undefined, fallback: number): number {
-  if (input === undefined) {
-    return Math.min(Math.max(fallback, 1), 120_000);
-  }
-  if (!Number.isFinite(input) || input <= 0) {
-    throw new Error("timeoutMs must be a positive number");
-  }
-  return Math.min(Math.trunc(input), 120_000);
-}
 
 const probes = MeetingPlatformAdapter.createRuntimeProbes<
   GoogleMeetConfig,
@@ -47,7 +17,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
 >({
   defaultSpeechMessage: "Say exactly: Google Meet speech test complete.",
   invalidRequest: (message) => new Error(message),
-  resolveTimeoutMs: resolveProbeTimeoutMs,
+  resolveTimeoutMs: MeetingPlatformAdapter.resolveProbeTimeoutMs,
   shouldWaitForListening: (session) =>
     Boolean(
       (session.transport === "chrome" || session.transport === "chrome-node") &&
@@ -70,12 +40,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
     "test_listen requires mode: transcribe; use test_speech for talk-back sessions.",
 });
 
-export const testGoogleMeetListening: (
-  context: GoogleMeetRuntimeProbeContext,
-  request: GoogleMeetJoinRequest,
-) => ReturnType<typeof probes.testListening> = probes.testListening;
+export type GoogleMeetRuntimeProbeContext = Parameters<typeof probes.testListening>[0];
 
-export const testGoogleMeetSpeech: (
-  context: GoogleMeetRuntimeProbeContext,
-  request: GoogleMeetJoinRequest,
-) => ReturnType<typeof probes.testSpeech> = probes.testSpeech;
+export const testGoogleMeetListening = probes.testListening;
+export const testGoogleMeetSpeech = probes.testSpeech;

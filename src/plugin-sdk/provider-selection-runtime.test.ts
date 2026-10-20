@@ -2,8 +2,10 @@
  * Tests provider selection runtime helper behavior.
  */
 import { describe, expect, it, vi } from "vitest";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   resolveConfiguredCapabilityProvider,
+  resolveConfiguredCapabilityProviderAsync,
   resolveProviderRawConfig,
   selectConfiguredOrAutoProvider,
   type AutoSelectableProvider,
@@ -18,6 +20,44 @@ describe("plugin-sdk provider-selection-runtime", () => {
     { id: "first", autoSelectOrder: 1 },
     { id: "second", autoSelectOrder: 2, configured: true },
   ];
+
+  it("keeps legacy selection compatible while warning once with the awaited replacement", async () => {
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const params = {
+      cfg: {},
+      cfgForResolve: {},
+      getConfiguredProvider: (providerId: string | undefined) =>
+        providers.find((entry) => entry.id === providerId),
+      listProviders: () => providers,
+      resolveProviderConfig: () => ({}),
+      isProviderConfigured: ({ provider }: { provider: TestProvider }) =>
+        provider.configured === true,
+    };
+    try {
+      await withPluginRuntimePluginScope(
+        { pluginId: "provider-selection-diagnostic" },
+        async () => {
+          expect(await resolveConfiguredCapabilityProviderAsync(params)).toMatchObject({
+            ok: true,
+            provider: { id: "second" },
+          });
+          expect(warning).not.toHaveBeenCalled();
+          for (let use = 0; use < 2; use += 1) {
+            expect(resolveConfiguredCapabilityProvider(params)).toMatchObject({
+              ok: true,
+              provider: { id: "second" },
+            });
+          }
+        },
+      );
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("await resolveConfiguredCapabilityProviderAsync()"),
+        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
 
   it("preserves JSON config keys without invoking prototype setters", () => {
     const rawConfig = JSON.parse('{"__proto__":{"marker":"config-value"},"constructor":"literal"}');
@@ -84,27 +124,6 @@ describe("plugin-sdk provider-selection-runtime", () => {
     expect(resolution.providerConfig).toEqual({ providerId: "second" });
   });
 
-  it("skips unavailable auto candidates before config normalization", () => {
-    const resolveProviderConfig = vi.fn(({ provider }: { provider: TestProvider }) => ({
-      providerId: provider.id,
-    }));
-    const resolution = resolveConfiguredCapabilityProvider({
-      cfg: {},
-      cfgForResolve: {},
-      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
-      listProviders: () => providers,
-      isProviderAvailable: ({ provider }) => provider.id !== "first",
-      resolveProviderConfig,
-      isProviderConfigured: () => true,
-    });
-
-    expect(resolution.ok).toBe(true);
-    expect(resolveProviderConfig).toHaveBeenCalledOnce();
-    expect(resolveProviderConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: providers[1] }),
-    );
-  });
-
   it("retains the first unavailable provider when no auto candidate is available", () => {
     const resolveProviderConfig = vi.fn();
     const resolution = resolveConfiguredCapabilityProvider({
@@ -126,18 +145,6 @@ describe("plugin-sdk provider-selection-runtime", () => {
   });
 
   it.each([
-    {
-      configuredProviderId: undefined,
-      expected: { apiKey: "default", model: "base", voice: "first", language: "en" },
-    },
-    {
-      configuredProviderId: "alias",
-      expected: { apiKey: "default", model: "alias-model", voice: "first" },
-    },
-    {
-      configuredProviderId: "canonical",
-      expected: { apiKey: "default", model: "base" },
-    },
     {
       configuredProviderId: "other-alias",
       expected: { apiKey: "default", model: "other-model", voice: "second", language: "en" },

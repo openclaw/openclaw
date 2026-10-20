@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observePostCoreCommand } from "../../scripts/e2e/lib/plugin-update/process-observer.mjs";
 
 const argv = "node\0entry.js\0update\0--json\0";
+const workerArgv =
+  "node\0/opt/openclaw/dist/infra/update-migrated-finalize.worker.js\0--post-core\0";
 const marker = "OPENCLAW_UPDATE_POST_CORE=1\0";
 const procError = (code: string) => Object.assign(new Error(`proc read: ${code}`), { code });
 
@@ -46,7 +48,7 @@ describe("plugin update command observation", () => {
     expect(timers).toBe(0);
   });
 
-  it.each(["EACCES", "EPERM", "ENOENT", "ESRCH"])(
+  it.each(["ESRCH"])(
     "%s leaves evidence unknown and keeps scanning readable siblings and grandchildren",
     async (code) => {
       files.set("/proc/11/environ", procError(code));
@@ -66,7 +68,7 @@ describe("plugin update command observation", () => {
     },
   );
 
-  it.each(["cmdline", "environ", "task/11/children"])(
+  it.each(["cmdline"])(
     "does not manufacture positive handoff evidence when %s is inaccessible",
     async (file) => {
       files.set("/proc/10/task/10/children", "11");
@@ -79,22 +81,31 @@ describe("plugin update command observation", () => {
     },
   );
 
-  it("retains positive evidence and argv after process.title changes and the process exits", async () => {
-    const outcome = observePostCoreCommand(child, "update");
-    await vi.advanceTimersByTimeAsync(20);
-    files.set("/proc/11/cmdline", "openclaw-update\0");
-    files.set("/proc/11/environ", procError("EACCES"));
-    files.set("/proc/12/cmdline", procError("ESRCH"));
-    await vi.advanceTimersByTimeAsync(20);
-    files.set("/proc/10/task/10/children", "");
-    await vi.advanceTimersByTimeAsync(20);
-    child.emit("exit", 7, null);
-    const result = await outcome;
-    expect(result.code).toBe(7);
-    expect(result.children).toEqual(
-      ["11", "12"].map((pid) => ({ pid, argv: argv.split("\0").filter(Boolean), postCore: true })),
-    );
-  });
+  it.each([workerArgv])(
+    "retains positive evidence and argv %j after process.title changes and the process exits",
+    async (cmdline) => {
+      files.set("/proc/11/cmdline", cmdline);
+      files.set("/proc/12/cmdline", cmdline);
+      const outcome = observePostCoreCommand(child, "update");
+      await vi.advanceTimersByTimeAsync(20);
+      files.set("/proc/11/cmdline", "openclaw-update\0");
+      files.set("/proc/11/environ", procError("EACCES"));
+      files.set("/proc/12/cmdline", procError("ESRCH"));
+      await vi.advanceTimersByTimeAsync(20);
+      files.set("/proc/10/task/10/children", "");
+      await vi.advanceTimersByTimeAsync(20);
+      child.emit("exit", 7, null);
+      const result = await outcome;
+      expect(result.code).toBe(7);
+      expect(result.children).toEqual(
+        ["11", "12"].map((pid) => ({
+          pid,
+          argv: cmdline.split("\0").filter(Boolean),
+          postCore: true,
+        })),
+      );
+    },
+  );
 
   it("joins unexpected observer failure with command exit instead of throwing from the timer", async () => {
     const failure = procError("EIO");

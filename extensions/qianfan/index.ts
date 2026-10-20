@@ -1,4 +1,3 @@
-// Qianfan plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -17,6 +16,6 @@ export default defineSingleProviderPluginEntry({
       defaultModel: QIANFAN_DEFAULT_MODEL_REF,
       applyConfig: applyQianfanConfig,
     },
-    catalog: { liveModelDiscovery: true },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
   },
 });

@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionCatalogPullRequestSummary } from "openclaw/plugin-sdk/session-catalog";
 import {
   asPositiveSafeInteger as pullRequestNumber,
@@ -9,8 +11,8 @@ import {
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import {
   childDirectories,
+  createCatalogJsonReader,
   desktopSessionsDir,
-  readJsonFile,
   setBoundedCache,
 } from "./session-catalog-scan.js";
 import {
@@ -19,29 +21,25 @@ import {
 } from "./session-catalog-tree-watch.js";
 
 export const MAX_STRING_LENGTH = 4096;
+const log = createSubsystemLogger("anthropic-session-catalog");
 const MAX_SESSION_PULL_REQUESTS = 20;
 const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
 
-export type DesktopSessionMetadata = {
-  sessionId?: unknown;
-  cliSessionId?: unknown;
-  cwd?: unknown;
-  originCwd?: unknown;
-  createdAt?: unknown;
-  lastActivityAt?: unknown;
-  model?: unknown;
-  isArchived?: unknown;
-  title?: unknown;
-  customGroup?: unknown;
-  prNumber?: unknown;
-  prState?: unknown;
-  prs?: unknown;
+type DesktopSessionMetadata = {
+  sessionId?: string;
+  cliSessionId: string;
+  cwd?: string;
+  createdAt?: number;
+  lastActivityAt?: number;
+  isArchived: boolean;
+  title?: string;
+  customGroup?: string;
+  pullRequest?: SessionCatalogPullRequestSummary;
 };
 
-type DesktopPullRequestMetadata = {
-  prNumber?: unknown;
-  state?: unknown;
-  dismissed?: unknown;
+export type DesktopOverlay = {
+  active: Map<string, DesktopSessionMetadata>;
+  archived: Set<string>;
 };
 
 function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["state"] | undefined {
@@ -56,17 +54,16 @@ function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["sta
 
 // Desktop retains historical PRs in order and marks hidden ones as dismissed;
 // the top-level pair identifies the current PR whose state labels the row.
-export function desktopPullRequestSummary(
-  metadata: DesktopSessionMetadata,
+function desktopPullRequestSummary(
+  metadata: Record<string, unknown>,
 ): SessionCatalogPullRequestSummary | undefined {
   const visibleByNumber = new Map<number, SessionCatalogPullRequestSummary["state"] | undefined>();
   const dismissed = new Set<number>();
   if (Array.isArray(metadata.prs)) {
-    for (const value of metadata.prs) {
-      if (!isRecord(value)) {
+    for (const entry of metadata.prs) {
+      if (!isRecord(entry)) {
         continue;
       }
-      const entry: DesktopPullRequestMetadata = value;
       const number = pullRequestNumber(entry.prNumber);
       if (!number) {
         continue;
@@ -103,6 +100,39 @@ export function desktopPullRequestSummary(
   };
 }
 
+function compactString(value: unknown, maxLength: number): string | undefined {
+  const normalized = readBoundedString(value, maxLength);
+  // trim() can leave a short catalog value retaining a large whitespace-padded string.
+  return normalized === undefined
+    ? undefined
+    : Buffer.from(normalized, "utf16le").toString("utf16le");
+}
+
+const readDesktopJson = createCatalogJsonReader((raw): DesktopSessionMetadata | undefined => {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const cliSessionId = compactString(raw.cliSessionId, 256);
+  if (!cliSessionId) {
+    return undefined;
+  }
+  if (raw.isArchived === true) {
+    return { cliSessionId, isArchived: true };
+  }
+  return {
+    cliSessionId,
+    isArchived: false,
+    sessionId: compactString(raw.sessionId, 256),
+    title: compactString(raw.title, 500),
+    cwd:
+      compactString(raw.cwd, MAX_STRING_LENGTH) ?? compactString(raw.originCwd, MAX_STRING_LENGTH),
+    createdAt: parseDateFirstTimestampMs(raw.createdAt),
+    lastActivityAt: parseDateFirstTimestampMs(raw.lastActivityAt),
+    customGroup: compactString(raw.customGroup, 500),
+    pullRequest: desktopPullRequestSummary(raw),
+  };
+});
+
 export function parsePullRequestSummary(
   value: unknown,
 ): SessionCatalogPullRequestSummary | undefined {
@@ -132,53 +162,43 @@ export function parsePullRequestSummary(
 async function readDesktopMetadata(
   homeDir: string,
   forceRefresh?: boolean,
-): Promise<{
-  available: boolean;
-  customGroups: Map<string, string>;
-  active: Map<string, DesktopSessionMetadata>;
-  archived: Set<string>;
-}> {
+): Promise<DesktopOverlay> {
   const active = new Map<string, DesktopSessionMetadata>();
   const archived = new Set<string>();
   const customGroups = await readClaudeDesktopCustomGroups(homeDir, forceRefresh);
   for (const accountDir of await childDirectories(desktopSessionsDir(homeDir))) {
     for (const workspaceDir of await childDirectories(accountDir)) {
-      let entries: string[];
-      try {
-        entries = await fs.readdir(workspaceDir);
-      } catch {
-        continue;
-      }
+      const entries = await fs.readdir(workspaceDir).catch(() => []);
       for (const name of entries) {
         if (!name.startsWith("local_") || !name.endsWith(".json")) {
           continue;
         }
-        const raw = await readJsonFile(path.join(workspaceDir, name));
-        if (!isRecord(raw)) {
+        const metadata = await readDesktopJson(path.join(workspaceDir, name));
+        if (!metadata) {
           continue;
         }
-        const metadata: DesktopSessionMetadata = raw;
-        const cliSessionId = readBoundedString(metadata.cliSessionId, 256);
-        if (!cliSessionId) {
-          continue;
-        }
-        if (metadata.isArchived === true) {
+        const { cliSessionId } = metadata;
+        if (metadata.isArchived) {
           archived.add(cliSessionId);
           active.delete(cliSessionId);
           continue;
         }
         if (!archived.has(cliSessionId)) {
-          const localSessionId = readBoundedString(metadata.sessionId, 256);
+          const localSessionId = metadata.sessionId;
           const customGroup = localSessionId ? customGroups.get(localSessionId) : undefined;
-          active.set(cliSessionId, customGroup ? { ...metadata, customGroup } : metadata);
+          active.set(
+            cliSessionId,
+            customGroup
+              ? { ...metadata, customGroup: readBoundedString(customGroup, 500) }
+              : metadata,
+          );
         }
       }
     }
   }
-  return { available: true, active, archived, customGroups };
+  return { active, archived };
 }
 
-export type DesktopOverlay = Awaited<ReturnType<typeof readDesktopMetadata>>;
 type DesktopOverlayCacheEntry = {
   watch?: DirtyDirectoryWatch;
   refreshedAt: number;
@@ -187,10 +207,8 @@ type DesktopOverlayCacheEntry = {
 };
 const desktopOverlays = new Map<string, DesktopOverlayCacheEntry>();
 export const emptyDesktopOverlay: DesktopOverlay = {
-  available: false,
   active: new Map(),
   archived: new Set(),
-  customGroups: new Map(),
 };
 
 export async function readDesktopOverlay(
@@ -212,12 +230,13 @@ export async function readDesktopOverlay(
     !forceRefresh &&
     entry &&
     entry.refreshedAt + CLAUDE_DESKTOP_SCAN_TTL_MS > Date.now() &&
+    dirty !== "all" &&
     !(dirty instanceof Set && dirty.size > 0)
   ) {
-    setBoundedCache(desktopOverlays, homeDir, entry, 8, (evicted) => evicted.watch?.close());
+    setBoundedCache(desktopOverlays, homeDir, entry, 8);
     return entry.overlay;
   }
-  const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir));
+  const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir), 3);
   const current: DesktopOverlayCacheEntry = {
     watch,
     refreshedAt: Date.now(),
@@ -228,7 +247,7 @@ export async function readDesktopOverlay(
     const stat = await fs.stat(desktopSessionsDir(homeDir)).catch(() => undefined);
     if (!stat?.isDirectory()) {
       // An absent Desktop store is rechecked on the 60s overlay TTL, never on each CLI poll.
-      watch.close();
+      await watch.close();
       current.watch = undefined;
       return emptyDesktopOverlay;
     }
@@ -236,6 +255,10 @@ export async function readDesktopOverlay(
   })().finally(() => {
     current.refreshing = false;
   });
-  setBoundedCache(desktopOverlays, homeDir, current, 8, (evicted) => evicted.watch?.close());
+  setBoundedCache(desktopOverlays, homeDir, current, 8, (evicted) => {
+    void evicted.watch?.close().catch((error: unknown) => {
+      log.warn(`Claude Desktop catalog watcher cleanup failed: ${String(error)}`);
+    });
+  });
   return current.overlay;
 }

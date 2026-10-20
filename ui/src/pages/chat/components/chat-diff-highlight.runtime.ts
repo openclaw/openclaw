@@ -1,19 +1,24 @@
+import { foldNodeProp } from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
-import { html } from "lit";
 import { loadCodeLanguage } from "../../../components/code-language.ts";
+import type { DiffSyntaxFold } from "../../../lib/chat/session-diff-folds.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 
 // Syntax is optional decoration; keep oversized/minified diffs readable without
 // synchronously parsing an unbounded source string on the UI thread.
 const MAX_HIGHLIGHT_CHARS = 120_000;
 
-export async function highlightDiffLines(lines: readonly DiffLine[], path: string, oldPath = path) {
-  const highlighted = new Map<DiffLine, unknown>();
+export type DiffHighlightToken = { text: string; classes: string };
+
+export async function analyzeDiffSyntax(lines: readonly DiffLine[], path: string, oldPath = path) {
+  const highlighted = new Map<DiffLine, DiffHighlightToken[]>();
+  const folds: DiffSyntaxFold[] = [];
   let size = 0;
   for (const line of lines) {
     size += line.text.length + 1;
     if (size > MAX_HIGHLIGHT_CHARS) {
-      return highlighted;
+      return { highlighted, folds };
     }
   }
   let section: { path: string; oldPath: string; lines: DiffLine[] } = { path, oldPath, lines: [] };
@@ -45,24 +50,90 @@ export async function highlightDiffLines(lines: readonly DiffLine[], path: strin
         }
         const side = part.lines.filter((line) => line.kind !== excluded);
         const code = side.map((line) => line.text).join("\n");
-        const tokens: unknown[][] = [[]];
+        const tokens: DiffHighlightToken[][] = [[]];
+        const tree = support.language.parser.parse(code);
+        const state = EditorState.create({ doc: code });
+        const candidates: {
+          from: number;
+          to: number;
+          function: boolean;
+          nodeFrom: number;
+          nodeTo: number;
+        }[] = [];
+        const errors: number[] = [];
+        tree.iterate({
+          enter(node) {
+            if (node.type.isError) {
+              errors.push(node.from);
+            }
+            const fold = node.type.prop(foldNodeProp)?.(node.node, state);
+            if (fold) {
+              candidates.push({
+                ...fold,
+                nodeFrom: node.from,
+                nodeTo: node.to,
+                function:
+                  /Function|Method|Class/.test(node.name) ||
+                  /Function|Method|Class/.test(node.node.parent?.name ?? ""),
+              });
+            }
+          },
+        });
+        // Recovery nodes cannot certify a complete block in a partial hunk.
+        errors.sort((a, b) => a - b);
+        for (const candidate of candidates) {
+          let low = 0,
+            high = errors.length;
+          while (low < high) {
+            const mid = (low + high) >>> 1;
+            if (errors[mid]! < candidate.nodeFrom) {
+              low = mid + 1;
+            } else {
+              high = mid;
+            }
+          }
+          if (low < errors.length && errors[low]! <= candidate.nodeTo) {
+            continue;
+          }
+          // We remove whole DOM rows, not text spans. Do not conceal a sibling
+          // statement or an enclosing delimiter that shares the closing line.
+          const endLine = state.doc.lineAt(candidate.nodeTo);
+          // A zero-width dedent can end a body at the next physical line.
+          const nodeEnd =
+            candidate.nodeTo > 0 && candidate.nodeTo === endLine.from
+              ? candidate.nodeTo - 1
+              : candidate.nodeTo;
+          const ending = state.doc.lineAt(nodeEnd);
+          if (!/^[;,\s]*$/u.test(code.slice(nodeEnd, ending.to))) {
+            continue;
+          }
+          const from = state.doc.lineAt(candidate.from).number - 1;
+          const to = state.doc.lineAt(candidate.to).number - 1;
+          if (to > from && side[from] && side[to]) {
+            folds.push({
+              start: side[from]!,
+              end: side[to]!,
+              side: excluded === "add" ? "old" : "new",
+              function: candidate.function,
+            });
+          }
+        }
         highlightCode(
           code,
-          support.language.parser.parse(code),
+          tree,
           classHighlighter,
-          (text, classes) =>
-            tokens.at(-1)!.push(classes ? html`<span class=${classes}>${text}</span>` : text),
+          (text, classes) => tokens.at(-1)!.push({ text, classes }),
           () => {
             tokens.push([]);
           },
         );
         side.forEach((line, index) => {
           if (line.text && (excluded === "del" || line.kind === "del")) {
-            highlighted.set(line, tokens[index]);
+            highlighted.set(line, tokens[index]!);
           }
         });
       }
     }),
   );
-  return highlighted;
+  return { highlighted, folds };
 }

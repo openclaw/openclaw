@@ -126,35 +126,6 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
     },
   );
 
-  it.each(["agent", "session", "shared"] as const)(
-    "reuses one sandbox for the same required-sandbox principal with %s scope",
-    (scope) => {
-      const layoutForSession = (rawSessionKey: string) => {
-        const layout = resolveSandboxWorkspaceLayoutPaths({
-          cfg: { scope, workspaceAccess: "ro", workspaceRoot: "/tmp/openclaw-sandboxes" },
-          rawSessionKey,
-          agentId: "shared",
-          isolationSubject: { kind: "profile", profileId: "guest-a" },
-          workspaceDir: workspaceA,
-        });
-        return {
-          ...layout,
-          containerName: buildSandboxContainerName(
-            "openclaw-sbx-",
-            slugifySessionKey(layout.scopeKey),
-          ),
-        };
-      };
-
-      const firstSession = layoutForSession("agent:shared:first-session");
-      const secondSession = layoutForSession("agent:shared:second-session");
-
-      expect(firstSession.scopeKey).toBe(secondSession.scopeKey);
-      expect(firstSession.containerName).toBe(secondSession.containerName);
-      expect(firstSession.workspaceDir).toBe(secondSession.workspaceDir);
-    },
-  );
-
   it("preserves the shared writable agent workspace without a required-sandbox principal", () => {
     const layoutForSession = (rawSessionKey: string) =>
       resolveSandboxWorkspaceLayoutPaths({

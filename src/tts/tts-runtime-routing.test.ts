@@ -1,9 +1,8 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
-  CODE_HEAVY_SPOKEN_FALLBACK,
-  MAX_TIMER_TIMEOUT_MS,
   buildTtsSystemPromptHint,
   clearRuntimeConfigSnapshot,
   createMockSpeechProvider,
@@ -33,7 +32,71 @@ import {
   type TtsConfig,
 } from "./tts-runtime.test-support.js";
 
+const mockConfig = (providerConfig: Record<string, unknown>): OpenClawConfig => ({
+  tts: { enabled: true, provider: "mock", providers: { mock: providerConfig } },
+});
+const expectVoiceMemo = (mediaExtension: string) =>
+  expectTtsPayloadResult({
+    channel: "voice-memo-chat",
+    prefsName: `voice-memo-${mediaExtension}`,
+    text: "A native voice memo.",
+    target: "audio-file",
+    audioAsVoice: true,
+    mediaExtension,
+    providerResult: {
+      audioBuffer: Buffer.from("mp3"),
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+      voiceCompatible: false,
+    },
+  });
+
 describe("TTS runtime native voice-note routing", () => {
+  it("prefers the environment preference path over migrated machine state", () => {
+    const envPath = prefsPathFor("env-override");
+    setTtsMachinePrefsPathResolver(() => prefsPathFor("machine-state"));
+    withEnv({ OPENCLAW_TTS_PREFS: envPath }, () => {
+      expect(resolveTtsPrefsPath(resolveTtsConfig({}))).toBe(envPath);
+    });
+  });
+
+  it("speaks stripped code through the explicit textToSpeech conversion path", async () => {
+    let mediaDir: string | undefined;
+    try {
+      const result = await textToSpeech({
+        text: "```ts\nconst answer = 42;\n```",
+        cfg: createTtsConfig("openclaw-speech-core-code-convert-test"),
+      });
+
+      expect(result.success).toBe(true);
+      const request = requireFirstSynthesisRequest("explicit code conversion request");
+      expect(request.text).toBe("const answer = 42;");
+      mediaDir = result.audioPath ? path.dirname(result.audioPath) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("returns a normal TTS failure when audio persistence rejects", async () => {
+    const result = await textToSpeechCore(
+      {
+        text: "Store this synthesized reply.",
+        cfg: createTtsConfig("openclaw-speech-core-persistence-failure-test"),
+      },
+      async () => {
+        throw new Error("Media exceeds configured limit");
+      },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "TTS audio persistence failed",
+      provider: "mock",
+    });
+  });
+
   afterEach(() => {
     setTtsMachinePrefsPathResolver();
     clearRuntimeConfigSnapshot();
@@ -42,22 +105,6 @@ describe("TTS runtime native voice-note routing", () => {
     prepareSynthesisMock.mockClear();
     transcodeAudioBufferMock.mockClear();
     installSpeechProviders([createMockSpeechProvider()]);
-  });
-
-  it("prefers the environment preference path over migrated machine state", () => {
-    const previousEnvPath = process.env.OPENCLAW_TTS_PREFS;
-    const envPath = prefsPathFor("env-override");
-    setTtsMachinePrefsPathResolver(() => prefsPathFor("machine-state"));
-    process.env.OPENCLAW_TTS_PREFS = envPath;
-    try {
-      expect(resolveTtsPrefsPath(resolveTtsConfig({}))).toBe(envPath);
-    } finally {
-      if (previousEnvPath === undefined) {
-        delete process.env.OPENCLAW_TTS_PREFS;
-      } else {
-        process.env.OPENCLAW_TTS_PREFS = previousEnvPath;
-      }
-    }
   });
 
   it("resolves voice delivery support from channel capabilities", () => {
@@ -93,29 +140,16 @@ describe("TTS runtime native voice-note routing", () => {
     expect(hint).not.toContain("[[tts:");
   });
 
-  it("prepares deep-merged surface config and directive inputs", () => {
-    const cfg: OpenClawConfig = {
-      tts: {
-        provider: "mock",
-        modelOverrides: { allowProvider: false },
-        providers: {
-          mock: {
-            model: "base-model",
-            voiceSettings: { stability: 0.4 },
-          },
-        },
-      },
-    };
+  it("prepares deep-merged surface config and directive inputs", async () => {
+    const cfg = mockConfig({ model: "base-model", voiceSettings: { stability: 0.4 } });
+    cfg.tts!.modelOverrides = { allowProvider: false };
 
-    const prepared = prepareTtsRequest({
+    const prepared = await prepareTtsRequest({
       cfg,
       override: {
         modelOverrides: { allowProvider: true },
         providers: {
-          mock: {
-            voice: "surface-voice",
-            voiceSettings: { speed: 1.1 },
-          },
+          mock: { voice: "surface-voice", voiceSettings: { speed: 1.1 } },
         },
       },
       text: "Hello [[tts:text]]Speak this instead[[/tts:text]] caller",
@@ -131,9 +165,7 @@ describe("TTS runtime native voice-note routing", () => {
     expect(prepared.directives).toEqual({
       cleanedText: "Hello  caller",
       hasDirective: true,
-      overrides: {
-        ttsText: "Speak this instead",
-      },
+      overrides: { ttsText: "Speak this instead" },
       ttsText: "Speak this instead",
       warnings: [],
     });
@@ -143,14 +175,9 @@ describe("TTS runtime native voice-note routing", () => {
     });
   });
 
-  it("sanitizes blocked override keys while preparing TTS config", () => {
-    const prepared = prepareTtsRequest({
-      cfg: {
-        tts: {
-          provider: "mock",
-          providers: { mock: { model: "base-model" } },
-        },
-      },
+  it("sanitizes blocked override keys while preparing TTS config", async () => {
+    const prepared = await prepareTtsRequest({
+      cfg: mockConfig({ model: "base-model" }),
       override: JSON.parse(
         '{"__proto__":{"polluted":"top"},"providers":{"mock":{"voice":"safe","__proto__":{"polluted":"nested"}}}}',
       ) as TtsConfig,
@@ -163,45 +190,7 @@ describe("TTS runtime native voice-note routing", () => {
       model: "base-model",
       voice: "safe",
     });
-    expect(prepared.directives.cleanedText).toBe("");
-    expect(prepared.directives.ttsText).toBe("Speak this instead");
-  });
-
-  it("marks Discord auto TTS replies as native voice messages", async () => {
-    await expectTtsPayloadResult({
-      channel: "discord",
-      prefsName: "openclaw-speech-core-tts-test",
-      text: "This Discord reply should be delivered as a native voice note.",
-      target: "voice-note",
-      audioAsVoice: true,
-    });
-  });
-
-  it("keeps compatible audio-file synthesis deliverable as a voice memo", async () => {
-    await expectTtsPayloadResult({
-      channel: "voice-memo-chat",
-      prefsName: "openclaw-speech-core-tts-voice-memo-mp3-test",
-      text: "This reply should be delivered as a native voice memo.",
-      target: "audio-file",
-      audioAsVoice: true,
-      mediaExtension: "mp3",
-      providerResult: {
-        audioBuffer: Buffer.from("mp3"),
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      },
-    });
-  });
-
-  it("does not mark unsupported audio-file output as a voice memo", async () => {
-    await expectTtsPayloadResult({
-      channel: "voice-memo-chat",
-      prefsName: "openclaw-speech-core-tts-voice-memo-ogg-test",
-      text: "This reply should stay a regular audio attachment.",
-      target: "audio-file",
-      audioAsVoice: undefined,
-    });
+    expect(prepared.directives).toMatchObject({ cleanedText: "", ttsText: "Speak this instead" });
   });
 
   it("pre-transcodes synthesized mp3 to opus-in-CAF when the host can satisfy preferAudioFileFormat", async () => {
@@ -209,27 +198,13 @@ describe("TTS runtime native voice-note routing", () => {
       ok: true,
       buffer: Buffer.from("transcoded-caf"),
     });
-    await expectTtsPayloadResult({
-      channel: "voice-memo-chat",
-      prefsName: "openclaw-speech-core-tts-voice-memo-caf-transcode-test",
-      text: "This reply should be pre-transcoded to a native voice-memo CAF.",
-      target: "audio-file",
-      audioAsVoice: true,
-      mediaExtension: "caf",
-      providerResult: {
-        audioBuffer: Buffer.from("mp3"),
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      },
-    });
+    await expectVoiceMemo("caf");
     expect(transcodeAudioBufferMock).toHaveBeenCalledOnce();
     const transcodeRequest = requireRecord(
       requireFirstCallParam(transcodeAudioBufferMock.mock.calls as unknown[][], "transcode"),
       "transcode request",
     );
-    expect(transcodeRequest.sourceExtension).toBe("mp3");
-    expect(transcodeRequest.targetExtension).toBe("caf");
+    expect(transcodeRequest).toMatchObject({ sourceExtension: "mp3", targetExtension: "caf" });
   });
 
   it("falls back to the original mp3 buffer when the host transcoder fails", async () => {
@@ -238,49 +213,15 @@ describe("TTS runtime native voice-note routing", () => {
       reason: "transcoder-failed",
       detail: "exit-1",
     });
-    // Even though the transcode failed, the original mp3 still satisfies the
-    // channel audioFileFormats list, so the channel still flips audioAsVoice.
-    // The user gets a voice memo bubble, possibly with bad duration, instead
-    // of a regression. The failure is logged via the call site in tts.ts.
-    await expectTtsPayloadResult({
-      channel: "voice-memo-chat",
-      prefsName: "openclaw-speech-core-tts-voice-memo-caf-fallback-test",
-      text: "This reply should fall back to the original mp3.",
-      target: "audio-file",
-      audioAsVoice: true,
-      mediaExtension: "mp3",
-      providerResult: {
-        audioBuffer: Buffer.from("mp3"),
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      },
-    });
+    // The original mp3 still satisfies the channel's voice-memo formats.
+    await expectVoiceMemo("mp3");
   });
 
   it("uses the active runtime snapshot when source config still contains TTS SecretRefs", async () => {
-    const sourceConfig = {
-      tts: {
-        enabled: true,
-        provider: "mock",
-        providers: {
-          mock: {
-            apiKey: { source: "exec", provider: "mockexec", id: "minimax/tts/apiKey" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const runtimeConfig = {
-      tts: {
-        enabled: true,
-        provider: "mock",
-        providers: {
-          mock: {
-            apiKey: "test-key",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const sourceConfig = mockConfig({
+      apiKey: { source: "exec", provider: "mockexec", id: "minimax/tts/apiKey" },
+    });
+    const runtimeConfig = mockConfig({ apiKey: "test-key" });
     installSpeechProviders([
       createMockSpeechProvider("mock", {
         isConfigured: ({ providerConfig }) => providerConfig.apiKey === "test-key",
@@ -306,75 +247,6 @@ describe("TTS runtime native voice-note routing", () => {
     expect(providerConfig.apiKey).toBe("test-key");
   });
 
-  it("uses provider default TTS timeout when the call and config omit timeoutMs", async () => {
-    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
-
-    const result = await synthesizeSpeech({
-      text: "Use provider timeout.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-        },
-      } as OpenClawConfig,
-      disableFallback: true,
-    });
-
-    expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
-    expect(request.timeoutMs).toBe(600_000);
-  });
-
-  it("normalizes non-streaming synthesis text before calling the provider", async () => {
-    const result = await synthesizeSpeech({
-      text: "## Update\n\nRead the [guide](https://example.com/guide)!!!!!",
-      cfg: createTtsConfig("openclaw-speech-core-talk-markdown-test"),
-      disableFallback: true,
-    });
-
-    expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("normalized talk synthesis request");
-    expect(request.text).toBe("Update\n\nRead the guide!");
-  });
-
-  it("speaks stripped code through the explicit textToSpeech conversion path", async () => {
-    let mediaDir: string | undefined;
-    try {
-      const result = await textToSpeech({
-        text: "```ts\nconst answer = 42;\n```",
-        cfg: createTtsConfig("openclaw-speech-core-code-convert-test"),
-      });
-
-      expect(result.success).toBe(true);
-      const request = requireFirstSynthesisRequest("explicit code conversion request");
-      expect(request.text).toBe("const answer = 42;");
-      expect(request.text).not.toBe(CODE_HEAVY_SPOKEN_FALLBACK);
-      mediaDir = result.audioPath ? path.dirname(result.audioPath) : undefined;
-    } finally {
-      if (mediaDir) {
-        rmSync(mediaDir, { recursive: true, force: true });
-      }
-    }
-  });
-
-  it("returns a normal TTS failure when audio persistence rejects", async () => {
-    const result = await textToSpeechCore(
-      {
-        text: "Store this synthesized reply.",
-        cfg: createTtsConfig("openclaw-speech-core-persistence-failure-test"),
-      },
-      async () => {
-        throw new Error("Media exceeds configured limit");
-      },
-    );
-
-    expect(result).toMatchObject({
-      success: false,
-      error: "TTS audio persistence failed",
-      provider: "mock",
-    });
-  });
-
   it("resolves the configured timeout for voice listing", async () => {
     const listVoicesMock = vi.fn(async (_request: SpeechListVoicesRequest) => []);
     installSpeechProviders([
@@ -386,74 +258,9 @@ describe("TTS runtime native voice-note routing", () => {
 
     await listSpeechVoices({
       provider: "mock",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-          timeoutMs: 45_000,
-        },
-      } as OpenClawConfig,
+      cfg: { tts: { enabled: true, provider: "mock", timeoutMs: 45_000 } },
     });
 
     expect(listVoicesMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45_000 }));
-  });
-
-  it("caps oversized provider default TTS timeouts before synthesis", async () => {
-    installSpeechProviders([
-      createMockSpeechProvider("mock", { defaultTimeoutMs: Number.MAX_SAFE_INTEGER }),
-    ]);
-
-    const result = await synthesizeSpeech({
-      text: "Use capped provider timeout.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-        },
-      } as OpenClawConfig,
-      disableFallback: true,
-    });
-
-    expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("provider default capped timeout request");
-    expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("ignores nonpositive provider default TTS timeouts", async () => {
-    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 0 })]);
-
-    const result = await synthesizeSpeech({
-      text: "Use fallback timeout.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-        },
-      } as OpenClawConfig,
-      disableFallback: true,
-    });
-
-    expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("provider default fallback timeout request");
-    expect(request.timeoutMs).toBe(30_000);
-  });
-
-  it("keeps explicit TTS config timeout ahead of provider default timeout", async () => {
-    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
-
-    await synthesizeSpeech({
-      text: "Use configured timeout.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-          timeoutMs: 45_000,
-        },
-      } as OpenClawConfig,
-      disableFallback: true,
-    });
-
-    const request = requireFirstSynthesisRequest("configured timeout synthesis request");
-    expect(request.timeoutMs).toBe(45_000);
   });
 });

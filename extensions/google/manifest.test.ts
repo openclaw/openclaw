@@ -30,11 +30,23 @@ type GoogleManifest = {
     >;
   };
   modelCatalog?: {
+    discovery?: Record<string, string>;
     suppressions?: Array<{
       provider?: string;
       model?: string;
       reason?: string;
     }>;
+    providers?: Record<
+      string,
+      {
+        api?: string;
+        baseUrl?: string;
+        models?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+      }
+    >;
   };
   configSchema?: JsonSchemaObject;
   configContracts?: {
@@ -112,6 +124,39 @@ describe("google manifest model catalog", () => {
     ]);
   });
 
+  it("owns the canonical Google model catalog and runtime discovery declaration", () => {
+    const catalog = loadManifest().modelCatalog;
+    const provider = catalog?.providers?.google;
+    const modelIds = provider?.models?.map((model) => model.id) ?? [];
+
+    expect(catalog?.discovery?.google).toBe("runtime");
+    expect(provider).toMatchObject({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
+    expect(modelIds).toHaveLength(12);
+    expect(modelIds[0]).toBe("gemini-4-argon");
+    expect(
+      modelIds.slice(
+        modelIds.indexOf("gemini-3.7-flash"),
+        modelIds.indexOf("gemini-3.7-flash") + 2,
+      ),
+    ).toEqual(["gemini-3.7-flash", "gemini-3.8-flash"]);
+    expect(modelIds).not.toContain(undefined);
+    expect(new Set(modelIds).size).toBe(modelIds.length);
+  });
+
+  it("keeps legacy Google chat providers out of the canonical manifest catalog", () => {
+    const manifest = loadManifest();
+
+    // google-gemini-cli references must stay unknown-model so Doctor keeps
+    // emitting its migration hint, and neither CLI nor Vertex declares runtime
+    // discovery, so manifest rows for them would leak into runtime catalog
+    // planning. Only the canonical google provider owns manifest rows.
+    expect(manifest.modelCatalog?.providers?.["google-gemini-cli"]).toBeUndefined();
+    expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
+  });
+
   it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
     const choices = loadManifest().providerAuthChoices ?? [];
 
@@ -168,6 +213,14 @@ describe("google manifest model catalog", () => {
       expect(aliases?.["gemini-3-pro"]).toBe("gemini-3.1-pro-preview");
       expect(aliases?.["gemini-3-pro-preview"]).toBe("gemini-3.1-pro-preview");
     }
+  });
+
+  it("normalizes the Gemini 4 shorthand only for API providers", () => {
+    const providers = loadManifest().modelIdNormalization?.providers;
+
+    expect(providers?.google?.aliases?.["gemini-4"]).toBe("gemini-4-argon");
+    expect(providers?.["google-vertex"]?.aliases?.["gemini-4"]).toBe("gemini-4-argon");
+    expect(providers?.["google-gemini-cli"]?.aliases?.["gemini-4"]).toBeUndefined();
   });
 });
 

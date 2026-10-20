@@ -8,8 +8,8 @@ type Request = { id: number; method: string; params: Record<string, unknown> };
 /** A loopback CLI protocol peer; the client, session, and tool dispatch are the real SDK. */
 export async function createCopilotFaultPeer() {
   const sent = createDeferred<void>();
-  const destroying = createDeferred<void>();
-  const releaseDestroy = createDeferred<void>();
+  const detaching = createDeferred<void>();
+  const releaseDetach = createDeferred<void>();
   const replies = new Map<string, ReturnType<typeof createDeferred<Record<string, unknown>>>>();
   const methods: string[] = [];
   const sockets = new Set<Socket>();
@@ -56,10 +56,10 @@ export async function createCopilotFaultPeer() {
         return {};
       case "session.abort":
         return {};
-      case "session.destroy":
-        destroying.resolve();
-        await releaseDestroy.promise;
-        return {};
+      case "session.detach":
+        detaching.resolve();
+        await releaseDetach.promise;
+        return { success: true };
       default:
         throw new Error(`Unexpected Copilot fixture RPC: ${request.method}`);
     }
@@ -115,8 +115,8 @@ export async function createCopilotFaultPeer() {
     client,
     methods,
     sent: sent.promise,
-    destroying: destroying.promise,
-    releaseDestroy: () => releaseDestroy.resolve(),
+    detaching: detaching.promise,
+    releaseDetach: () => releaseDetach.resolve(),
     emit,
     requestTool(name: string, args: Record<string, unknown>) {
       const requestId = randomUUID();
@@ -131,7 +131,7 @@ export async function createCopilotFaultPeer() {
       return reply.promise;
     },
     async close() {
-      releaseDestroy.resolve();
+      releaseDetach.resolve();
       await client.stop();
       for (const connected of sockets) {
         connected.destroy();

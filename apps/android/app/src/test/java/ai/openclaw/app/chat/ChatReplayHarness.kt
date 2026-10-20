@@ -38,7 +38,7 @@ internal fun CoroutineScope.createChatController(
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
   gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
-  gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
+  gatewayAdvertisesCapability: (capability: String) -> Boolean? = { it == "session-scoped-model-catalog" },
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
@@ -84,7 +84,7 @@ internal class ChatControllerTestSetup(
   val requests = mutableListOf<Pair<String, String?>>()
   var cacheScope: () -> ChatCacheScope? = { ChatCacheScope("gateway-test", 1L) }
   var gatewayAdvertisesMethod: (method: String) -> Boolean? = { null }
-  var gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null }
+  var gatewayAdvertisesCapability: (capability: String) -> Boolean? = { it == "session-scoped-model-catalog" }
   var recordModelRecent: (String) -> Unit = {}
 
   private val handlers = mutableMapOf<String, suspend (String?) -> String>()
@@ -158,6 +158,7 @@ internal class ScriptedGateway(
     // Benign defaults so bootstrap/health/commands side requests never fail a scenario.
     respondWith("health", "{}")
     respondWith("chat.metadata", """{"commands":[],"models":[]}""")
+    respondWith("models.list", """{"models":[]}""")
     respondWith("sessions.list", """{"sessions":[]}""")
     respondWith("sessions.branches.list", """{"branches":[]}""")
     respondWith("progressCard.get", """{"card":null}""")

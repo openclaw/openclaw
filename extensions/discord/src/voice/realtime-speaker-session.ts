@@ -1,110 +1,48 @@
-import {
-  assertSecretOwnerAvailable,
-  isSecretOwnerAvailable,
-} from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
-  buildRealtimeVoiceSessionInstructions,
   buildRealtimeVoiceSpeakExactMessage,
-  canonicalizeRealtimeVoiceProviderId,
   createRealtimeVoiceSessionHarness,
   isRealtimeVoiceWakeNameRequired,
   matchRealtimeVoiceConsultQuestions,
   REALTIME_VOICE_AGENT_CONTROL_TOOL,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-  resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceAgentConsultTools,
-  resolveRealtimeVoiceBargeIn,
-  resolveRealtimeVoiceInterruptResponseOnInputAudio,
-  resolveRealtimeVoiceMinBargeInAudioEndMs,
-  resolveRealtimeVoiceSessionPolicy,
-  type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceBridgeEvent,
   type RealtimeVoiceBridgeSession,
-  type RealtimeVoiceProviderConfig,
+  type RealtimeVoiceCloseDisposition,
+  type RealtimeVoiceSelectionInfo,
+  type RealtimeVoiceTranscriptEntry,
   type RealtimeVoiceSessionHarness,
-  type RealtimeVoiceWakeNamePolicy,
+  type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { discordRealtimeVoiceSecretOwnerId } from "../secret-config-contract.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { DiscordVoiceIngressContext } from "./ingress.js";
+import { formatRealtimeInfoLog } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
-import { DiscordRealtimeTurns } from "./realtime-turns.js";
 import {
-  logVoiceVerbose,
-  type DiscordVoiceMode,
-  type VoiceRealtimeAgentTurnParams,
-  type VoiceRealtimeSession,
-  type VoiceRealtimeSpeakerContext,
-  type VoiceRealtimeSpeakerTurn,
-  type VoiceSessionEntry,
+  DiscordRealtimeRecording,
+  type DiscordRealtimeRecordingInput,
+} from "./realtime-recording.js";
+import { resolveDiscordRealtimeSpeakerConfig } from "./realtime-speaker-config.js";
+import { DiscordRealtimeTurns } from "./realtime-turns.js";
+import type {
+  DiscordVoiceMode,
+  VoiceRealtimeAgentTurnParams,
+  VoiceRealtimeSpeakerContext,
+  VoiceRealtimeSpeakerTurn,
+  VoiceSessionEntry,
 } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
 const discordRealtimeTalkPayload = () => ({});
-const DISCORD_REALTIME_VERBOSE_OMITTED_EVENTS = new Set([
-  "conversation.output_audio.delta",
-  "input_audio_buffer.append",
-  "response.audio.delta",
-  "response.output_audio.delta",
-]);
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
-
-function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string | undefined {
-  const detail = event.detail ? ` ${event.detail}` : "";
-  if (event.direction === "client") {
-    if (event.type === "response.cancel") {
-      return `discord voice: realtime model interrupt requested ${event.direction}:${event.type}${detail}`;
-    }
-    if (event.type === "conversation.item.truncate.skipped") {
-      return `discord voice: realtime model interrupt ignored ${event.direction}:${event.type}${detail}`;
-    }
-    if (event.type === "conversation.item.truncate") {
-      return `discord voice: realtime model audio truncated ${event.direction}:${event.type}${detail}`;
-    }
-  }
-  if (event.direction === "server") {
-    if (event.type === "response.cancelled") {
-      return `discord voice: realtime model interrupt confirmed ${event.direction}:${event.type}${detail}`;
-    }
-    if (
-      event.type === "error" &&
-      event.detail === "Cancellation failed: no active response found"
-    ) {
-      return `discord voice: realtime model interrupt raced ${event.direction}:${event.type}${detail}`;
-    }
-  }
-  return undefined;
-}
-
-function formatRealtimeLifecycleLog(event: RealtimeVoiceBridgeEvent): string | undefined {
-  if (!event.type.startsWith("session.")) {
-    return undefined;
-  }
-  const detail = event.detail ? ` ${event.detail}` : "";
-  return `discord voice: realtime lifecycle ${event.direction}:${event.type}${detail}`;
-}
-
-function shouldLogRealtimeVerboseEvent(event: RealtimeVoiceBridgeEvent): boolean {
-  return !DISCORD_REALTIME_VERBOSE_OMITTED_EVENTS.has(event.type);
-}
-
-function readProviderConfigString(
-  config: RealtimeVoiceProviderConfig,
-  key: string,
-): string | undefined {
-  const value = config[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function isDiscordAgentProxyVoiceMode(mode: DiscordVoiceMode): boolean {
-  return mode === "agent-proxy";
-}
 
 export type DiscordRealtimeSessionParams = {
   accountId: string;
@@ -116,29 +54,40 @@ export type DiscordRealtimeSessionParams = {
   getHumanParticipantCount?: () => number;
   onTerminalError: (error: Error) => void;
   runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
+  resolveSpeakerContext: (userId: string) => Promise<DiscordVoiceIngressContext | null>;
 };
 
-export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
+export class DiscordRealtimeSpeakerSession {
   private bridge: RealtimeVoiceBridgeSession | null = null;
   private readonly harness: RealtimeVoiceSessionHarness<AgentProxyConsultState>;
   private readonly playback: DiscordRealtimePlayback<AgentProxyConsultState>;
   private readonly turns: DiscordRealtimeTurns;
   private readonly consults: DiscordRealtimeConsults;
+  private readonly recording: DiscordRealtimeRecording;
   private lifecycle: {
-    status: "inactive" | "starting" | "active" | "stopped";
-    generation: number;
-  } = { status: "inactive", generation: 0 };
-  private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
-  private consultToolsAllow: string[] | undefined;
-  private consultPolicy: "auto" | "always" = "auto";
-  private wakeNamePolicy: RealtimeVoiceWakeNamePolicy = "never";
-  private wakeNames: string[] = [];
+    status: "inactive" | "starting" | "active" | "closing" | "stopped";
+  } = { status: "inactive" };
+  private policy: Omit<
+    ReturnType<typeof resolveDiscordRealtimeSpeakerConfig>["sessionPolicy"],
+    "autoRespondToAudio"
+  > = {
+    toolPolicy: "safe-read-only",
+    consultToolsAllow: undefined,
+    consultPolicy: "auto",
+    wakeNamePolicy: "never",
+    wakeNames: [],
+    handlesAgentConsult: false,
+  };
   private realtimeProviderId: string | undefined;
   private providerGenerationObserved = false;
   private providerContinuityEpoch = 0;
   private readonly captures = new Set<VoiceRealtimeSpeakerTurn>();
   private inputOpen = true;
+  private closeCompletion: Promise<void> | undefined;
   private activeOperations = 0;
+  private outputEnabled = true;
+  private selection: RealtimeVoiceSelectionInfo | undefined;
+  private readonly inputIdleListeners = new Set<() => void>();
   private lastActivityAt = Date.now();
   private lastRealtimeError:
     | { message: string; suppressed: number; lastLoggedAt: number }
@@ -148,8 +97,17 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     private readonly params: DiscordRealtimeSessionParams & {
       player: DiscordRealtimePlayer;
       sessionId: string;
+      preparedProvider: ResolvedRealtimeVoiceProvider;
+      standby?: boolean;
+      conversationHistory?: readonly RealtimeVoiceTranscriptEntry[];
     },
   ) {
+    this.outputEnabled = !params.standby;
+    this.recording = new DiscordRealtimeRecording({
+      entry: this.params.entry,
+      isCurrent: () => this.lifecycle.status !== "stopped",
+      warn: (message) => logger.warn(message),
+    });
     this.harness = createRealtimeVoiceSessionHarness<AgentProxyConsultState>({
       talk: {
         sessionId: this.params.sessionId,
@@ -171,178 +129,101 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         questionsMatch: matchRealtimeVoiceConsultQuestions,
       },
     });
-    this.playback = new DiscordRealtimePlayback({
+    for (const item of params.conversationHistory ?? []) {
+      this.harness.recordTranscript(item.role, item.text);
+    }
+    const context = {
+      ...params,
       bridge: () => this.bridge,
+      harness: this.harness,
+      providerEpoch: () => this.providerContinuityEpoch,
+      providerId: () => this.realtimeProviderId,
+      realtimeConfig: () => this.realtimeConfig,
+      stopped: () => this.isStopped(),
+      wakeNamePolicy: () => this.policy.wakeNamePolicy,
+    };
+    this.playback = new DiscordRealtimePlayback({
+      ...context,
       bridgeReady: () => this.isReady(),
       buildSpeakExactMessage: (text) =>
         buildRealtimeVoiceSpeakExactMessage({
           text,
           surfaceLabel: "the Discord voice channel",
         }),
-      entry: this.params.entry,
-      player: this.params.player,
-      harness: this.harness,
       markProviderGenerationObserved: () => this.markProviderGenerationObserved(),
-      mode: this.params.mode,
-      onTerminalError: this.params.onTerminalError,
-      providerId: () => this.realtimeProviderId,
-      realtimeConfig: () => this.realtimeConfig,
       stopTerminally: () => {
         this.lifecycle.status = "stopped";
         this.consults.close();
       },
-      stopped: () => this.isStopped(),
       wakeNameRequired: () => this.isWakeNameRequired(),
     });
     this.turns = new DiscordRealtimeTurns({
-      bridge: () => this.bridge,
-      entry: this.params.entry,
+      ...context,
       getHumanParticipantCount: () => this.humanParticipantCount(),
       interruptRoomPlayback: () => {
         if (!this.playback.isBargeInEnabled() || !this.params.player.isActive()) {
           return false;
         }
-        this.params.player.handleBargeIn("active-speaker-audio");
-        return true;
+        return this.params.player.handleBargeIn("active-speaker-audio");
       },
-      onAcceptedTranscript: (text, context, providerEpoch) =>
-        this.consults.handleAcceptedTranscript(text, context, providerEpoch),
+      onAcceptedTranscript: (text, speakerContext, providerEpoch) =>
+        this.consults.handleAcceptedTranscript(text, speakerContext, providerEpoch),
       playback: this.playback,
-      providerEpoch: () => this.providerContinuityEpoch,
-      providerId: () => this.realtimeProviderId,
-      realtimeConfig: () => this.realtimeConfig,
       recordInputAudio: (audio) => this.harness.recordInputAudio(audio),
-      stopped: () => this.isStopped(),
-      wakeNamePolicy: () => this.wakeNamePolicy,
-      wakeNames: () => this.wakeNames,
+      wakeNames: () => this.policy.wakeNames,
     });
     this.consults = new DiscordRealtimeConsults({
-      consultPolicy: () => this.consultPolicy,
-      consultToolPolicy: () => this.consultToolPolicy,
-      consultToolsAllow: () => this.consultToolsAllow,
+      ...context,
+      consultPolicy: () => this.policy.consultPolicy,
+      consultToolPolicy: () => this.policy.toolPolicy,
+      consultToolsAllow: () => this.policy.consultToolsAllow,
       debounceMs: () => this.realtimeConfig?.debounceMs,
-      entry: this.params.entry,
-      harness: this.harness,
-      isAgentProxy: isDiscordAgentProxyVoiceMode(this.params.mode),
-      isWakeNameRequired: () => this.isWakeNameRequired(),
+      isAgentProxy: () => this.params.mode === "agent-proxy" && !this.policy.handlesAgentConsult,
       playback: this.playback,
-      providerEpoch: () => this.providerContinuityEpoch,
       runAgentTurn: (turn) => this.trackOperation(() => this.params.runAgentTurn(turn)),
-      stopped: () => this.isStopped(),
       turns: this.turns,
       usesRealtimeAgentHandoff: () =>
-        this.params.mode === "bidi" || this.consultToolPolicy !== "none",
-      wakeNamePolicy: () => this.wakeNamePolicy,
+        this.params.mode === "bidi" || this.policy.toolPolicy !== "none",
     });
   }
 
   async connect(): Promise<void> {
-    const lifecycleGeneration = this.lifecycle.generation + 1;
-    this.lifecycle = {
-      status: "starting",
-      generation: lifecycleGeneration,
-    };
-    const configuredProviderId = this.realtimeConfig?.provider?.trim();
-    if (configuredProviderId) {
-      const ownerProviderIds = new Set([configuredProviderId]);
-      const canonicalProviderId = canonicalizeRealtimeVoiceProviderId(
-        configuredProviderId,
-        this.params.cfg,
-      );
-      if (canonicalProviderId) {
-        ownerProviderIds.add(canonicalProviderId);
-      }
-      // Secret collection keys owners by configured provider blocks, while selection also accepts
-      // aliases. Gate both identities before provider config normalization can read an unresolved ref.
-      for (const providerId of ownerProviderIds) {
-        assertSecretOwnerAvailable(
-          "capability",
-          discordRealtimeVoiceSecretOwnerId(this.params.accountId, providerId),
-        );
-      }
-    }
-    const resolved = resolveConfiguredRealtimeVoiceProvider({
-      configuredProviderId: this.realtimeConfig?.provider,
-      providerConfigs: buildProviderConfigs(this.realtimeConfig),
-      providerConfigOverrides: buildProviderConfigOverrides(this.realtimeConfig),
-      cfg: this.params.cfg,
-      agentId: this.params.entry.route.agentId,
-      defaultModel: this.realtimeConfig?.model,
-      isProviderAvailable: (provider) =>
-        isSecretOwnerAvailable(
-          "capability",
-          discordRealtimeVoiceSecretOwnerId(this.params.accountId, provider.id),
-        ),
-      assertProviderAvailable: (provider) =>
-        assertSecretOwnerAvailable(
-          "capability",
-          discordRealtimeVoiceSecretOwnerId(this.params.accountId, provider.id),
-        ),
-      noRegisteredProviderMessage: "No configured realtime voice provider registered",
-    });
-    assertSecretOwnerAvailable(
-      "capability",
-      discordRealtimeVoiceSecretOwnerId(this.params.accountId, resolved.provider.id),
-    );
-    this.realtimeProviderId = resolved.provider.id;
-    const isAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
-    const sessionPolicy = resolveRealtimeVoiceSessionPolicy({
-      isAgentProxy,
-      supportsActivationNameGating:
-        resolved.provider.capabilities?.supportsActivationNameGating === true,
-      configuredToolPolicy: this.realtimeConfig?.toolPolicy,
-      configuredConsultPolicy: this.realtimeConfig?.consultPolicy,
-      requireWakeName: this.realtimeConfig?.requireWakeName,
-      configuredWakeNames: this.realtimeConfig?.wakeNames,
-      cfg: this.params.cfg,
-      agentId: this.params.entry.route.agentId,
-    });
+    this.lifecycle.status = "starting";
     const {
-      toolPolicy,
-      consultToolsAllow,
-      consultPolicy,
-      wakeNamePolicy,
-      wakeNames,
-      autoRespondToAudio,
-    } = sessionPolicy;
-    this.consultToolPolicy = toolPolicy;
-    this.consultToolsAllow = consultToolsAllow;
-    this.consultPolicy = consultPolicy;
-    this.wakeNamePolicy = wakeNamePolicy;
-    this.wakeNames = wakeNames;
-    const usesRealtimeAgentHandoff = this.params.mode === "bidi" || toolPolicy !== "none";
-    const providerInterruptResponseOnInputAudio =
-      this.realtimeConfig?.providers?.[resolved.provider.id]?.interruptResponseOnInputAudio;
-    const interruptResponseOnInputAudio =
-      this.wakeNamePolicy === "never" &&
-      resolveRealtimeVoiceInterruptResponseOnInputAudio(providerInterruptResponseOnInputAudio);
-    const bargeIn = resolveRealtimeVoiceBargeIn({
-      configuredBargeIn: this.realtimeConfig?.bargeIn,
-      interruptResponseOnInputAudio: providerInterruptResponseOnInputAudio,
-    });
-    const minBargeInAudioEndMs = resolveRealtimeVoiceMinBargeInAudioEndMs(
-      this.realtimeConfig?.minBargeInAudioEndMs,
-    );
-    const instructions = buildRealtimeVoiceSessionInstructions({
-      base:
-        this.realtimeConfig?.instructions ??
-        [
-          "You are OpenClaw's Discord voice interface.",
-          "Keep spoken replies concise, natural, and suitable for a live Discord voice channel.",
-        ].join("\n"),
-      isAgentProxy,
+      resolved,
+      selection,
+      sessionPolicy,
+      instructions,
+      interruptResponseOnInputAudio,
+      bargeIn,
+      minBargeInAudioEndMs,
+      resolvedModel,
+      resolvedVoice,
+    } = resolveDiscordRealtimeSpeakerConfig({
+      accountId: this.params.accountId,
+      agentId: this.params.entry.route.agentId,
+      cfg: this.params.cfg,
+      realtimeConfig: this.realtimeConfig,
+      isAgentProxy: this.params.mode === "agent-proxy",
       bootstrapContextInstructions: this.params.bootstrapContextInstructions,
-      toolPolicy,
-      consultPolicy,
+      preparedProvider: this.params.preparedProvider,
+      conversationHistory: this.params.conversationHistory,
     });
+    this.realtimeProviderId = resolved.provider.id;
+    this.selection = selection;
+    const capabilities = resolved.capabilities;
+    this.policy = sessionPolicy;
+    const { toolPolicy, consultPolicy, autoRespondToAudio } = sessionPolicy;
+    const usesRealtimeAgentHandoff = this.params.mode === "bidi" || toolPolicy !== "none";
     const onReady = () => {
       this.markProviderGenerationObserved();
-      if (this.markLifecycleReady(lifecycleGeneration)) {
-        this.playback.drainQueuedExactSpeechMessages("provider-ready");
+      if (this.markLifecycleReady()) {
+        this.playback.drainQueuedExactSpeechMessages();
       }
     };
     this.bridge = this.harness.createBridge({
       provider: resolved.provider,
+      capabilities,
       cfg: this.params.cfg,
       agentId: this.params.entry.route.agentId,
       providerConfig: resolved.providerConfig,
@@ -351,6 +232,12 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       autoRespondToAudio,
       interruptResponseOnInputAudio,
       markStrategy: "transport",
+      ...(this.policy.handlesAgentConsult
+        ? {
+            runAgentConsult: (request) =>
+              this.trackOperation(() => this.consults.runAgentConsult(request)),
+          }
+        : {}),
       tools: usesRealtimeAgentHandoff
         ? resolveRealtimeVoiceAgentConsultTools(
             toolPolicy,
@@ -358,8 +245,12 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
           )
         : [],
       audioSink: {
-        isOpen: () => !this.isStopped(),
-        sendAudio: (audio, metadata) => this.playback.sendOutputAudio(audio, metadata),
+        isOpen: () => !this.isStopped() && this.outputEnabled,
+        sendAudio: (audio, metadata) => {
+          if (this.outputEnabled) {
+            this.playback.sendOutputAudio(audio, metadata);
+          }
+        },
         sendMark: (markName, acknowledge) => {
           if (acknowledge) {
             this.playback.sendOutputMark(acknowledge);
@@ -376,15 +267,16 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         },
       },
       onTranscript: (role, text, isFinal) => {
-        if (this.isStopped()) {
+        if (this.lifecycle.status === "stopped") {
+          return;
+        }
+        if (this.lifecycle.status === "closing") {
+          if (role === "user" && isFinal && text.trim()) {
+            this.recording.transcript(text.trim());
+          }
           return;
         }
         this.markProviderGenerationObserved();
-        if (isFinal && text.trim()) {
-          logger.info(
-            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatVoiceLogPreview(text)}`,
-          );
-        }
         if (isFinal && role === "assistant") {
           this.playback.suppressDuplicateControlSpeech(text);
         }
@@ -393,6 +285,14 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         }
         if (!isFinal) {
           this.turns.handlePartialUserTranscript(text);
+          return;
+        }
+        if (text.trim()) {
+          this.recording.transcript(text.trim());
+        }
+        // Provider-owned delegation consumes its own transcript; a final snapshot is not
+        // another agent request or a host-controlled speech turn.
+        if (this.policy.handlesAgentConsult) {
           return;
         }
         void this.trackOperation(() => this.turns.handleFinalUserTranscript(text)).catch(
@@ -444,63 +344,119 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     });
     // createBridge may close synchronously, before its returned bridge can be disposed.
     if (this.isStopped()) {
-      this.close();
+      await this.close();
       return;
     }
-    const resolvedModel =
-      readProviderConfigString(resolved.providerConfig, "model") ?? resolved.provider.defaultModel;
-    const resolvedVoice = readProviderConfigString(resolved.providerConfig, "voice");
     const humanParticipantCount = this.humanParticipantCount();
     logger.info(
-      `discord voice: realtime bridge starting mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"} consultPolicy=${consultPolicy} toolPolicy=${toolPolicy} autoRespond=${autoRespondToAudio} wakeNamePolicy=${this.wakeNamePolicy} requireWakeName=${this.isWakeNameRequired(humanParticipantCount)} humanParticipants=${humanParticipantCount} wakeNames=${this.wakeNames.join(",") || "none"} interruptResponse=${interruptResponseOnInputAudio} bargeIn=${bargeIn} minBargeInAudioEndMs=${minBargeInAudioEndMs}`,
+      `discord voice: realtime bridge starting mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"} consultPolicy=${consultPolicy} toolPolicy=${toolPolicy} autoRespond=${autoRespondToAudio} wakeNamePolicy=${this.policy.wakeNamePolicy} requireWakeName=${this.isWakeNameRequired(humanParticipantCount)} humanParticipants=${humanParticipantCount} wakeNames=${this.policy.wakeNames.join(",") || "none"} interruptResponse=${interruptResponseOnInputAudio} bargeIn=${bargeIn} minBargeInAudioEndMs=${minBargeInAudioEndMs}`,
     );
+    this.attachOutputAudioPort();
     await this.bridge.connect();
-    if (!this.markLifecycleReady(lifecycleGeneration)) {
-      this.bridge?.close();
+    if (!this.markLifecycleReady()) {
+      await this.close();
       return;
     }
     this.markProviderGenerationObserved();
-    this.playback.drainQueuedExactSpeechMessages("provider-connected");
+    this.playback.drainQueuedExactSpeechMessages();
     logger.info(
       `discord voice: realtime bridge ready mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"}`,
     );
   }
 
-  close(): void {
-    this.lifecycle.status = "stopped";
+  close(disposition: RealtimeVoiceCloseDisposition = "abort"): void | Promise<void> {
+    if (this.lifecycle.status === "closing" || (!this.bridge && !this.inputOpen)) {
+      return this.closeCompletion;
+    }
+    // Closing admits only final transcripts; provider completion owns their recording frontier.
+    this.lifecycle.status = "closing";
     this.drain();
-    this.providerContinuityEpoch += 1;
     this.flushSuppressedRealtimeErrors();
-    this.consults.close();
-    this.harness.close();
-    this.turns.clear();
-    this.playback.close();
-    this.bridge?.close();
-    this.bridge = null;
-    this.realtimeProviderId = undefined;
+    this.consults.close(disposition === "detach");
+    this.playback.close(disposition === "detach");
+    const finish = () => {
+      const dispose = () => {
+        this.lifecycle.status = "stopped";
+        this.providerContinuityEpoch += 1;
+        this.harness.close();
+        this.turns.clear();
+        this.bridge = null;
+        this.realtimeProviderId = undefined;
+      };
+      const recordingCompletion = this.recording.finish();
+      if (recordingCompletion) {
+        return recordingCompletion.finally(dispose);
+      }
+      dispose();
+      return undefined;
+    };
+    let completion: void | Promise<void>;
+    try {
+      completion = this.bridge?.close(disposition === "detach" ? { disposition } : undefined);
+    } catch (error) {
+      completion = Promise.reject(toErrorObject(error, "Discord realtime provider cleanup failed"));
+    }
+    if (completion) {
+      this.closeCompletion = completion.then(finish, async (error: unknown) => {
+        this.logRealtimeError(formatErrorMessage(error));
+        await finish();
+        if (disposition === "detach") {
+          throw error;
+        }
+      });
+    } else {
+      this.closeCompletion = finish();
+    }
+    return this.closeCompletion;
   }
 
-  beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
+  beginSpeakerTurn(
+    context: VoiceRealtimeSpeakerContext,
+    userId: string,
+    recordingInput?: DiscordRealtimeRecordingInput,
+  ): VoiceRealtimeSpeakerTurn {
     if (!this.inputOpen || this.isStopped()) {
       throw new Error("Discord realtime speaker input is closed");
     }
     const turn = this.turns.beginSpeakerTurn(context, userId);
+    if (recordingInput) {
+      this.recording.attach(recordingInput, { id: userId, label: context.speakerLabel });
+    }
     let closed = false;
     const capture: VoiceRealtimeSpeakerTurn = {
-      sendInputAudio: (audio) => {
+      sendInputAudio: (audio, receipt) => {
         if (!closed) {
+          recordingInput?.submit(receipt);
           this.lastActivityAt = Date.now();
           turn.sendInputAudio(audio);
         }
       },
-      close: () => {
+      close: (reason) => {
         if (closed) {
           return;
         }
         closed = true;
         this.captures.delete(capture);
+        if (this.captures.size === 0) {
+          for (const listener of this.inputIdleListeners) {
+            listener();
+          }
+        }
         this.lastActivityAt = Date.now();
-        turn.close();
+        try {
+          if (reason === "incomplete-input") {
+            recordingInput?.exclude();
+            // Retire this provider connection before a late transcript can dispatch partial speech.
+            this.params.onTerminalError(new Error("Discord realtime received incomplete speech."));
+          } else {
+            turn.close();
+          }
+        } catch (error) {
+          recordingInput?.exclude();
+          throw error;
+        } finally {
+          recordingInput?.seal("audio");
+        }
       },
     };
     this.captures.add(capture);
@@ -534,6 +490,85 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     this.playback.enqueueExactSpeechMessage(text);
   }
 
+  transferPendingSpeechTo(replacement: DiscordRealtimeSpeakerSession): void {
+    this.playback.transferPendingSpeechTo(replacement.playback);
+  }
+
+  readVoiceSelection(): RealtimeVoiceSelectionInfo {
+    if (!this.selection || !this.isReady()) {
+      throw new Error("Discord voice connection is not ready");
+    }
+    return {
+      ...this.selection,
+      voices: [...this.selection.voices],
+    };
+  }
+
+  snapshotConversation(): RealtimeVoiceTranscriptEntry[] {
+    const history: RealtimeVoiceTranscriptEntry[] = [];
+    let bytes = 0;
+    for (const item of this.harness.transcript.slice(-16).toReversed()) {
+      const entry = { ...item, text: sliceUtf16Safe(item.text, 0, 800) };
+      const size = Buffer.byteLength(
+        JSON.stringify(entry).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e"),
+        "utf8",
+      );
+      if (bytes + size > 8_000) {
+        break;
+      }
+      history.unshift(entry);
+      bytes += size;
+    }
+    return history;
+  }
+
+  conversationCheckpoint(): RealtimeVoiceTranscriptEntry | undefined {
+    return this.harness.transcript.at(-1);
+  }
+
+  activateOutput(): void {
+    this.readVoiceSelection();
+    this.outputEnabled = true;
+    this.playback.activateOutputAudioPort();
+  }
+
+  private attachOutputAudioPort(): void {
+    const provider = this.bridge?.bridge;
+    // Wake-name/response admission still owns those sinks on main. Standby
+    // voice replacements cannot acquire physical output until activated.
+    if (
+      this.policy.wakeNamePolicy === "never" &&
+      provider?.outputAudioMode === "continuous" &&
+      provider.setAudioOutputPort
+    ) {
+      provider.setAudioOutputPort(this.playback.createOutputAudioPort(this.outputEnabled));
+    }
+  }
+
+  hasActiveInput(): boolean {
+    return this.captures.size > 0;
+  }
+
+  async waitForInputIdle(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (!this.hasActiveInput()) {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const finish = () => {
+        this.inputIdleListeners.delete(finish);
+        signal?.removeEventListener("abort", abort);
+        resolve();
+      };
+      const abort = () => {
+        this.inputIdleListeners.delete(finish);
+        reject(toErrorObject(signal?.reason, "Discord voice change cancelled"));
+      };
+      this.inputIdleListeners.add(finish);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+
   private async trackOperation<T>(operation: () => Promise<T>): Promise<T> {
     this.activeOperations += 1;
     try {
@@ -544,15 +579,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     }
   }
 
-  handleBargeIn(reason = "barge-in"): void {
-    this.playback.handleBargeIn(reason);
-  }
-
-  isBargeInEnabled(): boolean {
-    if (this.isWakeNameRequired()) {
-      return false;
-    }
-    return this.playback.isBargeInEnabled();
+  canReceiveDuringPlayback(): boolean {
+    return this.bridge?.bridge.outputAudioMode === "continuous" || this.playback.isBargeInEnabled();
   }
 
   private get realtimeConfig(): DiscordRealtimeVoiceConfig {
@@ -560,18 +588,15 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   }
 
   private isStopped(): boolean {
-    return this.lifecycle.status === "stopped";
+    return this.lifecycle.status === "closing" || this.lifecycle.status === "stopped";
   }
 
   private isReady(): boolean {
     return this.lifecycle.status === "active";
   }
 
-  private markLifecycleReady(generation: number): boolean {
-    if (
-      (this.lifecycle.status !== "starting" && this.lifecycle.status !== "active") ||
-      this.lifecycle.generation !== generation
-    ) {
+  private markLifecycleReady(): boolean {
+    if (this.isStopped()) {
       return false;
     }
     this.lifecycle.status = "active";
@@ -583,14 +608,17 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   }
 
   private isWakeNameRequired(humanParticipantCount = this.humanParticipantCount()): boolean {
-    return isRealtimeVoiceWakeNameRequired(this.wakeNamePolicy, humanParticipantCount);
+    return isRealtimeVoiceWakeNameRequired(this.policy.wakeNamePolicy, humanParticipantCount);
   }
 
   private handleBridgeEvent(event: RealtimeVoiceBridgeEvent): void {
-    if (!(event.direction === "client" && event.type === "session.continuity.reset")) {
+    if (
+      !(event.direction === "client" && event.type === "session.continuity.reset") &&
+      !event.type.endsWith("audio.delta") &&
+      event.type !== "output_audio.rtp"
+    ) {
       this.markProviderGenerationObserved();
     }
-    const detail = event.detail ? ` ${event.detail}` : "";
     if (event.direction === "client" && event.type === "session.continuity.reset") {
       this.resetProviderContinuity(event.type);
     }
@@ -600,16 +628,9 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     if (event.direction === "server" && event.type === "input_audio_buffer.speech_started") {
       this.turns.resetPartialWakeNameTracking();
     }
-    if (shouldLogRealtimeVerboseEvent(event)) {
-      logVoiceVerbose(`realtime ${event.direction}:${event.type}${detail}`);
-    }
-    const interruptionLog = formatRealtimeInterruptionLog(event);
-    if (interruptionLog) {
-      logger.info(interruptionLog);
-    }
-    const lifecycleLog = formatRealtimeLifecycleLog(event);
-    if (lifecycleLog) {
-      logger.info(lifecycleLog);
+    const info = formatRealtimeInfoLog(event);
+    if (info) {
+      logger.info(info);
     }
   }
 
@@ -627,6 +648,9 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       this.lifecycle.status = "starting";
     }
     this.providerContinuityEpoch += 1;
+    // Provider queues may replay earlier input without new Discord send callbacks.
+    // Only a fresh speaker connection can establish recording receipts again.
+    this.recording.close();
     this.consults.resetProviderContinuity();
     this.turns.resetProviderContinuity();
     this.playback.resetProviderContinuity(reason);
@@ -655,28 +679,4 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     );
     this.lastRealtimeError.suppressed = 0;
   }
-}
-
-function buildProviderConfigs(
-  realtimeConfig: DiscordRealtimeVoiceConfig,
-): Record<string, RealtimeVoiceProviderConfig | undefined> | undefined {
-  const configs = realtimeConfig?.providers;
-  return configs && Object.keys(configs).length > 0 ? { ...configs } : undefined;
-}
-
-function buildProviderConfigOverrides(
-  realtimeConfig: DiscordRealtimeVoiceConfig,
-): RealtimeVoiceProviderConfig | undefined {
-  const overrides = {
-    ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
-    ...(realtimeConfig?.speakerVoice
-      ? { voice: realtimeConfig.speakerVoice }
-      : realtimeConfig?.speakerVoiceId
-        ? { voice: realtimeConfig.speakerVoiceId }
-        : {}),
-    ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
-      ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
-      : {}),
-  };
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }

@@ -1,4 +1,3 @@
-// Xai plugin module implements stt behavior.
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
@@ -9,6 +8,7 @@ import {
   buildAudioTranscriptionFormData,
   postTranscriptionRequest,
   readProviderJsonObjectResponse,
+  requireTranscriptionText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -63,17 +63,17 @@ async function transcribeXaiAudio(
   try {
     await assertOkOrThrowHttpError(response, "xAI audio transcription failed");
     const payload = await readProviderJsonObjectResponse(response, "xai.stt");
-    if (typeof payload.text !== "string") {
-      throw new Error("xAI transcription response missing text");
-    }
-    // xAI returns an empty transcript for valid audio without detected speech.
-    return { text: payload.text.trim() };
+    return {
+      text: requireTranscriptionText(payload.text, "xAI transcription response missing text"),
+    };
   } finally {
     await release();
   }
 }
 
-export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider {
+export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider & {
+  transcribeAudio: typeof transcribeXaiAudio;
+} {
   // Auth is resolved by media-understanding core via resolveProviderExecutionContext
   // before transcribeAudio runs, so an OAuth profile (when configured) reaches
   // here as `params.apiKey` already. No plugin-side fallback required.

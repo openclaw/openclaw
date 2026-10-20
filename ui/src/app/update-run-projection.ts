@@ -1,13 +1,26 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
-import { renderUpdateRunReport } from "../../../src/infra/update-run-report.ts";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "../../../src/infra/update-run-record.ts";
+import {
+  renderUpdateRunReport,
+  resolveUpdateRunIdentity,
+} from "../../../src/infra/update-run-report.ts";
 import { t } from "../i18n/index.ts";
 
 type OracleState = "pass" | "warn" | "fail" | "pending";
 
+export function updateRunStepOwner(step: string): string {
+  // Diagnostic suffixes identify ledger receipts, not additional installation work.
+  return step.replace(/^(?:diagnostic|warning):(.+?)(?::\d+)?$/u, "$1");
+}
+
 export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
   const terminal = run.status !== "running";
+  const managedByOcm = run.target.installationMethod === "ocm";
   const report = renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
@@ -33,26 +46,48 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
     }
     return [{ step: phase, status, label: t(`updates.run.phase.${phase}`) }];
   });
-  // Notice receipts share the bounded ledger but are delivery bookkeeping, not update work.
+  // Supplemental receipts share the ledger but do not represent installation steps.
   const steps = run.steps.filter(
     (step) =>
-      !step.step.startsWith("notice:") && !UPDATE_RUN_PHASES.some((phase) => phase === step.step),
+      !step.step.startsWith("notice:") &&
+      !step.step.startsWith("diagnostic:") &&
+      !UPDATE_RUN_PHASES.some((phase) => phase === step.step),
   );
+  // An active operation owns the panel even before it has emitted diagnostic text.
   const detailStep =
+    steps.findLast((step) => step.status === "in_progress") ??
     run.steps.findLast((step) => step.status === "in_progress" && step.detail) ??
     run.steps.findLast((step) => step.detail);
-  const details = detailStep
-    ? sliceUtf16Safe(detailStep.detail ?? "", -4096)
-        .split(/\r?\n/u)
-        .slice(-80)
-        .join("\n")
-    : "";
+  const groupedDetails = new Map<string, string[]>();
+  for (const step of run.steps) {
+    if (!step.detail) {
+      continue;
+    }
+    const owner = updateRunStepOwner(step.step);
+    const lines = groupedDetails.get(owner) ?? [];
+    lines.push(step.detail);
+    groupedDetails.set(owner, lines);
+  }
+  const stepDetails = new Map<string, string>(
+    Array.from(groupedDetails, ([owner, lines]) => [
+      owner,
+      sliceUtf16Safe(lines.join("\n"), -4096).split(/\r?\n/u).slice(-80).join("\n"),
+    ]),
+  );
+  const details = detailStep ? (stepDetails.get(updateRunStepOwner(detailStep.step)) ?? "") : "";
   const facts = run.verification;
+  const identity = resolveUpdateRunIdentity(facts, run.after);
   const booleanState = (value: boolean | undefined): OracleState =>
     value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
   const oracles = [
     { name: "service", state: booleanState(facts.serviceRunning) },
-    { name: "version", state: booleanState(facts.versionMatch) },
+    {
+      name: "version",
+      state:
+        identity.kind === "unavailable"
+          ? "warn"
+          : booleanState(identity.kind === "unobserved" ? undefined : identity.kind === "verified"),
+    },
     {
       name: "plugins",
       state: booleanState(
@@ -60,32 +95,37 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
       ),
     },
     { name: "channels", state: booleanState(facts.channelsReady) },
-    {
-      name: "inference",
-      state:
-        facts.inferenceProbe === "skipped"
-          ? "warn"
-          : booleanState(
-              facts.inferenceProbe === undefined ? undefined : facts.inferenceProbe === "passed",
-            ),
-    },
   ] as const;
   const completed = phases.filter((phase) => phase.status === "completed").length;
   const total = phases.filter((phase) => phase.status !== "skipped").length;
   return {
     report,
     terminal,
+    reconciled: isAcknowledgedAbandonedUpdateRun(run),
     headline:
       !connected &&
       !terminal &&
       (run.phase === "activating" || run.phase === "restarting" || run.phase === "verifying")
         ? t("updates.run.restarting")
         : report.headline,
-    compactLabel: t("updates.run.progress", { completed: String(completed), total: String(total) }),
-    phases,
-    steps,
+    compactLabel: managedByOcm
+      ? ""
+      : t("updates.run.progress", { completed: String(completed), total: String(total) }),
+    phases: managedByOcm
+      ? []
+      : phases.map(({ step, status, label }) => ({
+          step,
+          status,
+          label,
+          detail: stepDetails.get(step),
+        })),
+    steps: steps.map(({ step, status }) => ({
+      step,
+      status,
+      detail: stepDetails.get(updateRunStepOwner(step)),
+    })),
     detailStep: detailStep?.step,
     details,
-    oracles,
+    oracles: managedByOcm ? [] : oracles,
   };
 }

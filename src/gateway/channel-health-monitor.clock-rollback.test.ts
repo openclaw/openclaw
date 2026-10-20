@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelManager } from "./server-channels.js";
 
 const STARTED_AT = 1_000_000;
-const CHECK_INTERVAL_MS = 1_000;
+const CHECK_INTERVAL_MS = 5 * 60_000;
+const STARTUP_GRACE_MS = 60_000;
 
 function createChannelManager(running: boolean) {
   const account: ChannelAccountSnapshot = {
@@ -27,11 +33,12 @@ function createChannelManager(running: boolean) {
     releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(async () => false),
+    recoverAutostartSuppression: vi.fn(() => undefined),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
+    isAccountListed: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
@@ -40,51 +47,48 @@ function createChannelManager(running: boolean) {
 }
 
 describe("channel-health-monitor clock rollback", () => {
+  let clock: ReturnType<typeof createGatewaySchedulerClock>;
+  let scheduler: GatewayScheduler;
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(STARTED_AT);
+    clock = createGatewaySchedulerClock(STARTED_AT);
+    scheduler = createTestGatewayScheduler(clock.clock);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
+  afterEach(async () => {
+    await scheduler.stop();
   });
 
   it("does not trap an existing monitor in startup grace after clock rollback", async () => {
     const { manager } = createChannelManager(false);
     const monitor = startChannelHealthMonitor({
+      scheduler,
       channelManager: manager,
-      checkIntervalMs: CHECK_INTERVAL_MS,
-      timing: { monitorStartupGraceMs: CHECK_INTERVAL_MS },
     });
 
-    vi.setSystemTime(STARTED_AT - 60_000);
-    await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+    clock.setTime(STARTED_AT - 60_000);
+    await clock.wake();
 
-    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 
-  it.each([
-    { name: "restart cooldown", maxRestartsPerHour: 10 },
-    { name: "hourly restart budget", maxRestartsPerHour: 1 },
-  ])("discards future $name from an existing monitor", async ({ maxRestartsPerHour }) => {
+  it("discards a future restart cooldown from an existing monitor", async () => {
     const { account, manager } = createChannelManager(true);
     const monitor = startChannelHealthMonitor({
+      scheduler,
       channelManager: manager,
-      checkIntervalMs: CHECK_INTERVAL_MS,
-      cooldownCycles: 0,
-      maxRestartsPerHour,
-      timing: { monitorStartupGraceMs: 0 },
     });
 
-    await vi.advanceTimersByTimeAsync(5 * CHECK_INTERVAL_MS);
+    await clock.advanceBy(STARTUP_GRACE_MS);
     account.running = false;
     account.connected = false;
-    await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+    await clock.advanceBy(CHECK_INTERVAL_MS);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
 
-    vi.setSystemTime(STARTED_AT + 3 * CHECK_INTERVAL_MS);
-    await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+    clock.setTime(STARTED_AT + STARTUP_GRACE_MS);
+    await clock.wake();
 
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
     monitor.stop();

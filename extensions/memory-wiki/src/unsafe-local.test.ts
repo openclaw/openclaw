@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
@@ -24,6 +26,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
   });
 
   afterEach(() => {
+    __setFsSafeTestHooksForTest();
     vi.restoreAllMocks();
   });
 
@@ -71,6 +74,19 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(page).toContain("provenanceMode: unsafe-local");
 
     const readFile = vi.spyOn(fs, "readFile");
+    const retainedPages = new Set(
+      await Promise.all(
+        first.pagePaths.map((pagePath) => fs.realpath(path.join(vaultDir, pagePath))),
+      ),
+    );
+    const openedPages: string[] = [];
+    __setFsSafeTestHooksForTest({
+      beforeOpen: (filePath) => {
+        if (retainedPages.has(filePath)) {
+          openedPages.push(filePath);
+        }
+      },
+    });
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(second.importedCount).toBe(0);
@@ -82,18 +98,15 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
         ([filePath]) => typeof filePath === "string" && filePath.startsWith(vaultDir),
       ),
     ).toBe(false);
+    expect(openedPages).toEqual([]);
+
+    const canaryPage = first.pagePaths[0]!;
+    await (await fsRoot(vaultDir)).readText(canaryPage);
+    expect(openedPages).toEqual([await fs.realpath(path.join(vaultDir, canaryPage))]);
   });
 
-  it.each([
-    {
-      name: "prunes stale unsafe-local pages from an available configured directory",
-      humanNotes: null,
-    },
-    {
-      name: "salvages unsafe-local page Notes when configured files disappear",
-      humanNotes: "Durable unsafe-local annotation",
-    },
-  ])("$name", async ({ humanNotes }) => {
+  it("salvages unsafe-local page Notes when configured files disappear", async () => {
+    const humanNotes = "Durable unsafe-local annotation";
     const privateDir = await createPrivateDir("private-prune");
 
     const secretPath = path.join(privateDir, "secret.md");
@@ -115,16 +128,14 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const firstPageAbsPath = path.join(vaultDir, firstPagePath);
     const firstPage = await fs.readFile(firstPageAbsPath, "utf8");
     expect(firstPage).toContain("# private");
-    if (humanNotes) {
-      await fs.writeFile(
-        firstPageAbsPath,
-        firstPage.replace(
-          "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-          `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
-        ),
-        "utf8",
-      );
-    }
+    await fs.writeFile(
+      firstPageAbsPath,
+      firstPage.replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
+      ),
+      "utf8",
+    );
 
     await fs.rm(secretPath);
     const second = await syncMemoryWikiUnsafeLocalSources(config);
@@ -133,13 +144,9 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(second.removedCount).toBe(1);
     await expect(fs.stat(firstPageAbsPath)).rejects.toHaveProperty("code", "ENOENT");
     const salvageDir = path.join(vaultDir, ".salvage");
-    if (humanNotes) {
-      await expect(
-        fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
-      ).resolves.toContain(humanNotes);
-    } else {
-      await expect(fs.access(salvageDir)).rejects.toMatchObject({ code: "ENOENT" });
-    }
+    await expect(
+      fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
+    ).resolves.toContain(humanNotes);
   });
 
   it("preserves pages and human notes for unavailable configured paths", async () => {

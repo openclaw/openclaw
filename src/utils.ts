@@ -1,20 +1,18 @@
-// Shared filesystem, path, and process helpers for the CLI.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
-import {
-  resolveEffectiveHomeDir,
-  resolveRequiredHomeDir,
-  resolveUserPath,
-} from "./infra/home-dir.js";
+import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
+import { resolveConfigDir } from "./infra/config-dir.js";
+import { resolveEffectiveHomeDir, resolveUserPath } from "./infra/home-dir.js";
 import { shortenPathWithHome } from "./infra/home-display.js";
-import { isPlainObject } from "./infra/plain-object.js";
+import "./infra/plain-object.js";
 import { escapeRegExp as escapeRegExpValue } from "./shared/regexp.js";
+export { isPlainObject } from "./infra/plain-object.js";
 export { escapeRegExp } from "./shared/regexp.js";
 export { sleep } from "./utils/sleep.js";
+export { pathExists } from "@openclaw/fs-safe/advanced";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
-export { resolveUserPath };
+export { resolveConfigDir, resolveUserPath };
 
 /** Creates a directory tree if it does not already exist. */
 export async function ensureDir(dir: string) {
@@ -46,8 +44,6 @@ export function tryParseJson<T>(raw: string): T | null {
   }
 }
 
-export { isPlainObject };
-
 /** Normalizes phone-like input into the loose E.164 shape used by channel helpers. */
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^[a-z][a-z0-9-]*:/i, "").trim();
@@ -60,33 +56,24 @@ export function normalizeE164(number: string): string {
 // to preserve the historical `utils.ts` import surface.
 export { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
-/** Resolves the OpenClaw config directory from state/config env overrides or home. */
-export function resolveConfigDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  const override = env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, env, homedir);
-  }
-  const configPath = env.OPENCLAW_CONFIG_PATH?.trim();
-  if (configPath) {
-    return path.dirname(resolveUserPath(configPath, env, homedir));
-  }
-  return path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
-}
-
 /** Resolves the effective OpenClaw home directory, if one can be determined. */
 export function resolveHomeDir(): string | undefined {
   return resolveEffectiveHomeDir(process.env, os.homedir);
 }
+
+// Stack traces print ESM paths as file:// URLs, so the URL scheme also starts a path.
+const HOME_TEXT_START = String.raw`(?<=^|[\s"'\x60(\[{<=:;]|file://)`;
+const HOME_TEXT_DELIMITER = String.raw`[\s"'\x60)\]}>]`;
+
+// A PATH-style list continues with another absolute path, home prefix, or drive letter.
+const HOME_TEXT_LIST_NEXT = String.raw`[:;](?=[/\\~$]|[A-Za-z]:)`;
 
 function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefined {
   const home = resolveHomeDir();
   if (!home) {
     return undefined;
   }
-  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  const explicitHome = normalizeHomeDirValue(process.env.OPENCLAW_HOME);
   if (explicitHome) {
     return { home, prefix: "$OPENCLAW_HOME" };
   }
@@ -102,19 +89,27 @@ export function shortenHomePath(input: string): string {
   return shortenPathWithHome(input, display);
 }
 
-/** Replaces all effective-home occurrences inside a diagnostic string. */
+/** Replaces effective-home path occurrences inside a diagnostic string. */
 export function shortenHomeInString(input: string): string {
   if (!input) {
     return input;
   }
   const display = resolveHomeDisplayPrefix();
-  if (!display) {
+  // A filesystem-root home such as "/" would turn every path separator into the prefix.
+  if (!display || path.parse(display.home).root === display.home) {
     return input;
   }
-  if (process.platform === "win32") {
-    return input.replace(new RegExp(escapeRegExpValue(display.home), "giu"), display.prefix);
-  }
-  return input.split(display.home).join(display.prefix);
+  // Diagnostics delimit paths with whitespace, quotes, brackets, `=`, and PATH list separators.
+  // Replace the home only between those delimiters so /home/al+old, /mnt/home/al, and
+  // /home/al.bak stay exact. Trailing `.`, `,`, `;`, or `:` ends the home only when a
+  // delimiter, the end of the text, or the next PATH entry follows it.
+  // POSIX file names may contain backslashes, so only Windows treats them as separators.
+  const pathSeparator = process.platform === "win32" ? String.raw`[\\/]` : "/";
+  const homePattern = new RegExp(
+    `${HOME_TEXT_START}${escapeRegExpValue(display.home)}(?=$|${pathSeparator}|${HOME_TEXT_DELIMITER}|[.,;:](?:$|${HOME_TEXT_DELIMITER})|${HOME_TEXT_LIST_NEXT})`,
+    process.platform === "win32" ? "giu" : "gu",
+  );
+  return input.replace(homePattern, display.prefix);
 }
 
 /** Shortens a path for display without changing non-home paths. */
@@ -134,10 +129,4 @@ export let CONFIG_DIR = resolveConfigDir();
 export function pinConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   CONFIG_DIR = resolveConfigDir(env);
   return CONFIG_DIR;
-}
-/**
- * Check if a file or directory exists at the given path.
- */
-export async function pathExists(targetPath: string): Promise<boolean> {
-  return await fsSafePathExists(targetPath);
 }

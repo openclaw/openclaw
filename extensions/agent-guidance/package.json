@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/agent-guidance",
+  "version": "2026.10.5",
+  "private": true,
+  "description": "Shared instruction files for selected OpenClaw agents",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,4 +1,3 @@
-// Memory Host SDK helper module supports embedding provider adapter utils behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Adapter helpers shared by remote embedding provider implementations.
@@ -18,8 +17,7 @@ export function sanitizeEmbeddingCacheHeaders(
   );
   return Object.entries(headers)
     .filter(([key]) => !excluded.has(normalizeLowercaseStringOrEmpty(key)))
-    .toSorted(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => [key, value]);
+    .toSorted(([a], [b]) => a.localeCompare(b));
 }
 
 /** Convert custom-id keyed batch embeddings back to request-index order. */

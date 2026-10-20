@@ -54,6 +54,8 @@ legacy encrypted OAuth sidecar credentials. It must persist for that recovery
 path and remain separate from `OPENCLAW_CONFIG_DIR`, but it does not encrypt
 current SQLite rows or protect a state-only backup or copy.
 
+<a id="build-and-launch" />
+
 ## Run the maintained Docker setup
 
 ```bash
@@ -115,7 +117,7 @@ non-root uid 1000 setup, `tini` entrypoint, health check, and `openclaw` symlink
 
 <Note>
 The repository Dockerfile digest-pins its Node and Bun base images. Keep those
-reviewed pins instead of changing them to floating `FROM node:24-bookworm`
+reviewed pins instead of changing them to floating `FROM node:24-trixie`
 references. For ARM-based VMs, choose `arm64` release assets for extra binaries;
 for reproducible builds, use versioned asset URLs and verify their checksums.
 </Note>
@@ -196,6 +198,8 @@ to the same file in place does not cause this divergence.
 
 Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
 inside that directory.
+
+<a id="updates" />
 
 ## Update OpenClaw
 

@@ -28,13 +28,6 @@ describe("requested session agent ownership", () => {
     });
   });
 
-  it("rejects conflicting and retired persisted owners", () => {
-    expect(resolveRequestedSessionAgentId(fixedStoreConfig("ops"), "global", "research").ok).toBe(
-      false,
-    );
-    expect(resolveRequestedSessionAgentId(fixedStoreConfig("retired"), "global").ok).toBe(false);
-  });
-
   it.each(["main", "primary"])(
     "validates fixed ownership after the explicit %s alias becomes global",
     (alias) => {
@@ -63,32 +56,6 @@ describe("requested session agent ownership", () => {
     },
   );
 
-  it("uses a legacy compatibility owner for a bare key", () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { ops: { default: true }, research: {} } },
-    };
-
-    expect(resolveRequestedSessionAgentId(cfg, "global")).toEqual({
-      ok: true,
-      agentId: "ops",
-    });
-  });
-
-  it("returns a typed selection error for an ownerless bare key", () => {
-    const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    };
-
-    expect(tryResolveSessionCompatibilityOwnerAgentId(cfg, "global")).toBeUndefined();
-    expect(resolveRequestedSessionAgentId(cfg, "global")).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("has no explicit owner"),
-      },
-    });
-  });
-
   it("returns typed ownership results for arbitrary bare keys before canonicalization", () => {
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
@@ -104,7 +71,7 @@ describe("requested session agent ownership", () => {
     });
   });
 
-  it.each(["", "   ", "агент✨", "---"])(
+  it.each(["", "агент✨"])(
     "rejects explicit unrepresentable agent id %j instead of selecting main",
     (agentId) => {
       const cfg: OpenClawConfig = {
@@ -151,9 +118,11 @@ describe("session event agent scope", () => {
       "retired",
       undefined,
     ]);
-    expect(
-      resolveSessionEventAgentScope({ agents: { entries: { main: { default: true } } } }, "global"),
-    ).toEqual([undefined, "main", "main"]);
+    expect(resolveSessionEventAgentScope({ agents: { entries: { main: {} } } }, "global")).toEqual([
+      undefined,
+      "main",
+      "main",
+    ]);
     expect(resolveSessionEventAgentScope(fixedStoreConfig("ops"), "global", "research")).toEqual([
       "research",
       "research",

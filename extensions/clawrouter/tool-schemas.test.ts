@@ -1,7 +1,15 @@
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { inspectPerplexityToolSchemas, normalizePerplexityToolSchemas } from "./tool-schemas.js";
+
+let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+beforeAll(async () => {
+  provider = await registerSingleProviderPlugin(plugin);
+});
+
+function toolSchema(name: string, parameters: unknown) {
+  return [{ name, description: "Test tool", parameters }];
+}
 
 function schemaContext(modelId: string, tools: unknown[]) {
   return {
@@ -20,33 +28,29 @@ function schemaContext(modelId: string, tools: unknown[]) {
 
 describe("ClawRouter Perplexity tool schemas", () => {
   it("normalizes exec-like object maps", () => {
-    const tools = [
-      {
-        name: "exec",
-        description: "Run a command",
-        parameters: {
+    const tools = toolSchema("exec", {
+      type: "object",
+      properties: {
+        env: {
           type: "object",
-          properties: {
-            env: {
-              type: "object",
-              patternProperties: { "^.*$": { type: "string" } },
-              additionalProperties: { type: "string" },
-            },
-          },
-          additionalProperties: false,
+          patternProperties: { "^.*$": { type: "object" } },
+          additionalProperties: { type: "object" },
         },
       },
-    ];
+      additionalProperties: false,
+    });
 
-    const normalized = normalizePerplexityToolSchemas(schemaContext("perplexity/sonar-pro", tools));
+    const normalized = provider.normalizeToolSchemas?.(
+      schemaContext("perplexity/sonar-pro", tools),
+    );
 
-    expect(normalized[0]?.parameters).toEqual({
+    expect(normalized?.[0]?.parameters).toEqual({
       type: "object",
       properties: {
         env: { type: "object", properties: {} },
       },
     });
-    expect(inspectPerplexityToolSchemas(schemaContext("perplexity/sonar-pro", tools))).toEqual([
+    expect(provider.inspectToolSchemas?.(schemaContext("perplexity/sonar-pro", tools))).toEqual([
       {
         toolName: "exec",
         toolIndex: 0,
@@ -61,36 +65,32 @@ describe("ClawRouter Perplexity tool schemas", () => {
   });
 
   it("normalizes nested unions, arrays, and definitions", () => {
-    const tools = [
-      {
-        name: "nested",
-        description: "Nested schemas",
-        parameters: {
-          type: "object",
-          anyOf: [
-            { type: "object", additionalProperties: true },
-            {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  value: {
-                    anyOf: [{ type: "object" }, { type: "string" }],
-                  },
-                },
+    const tools = toolSchema("nested", {
+      type: "object",
+      anyOf: [
+        { type: "object", additionalProperties: true },
+        {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              value: {
+                anyOf: [{ type: "object" }, { type: "string" }],
               },
             },
-          ],
-          $defs: {
-            metadata: { type: "object", patternProperties: { ".*": { type: "string" } } },
           },
         },
+      ],
+      $defs: {
+        metadata: { type: "object", patternProperties: { ".*": { type: "string" } } },
       },
-    ];
+    });
 
-    const normalized = normalizePerplexityToolSchemas(schemaContext("perplexity/sonar-pro", tools));
+    const normalized = provider.normalizeToolSchemas?.(
+      schemaContext("perplexity/sonar-pro", tools),
+    );
 
-    expect(normalized[0]?.parameters).toEqual({
+    expect(normalized?.[0]?.parameters).toEqual({
       type: "object",
       properties: {},
       anyOf: [
@@ -114,28 +114,24 @@ describe("ClawRouter Perplexity tool schemas", () => {
   });
 
   it("treats union types containing object as object schemas", () => {
-    const tools = [
-      {
-        name: "union",
-        description: "Union typed root",
-        parameters: {
-          type: "object",
-          properties: {
-            payload: { type: ["object", "null"], additionalProperties: { type: "string" } },
-          },
-        },
+    const tools = toolSchema("union", {
+      type: "object",
+      properties: {
+        payload: { type: ["object", "null"], additionalProperties: { type: "string" } },
       },
-    ];
+    });
 
-    const normalized = normalizePerplexityToolSchemas(schemaContext("perplexity/sonar-pro", tools));
+    const normalized = provider.normalizeToolSchemas?.(
+      schemaContext("perplexity/sonar-pro", tools),
+    );
 
-    expect(normalized[0]?.parameters).toEqual({
+    expect(normalized?.[0]?.parameters).toEqual({
       type: "object",
       properties: {
         payload: { type: ["object", "null"], properties: {} },
       },
     });
-    expect(inspectPerplexityToolSchemas(schemaContext("perplexity/sonar-pro", tools))).toEqual([
+    expect(provider.inspectToolSchemas?.(schemaContext("perplexity/sonar-pro", tools))).toEqual([
       {
         toolName: "union",
         toolIndex: 0,
@@ -148,25 +144,21 @@ describe("ClawRouter Perplexity tool schemas", () => {
   });
 
   it("traverses dependentSchemas and unevaluatedProperties containers", () => {
-    const tools = [
-      {
-        name: "containers",
-        description: "Less common schema containers",
-        parameters: {
-          type: "object",
-          properties: {},
-          dependentSchemas: {
-            x: { type: "object", additionalProperties: false },
-          },
-          unevaluatedProperties: { type: "object" },
-          additionalItems: { type: "object", additionalProperties: false },
-        },
+    const tools = toolSchema("containers", {
+      type: "object",
+      properties: {},
+      dependentSchemas: {
+        x: { type: "object", additionalProperties: false },
       },
-    ];
+      unevaluatedProperties: { type: "object" },
+      additionalItems: { type: "object", additionalProperties: false },
+    });
 
-    const normalized = normalizePerplexityToolSchemas(schemaContext("perplexity/sonar-pro", tools));
+    const normalized = provider.normalizeToolSchemas?.(
+      schemaContext("perplexity/sonar-pro", tools),
+    );
 
-    expect(normalized[0]?.parameters).toEqual({
+    expect(normalized?.[0]?.parameters).toEqual({
       type: "object",
       properties: {},
       dependentSchemas: {
@@ -177,15 +169,11 @@ describe("ClawRouter Perplexity tool schemas", () => {
     });
   });
 
-  it("routes only Perplexity models through the plugin-local normalizer", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const tools = [
-      {
-        name: "exec",
-        description: "Run a command",
-        parameters: { type: "object", patternProperties: { ".*": { type: "string" } } },
-      },
-    ];
+  it("routes only Perplexity models through the plugin-local normalizer", () => {
+    const tools = toolSchema("exec", {
+      type: "object",
+      patternProperties: { ".*": { type: "string" } },
+    });
 
     const perplexity = provider?.normalizeToolSchemas?.(
       schemaContext("PeRpLeXiTy/sonar-pro", tools),

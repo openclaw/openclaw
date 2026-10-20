@@ -34,16 +34,6 @@ export type DurableSupportRequest = {
   requirements?: Record<string, boolean>;
 };
 
-export type DeliveryResult = {
-  messageIds?: string[];
-  receipt?: { platformMessageIds?: string[] };
-  visibleReplySent?: boolean;
-};
-
-export function deliveryResult(value: unknown): DeliveryResult {
-  return value as DeliveryResult;
-}
-
 export function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
     Body: "hello",
@@ -88,10 +78,12 @@ export function expectDispatched<TDispatchResult>(
 export function createDispatch(
   events: string[] = [],
   deliverPayload: { text: string } = { text: "reply" },
+  onDelivery?: (result: unknown) => void,
 ): DispatchReplyWithBufferedBlockDispatcher {
   return vi.fn(async (params) => {
     events.push("dispatch");
     const delivery = await params.dispatcherOptions.deliver(deliverPayload, { kind: "final" });
+    onDelivery?.(delivery);
     const deliveredNotVisible =
       typeof delivery === "object" &&
       delivery !== null &&
@@ -105,6 +97,16 @@ export function createDispatch(
       }),
     };
   }) as DispatchReplyWithBufferedBlockDispatcher;
+}
+
+export function createDeliveryResultCapture() {
+  let result: unknown;
+  return {
+    dispatch: createDispatch([], undefined, (delivery) => {
+      result = delivery;
+    }),
+    getResult: () => result,
+  };
 }
 
 export function createDispatcherBackedDispatch(

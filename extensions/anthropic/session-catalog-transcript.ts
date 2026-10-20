@@ -1,4 +1,7 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const MAX_TRANSCRIPT_ITEM_BYTES = 4 * 1024 * 1024;
@@ -57,10 +60,7 @@ export function collectTranscriptText(value: unknown, fragments: string[]): void
   }
 }
 
-export function parseTranscriptLine(
-  line: Buffer,
-  optionalString: (value: unknown, maxLength: number) => string | undefined,
-): ClaudeTranscriptItem | undefined {
+export function parseTranscriptLine(line: Buffer): ClaudeTranscriptItem | undefined {
   let raw: unknown;
   try {
     raw = JSON.parse(line.toString("utf8")) as unknown;
@@ -81,17 +81,16 @@ export function parseTranscriptLine(
   const fragments: string[] = [];
   collectTranscriptText(content, fragments);
   const text = [...new Set(fragments)].join("\n\n");
+  const timestamp = normalizeBoundedOptionalString(raw.timestamp, 128);
+  const model = normalizeBoundedOptionalString(raw.message.model, 256);
+  const uuid = normalizeBoundedOptionalString(raw.uuid, 256);
   const item: ClaudeTranscriptItem = {
     type: transcriptItemType(role, content),
     ...(text ? { text } : {}),
     content,
-    ...(optionalString(raw.timestamp, 128)
-      ? { timestamp: optionalString(raw.timestamp, 128) }
-      : {}),
-    ...(optionalString(raw.message.model, 256)
-      ? { model: optionalString(raw.message.model, 256) }
-      : {}),
-    ...(optionalString(raw.uuid, 256) ? { uuid: optionalString(raw.uuid, 256) } : {}),
+    ...(timestamp ? { timestamp } : {}),
+    ...(model ? { model } : {}),
+    ...(uuid ? { uuid } : {}),
   };
   if (Buffer.byteLength(JSON.stringify(item), "utf8") <= MAX_TRANSCRIPT_ITEM_BYTES) {
     return item;

@@ -3,9 +3,13 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+export function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
 /** Coerces object-like values to records, falling back to an empty record. */
 export function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  return asOptionalObjectRecord(value) ?? {};
 }
 
 /** Reads a field only when it exists as a string. */
@@ -27,6 +31,16 @@ export function asNonArrayRecord(value: unknown): Record<string, unknown> {
   return asOptionalRecord(value) ?? {};
 }
 
+export function ensureRecord(root: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = asOptionalRecord(root[key]);
+  if (current) {
+    return current;
+  }
+  const next: Record<string, unknown> = {};
+  root[key] = next;
+  return next;
+}
+
 /** Returns a non-array record or null. */
 export function asNullableRecord(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
@@ -39,7 +53,7 @@ export function asOptionalObjectRecord(value: unknown): Record<string, unknown> 
 
 /** Returns any object-backed record, including arrays, or null. */
 export function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  return asOptionalObjectRecord(value) ?? null;
 }
 
 /** Checks that every enumerable own value in a non-array record is a string. */

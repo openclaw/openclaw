@@ -1,5 +1,4 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createDiscordActivityHttpHandler } from "./http.js";
 import { createDiscordWidgetPresenter } from "./presenter.js";
 import { DiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
@@ -11,16 +10,11 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
   // Registration precedes publication of secret-resolved channel config. Keep the
   // transport static; runtime matching and HTTP dispatch gate on the current snapshot.
   const store = new DiscordActivityStore(
-    openDiscordActivityStores(<T>(options: OpenKeyedStoreOptions) =>
-      api.runtime.state.openKeyedStore<T>(options),
-    ),
+    openDiscordActivityStores(api.runtime.state.openKeyedStoreV2.bind(api.runtime.state)),
   );
   const runtime = new DiscordActivitiesRuntime(
     store,
-    api.config,
-    api.runtime.config?.current
-      ? () => api.runtime.config.current() as typeof api.config
-      : undefined,
+    () => api.runtime.config.current() as typeof api.config,
   );
   setDiscordActivitiesRuntime(runtime);
   const http = createDiscordActivityHttpHandler({
@@ -31,7 +25,7 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
     path: DISCORD_ACTIVITY_ROUTE_PREFIX,
     auth: "plugin",
     match: "prefix",
-    handler: async (req, res) => await http.handleHttpRequest(req, res),
+    handler: http.handleHttpRequest,
   });
   api.registerWidgetPresenter(createDiscordWidgetPresenter(runtime));
 }

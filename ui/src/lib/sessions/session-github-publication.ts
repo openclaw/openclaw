@@ -1,26 +1,33 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
-import { GitHubPublicationController } from "./github-publication-controller.ts";
+import type { GitHubPublicationOwner } from "./github-publication-owner.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionHistory,
 } from "./reconcile.ts";
+import type { createSessionDeletions } from "./session-deletions.ts";
+import {
+  isUiGlobalSessionKey,
+  resolveUiConversationIdentity,
+  scopedSessionArtifactKey,
+} from "./session-key.ts";
 import type {
   GitHubPublicationBinding,
-  SessionCapability,
   SessionConnectionOwner,
   SessionGateway,
-} from "./session-capability.ts";
-import { isUiGlobalSessionKey, resolveUiConversationIdentity } from "./session-key.ts";
+} from "./session-types.ts";
 
 const MAX_RETAINED_PUBLICATIONS = 32;
 
 type Host = {
   connection: SessionConnectionOwner;
   snapshot: () => SessionGateway["snapshot"];
-  deletionState: (row: GatewaySessionRow) => ReturnType<SessionCapability["deletionState"]>;
+  deletionState: (
+    row: GatewaySessionRow,
+  ) => ReturnType<ReturnType<typeof createSessionDeletions>["deletionState"]>;
 };
 
 function invocationRow(row: GatewaySessionRow): GatewaySessionRow {
@@ -33,13 +40,24 @@ function invocationRow(row: GatewaySessionRow): GatewaySessionRow {
     sharingRole: row.sharingRole,
     visibility: row.visibility,
     archived: row.archived,
+    worktree: row.worktree,
+    repositoryWorkspaceId: row.repositoryWorkspaceId,
+    repository: row.repository,
   };
 }
 
 function authority(row: GatewaySessionRow): string {
-  return JSON.stringify([row.sessionId, row.sharingRole, row.visibility, row.archived === true]);
+  const workspace = row.repositoryWorkspaceId
+    ? ["repository", row.repositoryWorkspaceId, row.repository?.branch]
+    : ["worktree", row.worktree?.id, row.worktree?.branch, row.worktree?.repoRoot];
+  return JSON.stringify([
+    row.sessionId,
+    row.sharingRole,
+    row.visibility,
+    row.archived === true,
+    ...workspace,
+  ]);
 }
-
 function identity(snapshot: SessionGateway["snapshot"]): string {
   return JSON.stringify([
     snapshot.selfUser?.identity ?? null,
@@ -55,23 +73,19 @@ export function createSessionGitHubPublication(host: Host) {
   type Entry = {
     row: GatewaySessionRow;
     retained: boolean;
-    controller: GitHubPublicationController;
+    publication: GitHubPublicationOwner;
     current: () => boolean;
   };
   const keyFor = (row: Pick<GatewaySessionRow, "key" | "agentId">, agentId?: string | null) => {
-    const owner = resolveUiConversationIdentity(
-      host.snapshot(),
-      row.key,
-      row.agentId ?? agentId ?? undefined,
-    );
+    const owner = resolveUiConversationIdentity(host.snapshot(), row.key, row.agentId ?? agentId);
     return `${owner.agentId ?? ""}\0${owner.sessionKey}`;
   };
   const retire = (key: string, entry: Entry) => {
     entries.delete(key);
-    entry.controller.reset();
+    entry.publication.reset();
   };
   const releaseIdle = (key: string, entry: Entry) => {
-    if (!entry.retained && !entry.controller.hasBindings && entries.get(key) === entry) {
+    if (!entry.retained && !entry.publication.hasBindings && entries.get(key) === entry) {
       entries.delete(key);
     }
   };
@@ -95,7 +109,10 @@ export function createSessionGitHubPublication(host: Host) {
     sessions: [row],
   });
   return {
-    attach(row: GatewaySessionRow, changed: () => void): GitHubPublicationBinding | null {
+    attach(
+      row: GatewaySessionRow,
+      Owner: typeof GitHubPublicationOwner,
+    ): GitHubPublicationBinding | null {
       const connection = host.connection.capture();
       if (!connection) {
         return null;
@@ -120,7 +137,7 @@ export function createSessionGitHubPublication(host: Host) {
             host.connection.isCurrent(connection) &&
             identity(host.snapshot()) === owner &&
             host.deletionState(candidate.row) !== "confirmed",
-          controller: new GitHubPublicationController({
+          publication: new Owner({
             client: connection.client,
             target: route,
             isCurrent: () => candidate.current(),
@@ -150,7 +167,7 @@ export function createSessionGitHubPublication(host: Host) {
         entries.set(key, entry);
       }
       const operation = entry;
-      return Object.assign(operation.controller.bind(changed), {
+      return Object.assign(operation.publication.bind(), {
         matches: (next: GatewaySessionRow) =>
           operation.current() &&
           !host.deletionState(next) &&
@@ -184,7 +201,7 @@ export function createSessionGitHubPublication(host: Host) {
       if (!event || (isUiGlobalSessionKey(event.key) && !event.agentId)) {
         return;
       }
-      const key = keyFor({ key: event.key, agentId: event.agentId ?? undefined });
+      const key = keyFor({ key: event.key }, event.agentId);
       reconcile((row, retainedKey) =>
         retainedKey === key
           ? reconcileSessionChanged(snapshotFor(row), payload, {
@@ -193,6 +210,39 @@ export function createSessionGitHubPublication(host: Host) {
             }).result?.sessions[0]
           : row,
       );
+      if (asNullableRecord(payload)?.reason === "github-publication") {
+        const entry = entries.get(key);
+        if (entry?.current()) {
+          entry.publication.invalidate();
+        }
+      }
+    },
+    observePullRequests(payload: unknown) {
+      const snapshots = asNullableRecord(asNullableRecord(payload)?.sessions);
+      if (!snapshots) {
+        return;
+      }
+      for (const entry of entries.values()) {
+        const snapshot = asNullableRecord(
+          snapshots[scopedSessionArtifactKey(entry.row.key, entry.row.agentId)],
+        );
+        if (snapshot?.status !== "ready" || !Array.isArray(snapshot.pullRequests)) {
+          continue;
+        }
+        // The Gateway decides coverage. Recheck held failure on fresh PR evidence,
+        // even with the same head: an earlier coverage read may have been unavailable.
+        // Existing publication coalescing shares this read across presentations.
+        if (entry.current() && entry.publication.result?.status === "failed") {
+          entry.publication.invalidate();
+        }
+      }
+    },
+    invalidate() {
+      for (const entry of entries.values()) {
+        if (entry.current()) {
+          entry.publication.invalidate();
+        }
+      }
     },
     clear() {
       for (const [key, entry] of entries) {

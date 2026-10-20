@@ -2,10 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import type { OpenClawConfig } from "../config/config.js";
-import { getRuntimeConfig } from "../config/config.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir, tempWorkspaceSync } from "openclaw/plugin-sdk/temp-path";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
@@ -14,6 +13,7 @@ import { type BrowserRouteContext, runProfileContextOperation } from "./server-c
 import { isProfileRestartRequiredError } from "./server-context.lifecycle.js";
 import {
   readChromeCookiesDatabase,
+  SUPPORTED_SYSTEM_BROWSERS,
   type CookieImportCounts,
   type KeychainSecretReader,
   type PlaywrightCookie,
@@ -40,21 +40,11 @@ export type ImportSystemProfileResult = {
   systemProfile: string;
   into: string;
   browser: SystemBrowser;
-  cookies: { total: number; imported: number; failed: number; skipped: number };
+  cookies: CookieImportCounts;
   domains: string[];
 };
 
 type CreateProfile = (params: { name: string; driver?: "openclaw" }) => Promise<unknown>;
-
-type SystemCookieReaderDeps = {
-  platform?: NodeJS.Platform;
-  homeDir?: string;
-  readSecret?: KeychainSecretReader;
-};
-
-type SystemProfileDeps = SystemCookieReaderDeps & {
-  cfg?: OpenClawConfig;
-};
 
 const SYSTEM_BROWSER_DIRS: Record<SystemBrowser, string[]> = {
   chrome: ["Google", "Chrome"],
@@ -63,57 +53,79 @@ const SYSTEM_BROWSER_DIRS: Record<SystemBrowser, string[]> = {
   chromium: ["Chromium"],
 };
 
-/** Normalize a supported Chrome-family browser identifier. */
 function resolveSystemBrowser(value?: string): SystemBrowser {
   const browser = value?.trim().toLowerCase() || "chrome";
-  if (browser === "chrome" || browser === "brave" || browser === "edge" || browser === "chromium") {
-    return browser;
+  const supported = SUPPORTED_SYSTEM_BROWSERS.find((candidate) => candidate === browser);
+  if (supported) {
+    return supported;
   }
   throw new Error(`unsupported system browser "${value}"; use chrome, brave, edge, or chromium`);
 }
 
-/** Resolve the macOS user-data root for one Chrome-family browser. */
-function resolveSystemBrowserRoot(browser: SystemBrowser, homeDir = os.homedir()): string {
-  return path.join(homeDir, "Library", "Application Support", ...SYSTEM_BROWSER_DIRS[browser]);
+function resolveSystemBrowserRoot(browser: SystemBrowser): string {
+  return path.join(os.homedir(), "Library", "Application Support", ...SYSTEM_BROWSER_DIRS[browser]);
+}
+
+/**
+ * macOS App Data protection can park open() on another browser's files until someone answers a
+ * consent prompt, possibly never on a headless host. Opening on the libuv pool keeps the Gateway
+ * event loop running and settles consent before synchronous SQLite reads the file.
+ */
+async function canOpenBrowserData(target: string): Promise<boolean> {
+  try {
+    await (await fs.promises.open(target, "r")).close();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Prefer Chrome's current Network/Cookies location, then its legacy location. */
-function resolveSystemCookiesFile(root: string, profileId: string): string | undefined {
-  const candidates = [
+async function resolveSystemCookiesFile(
+  root: string,
+  profileId: string,
+): Promise<string | undefined> {
+  for (const candidate of [
     path.join(root, profileId, "Network", "Cookies"),
     path.join(root, profileId, "Cookies"),
-  ];
-  return candidates.find((candidate) => fs.existsSync(candidate));
+  ]) {
+    if (await canOpenBrowserData(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 /** Enforce the host-local platform contract before touching browser cookie state. */
-export function assertSystemCookiePlatform(
-  platform = process.platform,
-  operation = "cookie access",
-): void {
-  if (platform !== "darwin") {
+export function assertSystemCookiePlatform(operation = "cookie access"): void {
+  if (process.platform !== "darwin") {
     throw new Error(`system profile ${operation} is only supported on macOS in this release`);
   }
 }
 
-/** Resolve one Chrome-family profile's source cookie database. */
-export function resolveSystemCookieSource(
-  params: { browser?: string; systemProfile?: string },
-  deps: Pick<SystemCookieReaderDeps, "homeDir"> = {},
-): { browser: SystemBrowser; systemProfile: string; cookiesFile: string } {
+export async function resolveSystemCookieSource(params: {
+  browser?: string;
+  systemProfile?: string;
+}): Promise<{
+  browser: SystemBrowser;
+  systemProfile: string;
+  cookiesFile: string;
+}> {
   const browser = resolveSystemBrowser(params.browser);
   const systemProfile = params.systemProfile?.trim() || "Default";
-  const root = resolveSystemBrowserRoot(browser, deps.homeDir);
-  const cookiesFile = resolveSystemCookiesFile(root, systemProfile);
+  const root = resolveSystemBrowserRoot(browser);
+  const cookiesFile = await resolveSystemCookiesFile(root, systemProfile);
   if (!cookiesFile) {
     throw new Error(`cookies database not found for ${browser} profile "${systemProfile}"`);
   }
   return { browser, systemProfile, cookiesFile };
 }
 
-function readProfileNames(root: string): Map<string, string> {
+async function readProfileNames(root: string): Promise<Map<string, string>> {
   try {
-    const localState = JSON.parse(fs.readFileSync(path.join(root, "Local State"), "utf8")) as {
+    const localState = JSON.parse(
+      await fs.promises.readFile(path.join(root, "Local State"), "utf8"),
+    ) as {
       profile?: {
         info_cache?: Record<string, { name?: unknown; user_name?: unknown; gaia_name?: unknown }>;
       };
@@ -131,23 +143,36 @@ function readProfileNames(root: string): Map<string, string> {
   }
 }
 
-const SUPPORTED_SYSTEM_BROWSERS: readonly SystemBrowser[] = ["chrome", "brave", "edge", "chromium"];
-
-function listOneBrowserProfiles(browser: SystemBrowser, homeDir?: string): SystemProfileInfo[] {
-  const root = resolveSystemBrowserRoot(browser, homeDir);
-  const names = readProfileNames(root);
-  if (names.size === 0 && fs.existsSync(path.join(root, "Default"))) {
+async function readBrowserProfiles(
+  browser: SystemBrowser,
+  root: string,
+): Promise<SystemProfileInfo[]> {
+  const names = await readProfileNames(root);
+  if (names.size === 0 && (await canOpenBrowserData(path.join(root, "Default")))) {
     names.set("Default", "Default");
   }
-  return [...names.entries()]
-    .filter(([id]) => id === "Default" || /^Profile \d+$/.test(id))
-    .map(([id, name]) => ({
-      browser,
-      id,
-      name,
-      hasCookies: resolveSystemCookiesFile(root, id) !== undefined,
-    }))
-    .toSorted((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  const profiles: SystemProfileInfo[] = [];
+  for (const [id, name] of names) {
+    if (id === "Default" || /^Profile \d+$/.test(id)) {
+      const hasCookies = (await resolveSystemCookiesFile(root, id)) !== undefined;
+      profiles.push({ browser, id, name, hasCookies });
+    }
+  }
+  return profiles.toSorted((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+}
+
+// A probe parked on consent holds one pool thread until macOS answers. Join it per browser
+// root so app status polls and agent retries cannot park every libuv thread meanwhile.
+const pendingBrowserProfiles = new Map<string, Promise<SystemProfileInfo[]>>();
+
+function listOneBrowserProfiles(browser: SystemBrowser): Promise<SystemProfileInfo[]> {
+  const root = resolveSystemBrowserRoot(browser);
+  let pending = pendingBrowserProfiles.get(root);
+  if (!pending) {
+    pending = readBrowserProfiles(browser, root).finally(() => pendingBrowserProfiles.delete(root));
+    pendingBrowserProfiles.set(root, pending);
+  }
+  return pending;
 }
 
 /**
@@ -155,36 +180,26 @@ function listOneBrowserProfiles(browser: SystemBrowser, homeDir?: string): Syste
  * no browser specified, list every supported browser so discovery matches the
  * Chrome-family import support instead of assuming Chrome.
  */
-export function listSystemProfiles(
-  browserInput?: string,
-  deps: Pick<SystemProfileDeps, "homeDir"> = {},
-): SystemProfileInfo[] {
+export async function listSystemProfiles(browserInput?: string): Promise<SystemProfileInfo[]> {
   const browsers = browserInput?.trim()
     ? [resolveSystemBrowser(browserInput)]
     : SUPPORTED_SYSTEM_BROWSERS;
-  return browsers.flatMap((browser) => listOneBrowserProfiles(browser, deps.homeDir));
+  const profiles: SystemProfileInfo[] = [];
+  for (const browser of browsers) {
+    profiles.push(...(await listOneBrowserProfiles(browser)));
+  }
+  return profiles;
 }
 
 /** Create a transactionally coherent snapshot while Chrome may be writing its WAL. */
-function snapshotCookieDatabase(source: string): { databasePath: string; cleanup: () => void } {
-  const tmpRoot = resolvePreferredOpenClawTmpDir();
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  const tempDir = fs.mkdtempSync(path.join(tmpRoot, "openclaw-system-cookies-"));
-  const databasePath = path.join(tempDir, "Cookies");
+function snapshotCookieDatabase(source: string, databasePath: string): void {
   const sourceDatabase = openNodeSqliteDatabase(source, { readOnly: true });
   try {
     sourceDatabase.exec("PRAGMA busy_timeout = 5000");
     sourceDatabase.prepare("VACUUM INTO ?").run(databasePath);
-  } catch (error) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    throw error;
   } finally {
     sourceDatabase.close();
   }
-  return {
-    databasePath,
-    cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
-  };
 }
 
 /** Snapshot and decrypt cookies from one local macOS Chrome-family profile. */
@@ -195,7 +210,7 @@ export async function readSystemProfileCookies(
     domains?: readonly string[];
     signal?: AbortSignal;
   },
-  deps: SystemCookieReaderDeps = {},
+  options: { readSecret?: KeychainSecretReader } = {},
 ): Promise<{
   browser: SystemBrowser;
   systemProfile: string;
@@ -203,21 +218,22 @@ export async function readSystemProfileCookies(
   counts: CookieImportCounts;
   domains: string[];
 }> {
-  assertSystemCookiePlatform(deps.platform);
-  const source = resolveSystemCookieSource(params, deps);
-  const snapshot = snapshotCookieDatabase(source.cookiesFile);
-  try {
-    const decrypted = await readChromeCookiesDatabase({
-      browser: source.browser,
-      databasePath: snapshot.databasePath,
-      domains: params.domains,
-      readSecret: deps.readSecret,
-      signal: params.signal,
-    });
-    return { browser: source.browser, systemProfile: source.systemProfile, ...decrypted };
-  } finally {
-    snapshot.cleanup();
-  }
+  assertSystemCookiePlatform();
+  const source = await resolveSystemCookieSource(params);
+  using snapshot = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-system-cookies-",
+  });
+  const databasePath = snapshot.path("Cookies");
+  snapshotCookieDatabase(source.cookiesFile, databasePath);
+  const decrypted = await readChromeCookiesDatabase({
+    browser: source.browser,
+    databasePath,
+    domains: params.domains,
+    readSecret: options.readSecret,
+    signal: params.signal,
+  });
+  return { browser: source.browser, systemProfile: source.systemProfile, ...decrypted };
 }
 
 /** Import decrypted system-profile cookies into one managed OpenClaw profile. */
@@ -229,10 +245,9 @@ export async function importSystemProfileCookies(
     signal?: AbortSignal;
     finalize?: (result: ImportSystemProfileResult) => Promise<void>;
   },
-  deps: SystemProfileDeps = {},
 ): Promise<ImportSystemProfileResult> {
-  assertSystemCookiePlatform(deps.platform, "import");
-  const cfg = deps.cfg ?? getRuntimeConfig();
+  assertSystemCookiePlatform("import");
+  const cfg = getRuntimeConfig();
   if (cfg.browser?.allowSystemProfileImport === false) {
     throw new Error("system profile import is disabled (browser.allowSystemProfileImport=false)");
   }
@@ -240,16 +255,12 @@ export async function importSystemProfileCookies(
   const browser = resolveSystemBrowser(params.browser);
   const systemProfile = params.systemProfile?.trim() || "Default";
   const into = params.into?.trim() || "imported";
-  const available = listSystemProfiles(browser, { homeDir: deps.homeDir });
+  const available = await listSystemProfiles(browser);
   const sourceProfile = available.find((profile) => profile.id === systemProfile);
   if (!sourceProfile) {
     throw new Error(`system browser profile "${systemProfile}" was not found for ${browser}`);
   }
-  const root = resolveSystemBrowserRoot(browser, deps.homeDir);
-  const cookiesFile = resolveSystemCookiesFile(root, sourceProfile.id);
-  if (!cookiesFile) {
-    throw new Error(`cookies database not found for ${browser} profile "${systemProfile}"`);
-  }
+  await resolveSystemCookieSource({ browser, systemProfile });
 
   if (!(into in runtime.ctx.state().resolved.profiles)) {
     await runtime.createProfile({ name: into, driver: "openclaw" });
@@ -287,10 +298,12 @@ export async function importSystemProfileCookies(
             );
           }
 
-          const decrypted = await readSystemProfileCookies(
-            { browser, systemProfile, domains: params.domains, signal },
-            deps,
-          );
+          const decrypted = await readSystemProfileCookies({
+            browser,
+            systemProfile,
+            domains: params.domains,
+            signal,
+          });
           signal.throwIfAborted();
           const pw = await getPwAiModule({ mode: "strict" });
           if (!pw) {
@@ -319,7 +332,7 @@ export async function importSystemProfileCookies(
           // Cookies rejected by Playwright are counted, not fatal: the import stays
           // best-effort and imported reflects what actually landed in the profile.
           const rejected = decrypted.cookies.length - injected;
-          const result: ImportSystemProfileResult = {
+          return {
             ok: true,
             systemProfile,
             into,
@@ -331,8 +344,7 @@ export async function importSystemProfileCookies(
               skipped: decrypted.counts.skipped,
             },
             domains: decrypted.domains,
-          };
-          return result;
+          } satisfies ImportSystemProfileResult;
         },
         {
           commit: async (result) => await runtime.finalize?.(result),

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 import {
   buildAssistantEvents,
-  buildPartialFailureEvents,
   buildAssistantThenToolCallEvents,
   buildFailedResponseEvents,
   buildReasoningAndAssistantEvents,
@@ -15,19 +14,7 @@ function readOutputItemSlots(events: StreamEvent[]) {
       (event) =>
         event.type === "response.output_item.added" || event.type === "response.output_item.done",
     )
-    .map((event) => {
-      if (
-        event.type !== "response.output_item.added" &&
-        event.type !== "response.output_item.done"
-      ) {
-        throw new Error("expected a response output item event");
-      }
-      return {
-        type: event.type,
-        itemId: event.item.id,
-        outputIndex: event.output_index,
-      };
-    });
+    .map((event) => [event.type, event.item.id, event.output_index]);
 }
 
 describe("mock OpenAI Responses output item slots", () => {
@@ -41,79 +28,6 @@ describe("mock OpenAI Responses output item slots", () => {
       }),
     ]);
     expect(events.some((event) => event.type === "response.output_text.delta")).toBe(false);
-  });
-
-  it("emits an unfinished assistant delta before the failed response", () => {
-    const marker = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-    const events = buildPartialFailureEvents(marker);
-
-    expect(events.map((event) => event.type)).toEqual([
-      "response.created",
-      "response.output_item.added",
-      "response.content_part.added",
-      "response.output_text.delta",
-      "response.failed",
-    ]);
-    expect(events[1]).toMatchObject({
-      item: { type: "message", role: "assistant", status: "in_progress" },
-    });
-    expect(events[3]).toMatchObject({
-      type: "response.output_text.delta",
-      delta: marker,
-    });
-    expect(events.some((event) => event.type === "response.output_item.done")).toBe(false);
-  });
-
-  it("indexes preview deltas and the final answer on the same assistant slot", () => {
-    const events = buildAssistantEvents([
-      {
-        id: "streamed-answer",
-        phase: "final_answer",
-        streamDeltas: ["preview ", "in progress"],
-        text: "FINAL-MARKER",
-      },
-    ]);
-
-    expect(readOutputItemSlots(events)).toEqual([
-      {
-        type: "response.output_item.added",
-        itemId: "streamed-answer",
-        outputIndex: 0,
-      },
-      {
-        type: "response.output_item.done",
-        itemId: "streamed-answer",
-        outputIndex: 0,
-      },
-    ]);
-    expect(
-      events.filter(
-        (event) =>
-          event.type === "response.output_text.delta" || event.type === "response.output_text.done",
-      ),
-    ).toEqual([
-      {
-        type: "response.output_text.delta",
-        item_id: "streamed-answer",
-        output_index: 0,
-        content_index: 0,
-        delta: "preview ",
-      },
-      {
-        type: "response.output_text.delta",
-        item_id: "streamed-answer",
-        output_index: 0,
-        content_index: 0,
-        delta: "in progress",
-      },
-      {
-        type: "response.output_text.done",
-        item_id: "streamed-answer",
-        output_index: 0,
-        content_index: 0,
-        text: "FINAL-MARKER",
-      },
-    ]);
   });
 
   it("keeps each streamed assistant on its own indexed slot", () => {
@@ -131,26 +45,10 @@ describe("mock OpenAI Responses output item slots", () => {
     ]);
 
     expect(readOutputItemSlots(events)).toEqual([
-      {
-        type: "response.output_item.added",
-        itemId: "first-answer",
-        outputIndex: 0,
-      },
-      {
-        type: "response.output_item.done",
-        itemId: "first-answer",
-        outputIndex: 0,
-      },
-      {
-        type: "response.output_item.added",
-        itemId: "second-answer",
-        outputIndex: 1,
-      },
-      {
-        type: "response.output_item.done",
-        itemId: "second-answer",
-        outputIndex: 1,
-      },
+      ["response.output_item.added", "first-answer", 0],
+      ["response.output_item.done", "first-answer", 0],
+      ["response.output_item.added", "second-answer", 1],
+      ["response.output_item.done", "second-answer", 1],
     ]);
     expect(
       events
@@ -183,26 +81,10 @@ describe("mock OpenAI Responses output item slots", () => {
     );
 
     expect(readOutputItemSlots(events)).toEqual([
-      {
-        type: "response.output_item.added",
-        itemId: "assistant-before-tool",
-        outputIndex: 0,
-      },
-      {
-        type: "response.output_item.done",
-        itemId: "assistant-before-tool",
-        outputIndex: 0,
-      },
-      {
-        type: "response.output_item.added",
-        itemId: expect.any(String),
-        outputIndex: 1,
-      },
-      {
-        type: "response.output_item.done",
-        itemId: expect.any(String),
-        outputIndex: 1,
-      },
+      ["response.output_item.added", "assistant-before-tool", 0],
+      ["response.output_item.done", "assistant-before-tool", 0],
+      ["response.output_item.added", expect.any(String), 1],
+      ["response.output_item.done", expect.any(String), 1],
     ]);
     expect(events.find((event) => event.type === "response.function_call_arguments.delta")).toEqual(
       {
@@ -239,41 +121,17 @@ describe("mock OpenAI Responses output item slots", () => {
     });
 
     expect(readOutputItemSlots(events)).toEqual([
-      {
-        type: "response.output_item.added",
-        itemId: "reasoning-before-answer",
-        outputIndex: 0,
-      },
-      {
-        type: "response.output_item.done",
-        itemId: "reasoning-before-answer",
-        outputIndex: 0,
-      },
-      {
-        type: "response.output_item.added",
-        itemId: "reasoned-answer",
-        outputIndex: 1,
-      },
-      {
-        type: "response.output_item.done",
-        itemId: "reasoned-answer",
-        outputIndex: 1,
-      },
+      ["response.output_item.added", "reasoning-before-answer", 0],
+      ["response.output_item.done", "reasoning-before-answer", 0],
+      ["response.output_item.added", "reasoned-answer", 1],
+      ["response.output_item.done", "reasoned-answer", 1],
     ]);
   });
 
   it("indexes a reasoning-only output on its first slot", () => {
     expect(readOutputItemSlots(buildReasoningOnlyEvents("thinking", "reasoning-only"))).toEqual([
-      {
-        type: "response.output_item.added",
-        itemId: "reasoning-only",
-        outputIndex: 0,
-      },
-      {
-        type: "response.output_item.done",
-        itemId: "reasoning-only",
-        outputIndex: 0,
-      },
+      ["response.output_item.added", "reasoning-only", 0],
+      ["response.output_item.done", "reasoning-only", 0],
     ]);
   });
 });

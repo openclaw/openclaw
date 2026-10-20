@@ -1,4 +1,3 @@
-// Mattermost plugin module shares monitor-scoped runtime dependencies.
 import type { getMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";

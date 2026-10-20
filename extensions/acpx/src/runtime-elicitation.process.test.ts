@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
 const temporaryDirectories: string[] = [];
 

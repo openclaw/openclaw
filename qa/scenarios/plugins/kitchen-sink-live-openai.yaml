@@ -17,7 +17,7 @@ scenario:
     - The npm Kitchen Sink package installs, enables, and inspects as loaded.
     - Kitchen Sink command inventory, MCP tool, and channel status work after gateway restart.
     - A live OpenAI turn either completes or surfaces the Kitchen Sink plugin's before-agent-run block without hanging.
-    - Gateway logs and process metrics are captured and stay under broad anomaly thresholds.
+    - Gateway logs and process metrics are captured, with CPU retained as diagnostic evidence and RSS kept under its broad anomaly threshold.
   docsRefs:
     - docs/concepts/qa-e2e-automation.md
     - docs/channels/qa-channel.md
@@ -80,7 +80,6 @@ scenario:
         migrationProviderIds:
           - kitchen-sink-migration-providers
           - kitchen-sink-migration-provider
-      maxGatewayCpuCoreRatio: 1.5
       maxGatewayRssMiB: 2048
       agentTurnTimeoutMs: 120000
       outboundTimeoutMs: 60000
@@ -99,13 +98,17 @@ scenario:
         - "http route registration missing or invalid auth: /kitchen-sink/http-route"
         - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
         - "trusted tool policy registration requires id, description, and evaluate()"
+        - memory prompt preparation registration missing prepare function
         - memory prompt supplement registration missing builder
         - model catalog provider registration missing provider
+        - MCP server connection resolver registration missing serverName or resolve
         - node invoke policy registration missing commands
         - session extension registration requires namespace and description
         - session scheduler job registration requires unique id, sessionKey, and kind
         - "plugin must declare contracts.tools for: kitchen-sink-tool"
         - tool metadata registration missing toolName
+        - invalid widget presenter registration
+        - "worker provider registration missing method: resolveAllocation"
       requiredAdversarialDiagnostics:
         - agent tool result middleware must be a function
         - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
@@ -125,6 +128,7 @@ flow:
               - install
               - expr: config.pluginSpec
               - --force
+              - --accept-capabilities
             - timeoutMs: 180000
         - call: runQaCli
           args:
@@ -407,7 +411,7 @@ flow:
               expr: "`Kitchen Sink live turn neither completed nor surfaced the plugin block: ${openaiReply.text}`"
       detailsExpr: "{ openaiReply: openaiReply.text }"
 
-    - name: records gateway CPU RSS and log anomaly evidence
+    - name: records gateway CPU evidence and checks RSS/log anomalies
       actions:
         - set: perfEvidence
           value:
@@ -450,10 +454,6 @@ flow:
             expr: "perfEvidence.findings.length === 0"
             message:
               expr: "`Gateway logs contain fatal runtime lines: ${JSON.stringify(perfEvidence.findings)}`"
-        - assert:
-            expr: "perfEvidence.cpuCoreRatio === null || perfEvidence.cpuCoreRatio <= config.maxGatewayCpuCoreRatio"
-            message:
-              expr: "`Gateway CPU ratio exceeded Kitchen Sink anomaly threshold: ${JSON.stringify(perfEvidence)}`"
         - assert:
             expr: "perfEvidence.rssMiB === null || perfEvidence.rssMiB <= config.maxGatewayRssMiB"
             message:

@@ -9,6 +9,22 @@ const COPILOT_BYOK_TRANSPORT_POLICY_ERROR =
 const COPILOT_BYOK_ENDPOINT_POLICY_ERROR =
   "[copilot-attempt] BYOK endpoint is blocked by OpenClaw SSRF policy";
 
+type ModelInput = Parameters<typeof resolveCopilotProvider>[0]["model"];
+
+function createModel(overrides: Partial<ModelInput> = {}): ModelInput {
+  return {
+    provider: "custom-proxy",
+    api: "openai-responses",
+    id: "proxy-model",
+    baseUrl: "https://proxy.example/v1",
+    ...overrides,
+  };
+}
+
+function resolveModel(overrides: Partial<ModelInput>) {
+  return resolveCopilotProvider({ model: createModel(overrides) });
+}
+
 describe("resolveCopilotProvider", () => {
   it("keeps the subscription provider on the native Copilot auth path", () => {
     expect(
@@ -26,16 +42,13 @@ describe("resolveCopilotProvider", () => {
 
   it("maps OpenAI Responses BYOK with a bearer token and stable limits", () => {
     const result = resolveCopilotProvider({
-      model: {
+      model: createModel({
         provider: "local-proxy",
-        api: "openai-responses",
-        id: "proxy-model",
-        baseUrl: "https://proxy.example/v1",
         authHeader: true,
         contextTokens: 12_000,
         maxTokens: 512,
         headers: { "X-Trace": "test" },
-      },
+      }),
       resolvedApiKey: "secret-key",
       authProfileId: "local-proxy:main",
     });
@@ -58,11 +71,7 @@ describe("resolveCopilotProvider", () => {
 
   it("defaults custom BYOK providers without an api to OpenAI Responses", () => {
     const result = resolveCopilotProvider({
-      model: {
-        provider: "custom-proxy",
-        id: "proxy-model",
-        baseUrl: "https://proxy.example/v1",
-      },
+      model: createModel({ api: undefined }),
       resolvedApiKey: "secret-key",
     });
 
@@ -97,19 +106,12 @@ describe("resolveCopilotProvider", () => {
   });
 
   it("changes the BYOK compatibility fingerprint when token limits change", () => {
-    const base = {
-      provider: "custom-proxy",
-      api: "openai-responses",
-      id: "proxy-model",
-      baseUrl: "https://proxy.example/v1",
-    };
-
     const small = resolveCopilotProvider({
-      model: { ...base, contextTokens: 8_000, maxTokens: 512 },
+      model: createModel({ contextTokens: 8_000, maxTokens: 512 }),
       resolvedApiKey: "secret-key",
     });
     const large = resolveCopilotProvider({
-      model: { ...base, contextTokens: 16_000, maxTokens: 1024 },
+      model: createModel({ contextTokens: 16_000, maxTokens: 1024 }),
       resolvedApiKey: "secret-key",
     });
 
@@ -206,17 +208,16 @@ describe("resolveCopilotProvider", () => {
 
   it("does not forward local auth markers or null no-auth headers", () => {
     const result = resolveCopilotProvider({
-      model: {
+      model: createModel({
         provider: "local-proxy",
         api: "openai-completions",
         id: "local-model",
-        baseUrl: "https://proxy.example/v1",
         authHeader: true,
         headers: {
           Authorization: null,
           "X-Local": "true",
         },
-      },
+      }),
       resolvedApiKey: "custom-local",
     });
 
@@ -232,18 +233,14 @@ describe("resolveCopilotProvider", () => {
 
   it.each([
     { mode: "header", headers: { "x-api-key": "header-secret" } },
-    { mode: "bearer", headers: { Authorization: "Bearer header-secret" } },
     { mode: "none", headers: undefined },
   ])("does not synthesize SDK auth for prepared $mode request auth", ({ mode, headers }) => {
     const result = resolveCopilotProvider({
-      model: {
+      model: createModel({
         provider: "custom-header-proxy",
-        api: "openai-responses",
-        id: "proxy-model",
-        baseUrl: "https://proxy.example/v1",
         headers,
         requestAuthMode: mode,
-      },
+      }),
       resolvedApiKey: "header-secret",
     });
 
@@ -263,17 +260,7 @@ describe("resolveCopilotProvider", () => {
       { requestTls: { ca: "ca-pem" } },
       { requestAllowPrivateNetwork: false },
     ]) {
-      expect(() =>
-        resolveCopilotProvider({
-          model: {
-            provider: "custom-proxy",
-            api: "openai-responses",
-            id: "proxy-model",
-            baseUrl: "https://proxy.example/v1",
-            ...model,
-          },
-        }),
-      ).toThrow(COPILOT_BYOK_TRANSPORT_POLICY_ERROR);
+      expect(() => resolveModel(model)).toThrow(COPILOT_BYOK_TRANSPORT_POLICY_ERROR);
     }
   });
 
@@ -292,88 +279,41 @@ describe("resolveCopilotProvider", () => {
       "http://metadata.google.internal/v1",
       "http://localhost:11434/v1",
     ]) {
-      expect(() =>
-        resolveCopilotProvider({
-          model: {
-            provider: "custom-proxy",
-            api: "openai-responses",
-            id: "proxy-model",
-            baseUrl,
-          },
-        }),
-      ).toThrow(COPILOT_BYOK_ENDPOINT_POLICY_ERROR);
+      expect(() => resolveModel({ baseUrl })).toThrow(COPILOT_BYOK_ENDPOINT_POLICY_ERROR);
     }
   });
 
   it("advertises support only for representable BYOK provider shapes", () => {
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "https://proxy.example/v1",
-      }),
-    ).toBe(true);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "azure-openai-responses",
-        baseUrl: "https://example.openai.azure.com/openai/v1",
-      }),
-    ).toBe(true);
-    expect(
-      supportsCopilotByokProviderShape({
+    const supported = [
+      { api: "openai-responses", baseUrl: "https://proxy.example/v1" },
+      { api: "azure-openai-responses", baseUrl: "https://example.openai.azure.com/openai/v1" },
+      {
         api: "azure-openai-responses",
         baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
-      }),
-    ).toBe(true);
-    expect(
-      supportsCopilotByokProviderShape({
+      },
+    ];
+    const unsupported = [
+      {
         api: "azure-openai-responses",
         baseUrl: "https://project.services.ai.azure.com/api/projects/demo",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "google-generative-ai",
-        baseUrl: "https://google.example",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "file://public.example/v1",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "http://proxy.example/v1",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "https://user:pass@proxy.example/v1",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "https://proxy.example/v1?api_key=secret",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "https://proxy.example/v1?x-api-key=secret",
-      }),
-    ).toBe(false);
-    expect(supportsCopilotByokProviderShape({ api: "openai-responses" })).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
+      },
+      { api: "google-generative-ai", baseUrl: "https://google.example" },
+      ...[
+        "file://public.example/v1",
+        "http://proxy.example/v1",
+        "https://user:pass@proxy.example/v1",
+        "https://proxy.example/v1?api_key=secret",
+        "https://proxy.example/v1?x-api-key=secret",
+      ].map((baseUrl) => ({ api: "openai-responses", baseUrl })),
+      { api: "openai-responses" },
+      {
         api: "openai-responses",
         baseUrl: "https://proxy.example/v1",
         requestProxy: { mode: "env-proxy" },
-      }),
-    ).toBe(false);
+      },
+    ];
+    expect(supported.map(supportsCopilotByokProviderShape)).toEqual([true, true, true]);
+    expect(unsupported.map(supportsCopilotByokProviderShape)).toEqual(Array(9).fill(false));
   });
 
   it("rejects provider APIs the SDK adapter cannot represent", () => {

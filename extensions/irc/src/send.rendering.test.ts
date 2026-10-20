@@ -1,7 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createPluginRuntimeMock,
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ircPlugin } from "./channel.js";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
-import { sendFormattedIrcText } from "./message-adapter.js";
+import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
+
+const sendFormattedIrcText = ircPlugin.outbound!.sendFormattedText!;
 
 describe("IRC formatted text on the wire", () => {
   let server: Awaited<ReturnType<typeof startIrcTestServer>>;
@@ -10,6 +18,9 @@ describe("IRC formatted text on the wire", () => {
   let disconnected: Promise<void>;
 
   beforeEach(async () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "irc", plugin: ircPlugin, source: "test" }]),
+    );
     lines = [];
     disconnected = Promise.resolve();
     server = await startIrcTestServer((socket) => {
@@ -33,6 +44,70 @@ describe("IRC formatted text on the wire", () => {
 
   afterEach(async () => {
     await server.close();
+  });
+
+  it.each([undefined, "parent-1"])(
+    "rejects sanitized-empty content without reporting delivery (reply %s)",
+    async (replyToId) => {
+      const core = createPluginRuntimeMock();
+      setIrcRuntime(core);
+      const onDeliveryResult = vi.fn();
+
+      await expect(
+        sendFormattedIrcText({
+          cfg,
+          to: "#room",
+          text: "\u0001",
+          replyToId,
+          onDeliveryResult,
+        }),
+      ).rejects.toThrow("Message must be non-empty for IRC sends");
+      await disconnected;
+
+      expect(lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
+      expect(onDeliveryResult).not.toHaveBeenCalled();
+      expect(core.channel.activity.record).not.toHaveBeenCalled();
+      expect(server.openSocketCount()).toBe(0);
+    },
+  );
+
+  it("sends literal backslash sequences unchanged with a reply reference", async () => {
+    const results = await sendFormattedIrcText({
+      cfg,
+      to: "#room",
+      text: String.raw`Run C:\tools\new.exe or printf("%d\n") with \x41`,
+      replyToId: "parent-1",
+    });
+    await disconnected;
+
+    expect(lines.filter((line) => line.startsWith("PRIVMSG "))).toEqual([
+      String.raw`PRIVMSG #room :Run C:\tools\new.exe or printf("%d\n") with \x41  [reply:parent-1]`,
+    ]);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.receipt?.replyToId).toBe("parent-1");
+  });
+
+  it.each([
+    {
+      mode: "code",
+      expected: "PRIVMSG #room :| Name | State | | ---- | ----- | | docs | ready |",
+    },
+    {
+      mode: "bullets",
+      expected: "PRIVMSG #room :docs \u2022 State: ready",
+    },
+  ] as const)("renders $mode tables as plain text on the wire", async ({ mode, expected }) => {
+    cfg.channels!.irc!.markdown = { tables: mode };
+    const results = await sendFormattedIrcText({
+      cfg,
+      to: "#room",
+      text: "  | Name | State |\n| --- | --- |\n| **docs** | ready |  ",
+    });
+    await disconnected;
+
+    expect(lines.filter((line) => line.startsWith("PRIVMSG "))).toEqual([expected]);
+    expect(results).toHaveLength(1);
+    expect(server.openSocketCount()).toBe(0);
   });
 
   it.each([

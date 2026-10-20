@@ -1,7 +1,9 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
+@Suite(.testWaitLimit)
 @MainActor
 struct DashboardHTTPFixtureTests {
     @Test func `fixtures own distinct loopback endpoints serving inert HTML`() async throws {
@@ -11,14 +13,7 @@ struct DashboardHTTPFixtureTests {
         defer { second.stop() }
         #expect(first.port != second.port)
 
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.urlCache = nil
-        configuration.httpCookieStorage = nil
-        configuration.urlCredentialStorage = nil
-        configuration.connectionProxyDictionary = [:]
-        configuration.timeoutIntervalForRequest = 2
-        configuration.timeoutIntervalForResource = 5
-        let session = URLSession(configuration: configuration)
+        let session = Self.makeSession()
         defer { session.invalidateAndCancel() }
 
         for fixture in [first, second] {
@@ -36,6 +31,48 @@ struct DashboardHTTPFixtureTests {
             #expect(http.value(forHTTPHeaderField: "Content-Security-Policy") == "default-src 'none'")
             #expect(http.value(forHTTPHeaderField: "Set-Cookie") == nil)
         }
+    }
+
+    @Test func `inert responses do not wait for the main actor`() async {
+        // The child owns the actor stall so parallel suites keep their deadlines.
+        await #expect(processExitsWith: .success) {
+            try await DashboardHTTPFixtureTests.checkResponseWithBlockedMainActor()
+        }
+    }
+
+    private static func checkResponseWithBlockedMainActor() async throws {
+        let fixture = try await DashboardHTTPFixture.start()
+        defer { fixture.stop() }
+        let session = Self.makeSession()
+        defer { session.invalidateAndCancel() }
+        try Self.receiveWhileBlockingMainActor(fixture: fixture, session: session)
+    }
+
+    private static func receiveWhileBlockingMainActor(fixture: DashboardHTTPFixture, session: URLSession) throws {
+        let completed = DispatchSemaphore(value: 0)
+        let servedHTML = Mutex(false)
+        let expectedBody = Data(DashboardHTTPFixture.html.utf8)
+        let task = session.dataTask(with: fixture.url()) { data, response, error in
+            servedHTML.withLock {
+                $0 = error == nil && (response as? HTTPURLResponse)?.statusCode == 200 && data == expectedBody
+            }
+            completed.signal()
+        }
+        task.resume()
+        // No actor suspension: accept/read/write must finish on the transport queue.
+        try #require(completed.wait(timeout: .now() + 5) == .success)
+        #expect(servedHTML.withLock { $0 })
+    }
+
+    private static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.connectionProxyDictionary = [:]
+        configuration.timeoutIntervalForRequest = 2
+        configuration.timeoutIntervalForResource = 5
+        return URLSession(configuration: configuration)
     }
 
     @Test func `stopping a fixture closes unfinished clients and releases its listener`() async throws {
@@ -60,9 +97,8 @@ struct DashboardHTTPFixtureTests {
         }
         try #require(connected == 0 || errno == EINPROGRESS)
         var writable = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
-        let connectDeadline = ContinuousClock.now + .seconds(2)
-        while poll(&writable, 1, 0) == 0, ContinuousClock.now < connectDeadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await TestWait.state("writable fixture socket") {
+            poll(&writable, 1, 0) != 0
         }
         try #require(writable.revents & Int16(POLLOUT) != 0)
         let partialHeader = Array("GET /pending HTTP/1.1\r\n".utf8)
@@ -71,17 +107,16 @@ struct DashboardHTTPFixtureTests {
 
         fixture.stop()
         fixture.stop()
-        let deadline = ContinuousClock.now + .seconds(2)
         var byte: UInt8 = 0
         var closed = false
-        while ContinuousClock.now < deadline {
+        try await TestWait.state("closed fixture client") {
             let received = Darwin.recv(descriptor, &byte, 1, 0)
             if received == 0 || (received == -1 && errno == ECONNRESET) {
                 closed = true
-                break
+                return true
             }
             try #require(received == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            try await Task.sleep(for: .milliseconds(10))
+            return false
         }
         #expect(closed)
 
@@ -98,8 +133,8 @@ struct DashboardHTTPFixtureTests {
         if errno == ECONNREFUSED { return }
         try #require(errno == EINPROGRESS)
         var probeEvents = pollfd(fd: probe, events: Int16(POLLOUT), revents: 0)
-        while poll(&probeEvents, 1, 0) == 0, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await TestWait.state("refused fixture reconnection") {
+            poll(&probeEvents, 1, 0) != 0
         }
         try #require(probeEvents.revents != 0)
         var socketError: Int32 = 0

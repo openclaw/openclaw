@@ -1,22 +1,20 @@
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  formatSqliteSessionFileMarker,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { captureRuntimeParityCell } from "./runtime-parity.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const tempDirs = createTempDirHarness();
+const tempDirs = createTempDirHarness({ beforeCleanup: closeQaRuntimeStores });
 
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await tempDirs.cleanup();
+afterEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
 });
+
+afterAll(() => tempDirs.cleanup());
 
 async function seedForcedRuntimeTranscript(params: {
   messages: Array<Record<string, unknown>>;

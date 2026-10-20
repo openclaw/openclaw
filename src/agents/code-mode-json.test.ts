@@ -1,13 +1,55 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   boundCodeModeError,
-  boundCodeModeValue,
   captureCodeModeOutput,
   captureCodeModeValue,
+  CodeModeOutputState,
   toCodeModeJsonSafe,
 } from "./code-mode-json.js";
+import { toolResultFitsBudget } from "./tool-result-limits.js";
 
 describe("Code Mode JSON normalization", () => {
+  it.each(["capacity", "undeliverable reference"])(
+    "preserves successful output when %s guidance exceeds the model budget",
+    (failure) => {
+      const value = captureCodeModeValue({ text: "data".repeat(1_000) }, 4_096);
+      const budget = { maxChars: 160, maxContextChars: 2_048 };
+      const metadata = { status: "completed" };
+      const original = new CodeModeOutputState(1_024, budget).takeResult(metadata, { value });
+      expect(original).toMatchObject({ status: "completed", value: { truncated: true } });
+      const release = vi.fn();
+      const output = new CodeModeOutputState(1_024, budget).takeResult(
+        metadata,
+        { value },
+        false,
+        () =>
+          failure === "capacity"
+            ? {
+                reason:
+                  "Not retained: result-store capacity exceeded. Delete references or return less data.",
+              }
+            : {
+                reference: {
+                  id: "result_00000000-0000-0000-0000-000000000000",
+                  bytes: 4_011,
+                  count: 1,
+                  shape: "object",
+                  preview: "sample",
+                  previewTruncated: true,
+                },
+                release,
+              },
+      );
+      expect(output).toMatchObject({
+        status: "completed",
+        value: { truncated: true, guidance: expect.stringContaining("Not retained") },
+      });
+      expect(output.value).not.toHaveProperty("reference");
+      expect(toolResultFitsBudget(JSON.stringify(output), budget)).toBe(true);
+      expect(release).toHaveBeenCalledTimes(failure === "capacity" ? 0 : 1);
+    },
+  );
+
   it.each([
     { limit: 20, prefix: "" },
     { limit: 24, prefix: 'a"' },
@@ -29,7 +71,10 @@ describe("Code Mode JSON normalization", () => {
     { limit: 108, prefix: '"', omittedBytes: 999 },
     { limit: 109, prefix: '"a', omittedBytes: 998 },
   ])("fits marker digit-width transitions at $limit bytes", ({ limit, prefix, omittedBytes }) => {
-    expect(boundCodeModeValue("a".repeat(998), limit)).toEqual({
+    expect(
+      new CodeModeOutputState(limit).take({ value: captureCodeModeValue("a".repeat(998), limit) })
+        .value,
+    ).toEqual({
       truncated: true,
       omittedBytes,
       guidance: "Output truncated; rerun with narrower args.",
@@ -58,7 +103,7 @@ describe("Code Mode JSON normalization", () => {
     });
   });
 
-  it("keeps structured values detached from later mutation", () => {
+  it("keeps captured and delivered structured values detached from later mutation", async () => {
     const input = { nested: { label: "before" }, items: ["before"] };
     const normalized = toCodeModeJsonSafe(input);
     const captured = captureCodeModeValue(input, 1_024);
@@ -69,6 +114,25 @@ describe("Code Mode JSON normalization", () => {
       kind: "complete",
       json: '{"nested":{"label":"before"},"items":["before"]}',
     });
+
+    const state = new CodeModeOutputState(65_536, { maxChars: 2_048, maxContextChars: 4_096 });
+    state.append(captureCodeModeOutput([{ type: "text", text: "x".repeat(10_000) }], 65_536));
+    const first = state.takeResult({ status: "completed" }, { value: captured });
+    expect(first.value).toEqual(normalized);
+    expect(first.output).toEqual([expect.objectContaining({ truncated: true })]);
+    if (!first.value || typeof first.value !== "object") {
+      throw new Error("Expected a structured delivered value");
+    }
+    Object.assign(first.value, { nested: { label: "changed after delivery" } });
+    await Promise.resolve();
+
+    const second = state.takeResult({ status: "completed" }, { value: captured });
+    expect(second).toMatchObject({ value: normalized, output: [] });
+    state.append(captureCodeModeOutput([{ type: "text", text: "next" }], 65_536));
+    expect(
+      state.takeResult({ status: "completed" }, { value: captureCodeModeValue(null, 65_536) })
+        .value,
+    ).toBeNull();
   });
 
   it("retains cycle fallbacks and normalizes each output entry with the root toJSON key", () => {

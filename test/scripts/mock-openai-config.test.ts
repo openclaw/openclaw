@@ -37,6 +37,41 @@ type MockConfig = {
 };
 
 describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
+  it("publishes distinct agent and utility models for every configured agent", () => {
+    const cfg = {
+      agents: { defaults: {}, entries: { main: {}, second: { utilityModel: "old/model" } } },
+      models: { providers: {} },
+    };
+    applyMockOpenAiModelConfig(cfg, {
+      mockPort: 18181,
+      modelRef: "openai/fixture-agent",
+      utilityModelRef: "openai/fixture-utility",
+    });
+    expect(cfg.models.providers).toMatchObject({
+      openai: {
+        models: [
+          { id: "fixture-agent", api: "openai-responses", agentRuntime: { id: "openclaw" } },
+          { id: "fixture-utility", api: "openai-responses", agentRuntime: { id: "openclaw" } },
+        ],
+      },
+    });
+    for (const agent of [cfg.agents.defaults, ...Object.values(cfg.agents.entries)]) {
+      expect(agent).toMatchObject({
+        model: { primary: "openai/fixture-agent" },
+        utilityModel: "openai/fixture-utility",
+        models: Object.fromEntries(
+          ["fixture-agent", "fixture-utility"].map((model) => [
+            `openai/${model}`,
+            {
+              agentRuntime: { id: "openclaw" },
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          ]),
+        ),
+      });
+    }
+  });
+
   it("parses strict TCP port values", () => {
     expect(parseMockOpenAiPort("18080")).toBe(18080);
     expect(parseMockOpenAiPort(443)).toBe(443);

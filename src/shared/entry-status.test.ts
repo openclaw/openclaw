@@ -3,8 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "./entry-status.js";
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
+type EntryParams = Parameters<typeof evaluateEntryRequirementsForCurrentPlatform>[0];
+
+function evaluate(overrides: Partial<EntryParams>) {
+  return evaluateEntryRequirementsForCurrentPlatform({
+    always: false,
+    entry: {},
+    hasLocalBin: () => false,
+    isEnvSatisfied: () => false,
+    isConfigSatisfied: () => false,
+    ...overrides,
+  });
 }
 
 afterEach(() => {
@@ -13,10 +22,9 @@ afterEach(() => {
 
 describe("shared/entry-status", () => {
   it("combines metadata presentation fields with evaluated requirements", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
 
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
+    const result = evaluate({
       entry: {
         metadata: {
           emoji: "🦀",
@@ -38,7 +46,6 @@ describe("shared/entry-status", () => {
       remote: {
         hasAnyBin: (bins) => bins.includes("sox"),
       },
-      isEnvSatisfied: () => false,
       isConfigSatisfied: (path) => path === "gateway.bind",
     });
 
@@ -65,16 +72,14 @@ describe("shared/entry-status", () => {
   });
 
   it("evaluates OS requirements against process.platform", () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
 
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
+    const result = evaluate({
       entry: {
         metadata: {
           os: ["darwin"],
         },
       },
-      hasLocalBin: () => false,
       isEnvSatisfied: () => true,
       isConfigSatisfied: () => true,
     });
@@ -84,9 +89,9 @@ describe("shared/entry-status", () => {
   });
 
   it("combines frontmatter presentation with always-on requirements", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
 
-    const result = evaluateEntryRequirementsForCurrentPlatform({
+    const result = evaluate({
       always: true,
       entry: {
         metadata: {
@@ -99,9 +104,6 @@ describe("shared/entry-status", () => {
           emoji: "🙂",
         },
       },
-      hasLocalBin: () => false,
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
     });
 
     expect(result).toEqual({
@@ -109,37 +111,6 @@ describe("shared/entry-status", () => {
       homepage: "https://docs.openclaw.ai",
       required: {
         bins: ["missing-bin"],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      requirementsSatisfied: true,
-      configChecks: [],
-    });
-  });
-
-  it("returns empty requirements when metadata and frontmatter are missing", () => {
-    setPlatform("linux");
-
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
-      entry: {},
-      hasLocalBin: () => false,
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
-    });
-
-    expect(result).toEqual({
-      required: {
-        bins: [],
         anyBins: [],
         env: [],
         config: [],
@@ -186,12 +157,8 @@ describe("shared/entry-status", () => {
       homepage: undefined,
     },
   ])("preserves presentation precedence: $name", ({ entry, emoji, homepage }) => {
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
+    const result = evaluate({
       entry,
-      hasLocalBin: () => false,
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
     });
 
     expect(result.emoji).toBe(emoji);

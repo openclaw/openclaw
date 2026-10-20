@@ -1,15 +1,27 @@
-// Reads local agent/session state for status output.
 // This never contacts the gateway; it inspects configured agents and their read-only session stores.
 
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { listGatewayAgentsBasic, type GatewayAgentOwnership } from "../gateway/agent-list.js";
+import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { readStatusSessionStores } from "../status/session-stores.js";
+import {
+  evaluateAgentDatabaseAdmissions,
+  hasAgentDatabaseAdmissions,
+  recordAgentDatabaseAdmissions,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
+import {
+  prepareStatusSessionStores,
+  STATUS_RECENT_SESSION_LIMIT,
+  type StatusSessionStores,
+} from "../status/session-stores.js";
 
 export type AgentLocalStatus = {
   id: string;
+  status?: "degraded";
+  admissionRefusal?: AgentDatabaseAdmissionRefusal;
   name?: string;
   workspaceDir: string | null;
   bootstrapPending: boolean | null;
@@ -19,25 +31,33 @@ export type AgentLocalStatus = {
   lastActiveAgeMs: number | null;
 };
 
-type AgentLocalStatusesResult = {
-  defaultId: string | null;
-  ownership: GatewayAgentOwnership;
-  selectionRequired: boolean;
-  agents: AgentLocalStatus[];
-  totalSessions: number;
-  bootstrapPendingCount: number;
-};
+export type PreparedStatusLocalSnapshot = Awaited<ReturnType<typeof collectStatusLocalSnapshot>>;
+export type AgentLocalStatusesResult = ReturnType<PreparedStatusLocalSnapshot["publish"]>;
 
-/** Returns per-agent local workspace, bootstrap, session count, and last activity status. */
-export async function getAgentLocalStatuses(
-  cfg: OpenClawConfig,
-): Promise<AgentLocalStatusesResult> {
-  const agentList = listGatewayAgentsBasic(cfg);
+/** Prepares local workspace and session facts for a final synchronous publication. */
+export async function collectStatusLocalSnapshot(cfg: OpenClawConfig) {
+  if (!hasAgentDatabaseAdmissions()) {
+    recordAgentDatabaseAdmissions(
+      await measureCliCommandStartup(
+        "status.agent-admission",
+        () => evaluateAgentDatabaseAdmissions(cfg),
+        { config: cfg },
+      ),
+    );
+  }
+  const agentList = await listGatewayAgentsBasic(cfg);
   const now = Date.now();
 
-  const sessionStores = readStatusSessionStores(cfg, agentList.agents, 1);
-  const statuses: AgentLocalStatus[] = [];
-  for (const { agent, path: sessionsPath, count, recent } of sessionStores.byAgent) {
+  const sessionStores = await measureCliCommandStartup(
+    "status.session-stores",
+    () => prepareStatusSessionStores(cfg, agentList.agents, STATUS_RECENT_SESSION_LIMIT),
+    { config: cfg },
+  );
+  const workspaces = new Map<
+    string,
+    { workspaceDir: string | null; bootstrapPending: boolean | null }
+  >();
+  for (const agent of agentList.agents) {
     const agentId = agent.id;
     const workspaceDir = (() => {
       try {
@@ -51,31 +71,47 @@ export async function getAgentLocalStatuses(
     const bootstrapPath = workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
     const bootstrapPending = bootstrapPath != null ? await pathExists(bootstrapPath) : null;
 
-    const lastUpdatedAt = recent[0]?.entry.updatedAt ?? 0;
-    const resolvedLastUpdatedAt = lastUpdatedAt > 0 ? lastUpdatedAt : null;
-    const lastActiveAgeMs = resolvedLastUpdatedAt ? now - resolvedLastUpdatedAt : null;
-
-    statuses.push({
-      id: agentId,
-      name: agent.name,
-      workspaceDir,
-      bootstrapPending,
-      sessionsPath,
-      sessionsCount: count,
-      lastUpdatedAt: resolvedLastUpdatedAt,
-      lastActiveAgeMs,
-    });
+    workspaces.set(agentId, { workspaceDir, bootstrapPending });
   }
-
-  const bootstrapPendingCount = statuses.reduce((sum, s) => sum + (s.bootstrapPending ? 1 : 0), 0);
+  const defaultId = agentList.selectionRequired ? null : agentList.defaultId;
   return {
-    // The gateway keeps a projected first id for wire compatibility. Local status must
-    // preserve the selection state so read-only consumers never treat that id as an owner.
-    defaultId: agentList.selectionRequired ? null : agentList.defaultId,
-    ownership: agentList.ownership,
-    selectionRequired: agentList.selectionRequired,
-    agents: statuses,
-    totalSessions: sessionStores.count,
-    bootstrapPendingCount,
+    defaultId,
+    sessionStores,
+    publish(published: StatusSessionStores = sessionStores.publish()) {
+      const statuses: AgentLocalStatus[] = published.byAgent.map(
+        ({ agent, path: sessionsPath, count, recent }) => {
+          const lastUpdatedAt = recent[0]?.entry.updatedAt ?? 0;
+          const resolvedLastUpdatedAt = lastUpdatedAt > 0 ? lastUpdatedAt : null;
+          return {
+            id: agent.id,
+            ...(agent.admissionRefusal
+              ? { status: agent.status, admissionRefusal: agent.admissionRefusal }
+              : {}),
+            name: agent.name,
+            ...workspaces.get(agent.id)!,
+            sessionsPath,
+            sessionsCount: count,
+            lastUpdatedAt: resolvedLastUpdatedAt,
+            lastActiveAgeMs: resolvedLastUpdatedAt ? now - resolvedLastUpdatedAt : null,
+          };
+        },
+      );
+
+      const bootstrapPendingCount = statuses.reduce(
+        (sum, s) => sum + (s.bootstrapPending ? 1 : 0),
+        0,
+      );
+      return {
+        // Keep explicit fleets unselected; the prepared default still owns local inspection.
+        defaultId: defaultId
+          ? ((statuses.find(({ id }) => id === defaultId) ?? statuses[0])?.id ?? null)
+          : null,
+        ownership: agentList.ownership,
+        selectionRequired: agentList.selectionRequired,
+        agents: statuses,
+        totalSessions: published.count,
+        bootstrapPendingCount,
+      };
+    },
   };
 }

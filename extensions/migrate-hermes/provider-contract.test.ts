@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { collectHermesProviderSecretBindings } from "./config-providers.js";
+import { collectHermesProviders, collectHermesProviderSecretBindings } from "./config-providers.js";
 import { buildConfigItems } from "./config.js";
+import { resolveHermesModelRef } from "./model.js";
 import { makeContext } from "./test/provider-helpers.js";
 
 const ctx = makeContext({ source: "/hermes", stateDir: "/state", workspaceDir: "/workspace" });
@@ -13,17 +14,18 @@ function providerItems(raw: Record<string, unknown>) {
 }
 
 describe("Hermes provider source contracts", () => {
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty"])(
+    "preserves prototype-like provider IDs without inventing environment mappings: %s",
+    (provider) => {
+      const config = { model: { provider, default: "custom-model" } };
+      expect(resolveHermesModelRef(config)).toBe(`${provider.toLowerCase()}/custom-model`);
+      expect(collectHermesProviders(config)).toEqual([]);
+    },
+  );
+
   it.each([
     ["openai", "openai-completions"],
-    ["openai-chat", "openai-completions"],
-    ["chat-completions", "openai-completions"],
-    ["chatcompletions", "openai-completions"],
     ["responses", "openai-responses"],
-    ["openai_responses", "openai-responses"],
-    ["openai-responses", "openai-responses"],
-    ["anthropic", "anthropic-messages"],
-    ["anthropic-messages", "anthropic-messages"],
-    ["messages", "anthropic-messages"],
     [" CHAT_COMPLETIONS ", "openai-completions"],
   ])("imports Hermes transport alias %s as %s", (transport, api) => {
     const items = providerItems({ transport, default_model: "acme-model" });

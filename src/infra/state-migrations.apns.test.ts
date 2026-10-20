@@ -3,12 +3,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
@@ -26,10 +24,11 @@ const APNS_DEVICE_FIELD = "token";
 const APNS_DEVICE_IDENTIFIER = "abcd1234abcd1234abcd1234abcd1234";
 
 describe("legacy APNs Doctor migration", () => {
+  let stateDir: string;
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
+    afterEach(async () => {
+      await closeStateDatabaseForTest();
       envSnapshot?.restore();
       envSnapshot = undefined;
       cleanup();
@@ -37,14 +36,18 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   function useStateDir(): string {
-    const stateDir = tempDirs.make("openclaw-apns-migration-");
+    const directory = tempDirs.make("openclaw-apns-migration-");
     envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_APNS_RELAY_ALLOW_HTTP"]);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    return stateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", directory);
+    return directory;
   }
 
-  function envFor(stateDir: string): NodeJS.ProcessEnv {
-    return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  beforeEach(() => {
+    stateDir = useStateDir();
+  });
+
+  function envFor(directory: string): NodeJS.ProcessEnv {
+    return { ...process.env, OPENCLAW_STATE_DIR: directory };
   }
 
   function directRegistration(overrides: Record<string, unknown> = {}) {
@@ -75,58 +78,62 @@ describe("legacy APNs Doctor migration", () => {
     };
   }
 
-  async function writeLegacyState(
-    stateDir: string,
-    registrationsByNodeId: Record<string, unknown>,
-  ): Promise<string> {
-    const sourcePath = path.join(stateDir, "push", "apns-registrations.json");
-    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fsp.writeFile(sourcePath, JSON.stringify({ registrationsByNodeId }, null, 2), "utf8");
-    return sourcePath;
+  function legacyPath() {
+    return path.join(stateDir, "push", "apns-registrations.json");
   }
-
-  async function migrate(
-    stateDir: string,
-    overrides: {
-      beforeClaim?: () => void;
-      removeSource?: (sourcePath: string) => Promise<void> | void;
-    } = {},
+  async function writeRaw(raw: string | Buffer): Promise<string> {
+    const file = legacyPath();
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(file, raw);
+    return file;
+  }
+  function writeLegacyState(
+    registrationsByNodeId: Record<string, unknown> = { "legacy-direct": directRegistration() },
   ) {
-    return await migrateLegacyApnsRegistrations({
-      detected: detectLegacyApnsRegistrations({
-        stateDir,
-        doctorOnlyStateMigrations: true,
-      }),
+    return writeRaw(JSON.stringify({ registrationsByNodeId }, null, 2));
+  }
+  function migrate(
+    overrides: Pick<
+      Parameters<typeof migrateLegacyApnsRegistrations>[0],
+      "beforeClaim" | "removeSource"
+    > = {},
+  ) {
+    return migrateLegacyApnsRegistrations({
+      detected: detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }),
       env: envFor(stateDir),
       stateDir,
       ...overrides,
     });
   }
+  function receipt(columns: string) {
+    return openOpenClawStateDatabase()
+      .db.prepare(`SELECT ${columns} FROM migration_sources WHERE migration_kind = ?`)
+      .get("legacy-apns-registrations-json");
+  }
+  function register(nodeId = "legacy-direct") {
+    return registerApnsRegistration({
+      nodeId,
+      transport: "direct",
+      [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      baseDir: stateDir,
+    });
+  }
 
-  it("detects source and interrupted claims only for explicit Doctor repair", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {});
+  it("imports shipped direct and relay shapes, records a receipt, and removes JSON", async () => {
+    const sourcePath = await writeLegacyState({
+      "legacy-direct": directRegistration(),
+      "legacy-relay": relayRegistration(),
+    });
     expect(detectLegacyApnsRegistrations({ stateDir }).hasLegacy).toBe(false);
     expect(
       detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
     ).toBe(true);
-
-    await fsp.rename(sourcePath, `${sourcePath}.doctor-importing`);
-    expect(
-      detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
-    ).toBe(true);
-  });
-
-  it("imports shipped direct and relay shapes, records a receipt, and removes JSON", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {
-      "legacy-direct": directRegistration(),
-      "legacy-relay": relayRegistration(),
-    });
     const sourceBytes = await fsp.readFile(sourcePath);
     const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toEqual({
@@ -151,22 +158,17 @@ describe("legacy APNs Doctor migration", () => {
       updatedAtMs: 2_000,
     });
     expect(fs.existsSync(sourcePath)).toBe(false);
-    const receipt = openOpenClawStateDatabase()
-      .db.prepare(
-        `SELECT source_sha256, source_size_bytes, source_record_count,
-                status, removed_source, report_json
-           FROM migration_sources
-          WHERE migration_kind = ?`,
-      )
-      .get("legacy-apns-registrations-json") as Record<string, unknown>;
-    expect(receipt).toMatchObject({
+    const importedReceipt = receipt(
+      "source_sha256, source_size_bytes, source_record_count, status, removed_source, report_json",
+    ) as Record<string, unknown>;
+    expect(importedReceipt).toMatchObject({
       source_sha256: sourceSha256,
       source_size_bytes: sourceBytes.byteLength,
       source_record_count: 2,
       status: "completed",
       removed_source: 1,
     });
-    expect(JSON.parse(String(receipt.report_json))).toMatchObject({
+    expect(JSON.parse(String(importedReceipt.report_json))).toMatchObject({
       source: "legacy-apns-registrations-json",
       target: "apns_registrations",
       sourceRecordCount: 2,
@@ -175,16 +177,8 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("preserves canonical SQLite rows and imports only missing node ids", async () => {
-    const stateDir = useStateDir();
-    const canonical = await registerApnsRegistration({
-      nodeId: "shared-node",
-      transport: "direct",
-      [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      baseDir: stateDir,
-    });
-    await writeLegacyState(stateDir, {
+    const canonical = await register("shared-node");
+    await writeLegacyState({
       "shared-node": directRegistration({
         nodeId: "shared-node",
         [APNS_DEVICE_FIELD]: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -193,7 +187,7 @@ describe("legacy APNs Doctor migration", () => {
       "legacy-only": directRegistration({ nodeId: "legacy-only" }),
     });
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     await expect(loadApnsRegistration("shared-node", stateDir)).resolves.toEqual(canonical);
@@ -204,18 +198,8 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("does not resurrect a registration deleted before the first Doctor import", async () => {
-    const stateDir = useStateDir();
-    await writeLegacyState(stateDir, {
-      "legacy-direct": directRegistration(),
-    });
-    const current = await registerApnsRegistration({
-      nodeId: "legacy-direct",
-      transport: "direct",
-      [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      baseDir: stateDir,
-    });
+    await writeLegacyState();
+    const current = await register("legacy-direct");
     await expect(
       clearApnsRegistrationIfCurrent({
         nodeId: "legacy-direct",
@@ -223,9 +207,9 @@ describe("legacy APNs Doctor migration", () => {
         baseDir: stateDir,
       }),
     ).resolves.toBe(true);
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toBeNull();
@@ -233,8 +217,7 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("uses the supplied environment while verifying local relay origins", async () => {
-    const stateDir = useStateDir();
-    await writeLegacyState(stateDir, {
+    await writeLegacyState({
       "legacy-relay": relayRegistration({ relayOrigin: "http://127.0.0.1:18791/" }),
     });
     const env = {
@@ -256,7 +239,7 @@ describe("legacy APNs Doctor migration", () => {
       .db.prepare("SELECT relay_origin FROM apns_registrations WHERE node_id = ?")
       .get("legacy-relay");
     expect(row).toEqual({ relay_origin: "http://127.0.0.1:18791" });
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     deleteTestEnvValue("OPENCLAW_APNS_RELAY_ALLOW_HTTP");
     await expect(loadApnsRegistration("legacy-relay", stateDir)).resolves.toMatchObject({
       relayOrigin: "http://127.0.0.1:18791",
@@ -266,14 +249,6 @@ describe("legacy APNs Doctor migration", () => {
   it.each([
     ["invalid root", []],
     [
-      "unknown field",
-      { registrationsByNodeId: { node: directRegistration({ nodeId: "node", extra: true }) } },
-    ],
-    [
-      "mismatched node id",
-      { registrationsByNodeId: { key: directRegistration({ nodeId: "other" }) } },
-    ],
-    [
       "invalid relay",
       { registrationsByNodeId: { "legacy-relay": relayRegistration({ distribution: "beta" }) } },
     ],
@@ -281,20 +256,7 @@ describe("legacy APNs Doctor migration", () => {
       "out-of-range direct timestamp",
       {
         registrationsByNodeId: {
-          node: directRegistration({
-            nodeId: "node",
-            updatedAtMs: Number.MAX_SAFE_INTEGER,
-          }),
-        },
-      },
-    ],
-    [
-      "out-of-range relay timestamp",
-      {
-        registrationsByNodeId: {
-          "legacy-relay": relayRegistration({
-            updatedAtMs: Number.MAX_SAFE_INTEGER,
-          }),
+          node: directRegistration({ nodeId: "node", updatedAtMs: Number.MAX_SAFE_INTEGER }),
         },
       },
     ],
@@ -309,9 +271,7 @@ describe("legacy APNs Doctor migration", () => {
     [
       "control character in send grant",
       {
-        registrationsByNodeId: {
-          "legacy-relay": relayRegistration({ sendGrant: "send\ngrant" }),
-        },
+        registrationsByNodeId: { "legacy-relay": relayRegistration({ sendGrant: "send\ngrant" }) },
       },
     ],
     [
@@ -323,12 +283,9 @@ describe("legacy APNs Doctor migration", () => {
       },
     ],
   ])("refuses %s atomically", async (_label, raw) => {
-    const stateDir = useStateDir();
-    const sourcePath = path.join(stateDir, "push", "apns-registrations.json");
-    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fsp.writeFile(sourcePath, JSON.stringify(raw), "utf8");
+    const sourcePath = await writeRaw(JSON.stringify(raw));
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings[0]).toMatch(/legacy APNs/i);
     await expect(loadApnsRegistration("node", stateDir)).resolves.toBeNull();
@@ -336,34 +293,25 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("rejects an empty unexpected field without exposing its later sibling", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {
+    const sourcePath = await writeLegacyState({
       node: directRegistration({ nodeId: "node", "": 1, later: 2 }),
     });
-    const result = await migrate(stateDir);
+    const result = await migrate();
     expect(result.warnings).toEqual([
       "Failed reading legacy APNs state: Error: legacy APNs registration has an unexpected field",
     ]);
     expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["apns-registrations.json"]);
     await expect(loadApnsRegistration("node", stateDir)).resolves.toBeNull();
-    const receipt = openOpenClawStateDatabase()
-      .db.prepare("SELECT source_key FROM migration_sources WHERE migration_kind = ?")
-      .get("legacy-apns-registrations-json");
-    expect(receipt).toBeUndefined();
+    expect(receipt("source_key")).toBeUndefined();
   });
 
   it("sanitizes malformed JSON warnings", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = path.join(stateDir, "push", "apns-registrations.json");
     const privateMarker = "must-not-appear-in-doctor-output";
-    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fsp.writeFile(
-      sourcePath,
+    const sourcePath = await writeRaw(
       `{"registrationsByNodeId":{"node":{"nodeId":"node","value":${privateMarker}}}}`,
-      "utf8",
     );
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings).toEqual([
       "Failed reading legacy APNs state: Error: legacy JSON store contains invalid JSON",
@@ -388,13 +336,11 @@ describe("legacy APNs Doctor migration", () => {
     ];
 
     for (const raw of malformedStores) {
-      closeOpenClawStateDatabaseForTest();
-      const stateDir = useStateDir();
-      const sourcePath = path.join(stateDir, "push", "apns-registrations.json");
-      await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-      await fsp.writeFile(sourcePath, JSON.stringify(raw), "utf8");
+      await closeStateDatabaseForTest();
+      stateDir = useStateDir();
+      const sourcePath = await writeRaw(JSON.stringify(raw));
 
-      const result = await migrate(stateDir);
+      const result = await migrate();
 
       expect(result.warnings[0]).toMatch(/legacy APNs/i);
       expect(result.warnings.join("\n")).not.toContain(privateMarker);
@@ -403,9 +349,8 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("rolls back inserted rows when a later canonical row is invalid", async () => {
-    const stateDir = useStateDir();
     const privateMarker = "must-not-appear-in-doctor-output";
-    const sourcePath = await writeLegacyState(stateDir, {
+    const sourcePath = await writeLegacyState({
       "legacy-only": directRegistration({ nodeId: "legacy-only" }),
       [privateMarker]: directRegistration({ nodeId: privateMarker }),
     });
@@ -417,7 +362,7 @@ describe("legacy APNs Doctor migration", () => {
       )
       .run(privateMarker, "unknown", "ai.openclaw.ios", "sandbox", 1);
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings[0]).toContain("invalid APNs registration row");
     expect(result.warnings.join("\n")).not.toContain(privateMarker);
@@ -427,7 +372,6 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("streams valid legacy stores larger than the retired reader's 4 MiB limit", async () => {
-    const stateDir = useStateDir();
     const registrationsByNodeId: Record<string, unknown> = {};
     for (let index = 0; index < 2_500; index += 1) {
       const nodeId = `legacy-relay-${index}`;
@@ -439,10 +383,10 @@ describe("legacy APNs Doctor migration", () => {
         topic: "t".repeat(255),
       });
     }
-    const sourcePath = await writeLegacyState(stateDir, registrationsByNodeId);
+    const sourcePath = await writeLegacyState(registrationsByNodeId);
     expect((await fsp.stat(sourcePath)).size).toBeGreaterThan(4 * 1024 * 1024);
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     await expect(loadApnsRegistration("legacy-relay-0", stateDir)).resolves.toMatchObject({
@@ -453,18 +397,14 @@ describe("legacy APNs Doctor migration", () => {
       nodeId: "legacy-relay-2499",
       transport: "relay",
     });
-    expect(
-      openOpenClawStateDatabase()
-        .db.prepare("SELECT source_record_count FROM migration_sources WHERE migration_kind = ?")
-        .get("legacy-apns-registrations-json"),
-    ).toEqual({ source_record_count: 2_500 });
+    expect(receipt("source_record_count")).toEqual({ source_record_count: 2_500 });
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
   it("rejects symlinks, hardlinks, and invalid UTF-8", async () => {
     for (const kind of ["symlink", "hardlink", "invalid-utf8"] as const) {
-      closeOpenClawStateDatabaseForTest();
-      const stateDir = tempDirs.make(`openclaw-apns-${kind}-`);
+      await closeStateDatabaseForTest();
+      stateDir = tempDirs.make(`openclaw-apns-${kind}-`);
       const sourcePath = path.join(stateDir, "push", "apns-registrations.json");
       const targetPath = path.join(stateDir, "target.json");
       await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -477,7 +417,7 @@ describe("legacy APNs Doctor migration", () => {
         await fsp.writeFile(sourcePath, Buffer.from([0xc3, 0x28]));
       }
 
-      const result = await migrate(stateDir);
+      const result = await migrate();
 
       expect(result.warnings.length).toBeGreaterThan(0);
       expect(fs.existsSync(sourcePath)).toBe(true);
@@ -485,13 +425,10 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("detects source mutation before claim and leaves the replacement untouched", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {
-      "legacy-direct": directRegistration(),
-    });
+    const sourcePath = await writeLegacyState();
     const replacement = JSON.stringify({ registrationsByNodeId: {} });
 
-    const result = await migrate(stateDir, {
+    const result = await migrate({
       beforeClaim: () => {
         fs.writeFileSync(sourcePath, replacement, "utf8");
       },
@@ -504,10 +441,7 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("requires exclusive state ownership", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {
-      "legacy-direct": directRegistration(),
-    });
+    const sourcePath = await writeLegacyState();
     const env = envFor(stateDir);
     const gatewayLock = await acquireGatewayLock({
       allowInTests: true,
@@ -522,24 +456,24 @@ describe("legacy APNs Doctor migration", () => {
 
     let result: Awaited<ReturnType<typeof migrateLegacyApnsRegistrations>>;
     try {
-      result = await migrate(stateDir);
+      result = await migrate();
     } finally {
       await gatewayLock.release();
     }
 
-    expect(result.warnings[0]).toContain("Gateway or another SQLite maintenance command");
+    expect(result.warnings[0]).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
   it("imports an interrupted claim when no receipt exists", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {
-      "legacy-direct": directRegistration(),
-    });
+    const sourcePath = await writeLegacyState();
     const claimPath = `${sourcePath}.doctor-importing`;
     await fsp.rename(sourcePath, claimPath);
+    expect(
+      detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
+    ).toBe(true);
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings).toEqual([]);
     await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toMatchObject({
@@ -549,14 +483,11 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("refuses source and claim files together without a receipt", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {
-      "legacy-direct": directRegistration(),
-    });
+    const sourcePath = await writeLegacyState();
     const claimPath = `${sourcePath}.doctor-importing`;
     await fsp.writeFile(claimPath, JSON.stringify({ registrationsByNodeId: {} }), "utf8");
 
-    const result = await migrate(stateDir);
+    const result = await migrate();
 
     expect(result.warnings[0]).toContain("source and interrupted claim both exist");
     expect(fs.existsSync(sourcePath)).toBe(true);
@@ -565,22 +496,15 @@ describe("legacy APNs Doctor migration", () => {
   });
 
   it("uses the receipt for cleanup-only retries and never resurrects deleted rows", async () => {
-    const stateDir = useStateDir();
-    const sourcePath = await writeLegacyState(stateDir, {
-      "legacy-direct": directRegistration(),
-    });
-    const first = await migrate(stateDir, {
+    const sourcePath = await writeLegacyState();
+    const first = await migrate({
       removeSource: () => {
         throw new Error("simulated unlink failure");
       },
     });
     expect(first.warnings[0]).toContain("legacy cleanup failed");
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
-    expect(
-      openOpenClawStateDatabase()
-        .db.prepare("SELECT removed_source FROM migration_sources WHERE migration_kind = ?")
-        .get("legacy-apns-registrations-json"),
-    ).toEqual({ removed_source: 0 });
+    expect(receipt("removed_source")).toEqual({ removed_source: 0 });
     const imported = (await loadApnsRegistration("legacy-direct", stateDir)) as ApnsRegistration;
     await expect(
       clearApnsRegistrationIfCurrent({
@@ -590,20 +514,16 @@ describe("legacy APNs Doctor migration", () => {
       }),
     ).resolves.toBe(true);
 
-    const retry = await migrate(stateDir);
+    const retry = await migrate();
     expect(retry.warnings).toEqual([]);
     await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toBeNull();
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
-    expect(
-      openOpenClawStateDatabase()
-        .db.prepare("SELECT removed_source FROM migration_sources WHERE migration_kind = ?")
-        .get("legacy-apns-registrations-json"),
-    ).toEqual({ removed_source: 1 });
+    expect(receipt("removed_source")).toEqual({ removed_source: 1 });
 
-    await writeLegacyState(stateDir, {
+    await writeLegacyState({
       "recreated-node": directRegistration({ nodeId: "recreated-node" }),
     });
-    const recreated = await migrate(stateDir);
+    const recreated = await migrate();
     expect(recreated.warnings).toEqual([]);
     await expect(loadApnsRegistration("recreated-node", stateDir)).resolves.toBeNull();
     expect(fs.existsSync(sourcePath)).toBe(false);

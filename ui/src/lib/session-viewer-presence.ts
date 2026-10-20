@@ -1,7 +1,7 @@
-import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
+import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/session-limits.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
-import { createGatewayRetryOwner } from "./gateway-retry.ts";
+import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
 import { resolveSessionKey } from "./sessions/index.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
@@ -13,21 +13,15 @@ type SessionViewerPresenceStore = {
 
 const stores = new WeakMap<ApplicationGateway, SessionViewerPresenceStore>();
 
-function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
+export function sessionViewerPresenceForGateway(
+  gateway: ApplicationGateway,
+): SessionViewerPresenceStore {
+  const existing = stores.get(gateway);
+  if (existing) {
+    return existing;
+  }
   const watchedByOwner = new Map<object, Set<string>>();
-  const retry = createGatewayRetryOwner();
   let knownClient = gateway.snapshot.client;
-  let lastHello: object | null = null;
-  let lastSignature: string | null = null;
-  let acknowledgedSignature: string | null = null;
-  let acknowledgedGeneration = 0;
-  let requestGeneration = 0;
-  let syncScheduled = false;
-  let scheduleGeneration = 0;
-  let attached = false;
-  let stopGatewaySnapshots: (() => void) | null = null;
-  let visibilityDocument: Document | null = null;
-
   const isActive = () => watchedByOwner.size > 0;
 
   const visibleSessionKeys = (): string[] => {
@@ -44,62 +38,22 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     return [...keys].toSorted().slice(0, SESSION_VIEWER_PRESENCE_MAX_KEYS);
   };
 
-  const handleGatewaySnapshot = () => scheduleSync();
-  const handleVisibilityChange = () => {
-    retry.reset();
-    scheduleSync();
-  };
-
-  const attach = () => {
-    if (attached) {
-      return;
-    }
-    attached = true;
-    knownClient = gateway.snapshot.client;
-    lastHello = null;
-    lastSignature = null;
-    acknowledgedSignature = null;
-    acknowledgedGeneration = 0;
-    stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", handleVisibilityChange);
-      visibilityDocument = document;
-    }
-  };
-
-  const detach = () => {
-    if (!attached) {
-      return;
-    }
-    attached = false;
-    stopGatewaySnapshots?.();
-    stopGatewaySnapshots = null;
-    visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
-    visibilityDocument = null;
-    retry.reset();
-    requestGeneration += 1;
-    scheduleGeneration += 1;
-    syncScheduled = false;
-    lastHello = null;
-    lastSignature = null;
-    acknowledgedSignature = null;
-    acknowledgedGeneration = 0;
-  };
+  const lifecycle = createGatewaySetSyncLifecycle(gateway, {
+    sync,
+    onAttach: () => {
+      knownClient = gateway.snapshot.client;
+      lifecycle.clearRequest();
+    },
+  });
+  const { retry } = lifecycle;
 
   function sync() {
-    syncScheduled = false;
-    if (!attached) {
-      return;
-    }
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
     if (client !== knownClient) {
       retry.reset();
       knownClient = client;
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      lifecycle.clearRequest();
     }
     const available =
       snapshot.phase === "connected" &&
@@ -107,12 +61,9 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       snapshot.hello !== null &&
       isGatewayMethodAdvertised(snapshot, SESSION_VIEWERS_SET_METHOD) === true;
     if (!available) {
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      lifecycle.clearRequest();
       if (!isActive()) {
-        detach();
+        lifecycle.detach();
       }
       return;
     }
@@ -124,64 +75,26 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       ? snapshot.assistantAgentId
       : undefined;
     const signature = JSON.stringify({ agentId, sessionKeys });
-    if (snapshot.hello === lastHello && signature === lastSignature) {
-      if (
-        !isActive() &&
-        acknowledgedSignature === signature &&
-        acknowledgedGeneration === requestGeneration
-      ) {
-        detach();
+    if (lifecycle.matchesRequest(signature)) {
+      if (!isActive() && lifecycle.requestAcknowledged) {
+        lifecycle.detach();
       }
       return;
     }
-    lastHello = snapshot.hello;
-    lastSignature = signature;
-    const currentGeneration = ++requestGeneration;
-    const isCurrentRequest = () =>
-      attached &&
-      currentGeneration === requestGeneration &&
-      snapshot.hello === lastHello &&
-      signature === lastSignature;
-    retry.cancel();
-    const request = client.request(SESSION_VIEWERS_SET_METHOD, {
-      ...(agentId ? { agentId } : {}),
-      sessionKeys,
-    });
-    void request
-      .then(() => {
-        if (isCurrentRequest()) {
-          acknowledgedSignature = signature;
-          acknowledgedGeneration = currentGeneration;
-          retry.reset();
-          if (!isActive()) {
-            detach();
+    lifecycle.send(
+      client,
+      SESSION_VIEWERS_SET_METHOD,
+      { ...(agentId ? { agentId } : {}), sessionKeys },
+      signature,
+      {
+        onSuccess: () => {
+          if (!isActive() && sessionKeys.length === 0) {
+            lifecycle.detach();
           }
-        }
-      })
-      .catch(() => {
-        if (!isCurrentRequest()) {
-          return;
-        }
-        lastSignature = null;
-        retry.schedule(() => {
-          if (attached) {
-            scheduleSync();
-          }
-        });
-      });
-  }
-
-  function scheduleSync() {
-    if (!attached || syncScheduled) {
-      return;
-    }
-    syncScheduled = true;
-    const generation = scheduleGeneration;
-    globalThis.queueMicrotask(() => {
-      if (generation === scheduleGeneration) {
-        sync();
-      }
-    });
+        },
+        onError: () => retry.schedule(lifecycle.schedule),
+      },
+    );
   }
 
   const watch = (owner: object, sessionKeys: readonly string[]) => {
@@ -201,24 +114,12 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     }
     retry.reset();
     if (isActive()) {
-      attach();
-      scheduleSync();
-    } else if (attached) {
-      sync();
+      lifecycle.attach();
     }
+    lifecycle.schedule();
   };
 
-  return { watch, unwatch: (owner) => watch(owner, []) };
-}
-
-export function sessionViewerPresenceForGateway(
-  gateway: ApplicationGateway,
-): SessionViewerPresenceStore {
-  const existing = stores.get(gateway);
-  if (existing) {
-    return existing;
-  }
-  const store = createStore(gateway);
+  const store: SessionViewerPresenceStore = { watch, unwatch: (owner) => watch(owner, []) };
   stores.set(gateway, store);
   return store;
 }

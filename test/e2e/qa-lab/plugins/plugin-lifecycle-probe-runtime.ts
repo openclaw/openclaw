@@ -1,7 +1,7 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
 import { spawn, spawnSync } from "node:child_process";
-/* oxlint-disable eslint/no-shadow, eslint/prefer-const, eslint/no-promise-executor-return, typescript/restrict-template-expressions, typescript/no-base-to-string -- QA probe intentionally validates loosely typed external JSON and mirrors child-process callback shapes. */
-import { randomBytes } from "node:crypto";
+/* oxlint-disable eslint/no-shadow, eslint/prefer-const, typescript/restrict-template-expressions, typescript/no-base-to-string -- QA probe intentionally validates loosely typed external JSON and mirrors child-process callback shapes. */
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,7 +42,7 @@ interface CommandOptions {
 
 interface RegistryServer {
   env: NodeJS.ProcessEnv;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 function stateDir(env: ProbeEnv = process.env) {
@@ -221,7 +221,11 @@ export function assertUninstalled(pluginId: string, env: ProbeEnv = process.env)
   );
 }
 
-function assertRemovedChildPolicy(pluginId: string, env: ProbeEnv = process.env) {
+function assertRemovedChildPolicy(
+  pluginId: string,
+  env: ProbeEnv = process.env,
+  options: { expectDisabledMarker?: boolean } = {},
+) {
   const cfg = requiredConfig(env) as {
     plugins?: {
       allow?: string[];
@@ -231,7 +235,14 @@ function assertRemovedChildPolicy(pluginId: string, env: ProbeEnv = process.env)
       slots?: { memory?: string; contextEngine?: string };
     };
   };
-  assertProbe(!cfg.plugins?.entries?.[pluginId], `plugin entry survived for ${pluginId}`);
+  if (options.expectDisabledMarker) {
+    assertProbe(
+      isExplicitPluginDisableMarker(cfg, pluginId),
+      `exact disabled uninstall marker missing for ${pluginId}`,
+    );
+  } else {
+    assertProbe(!cfg.plugins?.entries?.[pluginId], `plugin entry survived for ${pluginId}`);
+  }
   assertProbe(
     !(cfg.plugins?.allow ?? []).includes(pluginId),
     `allow policy survived for ${pluginId}`,
@@ -283,7 +294,6 @@ function createMatrixStateEnv(resourceDir: string): MatrixEnv {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configFile,
     OPENCLAW_TEST_WORKSPACE_DIR: workspaceDir,
-    OPENCLAW_AUTH_PROFILE_SECRET_KEY: randomBytes(32).toString("hex"),
   };
 }
 
@@ -500,6 +510,7 @@ async function startNpmFixtureRegistry(
   registryRoot: string,
   packages: readonly [packageName: string, version: string, tarball: string][],
   env: MatrixEnv,
+  signal?: AbortSignal,
 ): Promise<RegistryServer> {
   const serverLog = path.join(registryRoot, "npm-registry.log");
   const serverPortFile = path.join(registryRoot, "npm-registry-port");
@@ -515,33 +526,42 @@ async function startNpmFixtureRegistry(
     {
       cwd: process.cwd(),
       env,
-      stdio: ["ignore", logFd, logFd],
+      stdio: ["ignore", logFd, logFd, "ipc"],
     },
   );
   fs.closeSync(logFd);
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (fs.existsSync(serverPortFile) && fs.statSync(serverPortFile).size > 0) {
-      const port = fs.readFileSync(serverPortFile, "utf8").trim();
-      return {
-        env: {
-          ...env,
-          NPM_CONFIG_REGISTRY: `http://127.0.0.1:${port}`,
-        },
-        stop() {
-          child.kill();
-        },
-      };
-    }
-    if (child.exitCode !== null) {
-      const log = fs.existsSync(serverLog) ? fs.readFileSync(serverLog, "utf8") : "";
-      throw new Error(`npm fixture registry exited early${log ? `\n${log}` : ""}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  const readiness = new AbortController();
+  const exited = once(child, "exit");
+  try {
+    const [port] = await Promise.race([
+      once(child, "message", {
+        signal: signal ? AbortSignal.any([readiness.signal, signal]) : readiness.signal,
+      }),
+      exited.then((): never => {
+        const log = fs.existsSync(serverLog) ? fs.readFileSync(serverLog, "utf8") : "";
+        throw new Error(`npm fixture registry exited early${log ? `\n${log}` : ""}`);
+      }),
+    ]);
+    assertProbe(typeof port === "number" && port > 0, "npm fixture registry omitted its port");
+    return {
+      env: {
+        ...env,
+        NPM_CONFIG_REGISTRY: `http://127.0.0.1:${port}`,
+        npm_config_registry: `http://127.0.0.1:${port}`,
+      },
+      async stop() {
+        child.kill();
+        await exited;
+      },
+    };
+  } catch (error) {
+    child.kill();
+    await exited.catch(() => undefined);
+    throw error;
+  } finally {
+    readiness.abort();
   }
-  child.kill();
-  const log = fs.existsSync(serverLog) ? fs.readFileSync(serverLog, "utf8") : "";
-  throw new Error(`timed out waiting for npm fixture registry${log ? `\n${log}` : ""}`);
 }
 
 async function runMeasured(
@@ -768,24 +788,14 @@ async function runPluginLifecycleMatrix() {
       `failed to remove plugin code before missing-code uninstall: ${installedPath}`,
     );
 
-    let missingCodeUninstallFailed = false;
-    try {
-      await runMeasured(
-        summaryTsv,
-        "missing-code-uninstall",
-        "node",
-        [entry, "plugins", "uninstall", pluginId, "--force"],
-        runEnv,
-      );
-    } catch {
-      missingCodeUninstallFailed = true;
-    }
-    assertProbe(
-      missingCodeUninstallFailed,
-      "missing-code uninstall must fail closed without authoritative child metadata",
+    await runMeasured(
+      summaryTsv,
+      "missing-code-uninstall",
+      "node",
+      [entry, "plugins", "uninstall", pluginId, "--force"],
+      runEnv,
     );
-    assertProbe(recordFor(pluginId, runEnv), "missing-code uninstall removed the install record");
-    assertEnabled(pluginId, true, runEnv);
+    assertUninstalled(pluginId, runEnv);
 
     await runMeasured(
       summaryTsv,
@@ -853,7 +863,7 @@ async function runPluginLifecycleMatrix() {
     };
     writeConfig(policyConfig, runEnv);
 
-    registry.stop();
+    await registry.stop();
     registry = await startNpmFixtureRegistry(
       registryRoot,
       [
@@ -904,11 +914,13 @@ async function runPluginLifecycleMatrix() {
       [entry, "plugins", "uninstall", packOne, "--force"],
       runEnv,
     );
-    assertUninstalled(packOwner, runEnv);
-    assertUninstalled(packOne, runEnv);
-    assertUninstalled(packTwo, runEnv);
-    assertUninstalled(packOld, runEnv);
-    assertUninstalled(packRenamed, runEnv);
+    assertProbe(!recordFor(packOwner, runEnv), `install record still present for ${packOwner}`);
+    for (const currentPluginId of [packOne, packRenamed]) {
+      assertRemovedChildPolicy(currentPluginId, runEnv, { expectDisabledMarker: true });
+    }
+    for (const removedPluginId of [packOwner, packTwo, packOld]) {
+      assertRemovedChildPolicy(removedPluginId, runEnv);
+    }
     assertProbe(
       !fs.existsSync(packInstallPath),
       `pack install directory still exists after child-addressed uninstall: ${packInstallPath}`,
@@ -919,11 +931,11 @@ async function runPluginLifecycleMatrix() {
     );
     process.stdout.write("Plugin lifecycle matrix passed.\n");
   } finally {
-    registry?.stop();
+    await registry?.stop();
   }
 }
 
-export const testing = { runCommand };
+export const testing = { runCommand, startNpmFixtureRegistry };
 
 const isLifecycleMatrixCli = process.argv[2] === "--lifecycle-matrix";
 

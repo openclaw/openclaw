@@ -1,4 +1,4 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Tool policy audit logging helpers.
  * Emits bounded, sanitized logs when allow/deny policy filters remove tools or
@@ -9,7 +9,6 @@ import type { SandboxConfig } from "./sandbox/types.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import { normalizeToolList, normalizeToolPolicyName, type ToolPolicyLike } from "./tool-policy.js";
 
-// Emits bounded audit logs when tool allow/deny policies remove or block tools.
 // Sanitizing here keeps logs single-line and safe for arbitrary tool names.
 const MAX_AUDIT_TOOL_NAMES = 50;
 const MAX_AUDIT_FIELD_LENGTH = 160;
@@ -18,8 +17,8 @@ const toolPolicyAuditLogger = createSubsystemLogger("agents/tool-policy");
 type ToolPolicyRuleKind = "allow" | "deny" | "allow+deny" | "unknown";
 
 function toolPolicyRuleKind(policy: ToolPolicyLike): ToolPolicyRuleKind {
-  const hasAllow = Array.isArray(policy.allow) && policy.allow.length > 0;
-  const hasDeny = Array.isArray(policy.deny) && policy.deny.length > 0;
+  const hasAllow = Boolean(policy.allow?.length);
+  const hasDeny = Boolean(policy.deny?.length);
   if (hasAllow && hasDeny) {
     return "allow+deny";
   }
@@ -32,34 +31,29 @@ function toolPolicyRuleKind(policy: ToolPolicyLike): ToolPolicyRuleKind {
   return "unknown";
 }
 
-function normalizedToolNames(tools: readonly { name: string }[]): string[] {
-  return normalizeToolList(tools.map((tool) => tool.name));
-}
-
 function removedToolNamesByRule(params: {
   policy: ToolPolicyLike;
   before: readonly { name: string }[];
   after: readonly { name: string }[];
 }): Map<ToolPolicyRuleKind, string[]> {
   const remainingCounts = new Map<string, number>();
-  for (const name of normalizedToolNames(params.after)) {
+  for (const name of normalizeToolList(params.after.map((tool) => tool.name))) {
     remainingCounts.set(name, (remainingCounts.get(name) ?? 0) + 1);
   }
 
   let matchesDeny: ReturnType<typeof createToolPolicyMatcher> | undefined;
-  const fallbackRuleKind =
-    Array.isArray(params.policy.allow) && params.policy.allow.length > 0
-      ? "allow"
-      : toolPolicyRuleKind(params.policy);
+  const fallbackRuleKind = params.policy.allow?.length
+    ? "allow"
+    : toolPolicyRuleKind(params.policy);
   const removed = new Map<ToolPolicyRuleKind, Set<string>>();
-  for (const name of normalizedToolNames(params.before)) {
+  for (const name of normalizeToolList(params.before.map((tool) => tool.name))) {
     const remaining = remainingCounts.get(name) ?? 0;
     if (remaining > 0) {
       remainingCounts.set(name, remaining - 1);
       continue;
     }
     matchesDeny ??= createToolPolicyMatcher({
-      deny: Array.isArray(params.policy.deny) ? params.policy.deny : undefined,
+      deny: params.policy.deny,
     });
     const ruleKind = matchesDeny(name) ? fallbackRuleKind : "deny";
     const names = removed.get(ruleKind) ?? new Set<string>();
@@ -70,7 +64,7 @@ function removedToolNamesByRule(params: {
 }
 
 function createMatchedPolicyRuleForTool(policy: ToolPolicyLike, ruleKind: ToolPolicyRuleKind) {
-  const rules = ruleKind === "deny" && Array.isArray(policy.deny) ? policy.deny : [];
+  const rules = ruleKind === "deny" ? (policy.deny ?? []) : [];
   const matchers: ReturnType<typeof createToolPolicyMatcher>[] = [];
   return (toolName: string) =>
     rules.find(
@@ -95,13 +89,9 @@ function boundedToolNames(names: readonly string[]): {
   toolNames: string[];
   truncated: boolean;
 } {
-  const sanitizedNames = names.map(sanitizeAuditField);
-  if (names.length <= MAX_AUDIT_TOOL_NAMES) {
-    return { toolNames: sanitizedNames, truncated: false };
-  }
   return {
-    toolNames: sanitizedNames.slice(0, MAX_AUDIT_TOOL_NAMES),
-    truncated: true,
+    toolNames: names.slice(0, MAX_AUDIT_TOOL_NAMES).map(sanitizeAuditField),
+    truncated: names.length > MAX_AUDIT_TOOL_NAMES,
   };
 }
 
@@ -127,13 +117,11 @@ export function escapeControlCharsVisible(value: string): string {
 
 function sanitizeAuditField(value: string): string {
   const sanitized = escapeControlCharsVisible(value.trim());
-  if (!sanitized) {
-    return "(unknown)";
-  }
-  if (sanitized.length <= MAX_AUDIT_FIELD_LENGTH) {
-    return sanitized;
-  }
-  return `${truncateUtf16Safe(sanitized, MAX_AUDIT_FIELD_LENGTH)}...`;
+  return truncateWithMarker(sanitized || "(unknown)", MAX_AUDIT_FIELD_LENGTH, {
+    marker: "...",
+    reserve: 0,
+    trimEnd: false,
+  });
 }
 
 function matchedPolicyRules(params: {
@@ -159,15 +147,8 @@ export function auditToolPolicyFilter(params: {
   before: readonly { name: string }[];
   after: readonly { name: string }[];
 }): void {
-  const removedByRule = removedToolNamesByRule({
-    policy: params.policy,
-    before: params.before,
-    after: params.after,
-  });
+  const removedByRule = removedToolNamesByRule(params);
   for (const [ruleKind, removed] of removedByRule) {
-    if (removed.length === 0) {
-      continue;
-    }
     const rule = sanitizeAuditField(labelForRuleKind(params.stepLabel, ruleKind));
     const { toolNames, truncated } = boundedToolNames(removed);
     const matchedRuleSourceTools = removed.slice(0, MAX_AUDIT_TOOL_NAMES);

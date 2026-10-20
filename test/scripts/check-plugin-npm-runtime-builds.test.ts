@@ -76,7 +76,10 @@ describe("plugin npm runtime build checks", () => {
         repoRoot,
         packageDirs: ["extensions/missing"],
       }),
-    ).rejects.toThrow("did not produce a package-local runtime build plan");
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+      path: join(repoRoot, "extensions", "missing", "package.json"),
+    });
   });
 
   it("builds a ClawHub-only TypeScript package runtime", async () => {

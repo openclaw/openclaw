@@ -1,4 +1,3 @@
-/** Executes prepared CLI backend runs and owns their queue and resource lifecycle. */
 import crypto from "node:crypto";
 import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -12,7 +11,7 @@ import {
 } from "../../infra/installation-target-context.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   fingerprintCliRuntimeArtifact,
@@ -26,20 +25,20 @@ import {
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
+import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import { runCliCleanup } from "./cleanup.js";
 import {
   acceptsCliLiveSession,
   buildCliLiveOwnerKey,
-  closeCliLiveSession,
+  restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
-  buildCliExecLogLine,
   CLAUDE_SELECTED_AUTH_ENV_KEYS,
   CLI_BACKEND_PRESERVE_ENV,
-  logCliInvocation,
   NODE_CLAUDE_FORWARD_ENV_KEYS,
   parseCliBackendPreserveEnv,
   resolveNodeClaudeAuthEnv,
@@ -50,30 +49,18 @@ import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import {
   buildCliArgs,
-  enqueueCliRun,
   isClaudeCliBackendId,
   prepareCliPromptImagePayload,
-  resolveCliNoOutputTimeoutMs,
   resolveCliRunQueueKey,
-  resolveCliRunTimeoutOverrideMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
 } from "./helpers.js";
-import {
-  cliBackendLog,
-  CLI_BACKEND_LOG_OUTPUT_ENV,
-  LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
-} from "./log.js";
+import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
+import { resolveCliNoOutputTimeoutMs, resolveCliRunTimeoutOverrideMs } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-function normalizeCliBackendThinkingLevel(
-  level: PreparedCliRunContext["params"]["thinkLevel"],
-): CliBackendThinkingLevel | undefined {
-  return level === "ultra" ? "max" : level;
-}
 
 function exactToolAvailabilityError(params: {
   code: "unsupported" | "runtime-unavailable";
@@ -83,56 +70,38 @@ function exactToolAvailabilityError(params: {
   if (!params.isolatedCompletion) {
     return new Error(params.message);
   }
-  const error = new Error(params.message) as Error & { code: typeof params.code };
-  error.name = "IsolatedCompletionRuntimeError";
-  error.code = params.code;
-  return error;
-}
-
-function assertExactToolAvailabilityRuntimeVersion(params: {
-  backendId: string;
-  policy: NonNullable<
-    PreparedCliRunContext["backendResolved"]["runtimeArtifact"]
-  >["exactToolAvailabilityVersionPolicy"];
-  executableIdentity: Awaited<ReturnType<typeof resolveCliExecutableIdentity>>;
-  isolatedCompletion: boolean;
-}): void {
-  const artifact = params.executableIdentity?.runtimeArtifact;
-  const packageVersion = artifact?.kind === "package-tree" ? artifact.packageVersion : undefined;
-  const parsedVersion = packageVersion ? parseSemver(packageVersion) : null;
-  const prereleaseChannel = parsedVersion?.prerelease[0];
-  const minimumVersion =
-    parsedVersion?.prerelease.length === 0
-      ? params.policy?.stableMinimum
-      : typeof prereleaseChannel === "string"
-        ? params.policy?.prereleaseMinimums?.[prereleaseChannel]
-        : undefined;
-  const comparison =
-    packageVersion && minimumVersion ? compareValidSemver(packageVersion, minimumVersion) : null;
-  if (comparison !== null && comparison >= 0) {
-    return;
-  }
-  throw exactToolAvailabilityError({
-    code: "unsupported",
-    isolatedCompletion: params.isolatedCompletion,
-    message: `CLI backend ${params.backendId} requires a supported package version for exact per-run tool availability${minimumVersion ? ` (requires >=${minimumVersion}` : " (unsupported release line"}${packageVersion ? `; found ${packageVersion})` : ")"}`,
+  return Object.assign(new Error(params.message), {
+    name: "IsolatedCompletionRuntimeError",
+    code: params.code,
   });
 }
 
 type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
+  /** Receives the exact composed prompt sent to the CLI, once per attempt. */
+  onPromptPrepared?: (prompt: string) => void;
 };
 
 type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
   mediaImageLayout?: MediaImageLayout;
 };
 
-/** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
-  context: PreparedCliRunContext,
+  inputContext: PreparedCliRunContext,
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
+  // Reuse the writer's run authority; each transport checks private history
+  // separately at its disclosure boundary.
+  const context = inputContext.cliHistoryWriter
+    ? {
+        ...inputContext,
+        params: {
+          ...inputContext.params,
+          assertCurrent: inputContext.cliHistoryWriter.assertCurrent,
+        },
+      }
+    : inputContext;
   const params = context.params as PreparedCliRunInternalParams;
   const assertCurrent = createCliRunCurrentAssertion(params);
   assertCurrent();
@@ -160,10 +129,9 @@ export async function executePreparedCliRun(
   const shouldSendSystemPrompt =
     systemPromptArg &&
     (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume);
-  const systemPromptFile =
-    !nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt
-      ? await executeDeps.writeCliSystemPromptFile({ backend, systemPrompt: systemPromptArg })
-      : undefined;
+  let systemPromptFile:
+    | Awaited<ReturnType<typeof executeDeps.writeCliSystemPromptFile>>
+    | undefined;
   const nodeSystemPrompt = nodePlacement && shouldSendSystemPrompt ? systemPromptArg : undefined;
 
   const basePrompt = cliSessionIdToUse
@@ -207,7 +175,7 @@ export async function executePreparedCliRun(
     ? params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId
     : undefined;
   const imagePayload = nodePlacement
-    ? { prompt, imagePaths: [] as string[], cleanupImages: async () => {} }
+    ? { prompt, imagePaths: [] as string[] }
     : await prepareCliPromptImagePayload({
         backend,
         prompt,
@@ -234,56 +202,9 @@ export async function executePreparedCliRun(
     !nodePlacement && context.claudeSkillsPluginArgs.length > 0
       ? [...resolvedArgs, ...context.claudeSkillsPluginArgs]
       : resolvedArgs;
-  const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
-    config: params.config,
-    workspaceDir: context.workspaceDir,
-    provider: params.provider,
-    modelId: context.modelId,
-    authProfileId: context.effectiveAuthProfileId,
-    thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
-    executionMode: params.executionMode ?? "agent",
-    // Node runs project the native subset only: gateway-loopback MCP tools do
-    // not exist on the node, and auto-approval must not cross that boundary.
-    toolAvailability:
-      params.cliToolAvailability && nodePlacement
-        ? { native: params.cliToolAvailability.native, openClaw: [] }
-        : params.cliToolAvailability,
-    useResume,
-    baseArgs: baseArgsWithSkills,
-  });
-  if (
-    params.cliToolAvailability &&
-    context.backendResolved.toolAvailabilityEnforcement === "execution-args" &&
-    !resolvedExecutionArgs
-  ) {
-    throw new Error(
-      `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
-    );
-  }
-  const executionBaseArgs = nodePlacement
-    ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills)
-    : (resolvedExecutionArgs ?? baseArgsWithSkills);
-  const args = buildCliArgs({
-    backend: nodePlacement
-      ? { ...backend, systemPromptArg: undefined, systemPromptFileArg: undefined }
-      : backend,
-    baseArgs: Array.from(executionBaseArgs),
-    modelId: context.normalizedModel,
-    sessionId: resolvedSessionId,
-    systemPrompt: nodePlacement || usePluginOwnedExecution ? undefined : systemPromptArg,
-    systemPromptFilePath: systemPromptFile?.filePath,
-    imagePaths: imagePayload.imagePaths,
-    promptArg: argsPrompt,
-    useResume,
-    forkResume: params.forkCliSessionOnResume,
-    resumeAt: params.cliSessionResumeAt,
-    sendSystemPromptOnResume: resendSystemPromptForSoftResume,
-  });
 
   const cliLiveOwnerKey = buildCliLiveOwnerKey({
-    agentAccountId: params.agentAccountId,
     agentId: params.agentId,
-    authProfileId: context.effectiveAuthProfileId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
@@ -302,9 +223,11 @@ export async function executePreparedCliRun(
     usePluginOwnedExecution && acceptsCliLiveSession(context) && !params.onSuccessfulAuthBinding;
   // Fresh-session retries invoke this function again. Keep one helper per
   // observable CLI attempt so every started call retains its own terminal event.
+  const sentPrompt = composeCliPromptContext(prompt, promptContext);
+  options?.onPromptPrepared?.(sentPrompt);
   const diagnostics = createClaudeCliModelCallDiagnostics({
     context,
-    prompt: composeCliPromptContext(prompt, promptContext),
+    prompt: sentPrompt,
     systemPrompt: systemPromptArg ?? undefined,
     transport: nodePlacement
       ? "paired-node-cli"
@@ -339,29 +262,16 @@ export async function executePreparedCliRun(
       throw error;
     }
   };
-  const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
-    try {
-      await cleanup?.();
-    } catch (error) {
-      if (completedOutput?.didSendViaMessagingTool) {
-        cliBackendLog.warn(
-          `CLI outer resource cleanup failed after confirmed message delivery: ${formatErrorMessage(error)}`,
-        );
-        return;
-      }
-      if (executionError !== undefined) {
-        cliBackendLog.warn(
-          `CLI outer resource cleanup also failed after run error: ${formatErrorMessage(error)}`,
-        );
-        return;
-      }
-      throw error;
-    }
-  };
   const executeAttempt = async (): Promise<CliOutput> => {
     assertCurrent();
     await context.preparedBackend.beforeExecution?.();
     assertCurrent();
+    if (!nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt) {
+      systemPromptFile = await executeDeps.writeCliSystemPromptFile({
+        backend,
+        systemPrompt: systemPromptArg,
+      });
+    }
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =
       params.skillsSnapshot && !params.controlOperation
@@ -387,31 +297,14 @@ export async function executePreparedCliRun(
       getRunState: () => ({ failed: runFailed, error: runError }),
     });
     try {
-      cliBackendLog.info(
-        buildCliExecLogLine({
-          provider: params.provider,
-          model: context.normalizedModel,
-          promptChars: basePrompt.length,
-          trigger: params.trigger,
-          useResume,
-          cliSessionId: cliSessionIdToUse,
-          resolvedSessionId,
-          reusableSession: context.reusableCliSession,
-          hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
-        }),
-      );
-      const logOutputText =
-        isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
-        isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
+      const logOutputText = isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]);
       const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
       const initialGatewayCaptureKey =
         nodePlacement || !context.mcpDeliveryCapture ? undefined : crypto.randomUUID();
       const mcpCaptureAttempt = nodePlacement
         ? { env: {}, cleanup: undefined }
         : await prepareCliBundleMcpCaptureAttempt({
-            mode: context.backendResolved.bundleMcpMode,
-            backend,
-            env: context.preparedBackend.env,
+            preparedBackend: context.preparedBackend,
             captureKey: initialGatewayCaptureKey,
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
@@ -438,9 +331,9 @@ export async function executePreparedCliRun(
       const nodeRuntimeClearEnv = nodePlacement
         ? [...NODE_CLAUDE_FORWARD_ENV_KEYS].filter((key) => backend.clearEnv?.includes(key))
         : [];
-      const nodeClearEnv = [...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv].filter(
-        (key, index, values) => values.indexOf(key) === index,
-      );
+      const nodeClearEnv = [
+        ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
+      ];
       const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
       const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
       for (const key of backend.clearEnv ?? []) {
@@ -500,12 +393,28 @@ export async function executePreparedCliRun(
           });
         }
         if (exactToolAvailabilityVersionPolicy) {
-          assertExactToolAvailabilityRuntimeVersion({
-            backendId: context.backendResolved.id,
-            policy: exactToolAvailabilityVersionPolicy,
-            executableIdentity,
-            isolatedCompletion: params.isolatedCompletion === true,
-          });
+          const artifact = executableIdentity.runtimeArtifact;
+          const packageVersion =
+            artifact?.kind === "package-tree" ? artifact.packageVersion : undefined;
+          const parsedVersion = packageVersion ? parseSemver(packageVersion) : null;
+          const prereleaseChannel = parsedVersion?.prerelease[0];
+          const minimumVersion =
+            parsedVersion?.prerelease.length === 0
+              ? exactToolAvailabilityVersionPolicy.stableMinimum
+              : typeof prereleaseChannel === "string"
+                ? exactToolAvailabilityVersionPolicy.prereleaseMinimums?.[prereleaseChannel]
+                : undefined;
+          const comparison =
+            packageVersion && minimumVersion
+              ? compareValidSemver(packageVersion, minimumVersion)
+              : null;
+          if (comparison === null || comparison < 0) {
+            throw exactToolAvailabilityError({
+              code: "unsupported",
+              isolatedCompletion: params.isolatedCompletion === true,
+              message: `CLI backend ${context.backendResolved.id} requires a supported package version for exact per-run tool availability${minimumVersion ? ` (requires >=${minimumVersion}` : " (unsupported release line"}${packageVersion ? `; found ${packageVersion})` : ")"}`,
+            });
+          }
         }
         executionCommand = executableIdentity.invocation.command;
         executionArgv0 = executableIdentity.invocation.argv0;
@@ -530,18 +439,67 @@ export async function executePreparedCliRun(
           });
         }
       }
-      if (logOutputText) {
-        logCliInvocation({
-          args,
-          command: executionCommand,
-          env,
-          systemPromptArg: backend.systemPromptArg,
-          modelArg: backend.modelArg,
-          imageArg: backend.imageArg,
-          argsPrompt,
-          log: (message) => cliBackendLog.info(message),
+      // Process supervision can add a scope wait after the CLI queue and backend setup.
+      const resolveExecutionArgs = () => {
+        assertCurrent();
+        const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
+          config: params.config,
+          workspaceDir: context.workspaceDir,
+          provider: params.provider,
+          modelId: context.modelId,
+          authProfileId: context.effectiveAuthProfileId,
+          thinkingLevel:
+            params.thinkLevel === "ultra" ? context.providerThinkingLevel : params.thinkLevel,
+          fastMode:
+            params.fastMode === undefined
+              ? undefined
+              : resolveFastModeForElapsed({
+                  mode: params.fastMode,
+                  startedAtMs: params.fastModeStartedAtMs ?? context.started,
+                  fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+                }).enabled,
+          executionMode: params.executionMode ?? "agent",
+          // Node runs project the native subset only: gateway-loopback MCP tools do
+          // not exist on the node, and auto-approval must not cross that boundary.
+          toolAvailability:
+            params.cliToolAvailability && nodePlacement
+              ? { native: params.cliToolAvailability.native, openClaw: [] }
+              : params.cliToolAvailability,
+          hostOwnedTools: context.hostOwnedTools,
+          useResume,
+          baseArgs: baseArgsWithSkills,
         });
-      }
+        if (
+          params.cliToolAvailability &&
+          context.backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+          !resolvedExecutionArgs
+        ) {
+          throw new Error(
+            `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
+          );
+        }
+        const executionBaseArgs = nodePlacement
+          ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills)
+          : (resolvedExecutionArgs ?? baseArgsWithSkills);
+        const args = buildCliArgs({
+          backend: nodePlacement
+            ? { ...backend, systemPromptArg: undefined, systemPromptFileArg: undefined }
+            : backend,
+          baseArgs: Array.from(executionBaseArgs),
+          modelId: context.normalizedModel,
+          sessionId: resolvedSessionId,
+          systemPrompt: nodePlacement || usePluginOwnedExecution ? undefined : systemPromptArg,
+          systemPromptFilePath: systemPromptFile?.filePath,
+          imagePaths: imagePayload.imagePaths,
+          promptArg: argsPrompt,
+          useResume,
+          forkResume: params.forkCliSessionOnResume,
+          resumeAt: params.cliSessionResumeAt,
+          sendSystemPromptOnResume: resendSystemPromptForSoftResume,
+        });
+
+        return args;
+      };
       const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
         config: params.config,
         lane: params.lane,
@@ -556,9 +514,6 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
-      if (!useManagedClaudeLiveSession) {
-        toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
-      }
       runOutput = await executeCliProcess({
         context,
         assertCurrent,
@@ -579,7 +534,7 @@ export async function executePreparedCliRun(
         executionCommand,
         executionArgv0,
         executionLeadingArgv,
-        executionArgs: args,
+        resolveExecutionArgs,
         env,
         prompt,
         ...(promptContext ? { promptContext } : {}),
@@ -601,12 +556,16 @@ export async function executePreparedCliRun(
       });
       toolTracking.finalizeCapture(events.finalizeParsedTools);
       try {
-        await cleanupMcpCaptureAttempt?.();
+        await runCliCleanup(params, "cli-mcp-capture", async () => {
+          await cleanupMcpCaptureAttempt?.();
+        });
       } catch (error) {
         recordRunError(error);
       }
       try {
-        restoreSkillEnv?.();
+        await runCliCleanup(params, "cli-skill-env", async () => {
+          restoreSkillEnv?.();
+        });
       } catch (error) {
         recordRunError(error);
       }
@@ -623,26 +582,40 @@ export async function executePreparedCliRun(
     });
   };
   try {
-    completedOutput = await enqueueCliRun(queueKey, async () => {
-      assertCurrent();
-      if (params.lifecycleGeneration) {
-        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-      }
-      diagnostics?.emitStarted();
-      if (params.forkCliSessionOnResume && useResume) {
-        if (!params.persistCliSessionForkSuccessor) {
-          throw new Error("CLI session fork successor persistence is unavailable");
-        }
-        forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
-        if (!forkResumeClaimed) {
-          throw new Error("CLI session fork marker is no longer available");
-        }
-        // The fork argument only applies at process startup; a cached warm child
-        // would run inside the source session. Force a fresh spawn.
-        await closeCliLiveSession(context, "restart");
-      }
-      return await executeAttempt();
-    });
+    completedOutput = await enqueueCommandInLane(
+      `cli:${queueKey}`,
+      () => {
+        const runQueuedAttempt = async () => {
+          assertCurrent();
+          if (params.lifecycleGeneration) {
+            assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+          }
+          diagnostics?.emitStarted();
+          if (params.controlOperation === "compact") {
+            // A one-shot compactor rewrites persisted history behind the warm process.
+            await restartCliLiveSession(context);
+          }
+          if (params.forkCliSessionOnResume && useResume) {
+            if (!params.persistCliSessionForkSuccessor) {
+              throw new Error("CLI session fork successor persistence is unavailable");
+            }
+            forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
+            if (!forkResumeClaimed) {
+              throw new Error("CLI session fork marker is no longer available");
+            }
+            // The fork argument only applies at process startup; a cached warm child
+            // would run inside the source session. Force a fresh spawn.
+            await restartCliLiveSession(context);
+          }
+          return await executeAttempt();
+        };
+        // The retained consumer keeps every plugin call of this queued attempt, including
+        // a fork-on-resume live-session restart, admitted across a plugin hot reload.
+        const consumer = context.pluginExecutionConsumer;
+        return consumer ? consumer.run(runQueuedAttempt) : runQueuedAttempt();
+      },
+      { abortSignal: params.abortSignal },
+    );
     if (completedOutput.sessionId) {
       observeForkSuccessor(completedOutput.sessionId);
     }
@@ -671,21 +644,27 @@ export async function executePreparedCliRun(
     throw failure;
   } finally {
     try {
-      await cleanupOuterResource(systemPromptFile?.cleanup);
-      await cleanupOuterResource(imagePayload.cleanupImages);
+      await runCliCleanup(params, "cli-outer-resource", async () => {
+        await systemPromptFile?.cleanup();
+      });
     } catch (error) {
-      outerCleanupError = toErrorObject(error, "CLI outer resource cleanup failed");
+      if (completedOutput?.didSendViaMessagingTool) {
+        cliBackendLog.warn(
+          `CLI outer resource cleanup failed after confirmed message delivery: ${formatErrorMessage(error)}`,
+        );
+      } else if (executionError !== undefined) {
+        cliBackendLog.warn(
+          `CLI outer resource cleanup also failed after run error: ${formatErrorMessage(error)}`,
+        );
+      } else {
+        outerCleanupError = toErrorObject(error, "CLI outer resource cleanup failed");
+      }
     }
   }
   if (outerCleanupError) {
     options?.onPhase?.("cleanup");
     diagnostics?.emitError(outerCleanupError);
     throw outerCleanupError;
-  }
-  if (!completedOutput) {
-    const error = new Error("CLI run completed without output");
-    diagnostics?.emitError(error);
-    throw error;
   }
   // Success stays provisional until persistence and cleanup finish; otherwise
   // a rejected turn would be exported as completed.

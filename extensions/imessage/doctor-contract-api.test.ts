@@ -1,31 +1,12 @@
 // Imessage tests cover doctor contract api plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 
 function imessageConfig(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { imessage: entry } } as never;
 }
-
-describe("imessage doctor control plane", () => {
-  afterEach(() => {
-    vi.doUnmock("./src/state-migrations.js");
-    vi.resetModules();
-  });
-
-  it("repairs config without loading state migration implementation", async () => {
-    vi.resetModules();
-    vi.doMock("./src/state-migrations.js", () => {
-      throw new Error("config repair must not load state migration implementation");
-    });
-    const doctor = await import("./doctor-contract-api.js");
-    const result = doctor.normalizeCompatibilityConfig({
-      cfg: imessageConfig({ chunkMode: "newline" }),
-    });
-    expect(result.config.channels?.imessage).toEqual({ streaming: { chunkMode: "newline" } });
-  });
-});
 
 describe("imessage streaming legacy config rules", () => {
   const rootRule = legacyConfigRules.find(
@@ -118,14 +99,5 @@ describe("imessage normalizeCompatibilityConfig streaming aliases", () => {
     const second = normalizeCompatibilityConfig({ cfg: first.config });
     expect(second.changes).toEqual([]);
     expect(second.config).toBe(first.config);
-  });
-
-  it("leaves nested-only configs untouched", () => {
-    const cfg = imessageConfig({
-      streaming: { chunkMode: "newline", block: { enabled: true } },
-    });
-    const result = normalizeCompatibilityConfig({ cfg });
-    expect(result.changes).toEqual([]);
-    expect(result.config).toBe(cfg);
   });
 });

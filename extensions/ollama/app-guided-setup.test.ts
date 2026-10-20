@@ -1,9 +1,9 @@
-import { once } from "node:events";
-import { createServer } from "node:http";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import type { OllamaTagModel } from "./src/provider-models.js";
 
 const selected = "setup-tools:latest";
 const configuredModel: ModelDefinitionConfig = {
@@ -19,7 +19,7 @@ const configuredModel: ModelDefinitionConfig = {
 
 async function withOllamaServer(
   options: {
-    models?: string[];
+    models?: Array<string | OllamaTagModel>;
     loaded?: string[];
     show?: Record<string, unknown>;
     showStatus?: number;
@@ -28,52 +28,47 @@ async function withOllamaServer(
   run: (baseUrl: string, inspected: string[]) => Promise<void>,
 ) {
   const inspected: string[] = [];
-  const server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      response.setHeader("content-type", "application/json");
-      if (request.url === "/api/ps") {
-        response.end(
-          JSON.stringify({ models: (options.loaded ?? [selected]).map((name) => ({ name })) }),
-        );
-      } else if (request.url === "/api/tags") {
-        response.end(
-          JSON.stringify({ models: (options.models ?? [selected]).map((name) => ({ name })) }),
-        );
-      } else if (request.url === "/api/show") {
-        inspected.push((JSON.parse(body) as { model: string }).model);
-        options.onShow?.();
-        response.writeHead(options.showStatus ?? 200).end(
-          JSON.stringify(
-            options.show ?? {
-              model_info: { "model.context_length": 32_768 },
-              capabilities: ["completion", "tools"],
-            },
-          ),
-        );
-      } else {
-        response.writeHead(404).end();
-      }
-    });
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing fixture server address");
-    }
-    await run(`http://127.0.0.1:${address.port}`, inspected);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+  await withServer(
+    (request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        response.setHeader("content-type", "application/json");
+        if (request.url === "/api/ps") {
+          response.end(
+            JSON.stringify({ models: (options.loaded ?? [selected]).map((name) => ({ name })) }),
+          );
+        } else if (request.url === "/api/tags") {
+          response.end(
+            JSON.stringify({
+              models: (options.models ?? [selected]).map((model) =>
+                typeof model === "string" ? { name: model } : model,
+              ),
+            }),
+          );
+        } else if (request.url === "/api/show") {
+          inspected.push((JSON.parse(body) as { model: string }).model);
+          options.onShow?.();
+          response.writeHead(options.showStatus ?? 200).end(
+            JSON.stringify(
+              options.show ?? {
+                model_info: { "model.context_length": 32_768 },
+                capabilities: ["completion", "tools"],
+              },
+            ),
+          );
+        } else {
+          response.writeHead(404).end();
+        }
+      });
+    },
+    async (baseUrl) => {
+      await run(baseUrl, inspected);
+    },
+  );
 }
 
 function guidedSetup() {
@@ -87,6 +82,35 @@ function guidedSetup() {
 }
 
 describe("Ollama app-guided setup HTTP discovery", () => {
+  it.each([
+    { tag: { remote_host: "https://ollama.com" }, expected: 262_144 },
+    { tag: { remote_model: "upstream-model" }, expected: 262_144 },
+    { tag: {}, expected: 8192 },
+  ])("preserves alias output budgets for $tag", async ({ tag, expected }) => {
+    const name = "private-alias";
+    await withOllamaServer(
+      {
+        models: [{ name, ...tag }],
+        loaded: [name],
+        show: {
+          model_info: { "model.context_length": 262_144 },
+          capabilities: ["completion", "tools"],
+        },
+      },
+      async (baseUrl) => {
+        const prepared = await guidedSetup().prepare({
+          config: { models: { providers: { ollama: { baseUrl, models: [] } } } },
+          env: {},
+          modelRef: `ollama/${name}`,
+        });
+        expect(prepared?.configPatch?.models?.providers?.ollama?.models?.[0]).toMatchObject({
+          id: name,
+          maxTokens: expected,
+        });
+      },
+    );
+  });
+
   it.each(["detect", "prepare"] as const)(
     "%s finds a loaded model beyond the general catalog cap without inspecting idle models",
     async (operation) => {

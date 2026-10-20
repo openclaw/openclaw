@@ -2,10 +2,10 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
+  formatSecretDegradationRetryHint,
   redactSecretDegradationReason,
-  SECRET_DEGRADATION_RETRY_HINT,
 } from "../secrets/runtime-degraded-state.js";
-import type { StatusSummary } from "../status/types.js";
+import type { StatusSummary } from "../status/summary.js";
 
 const DOCTOR_SECRET_OWNER_ID_MAX_CHARS = 96;
 const DOCTOR_SECRET_OWNER_PATH_MAX_CHARS = 120;
@@ -18,9 +18,9 @@ function safeDoctorSecretOwnerText(value: string, maxChars: number): string {
 
 /** Projects Gateway-owned secret degradation into the shared bounded Doctor display shape. */
 export function projectDoctorSecretRuntimeDegradations(
-  status: Pick<StatusSummary, "degradedSecretOwners">,
+  status: Pick<StatusSummary, "degradedSecretOwners" | "secretEgressProxy">,
 ) {
-  return (status.degradedSecretOwners ?? []).map((owner) => {
+  const findings = (status.degradedSecretOwners ?? []).map((owner) => {
     const ownerId = safeDoctorSecretOwnerText(owner.ownerId, DOCTOR_SECRET_OWNER_ID_MAX_CHARS);
     const target = `${owner.ownerKind}:${ownerId}`;
     const visiblePaths = owner.paths
@@ -35,7 +35,25 @@ export function projectDoctorSecretRuntimeDegradations(
       message: `${owner.degradationState ?? "cold"} ${target} (${paths || "no affected paths reported"}): ${redactSecretDegradationReason(owner.reason)}`,
       path: visiblePaths[0] ?? "gateway",
       target,
-      retryHint: SECRET_DEGRADATION_RETRY_HINT,
+      retryHint: formatSecretDegradationRetryHint(owner.reason),
     };
   });
+  if (status.secretEgressProxy?.state !== "degraded") {
+    return findings;
+  }
+  return [
+    ...findings,
+    {
+      message:
+        "Secret egress proxy: " +
+        safeDoctorSecretOwnerText(
+          status.secretEgressProxy.message ??
+            "TLS certificate preparation unavailable. Check Gateway logs.",
+          512,
+        ),
+      path: "secrets.egressProxy.enabled",
+      target: "capability:secret-egress-proxy",
+      retryHint: "Correct the reported certificate or clock problem before retrying the request.",
+    },
+  ];
 }

@@ -1,20 +1,18 @@
 // Migrate Hermes tests cover model.apply plugin behavior.
 import path from "node:path";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import {
-  resolvePreferredOpenClawTmpDir,
-  tempWorkspace,
-  type TempWorkspace,
-} from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   HERMES_REASON_DEFAULT_MODEL_CONFIGURED,
   HERMES_REASON_MODEL_PROVIDER_CONFLICT,
 } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
+import { useHermesFixture } from "./test/migration-fixture.js";
+import { makeConfigRuntime, writeFile } from "./test/provider-helpers.js";
 
-let testWorkspace: TempWorkspace;
+const fixture = useHermesFixture();
+const makeTestContext = fixture.context;
 
 function defaultModelItem(status: "migrated" | "conflict") {
   return {
@@ -30,26 +28,14 @@ function defaultModelItem(status: "migrated" | "conflict") {
 
 describe("Hermes migration model apply", () => {
   beforeEach(async () => {
-    testWorkspace = await tempWorkspace({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-migrate-hermes-",
-    });
-  });
-
-  afterEach(async () => {
-    await testWorkspace.cleanup();
+    await writeFile(
+      path.join(fixture.paths.source, "config.yaml"),
+      "model:\n  provider: openai\n  model: gpt-5.4\n",
+    );
   });
 
   it("updates only the primary model when applying over object-form model config", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: openai\n  model: gpt-5.4\n",
-    );
+    const { workspaceDir, reportDir } = fixture.paths;
     const existingConfig = {
       agents: {
         defaults: {
@@ -62,18 +48,10 @@ describe("Hermes migration model apply", () => {
         },
       },
     } as OpenClawConfig;
-    let writtenConfig: OpenClawConfig | undefined;
-    const provider = buildHermesMigrationProvider({
-      runtime: makeConfigRuntime(existingConfig, (next) => {
-        writtenConfig = next;
-      }),
-    });
+    const provider = buildHermesMigrationProvider({ runtime: makeConfigRuntime(existingConfig) });
 
     const result = await provider.apply(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      makeTestContext({
         overwrite: true,
         model: existingConfig.agents?.defaults?.model,
         reportDir,
@@ -81,7 +59,7 @@ describe("Hermes migration model apply", () => {
     );
 
     expect(result.items).toEqual([defaultModelItem("migrated")]);
-    expect(writtenConfig?.agents?.defaults?.model).toEqual({
+    expect(existingConfig.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.4",
       fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
       timeoutMs: 120_000,
@@ -89,84 +67,42 @@ describe("Hermes migration model apply", () => {
   });
 
   it("updates the default-agent model override when applying with overwrite", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: openai\n  model: gpt-5.4\n",
-    );
+    const { workspaceDir, reportDir } = fixture.paths;
+    const sharedModel = { primary: "google/gemini-3-pro", fallbacks: ["openai/gpt-5.4"] };
     const existingConfig = {
       agents: {
-        defaults: {
-          workspace: workspaceDir,
-          model: {
-            primary: "google/gemini-3-pro",
-            fallbacks: ["openai/gpt-5.4"],
-          },
-        },
-        list: [
-          {
-            id: "main",
-            default: true,
+        defaults: { workspace: workspaceDir, model: sharedModel },
+        entries: {
+          main: {
             model: {
               primary: "anthropic/claude-sonnet-4.6",
               fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
             },
           },
-        ],
-      },
-    } as OpenClawConfig;
-    let writtenConfig: OpenClawConfig | undefined;
-    const provider = buildHermesMigrationProvider({
-      runtime: makeConfigRuntime(existingConfig, (next) => {
-        writtenConfig = next;
-      }),
-    });
-
-    const result = await provider.apply(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
-        config: existingConfig,
-        overwrite: true,
-        reportDir,
-      }),
-    );
-
-    expect(result.items).toEqual([defaultModelItem("migrated")]);
-    expect(writtenConfig?.agents?.list?.[0]?.model).toEqual({
-      primary: "openai/gpt-5.4",
-      fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
-    });
-    expect(writtenConfig?.agents?.defaults?.model).toEqual(existingConfig.agents?.defaults?.model);
-  });
-
-  it("reports late-created default models as conflicts without overwriting", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: openai\n  model: gpt-5.4\n",
-    );
-    const lateConfig = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          model: "anthropic/claude-sonnet-4.6",
         },
       },
     } as OpenClawConfig;
-    const provider = buildHermesMigrationProvider({
-      runtime: makeConfigRuntime(lateConfig),
+    const provider = buildHermesMigrationProvider({ runtime: makeConfigRuntime(existingConfig) });
+
+    const result = await provider.apply(
+      makeTestContext({ config: existingConfig, overwrite: true, reportDir }),
+    );
+
+    expect(result.items).toEqual([defaultModelItem("migrated")]);
+    expect(existingConfig.agents?.entries?.main?.model).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
     });
-    const ctx = makeContext({ source, stateDir, workspaceDir, reportDir });
+    expect(existingConfig.agents?.defaults?.model).toEqual(sharedModel);
+  });
+
+  it("reports late-created default models as conflicts without overwriting", async () => {
+    const { workspaceDir, reportDir } = fixture.paths;
+    const lateConfig: OpenClawConfig = {
+      agents: { defaults: { workspace: workspaceDir, model: "anthropic/claude-sonnet-4.6" } },
+    };
+    const provider = buildHermesMigrationProvider({ runtime: makeConfigRuntime(lateConfig) });
+    const ctx = makeTestContext({ reportDir });
     const plan = await provider.plan(ctx);
 
     const result = await provider.apply(ctx, plan);
@@ -179,23 +115,15 @@ describe("Hermes migration model apply", () => {
   it.each([undefined, { primary: "old/model", fallbacks: ["backup/model"] }])(
     "applies an explicit target agent without changing shared or sibling models (%j)",
     async (model) => {
-      const root = testWorkspace.dir;
-      const source = path.join(root, "hermes");
-      const workspaceDir = path.join(root, "workspace");
+      const { source, workspaceDir } = fixture.paths;
       await writeFile(path.join(source, "config.yaml"), "model: imported/model\n");
       const config: OpenClawConfig = {
         agents: {
           defaults: { workspace: workspaceDir, model: "shared/model" },
-          entries: {
-            main: { default: true, model: "main/model" },
-            research: { workspace: workspaceDir, model },
-          },
+          entries: { main: { model: "main/model" }, research: { workspace: workspaceDir, model } },
         },
       };
-      const ctx = makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir,
+      const ctx = makeTestContext({
         config,
         targetAgentId: "research",
         overwrite: true,
@@ -216,38 +144,22 @@ describe("Hermes migration model apply", () => {
   );
 
   it("does not apply a custom default after its provider develops a late conflict", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
+    const { source, workspaceDir, reportDir } = fixture.paths;
     await writeFile(
       path.join(source, "config.yaml"),
-      [
-        "model:",
-        "  provider: custom:acme",
-        "  default: imported-model",
-        "providers:",
-        "  acme:",
-        "    base_url: https://new.example.test/v1",
-        "    transport: openai_chat",
-        "",
-      ].join("\n"),
+      "model: {provider: 'custom:acme', default: imported-model}\n" +
+        "providers: {acme: {base_url: 'https://new.example.test/v1', transport: openai_chat}}\n",
     );
     const lateConfig = {
       agents: { defaults: { workspace: workspaceDir } },
       models: {
         providers: {
-          acme: {
-            baseUrl: "https://old.example.test/v1",
-            api: "openai-completions",
-            models: [],
-          },
+          acme: { baseUrl: "https://old.example.test/v1", api: "openai-completions", models: [] },
         },
       },
     } as OpenClawConfig;
     const provider = buildHermesMigrationProvider({ runtime: makeConfigRuntime(lateConfig) });
-    const ctx = makeContext({ source, stateDir, workspaceDir, reportDir });
+    const ctx = makeTestContext({ reportDir });
     const plan = await provider.plan(ctx);
 
     const result = await provider.apply(ctx, plan);
@@ -255,12 +167,10 @@ describe("Hermes migration model apply", () => {
     expect(result.items.find((item) => item.id === "config:model-provider:acme")?.status).toBe(
       "conflict",
     );
-    expect(result.items.find((item) => item.id === "config:default-model")).toEqual(
-      expect.objectContaining({
-        status: "conflict",
-        reason: HERMES_REASON_MODEL_PROVIDER_CONFLICT,
-      }),
-    );
+    expect(result.items.find((item) => item.id === "config:default-model")).toMatchObject({
+      status: "conflict",
+      reason: HERMES_REASON_MODEL_PROVIDER_CONFLICT,
+    });
     expect(lateConfig.agents?.defaults?.model).toBeUndefined();
   });
 });

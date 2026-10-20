@@ -1,32 +1,49 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
-import { downloadXaiVideo } from "./video-generation-transport.js";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
 
-function downloadVideo(fetchFn: typeof fetch) {
-  return downloadXaiVideo({
-    url: "https://example.com/generated.mp4",
-    defaultTimeoutMs: 5_000,
-    fetchFn,
-    maxBytes: 10 * 1024 * 1024,
-    allowPrivateNetwork: false,
+afterEach(() => vi.unstubAllGlobals());
+
+function downloadVideo(
+  videoUrl = "https://example.com/generated.mp4",
+  allowPrivateNetwork = false,
+) {
+  const downloadFetch = globalThis.fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === videoUrl) {
+        return downloadFetch(input, init);
+      }
+      return Response.json(
+        url.endsWith("/videos/generations")
+          ? { request_id: "synthetic-request" }
+          : { status: "done", video: { url: videoUrl } },
+      );
+    }),
+  );
+  return buildXaiVideoGenerationProvider().generateVideo({
+    provider: "xai",
+    model: "grok-imagine-video",
+    prompt: "Synthetic video",
+    cfg: {
+      models: {
+        providers: {
+          xai: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "synthetic-key",
+            models: [],
+            request: { allowPrivateNetwork },
+          },
+        },
+      },
+    },
+    timeoutMs: 5_000,
   });
 }
 
-describe("downloadXaiVideo", () => {
-  it("returns the downloaded video bytes for a well-formed binary response", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response("mp4-bytes", { status: 200, headers: { "content-type": "video/mp4" } }),
-    );
-
-    const video = await downloadVideo(fetchFn);
-
-    expect(video.mimeType).toBe("video/mp4");
-    expect(video.fileName).toBe("video-1.mp4");
-    expect(video.buffer?.toString("utf8")).toBe("mp4-bytes");
-  });
-
+describe("xAI generated video download", () => {
   it.each([
     { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
     { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
@@ -36,8 +53,9 @@ describe("downloadXaiVideo", () => {
     const fetchFn = vi.fn(
       async () => new Response(body, { status: 200, headers: { "content-type": contentType } }),
     );
+    vi.stubGlobal("fetch", fetchFn);
 
-    await expect(downloadVideo(fetchFn)).rejects.toThrow(
+    await expect(downloadVideo()).rejects.toThrow(
       "xAI generated video download: malformed video response",
     );
   });
@@ -47,34 +65,20 @@ describe("downloadXaiVideo", () => {
     const socketClosed = new Promise<boolean>((resolve) => {
       notifySocketClosed = resolve;
     });
-    const server = createServer((request, response) => {
-      request.socket.once("close", () => notifySocketClosed?.(true));
-      response.writeHead(200, { "content-type": "application/json" });
-      // Headers land, then the body never ends: only an explicit cancel closes this.
-      response.write('{"error":"still streaming');
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    await withServer(
+      (request, response) => {
+        request.socket.once("close", () => notifySocketClosed?.(true));
+        response.writeHead(200, { "content-type": "application/json" });
+        // Headers land, then the body never ends: only an explicit cancel closes this.
+        response.write('{"error":"still streaming');
+      },
+      async (baseUrl) => {
+        await expect(downloadVideo(`${baseUrl}/generated.mp4`, true)).rejects.toThrow(
+          "xAI generated video download: malformed video response",
+        );
 
-    try {
-      const { port } = server.address() as AddressInfo;
-      await expect(
-        downloadXaiVideo({
-          url: `http://127.0.0.1:${port}/generated.mp4`,
-          defaultTimeoutMs: 5_000,
-          fetchFn: fetch,
-          maxBytes: 10 * 1024 * 1024,
-          allowPrivateNetwork: true,
-        }),
-      ).rejects.toThrow("xAI generated video download: malformed video response");
-
-      await expect(socketClosed).resolves.toBe(true);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        await expect(socketClosed).resolves.toBe(true);
+      },
+    );
   });
 });

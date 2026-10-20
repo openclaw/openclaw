@@ -1,5 +1,3 @@
-// Voice Call plugin module owns reconnect grace for carrier media streams.
-
 const STREAM_DISCONNECT_GRACE_MS = 2_000;
 
 export type StreamDisconnectLifecycle = {
@@ -36,10 +34,6 @@ export class StreamDisconnectGrace implements StreamDisconnectLifecycle {
     }
 
     const disconnectTimer = setTimeout(() => {
-      const latest = this.streams.get(providerCallId);
-      if (latest?.disconnectTimer !== disconnectTimer) {
-        return;
-      }
       this.streams.delete(providerCallId);
       this.onGraceExpired({ providerCallId, streamId });
     }, STREAM_DISCONNECT_GRACE_MS);

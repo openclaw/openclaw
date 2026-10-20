@@ -3,6 +3,23 @@ import { describe, expect, it } from "vitest";
 import { cronSchedulingInputsEqual, tryCronScheduleIdentity } from "./schedule-identity.js";
 
 describe("tryCronScheduleIdentity", () => {
+  it("preserves meaningful whitespace in on-exit command identity", () => {
+    const command = " printf %s hello\\ ";
+    const job = { schedule: { kind: "on-exit", command } };
+    expect(tryCronScheduleIdentity(job)).toBeDefined();
+    expect(cronSchedulingInputsEqual(job, structuredClone(job))).toBe(true);
+    for (const changedCommand of [command.trimStart(), command.trimEnd()]) {
+      expect(
+        cronSchedulingInputsEqual(job, {
+          schedule: { kind: "on-exit", command: changedCommand },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      tryCronScheduleIdentity({ schedule: { kind: "on-exit", command: " \t " } }),
+    ).toBeUndefined();
+  });
+
   it("normalizes numeric schedule strings like execution does", () => {
     const numeric = tryCronScheduleIdentity({
       enabled: true,

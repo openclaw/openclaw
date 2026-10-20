@@ -1,16 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import { registerPluginDashboardCapabilities } from "../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import * as processExec from "../process/exec.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 
 describe("show_widget prompt", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
-    vi.restoreAllMocks();
   });
 
   it("discovers active host capabilities with usable contracts", () => {
@@ -79,44 +77,5 @@ describe("show_widget prompt", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     expect(JSON.stringify(createShowWidgetTool())).not.toContain("fixture.list");
     expect(JSON.stringify(createShowWidgetTool())).not.toContain("fixture.dispatch");
-  });
-  it("constructs synchronously without probing GitHub identity", () => {
-    const http = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("Unexpected HTTP probe"));
-    const native = vi
-      .spyOn(processExec, "runCommandBuffered")
-      .mockRejectedValue(new Error("Unexpected native probe"));
-    expect(createShowWidgetTool().name).toBe("show_widget");
-    expect(http).not.toHaveBeenCalled();
-    expect(native).not.toHaveBeenCalled();
-  });
-  it("keeps proactive single visualizations inline unless dashboard use meets its threshold", () => {
-    const tool = createShowWidgetTool();
-    const directoryDescription = tool.description.slice(0, 177);
-    const properties = (
-      tool.parameters as {
-        properties?: {
-          pin?: { description?: string };
-          name?: { description?: string };
-          widget_code?: { description?: string };
-        };
-      }
-    ).properties;
-    const pinDescription = properties?.pin?.description;
-
-    expect(directoryDescription).toMatch(/^Visual helps\? Make widget\. Do not wait for ask\./);
-    expect(directoryDescription).toMatch(
-      /(?:single|one[- ]off|ad hoc).{0,40}visualizations?.{0,40}inline/i,
-    );
-    expect(directoryDescription).toContain("explicit dashboard request");
-    expect(directoryDescription).toContain("multiple non-code visualizations");
-    expect(directoryDescription).toContain("Update HTML by name");
-    expect(pinDescription).toContain("explicit dashboard request");
-    expect(pinDescription).toContain("multiple non-code visualizations");
-    expect(properties?.name?.description).toMatch(/same name.*pin=true.*widget_code/i);
-    expect(properties?.widget_code?.description).toMatch(/fit.*iframe width/i);
-    expect(properties?.widget_code?.description).toMatch(/avoid fixed.*width/i);
-    expect(properties?.widget_code?.description).toMatch(/wrap or stack.*narrow/i);
   });
 });

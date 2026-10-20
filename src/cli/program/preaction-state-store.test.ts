@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliGatewayStateDirOutcome } from "../state-dir-gateway-check.js";
+import { registerPreActionHooks } from "./preaction.js";
 
 const mocks = vi.hoisted(() => ({
   action: vi.fn(),
@@ -24,17 +25,12 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: mocks.ensureBootstrap,
-  resolveCliExecutionStartupContext: ({ commandPath }: { commandPath: string[] }) => ({
-    commandPath,
-    startupPolicy: { skipConfigGuard: true },
-  }),
 }));
 
 let program: Command;
 let originalArgv: string[];
 
-beforeAll(async () => {
-  const { registerPreActionHooks } = await import("./preaction.js");
+beforeAll(() => {
   program = new Command().name("openclaw");
   program.command("configure").action(mocks.action);
   registerPreActionHooks(program, "test");

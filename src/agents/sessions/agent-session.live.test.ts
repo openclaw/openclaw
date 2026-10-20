@@ -58,9 +58,6 @@ function createResourceLoader(handlers: ExtensionHandlers = new Map()): Resource
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
     extendResources: () => {},
     reload: async () => {},
   };
@@ -113,14 +110,13 @@ async function resolveLiveModel(
 
 async function createLiveSession(
   options: {
-    customTools?: ToolDefinition[];
+    customTools?: (cwd: string) => ToolDefinition[];
     handlers?: ExtensionHandlers;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "openclaw-agent-session-live-"));
   tempRoots.push(root);
   const cwd = join(root, "workspace");
-  const agentDir = join(root, "agent");
   const modelsPath = join(root, "models.json");
   await mkdir(cwd, { recursive: true });
   const authStorage = AuthStorage.inMemory();
@@ -135,21 +131,21 @@ async function createLiveSession(
       provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetryDelayMs: 0 },
     },
   });
+  const customTools = options.customTools?.(cwd) ?? [];
   const { session } = await createAgentSession({
+    systemPrompt: "Follow the user's instructions and use the supplied tools when requested.",
     cwd,
-    agentDir,
     model,
     thinkingLevel: "off",
-    noTools: "builtin",
-    customTools: options.customTools,
+    tools: customTools.map((tool) => tool.name),
+    customTools,
     resourceLoader: createResourceLoader(options.handlers),
-    authStorage,
     modelRegistry,
     sessionManager,
     settingsManager,
   });
   sessions.push(session);
-  return { session, sessionManager };
+  return { session, sessionManager, cwd };
 }
 
 function assistantText(message: AgentMessage): string {
@@ -194,7 +190,7 @@ describeLive("AgentSession live", () => {
           };
         },
       };
-      const { session } = await createLiveSession({ customTools: [echoTool] });
+      const { session } = await createLiveSession({ customTools: () => [echoTool] });
 
       await session.prompt(
         "Call live_echo exactly once with text OK. After its result, reply with exactly OK.",

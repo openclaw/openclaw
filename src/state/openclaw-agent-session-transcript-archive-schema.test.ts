@@ -1,35 +1,39 @@
-import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   ensureSessionTranscriptArchiveSchema,
   SESSION_TRANSCRIPT_ARCHIVES_TABLE,
 } from "./openclaw-agent-session-transcript-archive-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const nativeDatabases: DatabaseSync[] = [];
+
+function openArchiveDatabase(filename = ":memory:", admitted = true) {
+  const database = admitted ? openNodeSqliteDatabase(filename) : new DatabaseSync(filename);
+  nativeDatabases.push(database);
+  if (admitted) {
+    admitSqliteSchema(database);
+  }
+  return database;
+}
 
 afterEach(() => {
+  for (const database of nativeDatabases.splice(0)) {
+    if (database.isOpen) {
+      database.close();
+    }
+  }
   closeOpenClawAgentDatabasesForTest();
 });
-
-function schemaWithoutTranscriptArchives(): string {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
-    `CREATE TABLE IF NOT EXISTS ${SESSION_TRANSCRIPT_ARCHIVES_TABLE} (`,
-  );
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (",
-    start,
-  );
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return `${OPENCLAW_AGENT_SCHEMA_SQL.slice(0, start)}${OPENCLAW_AGENT_SCHEMA_SQL.slice(end)}`;
-}
 
 describe("session transcript archive schema", () => {
   it("keeps a current database table-free until first archive use without changing its version", () => {
@@ -73,42 +77,6 @@ describe("session transcript archive schema", () => {
     ).toEqual(metadataBefore);
   });
 
-  it("keeps a populated additive archive table usable by the previous schema contract", () => {
-    const database = new DatabaseSync(":memory:");
-    try {
-      database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-      database
-        .prepare(
-          `INSERT INTO ${SESSION_TRANSCRIPT_ARCHIVES_TABLE} (
-             session_id, generation, session_key, reason, encoding, archive_blob, archive_sha256,
-             archive_name, created_at
-           ) VALUES (?, ?, ?, 'deleted', 'identity', ?, ?, ?, ?)`,
-        )
-        .run(
-          "session-1",
-          "generation-1",
-          "agent:main:session-1",
-          Buffer.from("{}\n"),
-          "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
-          "session-1.jsonl.deleted.2026-08-14T00-00-00.000Z",
-          Date.now(),
-        );
-
-      expect(() =>
-        assertSqliteSchemaContains(
-          database,
-          "previous agent schema",
-          schemaWithoutTranscriptArchives(),
-        ),
-      ).not.toThrow();
-      expect(
-        database.prepare("SELECT archive_name FROM session_transcript_archives").get(),
-      ).toEqual({ archive_name: "session-1.jsonl.deleted.2026-08-14T00-00-00.000Z" });
-    } finally {
-      database.close();
-    }
-  });
-
   it("rejects a drifted archive table instead of treating it as an optional absence", () => {
     const stateDir = tempDirs.make("openclaw-session-archive-drift-");
     const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -130,4 +98,70 @@ describe("session transcript archive schema", () => {
 
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/session_transcript_archives|schema/u);
   });
+
+  it.each([false, true])(
+    "reinstalls rolled-back first use and reopened storage with admitted=%s",
+    (admitted) => {
+      const database = openArchiveDatabase(":memory:", admitted);
+      expect(() =>
+        runSqliteImmediateTransactionSync(database, () => {
+          ensureSessionTranscriptArchiveSchema(database);
+          database.prepare("SELECT session_id FROM session_transcript_archives").all();
+          throw new Error("rollback archive installation");
+        }),
+      ).toThrow("rollback archive installation");
+      expect(() => database.prepare("SELECT session_id FROM session_transcript_archives")).toThrow(
+        /no such table/u,
+      );
+      ensureSessionTranscriptArchiveSchema(database);
+      expect(database.prepare("SELECT session_id FROM session_transcript_archives").all()).toEqual(
+        [],
+      );
+      database.close();
+      database.open();
+      ensureSessionTranscriptArchiveSchema(database);
+      expect(database.prepare("SELECT session_id FROM session_transcript_archives").all()).toEqual(
+        [],
+      );
+    },
+  );
+
+  it("repairs a missing index on first admission and local companion-table removal on the next use", () => {
+    const filename = path.join(tempDirs.make("archive-schema-refresh-"), "agent.sqlite");
+    const peer = openArchiveDatabase(filename, false);
+    ensureSessionTranscriptArchiveSchema(peer);
+    peer.exec("DROP INDEX idx_agent_session_transcript_archives_pending");
+    peer.close();
+    const database = openArchiveDatabase(filename);
+    ensureSessionTranscriptArchiveSchema(database);
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM main.sqlite_schema WHERE type = 'index' AND name = 'idx_agent_session_transcript_archives_pending'",
+        )
+        .get(),
+    ).toEqual({ name: "idx_agent_session_transcript_archives_pending" });
+    database.exec("DROP TABLE session_transcript_cold_archives");
+    ensureSessionTranscriptArchiveSchema(database);
+    expect(
+      database.prepare("SELECT session_id FROM session_transcript_cold_archives").all(),
+    ).toEqual([]);
+  });
+
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
+    "does not reuse schema presence across dynamic authorizer decisions",
+    () => {
+      const database = openArchiveDatabase();
+      ensureSessionTranscriptArchiveSchema(database);
+      let allowed = true;
+      database.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
+      try {
+        ensureSessionTranscriptArchiveSchema(database);
+        allowed = false;
+        expect(() => ensureSessionTranscriptArchiveSchema(database)).toThrow(/not authorized/iu);
+      } finally {
+        database.setAuthorizer(null);
+      }
+    },
+  );
 });

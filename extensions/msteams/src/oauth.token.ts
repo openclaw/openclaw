@@ -1,9 +1,10 @@
-// Msteams plugin module implements oauth.token behavior.
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createMSTeamsHttpError } from "./http-error.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
@@ -22,47 +23,13 @@ type MSTeamsTokenResponse = {
   scope?: string;
 };
 
-function createMSTeamsTokenBody(params: {
-  clientId: string;
-  clientSecret: string;
-  grantType: string;
-  scopes: readonly string[];
-  values?: Record<string, string>;
-}): URLSearchParams {
-  const body = new URLSearchParams({
-    client_id: params.clientId,
-    client_secret: params.clientSecret,
-    grant_type: params.grantType,
-    scope: [...params.scopes].join(" "),
-  });
-
-  for (const [key, value] of Object.entries(params.values ?? {})) {
-    body.set(key, value);
-  }
-
-  return body;
-}
-
-function resolveMSTeamsTokenExpiresAt(value: unknown): number | undefined {
-  return resolveExpiresAtMsFromDurationSeconds(value, { bufferMs: EXPIRY_BUFFER_MS });
-}
-
-function assertMSTeamsTokenResponseObject(
-  data: unknown,
-  failureLabel: string,
-): Record<string, unknown> {
-  // JSON.parse can yield null or arrays even when the provider response is typed as an object.
+function parseMSTeamsTokenResponse(data: unknown, failureLabel: string): MSTeamsTokenResponse {
   if (!isRecord(data)) {
     throw new Error(`MSTeams ${failureLabel} failed: invalid token response fields`);
   }
-  return data;
-}
-
-function parseMSTeamsTokenResponse(
-  data: Record<string, unknown>,
-  failureLabel: string,
-): MSTeamsTokenResponse {
-  const expiresAt = resolveMSTeamsTokenExpiresAt(data.expires_in);
+  const expiresAt = resolveExpiresAtMsFromDurationSeconds(data.expires_in, {
+    bufferMs: EXPIRY_BUFFER_MS,
+  });
   if (
     typeof data.access_token !== "string" ||
     !data.access_token ||
@@ -103,16 +70,13 @@ async function fetchMSTeamsTokens(params: {
 
   try {
     if (!response.ok) {
-      throw await createMSTeamsHttpError(response, `MSTeams ${params.failureLabel} failed`);
+      throw await createProviderHttpError(response, `MSTeams ${params.failureLabel} failed`);
     }
     const data = await readProviderJsonResponse<unknown>(
       response,
       `MSTeams ${params.failureLabel} failed`,
     );
-    return parseMSTeamsTokenResponse(
-      assertMSTeamsTokenResponseObject(data, params.failureLabel),
-      params.failureLabel,
-    );
+    return parseMSTeamsTokenResponse(data, params.failureLabel);
   } finally {
     await release();
   }
@@ -130,12 +94,12 @@ async function requestMSTeamsDelegatedTokens(params: {
   resolveRefreshToken: (data: MSTeamsTokenResponse) => string;
 }): Promise<MSTeamsDelegatedTokens> {
   const scopes = params.scopes ?? MSTEAMS_DEFAULT_DELEGATED_SCOPES;
-  const body = createMSTeamsTokenBody({
-    clientId: params.clientId,
-    clientSecret: params.clientSecret,
-    grantType: params.grantType,
-    scopes,
-    values: params.values,
+  const body = new URLSearchParams({
+    client_id: params.clientId,
+    client_secret: params.clientSecret,
+    grant_type: params.grantType,
+    scope: scopes.join(" "),
+    ...params.values,
   });
   const data = await fetchMSTeamsTokens({
     tokenUrl: buildMSTeamsTokenEndpoint(params.tenantId),

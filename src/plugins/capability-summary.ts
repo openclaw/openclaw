@@ -232,8 +232,12 @@ export function buildPluginCapabilitySummary(params: {
   };
 }
 
-export type PluginCapabilityConsentReview = Omit<PluginsInspectResult, "ok" | "plugin"> & {
+export type PluginCapabilityConsentReview = Omit<
+  PluginsInspectResult,
+  "ok" | "plugin" | "components" | "catalog"
+> & {
   pluginId: string;
+  reviewToken: string;
   name: string;
   version?: string;
   widened?: Partial<PluginAcceptedDeclaredSurface>;

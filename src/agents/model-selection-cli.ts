@@ -3,6 +3,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolvePluginSetupCliBackendDescriptor,
   resolvePluginSetupCliBackendIds,
@@ -15,7 +16,7 @@ export type CliProviderClassifier = (provider: string) => boolean;
 export function prepareCliProviderClassifier(cfg?: OpenClawConfig): CliProviderClassifier {
   const providers = new Set(
     [
-      ...resolveRuntimeCliBackends().map((backend) => backend.id),
+      ...resolveRuntimeCliBackends("metadata").map((backend) => backend.id),
       ...resolvePluginSetupCliBackendIds({ config: cfg }),
     ].map(normalizeProviderId),
   );
@@ -23,14 +24,21 @@ export function prepareCliProviderClassifier(cfg?: OpenClawConfig): CliProviderC
 }
 
 /** Return true when a provider id resolves to a configured or plugin CLI backend. */
-export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
+export function isCliProvider(
+  provider: string,
+  cfg?: OpenClawConfig,
+  metadataSnapshot?: PluginMetadataSnapshot | null,
+): boolean {
   const normalized = normalizeProviderId(provider);
-  const cliBackends = resolveRuntimeCliBackends();
+  const cliBackends = resolveRuntimeCliBackends("metadata");
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;
   }
-  if (resolvePluginSetupCliBackendDescriptor({ backend: normalized, config: cfg })) {
-    return true;
+  // An admitted projection's missing metadata cannot trigger setup discovery.
+  if (metadataSnapshot === null) {
+    return false;
   }
-  return false;
+  return Boolean(
+    resolvePluginSetupCliBackendDescriptor({ backend: normalized, config: cfg, metadataSnapshot }),
+  );
 }

@@ -34,7 +34,6 @@ type MockHttpInterceptor = {
   requestBody?: MockHttpValueMatcher;
   requestHeaders?: MockHttpHeaderMatcher;
   reply: MockHttpReply | Error;
-  times?: number;
 };
 
 type MockHttp = {
@@ -93,16 +92,14 @@ export function createMockHttp(): MockHttp {
         ...(params.requestBody === undefined ? {} : { body: params.requestBody }),
         ...(params.requestHeaders === undefined ? {} : { headers: params.requestHeaders }),
       });
-      const scope =
-        params.reply instanceof Error
-          ? interceptor.replyWithError(params.reply)
-          : interceptor.reply(
-              params.reply.status ?? 200,
-              "json" in params.reply ? JSON.stringify(params.reply.json) : params.reply.body,
-              { headers: replyHeaders(params.reply) },
-            );
-      if (params.times !== undefined) {
-        scope.times(params.times);
+      if (params.reply instanceof Error) {
+        interceptor.replyWithError(params.reply);
+      } else {
+        interceptor.reply(
+          params.reply.status ?? 200,
+          "json" in params.reply ? JSON.stringify(params.reply.json) : params.reply.body,
+          { headers: replyHeaders(params.reply) },
+        );
       }
     },
     requests() {

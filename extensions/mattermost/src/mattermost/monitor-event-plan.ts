@@ -1,4 +1,3 @@
-// Mattermost plugin module prepares shared routing and reply facts for monitor events.
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveMattermostReplyToMode } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
@@ -128,9 +127,9 @@ export async function buildMattermostEventPlan(
       },
       replyOptions: {
         disableBlockStreaming:
-          typeof monitor.account.blockStreaming === "boolean"
-            ? !monitor.account.blockStreaming
-            : undefined,
+          monitor.account.blockStreaming === undefined
+            ? undefined
+            : !monitor.account.blockStreaming,
       },
     }),
   };

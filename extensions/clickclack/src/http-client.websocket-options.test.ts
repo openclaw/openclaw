@@ -1,16 +1,20 @@
 // ClickClack tests cover websocket constructor options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { webSocketCtorCalls } = vi.hoisted(() => ({
-  webSocketCtorCalls: [] as Array<{ url: string; options: unknown }>,
+const { webSocketCtorCalls, MockWebSocket } = vi.hoisted(() => {
+  const calls: Array<{ url: string; options: unknown }> = [];
+  function StubWebSocket(url: string | URL, options?: unknown) {
+    calls.push({ url: String(url), options });
+  }
+  return { webSocketCtorCalls: calls, MockWebSocket: StubWebSocket };
+});
+
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: MockWebSocket,
 }));
 
-vi.mock("ws", () => ({
-  WebSocket: function MockWebSocket(url: string | URL, options?: unknown) {
-    webSocketCtorCalls.push({ url: String(url), options });
-  },
-}));
-
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { createClickClackClient } from "./http-client.js";
 
 describe("createClickClackClient websocket options", () => {
@@ -19,6 +23,7 @@ describe("createClickClackClient websocket options", () => {
   });
 
   it("passes a 30-second opening handshake deadline to ws", () => {
+    expect(WebSocket).toBe(MockWebSocket);
     const client = createClickClackClient({
       baseUrl: "https://clickclack.example",
       token: "fake",

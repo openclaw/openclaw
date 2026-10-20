@@ -1,16 +1,15 @@
-// Google tests cover media understanding provider.video plugin behavior.
 import { createServer, type Server } from "node:http";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "openclaw/plugin-sdk/test-media-understanding";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import googlePlugin from "./index.js";
 import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understanding-provider.js";
-import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 
 installPinnedHostnameTestHooks();
-
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 
 async function listenLoopbackServer(server: Server): Promise<number> {
@@ -54,215 +53,125 @@ function createOversizedJsonServer(): { server: Server; closed: Promise<number> 
   return { server, closed };
 }
 
-describe("describeGeminiVideo", () => {
-  it("respects case-insensitive x-goog-api-key overrides", async () => {
-    let seenKey: string | null = null;
-    const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      seenKey = headers.get("x-goog-api-key");
-      return new Response(
-        JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "video ok" }] } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
+const mediaRequest = {
+  buffer: Buffer.from("video-bytes"),
+  fileName: "clip.mp4",
+  apiKey: "test-key",
+  timeoutMs: 1500,
+};
+const describeVideo = (overrides: Partial<Parameters<typeof describeGeminiVideo>[0]> = {}) =>
+  describeGeminiVideo({ ...mediaRequest, ...overrides });
 
-    const result = await describeGeminiVideo({
-      buffer: Buffer.from("video"),
-      fileName: "clip.mp4",
-      apiKey: "test-key",
-      timeoutMs: 1000,
-      headers: { "X-Goog-Api-Key": "override" },
-      fetchFn,
-    });
+const mediaResponse = (...texts: string[]) => ({
+  candidates: [{ content: { parts: texts.map((text) => ({ text })) } }],
+});
 
-    expect(seenKey).toBe("override");
-    expect(result.text).toBe("video ok");
+it.each([undefined, "override"])("builds the request with API key override %s", async (apiKey) => {
+  const { fetchFn, getRequest } = createRequestCaptureJsonFetch(
+    mediaResponse("first", " second ", ""),
+  );
+
+  const result = await describeVideo({
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
+    model: "gemini-3-pro",
+    headers: { "X-Other": "1", ...(apiKey ? { "X-Goog-Api-Key": apiKey } : {}) },
+    fetchFn,
+  });
+  const { url: seenUrl, init: seenInit } = getRequest();
+
+  expect(result).toMatchObject({ model: "gemini-3.1-pro-preview", text: "first\nsecond" });
+  expect(seenUrl).toBe(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent",
+  );
+  expect(seenInit).toMatchObject({ method: "POST", signal: expect.any(AbortSignal) });
+
+  const headers = new Headers(seenInit?.headers);
+  expect(Object.fromEntries(headers)).toMatchObject({
+    "x-goog-api-key": apiKey ?? "test-key",
+    "content-type": "application/json",
+    "x-other": "1",
   });
 
-  it("keeps private-network disabled for the default Google media endpoint", async () => {
-    expect(
-      resolveGoogleGenerativeAiHttpRequestConfig({
-        apiKey: "test-key",
-        capability: "video",
-        transport: "media-understanding",
-      }).allowPrivateNetwork,
-    ).toBe(false);
+  const bodyText = seenInit?.body;
+  if (typeof bodyText !== "string") {
+    throw new Error("Expected a JSON string request body");
+  }
+  const body = JSON.parse(bodyText);
+  expect(body.contents?.[0]?.parts).toMatchObject([
+    { text: "Describe the video." },
+    { inline_data: { mime_type: "video/mp4", data: mediaRequest.buffer.toString("base64") } },
+  ]);
+});
 
-    const fetchFn = withFetchPreconnect(async () => {
-      return new Response(
-        JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "video ok" }] } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
-
-    await describeGeminiVideo({
-      buffer: Buffer.from("video"),
-      fileName: "clip.mp4",
-      apiKey: "test-key",
-      timeoutMs: 1000,
-      fetchFn,
-    });
-  });
-
-  it("builds the expected request payload", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
-      candidates: [
-        {
-          content: {
-            parts: [{ text: "first" }, { text: " second " }, { text: "" }],
-          },
-        },
-      ],
-    });
-
-    const result = await describeGeminiVideo({
-      buffer: Buffer.from("video-bytes"),
-      fileName: "clip.mp4",
-      apiKey: "test-key",
-      timeoutMs: 1500,
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
-      model: "gemini-3-pro",
-      headers: { "X-Other": "1" },
-      fetchFn,
-    });
-    const { url: seenUrl, init: seenInit } = getRequest();
-
-    expect(result.model).toBe("gemini-3.1-pro-preview");
-    expect(result.text).toBe("first\nsecond");
-    expect(seenUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent",
-    );
-    expect(seenInit?.method).toBe("POST");
-    expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
-
-    const headers = new Headers(seenInit?.headers);
-    expect(headers.get("x-goog-api-key")).toBe("test-key");
-    expect(headers.get("content-type")).toBe("application/json");
-    expect(headers.get("x-other")).toBe("1");
-
-    const bodyText =
-      typeof seenInit?.body === "string"
-        ? seenInit.body
-        : Buffer.isBuffer(seenInit?.body)
-          ? seenInit.body.toString("utf8")
-          : "";
-    const body = JSON.parse(bodyText);
-    expect(body.contents?.[0]?.parts?.[0]?.text).toBe("Describe the video.");
-    expect(body.contents?.[0]?.parts?.[1]?.inline_data?.mime_type).toBe("video/mp4");
-    expect(body.contents?.[0]?.parts?.[1]?.inline_data?.data).toBe(
-      Buffer.from("video-bytes").toString("base64"),
-    );
-  });
-
-  it("uses the canonical endpoint for an empty configured base URL", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
-      candidates: [{ content: { parts: [{ text: "video ok" }] } }],
-    });
-
-    await describeGeminiVideo({
-      buffer: Buffer.from("video-bytes"),
-      fileName: "clip.mp4",
-      apiKey: "test-key",
-      baseUrl: "",
-      timeoutMs: 1500,
-      fetchFn,
-    });
-
-    const { url, init } = getRequest();
-    expect(url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
-    );
-    expect(new Headers(init?.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
-  });
-
-  it("uses the canonical endpoint for blank audio base URLs", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
-      candidates: [{ content: { parts: [{ text: "audio ok" }] } }],
-    });
-
-    await transcribeGeminiAudio({
-      buffer: Buffer.from("audio-bytes"),
-      fileName: "clip.wav",
-      apiKey: "test-key",
-      baseUrl: "   ",
-      timeoutMs: 1500,
-      fetchFn,
-    });
-
-    const { url, init } = getRequest();
-    expect(url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
-    );
-    expect(new Headers(init?.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
-  });
-
-  it("bounds oversized video JSON responses and closes the stream early", async () => {
-    const { server, closed } = createOversizedJsonServer();
-    const port = await listenLoopbackServer(server);
-    const fetchFn = withFetchPreconnect(async () =>
-      fetch(`http://127.0.0.1:${port}/google-video-json`),
-    );
-
-    try {
-      await expect(
-        describeGeminiVideo({
-          buffer: Buffer.from("video-bytes"),
-          fileName: "clip.mp4",
-          apiKey: "test-key",
-          timeoutMs: 1500,
-          fetchFn,
-        }),
-      ).rejects.toThrow(/JSON response exceeds 16777216 bytes/u);
-      await expect(closed).resolves.toBeLessThan(LOOPBACK_RESPONSE_BYTES);
-    } finally {
-      server.close();
+it.each([
+  { method: "describeVideo", baseUrl: "", fileName: "clip.mp4" },
+  { method: "transcribeAudio", baseUrl: "   ", fileName: "clip.wav" },
+] as const)(
+  "uses the canonical endpoint for blank $method base URLs through registration",
+  async ({ method, baseUrl, fileName }) => {
+    const captured = createCapturedPluginRegistration({ id: "google" });
+    googlePlugin.register(captured.api);
+    const handler = captured.mediaUnderstandingProviders.find(
+      (provider) => provider.id === "google",
+    )?.[method];
+    if (!handler) {
+      throw new Error(`Expected registered Google ${method}`);
     }
-  });
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch(mediaResponse("media ok"));
 
-  it("rejects non-Google video base URLs before sending authenticated requests", async () => {
-    await expect(
-      describeGeminiVideo({
-        buffer: Buffer.from("video-bytes"),
-        fileName: "clip.mp4",
-        apiKey: "test-key",
-        timeoutMs: 1500,
-        baseUrl: "https://example.com/v1beta/",
-        fetchFn: async () => {
-          throw new Error("fetch should not run");
-        },
-      }),
-    ).rejects.toThrow(
-      "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",
-    );
-  });
+    const result = await handler({ ...mediaRequest, fileName, baseUrl, fetchFn });
 
-  it("formats Google audio transcription HTTP errors with provider details", async () => {
-    await expect(
-      transcribeGeminiAudio({
-        buffer: Buffer.from("audio-bytes"),
-        fileName: "clip.wav",
-        apiKey: "test-key",
-        timeoutMs: 1500,
-        fetchFn: async () =>
-          new Response(
-            JSON.stringify({
-              error: {
-                message: "Unsupported audio",
-                status: "INVALID_ARGUMENT",
-              },
-            }),
-            {
-              status: 400,
-              headers: { "x-request-id": "google_audio_req" },
-            },
-          ),
-      }),
-    ).rejects.toThrow(
-      "Audio transcription failed (400): Unsupported audio [code=INVALID_ARGUMENT] [request_id=google_audio_req]",
+    const { url, init } = getRequest();
+    expect(result.text).toBe("media ok");
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
     );
-  });
+    expect(new Headers(init?.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
+  },
+);
+
+it("bounds oversized video JSON responses and closes the stream early", async () => {
+  const { server, closed } = createOversizedJsonServer();
+  const port = await listenLoopbackServer(server);
+  const fetchFn = withFetchPreconnect(async () =>
+    fetch(`http://127.0.0.1:${port}/google-video-json`),
+  );
+
+  try {
+    await expect(describeVideo({ fetchFn })).rejects.toThrow(
+      /JSON response exceeds 16777216 bytes/u,
+    );
+    await expect(closed).resolves.toBeLessThan(LOOPBACK_RESPONSE_BYTES);
+  } finally {
+    server.close();
+  }
+});
+
+it("rejects non-Google video base URLs before sending authenticated requests", async () => {
+  await expect(
+    describeVideo({
+      baseUrl: "https://example.com/v1beta/",
+      fetchFn: async () => {
+        throw new Error("fetch should not run");
+      },
+    }),
+  ).rejects.toThrow(
+    "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",
+  );
+});
+
+it("formats Google audio transcription HTTP errors with provider details", async () => {
+  await expect(
+    transcribeGeminiAudio({
+      ...mediaRequest,
+      fileName: "clip.wav",
+      fetchFn: async () =>
+        Response.json(
+          { error: { message: "Unsupported audio", status: "INVALID_ARGUMENT" } },
+          { status: 400, headers: { "x-request-id": "google_audio_req" } },
+        ),
+    }),
+  ).rejects.toThrow(
+    "Audio transcription failed (400): Unsupported audio [code=INVALID_ARGUMENT] [request_id=google_audio_req]",
+  );
 });

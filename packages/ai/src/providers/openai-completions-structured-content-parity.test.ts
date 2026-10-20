@@ -1,23 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { describe, expect, it } from "vitest";
+import { configureAiTransportHost } from "../host.js";
 import { convertMessages } from "../openai-completions-messages.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
-import type { AssistantMessageEventStreamLike, Context, Model } from "../types.js";
+import type { Context, Model } from "../types.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
+import { makeOpenAIProviderModel, preserveTransportHost } from "./openai-provider.test-support.js";
 
-const reasoningModel = {
-  id: "gpt-5.5",
-  name: "GPT-5.5",
-  api: "openai-completions",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 4_096,
-} satisfies Model<"openai-completions">;
+const reasoningModel = makeOpenAIProviderModel("openai-completions");
 
 const context = {
   messages: [{ role: "user", content: "Reply exactly", timestamp: 1 }],
@@ -25,6 +15,7 @@ const context = {
 
 type StructuredContentScenario = {
   name: string;
+  package?: boolean;
   choice: Record<string, unknown>;
   followupChoice?: Record<string, unknown>;
   expectedContent: Array<Record<string, unknown>>;
@@ -32,278 +23,187 @@ type StructuredContentScenario = {
   reasoningEffort?: "medium" | "none";
 };
 
+const textPart = (text: string) => ({ type: "text", text });
+function privateParts(thought = "Private thought", visible = "Visible answer") {
+  return [{ type: "reasoning", text: thought }, textPart(visible)];
+}
+function answer(thinking = "Private thought", thinkingSignature?: string) {
+  return [
+    { type: "thinking", thinking, ...(thinkingSignature ? { thinkingSignature } : {}) },
+    textPart("Visible answer"),
+  ];
+}
+function refusalPart(refusal: string) {
+  return { type: "refusal", refusal };
+}
+
+type ContentRow = [
+  name: string,
+  delta: Record<string, unknown>,
+  expectedContent: StructuredContentScenario["expectedContent"],
+  overrides?: Partial<StructuredContentScenario>,
+];
+const disabledReasoningRows = [
+  ["mirrored disabled", "Do not expose this", "Do not expose this", false, undefined],
+  ["structured explicitly disabled", "Do not expose this", undefined, undefined, "none"],
+  [
+    "distinct explicitly disabled",
+    "Another private thought",
+    "Do not expose this",
+    undefined,
+    "none",
+  ],
+] as const;
+const refusalRows = [
+  ["documented refusal part", ["Refused."], undefined, "Refused."],
+  ["mirrored refusal", ["No."], "No.", "No."],
+  ["distinct refusals", ["No. "], "Guidance.", "No. Guidance."],
+  ["split mirrored refusal", ["No", "."], "No.", "No."],
+] as const;
+const contentRows: ContentRow[] = [
+  ["the unchanged scalar text contract", { content: "Scalar answer" }, [textPart("Scalar answer")]],
+  [
+    "a provider-compatible typed text object",
+    { content: { type: "text", text: "Visible object" } },
+    [textPart("Visible object")],
+  ],
+  [
+    "nested typed text content",
+    { content: { type: "output_text", content: { text: "Nested answer" } } },
+    [textPart("Nested answer")],
+  ],
+  [
+    "mixed private reasoning and visible text",
+    { content: privateParts() },
+    answer(),
+    { package: true },
+  ],
+  ...["reasoning_content", "reasoning", "reasoning_text"].map((field): ContentRow => [
+    `private reasoning mirrored in ${field} and structured content`,
+    { [field]: "Private thought", content: privateParts() },
+    answer("Private thought", field),
+  ]),
+  ...["reasoning_content", "reasoning", "reasoning_text"].map((field): ContentRow => [
+    `distinct private reasoning in ${field} and structured content`,
+    {
+      [field]: "Dedicated private thought.",
+      content: privateParts("Distinct structured private thought."),
+    },
+    answer("Dedicated private thought.Distinct structured private thought.", field),
+    { package: field === "reasoning_content" },
+  ]),
+  [
+    "split structured reasoning mirrored in the dedicated field",
+    {
+      reasoning_content: "Private thought",
+      content: [
+        { type: "reasoning", text: "Private " },
+        { type: "reasoning", text: "thought" },
+        textPart("Visible answer"),
+      ],
+    },
+    answer("Private thought", "reasoning_content"),
+    { package: true },
+  ],
+  [
+    "standalone dedicated reasoning alongside visible structured text",
+    { reasoning_content: "Private thought", content: [textPart("Visible answer")] },
+    answer("Private thought", "reasoning_content"),
+  ],
+  [
+    "structured reasoning that is disabled",
+    {
+      content: [
+        { type: "thinking", thinking: [textPart("Do not expose this")] },
+        textPart("Visible answer"),
+      ],
+    },
+    [textPart("Visible answer")],
+    { reasoningEnabled: false },
+  ],
+  ...disabledReasoningRows.map(
+    ([name, thought, dedicated, reasoningEnabled, reasoningEffort]): ContentRow => [
+      name,
+      { content: privateParts(thought), ...(dedicated ? { reasoning_content: dedicated } : {}) },
+      [textPart("Visible answer")],
+      { package: Boolean(dedicated), reasoningEnabled, reasoningEffort },
+    ],
+  ),
+  [
+    "pending partial inline reasoning remains private after a structured thought",
+    { content: "<thi" },
+    [{ type: "thinking", thinking: "Structured private thought" }, textPart("SAFE")],
+    {
+      package: true,
+      followupChoice: {
+        delta: {
+          content: privateParts("Structured private thought", "nk>SECRET</think>SAFE"),
+        },
+      },
+    },
+  ],
+  ...refusalRows.map(([name, parts, refusal, visible]): ContentRow => [
+    name,
+    { content: parts.map(refusalPart), ...(refusal === undefined ? {} : { refusal }) },
+    [textPart(visible)],
+  ]),
+  [
+    "identical refusals intentionally repeated across separate chunks",
+    { refusal: "Safety refusal." },
+    [textPart("Safety refusal.Safety refusal.")],
+    { followupChoice: { delta: { refusal: "Safety refusal." } } },
+  ],
+  [
+    "an existing top-level refusal without duplication",
+    { content: [textPart("Visible prefix. ")], refusal: "Safety refusal." },
+    [textPart("Visible prefix. Safety refusal.")],
+  ],
+  [
+    "unknown structured parts without object coercion",
+    { content: [{ type: "unknown", text: "Do not expose this" }] },
+    [],
+  ],
+];
 const scenarios: StructuredContentScenario[] = [
-  {
-    name: "the unchanged scalar text contract",
-    choice: { delta: { content: "Scalar answer" } },
-    expectedContent: [{ type: "text", text: "Scalar answer" }],
-  },
-  {
-    name: "a provider-compatible typed text object",
-    choice: { delta: { content: { type: "text", text: "Visible object" } } },
-    expectedContent: [{ type: "text", text: "Visible object" }],
-  },
-  {
-    name: "nested typed text content",
-    choice: { delta: { content: { type: "output_text", content: { text: "Nested answer" } } } },
-    expectedContent: [{ type: "text", text: "Nested answer" }],
-  },
-  {
-    name: "mixed private reasoning and visible text",
-    choice: {
-      delta: {
-        content: [
-          { type: "reasoning", text: "Private thought" },
-          { type: "text", text: "Visible answer" },
-        ],
-      },
-    },
-    expectedContent: [
-      { type: "thinking", thinking: "Private thought" },
-      { type: "text", text: "Visible answer" },
-    ],
-  },
-  ...(["reasoning_content", "reasoning", "reasoning_text"] as const).map((field) => ({
-    name: `private reasoning mirrored in ${field} and structured content`,
-    choice: {
-      delta: {
-        [field]: "Private thought",
-        content: [
-          { type: "reasoning", text: "Private thought" },
-          { type: "text", text: "Visible answer" },
-        ],
-      },
-    },
-    expectedContent: [
-      { type: "thinking", thinking: "Private thought", thinkingSignature: field },
-      { type: "text", text: "Visible answer" },
-    ],
-  })),
-  ...(["reasoning_content", "reasoning", "reasoning_text"] as const).map((field) => ({
-    name: `distinct private reasoning in ${field} and structured content`,
-    choice: {
-      delta: {
-        [field]: "Dedicated private thought.",
-        content: [
-          { type: "reasoning", text: "Distinct structured private thought." },
-          { type: "text", text: "Visible answer" },
-        ],
-      },
-    },
-    expectedContent: [
-      {
-        type: "thinking",
-        thinking: "Dedicated private thought.Distinct structured private thought.",
-        thinkingSignature: field,
-      },
-      { type: "text", text: "Visible answer" },
-    ],
-  })),
-  {
-    name: "split structured reasoning mirrored in the dedicated field",
-    choice: {
-      delta: {
-        reasoning_content: "Private thought",
-        content: [
-          { type: "reasoning", text: "Private " },
-          { type: "reasoning", text: "thought" },
-          { type: "text", text: "Visible answer" },
-        ],
-      },
-    },
-    expectedContent: [
-      { type: "thinking", thinking: "Private thought", thinkingSignature: "reasoning_content" },
-      { type: "text", text: "Visible answer" },
-    ],
-  },
-  {
-    name: "standalone dedicated reasoning alongside visible structured text",
-    choice: {
-      delta: {
-        reasoning_content: "Private thought",
-        content: [{ type: "text", text: "Visible answer" }],
-      },
-    },
-    expectedContent: [
-      { type: "thinking", thinking: "Private thought", thinkingSignature: "reasoning_content" },
-      { type: "text", text: "Visible answer" },
-    ],
-  },
-  {
-    name: "structured reasoning that is disabled",
-    reasoningEnabled: false,
-    choice: {
-      delta: {
-        content: [
-          { type: "thinking", thinking: [{ type: "text", text: "Do not expose this" }] },
-          { type: "text", text: "Visible answer" },
-        ],
-      },
-    },
-    expectedContent: [{ type: "text", text: "Visible answer" }],
-  },
-  {
-    name: "dedicated and structured mirrored reasoning that is disabled",
-    reasoningEnabled: false,
-    choice: {
-      delta: {
-        reasoning_content: "Do not expose this",
-        content: [
-          { type: "reasoning", text: "Do not expose this" },
-          { type: "text", text: "Visible answer" },
-        ],
-      },
-    },
-    expectedContent: [{ type: "text", text: "Visible answer" }],
-  },
-  {
-    name: "structured reasoning explicitly disabled on a capable model",
-    reasoningEffort: "none",
-    choice: {
-      delta: {
-        content: [
-          { type: "reasoning", text: "Do not expose this" },
-          { type: "text", text: "Visible answer" },
-        ],
-      },
-    },
-    expectedContent: [{ type: "text", text: "Visible answer" }],
-  },
-  {
-    name: "pending partial inline reasoning remains private after a structured thought",
-    choice: { delta: { content: "<thi" } },
-    followupChoice: {
-      delta: {
-        content: [
-          { type: "reasoning", text: "Structured private thought" },
-          { type: "text", text: "nk>SECRET</think>SAFE" },
-        ],
-      },
-    },
-    expectedContent: [
-      { type: "thinking", thinking: "Structured private thought" },
-      { type: "text", text: "SAFE" },
-    ],
-  },
-  {
-    name: "dedicated and structured reasoning explicitly disabled on a capable model",
-    reasoningEffort: "none",
-    choice: {
-      delta: {
-        reasoning_content: "Do not expose this",
-        content: [
-          { type: "reasoning", text: "Another private thought" },
-          { type: "text", text: "Visible answer" },
-        ],
-      },
-    },
-    expectedContent: [{ type: "text", text: "Visible answer" }],
-  },
-  {
-    name: "a documented refusal content part",
-    choice: {
-      delta: { content: [{ type: "refusal", refusal: "I cannot help with that." }] },
-    },
-    expectedContent: [{ type: "text", text: "I cannot help with that." }],
-  },
-  {
-    name: "the same refusal mirrored in structured and top-level fields",
-    choice: {
-      delta: {
-        content: [{ type: "refusal", refusal: "Safety refusal." }],
-        refusal: "Safety refusal.",
-      },
-    },
-    expectedContent: [{ type: "text", text: "Safety refusal." }],
-  },
-  {
-    name: "distinct structured and top-level refusals",
-    choice: {
-      delta: {
-        content: [{ type: "refusal", refusal: "Provider refusal. " }],
-        refusal: "Operator guidance.",
-      },
-    },
-    expectedContent: [{ type: "text", text: "Provider refusal. Operator guidance." }],
-  },
-  {
-    name: "split structured refusal mirrored in the top-level field",
-    choice: {
-      delta: {
-        content: [
-          { type: "refusal", refusal: "Safety " },
-          { type: "refusal", refusal: "refusal." },
-        ],
-        refusal: "Safety refusal.",
-      },
-    },
-    expectedContent: [{ type: "text", text: "Safety refusal." }],
-  },
-  {
-    name: "identical refusals intentionally repeated across separate chunks",
-    choice: { delta: { refusal: "Safety refusal." } },
-    followupChoice: { delta: { refusal: "Safety refusal." } },
-    expectedContent: [{ type: "text", text: "Safety refusal.Safety refusal." }],
-  },
+  ...contentRows.map(([name, delta, expectedContent, overrides]) =>
+    Object.assign({ name, choice: { delta }, expectedContent }, overrides),
+  ),
   {
     name: "documented mixed assistant text and refusal parts",
+    package: true,
     choice: {
       message: {
         role: "assistant",
-        content: [
-          { type: "text", text: "Visible prefix. " },
-          { type: "refusal", refusal: "Safety refusal." },
-        ],
+        content: [textPart("Visible prefix. "), refusalPart("Safety refusal.")],
       },
     },
-    expectedContent: [{ type: "text", text: "Visible prefix. Safety refusal." }],
-  },
-  {
-    name: "an existing top-level refusal without duplication",
-    choice: {
-      delta: {
-        content: [{ type: "text", text: "Visible prefix. " }],
-        refusal: "Safety refusal.",
-      },
-    },
-    expectedContent: [{ type: "text", text: "Visible prefix. Safety refusal." }],
-  },
-  {
-    name: "unknown structured parts without object coercion",
-    choice: {
-      delta: { content: [{ type: "unknown", text: "Do not expose this" }] },
-    },
-    expectedContent: [],
+    expectedContent: [textPart("Visible prefix. Safety refusal.")],
   },
 ];
+
+function chatChunk(model: Model, choice: Record<string, unknown>, finishReason: "stop" | null) {
+  return `data: ${JSON.stringify({
+    id: "chatcmpl-structured-content",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: model.id,
+    choices: [{ index: 0, ...choice, finish_reason: finishReason }],
+  })}\n\n`;
+}
+
+function installResponse(body: string | ReadableStream<Uint8Array>) {
+  configureAiTransportHost({
+    buildModelFetch: () => async () =>
+      new Response(body, { headers: { "content-type": "text/event-stream" } }),
+  });
+}
 
 function installChatChunk(scenario: StructuredContentScenario, model: Model): void {
   const choices = [scenario.choice, ...(scenario.followupChoice ? [scenario.followupChoice] : [])];
   const body = `${choices
-    .map(
-      (choice, index) =>
-        `data: ${JSON.stringify({
-          id: `chatcmpl-${scenario.name.replaceAll(" ", "-")}`,
-          object: "chat.completion.chunk",
-          created: 1,
-          model: model.id,
-          choices: [
-            {
-              index: 0,
-              ...choice,
-              finish_reason: index === choices.length - 1 ? "stop" : null,
-            },
-          ],
-        })}\n\n`,
-    )
+    .map((choice, index) => chatChunk(model, choice, index === choices.length - 1 ? "stop" : null))
     .join("")}data: [DONE]\n\n`;
-  configureAiTransportHost({
-    buildModelFetch: () => async () =>
-      new Response(body, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-  });
+  installResponse(body);
 }
 
 function installDeferredStructuredChatChunks(model: Model): () => void {
@@ -311,50 +211,23 @@ function installDeferredStructuredChatChunks(model: Model): () => void {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const encodeChunk = (delta: Record<string, unknown>, finishReason: "stop" | null) =>
-        encoder.encode(
-          `data: ${JSON.stringify({
-            id: "chatcmpl-incremental-structured-content",
-            object: "chat.completion.chunk",
-            created: 1,
-            model: model.id,
-            choices: [{ index: 0, delta, finish_reason: finishReason }],
-          })}\n\n`,
-        );
-      controller.enqueue(
-        encodeChunk(
-          {
-            content: [
-              { type: "reasoning", text: "Private thought" },
-              { type: "text", text: "VISIBLE_ONE" },
-            ],
-          },
-          null,
-        ),
-      );
+      const encodeChunk = (content: unknown, finishReason: "stop" | null) =>
+        encoder.encode(chatChunk(model, { delta: { content } }, finishReason));
+      controller.enqueue(encodeChunk(privateParts("Private thought", "VISIBLE_ONE"), null));
       releaseTerminal = () => {
-        controller.enqueue(encodeChunk({ content: "VISIBLE_TWO" }, "stop"));
+        controller.enqueue(encodeChunk("VISIBLE_TWO", "stop"));
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       };
     },
   });
-  configureAiTransportHost({
-    buildModelFetch: () => async () =>
-      new Response(stream, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-  });
+  installResponse(stream);
   return () => releaseTerminal?.();
 }
 
 const createManagedStream = createOpenAICompletionsTransportStreamFn();
 
-function createManagedFixtureStream(
-  model: Model,
-  scenario: StructuredContentScenario,
-): AssistantMessageEventStreamLike {
+function createManagedFixtureStream(model: Model, scenario: StructuredContentScenario) {
   const options = {
     apiKey: "fixture-token",
     reasoningEffort: scenario.reasoningEffort ?? "medium",
@@ -366,15 +239,7 @@ function createManagedFixtureStream(
   return stream;
 }
 
-let previousHost: ReturnType<typeof getAiTransportHost>;
-
-beforeEach(() => {
-  previousHost = getAiTransportHost();
-});
-
-afterEach(() => {
-  configureAiTransportHost(previousHost);
-});
+preserveTransportHost();
 
 describe.each([
   {
@@ -386,8 +251,10 @@ describe.each([
       }),
   },
   { name: "managed", createStream: createManagedFixtureStream },
-])("$name Chat Completions structured content", ({ createStream }) => {
-  it.each(scenarios)("preserves $name", async (scenario) => {
+])("$name Chat Completions structured content", ({ name, createStream }) => {
+  const ownerScenarios =
+    name === "package" ? scenarios.filter((scenario) => scenario.package) : scenarios;
+  it.each(ownerScenarios)("preserves $name", async (scenario) => {
     const model = {
       ...reasoningModel,
       reasoning: scenario.reasoningEnabled ?? true,
@@ -395,8 +262,10 @@ describe.each([
     installChatChunk(scenario, model);
 
     const result = await createStream(model, scenario).result();
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual(scenario.expectedContent);
+    expect({ stopReason: result.stopReason, content: result.content }).toEqual({
+      stopReason: "stop",
+      content: scenario.expectedContent,
+    });
     expect(JSON.stringify(result.content)).not.toContain("[object Object]");
 
     const visibleAnswer = result.content

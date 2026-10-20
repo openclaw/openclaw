@@ -27,6 +27,7 @@ describe("scripts/lib/plugin-package-dependencies.mts", () => {
     expect(packageNameFromSpecifier("plain-pkg/subpath")).toBe("plain-pkg");
     expect(packageNameFromSpecifier("@scope")).toBeNull();
     expect(packageNameFromSpecifier("@scope/")).toBeNull();
+    expect(packageNameFromSpecifier("bun:sqlite")).toBeNull();
     expect(packageNameFromSpecifier("node:fs")).toBeNull();
     expect(packageNameFromSpecifier("./local")).toBeNull();
     expect(packageNameFromSpecifier("/absolute")).toBeNull();

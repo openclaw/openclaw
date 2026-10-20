@@ -1,167 +1,262 @@
-import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
+import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import { createAgentSelectionCapability, selectApplicationSession } from "./agent-selection.ts";
+import { loadSettings, saveSettings, type UiSettings } from "./settings.ts";
 
-function createGateway(
-  assistantAgentId: string | null = "Main",
-  initialGatewayUrl = "ws://gateway-a.test",
-) {
-  let snapshot = { client: null as GatewayBrowserClient | null, assistantAgentId };
-  let gatewayUrl = initialGatewayUrl;
-  const listeners = new Set<(next: typeof snapshot) => void>();
+function publisher<T>(initial: T) {
+  let value = initial;
+  const listeners = new Set<(next: T) => void>();
+  return {
+    read: () => value,
+    subscribe: (listener: (next: T) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    publish: (next: T) => {
+      value = next;
+      for (const listener of listeners) {
+        listener(next);
+      }
+    },
+  };
+}
+
+function createGateway(assistantAgentId: string | null = "Main") {
+  const snapshot = publisher({ assistantAgentId });
+  const connection = { gatewayUrl: "ws://gateway-a.test" };
   return {
     gateway: {
-      get connection() {
-        return { gatewayUrl };
-      },
+      connection,
       get snapshot() {
-        return snapshot;
+        return snapshot.read();
       },
-      subscribe(listener: (next: typeof snapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      subscribe: snapshot.subscribe,
     },
-    publish(next: typeof snapshot) {
-      snapshot = next;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-    switchGateway(nextGatewayUrl: string) {
-      gatewayUrl = nextGatewayUrl;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+    publish: snapshot.publish,
+    switchGateway(url: string) {
+      connection.gatewayUrl = url;
+      snapshot.publish(snapshot.read());
     },
   };
 }
 
 function createRoster() {
-  let state = { agentsList: null as AgentsListResult | null };
-  const listeners = new Set<() => void>();
+  const state = publisher({ agentsList: null as AgentsListResult | null });
   return {
     roster: {
       get state() {
-        return state;
+        return state.read();
       },
-      subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
+      subscribe: state.subscribe,
+    },
+    publish: (agentsList: AgentsListResult | null) => state.publish({ agentsList }),
+  };
+}
+
+function createPreferences(sidebarAgentsMode?: "chip" | "roster") {
+  let settings = loadSettings("ws://gateway-a.test");
+  const notifications = publisher(undefined);
+  const refresh = (url = settings.gatewayUrl) => {
+    settings = loadSettings(url);
+    notifications.publish(undefined);
+  };
+  const patch = (changes: Partial<UiSettings>) => {
+    saveSettings({ ...settings, ...changes });
+    refresh();
+  };
+  if (sidebarAgentsMode) {
+    patch({ sidebarAgentsMode });
+  }
+  return {
+    get settings() {
+      return settings;
+    },
+    patch,
+    refresh,
+    persistence: {
+      load: (url: string) => loadSettings(url).selectedAgentId ?? null,
+      save: (url: string, selectedAgentId: string | null) => {
+        saveSettings({ ...loadSettings(url), selectedAgentId: selectedAgentId ?? undefined });
+        refresh();
       },
     },
-    publish(agentsList: AgentsListResult) {
-      state = { agentsList };
-      for (const listener of listeners) {
-        listener();
-      }
-    },
+    setMode: (mode: "chip" | "roster") => patch({ sidebarAgentsMode: mode }),
+    subscribe: notifications.subscribe,
+  };
+}
+
+function agentRoster(
+  defaultId: string,
+  agents: Array<string | AgentsListResult["agents"][number]> = [defaultId],
+): AgentsListResult {
+  return {
+    defaultId,
+    mainKey: "main",
+    scope: "per-sender",
+    agents: agents.map((agent) =>
+      typeof agent === "string" ? { id: agent, kind: "agent" } : agent,
+    ),
+  };
+}
+
+function defaultSelection(
+  assistantAgentId: string | null = "Main",
+  options: {
+    agents?: AgentsListResult;
+    persistence?: Parameters<typeof createAgentSelectionCapability>[2];
+    configured?: boolean;
+  } = {},
+) {
+  const gateway = createGateway(assistantAgentId);
+  const roster = createRoster();
+  if (options.agents) {
+    roster.publish(options.agents);
+  }
+  const selection = createAgentSelectionCapability(
+    gateway.gateway,
+    roster.roster,
+    options.persistence,
+    undefined,
+    options.configured ? { requireConfiguredAgent: true } : {},
+  );
+  return { gateway, roster, selection };
+}
+
+function selectionFixture(assistantAgentId: string | null = "Main") {
+  const gateway = createGateway(assistantAgentId);
+  const roster = createRoster();
+  const preferences = createPreferences();
+  return {
+    gateway,
+    roster,
+    preferences,
+    select: (persistence = preferences.persistence) =>
+      createAgentSelectionCapability(gateway.gateway, roster.roster, persistence, preferences),
   };
 }
 
 describe("agent selection", () => {
-  it("restores a persisted selection before the Gateway default arrives", () => {
-    const harness = createGateway(null);
-    const persistence = {
-      load: () => "OpenClaw",
-      save: vi.fn(),
-    };
-    const selection = createAgentSelectionCapability(
-      harness.gateway,
-      createRoster().roster,
-      persistence,
-    );
-
-    harness.publish({
-      client: { request() {} } as unknown as GatewayBrowserClient,
-      assistantAgentId: "Dummy",
-    });
-
-    expect(selection.state).toEqual({ selectedId: "openclaw", scopeId: "openclaw" });
-    expect(persistence.save).not.toHaveBeenCalled();
+  installSettingsStorageLifecycle();
+  beforeEach(() => {
+    setTestLocation({ protocol: "http:", host: "gateway-a.test", pathname: "/" });
   });
 
-  it("persists explicit selections and clears a removed agent", () => {
-    const harness = createGateway("Dummy");
-    const roster = createRoster();
-    roster.publish({
-      defaultId: "dummy",
-      mainKey: "main",
-      scope: "global",
-      agents: [
-        { id: "dummy", kind: "agent" },
-        { id: "openclaw", kind: "agent" },
-      ],
+  it("restores the pre-team scope after chat navigation and a preference reload", () => {
+    const scopeId = "research";
+    let preferences = createPreferences();
+    const gateway = createGateway().gateway;
+    const roster = createRoster().roster;
+    const select = () =>
+      createAgentSelectionCapability(gateway, roster, preferences.persistence, preferences);
+    let selection = select();
+    selection.setScope(scopeId);
+    preferences.setMode("roster");
+    selectApplicationSession({
+      selection,
+      gateway: { setSessionKey() {} },
+      sessionKey: "agent:writer:main",
     });
-    const persistence = { load: () => null, save: vi.fn() };
-    const selection = createAgentSelectionCapability(harness.gateway, roster.roster, persistence);
+    selection.dispose();
 
-    selection.set("OpenClaw");
-    expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", "openclaw");
-
-    roster.publish({
-      defaultId: "dummy",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "dummy", kind: "agent" }],
-    });
-    expect(selection.state).toEqual({ selectedId: "dummy", scopeId: "dummy" });
-    expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", null);
+    preferences = createPreferences();
+    selection = select();
+    expect(selection.state).toEqual({ selectedId: "writer", scopeId: null });
+    preferences.setMode("chip");
+    expect(selection.state).toEqual({ selectedId: "writer", scopeId });
+    expect(loadSettings().sidebarPreTeamScope).toBeUndefined();
+    selection.dispose();
   });
 
-  it("restores selection independently when the Gateway changes", () => {
-    const harness = createGateway("Dummy");
-    const persistence = {
-      load: (gatewayUrl: string) =>
-        gatewayUrl === "wss://gateway-b.test" ? "Research" : "OpenClaw",
-      save: vi.fn(),
-    };
-    const selection = createAgentSelectionCapability(
-      harness.gateway,
-      createRoster().roster,
-      persistence,
-    );
+  it("restores each gateway's own pre-team scope after switching away and back", () => {
+    const { gateway: harness, preferences, select } = selectionFixture();
+    harness.gateway.subscribe(() => preferences.refresh(harness.gateway.connection.gatewayUrl));
+    const selection = select();
+    selection.setScope("research");
+    preferences.setMode("roster");
+    selection.set("writer");
 
-    expect(selection.state.selectedId).toBe("openclaw");
-    harness.switchGateway("wss://gateway-b.test");
-    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
-  });
-
-  it("keeps page scope separate from the concrete chat agent", () => {
-    const harness = createGateway();
-    const roster = createRoster();
-    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
-
-    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+    harness.switchGateway("ws://gateway-b.test");
     selection.setScope(null);
+    preferences.setMode("roster");
+    selection.set("ops");
+    harness.switchGateway("ws://gateway-a.test");
+    preferences.setMode("chip");
+    expect(selection.state).toEqual({ selectedId: "writer", scopeId: "research" });
+    harness.switchGateway("ws://gateway-b.test");
+    preferences.setMode("chip");
+    expect(selection.state).toEqual({ selectedId: "ops", scopeId: null });
+    selection.dispose();
+  });
+  it("keeps persisted team mode global through roster fallback and clears removed filters", () => {
+    const preferences = createPreferences("roster");
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(
+      createGateway("stale").gateway,
+      roster.roster,
+      { load: () => "research", save: vi.fn() },
+      preferences,
+    );
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: null });
+    roster.publish(agentRoster("main", ["main", "research"]));
+    selection.setScope("research");
+    const listener = vi.fn();
+    selection.subscribe(listener);
+    roster.publish(agentRoster("main"));
     expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
+    expect(listener).toHaveBeenLastCalledWith({ selectedId: "main", scopeId: null });
+    preferences.setMode("chip");
+    expect(selection.state.scopeId).toBe("main");
+  });
 
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", kind: "agent" },
-        { id: "writer", kind: "agent" },
-      ],
-    });
-    expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
+  it("reconciles a saved agent against a roster that excludes the Gateway default", () => {
+    const persistence = { load: () => "private", save: vi.fn() };
+    const { gateway, roster, selection } = defaultSelection("main", { persistence });
 
-    selection.set("Writer");
-    expect(selection.state).toEqual({ selectedId: "writer", scopeId: "writer" });
+    expect(selection.state).toEqual({ selectedId: "private", scopeId: "private" });
+    roster.publish(agentRoster("main", ["shared", "research"]));
+    expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+    expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", null);
+
+    selection.set("research");
+    gateway.publish({ assistantAgentId: "private" });
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+    selection.set("private");
+    expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+    selection.dispose();
+  });
+
+  it("clears selection and remembered roster scope when the loaded roster becomes empty", () => {
+    const mode = "roster";
+    const { gateway, roster, preferences, select } = selectionFixture("main");
+    const selection = select();
+    const result = { ...agentRoster("main"), agents: [{ id: "shared" }] };
+    roster.publish(result);
+    selection.set("shared");
+    preferences.setMode(mode);
+
+    roster.publish(null);
+    expect(selection.state.selectedId).toBe("shared");
+    roster.publish({ ...result, agents: [] });
+    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+    expect(loadSettings().selectedAgentId).toBeUndefined();
+    preferences.setMode("chip");
+    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+
+    gateway.publish({ assistantAgentId: "private" });
+    selection.set("main");
+    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+    roster.publish(result);
+    expect(selection.state).toEqual({ selectedId: "shared", scopeId: "shared" });
+    selection.dispose();
   });
 
   it("clears system page scopes when the typed roster becomes known", () => {
-    const gateway = createGateway("OpenClaw");
-    const roster = createRoster();
-    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
+    const { roster, selection } = defaultSelection("OpenClaw");
 
     expect(selection.state).toEqual({ selectedId: "openclaw", scopeId: "openclaw" });
     roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
+      ...agentRoster("main"),
       agents: [
         { id: "main", kind: "agent" },
         { id: "openclaw", kind: "system" },
@@ -177,288 +272,197 @@ describe("agent selection", () => {
     expect(selection.state.scopeId).toBeNull();
   });
 
-  it("adopts the Gateway default when the cold-start selection is unresolved", () => {
-    const harness = createGateway("");
-    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
+  it.each(["filter", "sidebar mode"])(
+    "publishes %s intent before notifying scope observers",
+    (action) => {
+      const { gateway, roster, preferences } = selectionFixture(null);
+      const selection = createAgentSelectionCapability(
+        gateway.gateway,
+        roster.roster,
+        undefined,
+        preferences,
+      );
+      const observed = vi.fn(() => selection.intentRevision);
+      selection.subscribe(observed);
+      const revision = selection.intentRevision;
+      gateway.publish({ assistantAgentId: "main" });
+      expect(observed.mock.results.at(-1)?.value).toBe(revision);
 
-    harness.publish({
-      client: { request() {} } as unknown as GatewayBrowserClient,
-      assistantAgentId: "Ops",
-    });
-
-    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
-  });
-
-  it("adopts the hello default published by the same gateway client", () => {
-    const gateway = createGateway(null);
-    const selection = createAgentSelectionCapability(gateway.gateway, createRoster().roster);
-    const client = { request() {} } as unknown as GatewayBrowserClient;
-
-    gateway.publish({ client, assistantAgentId: null });
-    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
-
-    gateway.publish({ client, assistantAgentId: "Roboclaw" });
-    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
-  });
-
-  it("does not replace an explicit pre-hello selection", () => {
-    const gateway = createGateway(null);
-    const selection = createAgentSelectionCapability(gateway.gateway, createRoster().roster);
-    const client = { request() {} } as unknown as GatewayBrowserClient;
-
-    gateway.publish({ client, assistantAgentId: null });
-    selection.set("Research");
-    gateway.publish({ client, assistantAgentId: "Roboclaw" });
-
-    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
-  });
-
-  it("keeps an explicit session owner across a Gateway reconnect", () => {
-    const harness = createGateway();
-    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
-    harness.publish({
-      client: { request() {} } as unknown as GatewayBrowserClient,
-      assistantAgentId: "Main",
-    });
-    selection.set("Research");
-
-    harness.publish({
-      client: { request() {} } as unknown as GatewayBrowserClient,
-      assistantAgentId: "Main",
-    });
-
-    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
-  });
-
-  it("adopts a changed default after the reconnect null phase", () => {
-    const harness = createGateway("Main");
-    const roster = createRoster();
-    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main", kind: "agent" }],
-    });
-    const client = { request() {} } as unknown as GatewayBrowserClient;
-
-    harness.publish({ client, assistantAgentId: null });
-    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
-    harness.publish({ client, assistantAgentId: "Ops" });
-    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
-    roster.publish({
-      defaultId: "ops",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", kind: "agent" },
-        { id: "ops", kind: "agent" },
-      ],
-    });
-
-    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
-  });
-
-  it("keeps following hello after the roster repairs an invalid startup default", () => {
-    const harness = createGateway("Stale");
-    const roster = createRoster();
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main", kind: "agent" }],
-    });
-    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
-    const client = { request() {} } as unknown as GatewayBrowserClient;
-
-    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
-    harness.publish({ client, assistantAgentId: "Ops" });
-    roster.publish({
-      defaultId: "ops",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", kind: "agent" },
-        { id: "ops", kind: "agent" },
-      ],
-    });
-
-    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
-  });
-
-  it("preserves an explicit owner through reconnect and a changed default", () => {
-    const harness = createGateway("Main");
-    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
-    selection.set("Research");
-    const client = { request() {} } as unknown as GatewayBrowserClient;
-
-    harness.publish({ client, assistantAgentId: null });
-    harness.publish({ client, assistantAgentId: "Ops" });
-
-    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
-  });
-
-  it("establishes explicit ownership before notifying selection subscribers", () => {
-    const harness = createGateway("Main");
-    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
-    const client = { request() {} } as unknown as GatewayBrowserClient;
-    selection.subscribe((state) => {
-      if (state.selectedId === "research") {
-        harness.publish({ client, assistantAgentId: "Ops" });
+      if (action === "filter") {
+        selection.setScope("research");
+      } else {
+        preferences.setMode("roster");
       }
-    });
+      expect(observed.mock.results.at(-1)?.value).toBe(revision + 1);
+      roster.publish(agentRoster("main", ["main", "research"]));
+      expect(selection.intentRevision).toBe(revision + 1);
+      selection.dispose();
+    },
+  );
 
-    selection.set("Research");
-
-    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
-  });
-
-  it("follows hello again after the roster removes an explicit owner", () => {
-    const harness = createGateway("Main");
-    const roster = createRoster();
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", kind: "agent" },
-        { id: "research", kind: "agent" },
-      ],
-    });
-    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
-    selection.set("Research");
-
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main", kind: "agent" }],
-    });
-    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
-
-    const client = { request() {} } as unknown as GatewayBrowserClient;
-    harness.publish({ client, assistantAgentId: null });
-    harness.publish({ client, assistantAgentId: "Ops" });
-    roster.publish({
-      defaultId: "ops",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", kind: "agent" },
-        { id: "ops", kind: "agent" },
-      ],
-    });
-
-    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
-  });
-
-  it("preserves a reentrant explicit owner during roster fallback", () => {
-    const harness = createGateway("Main");
-    const roster = createRoster();
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", kind: "agent" },
-        { id: "ops", kind: "agent" },
-        { id: "research", kind: "agent" },
-      ],
-    });
-    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
-    selection.set("Research");
-    selection.subscribe((state) => {
-      if (state.selectedId === "main") {
-        selection.set("Ops");
+  it.each([false, true])(
+    "follows a changed reconnect default after explicit owner removal: %s",
+    (explicitOwner) => {
+      const { gateway, roster, selection } = defaultSelection("Main", {
+        agents: explicitOwner ? agentRoster("main", ["main", "research"]) : undefined,
+      });
+      if (explicitOwner) {
+        selection.set("Research");
       }
-    });
+      roster.publish(agentRoster("main"));
+      expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+      gateway.publish({ assistantAgentId: null });
+      expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+      gateway.publish({ assistantAgentId: "Ops" });
+      expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+      roster.publish(agentRoster("ops", ["main", "ops"]));
+      expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
+    },
+  );
 
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", kind: "agent" },
-        { id: "ops", kind: "agent" },
-      ],
-    });
-    const client = { request() {} } as unknown as GatewayBrowserClient;
-    harness.publish({ client, assistantAgentId: null });
-    harness.publish({ client, assistantAgentId: "Main" });
+  it.each(["selection", "roster"] as const)(
+    "preserves explicit ownership through a reentrant %s subscriber",
+    (trigger) => {
+      const fallback = trigger === "roster";
+      const { gateway, roster, selection } = defaultSelection("Main", {
+        agents: fallback ? agentRoster("main", ["main", "ops", "research"]) : undefined,
+      });
+      if (fallback) {
+        selection.set("Research");
+      }
+      selection.subscribe((state) => {
+        if (state.selectedId === (fallback ? "main" : "research")) {
+          if (fallback) {
+            selection.set("Ops");
+          } else {
+            gateway.publish({ assistantAgentId: "Ops" });
+          }
+        }
+      });
+      if (fallback) {
+        roster.publish(agentRoster("main", ["main", "ops"]));
+        gateway.publish({ assistantAgentId: null });
+        gateway.publish({ assistantAgentId: "Main" });
+      } else {
+        selection.set("Research");
+      }
+      const expected = fallback ? "ops" : "research";
+      expect(selection.state).toEqual({ selectedId: expected, scopeId: expected });
+    },
+  );
+});
 
-    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
-  });
+describe("configured Settings agent selection", () => {
+  const settingsFixture = (assistantAgentId: string | null = "Main") =>
+    defaultSelection(assistantAgentId, { configured: true });
 
-  it("self-heals an unknown cold-load selection to the roster default", () => {
-    const gateway = createGateway("Main");
-    const roster = createRoster();
-    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
-
-    roster.publish({
-      defaultId: "Roboclaw",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "roboclaw", kind: "agent" }],
-    });
-
-    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
-
-    selection.set("main");
-    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
-  });
-
-  it("waits for the roster when the gateway has no assistant agent id", () => {
+  it("keeps a cold link private until the roster confirms it, independently of chat", () => {
     const gateway = createGateway(null);
     const roster = createRoster();
-    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
+    const chat = createAgentSelectionCapability(gateway.gateway, roster.roster);
+    const settings = createAgentSelectionCapability(
+      gateway.gateway,
+      roster.roster,
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
+    );
+    settings.set("Research");
+    expect(settings.state).toEqual({ selectedId: null, scopeId: null });
+    gateway.publish({ assistantAgentId: "main" });
+    roster.publish(agentRoster("main", ["main", "research"]));
+    expect(settings.state).toEqual({ selectedId: "research", scopeId: "research" });
+    expect(chat.state.selectedId).toBe("main");
+    settings.set("main");
+    chat.set("research");
+    expect(settings.state.selectedId).toBe("main");
+    settings.dispose();
+    chat.dispose();
+  });
 
-    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
-    roster.publish({
-      defaultId: "Roboclaw",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "roboclaw", kind: "agent" }],
-    });
+  it.each([
+    ["system", [{ id: "system", kind: "system" }, { id: "research" }], "research"],
+    ["main", [{ id: "system", kind: "system" }], null],
+  ] as const)("reconciles %s against the selectable roster", (requested, agents, expected) => {
+    const { roster, selection: settings } = settingsFixture();
+    settings.set(requested);
+    roster.publish(agentRoster(requested, [...agents]));
+    expect(settings.state).toEqual({ selectedId: expected, scopeId: expected });
+    settings.setScope(requested);
+    expect(settings.state).toEqual({ selectedId: expected, scopeId: expected });
+    settings.dispose();
+  });
 
-    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  it("preserves explicit ownership through reconnect, then clears a removed agent", () => {
+    const { gateway, roster, selection: settings } = settingsFixture();
+    roster.publish(agentRoster("main", ["main", "research"]));
+    settings.set("research");
+    roster.publish(null);
+    gateway.publish({ assistantAgentId: null });
+    expect(settings.state.selectedId).toBeNull();
+    gateway.publish({ assistantAgentId: "main" });
+    roster.publish(agentRoster("main", ["main", "research"]));
+    expect(settings.state.selectedId).toBe("research");
+    roster.publish(agentRoster("main"));
+    expect(settings.state).toEqual({ selectedId: "main", scopeId: "main" });
+    roster.publish(agentRoster("main", []));
+    expect(settings.state).toEqual({ selectedId: null, scopeId: null });
+    settings.dispose();
+  });
+
+  it("does not carry pending intent to another Gateway and stops observing after disposal", () => {
+    const gateway = createGateway();
+    const roster = createRoster();
+    gateway.gateway.subscribe(() => roster.publish(null));
+    const settings = createAgentSelectionCapability(
+      gateway.gateway,
+      roster.roster,
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
+    );
+    settings.set("research");
+    const revision = settings.intentRevision;
+    gateway.switchGateway("ws://gateway-b.test");
+    expect(settings.intentRevision).toBeGreaterThan(revision);
+    roster.publish(agentRoster("main", ["main", "research"]));
+    expect(settings.state.selectedId).toBe("main");
+    const listener = vi.fn();
+    settings.subscribe(listener);
+    settings.dispose();
+    roster.publish(agentRoster("research"));
+    gateway.publish({ assistantAgentId: "research" });
+    expect(settings.state.selectedId).toBe("main");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("records same-id and ABA user intent without treating roster publication as new intent", () => {
+    const { roster, selection: settings } = settingsFixture();
+    const initialRevision = settings.intentRevision;
+    roster.publish(agentRoster("main", ["main", "research"]));
+    expect(settings.intentRevision).toBe(initialRevision);
+    settings.set("main");
+    settings.set("research");
+    settings.set("main");
+    expect(settings.intentRevision).toBe(initialRevision + 3);
+    roster.publish(agentRoster("research"));
+    expect(settings.intentRevision).toBe(initialRevision + 3);
+    settings.dispose();
   });
 });
 
 describe("application session selection", () => {
-  it("selects the encoded agent before changing the Gateway session", () => {
+  it.each([
+    { sessionKey: "agent:Research:work", agentId: undefined },
+    { sessionKey: "global", agentId: "Research" },
+  ])("selects the owner before the Gateway session ($sessionKey)", ({ sessionKey, agentId }) => {
     const calls: string[] = [];
-
     selectApplicationSession({
-      selection: { set: (agentId) => calls.push(`agent:${agentId}`) },
-      gateway: { setSessionKey: (sessionKey) => calls.push(`session:${sessionKey}`) },
-      sessionKey: "agent:Research:work",
+      selection: { set: (id) => calls.push(`agent:${id}`) },
+      gateway: { setSessionKey: (key) => calls.push(`session:${key}`) },
+      sessionKey,
+      agentId,
     });
-
-    expect(calls).toEqual(["agent:research", "session:agent:Research:work"]);
-  });
-
-  it("uses explicit ownership for a canonical global session", () => {
-    const calls: string[] = [];
-
-    selectApplicationSession({
-      selection: { set: (agentId) => calls.push(`agent:${agentId}`) },
-      gateway: { setSessionKey: (sessionKey) => calls.push(`session:${sessionKey}`) },
-      sessionKey: "global",
-      agentId: "Research",
-    });
-
-    expect(calls).toEqual(["agent:research", "session:global"]);
-  });
-
-  it("preserves the encoded owner of an explicit global-session alias", () => {
-    const calls: string[] = [];
-
-    selectApplicationSession({
-      selection: { set: (agentId) => calls.push(`agent:${agentId}`) },
-      gateway: { setSessionKey: (sessionKey) => calls.push(`session:${sessionKey}`) },
-      sessionKey: "agent:Research:main",
-    });
-
-    expect(calls).toEqual(["agent:research", "session:agent:Research:main"]);
+    expect(calls).toEqual(["agent:research", `session:${sessionKey}`]);
   });
 });

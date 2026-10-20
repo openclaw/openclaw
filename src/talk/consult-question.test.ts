@@ -48,6 +48,5 @@ describe("realtime voice consult question helpers", () => {
     );
 
     expect(result).toBe(`${"a".repeat(7)} [truncated]`);
-    expect(result).toContain("[truncated]");
   });
 });

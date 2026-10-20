@@ -45,7 +45,7 @@ const ACP_CRON_MCP_PROBE_VERIFY_POLLS = 5;
 const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.6-luna";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
-type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
+type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "grok-build" | "opencode";
 
 function snapshotAcpBindLiveEnv(): LiveEnvSnapshot {
   return snapshotLiveEnv(["CODEX_HOME"]);
@@ -97,6 +97,9 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   }
   if (normalized === "opencode") {
     return "opencode";
+  }
+  if (normalized === "grok-build") {
+    return "grok-build";
   }
   return "claude";
 }
@@ -401,17 +404,10 @@ async function bindConversationAndWait(params: {
   while (Date.now() - startedAt < timeoutMs) {
     attempt += 1;
     const backend = getAcpRuntimeBackend("acpx");
-    const runtime = backend?.runtime as
-      | {
-          probeAvailability?: () => Promise<void>;
-          doctor?: () => Promise<{ message?: string; details?: string[] }>;
-        }
-      | undefined;
+    const runtime = backend?.runtime;
     const backendUnavailable = !backend || (backend.healthy && !backend.healthy());
     if (backendUnavailable) {
-      if (runtime?.probeAvailability) {
-        await runtime.probeAvailability().catch(() => {});
-      }
+      await runtime?.doctor?.().catch(() => {});
       const backendReadyAfterProbe = backend && (!backend.healthy || backend.healthy());
       if (backendReadyAfterProbe) {
         logLiveStep(`acpx backend became healthy before bind attempt ${attempt}`);

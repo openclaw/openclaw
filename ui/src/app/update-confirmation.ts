@@ -14,6 +14,8 @@ export type UpdateProgress = {
   connected: boolean;
   /** Set once the update produced a definitive failure. */
   failure: string | null;
+  /** Reading fresh progress failed; the retained run remains authoritative. */
+  readError?: string | null;
 };
 
 // Keep the lazy confirmation entry independent of the application context.
@@ -27,7 +29,8 @@ type UpdateProgressSources = {
       updateRun: UpdateRunRecord | null;
       updateRunning: boolean;
       updateReconciliationPending: boolean;
-      updateStatusBanner: { tone: string; text: string } | null;
+      updateStatusBanner: { tone: string; text: string; source?: "read" } | null;
+      updateStatusCheckBanner: { text: string } | null;
     };
     subscribe: (listener: () => void) => () => void;
   };
@@ -44,16 +47,15 @@ export function createUpdateProgressWatcher(
         run: update.updateRun,
         busy: update.updateRunning || update.updateReconciliationPending,
         connected: context.gateway.snapshot.phase === "connected",
-        failure: banner && banner.tone !== "info" ? banner.text : null,
+        failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
+        readError:
+          update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
       });
     };
-    const stopOverlays = context.overlays.subscribe(emit);
-    const stopGateway = context.gateway.subscribe(emit);
+    // Deliver ordered progress receipts, including subscribe-time state, to the dialog.
+    const stops = [context.overlays, context.gateway].map((source) => source.subscribe(emit));
     emit();
-    return () => {
-      stopOverlays();
-      stopGateway();
-    };
+    return () => stops.forEach((stop) => stop());
   };
 }
 
@@ -61,7 +63,16 @@ export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
   existingRun?: UpdateRunRecord;
-  onCheckStatus?: () => Promise<void>;
+  onCheckStatus?: () => Promise<boolean>;
+  /** Refreshes source-owned target details before retry confirmation. */
+  prepareRetry?: () => Promise<{
+    updateAvailable: UpdateAvailable | null;
+    updateSchedule: UpdateScheduleState | null;
+  } | null>;
+  /** Required for native dispatch; reads current application-owned authority at the action. */
+  canStartNativeUpdate?: () => boolean;
+  /** Reconfirm a fresh Gateway target if the native bridge disappears. */
+  prepareGatewayFallback?: ConfirmAndStartUpdateParams["prepareRetry"];
   onReviewUpdate?: () => void;
   onAcknowledge?: () => void;
   /**
@@ -70,6 +81,8 @@ export type ConfirmAndStartUpdateParams = {
    * the Gateway route so a declined handoff cannot end in silence.
    */
   viaNativeApp: boolean;
+  /** Owner-held target captured before loading or showing confirmation. */
+  isCurrentTarget: () => boolean;
   startGatewayUpdate: () => void;
   /**
    * Streams the update lifecycle so the dialog can stay open and report it.
@@ -80,6 +93,6 @@ export type ConfirmAndStartUpdateParams = {
 };
 
 export async function confirmAndStartUpdate(params: ConfirmAndStartUpdateParams): Promise<void> {
-  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.ts");
+  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.tsx");
   await confirmAndStartUpdateRuntime(params);
 }

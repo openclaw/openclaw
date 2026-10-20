@@ -1,22 +1,14 @@
-// Implements ACP context commands for session metadata and prompt state.
 import { normalizeConversationTargetRef } from "../../../infra/outbound/session-binding-normalization.js";
-import type { HandleCommandsParams } from "../commands-types.js";
+import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import {
   resolveConversationBindingAccountIdFromMessage,
   resolveConversationBindingChannelFromMessage,
   resolveConversationBindingContextFromAcpCommand,
-  resolveConversationBindingThreadIdFromMessage,
 } from "../conversation-binding-input.js";
 
-export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
-  return resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
-}
-
-export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {
-  return resolveConversationBindingThreadIdFromMessage(params.ctx);
-}
-
-export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
+export function resolveAcpCommandBindingContext(
+  params: Parameters<typeof resolveConversationBindingContextFromAcpCommand>[0],
+): {
   channel: string;
   accountId: string;
   threadId?: string;
@@ -29,12 +21,12 @@ export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
     return normalizeConversationTargetRef(resolved);
   }
   return {
-    channel: resolveAcpCommandChannel(params),
+    channel: resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel),
     accountId: resolveConversationBindingAccountIdFromMessage({
       ctx: params.ctx,
       cfg: params.cfg,
       commandChannel: params.command.channel,
     }),
-    threadId: resolveAcpCommandThreadId(params),
+    threadId: stringifyRouteThreadId(params.ctx.MessageThreadId),
   };
 }

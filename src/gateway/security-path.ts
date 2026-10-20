@@ -21,46 +21,23 @@ function normalizePathSeparators(pathname: string): string {
   return collapsed.replace(/\/+$/, "");
 }
 
-function resolveDotSegments(pathname: string): string {
-  try {
-    return new URL(pathname, "http://localhost").pathname;
-  } catch {
-    return pathname;
-  }
-}
-
 function normalizePathForSecurity(pathname: string): string {
-  return (
-    normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolveDotSegments(pathname))) || "/"
-  );
+  const resolved = URL.parse(pathname, "http://localhost")?.pathname ?? pathname;
+  return normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolved)) || "/";
 }
 
-function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value: string): void {
-  const normalized = normalizePathForSecurity(value);
-  if (seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  candidates.push(normalized);
-}
-
-function buildCanonicalPathCandidates(
-  pathname: string,
-  maxDecodePasses = MAX_PATH_DECODE_PASSES,
-): {
+function buildCanonicalPathCandidates(pathname: string): {
   candidates: string[];
   decodePasses: number;
   decodePassLimitReached: boolean;
   malformedEncoding: boolean;
 } {
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-  pushNormalizedCandidate(candidates, seen, pathname);
+  const candidates = new Set([normalizePathForSecurity(pathname)]);
 
   let decoded = pathname;
   let malformedEncoding = false;
   let decodePasses = 0;
-  for (let pass = 0; pass < maxDecodePasses; pass++) {
+  for (let pass = 0; pass < MAX_PATH_DECODE_PASSES; pass++) {
     let nextDecoded;
     try {
       nextDecoded = decodeURIComponent(decoded);
@@ -73,7 +50,7 @@ function buildCanonicalPathCandidates(
     }
     decodePasses += 1;
     decoded = nextDecoded;
-    pushNormalizedCandidate(candidates, seen, decoded);
+    candidates.add(normalizePathForSecurity(decoded));
   }
   let decodePassLimitReached = false;
   if (!malformedEncoding) {
@@ -84,7 +61,7 @@ function buildCanonicalPathCandidates(
     }
   }
   return {
-    candidates,
+    candidates: [...candidates],
     decodePasses,
     decodePassLimitReached,
     malformedEncoding,

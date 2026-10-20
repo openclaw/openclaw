@@ -39,6 +39,21 @@ afterEach(() => {
 });
 
 describe("withActivatedPluginIds", () => {
+  it("preserves global and explicit plugin disablement", () => {
+    const config = {
+      plugins: {
+        enabled: false,
+        allow: ["owner"],
+        entries: { owner: { enabled: false } },
+      },
+    };
+    const projected = withActivatedPluginIds({ config, pluginIds: ["owner"] });
+    expect(projected?.plugins?.enabled).toBe(false);
+    expect(projected?.plugins?.entries?.owner?.enabled).toBe(false);
+    expect(config.plugins.enabled).toBe(false);
+    expect(config.plugins.entries.owner.enabled).toBe(false);
+  });
+
   it("keeps omitted plugin ids outside restrictive allowlists", () => {
     expect(
       withActivatedPluginIds({

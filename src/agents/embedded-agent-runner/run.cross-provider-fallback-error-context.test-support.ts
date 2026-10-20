@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
+import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   MockedFailoverError,
@@ -79,16 +79,10 @@ function expectDeepseekAssistant(value: unknown) {
 }
 
 function makeCrossProviderFallbackConfig() {
-  return makeModelFallbackCfg({
-    agents: {
-      defaults: {
-        model: {
-          primary: "openai/gpt-5.4",
-          fallbacks: ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
-        },
-      },
-    },
-  });
+  return createModelFallbackConfig("openai/gpt-5.4", [
+    "deepseek/deepseek-chat",
+    "google/gemini-2.5-flash",
+  ]);
 }
 
 function useCrossProviderAuthFixture() {
@@ -169,6 +163,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "cross-provider-warmup" }, async (warmupState) => {
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot(makeCrossProviderFallbackConfig());
       await warmRunOverflowCompactionHarness(runEmbeddedAgent, warmupState, {
         config: makeCrossProviderFallbackConfig(),
         agentHarnessRuntimeOverride: "openclaw",
@@ -184,6 +180,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.cross-provider-fallback-error-context" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(makeCrossProviderFallbackConfig());
     useCrossProviderAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
@@ -235,7 +233,9 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     const promise = runCompactionRemovedFallbackAttempt(state);
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow("⚠️ Agent run failed (model: anthropic/test-model).");
+    await expect(promise).rejects.toThrow(
+      "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+    );
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
@@ -316,6 +316,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);
     expect(getLastFormattedAssistant()).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
     expect(result.meta.agentMeta).toMatchObject({
       provider: "deepseek",
       model: "deepseek-chat",
@@ -356,8 +357,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
   });
 
   it("does not retry successful replies for stale unsupported-thinking errors", async () => {
-    const helpers = await import("../embedded-agent-helpers.js");
-    const thinking = await import("../embedded-agent-helpers/thinking.js");
+    const helpers = await import("../embedded-agent-helpers/thinking.js");
+    const thinking = await vi.importActual<typeof import("../embedded-agent-helpers/thinking.js")>(
+      "../embedded-agent-helpers/thinking.js",
+    );
     const thinkingMock = vi.mocked(helpers.pickFallbackThinkingLevel);
     const previousThinking = thinkingMock.getMockImplementation();
     thinkingMock.mockImplementation(thinking.pickFallbackThinkingLevel);

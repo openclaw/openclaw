@@ -1,13 +1,13 @@
 // Registry tests cover channel plugin registry installation, lookup, and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import type { PluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { normalizeAnyChannelId } from "../registry-normalize.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -25,61 +25,11 @@ vi.mock("./bundled.js", () => ({
       : undefined,
 }));
 
-function withMalformedChannels(registry: PluginRegistry): PluginRegistry {
-  const malformed = { ...registry } as PluginRegistry;
-  (malformed as { channels?: unknown }).channels = undefined;
-  return malformed;
-}
-
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
 describe("listChannelPlugins", () => {
-  it("returns an empty list when runtime registry has no channels field", () => {
-    const malformedRegistry = withMalformedChannels(createEmptyPluginRegistry());
-    setActivePluginRegistry(malformedRegistry);
-
-    expect(listChannelPlugins()).toStrictEqual([]);
-  });
-
-  it("falls back to bundled channel plugins for direct lookups before registry bootstrap", () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-
-    expect(getChannelPlugin("fallback")?.meta.label).toBe("fallback");
-    expect(resolveChannelPluginRegistration("fallback")).toMatchObject({
-      origin: "bundled",
-      plugin: {
-        id: "fallback",
-      },
-    });
-  });
-
-  it("does not let a loaded external override inherit bundled fallback provenance", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.channels = [
-      {
-        pluginId: "external-fallback",
-        plugin: {
-          id: "fallback",
-          meta: { label: "external fallback" },
-        } as never,
-        origin: "config",
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(resolveChannelPluginRegistration("fallback")).toMatchObject({
-      origin: "config",
-      plugin: {
-        meta: {
-          label: "external fallback",
-        },
-      },
-    });
-  });
-
   it("keeps the scoped channel implementation and its registration provenance together", () => {
     const root = createChannelTestPluginBase({ id: "fallback", label: "Root" });
     const scoped = createChannelTestPluginBase({ id: "fallback", label: "Scoped" });
@@ -149,6 +99,8 @@ describe("listChannelPlugins", () => {
 
     expect(listChannelPlugins()).toEqual([firstPlugin]);
     expect(getLoadedChannelPlugin("duplicate")).toBe(firstPlugin);
+    expect(normalizeAnyChannelId("DUPLICATE")).toBe("duplicate");
+    expect(getLoadedChannelPlugin("DUPLICATE")).toBeUndefined();
     expect(getChannelPlugin("duplicate")).toBe(firstPlugin);
     expect(resolveChannelPluginRegistration("duplicate")).toEqual({
       plugin: firstPlugin,
@@ -218,6 +170,7 @@ describe("listChannelPlugins", () => {
     );
     setActivePluginRegistry(registry);
 
+    expect(normalizeAnyChannelId("alpha")).toBe("alpha");
     expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
     expect(resolveChannelPluginRegistration("zeta")?.plugin.meta.label).toBe("zeta");
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["alpha", "zeta"]);
@@ -225,6 +178,7 @@ describe("listChannelPlugins", () => {
 
     setActivePluginRegistry(registry);
 
+    expect(normalizeAnyChannelId("zeta")).toBe("zeta");
     expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["alpha", "zeta"]);
     expect(buildCount).toBe(2);

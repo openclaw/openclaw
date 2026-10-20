@@ -210,7 +210,7 @@ class ChatControllerTerminalAckTest {
       val ambiguousOwner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
       assertFalse(controller.isCurrentComposerOwner(ambiguousOwner))
       assertFalse(
-        controller.sendMessageForOwnerAwaitAcceptance(
+        controller.sendMessageAwaitAcceptance(
           message = "unbound main alias",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -225,7 +225,7 @@ class ChatControllerTerminalAckTest {
       assertFalse(controller.isCurrentComposerOwner(owner.copy(gatewayStableId = "gateway-b")))
 
       assertFalse(
-        controller.sendMessageForOwnerAwaitAcceptance(
+        controller.sendMessageAwaitAcceptance(
           message = "wrong gateway",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -233,7 +233,7 @@ class ChatControllerTerminalAckTest {
         ),
       )
       assertFalse(
-        controller.sendMessageForOwnerAwaitAcceptance(
+        controller.sendMessageAwaitAcceptance(
           message = "wrong session",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -241,7 +241,7 @@ class ChatControllerTerminalAckTest {
         ),
       )
       assertTrue(
-        controller.sendMessageForOwnerAwaitAcceptance(
+        controller.sendMessageAwaitAcceptance(
           message = "correct owner",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -287,7 +287,7 @@ class ChatControllerTerminalAckTest {
 
       val accepted =
         async {
-          controller.sendMessageForOwnerAwaitAcceptance(
+          controller.sendMessageAwaitAcceptance(
             message = "stale after settings",
             thinkingLevel = "high",
             attachments = emptyList(),
@@ -330,7 +330,7 @@ class ChatControllerTerminalAckTest {
         assertTrue(accepted)
         assertEquals(0, controller.pendingRunCount.value)
         assertEquals(
-          if (index == 2) "INVALID_REQUEST: message rejected" else "Chat failed before the run started; try again.",
+          if (index == 2) "INVALID_REQUEST: message rejected" else "OpenClaw request failed.",
           controller.errorText.value,
         )
         assertFalse(controller.messages.value.hasUserText("retained input"))

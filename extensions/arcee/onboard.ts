@@ -1,8 +1,7 @@
-/**
- * Arcee setup preset appliers. They seed model catalog defaults for direct
- * Arcee API usage and the OpenRouter-backed path.
- */
-import { createModelCatalogPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  createModelCatalogPresetAppliers,
+  createProviderConnectionPresetAppliers,
+} from "openclaw/plugin-sdk/provider-onboard";
 import { ARCEE_BASE_URL } from "./models.js";
 import {
   buildArceeCatalogModels,
@@ -10,31 +9,35 @@ import {
   OPENROUTER_BASE_URL,
 } from "./provider-catalog.js";
 
-/** Default Arcee model ref for direct API setup. */
 export const ARCEE_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
-/** Default Arcee model ref for OpenRouter setup. */
 export const ARCEE_OPENROUTER_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
 
-/** Apply direct Arcee provider defaults to config. */
-export const { applyConfig: applyArceeConfig } = createModelCatalogPresetAppliers<[]>({
+const ARCEE_PRESET = {
   primaryModelRef: ARCEE_DEFAULT_MODEL_REF,
   resolveParams: () => ({
     providerId: "arcee",
-    api: "openai-completions",
+    api: "openai-completions" as const,
     baseUrl: ARCEE_BASE_URL,
-    catalogModels: buildArceeCatalogModels(),
+    catalogModels: buildArceeCatalogModels,
     aliases: [{ modelRef: ARCEE_DEFAULT_MODEL_REF, alias: "Arcee AI" }],
   }),
-});
+};
 
-/** Apply OpenRouter-backed Arcee provider defaults to config. */
-export const { applyConfig: applyArceeOpenRouterConfig } = createModelCatalogPresetAppliers<[]>({
+const ARCEE_OPENROUTER_PRESET = {
   primaryModelRef: ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
   resolveParams: () => ({
     providerId: "arcee",
-    api: "openai-completions",
+    api: "openai-completions" as const,
     baseUrl: OPENROUTER_BASE_URL,
-    catalogModels: buildArceeOpenRouterCatalogModels(),
+    catalogModels: buildArceeOpenRouterCatalogModels,
     aliases: [{ modelRef: ARCEE_OPENROUTER_DEFAULT_MODEL_REF, alias: "Arcee AI (OpenRouter)" }],
   }),
-});
+};
+
+export const { applyConfig: applyArceeConfig } = createModelCatalogPresetAppliers(ARCEE_PRESET);
+export const { applyConfig: applyArceeOpenRouterConfig } =
+  createModelCatalogPresetAppliers(ARCEE_OPENROUTER_PRESET);
+export const { applyConfig: applyArceeOnboardConfig } =
+  createProviderConnectionPresetAppliers(ARCEE_PRESET);
+export const { applyConfig: applyArceeOpenRouterOnboardConfig } =
+  createProviderConnectionPresetAppliers(ARCEE_OPENROUTER_PRESET);

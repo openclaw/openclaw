@@ -13,31 +13,21 @@ import {
 } from "./delivery-observations.js";
 import { setSmsRuntime } from "./runtime.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 function createAccount(
   accountId = "default",
   overrides: Partial<ResolvedSmsAccount> = {},
 ): ResolvedSmsAccount {
-  return {
-    accountId,
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId, ...overrides });
 }
 
 function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
   const values = new Map<string, SmsDeliveryRecord>();
+  const observe = (key: string) => ({
+    value: structuredClone(values.get(key)),
+    comparison: JSON.stringify(values.get(key)) ?? "missing",
+  });
   return {
     async register(key, value) {
       values.set(key, value);
@@ -49,20 +39,22 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       values.set(key, value);
       return true;
     },
-    async update(key, updateValue) {
-      const next = updateValue(values.get(key));
-      if (!next) {
-        return false;
-      }
-      values.set(key, next);
-      return true;
+    async observe(key) {
+      return observe(key);
     },
-    async deleteIf(key, predicate) {
-      const value = values.get(key);
-      if (!value || !predicate(value)) {
-        return false;
+    async compareAndApply(key, comparison, intent) {
+      const current = observe(key);
+      if (comparison !== current.comparison) {
+        return { status: "conflict", current };
       }
-      return values.delete(key);
+      if (intent.action === "keep") {
+        return { status: "unchanged" };
+      }
+      if (intent.action === "delete") {
+        return { status: values.delete(key) ? "applied" : "unchanged" };
+      }
+      values.set(key, structuredClone(intent.value));
+      return { status: "applied" };
     },
     async lookup(key) {
       return values.get(key);
@@ -102,14 +94,19 @@ async function recordApiStatus(
   store: PluginStateKeyedStore<SmsDeliveryRecord>,
   status: string,
   observedAt: number,
+  sid = "SM123",
 ): Promise<SmsDeliveryRecord> {
   await recordInitialSmsDeliveryResult({
     account: createAccount(),
-    result: { sid: "SM123", to: "+15551234567", status },
+    result: { sid, to: "+15551234567", status },
     nowMs: observedAt,
     store,
   });
   return await latestRecord(store);
+}
+
+function statusForm(status: string, fields: Record<string, string> = {}) {
+  return { MessageSid: "SM123", MessageStatus: status, ...fields };
 }
 
 async function recordCallback(
@@ -132,31 +129,24 @@ async function recordCallback(
 describe("SMS delivery observations", () => {
   it("parses current and legacy status fields without retaining message content", async () => {
     const store = createStore();
-    const current = await recordCallback(
-      store,
-      {
-        AccountSid: "AC123",
-        From: "+15557654321",
-        To: "+15551234567",
-        Body: "private message",
-        MessageSid: "SM123",
-        MessageStatus: "undelivered",
-        ErrorCode: "30005",
-        RawDlrDoneDate: "2608021200",
-      },
-      100,
-    );
+    const privateFields = {
+      AccountSid: "AC123",
+      From: "+15557654321",
+      To: "+15551234567",
+      Body: "private message",
+      ErrorCode: "30005",
+      RawDlrDoneDate: "2608021200",
+    };
+    const current = await recordCallback(store, statusForm("undelivered", privateFields), 100);
     const legacy = await recordCallback(
       store,
       {
-        AccountSid: "AC123",
+        ...privateFields,
         From: "+15550000000",
         To: "+15559999999",
         Body: "different private message",
         SmsSid: "SM123",
         SmsStatus: "undelivered",
-        ErrorCode: "30005",
-        RawDlrDoneDate: "2608021200",
       },
       200,
     );
@@ -186,20 +176,14 @@ describe("SMS delivery observations", () => {
     expect(JSON.stringify(current.record)).not.toContain("AC123");
   });
 
-  it.each(["receiving", "received"])(
-    "leaves legacy inbound SmsStatus=%s on the inbound path",
-    async (status) => {
-      const form = {
-        MessageSid: "SM123",
-        SmsStatus: status,
-      };
+  it("rejects legacy inbound status observations", async () => {
+    const form = { MessageSid: "SM123", SmsStatus: "receiving" };
 
-      expect(isTwilioDeliveryStatusForm(form)).toBe(false);
-      await expect(recordCallback(createStore(), form)).rejects.toThrow(
-        "Invalid Twilio delivery status callback.",
-      );
-    },
-  );
+    expect(isTwilioDeliveryStatusForm(form)).toBe(false);
+    await expect(recordCallback(createStore(), form)).rejects.toThrow(
+      "Invalid Twilio delivery status callback.",
+    );
+  });
 
   it.each(["accepted", "scheduled"])(
     "advances a message from its %s initial state through sent",
@@ -238,16 +222,8 @@ describe("SMS delivery observations", () => {
 
   it("fills a missing error from a later observation of the same state", async () => {
     const store = createStore();
-    await recordCallback(store, { MessageSid: "SM123", MessageStatus: "failed" }, 100);
-    const enriched = await recordCallback(
-      store,
-      {
-        MessageSid: "SM123",
-        MessageStatus: "failed",
-        ErrorCode: "30006",
-      },
-      200,
-    );
+    await recordCallback(store, statusForm("failed"), 100);
+    const enriched = await recordCallback(store, statusForm("failed", { ErrorCode: "30006" }), 200);
 
     expect(enriched.record).toMatchObject({
       status: "failed",
@@ -258,16 +234,8 @@ describe("SMS delivery observations", () => {
 
   it("records conflicting terminal observations without choosing a false winner", async () => {
     const store = createStore();
-    await recordCallback(store, { MessageSid: "SM123", MessageStatus: "delivered" }, 100);
-    const failed = await recordCallback(
-      store,
-      {
-        MessageSid: "SM123",
-        MessageStatus: "failed",
-        ErrorCode: "30006",
-      },
-      200,
-    );
+    await recordCallback(store, statusForm("delivered"), 100);
+    const failed = await recordCallback(store, statusForm("failed", { ErrorCode: "30006" }), 200);
 
     expect(failed.record).toMatchObject({
       status: "conflicted",
@@ -308,17 +276,50 @@ describe("SMS delivery observations", () => {
     );
   });
 
+  it.each([
+    {
+      secondStatus: "delivered",
+      status: "delivered",
+      duplicates: [false, true],
+      lastObservedAt: 100,
+      observations: [{ status: "delivered", observedAt: 100 }],
+    },
+    {
+      secondStatus: "failed",
+      status: "conflicted",
+      duplicates: [false, false],
+      lastObservedAt: 101,
+      observations: [
+        { status: "delivered", observedAt: 100 },
+        { status: "failed", observedAt: 101 },
+      ],
+    },
+  ])("retains concurrent $secondStatus observations", async (expected) => {
+    const store = createStore();
+    const results = await Promise.all(
+      ["delivered", expected.secondStatus].map((status, index) =>
+        recordInitialSmsDeliveryResult({
+          account: createAccount(),
+          result: { sid: "SM123", to: "+15551234567", status },
+          nowMs: 100 + index,
+          store,
+        }),
+      ),
+    );
+
+    expect(results.map((result) => result?.duplicate)).toEqual(expected.duplicates);
+    const record = await latestRecord(store);
+    expect(record).toMatchObject({
+      status: expected.status,
+      firstObservedAt: 100,
+      lastObservedAt: expected.lastObservedAt,
+      observations: expected.observations,
+    });
+  });
+
   it("isolates records by local account and account SID but survives token rotation", async () => {
     const store = createStore();
-    const account = createAccount();
-    const recorder = createSmsDeliveryRecorder(store);
-    await recorder.record({
-      account,
-      form: {
-        MessageSid: "SM123",
-        MessageStatus: "delivered",
-      },
-    });
+    await recordCallback(store, statusForm("delivered"));
 
     await expect(listRecentSmsDeliveryRecords(createAccount("support"), 5, store)).resolves.toEqual(
       [],
@@ -332,38 +333,16 @@ describe("SMS delivery observations", () => {
         5,
         store,
       ),
-    ).resolves.toMatchObject([
-      {
-        accountId: "default",
-        messageSid: "SM123",
-        status: "delivered",
-      },
-    ]);
+    ).resolves.toMatchObject([{ accountId: "default", messageSid: "SM123", status: "delivered" }]);
   });
 
   it("records each successful API response and lets callbacks advance it", async () => {
     const store = createStore();
     const account = createAccount();
     for (const [index, status] of ["accepted", "scheduled", "queued"].entries()) {
-      await recordInitialSmsDeliveryResult({
-        account,
-        result: {
-          sid: `SM-${status}`,
-          to: "+15551234567",
-          status,
-        },
-        nowMs: index + 1,
-        store,
-      });
+      await recordApiStatus(store, status, index + 1, `SM-${status}`);
     }
-    const recorder = createSmsDeliveryRecorder(store);
-    await recorder.record({
-      account,
-      form: {
-        MessageSid: "SM-queued",
-        MessageStatus: "sent",
-      },
-    });
+    await recordCallback(store, statusForm("sent", { MessageSid: "SM-queued" }));
 
     await expect(listRecentSmsDeliveryRecords(account, 5, store)).resolves.toEqual(
       expect.arrayContaining([
@@ -394,15 +373,7 @@ describe("SMS delivery observations", () => {
   it("bounds retained observations per message", async () => {
     const store = createStore();
     for (let index = 0; index < 25; index += 1) {
-      await recordCallback(
-        store,
-        {
-          MessageSid: "SM123",
-          MessageStatus: "queued",
-          RawDlrDoneDate: String(index),
-        },
-        index,
-      );
+      await recordCallback(store, statusForm("queued", { RawDlrDoneDate: String(index) }), index);
     }
 
     const current = await latestRecord(store);
@@ -417,17 +388,9 @@ describe("SMS delivery observations", () => {
     const secondOpen = vi.fn(() => secondStore);
     const account = createAccount();
 
-    setSmsRuntime(
-      createPluginRuntimeMock({
-        state: { openKeyedStore: firstOpen as never },
-      }),
-    );
+    setSmsRuntime(createPluginRuntimeMock({ state: { openKeyedStore: firstOpen as never } }));
     await listRecentSmsDeliveryRecords(account);
-    setSmsRuntime(
-      createPluginRuntimeMock({
-        state: { openKeyedStore: secondOpen as never },
-      }),
-    );
+    setSmsRuntime(createPluginRuntimeMock({ state: { openKeyedStore: secondOpen as never } }));
     await listRecentSmsDeliveryRecords(account);
 
     const expectedOptions = {

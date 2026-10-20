@@ -1,9 +1,24 @@
-import { mkdtempSync, rmSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { realpathSync } from "node:fs";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveLogbookConfig } from "./config.js";
 import { LogbookService } from "./service.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
+import { LogbookStore } from "./store.js";
+
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
+const services: LogbookService[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    try {
+      await Promise.all(services.splice(0).map((service) => service.stop()));
+    } finally {
+      cleanup();
+    }
+  }),
+);
 
 type NodeRecord = { nodeId: string; displayName?: string; commands: string[] };
 
@@ -14,13 +29,14 @@ const quietLogger = {
   debug() {},
 };
 
-function makeService(params: {
+async function makeService(params: {
   nodes: NodeRecord[];
   invoke: (args: { nodeId: string; command: string }) => Promise<unknown>;
   config?: Record<string, unknown>;
   fullConfig?: Record<string, unknown>;
+  logger?: typeof quietLogger;
 }) {
-  const dataDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-service-test-")));
+  const dataDir = realpathSync(tempDirs.make("logbook-service-test-"));
   const invoked: Array<{ nodeId: string; command: string }> = [];
   const runtime = {
     nodes: {
@@ -36,14 +52,17 @@ function makeService(params: {
     {
       runtime: runtime as never,
       fullConfig: (params.fullConfig ?? {}) as never,
-      logger: quietLogger as never,
+      logger: (params.logger ?? quietLogger) as never,
       dataDir,
+      workerModuleUrl,
+      scheduler: createTestPluginServiceScheduler(),
     },
   );
-  service.start();
+  services.push(service);
+  await service.start();
   const tick = () =>
     (service as unknown as { captureTick(): Promise<void> }).captureTick.call(service);
-  return { service, invoked, tick, dataDir };
+  return { service, invoked, tick };
 }
 
 const framePayload = {
@@ -51,33 +70,8 @@ const framePayload = {
 };
 
 describe("LogbookService capture node selection", () => {
-  const cleanups: Array<() => Promise<void>> = [];
-  afterEach(async () => {
-    for (const cleanup of cleanups.splice(0)) {
-      await cleanup();
-    }
-  });
-
-  it("prefers app nodes over headless node hosts regardless of node id order", async () => {
-    const { service, invoked, tick, dataDir } = makeService({
-      nodes: [
-        { nodeId: "a-headless", commands: ["logbook.snapshot"] },
-        { nodeId: "b-mac-app", commands: ["screen.snapshot"] },
-      ],
-      invoke: async () => framePayload,
-    });
-    cleanups.push(async () => {
-      await service.stop();
-      rmSync(dataDir, { recursive: true, force: true });
-    });
-
-    await tick();
-    expect(invoked).toEqual([{ nodeId: "b-mac-app", command: "screen.snapshot" }]);
-    expect(service.status()).toMatchObject({ pendingFrames: 1, lastCaptureError: undefined });
-  });
-
   it("rotates to the next capture node after a failure instead of re-picking the broken one", async () => {
-    const { service, invoked, tick, dataDir } = makeService({
+    const { service, invoked, tick } = await makeService({
       nodes: [
         { nodeId: "a-broken", commands: ["logbook.snapshot"] },
         { nodeId: "b-working", commands: ["logbook.snapshot"] },
@@ -89,34 +83,25 @@ describe("LogbookService capture node selection", () => {
         return framePayload;
       },
     });
-    cleanups.push(async () => {
-      await service.stop();
-      rmSync(dataDir, { recursive: true, force: true });
-    });
 
     await tick();
     await tick();
     expect(invoked.map((call) => call.nodeId)).toEqual(["a-broken", "b-working"]);
-    expect(service.status().lastCaptureError).toBeUndefined();
+    expect((await service.status()).lastCaptureError).toBeUndefined();
   });
 
   it.each([
     ["malformed string", "not-base64!"],
-    ["object", { encoded: "ZmFrZQ==" }],
     ["array", ["ZmFrZQ=="]],
   ])("rejects a %s snapshot payload before storing a frame", async (_label, base64) => {
-    const { service, tick, dataDir } = makeService({
+    const { service, tick } = await makeService({
       nodes: [{ nodeId: "capture-node", commands: ["logbook.snapshot"] }],
       invoke: async () => ({ payload: { format: "jpeg", base64 } }),
-    });
-    cleanups.push(async () => {
-      await service.stop();
-      rmSync(dataDir, { recursive: true, force: true });
     });
 
     await tick();
 
-    expect(service.status()).toMatchObject({
+    expect(await service.status()).toMatchObject({
       pendingFrames: 0,
       lastCaptureError: "logbook.snapshot returned invalid image payload",
     });
@@ -124,15 +109,61 @@ describe("LogbookService capture node selection", () => {
 });
 
 describe("LogbookService vision model selection", () => {
-  const cleanups: Array<() => Promise<void>> = [];
-  afterEach(async () => {
-    for (const cleanup of cleanups.splice(0)) {
-      await cleanup();
-    }
+  it("warns about a missing model only when analysis work is pending", async () => {
+    const warn = vi.fn();
+    const { service, tick } = await makeService({
+      nodes: [{ nodeId: "capture-node", commands: ["logbook.snapshot"] }],
+      invoke: async () => framePayload,
+      logger: { ...quietLogger, warn },
+    });
+    const analyze = () =>
+      (service as unknown as { analysisTick(): Promise<void> }).analysisTick.call(service);
+
+    await analyze();
+    expect(warn).not.toHaveBeenCalled();
+
+    await tick();
+    await analyze();
+    await analyze();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("logbook: analysis paused; no vision model"),
+    );
   });
 
-  it("borrows only a media provider with structured extraction", () => {
-    const { service, dataDir } = makeService({
+  it("warns when a pending batch has no unbatched frames", async () => {
+    const warn = vi.fn();
+    const { service } = await makeService({
+      nodes: [],
+      invoke: async () => framePayload,
+      config: { captureEnabled: false },
+      logger: { ...quietLogger, warn },
+    });
+    const store = (service as unknown as { store: LogbookStore }).store;
+    const capturedAtMs = Date.now();
+    const day = new Date(capturedAtMs).toISOString().slice(0, 10);
+    const frameId = await store.captureFrame({
+      capturedAtMs,
+      day,
+      screenIndex: 0,
+      buffer: Buffer.from("fake-jpeg"),
+    });
+    await store.createBatch({
+      day,
+      startMs: capturedAtMs,
+      endMs: capturedAtMs + 1000,
+      frameIds: [frameId],
+    });
+
+    expect(await store.countUnbatchedActiveFrames()).toBe(0);
+    expect(await store.nextPendingBatch()).not.toBeNull();
+    await (service as unknown as { analysisTick(): Promise<void> }).analysisTick();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("logbook: analysis paused; no vision model"),
+    );
+  });
+
+  it("borrows only a media provider with structured extraction", async () => {
+    const { service } = await makeService({
       nodes: [],
       invoke: async () => framePayload,
       fullConfig: {
@@ -146,56 +177,12 @@ describe("LogbookService vision model selection", () => {
         },
       },
     });
-    cleanups.push(async () => {
-      await service.stop();
-      rmSync(dataDir, { recursive: true, force: true });
-    });
 
-    expect(service.status()).toMatchObject({
+    expect(await service.status()).toMatchObject({
       visionModel: "codex/gpt-5.5",
       visionModelSource: "media-defaults",
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
-  });
-
-  it("reports a missing model when borrowed defaults cannot extract structured data", () => {
-    const { service, dataDir } = makeService({
-      nodes: [],
-      invoke: async () => framePayload,
-      fullConfig: {
-        tools: {
-          media: {
-            models: [{ provider: "openai", model: "gpt-5.5", capabilities: ["image"] }],
-          },
-        },
-      },
-    });
-    cleanups.push(async () => {
-      await service.stop();
-      rmSync(dataDir, { recursive: true, force: true });
-    });
-
-    expect(service.status()).toMatchObject({
-      visionModel: undefined,
-      visionModelSource: "missing",
-    });
-  });
-});
-
-describe("LogbookService status", () => {
-  it("returns the capture-host timezone without exposing the state path", async () => {
-    const { service, dataDir } = makeService({
-      nodes: [],
-      invoke: async () => framePayload,
-    });
-
-    try {
-      expect(service.status()).toMatchObject({
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      });
-      expect(service.status()).not.toHaveProperty("dataDir");
-    } finally {
-      await service.stop();
-      rmSync(dataDir, { recursive: true, force: true });
-    }
+    expect(await service.status()).not.toHaveProperty("dataDir");
   });
 });

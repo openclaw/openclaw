@@ -1,48 +1,50 @@
-import { ContextProvider } from "@lit/context";
-import type { RouteId } from "../app-route-paths.ts";
+import { render } from "@solidjs/web";
+import { createComponent, createSignal, flush } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
-import type { MentionsCapability } from "../app/mentions.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
+import { normalizeApplicationContext } from "./application-context-fixtures.ts";
 
-export const hiddenScopeUpgradeCapability = {
-  state: { phase: "hidden" as const },
-  activate: () => undefined,
-  request: () => undefined,
-  retry: () => undefined,
-  cancel: () => undefined,
-  subscribe: () => () => undefined,
-  dispose: () => undefined,
-} satisfies ApplicationContext["scopeUpgrade"];
+export {
+  createApplicationGateway,
+  createNavigationPreferencesFixture,
+  hiddenScopeUpgradeCapability,
+} from "./application-context-fixtures.ts";
 
-const unavailableMentionsCapability = {
-  snapshot: { phase: "unavailable", items: [], dismissing: [], error: null },
-  refresh: async () => undefined,
-  dismiss: async () => undefined,
-  subscribe: () => () => undefined,
-  dispose: () => undefined,
-} satisfies MentionsCapability;
+type ContextCallback = (value: ApplicationContext, unsubscribe?: () => void) => void;
+/** Plain-DOM fixture for callers still crossing the application context bridge. */
+export function requestApplicationContext(
+  host: Element,
+  callback: ContextCallback,
+  subscribe = false,
+) {
+  host.dispatchEvent(
+    Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+      context: applicationContext,
+      contextTarget: host,
+      callback,
+      subscribe,
+    }),
+  );
+}
 
-const emptySidebarAttentionStore = {
-  entries: [],
-  activate: () => unavailableMentionsCapability,
-  dismiss: () => undefined,
-  subscribe: () => () => undefined,
-  dispose: () => undefined,
-} satisfies ApplicationContext["sidebarAttention"];
-
-export function createApplicationContextProvider(context: ApplicationContext<RouteId>) {
+export function createApplicationContextProvider(context: ApplicationContext) {
   const host = document.createElement("div");
-  const normalize = (value: ApplicationContext<RouteId>) => {
-    if (!value.sidebarAttention) {
-      Object.assign(value, { sidebarAttention: emptySidebarAttentionStore });
-    }
-    return value;
-  };
-  const provider = new ContextProvider(host, {
-    context: applicationContext,
-    initialValue: normalize(context),
-  });
+  const [value, setValue] = createSignal(normalizeApplicationContext(context));
+  render(
+    () =>
+      createComponent(ApplicationProvider, {
+        host,
+        get value() {
+          return value();
+        },
+      }),
+    document.createDocumentFragment(),
+  );
   return Object.assign(host, {
-    setContext: (value: ApplicationContext<RouteId>) => provider.setValue(normalize(value)),
+    setContext: (next: ApplicationContext) => {
+      setValue(normalizeApplicationContext(next));
+      flush();
+    },
   });
 }
 

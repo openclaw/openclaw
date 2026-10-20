@@ -1,18 +1,27 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { runAgentLoop } from "../../../../packages/agent-core/src/agent-loop.js";
-import type { AgentMessage, AgentTool } from "../../../../packages/agent-core/src/types.js";
+import type {
+  AgentMessage,
+  AgentTool,
+  StreamFn,
+} from "../../../../packages/agent-core/src/types.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../../../test/helpers/openai-responses-sse.js";
+  closeOpenAICodexWebSocketSessions,
+  streamOpenAICodexResponses,
+} from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
+import { writeOpenAiResponsesSse } from "../../../../test/helpers/openai-responses-sse.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
+import { rawDataToString } from "../../../infra/ws.js";
 import type { Message, Model } from "../../../llm/types.js";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -24,6 +33,7 @@ import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-final
 import {
   createSettledFinalizationTestInput,
   createSettledProviderFailureAttempt,
+  projectSettledProviderFailureAttempt,
 } from "./settled-turn-finalization.test-support.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 
@@ -34,6 +44,63 @@ function toLlmMessages(items: AgentMessage[]): Message[] {
   );
 }
 
+function responseEvents(first: boolean): Record<string, unknown>[] {
+  const text = "Note saved once.";
+  const position = { output_index: 0 };
+  const item = first
+    ? {
+        type: "function_call",
+        id: "fc_write",
+        call_id: "call_write",
+        name: "write",
+        arguments: "{}",
+        status: "completed",
+      }
+    : {
+        type: "message",
+        id: "msg_final",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }],
+      };
+  return [
+    {
+      type: "response.output_item.added",
+      ...position,
+      item: { ...item, status: "in_progress", ...(!first ? { content: [] } : {}) },
+    },
+    ...(!first
+      ? ["delta", "done"].map((phase) =>
+          Object.assign(
+            { type: `response.output_text.${phase}`, item_id: item.id, content_index: 0 },
+            position,
+            phase === "delta" ? { delta: text } : { text },
+          ),
+        )
+      : []),
+    { type: "response.output_item.done", ...position, item },
+    {
+      type: "response.completed",
+      response: {
+        id: first ? "resp_tool" : "resp_final",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+      },
+    },
+  ];
+}
+
+function syntheticLoopbackJwt(): string {
+  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return (
+    encode({ alg: "none", typ: "JWT" }) +
+    "." +
+    encode({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-loopback" } }) +
+    ".signature"
+  );
+}
+
 const fixture = useTempSessionsFixture("settled-provider-error-loopback-");
 let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
 beforeEach(() => {
@@ -41,7 +108,9 @@ beforeEach(() => {
 });
 afterEach(() => admission.close());
 
-it("executes the tool once and finalizes over HTTP after a transient 503", async () => {
+it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async (failure) => {
+  const websocket = failure === "WebSocket";
+  const apiKey = websocket ? syntheticLoopbackJwt() : "synthetic-loopback-key";
   const requests: Array<{ tools?: unknown[] }> = [];
   const server = createServer((request, response) => {
     request.setEncoding("utf8");
@@ -52,56 +121,42 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
     request.on("end", () => {
       requests.push(JSON.parse(body));
       if (requests.length === 2) {
+        if (failure === "terminated") {
+          response.writeHead(200, {
+            "content-type": "text/event-stream",
+            "cache-control": "no-store",
+          });
+          response.write(`data: ${JSON.stringify(responseEvents(false)[0])}\n\n`, () =>
+            response.destroy(),
+          );
+          return;
+        }
         response.writeHead(503, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
-            error: {
-              message: "upstream connect error: connection refused",
-              type: "server_error",
-            },
+            error: { message: "upstream connect error: connection refused", type: "server_error" },
           }),
         );
         return;
       }
-      if (requests.length !== 1) {
-        writeOpenAiResponsesText(response, {
-          text: "Note saved once.",
-          messageId: "msg_final",
-          responseId: "resp_final",
-        });
-        return;
-      }
-      const item = {
-        type: "function_call",
-        id: "fc_write",
-        call_id: "call_write",
-        name: "write",
-        arguments: "{}",
-        status: "completed",
-      };
-      writeOpenAiResponsesSse(response, [
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { ...item, status: "in_progress" },
-        },
-        { type: "response.output_item.done", output_index: 0, item },
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_" + requests.length,
-            status: "completed",
-            output: [item],
-            usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-          },
-        },
-      ]);
+      writeOpenAiResponsesSse(response, responseEvents(requests.length === 1));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+  const sockets = new WebSocketServer({ server });
+  sockets.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      requests.push(JSON.parse(rawDataToString(data)));
+      if (requests.length === 2) {
+        socket.terminate();
+        return;
+      }
+      for (const event of responseEvents(requests.length === 1)) {
+        socket.send(JSON.stringify(event));
+      }
+    });
   });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   try {
     const address = server.address();
     if (!address || typeof address === "string") {
@@ -113,8 +168,8 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
     const model: Model = {
       ...resolved.model,
       input: ["text"],
-      contextWindow: 8192,
-      maxTokens: 256,
+      api: websocket ? "openai-chatgpt-responses" : "openai-responses",
+      provider: websocket ? "openai" : "loopback-provider",
     };
     const target = {
       agentId: "main",
@@ -137,16 +192,20 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
       parameters: Type.Object({}),
       execute,
     };
-    const stream = createOpenAIResponsesTransportStreamFn();
+    const stream: StreamFn = websocket
+      ? (requestModel, context, options) =>
+          streamOpenAICodexResponses(
+            // Responses-specific compat settings do not belong to the ChatGPT API.
+            { ...requestModel, api: "openai-chatgpt-responses", compat: undefined },
+            context,
+            { ...options, transport: "websocket" },
+          )
+      : createOpenAIResponsesTransportStreamFn();
     const itemLifecycle = { startedCount: 0, completedCount: 0, activeCount: 0 };
     const messages = await runAgentLoop(
       [{ role: "user", content: "Save the note, then summarize.", timestamp: 1 }],
       { systemPrompt: "Save once.", messages: [], tools: [tool] },
-      {
-        model,
-        apiKey: "synthetic-loopback-key",
-        convertToLlm: toLlmMessages,
-      },
+      { model, apiKey, convertToLlm: toLlmMessages },
       async (event) => {
         if (event.type === "tool_execution_start") {
           itemLifecycle.startedCount++;
@@ -169,31 +228,42 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
     }
     expect(assistant.stopReason).toBe("error");
     const error = Object.assign(new Error(assistant.errorMessage), { code: assistant.errorCode });
-    expect(isTransientNetworkError(error)).toBe(true);
+    if (failure === "terminated") {
+      // The bare transport message reaches the transcript unclassified; the
+      // recovery below must therefore come from the exact `terminated` match.
+      expect(assistant.errorMessage).toBe("terminated");
+    }
+    expect(isTransientNetworkError(error)).toBe(failure !== "terminated");
     expect(execute).toHaveBeenCalledOnce();
     expect(itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
     const prefix = await readVisibleSessionTranscriptMessageEntries(target);
     expect(prefix.some((entry) => entry.message.role === "toolResult")).toBe(true);
-    const attempt = createSettledProviderFailureAttempt({
-      sessionIdUsed: target.sessionId,
-      messagesSnapshot: messages,
-      toolMetas: [
-        { toolName: "write", toolCallId: "call_write", isError: false, replaySafe: false },
-      ],
-      itemLifecycle,
+    const attempt = projectSettledProviderFailureAttempt(
+      createSettledProviderFailureAttempt({
+        terminal: { kind: "ok" },
+        sessionIdUsed: target.sessionId,
+        messagesSnapshot: messages,
+        toolMetas: [
+          { toolName: "write", toolCallId: "call_write", isError: false, replaySafe: false },
+        ],
+        itemLifecycle,
+      }),
+    );
+    expect(attempt).toMatchObject({
+      terminal: { kind: "ok" },
+      settledTurnFinalizationContext: { source: "openclaw-transcript" },
     });
     const input = createSettledFinalizationTestInput(attempt, await admission.admit("embedded"));
-    input.terminalBase.runParams.trigger = "user";
-    input.terminalBase.runParams.config = {};
-    input.terminalBase.provider = model.provider;
-    input.terminalBase.model = model.id;
-    input.terminalBase.activeErrorContext = { provider: model.provider, model: model.id };
+    const modelIdentity = { provider: model.provider, model: model.id };
+    Object.assign(input.terminalBase.runParams, { trigger: "user", config: {} });
+    Object.assign(input.terminalBase, modelIdentity, { activeErrorContext: modelIdentity });
+    input.finalization.modelApi = model.api;
     Object.assign(input.finalization.preparedAttempt, resolved, {
       model,
       config: {},
-      provider: "loopback-provider",
+      provider: model.provider,
       modelId: model.id,
-      resolvedApiKey: "synthetic-loopback-key",
+      resolvedApiKey: apiKey,
       agentId: target.agentId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
@@ -214,7 +284,7 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
             messages: toLlmMessages(messages),
             tools: prepared.disableTools ? [] : [tool],
           },
-          { apiKey: "synthetic-loopback-key", signal: prepared.abortSignal },
+          { apiKey, signal: prepared.abortSignal },
         );
         const answer = await response.result();
         await persist(answer);
@@ -222,8 +292,7 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
       },
     );
     input.finalization.harness.finalizeSettledTurn = finalize;
-    const runAttempt = vi.fn();
-    input.finalization.harness.runAttempt = runAttempt;
+    const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
     const before = prepareEmbeddedRunTerminal({ ...input.terminalBase, ...input.initial });
     expect(before.payloadsWithToolMedia).toEqual([expect.objectContaining({ isError: true })]);
     const result = await prepareTerminalWithSettledTurnFinalization(input);
@@ -233,7 +302,6 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
     expect(runAttempt).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledOnce();
     expect(fs.readFileSync(note, "utf8")).toBe("saved\n");
-    expect(requests).toHaveLength(3);
     expect(requests.map((request) => request.tools?.length ?? 0)).toEqual([1, 1, 0]);
     expect(result.prepared.payloadsWithToolMedia).toEqual([
       expect.objectContaining({ text: "Note saved once." }),
@@ -243,9 +311,12 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
     expect(transcript.slice(0, prefix.length)).toEqual(prefix);
     expect(transcript).toHaveLength(prefix.length + 1);
   } finally {
+    closeOpenAICodexWebSocketSessions();
+    for (const socket of sockets.clients) {
+      socket.terminate();
+    }
+    await promisify(sockets.close.bind(sockets))();
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await promisify(server.close.bind(server))();
   }
 });

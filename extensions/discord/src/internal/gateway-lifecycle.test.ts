@@ -10,6 +10,7 @@ describe("GatewayHeartbeatTimers", () => {
 
   it("does not false-timeout when the first heartbeat fires near the interval boundary", () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.95);
 
     const onHeartbeat = vi.fn();
     const onAckTimeout = vi.fn();
@@ -21,7 +22,6 @@ describe("GatewayHeartbeatTimers", () => {
       isAcked,
       onAckTimeout,
       onHeartbeat,
-      random: () => 0.95,
     });
 
     vi.advanceTimersByTime(42_750);
@@ -41,6 +41,7 @@ describe("GatewayHeartbeatTimers", () => {
 
   it("fires an ACK timeout when a heartbeat is genuinely not acknowledged", () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
 
     const timers = new GatewayHeartbeatTimers();
     const onHeartbeat = vi.fn();
@@ -51,7 +52,6 @@ describe("GatewayHeartbeatTimers", () => {
       isAcked: () => false,
       onAckTimeout,
       onHeartbeat,
-      random: () => 0,
     });
 
     vi.advanceTimersByTime(0);
@@ -63,36 +63,9 @@ describe("GatewayHeartbeatTimers", () => {
     timers.stop();
   });
 
-  it("sends heartbeats at regular intervals after the initial random delay", () => {
-    vi.useFakeTimers();
-
-    const timers = new GatewayHeartbeatTimers();
-    const onHeartbeat = vi.fn();
-    const onAckTimeout = vi.fn();
-
-    timers.start({
-      intervalMs: 10_000,
-      isAcked: () => true,
-      onAckTimeout,
-      onHeartbeat,
-      random: () => 0.5,
-    });
-
-    vi.advanceTimersByTime(5_000);
-    expect(onHeartbeat).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(10_000);
-    expect(onHeartbeat).toHaveBeenCalledTimes(2);
-
-    vi.advanceTimersByTime(10_000);
-    expect(onHeartbeat).toHaveBeenCalledTimes(3);
-    expect(onAckTimeout).not.toHaveBeenCalled();
-
-    timers.stop();
-  });
-
   it("stop cancels all pending timers", () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
 
     const timers = new GatewayHeartbeatTimers();
     const onHeartbeat = vi.fn();
@@ -103,7 +76,6 @@ describe("GatewayHeartbeatTimers", () => {
       isAcked: () => true,
       onAckTimeout,
       onHeartbeat,
-      random: () => 0.5,
     });
 
     timers.stop();

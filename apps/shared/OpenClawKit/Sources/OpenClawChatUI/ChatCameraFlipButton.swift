@@ -57,35 +57,14 @@ struct ChatTalkButton: View {
     let style: Style
 
     var body: some View {
-        switch self.style {
-        case .full:
-            self.fullButton
-        case let .compact(controlHeight, iconControlSize):
-            self.compactButton(controlHeight: controlHeight, iconControlSize: iconControlSize)
-        }
-    }
-
-    private var fullButton: some View {
         Button {
             self.control.toggle(self.sessionKey)
         } label: {
-            HStack(spacing: 6) {
-                ChatTalkButtonGlyph(control: self.control)
-                    .font(OpenClawChatTypography.captionSemiBold)
-                Text(self.control.isEnabled ? "Stop" : "Talk")
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .lineLimit(1)
-            }
-            .foregroundStyle(self.control.isEnabled ? .white : .primary)
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background {
-                Capsule()
-                    .fill(self.fill)
-            }
-            .overlay {
-                Capsule()
-                    .strokeBorder(self.stroke, lineWidth: 1)
+            switch self.style {
+            case .full:
+                self.fullLabel
+            case let .compact(controlHeight, iconControlSize):
+                self.compactLabel(controlHeight: controlHeight, iconControlSize: iconControlSize)
             }
         }
         .buttonStyle(.plain)
@@ -94,34 +73,77 @@ struct ChatTalkButton: View {
         .accessibilityValue(self.accessibilityValue)
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.helpText)
-        .chatTalkInputDeviceMenu(self.control)
-    }
-
-    private func compactButton(controlHeight: CGFloat, iconControlSize: CGFloat) -> some View {
-        Button {
-            self.control.toggle(self.sessionKey)
-        } label: {
-            ChatTalkButtonGlyph(control: self.control)
-                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(.white)
-                .frame(width: iconControlSize, height: iconControlSize)
-                // Prominent filled circle so the mic reads as the primary action,
-                // mirroring the send button it swaps with once a draft exists.
-                .background {
-                    Circle()
-                        .fill(self.control.isEnabled ? self.fill : AnyShapeStyle(OpenClawChatTheme.accent))
-                        .opacity(self.control.isGatewayConnected || self.control.isEnabled ? 1 : 0.4)
+        .contextMenu {
+            if let selectInputDevice = self.control.selectInputDevice {
+                Button {
+                    selectInputDevice(nil)
+                } label: {
+                    self.menuLabel(
+                        String(localized: "System Default"),
+                        selected: self.control.selectedInputDeviceID == nil)
                 }
-                .frame(width: controlHeight, height: controlHeight)
-                .contentShape(Rectangle())
+                if !self.control.inputDevices.isEmpty {
+                    Divider()
+                    ForEach(self.control.inputDevices) { device in
+                        Button {
+                            selectInputDevice(device.id)
+                        } label: {
+                            self.menuLabel(
+                                device.name,
+                                selected: self.control.selectedInputDeviceID == device.id)
+                        }
+                    }
+                }
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
-        .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(self.accessibilityValue)
-        .accessibilityIdentifier("chat-realtime-control")
-        .help(self.helpText)
-        .chatTalkInputDeviceMenu(self.control)
+    }
+
+    @ViewBuilder
+    private func menuLabel(_ text: String, selected: Bool) -> some View {
+        if selected {
+            Label(text, systemImage: "checkmark")
+                .font(OpenClawChatTypography.body)
+        } else {
+            Text(text)
+                .font(OpenClawChatTypography.body)
+        }
+    }
+
+    private var fullLabel: some View {
+        HStack(spacing: 6) {
+            ChatTalkButtonGlyph(control: self.control)
+                .font(OpenClawChatTypography.captionSemiBold)
+            Text(self.control.isEnabled ? "Stop" : "Talk")
+                .font(OpenClawChatTypography.captionSemiBold)
+                .lineLimit(1)
+        }
+        .foregroundStyle(self.control.isEnabled ? .white : .primary)
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background {
+            Capsule()
+                .fill(self.fill)
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder(self.stroke, lineWidth: 1)
+        }
+    }
+
+    private func compactLabel(controlHeight: CGFloat, iconControlSize: CGFloat) -> some View {
+        ChatTalkButtonGlyph(control: self.control)
+            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+            .foregroundStyle(.white)
+            .frame(width: iconControlSize, height: iconControlSize)
+            // Prominent filled circle so the mic reads as the primary action,
+            // mirroring the send button it swaps with once a draft exists.
+            .background {
+                Circle()
+                    .fill(self.control.isEnabled ? self.fill : AnyShapeStyle(OpenClawChatTheme.accent))
+                    .opacity(self.control.isGatewayConnected || self.control.isEnabled ? 1 : 0.4)
+            }
+            .frame(width: controlHeight, height: controlHeight)
+            .contentShape(Rectangle())
     }
 
     private var fill: AnyShapeStyle {

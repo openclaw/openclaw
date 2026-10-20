@@ -1,4 +1,4 @@
-// Application-owned browser push subscription lifecycle.
+import { isIosBrowserPlatform } from "../lib/browser-platform.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -19,21 +19,14 @@ export type WebPushSnapshot = {
   preferences?: WebPushPreferencesResult | null;
 };
 
-export type WebPushCapability = {
-  readonly snapshot: WebPushSnapshot;
-  subscribe: (listener: () => void) => () => void;
-  run: (action: WebPushCapabilityAction) => Promise<void>;
-  dispose: () => void;
-};
+export type WebPushCapability = ReturnType<typeof createWebPushCapability>;
 
 export function createWebPushCapability(
   gateway: ApplicationGateway,
   options: { connectionBootstrap?: ConnectionBootstrapCoordinator } = {},
-): WebPushCapability {
+) {
   const nav = globalThis.navigator;
-  const ios =
-    /iPad|iPhone|iPod/u.test(nav.userAgent) ||
-    (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
+  const ios = isIosBrowserPlatform();
   // SAFETY: iOS Safari's non-standard standalone flag is optional and read-only.
   const installed = !ios || (nav as Navigator & { standalone?: boolean }).standalone === true;
   const supported =
@@ -51,13 +44,11 @@ export function createWebPushCapability(
     subscription: "unknown",
     loading: false,
   };
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
 
   const publish = (patch: WebPushCapabilityPatch) => {
     Object.assign(snapshot, patch);
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
   };
   const runtime: Promise<WebPushCapabilityRuntime | null> | null = snapshot.supported
     ? import("./web-push.runtime.ts")
@@ -81,14 +72,17 @@ export function createWebPushCapability(
     : null;
   return {
     snapshot,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+    subscribe(listener: () => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
     },
-    run: (action) => (runtime ? runtime.then((owner) => owner?.run(action)) : Promise.resolve()),
-    dispose() {
+    run: (action: WebPushCapabilityAction) =>
+      runtime ? runtime.then((owner) => owner?.run(action)) : Promise.resolve(),
+    dispose(this: void) {
       void runtime?.then((owner) => owner?.dispose());
-      listeners.clear();
+      render = undefined;
     },
   };
 }

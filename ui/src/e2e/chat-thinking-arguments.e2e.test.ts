@@ -1,5 +1,6 @@
 // Control UI E2E proves model-aware /think completion in the rendered composer.
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -14,19 +15,81 @@ const VIEWPORTS = [
   { name: "tablet", width: 768, height: 1024 },
   { name: "desktop", width: 1440, height: 900 },
 ] as const;
+const key = "agent:main:main";
+async function openComposer(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
+  await page.goto(`${suite.server.baseUrl}chat`);
+  await gateway.waitForRequest("chat.startup");
+  const composer = page.locator(".agent-chat__composer-combobox textarea");
+  await composer.waitFor({ state: "visible" });
+  await expect.poll(() => composer.isEnabled()).toBe(true);
+  return composer;
+}
+const sessionList = (
+  model: string,
+  contextTokens: number | null,
+  modelProvider?: string,
+  ts = 1,
+) => ({
+  count: 1,
+  path: "",
+  ts,
+  defaults: { model, modelProvider: "openai", contextTokens },
+  sessions: [
+    { key, kind: "direct", model, ...(modelProvider ? { modelProvider } : {}), updatedAt: ts },
+  ],
+});
 
 suite.define(() => {
+  it("keeps partial model thinking unknown and sends typed effort for server validation", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/other",
+        models: [
+          {
+            id: "model",
+            name: "Model",
+            provider: "openai",
+            thinkingLevels: [{ id: "high", label: "High" }],
+            thinkingDefault: "high",
+          },
+        ],
+        methodResponses: {
+          "sessions.list": {
+            ...sessionList("model", null),
+            defaults: { model: "other", modelProvider: "openai", contextTokens: null },
+          },
+        },
+      });
+      try {
+        const composer = await openComposer(page, gateway);
+        await composer.fill("/think");
+        await composer.press("Tab");
+        await expect.poll(() => composer.inputValue()).toBe("/think ");
+        await composer.press("Enter");
+        const log = page.getByRole("log");
+        await expect.poll(() => log.textContent()).toContain("Current thinking level: Unknown.");
+        expect(await log.textContent()).toContain("Options: Unknown.");
+        expect(await page.locator('[data-chat-thinking-option="high"]').count()).toBe(0);
+        expect(await page.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
+        await composer.fill("/think low");
+        await composer.press("Enter");
+        expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+          key,
+          thinkingLevel: "low",
+        });
+      } finally {
+        await page.screenshot({ path: path.join(suite.artifactDir, "partial-thinking.png") });
+      }
+    });
+  });
+
   it("executes a typed inline /elevated argument separately from the draft", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.send"],
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor({ state: "visible" });
-      await expect.poll(() => composer.isEnabled()).toBe(true);
+      const composer = await openComposer(page, gateway);
 
       await composer.fill("Keep this /elevated full");
       await composer.press("Enter");
@@ -43,19 +106,14 @@ suite.define(() => {
         deferredMethods: ["chat.send"],
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor({ state: "visible" });
-      await expect.poll(() => composer.isEnabled()).toBe(true);
+      const composer = await openComposer(page, gateway);
 
       await composer.fill("Keep this /exec");
       await composer.press("Tab");
-      await composer.press("ArrowDown");
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
-      expect((request.params as { message?: unknown }).message).toBe("/exec host=gateway");
+      expect((request.params as { message?: unknown }).message).toBe("/exec host=auto");
       await expect.poll(() => composer.inputValue()).toBe("Keep this ");
     });
   });
@@ -79,46 +137,27 @@ suite.define(() => {
               name: "GPT-5.6 Sol",
               provider: "openai",
               thinkingLevels: [
-                { id: "off", label: "off" },
-                { id: "minimal", label: "minimal" },
-                { id: "low", label: "low" },
-                { id: "medium", label: "medium" },
-                { id: "high", label: "high" },
-                { id: "xhigh", label: "xhigh" },
-                { id: "max", label: "max" },
-                { id: "ultra", label: "ultra" },
-              ],
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra",
+              ].map((id) => ({ id, label: id })),
             },
           ],
           methodResponses: {
-            "sessions.list": {
-              count: 1,
-              defaults: {
-                contextTokens: 200_000,
-                model: "gpt-5.6-sol",
-                modelProvider: "openai",
-              },
-              path: "",
-              sessions: [
-                {
-                  key: "agent:main:main",
-                  kind: "direct",
-                  model: "gpt-5.6-sol",
-                  modelProvider: "openai",
-                  updatedAt: Date.now(),
-                },
-              ],
-              ts: Date.now(),
-            },
+            "sessions.list": sessionList("gpt-5.6-sol", 200_000, "openai", Date.now()),
           },
         });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.waitFor({ state: "visible" });
-        await expect.poll(() => composer.isEnabled()).toBe(true);
+        const composer = await openComposer(page, gateway);
 
+        const thinking = page.locator('[data-chat-thinking-select="true"]');
+        await thinking.waitFor({ state: "visible" });
+        await expect.poll(() => thinking.getAttribute("data-chat-thinking-disabled")).toBe("false");
         await composer.fill("/think");
         await composer.press("Tab");
 

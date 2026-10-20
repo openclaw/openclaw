@@ -1,4 +1,3 @@
-// QA Lab WhatsApp Gateway RPC operations.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -66,23 +65,18 @@ function buildWhatsAppGatewaySendRequest(
 }
 
 export async function callWhatsAppGatewaySendConcurrently(
-  context: WhatsAppQaMessageScenarioContext,
+  context: WhatsAppQaGatewayCallContext & { gateway: WhatsAppQaGatewayRuntime },
   sends: WhatsAppQaGatewaySendParams[],
 ) {
   // Each QA RPC client serializes its own requests. Separate clients preserve
   // real Gateway overlap so this probe reaches the shared WhatsApp socket concurrently.
   const connection = resolveWhatsAppGatewayRpcConnection(context.gateway);
-  const clients = await Promise.all(
-    sends.map(async (send) => ({
-      send,
-      client: await startQaGatewayRpcClient({
-        logs: connection.logs,
-        token: connection.token,
-        wsUrl: connection.wsUrl,
-      }),
-    })),
-  );
+  const connections = sends.map(async (send) => ({
+    send,
+    client: await startQaGatewayRpcClient(connection),
+  }));
   try {
+    const clients = await Promise.all(connections);
     await Promise.all(
       clients.map(({ client, send }) =>
         client.request("send", buildWhatsAppGatewaySendRequest(context, send), {
@@ -91,13 +85,19 @@ export async function callWhatsAppGatewaySendConcurrently(
       ),
     );
   } finally {
-    await Promise.all(clients.map(({ client }) => client.stop()));
+    // A sibling connection can finish after another rejects; settle all acquisitions before teardown.
+    const settled = await Promise.allSettled(connections);
+    await Promise.all(
+      settled.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value.client.stop()] : [],
+      ),
+    );
   }
 }
 
 function resolveWhatsAppGatewayRpcConnection(gateway: WhatsAppQaGatewayRuntime) {
   if (!gateway.logs || !gateway.token || !gateway.wsUrl) {
-    throw new Error("WhatsApp concurrent Gateway probe requires a live RPC connection.");
+    throw new Error("WhatsApp concurrent Gateway check requires a live RPC connection.");
   }
   return {
     logs: gateway.logs,

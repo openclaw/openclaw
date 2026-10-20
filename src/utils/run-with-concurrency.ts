@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import pMap from "p-map";
 
 /** Controls whether the worker pool keeps scheduling after a task failure. */
-export type ConcurrencyErrorMode = "continue" | "stop";
+type ConcurrencyErrorMode = "continue" | "stop";
 
 /** Options for running a fixed list of promise factories through a bounded worker pool. */
 export type RunTasksWithConcurrencyOptions<T> = {

@@ -29,8 +29,8 @@ export type RuntimeAuthProfileStoreMutationOwner =
 
 // Runtime snapshots are keyed by the canonical database path so default-agent
 // and per-agent stores do not overwrite each other.
-export function resolveRuntimeStoreKey(agentDir?: string): string {
-  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
+export function resolveRuntimeStoreKey(agentDir?: string, env?: NodeJS.ProcessEnv): string {
+  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env);
 }
 
 function maxMutationRevision(record: PersistedMutationRecord): number {
@@ -64,17 +64,11 @@ function getOrCreatePersistedMutationRecord(ownerKey: string): PersistedMutation
   };
   persistedMutationRecords.set(ownerKey, record);
   while (persistedMutationRecords.size > MAX_PERSISTED_MUTATION_OWNERS) {
-    const oldestOwnerKey = persistedMutationRecords.keys().next().value;
-    if (oldestOwnerKey === undefined) {
-      break;
-    }
-    const oldest = persistedMutationRecords.get(oldestOwnerKey);
+    const [oldestOwnerKey, oldest] = persistedMutationRecords.entries().next().value!;
     persistedMutationRecords.delete(oldestOwnerKey);
-    if (oldest) {
-      // A floor trades false-positive rollback fences for bounded memory; it
-      // must never let an evicted persisted mutation look unchanged.
-      evictedOwnerMutationFloor = Math.max(evictedOwnerMutationFloor, maxMutationRevision(oldest));
-    }
+    // A floor trades false-positive rollback fences for bounded memory; it
+    // must never let an evicted persisted mutation look unchanged.
+    evictedOwnerMutationFloor = Math.max(evictedOwnerMutationFloor, maxMutationRevision(oldest));
   }
   record.mutationFloor = Math.max(record.mutationFloor, evictedOwnerMutationFloor);
   return record;
@@ -88,18 +82,22 @@ function setProfileMutationRevision(
   record.profileRevisions.delete(profileId);
   record.profileRevisions.set(profileId, revision);
   while (record.profileRevisions.size > MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER) {
-    const oldestProfileId = record.profileRevisions.keys().next().value;
-    if (oldestProfileId === undefined) {
-      break;
-    }
-    const oldestRevision = record.profileRevisions.get(oldestProfileId) ?? 0;
+    const [oldestProfileId, oldestRevision] = record.profileRevisions.entries().next().value!;
     record.profileRevisions.delete(oldestProfileId);
     record.mutationFloor = Math.max(record.mutationFloor, oldestRevision);
   }
 }
 
-function getPersistedMutationRecord(ownerKey: string): PersistedMutationRecord | undefined {
-  return persistedMutationRecords.get(ownerKey);
+/** All persisted rows, including usage state, follow their exact owner's write generation. */
+export function getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(
+  ownerKey: string,
+  scope: "rows" | "credentials" = "rows",
+): number {
+  const record = persistedMutationRecords.get(ownerKey);
+  if (record && scope === "credentials") {
+    return Math.max(record.credentialRevision, record.profileSetRevision, record.mutationFloor);
+  }
+  return record ? maxMutationRevision(record) : evictedOwnerMutationFloor;
 }
 
 export function recordRuntimeAuthProfileStorePersistedMutation(
@@ -130,9 +128,29 @@ export function recordRuntimeAuthProfileStorePersistedMutation(
   }
 }
 
-function combineMutationTokens(
-  tokens: RuntimeAuthProfileStoreMutationToken[],
+function readMutationTokens(
+  requestedKey: string,
+  options: { includeMain?: boolean; owner?: RuntimeAuthProfileStoreMutationOwner } | undefined,
+  read: (record: PersistedMutationRecord) => RuntimeAuthProfileStoreMutationToken,
 ): RuntimeAuthProfileStoreMutationToken {
+  if (options?.includeMain && options.owner?.kind === "unresolved") {
+    return { revision: 0, known: false };
+  }
+  const mainKey = !options?.includeMain
+    ? requestedKey
+    : options.owner?.kind === "resolved"
+      ? options.owner.sharedDatabasePath
+      : resolveRuntimeStoreKey(undefined);
+  const keys =
+    requestedKey === mainKey || options?.includeMain !== true
+      ? [requestedKey]
+      : [requestedKey, mainKey];
+  const tokens = keys.map((key) => {
+    const record = persistedMutationRecords.get(key);
+    return record
+      ? read(record)
+      : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
+  });
   return {
     revision: Math.max(0, ...tokens.map((token) => token.revision)),
     known: tokens.every((token) => token.known),
@@ -147,35 +165,17 @@ export function getRuntimeAuthProfileStoreCredentialMutationToken(
 ): RuntimeAuthProfileStoreMutationToken {
   const requestedKey = options?.owner?.databasePath ?? resolveRuntimeStoreKey(agentDir);
   if (!profileId) {
-    const record = getPersistedMutationRecord(requestedKey);
+    const record = persistedMutationRecords.get(requestedKey);
     return record
       ? { revision: record.credentialRevision, known: record.credentialRevisionKnown }
       : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
   }
-  if (options?.includeMain && options.owner?.kind === "unresolved") {
-    return { revision: 0, known: false };
-  }
-  const mainKey = !options?.includeMain
-    ? requestedKey
-    : options.owner?.kind === "resolved"
-      ? options.owner.sharedDatabasePath
-      : resolveRuntimeStoreKey(undefined);
-  const keys =
-    requestedKey === mainKey || options?.includeMain !== true
-      ? [requestedKey]
-      : [requestedKey, mainKey];
-  return combineMutationTokens(
-    keys.map((key) => {
-      const record = getPersistedMutationRecord(key);
-      if (!record) {
-        return { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
-      }
-      const revision = record.profileRevisions.get(profileId);
-      return revision === undefined
-        ? { revision: record.mutationFloor, known: record.mutationFloor === 0 }
-        : { revision, known: true };
-    }),
-  );
+  return readMutationTokens(requestedKey, options, (record) => {
+    const revision = record.profileRevisions.get(profileId);
+    return revision === undefined
+      ? { revision: record.mutationFloor, known: record.mutationFloor === 0 }
+      : { revision, known: true };
+  });
 }
 
 /** Persisted token for profile-id additions and removals in one owner store. */
@@ -184,7 +184,7 @@ export function getRuntimeAuthProfileStoreProfileSetMutationToken(
   databasePath?: string,
 ): RuntimeAuthProfileStoreMutationToken {
   const ownerKey = databasePath ?? resolveRuntimeStoreKey(agentDir);
-  const record = getPersistedMutationRecord(ownerKey);
+  const record = persistedMutationRecords.get(ownerKey);
   return record
     ? { revision: record.profileSetRevision, known: record.profileSetRevisionKnown }
     : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
@@ -196,26 +196,10 @@ export function getRuntimeAuthProfileStoreStateMutationToken(
   options?: { includeMain?: boolean; owner?: RuntimeAuthProfileStoreMutationOwner },
 ): RuntimeAuthProfileStoreMutationToken {
   const requestedKey = options?.owner?.databasePath ?? resolveRuntimeStoreKey(agentDir);
-  if (options?.includeMain && options.owner?.kind === "unresolved") {
-    return { revision: 0, known: false };
-  }
-  const mainKey = !options?.includeMain
-    ? requestedKey
-    : options.owner?.kind === "resolved"
-      ? options.owner.sharedDatabasePath
-      : resolveRuntimeStoreKey(undefined);
-  const keys =
-    requestedKey === mainKey || options?.includeMain !== true
-      ? [requestedKey]
-      : [requestedKey, mainKey];
-  return combineMutationTokens(
-    keys.map((key) => {
-      const record = getPersistedMutationRecord(key);
-      return record
-        ? { revision: record.stateRevision, known: record.stateRevisionKnown }
-        : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
-    }),
-  );
+  return readMutationTokens(requestedKey, options, (record) => ({
+    revision: record.stateRevision,
+    known: record.stateRevisionKnown,
+  }));
 }
 
 const testing = {

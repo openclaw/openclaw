@@ -2,22 +2,22 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it } from "vitest";
+import templates from "../../skills/meme-maker/references/templates.json" with { type: "json" };
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createSolidPngBuffer } from "../helpers/image-fixtures.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const execFileAsync = promisify(execFile);
 const { createTempDir } = createScriptTestHarness();
+const testNodeExecPath = resolveTestNodeExecPath();
 const skillRoot = path.resolve("skills/meme-maker");
 const scriptPath = path.join(skillRoot, "scripts/meme.mjs");
-const template = JSON.parse(
-  fs.readFileSync(path.join(skillRoot, "references/templates.json"), "utf8"),
-).find((entry: { id: string }) => entry.id === "always-has-been") as {
-  id: string;
-  imgflipId: string;
-  width: number;
-  height: number;
-};
+const template = expectDefined(
+  templates.find((entry) => entry.id === "always-has-been"),
+  "Expected the always-has-been template",
+);
 
 function renderFixture(format: "svg" | "png", isolated = false) {
   const root = createTempDir("openclaw-meme-maker-");
@@ -44,7 +44,7 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   }
   const out = path.join(root, `meme.${format}`);
   const result = execFileAsync(
-    process.execPath,
+    testNodeExecPath,
     ["--import", hook, script, "render", template.id, "--text", "Fish & chips", "--out", out],
     { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
   );

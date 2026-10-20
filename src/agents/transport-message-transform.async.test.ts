@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
+import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import type { Context, Model } from "../llm/types.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 it.each([
@@ -23,14 +25,7 @@ it.each([
     model: "async-model",
     api: "openai-responses",
     timestamp: 0,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
   };
   const messages: Context["messages"] = [
     {
@@ -39,14 +34,7 @@ it.each([
       content: [{ type: "toolCall", id: "lookup", name: "lookup", arguments: {}, async: true }],
     },
     { ...assistant, stopReason: "stop", content: [{ type: "text", text: "independent answer" }] },
-    {
-      role: "toolResult",
-      toolCallId: "lookup",
-      toolName: "lookup",
-      content: [{ type: "text", text: "found" }],
-      isError: false,
-      timestamp: 1,
-    },
+    makeTextToolResult("lookup", "lookup", "found", false, 1),
   ];
   const replay = transformTransportMessages(messages, model);
   expect(replay.map((message) => message.role)).toEqual(["assistant", "toolResult", "assistant"]);

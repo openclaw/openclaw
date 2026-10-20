@@ -9,13 +9,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { READ_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -51,14 +48,14 @@ it(
 
     const events: string[] = [];
     const start = async () => {
-      const port = await getGatewayTestPort();
-      const server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
         bind: "loopback",
         controlUiEnabled: false,
         sidecarStartup: "defer",
       });
-      return { port, server };
+      return { port: portClaim.port, server };
     };
     const connect = (port: number, deviceFamily: string) =>
       connectGatewayClient({

@@ -12,7 +12,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearIMessageApprovalReactionTargetsForTest,
-  maybeResolveIMessageApprovalReaction,
+  handleIMessageApprovalReaction,
   registerIMessageApprovalReactionTarget,
 } from "./approval-reactions.js";
 import { createIMessageDurableIngress } from "./monitor/ingress.js";
@@ -109,7 +109,7 @@ describe("iMessage approval reaction durable replay", () => {
               approval: { status: "allowed", decision: "allow-once", reason: "user" },
             };
           });
-        registerIMessageApprovalReactionTarget({
+        await registerIMessageApprovalReactionTarget({
           accountId: "default",
           conversation: { chatId: 7, handle: "+15551230000" },
           messageId: "pending-approval",
@@ -120,7 +120,7 @@ describe("iMessage approval reaction durable replay", () => {
 
         const cfg = {
           channels: { imessage: { allowFrom: ["+15551230000"] } },
-        } as Parameters<typeof maybeResolveIMessageApprovalReaction>[0]["cfg"];
+        } as Parameters<typeof handleIMessageApprovalReaction>[0]["cfg"];
         const chatLaneDispatch = vi.fn(async () => ({ kind: "completed" as const }));
         const monitor = createIMessageDurableIngress({
           accountId: "default",
@@ -131,7 +131,7 @@ describe("iMessage approval reaction durable replay", () => {
           // the real drain. The chat lane completes like production would, so
           // a fall-through finishes the claim without any replay.
           dispatchPriority: async (message) => {
-            const handled = await maybeResolveIMessageApprovalReaction({
+            const { handled } = await handleIMessageApprovalReaction({
               cfg,
               accountId: "default",
               message,

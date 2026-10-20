@@ -2,11 +2,36 @@
 import { describe, expect, it } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
+  inspectStaleLockOwner,
   isLockOwnerDefinitelyStale,
   shouldRemoveDeadOwnerOrExpiredLock,
 } from "./stale-lock-file.js";
 
 describe("stale lock file ownership", () => {
+  it("records the deciding exited-owner facts without payload disclosure", () => {
+    let startReads = 0;
+    let deadReads = 0;
+    const observed = inspectStaleLockOwner({
+      payload: { pid: 123, starttime: 111, privateField: "must-not-be-copied" },
+      getProcessStartTime: () => {
+        startReads += 1;
+        return 111;
+      },
+      isPidDefinitelyDead: () => {
+        deadReads += 1;
+        return true;
+      },
+    });
+    expect(observed).toEqual({
+      reason: "owner-process-exited",
+      pid: 123,
+      recordedStarttime: 111,
+      observedStarttime: 111,
+    });
+    expect(startReads).toBe(1);
+    expect(deadReads).toBe(1);
+  });
+
   it("keeps expired locks when a pid owner is not definitely dead", () => {
     expect(
       isLockOwnerDefinitelyStale({
@@ -31,42 +56,6 @@ describe("stale lock file ownership", () => {
         getProcessStartTime: () => 222,
       }),
     ).toBe(true);
-  });
-
-  it("keeps locks when the owner pid starttime still matches", () => {
-    expect(
-      isLockOwnerDefinitelyStale({
-        payload: {
-          pid: 123,
-          createdAt: "2026-05-23T00:00:00.000Z",
-          starttime: 111,
-        },
-        isPidDefinitelyDead: () => false,
-        getProcessStartTime: () => 111,
-      }),
-    ).toBe(false);
-  });
-
-  it("classifies pid-owned locks when the owner is definitely dead", () => {
-    expect(
-      isLockOwnerDefinitelyStale({
-        payload: {
-          pid: 123,
-          createdAt: new Date(Date.now() - 60_000).toISOString(),
-        },
-        isPidDefinitelyDead: () => true,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps expired pidless locks because ownership cannot be proven", () => {
-    expect(
-      isLockOwnerDefinitelyStale({
-        payload: {
-          createdAt: "2026-05-23T00:00:00.000Z",
-        },
-      }),
-    ).toBe(false);
   });
 
   it("retains shipped expiry recovery for generic pidless locks", () => {

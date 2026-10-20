@@ -1,7 +1,7 @@
-// Doctor owns repair of merged shared owners; connection-time resolution fails closed.
-import type { DatabaseSync } from "node:sqlite";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+// Doctor owns repair of merged shared owners; connection-time resolution fails closed.
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -9,11 +9,16 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { emitUserProfilesChanged, publishUserProfileAliasChange } from "./user-profile-events.js";
-import { userProfilesDb } from "./user-profiles-internal.js";
+import {
+  publishUserProfileAliasChange,
+  publishUserProfileAuthorityChange,
+  publishUserProfileIdentityChange,
+} from "./user-profile-events.js";
+import { publishUserProfilesChange } from "./user-profile-list.js";
+import { selectResolvedUserProfileMetadataById, userProfilesDb } from "./user-profiles-internal.js";
 import { readGatewayOwnerProfileRows } from "./user-profiles-owner.js";
 
-function ownerRepairRequired(db: DatabaseSync): boolean {
+function ownerRepairRequired(db: EngineConnection): boolean {
   if (!tableExists(db, "user_profiles") || !tableExists(db, "user_profile_identities")) {
     return false;
   }
@@ -45,6 +50,9 @@ export function repairMergedGatewayOwnerProfile(
         return unchanged;
       }
       const { owner } = readGatewayOwnerProfileRows(db);
+      const previousOwnerHead = owner?.merged_into
+        ? selectResolvedUserProfileMetadataById(db, owner.id)?.id
+        : undefined;
       const kysely = userProfilesDb(db);
       const now = Date.now();
       if (owner) {
@@ -56,6 +64,13 @@ export function repairMergedGatewayOwnerProfile(
             .where("id", "=", GATEWAY_OWNER_PROFILE_ID),
         );
         if (owner.merged_into) {
+          publishUserProfileIdentityChange(db, GATEWAY_OWNER_PROFILE_ID);
+          publishUserProfileAuthorityChange(
+            db,
+            GATEWAY_OWNER_PROFILE_ID,
+            owner.merged_into,
+            ...(previousOwnerHead ? [previousOwnerHead] : []),
+          );
           deferSqlitePostCommitPublication(db, publishUserProfileAliasChange);
         }
       } else {
@@ -91,7 +106,7 @@ export function repairMergedGatewayOwnerProfile(
               .doUpdateSet({ profile_id: GATEWAY_OWNER_PROFILE_ID }),
           ),
       );
-      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
+      publishUserProfilesChange(db, GATEWAY_OWNER_PROFILE_ID);
       return {
         repaired: true,
         changes: [

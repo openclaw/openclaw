@@ -1,6 +1,5 @@
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
-import type { SessionRouteRepairResult } from "./codex-route-types.js";
 import "./codex-route-session-repair.js";
 
 type TestApi = {
@@ -9,7 +8,7 @@ type TestApi = {
     now?: number;
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
     authProfileIdMap?: ReadonlyMap<string, string>;
-  }): SessionRouteRepairResult;
+  }): string[];
 };
 
 function getTestApi(): TestApi {

@@ -1,10 +1,12 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import { resolveJsonSaveTarget } from "../../infra/json-file.js";
-import { replaceFileAtomicSync } from "../../infra/replace-file.js";
-import type { Transport } from "../../llm/types.js";
-import { CONFIG_DIR_NAME } from "../config.js";
+import type { ThinkingBudgets, Transport } from "../../llm/types.js";
+import { CONFIG_DIR_NAME } from "../package-metadata.js";
 
 interface CompactionSettings {
   enabled?: boolean; // default: true
@@ -12,49 +14,43 @@ interface CompactionSettings {
   keepRecentTokens?: number; // default: 20000
 }
 
-export interface BranchSummarySettings {
+interface BranchSummarySettings {
   reserveTokens?: number; // default: 16384 (tokens reserved for prompt + LLM response)
   skipPrompt?: boolean; // default: false - when true, skips "Summarize branch?" prompt and defaults to no summary
 }
 
-export interface ProviderRetrySettings {
+interface ProviderRetrySettings {
   timeoutMs?: number; // SDK/provider request timeout in milliseconds
   maxRetries?: number; // transient provider retry attempts
   maxRetryDelayMs?: number; // default: 60000 (max server-requested delay before failing)
 }
 
-export interface RetrySettings {
+interface RetrySettings {
   enabled?: boolean; // default: true
   maxRetries?: number; // default: 3
   baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s)
   provider?: ProviderRetrySettings;
 }
 
-export interface TerminalSettings {
+interface TerminalSettings {
   showImages?: boolean; // default: true (only relevant if terminal supports images)
   imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
   clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
   showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
 }
 
-export interface ImageSettings {
+interface ImageSettings {
   autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
   blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
 }
 
-export interface ThinkingBudgetsSettings {
-  minimal?: number;
-  low?: number;
-  medium?: number;
-  high?: number;
-  max?: number;
-}
+export interface ThinkingBudgetsSettings extends ThinkingBudgets {}
 
-export interface MarkdownSettings {
+interface MarkdownSettings {
   codeBlockIndent?: string; // default: "  "
 }
 
-export interface WarningSettings {
+interface WarningSettings {
   anthropicExtraUsage?: boolean; // default: true
 }
 
@@ -65,7 +61,7 @@ export type TransportSetting = Transport;
  * - String form: load all resources from the package
  * - Object form: filter which resources to load
  */
-export type PackageSource =
+type PackageSource =
   | string
   | {
       source: string;
@@ -117,35 +113,38 @@ export interface Settings {
 
 export type SettingsScope = "global" | "project";
 
-export const SETTINGS_SCOPES: SettingsScope[] = ["global", "project"];
-
-export interface SettingsStorage {
+interface SettingsStorage {
   /** Pure scope reads; existing custom backends may serve reads through withLock. */
   readSettingsScope?(scope: SettingsScope): string | undefined;
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
 }
 
-export interface SettingsError {
-  scope: SettingsScope;
-  error: Error;
-}
-
-function replaceSettingsFile(path: string, content: string): void {
-  const savePath = resolveJsonSaveTarget(path);
-  const saveDir = realpathSync(dirname(savePath));
-  const canonicalSavePath = join(saveDir, basename(savePath));
-
-  // The atomic helper enforces explicit modes. Carry the existing parent mode
-  // and Node's writeFile creation mode forward so replacement changes no permissions.
-  // Keep rename failures fail-closed: copy fallback can expose a partial destination.
-  replaceFileAtomicSync({
-    filePath: canonicalSavePath,
-    content,
-    dirMode: statSync(saveDir).mode & 0o7777,
-    mode: 0o666 & ~process.umask(),
-    preserveExistingMode: true,
-    tempPrefix: basename(canonicalSavePath),
-  });
+/** Read one scope without applying runtime-specific settings validation or defaults. */
+export function readSettingsScope(
+  storage: SettingsStorage,
+  scope: SettingsScope,
+): { settings: Settings; loadError: Error | null } {
+  try {
+    let content: string | undefined;
+    if (storage.readSettingsScope) {
+      content = storage.readSettingsScope(scope);
+    } else {
+      storage.withLock(scope, (current) => {
+        content = current;
+        return undefined;
+      });
+    }
+    const settings: unknown = content ? JSON.parse(content) : {};
+    if (!isRecord(settings)) {
+      throw new TypeError("Session settings must be an object");
+    }
+    return { settings, loadError: null };
+  } catch (error) {
+    return {
+      settings: {},
+      loadError: toErrorObject(error, "Session settings could not be loaded"),
+    };
+  }
 }
 
 export class FileSettingsStorage implements SettingsStorage {
@@ -186,24 +185,24 @@ export class FileSettingsStorage implements SettingsStorage {
       const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
-        replaceSettingsFile(path, next);
+        const savePath = resolveJsonSaveTarget(path);
+        const saveDir = realpathSync(dirname(savePath));
+        const canonicalSavePath = join(saveDir, basename(savePath));
+
+        // The atomic helper enforces explicit modes. Carry the existing parent mode
+        // and Node's writeFile creation mode forward so replacement changes no permissions.
+        // Keep rename failures fail-closed: copy fallback can expose a partial destination.
+        replaceFileAtomicSync({
+          filePath: canonicalSavePath,
+          content: next,
+          dirMode: statSync(saveDir).mode & 0o7777,
+          mode: 0o666 & ~process.umask(),
+          preserveExistingMode: true,
+          tempPrefix: basename(canonicalSavePath),
+        });
       }
     } finally {
       release();
-    }
-  }
-}
-
-export class InMemorySettingsStorage implements SettingsStorage {
-  private values: Record<SettingsScope, string | undefined> = {
-    global: undefined,
-    project: undefined,
-  };
-
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const next = fn(this.values[scope]);
-    if (next !== undefined) {
-      this.values[scope] = next;
     }
   }
 }

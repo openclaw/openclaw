@@ -113,13 +113,20 @@ describe("retained loggers after config application", () => {
       type: "hidden",
     });
     const records: unknown[] = [];
-    logger.attachTransport((record) => records.push(record));
+    logger.attachTransport((record) => {
+      records.push(record);
+    });
     const child = toPinoLikeLogger(logger, "warn").child({ component: "external" });
     applyLoggingConfig({ level: "silent", file: paths.nextPath() });
     child.info("hidden external info");
-    child.warn("external warning");
+    child.warn({ event: "external" }, { detail: "retained" }, "external warning");
     expect(records).toHaveLength(1);
-    expect(JSON.stringify(records)).toContain("external warning");
+    expect(records[0]).toMatchObject({
+      "0": { event: "external" },
+      "1": { detail: "retained" },
+      "2": "external warning",
+      _logMeta: { logLevelName: "WARN" },
+    });
   });
 
   it("keeps Pino inheritance when the adapter comes from another module copy", async () => {

@@ -8,16 +8,18 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./runtime-group-policy.js";
 
-beforeEach(() => {});
-
 describe("resolveOpenProviderRuntimeGroupPolicy", () => {
-  it("uses open fallback when provider config exists", () => {
-    const resolved = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: true,
-    });
-    expect(resolved.groupPolicy).toBe("open");
-    expect(resolved.providerMissingFallbackApplied).toBe(false);
-  });
+  it.each(["open"] as const)(
+    "ignores the %s global default when provider config is missing",
+    (defaultGroupPolicy) => {
+      const resolved = resolveOpenProviderRuntimeGroupPolicy({
+        providerConfigPresent: false,
+        defaultGroupPolicy,
+      });
+      expect(resolved.groupPolicy).toBe("allowlist");
+      expect(resolved.providerMissingFallbackApplied).toBe(true);
+    },
+  );
 });
 
 describe("resolveAllowlistProviderRuntimeGroupPolicy", () => {

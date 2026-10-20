@@ -1,31 +1,36 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/check-release-metadata-only.mts";
+import { createPnpmRunnerSpawnSpec } from "../../scripts/pnpm-runner.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
-const scriptPath = path.resolve(
-  import.meta.dirname,
-  "../../scripts/check-release-metadata-only.mts",
+const repoRoot = path.resolve(import.meta.dirname, "../..");
+const scriptPath = path.join(repoRoot, "scripts/check-release-metadata-only.mts");
+const scriptArgs = resolveRuntimeWorkerArgv(
+  resolveRuntimeWorkerUrl(toolingMtsEntrypoints.releaseMetadata),
 );
-const tsxLoaderPath = path.resolve(import.meta.dirname, "../../scripts/tsx.mjs");
-const tsconfigPath = path.resolve(import.meta.dirname, "../../tsconfig.json");
+const tsconfigPath = path.join(repoRoot, "tsconfig.json");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itUnix = process.platform === "win32" ? it.skip : it;
 
 describe("check-release-metadata-only", () => {
   it("parses refs and explicit paths", () => {
-    expect(
-      parseArgs([
-        "--base",
-        "origin/release",
-        "--head",
-        "HEAD",
-        "./package.json",
-        "apps\\ios\\CHANGELOG.md",
-      ]),
-    ).toEqual({
+    const refs = ["--base", "origin/release", "--head", "HEAD"];
+    expect(parseArgs([...refs, "./package.json", "apps\\ios\\CHANGELOG.md"])).toEqual({
       staged: false,
       base: "origin/release",
       head: "HEAD",
@@ -48,80 +53,84 @@ describe("check-release-metadata-only", () => {
   it("preserves option-shaped paths after the separator", () => {
     expect(parseArgs(["--staged", "--", "--head"])).toEqual({
       staged: true,
-      base: "origin/main",
       head: "HEAD",
       paths: ["--head"],
     });
   });
 
-  it("accepts only version-literal changes in the mobile manifest", () => {
+  it("preserves refs, staged bytes, and worktree overlay through the package command", () => {
     const root = tempDirs.make("openclaw-release-metadata-mobile-");
-    const manifestPath = path.join(root, "apps/mobile/version.json");
+    const fixtureTsconfigPath = path.join(root, "tsconfig.json");
+    const { scripts } = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        private: true,
+        scripts: {
+          "release-metadata:check": scripts["release-metadata:check"],
+          "changelog:check": scripts["changelog:check"],
+        },
+      }),
+    );
+    copyFileSync(tsconfigPath, fixtureTsconfigPath);
+    mkdirSync(path.join(root, "scripts"));
+    copyFileSync(scriptPath, path.join(root, "scripts/check-release-metadata-only.mts"));
+    for (const file of ["tsx.mjs", "changed-lanes.mts"]) {
+      symlinkSync(path.join(repoRoot, "scripts", file), path.join(root, "scripts", file), "file");
+    }
+    symlinkSync(path.join(repoRoot, "scripts/lib"), path.join(root, "scripts/lib"), "junction");
+    symlinkSync(path.join(repoRoot, "packages"), path.join(root, "packages"), "junction");
+    const runMetadata = (args: string[]) => {
+      const spec = createPnpmRunnerSpawnSpec({
+        cwd: root,
+        pnpmArgs: ["run", "release-metadata:check", ...args],
+        env: { ...process.env, TSX_TSCONFIG_PATH: fixtureTsconfigPath },
+        stdio: "pipe",
+      });
+      return spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });
+    };
+    const manifestPath = path.join(root, "apps/android/version.json");
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    const compareHead = (head = "HEAD") =>
+      runMetadata(["--base", head, "--head", head, "--", "apps/android/version.json"]);
     mkdirSync(path.dirname(manifestPath), { recursive: true });
     writeFileSync(manifestPath, '{\n  "version": "2026.8.1"\n}\n');
-    execFileSync("git", ["init", "-q"], { cwd: root });
-    execFileSync("git", ["add", "."], { cwd: root });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=test@openclaw.invalid",
-        "commit",
-        "-qm",
-        "baseline",
-      ],
-      { cwd: root },
-    );
+    git("init", "-q");
+    git("config", "user.name", "OpenClaw Test");
+    git("config", "user.email", "test@openclaw.invalid");
+    git("add", "package.json", "apps/android/version.json");
+    git("commit", "-qm", "baseline");
 
     writeFileSync(manifestPath, '{\n  "version": "2026.8.2"\n}\n');
-    const accepted = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxLoaderPath,
-        scriptPath,
-        "--base",
-        "HEAD",
-        "--head",
-        "HEAD",
-        "--",
-        "apps/mobile/version.json",
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
-      },
-    );
-    expect(accepted.status).toBe(0);
+    const accepted = compareHead();
+    expect(accepted.status, accepted.stderr).toBe(0);
     expect(accepted.stderr).toContain("[release-metadata] ok (1 files)");
 
+    git("add", "apps/android/version.json");
     writeFileSync(manifestPath, '{\n  "version": "2026.8.2",\n  "channel": "stable"\n}\n');
-    const rejected = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxLoaderPath,
-        scriptPath,
-        "--base",
-        "HEAD",
-        "--head",
-        "HEAD",
-        "--",
-        "apps/mobile/version.json",
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
-      },
-    );
+    const staged = runMetadata(["--staged"]);
+    expect(staged.status, staged.stderr).toBe(0);
+    const head = git("rev-parse", "HEAD");
+    const pinned = compareHead(head);
+    expect(pinned.status, pinned.stderr).toBe(0);
+    const rejected = compareHead();
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain(
-      "apps/mobile/version.json: changed outside recognized version/build literals",
+      "apps/android/version.json: changed outside recognized version/build literals",
     );
+
+    // Incoming metadata may legitimately differ from the feature branch's HEAD.
+    git("add", "apps/android/version.json");
+    git("commit", "-qm", "incoming metadata");
+    const incoming = git("rev-parse", "HEAD");
+    git("switch", "--detach", head);
+    writeFileSync(manifestPath, '{\n  "version": "2026.8.3",\n  "channel": "stable"\n}\n');
+    git("add", "apps/android/version.json");
+    const based = runMetadata(["--staged", "--base", incoming]);
+    expect(based.status, based.stderr).toBe(0);
+    expect(based.stderr).toContain("[release-metadata] ok (1 files)");
+    expect(runMetadata(["--staged"]).status).toBe(1);
   });
 
   itUnix("fails with an actionable timeout when git diff hangs", () => {
@@ -129,45 +138,33 @@ describe("check-release-metadata-only", () => {
     const gitPath = path.join(tempDir, "git");
     writeFileSync(
       gitPath,
-      `#!/usr/bin/env node
-if (process.argv.includes("diff")) {
-  setInterval(() => {}, 1000);
-} else {
-  process.exit(0);
-}
-`,
+      '#!/usr/bin/env node\nif (process.argv.includes("diff")) { setInterval(() => {}, 1000); }\n',
       "utf8",
     );
     chmodSync(gitPath, 0o755);
 
-    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
-      cwd: path.resolve(import.meta.dirname, "../.."),
-      env: {
-        ...process.env,
-        OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS: "500",
-        PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      encoding: "utf8",
-      timeout: 5_000,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "release metadata guard: git diff --name-only --diff-filter=ACMR origin/main...HEAD timed out after 500ms.",
-    );
-
-    const fractionalResult = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
-      cwd: path.resolve(import.meta.dirname, "../.."),
-      env: {
-        ...process.env,
-        OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS: "0.5",
-        PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      encoding: "utf8",
-      timeout: 5_000,
-    });
-
-    expect(fractionalResult.status).toBe(1);
-    expect(fractionalResult.stderr).toContain("timed out after 1ms.");
+    const run = (timeout: string) =>
+      spawnSync(process.execPath, scriptArgs, {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS: timeout,
+          PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+    for (const [timeout, diagnostic] of [
+      [
+        "500",
+        "release metadata guard: git diff --name-only --diff-filter=ACMR origin/main...HEAD timed out after 500ms.",
+      ],
+      ["0.5", "timed out after 1ms."],
+    ] as const) {
+      expect(run(timeout)).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining(diagnostic),
+      });
+    }
   });
 });

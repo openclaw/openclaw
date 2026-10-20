@@ -1,0 +1,304 @@
+// @vitest-environment node
+
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
+import type { ConfigSnapshot } from "../../api/types.ts";
+import { loadConfig } from "./config-gateway-operations.ts";
+import { nextRequestVersion } from "./config-state-model.ts";
+import { configSnapshot } from "./config-suite.test-support.ts";
+import {
+  CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
+  createConfigCapabilityHarness,
+} from "./config-test-harness.ts";
+
+function snapshot(count: number): ConfigSnapshot {
+  return configSnapshot({ count }, `hash-${count}`);
+}
+
+function mutationHarness(read: () => Promise<ConfigSnapshot>) {
+  const request = vi.fn((method: string) =>
+    method === "config.get" ? read() : Promise.resolve({ ok: true }),
+  );
+  return createConfigCapabilityHarness(request);
+}
+
+function mutate(runtimeConfig: ReturnType<typeof mutationHarness>["runtimeConfig"]) {
+  return runtimeConfig.runExternalMutation((client) =>
+    client.request("plugins.setEnabled", { pluginId: "test-plugin", enabled: true }),
+  );
+}
+
+describe("external mutation config refresh", () => {
+  it.each([false, true])(
+    "preserves edits made during an agent update (overlapping field: %s)",
+    async (overlap) => {
+      vi.useFakeTimers();
+      const update = deferred();
+      let config: Record<string, unknown> = { agents: {} };
+      let hash = "before-update";
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config.get") {
+          return configSnapshot(config, hash);
+        }
+        if (method === "agents.update") {
+          await update.promise;
+          config = { agents: { entries: { main: { name: "Saved identity" } } } };
+          hash = "after-update";
+          return {};
+        }
+        if (method === "config.set") {
+          const submission = params as { raw: string; baseHash: string };
+          if (submission.baseHash !== hash) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "config changed since last load; re-run config.get and retry",
+            });
+          }
+          config = JSON.parse(submission.raw) as Record<string, unknown>;
+          hash = "after-form-save";
+          return { config, hash };
+        }
+        return {};
+      });
+      const { runtimeConfig } = createConfigCapabilityHarness(request);
+      try {
+        await runtimeConfig.ensureLoaded();
+        const mutation = runtimeConfig.runExternalMutation((client) =>
+          client.request("agents.update", { agentId: "main", name: "Saved identity" }),
+        );
+        runtimeConfig.patchForm(
+          ["agents", "entries", "main", overlap ? "name" : "model"],
+          overlap ? "Local identity" : { primary: "fixture/selected" },
+        );
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+        update.resolve();
+        await mutation;
+        await runtimeConfig.waitForPendingWrites();
+
+        expect(config).toEqual({
+          agents: {
+            entries: {
+              main: {
+                name: "Saved identity",
+                ...(!overlap ? { model: { primary: "fixture/selected" } } : {}),
+              },
+            },
+          },
+        });
+        expect(runtimeConfig.state.configFormDirty).toBe(overlap);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe(overlap ? "conflict" : "saved");
+        if (overlap) {
+          expect(runtimeConfig.state.configForm).toMatchObject({
+            agents: { entries: { main: { name: "Local identity" } } },
+          });
+          expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(0);
+        }
+      } finally {
+        update.resolve();
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
+  it.each(
+    [
+      { order: "mutation read first", failure: false },
+      { order: "successor read first", failure: false },
+      { order: "mutation read first", failure: true },
+      { order: "successor read first", failure: true },
+    ].flatMap(({ order, failure }) =>
+      [false, true].map((mutationFailure) => ({ order, failure, mutationFailure })),
+    ),
+  )(
+    "uses the actual successor result with $order (failure: $failure, mutation failure: $mutationFailure)",
+    async ({ order, failure, mutationFailure }) => {
+      const mutationRead = deferred<ConfigSnapshot>();
+      const successorRead = deferred<ConfigSnapshot>();
+      const mutationReadStarted = deferred();
+      let reads = 0;
+      const { runtimeConfig } = mutationHarness(() => {
+        reads += 1;
+        if (reads === 1) {
+          return Promise.resolve(snapshot(1));
+        }
+        if (reads === 2) {
+          mutationReadStarted.resolve();
+          return mutationRead.promise;
+        }
+        if (reads === 3) {
+          return successorRead.promise;
+        }
+        throw new Error(`Unexpected configuration read ${reads}`);
+      });
+      try {
+        await runtimeConfig.ensureLoaded();
+        const mutation = mutate(runtimeConfig);
+        await mutationReadStarted.promise;
+        runtimeConfig.setRaw('{"count":9}');
+        // The generation-triggered page refresh starts after the RPC and its own fresh read.
+        const refresh = runtimeConfig.refresh();
+        expect(reads).toBe(3);
+        const finishSuccessor = () =>
+          failure
+            ? successorRead.reject(new Error("current refresh unavailable"))
+            : successorRead.resolve(snapshot(3));
+        const finishMutationRead = async () => {
+          if (mutationFailure) {
+            mutationRead.reject(new Error("superseded refresh unavailable"));
+            await expect(mutationRead.promise).rejects.toThrow("superseded refresh unavailable");
+          } else {
+            mutationRead.resolve(snapshot(2));
+            await mutationRead.promise;
+          }
+        };
+        if (order === "mutation read first") {
+          await finishMutationRead();
+          finishSuccessor();
+        } else {
+          finishSuccessor();
+          await refresh;
+          await finishMutationRead();
+        }
+        await refresh;
+        await expect(mutation).resolves.toEqual({
+          ok: true,
+          value: { ok: true },
+          refresh: failure ? { ok: false, error: "current refresh unavailable" } : { ok: true },
+        });
+        expect(runtimeConfig.state.configSnapshot?.hash).toBe(failure ? "hash-1" : "hash-3");
+        expect(runtimeConfig.state.lastError).toBe(failure ? "current refresh unavailable" : null);
+        expect(runtimeConfig.state.configRaw).toBe('{"count":9}');
+        expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
+        expect(runtimeConfig.state.configFormDirty).toBe(true);
+      } finally {
+        runtimeConfig.dispose();
+      }
+    },
+  );
+  it.each(["write acknowledgement", "disconnect", "same-client reconnect", "dispose"] as const)(
+    "ends a pending mutation refresh on %s without waiting for its transport reply",
+    async (retirement) => {
+      const pendingRead = deferred<ConfigSnapshot>();
+      const readStarted = deferred();
+      let reads = 0;
+      const { runtimeConfig, publish } = mutationHarness(() => {
+        if (++reads === 1) {
+          return Promise.resolve(snapshot(1));
+        }
+        if (reads === 3) {
+          return Promise.resolve(snapshot(3));
+        }
+        readStarted.resolve();
+        return pendingRead.promise;
+      });
+      try {
+        await runtimeConfig.ensureLoaded();
+        const mutation = mutate(runtimeConfig);
+        await readStarted.promise;
+        if (retirement === "write acknowledgement") {
+          // Config write acknowledgements invalidate older reads without issuing a replacement.
+          nextRequestVersion(runtimeConfig.state);
+        } else if (retirement === "disconnect" || retirement === "same-client reconnect") {
+          publish(false);
+          if (retirement === "same-client reconnect") {
+            publish(true);
+          }
+        } else {
+          runtimeConfig.dispose();
+        }
+        await expect(mutation).resolves.toEqual({
+          ok: true,
+          value: { ok: true },
+          refresh: {
+            ok: false,
+            error:
+              retirement === "write acknowledgement"
+                ? "The configuration refresh was superseded by a configuration write."
+                : "Connection changed before the configuration update was refreshed.",
+          },
+        });
+        expect(reads).toBe(retirement === "same-client reconnect" ? 3 : 2);
+        pendingRead.resolve(snapshot(99));
+        await pendingRead.promise;
+        expect(runtimeConfig.state.configSnapshot?.hash).toBe(
+          retirement === "same-client reconnect" ? "hash-3" : "hash-1",
+        );
+      } finally {
+        pendingRead.resolve(snapshot(99));
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
+  it("does not borrow a successor's apply outcome for reconnect draft recovery", async () => {
+    const stale = deferred<ConfigSnapshot>();
+    const request = vi.fn((method: string) => {
+      if (method !== "config.get") {
+        throw new Error(`Unexpected request ${method}`);
+      }
+      return request.mock.calls.length === 1 ? stale.promise : Promise.resolve(snapshot(2));
+    });
+    const { runtimeConfig } = createConfigCapabilityHarness(request);
+    const captureDraft = vi.fn();
+    try {
+      const original = loadConfig(runtimeConfig.state, { beforeApplySnapshot: captureDraft });
+      await expect(loadConfig(runtimeConfig.state)).resolves.toBe(true);
+      stale.resolve(snapshot(1));
+      await expect(original).resolves.toBe(false);
+      expect(captureDraft).not.toHaveBeenCalled();
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    } finally {
+      runtimeConfig.dispose();
+    }
+  });
+
+  it("rechecks connection ownership after the pre-adoption recovery callback", async () => {
+    const request = vi.fn(async () => snapshot(1));
+    const { runtimeConfig, publish } = createConfigCapabilityHarness(request);
+    try {
+      await expect(
+        loadConfig(runtimeConfig.state, { beforeApplySnapshot: () => publish(false) }),
+      ).resolves.toBe(false);
+      expect(runtimeConfig.state.configSnapshot).toBeNull();
+    } finally {
+      runtimeConfig.dispose();
+    }
+  });
+  it("records a successor started synchronously by a loading-state subscriber", async () => {
+    const staleRead = deferred<ConfigSnapshot>();
+    let reads = 0;
+    const { runtimeConfig } = mutationHarness(() => {
+      reads += 1;
+      return reads === 2 ? staleRead.promise : Promise.resolve(snapshot(reads));
+    });
+    let successor: Promise<void> | undefined;
+    let observe = false;
+    const stop = runtimeConfig.subscribe((state) => {
+      if (observe && state.configLoading) {
+        observe = false;
+        successor = runtimeConfig.refresh();
+      }
+    });
+    try {
+      await runtimeConfig.ensureLoaded();
+      observe = true;
+      const mutation = mutate(runtimeConfig);
+      await expect(mutation).resolves.toEqual({
+        ok: true,
+        value: { ok: true },
+        refresh: { ok: true },
+      });
+      await successor;
+      expect(reads).toBe(3);
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+      staleRead.resolve(snapshot(2));
+      await staleRead.promise;
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    } finally {
+      staleRead.resolve(snapshot(2));
+      stop();
+      runtimeConfig.dispose();
+    }
+  });
+});

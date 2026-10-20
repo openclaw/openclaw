@@ -7,7 +7,7 @@ export function matchMarkdownHtmlTag(source: string): string | undefined {
   return MARKDOWN_HTML_TAG_RE.exec(source)?.[0];
 }
 
-type HtmlTagToken = {
+export type HtmlTagToken = {
   raw: string;
   start: number;
   end: number;
@@ -58,7 +58,7 @@ export function* tokenizeHtmlTags(html: string): Generator<HtmlTagToken> {
       end,
       name,
       closing,
-      selfClosing: !closing && raw.trimEnd().endsWith("/>"),
+      selfClosing: !closing && raw.endsWith("/>"),
     };
     cursor = end;
   }

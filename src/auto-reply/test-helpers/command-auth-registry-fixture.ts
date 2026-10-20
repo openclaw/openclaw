@@ -100,7 +100,9 @@ const createCommandAuthRegistry = () =>
 export function installDiscordRegistryHooks() {
   beforeEach(({ onTestFinished }) => {
     const previous = captureActivePluginRegistrySnapshot();
-    onTestFinished(() => rollbackStagedPluginRegistry(previous));
+    onTestFinished(() => {
+      rollbackStagedPluginRegistry(previous);
+    });
     // Stage without retiring the predecessor; roll back after caller cleanup
     // so its original lifecycle authority survives this temporary fixture.
     stageActivePluginRegistry(createCommandAuthRegistry(), null, "default");

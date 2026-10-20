@@ -3,21 +3,26 @@ import { en } from "./en.ts";
 
 const enMeetings = {
   meetings: {
-    refresh: "Refresh",
-    loading: "Loading meetings…",
     emptyTitle: "Your meeting notes, together",
-    emptyBody: "Meetings appear here once Discord voice or a meeting plugin captures a transcript.",
     docs: "Set up meeting transcripts",
-    select: "Select a meeting to read its notes.",
     inProgress: "In progress",
-    utterances: "{count} utterances",
-    participants: "Participants",
-    notesSource: "Notes: {source}",
-    noNotes: "No notes have been saved for this meeting yet.",
-    activeNotes: "Capture is in progress. Refresh to check for notes.",
+    activeNotes:
+      "Summaries are generated about every 5 minutes when new speech is captured. Follow the Transcript tab for speech as it is saved.",
+    liveCapture: "Live capture",
+    liveHint: "Updates automatically every 3 seconds.",
+    liveSummaryHint:
+      "Summary so far · Updates about every 5 minutes when there is new speech. Final notes are saved when capture ends.",
+    liveRetrying: "Updates are delayed. Retrying automatically.",
+    waitingForSpeech: "Waiting for speech…",
     noSpeech: "No speech captured",
-    loadingNotes: "Loading notes…",
     listLabel: "Meetings by day",
+    newestFirst: "Newest first · grouped by meeting date",
+    loadingMeetings: "Loading meetings…",
+    loadingSummary: "Loading summary…",
+    loadingTranscript: "Loading transcript…",
+    summaryPending: "Summary updates about every 5 minutes as new speech is captured.",
+    summaryUnavailable: "No saved summary preview is available.",
+    noResults: "No meetings match your search",
   },
 } satisfies TranslationMap;
 

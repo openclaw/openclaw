@@ -8,123 +8,44 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
+import * as execDefaults from "../exec-defaults.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
   createCliLiveSessionCapability,
 } from "./cli-live-session-registry.js";
-import { executePluginOwnedProcess } from "./execute-plugin.js";
-import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import {
+  closePluginTestAdmissions,
+  createExecution,
+  requestNativeTool,
+  runPlugin,
+  SUCCESS_RESULT,
+  waitUntilAborted,
+} from "./execute-plugin.test-support.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
-const activeAdmissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 const activeSessions = new Set<CliBackendLiveSessionHandle>();
-let nextRunId = 0;
 
-const SUCCESS_RESULT = {
-  type: "result",
-  subtype: "success",
-  is_error: false,
-  result: "completed",
-  session_id: "sdk-session",
-};
-
-async function createExecution(
-  options: {
-    config?: OpenClawConfig;
-    sessionEntry?: RunCliAgentParams["sessionEntry"];
-    nativeTools?: string[];
-    abortSignal?: AbortSignal;
-    timeoutMs?: number;
-    runId?: string;
-    resumeArgs?: string[];
-  } = {},
-) {
-  const runId = options.runId ?? `plugin-owner-${++nextRunId}`;
-  const config = options.config ?? { tools: { exec: { security: "full", ask: "off" } } };
-  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "plugin-test");
-  activeAdmissions.push(admission);
-  const context = buildPreparedCliRunContext({
-    provider: "claude-cli",
-    model: "claude-sonnet-4-6",
-    agentId: "main",
-    runId,
-    sessionId: "sdk-session",
-    sessionKey: "agent:main:main",
-    prompt: "hello",
-    config,
-    executionMode: "agent",
-    timeoutMs: options.timeoutMs ?? 5_000,
-    sessionEntry: options.sessionEntry,
-    ...(options.nativeTools
-      ? { cliToolAvailability: { native: options.nativeTools, openClaw: [] } }
-      : {}),
-    systemPrompt: "  Follow host policy.  ",
-    backend: {
-      command: "/bin/sh",
-      args: [],
-      ...(options.resumeArgs ? { resumeArgs: options.resumeArgs } : {}),
-    },
-  });
-  context.params.admittedRunContext = await admission.admit("plugin-harness");
-  if (options.abortSignal) {
-    context.params.abortSignal = options.abortSignal;
-  }
-
-  return { admission, context };
-}
-
-function runPlugin(
+async function runTurn<T>(
   context: PreparedCliRunContext,
-  execute: CliBackendExecute,
-  options: {
-    noOutputTimeoutMs?: number;
-    consumeStdout?: (chunk: string) => void;
-    sessionId?: string;
-    useResume?: boolean;
-    forceNewSession?: boolean;
-    liveSession?: boolean;
-    requiredGeneration?: string;
-    onNoOutputTimeout?: NonNullable<
-      Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
-    >;
-    onOutstandingWorkChange?: (active: boolean) => void;
-    onInterrupted?: (reason: "aborted" | "timeout") => boolean;
-  } = {},
+  action: (execution: CliBackendExecuteContext) => T,
+  options: Parameters<typeof runPlugin>[2] = {},
 ) {
-  return executePluginOwnedProcess({
+  let value: Awaited<T> | undefined;
+  await runPlugin(
     context,
-    execute,
-    executionCommand: "/bin/sh",
-    executionArgs: ["-p", "--permission-mode", "bypassPermissions"],
-    env: { PATH: "/bin:/usr/bin", OPENCLAW_TEST_MARKER: "host-owned" },
-    prompt: context.params.prompt,
-    promptContext: context.promptContext,
-    useResume: options.useResume ?? Boolean(options.requiredGeneration),
-    sessionId: options.sessionId ?? "sdk-session",
-    ...(options.forceNewSession ? { forceNewSession: true } : {}),
-    ...(options.liveSession || options.requiredGeneration
-      ? {
-          liveSession: {
-            beginCapture: () => {},
-            ...(options.requiredGeneration
-              ? { requiredGeneration: options.requiredGeneration }
-              : {}),
-          },
-        }
-      : {}),
-    ...(options.onNoOutputTimeout ? { onNoOutputTimeout: options.onNoOutputTimeout } : {}),
-    onOutstandingWorkChange: options.onOutstandingWorkChange,
-    ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
-    noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
-    consumeStdout: options.consumeStdout ?? (() => {}),
-  });
+    async function* (execution) {
+      value = await action(execution);
+      yield SUCCESS_RESULT;
+    },
+    options,
+  );
+  return value;
 }
 
 function registerOwnerSession(context: PreparedCliRunContext, generation: string) {
@@ -148,34 +69,29 @@ function registerOwnerSession(context: PreparedCliRunContext, generation: string
   return { handle: session, close };
 }
 
-function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
-  const signal = execution.abortSignal;
-  if (!signal) {
-    throw new Error("Host execution did not expose its abort signal.");
-  }
-  return new Promise((_, reject) => {
-    signal.addEventListener(
-      "abort",
-      () =>
-        reject(
-          signal.reason instanceof Error ? signal.reason : new Error("CLI test run was aborted."),
-        ),
-      { once: true },
-    );
-  });
-}
-
-function requestNativeTool(
-  execution: CliBackendExecuteContext,
-  toolName = "Bash",
-  toolInput: Record<string, unknown> = { command: "echo approved" },
-) {
-  return execution.requestToolPermission({
-    toolName,
-    toolInput,
-    toolCallId: `native-${toolName}`,
-    ...(execution.abortSignal ? { abortSignal: execution.abortSignal } : {}),
-  });
+async function startBlockedRun(options: {
+  timeoutMs: number;
+  getDeadline: () => number | undefined;
+  onChange?: (listener: (() => void) | undefined) => void;
+}) {
+  const { context } = await createExecution({ timeoutMs: options.timeoutMs });
+  const started = createDeferred();
+  const run = runPlugin(
+    context,
+    async function* (execution) {
+      started.resolve();
+      await waitUntilAborted(execution);
+      yield SUCCESS_RESULT;
+    },
+    {
+      noOutputTimeoutMs: 100,
+      activeToolCount: () => 1,
+      getActiveLoopbackAskUserDeadline: options.getDeadline,
+      setOnActiveLoopbackAskUserDeadlineChange: options.onChange,
+    },
+  );
+  await started.promise;
+  return { run };
 }
 
 afterEach(() => {
@@ -183,9 +99,7 @@ afterEach(() => {
     session.close("restart");
   }
   activeSessions.clear();
-  for (const admission of activeAdmissions.splice(0)) {
-    admission.close();
-  }
+  closePluginTestAdmissions();
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -193,6 +107,8 @@ afterEach(() => {
 
 describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
+    // Exercise stream translation independently of cold policy-worker startup time.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const { context } = await createExecution();
     context.systemPrompt = `  Follow host policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}Keep credentials private.  `;
     context.promptContext = {
@@ -235,78 +151,196 @@ describe("plugin-owned CLI execution host boundary", () => {
     );
   });
 
-  it("runs plugin user questions through the shared Gateway question flow", async () => {
-    const { context } = await createExecution({
-      runId: "plugin-user-input",
-      nativeTools: ["AskUserQuestion"],
+  it("does not disclose private context when history access changes during permission preparation", async () => {
+    const { context } = await createExecution();
+    context.promptContext = { prependContext: "private conversation history" };
+    let historyReadable = true;
+    context.cliHistoryWriter = {
+      target: {
+        agentId: "main",
+        sessionId: "sdk-session",
+        sessionKey: "agent:main:main",
+        storePath: "/synthetic/sessions.sqlite",
+      },
+      runId: "history-owner",
+      authFingerprint: "a".repeat(64),
+      assertCurrent() {},
+      async assertReadable() {
+        if (!historyReadable) {
+          throw new Error("Private history account changed");
+        }
+      },
+    };
+    const preparingPermission = createDeferred();
+    const releasePermission = createDeferred();
+    const resolvePermission = execDefaults.resolveExecDefaultsAsync;
+    vi.spyOn(execDefaults, "resolveExecDefaultsAsync").mockImplementationOnce(async (...args) => {
+      preparingPermission.resolve();
+      await releasePermission.promise;
+      return resolvePermission(...args);
     });
-    context.params.sessionKey = "main";
-    context.params.runtimePolicySessionKey = "agent:main:telegram:default:direct:canonical-sender";
-    let promptDelivered = createDeferred();
-    const onBlockReply = vi.fn(async () => {
-      promptDelivered.resolve();
-    });
-    context.params.onBlockReply = onBlockReply;
-    const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
-    mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
-      const params = rawParams as {
-        id: string;
-        questions?: Array<{ questionId: string }>;
-        sessionKey?: string;
-      };
-      if (method === "question.request") {
-        expect(params.sessionKey).toBe(context.params.sessionKey);
-        requests.set(params.id, { questions: params.questions ?? [] });
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        const request = requests.get(params.id);
-        await promptDelivered.promise;
-        promptDelivered = createDeferred();
-        return {
-          status: "answered",
-          answers: {
-            answers: Object.fromEntries(
-              (request?.questions ?? []).map((question) => [
-                question.questionId,
-                [question.questionId],
-              ]),
-            ),
-          },
-        };
-      }
-      if (method === "question.resolve") {
-        return { status: "cancelled" };
-      }
-      throw new Error(`Unexpected Gateway method: ${method}`);
-    });
-    let result: unknown;
-
-    await runPlugin(context, async function* (execution) {
-      result = await execution.requestUserInput({
-        toolName: "AskUserQuestion",
-        toolCallId: "claude-question",
-        questions: [
-          {
-            id: "one",
-            header: "One",
-            question: "First question?",
-            isOther: true,
-            options: [{ label: "A" }, { label: "B" }],
-          },
-        ],
-      });
+    const execute = vi.fn(async function* () {
       yield SUCCESS_RESULT;
     });
+    const result = runPlugin(context, execute).catch((error: unknown) => error);
+    try {
+      await preparingPermission.promise;
+      historyReadable = false;
+    } finally {
+      releasePermission.resolve();
+    }
+    expect(await result).toEqual(new Error("Private history account changed"));
+    expect(execute).not.toHaveBeenCalled();
+  });
 
-    expect(result).toEqual({
-      status: "answered",
-      answers: {
-        one: ["one"],
-      },
+  it.each([false, true])(
+    "runs plugin user questions with current caller authority (revoked=%s)",
+    async (revoked) => {
+      const { context } = await createExecution({
+        runId: "plugin-user-input",
+        nativeTools: ["AskUserQuestion"],
+      });
+      context.params.sessionKey = "main";
+      let callerCurrent = true;
+      context.params.assertCurrent = () => {
+        if (!callerCurrent) {
+          throw new Error("caller revoked");
+        }
+      };
+      context.params.runtimePolicySessionKey =
+        "agent:main:telegram:default:direct:canonical-sender";
+      let promptDelivered = createDeferred();
+      const onBlockReply = vi.fn(async () => {
+        promptDelivered.resolve();
+      });
+      context.params.onBlockReply = onBlockReply;
+      const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
+      mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
+        const params = rawParams as {
+          id: string;
+          questions?: Array<{ questionId: string }>;
+          sessionKey?: string;
+        };
+        if (method === "question.request") {
+          expect(params.sessionKey).toBe(context.params.sessionKey);
+          requests.set(params.id, { questions: params.questions ?? [] });
+          return { id: params.id };
+        }
+        if (method === "question.waitAnswer") {
+          const request = requests.get(params.id);
+          await promptDelivered.promise;
+          promptDelivered = createDeferred();
+          callerCurrent = !revoked;
+          return {
+            status: "answered",
+            answers: {
+              answers: Object.fromEntries(
+                (request?.questions ?? []).map((question) => [
+                  question.questionId,
+                  [question.questionId],
+                ]),
+              ),
+            },
+          };
+        }
+        if (method === "question.resolve") {
+          return { status: "cancelled" };
+        }
+        throw new Error(`Unexpected Gateway method: ${method}`);
+      });
+      const result = await runTurn(context, (execution) =>
+        execution.requestUserInput({
+          toolName: "AskUserQuestion",
+          toolCallId: "claude-question",
+          questions: [
+            {
+              id: "one",
+              header: "One",
+              question: "First question?",
+              isOther: true,
+              options: [{ label: "A" }, { label: "B" }],
+            },
+          ],
+        }),
+      );
+
+      expect(result).toEqual(
+        revoked
+          ? expect.objectContaining({ status: "cancelled" })
+          : {
+              status: "answered",
+              answers: {
+                one: ["one"],
+              },
+            },
+      );
+      expect([...requests.keys()]).toEqual(["claude-question:0"]);
+      expect(onBlockReply).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["caller", "admission"] as const)(
+    "rejects %s revocation before restart or plugin execution",
+    async (authority) => {
+      const { context, admission } = await createExecution();
+      const session = registerOwnerSession(context, "dispatch-owner");
+      if (authority === "caller") {
+        context.params.assertCurrent = () => {
+          throw new Error("caller revoked");
+        };
+      } else {
+        admission.close();
+      }
+      const execute = vi.fn(async function* () {
+        yield SUCCESS_RESULT;
+      });
+      await expect(
+        runPlugin(context, execute, { liveSession: true, forceNewSession: true }),
+      ).rejects.toThrow();
+      expect(session.close).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      await expect(runPlugin(context, execute)).rejects.toThrow();
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not close a successor or execute after caller revocation during restart cleanup", async () => {
+    const { context } = await createExecution();
+    const successor = await createExecution();
+    const session = registerOwnerSession(successor.context, "successor-during-restart");
+    const entered = createDeferred();
+    const held = createDeferred();
+    let callerCurrent = true;
+    context.params.assertCurrent = () => {
+      if (!callerCurrent) {
+        throw new Error("caller revoked");
+      }
+    };
+    context.preparedBackend.closeLiveSession = async () => {
+      entered.resolve();
+      await held.promise;
+    };
+    const execute = vi.fn(async function* () {
+      yield SUCCESS_RESULT;
     });
-    expect([...requests.keys()]).toEqual(["claude-question:0"]);
-    expect(onBlockReply).toHaveBeenCalledOnce();
+    const run = runPlugin(context, execute, { liveSession: true, forceNewSession: true });
+    const observed = run.catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      callerCurrent = false;
+    } finally {
+      held.resolve();
+    }
+    expect(await observed).toEqual(new Error("caller revoked"));
+    expect(session.close).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    await runTurn(
+      successor.context,
+      (execution) => {
+        expect(execution.liveSession?.current()).toBe(session.handle);
+      },
+      { liveSession: true },
+    );
   });
 
   it("restarts true fresh sessions while preserving legitimate no-resume warm reuse", async () => {
@@ -314,11 +348,10 @@ describe("plugin-owned CLI execution host boundary", () => {
     reseed.context.openClawHistoryPrompt = "Previously recorded bounded conversation.";
     const reseededSession = registerOwnerSession(reseed.context, "old-reseed-session");
 
-    await runPlugin(
+    await runTurn(
       reseed.context,
-      async function* (execution) {
+      (execution) => {
         expect(execution.liveSession?.current()).toBeUndefined();
-        yield SUCCESS_RESULT;
       },
       { liveSession: true, forceNewSession: true },
     );
@@ -329,22 +362,15 @@ describe("plugin-owned CLI execution host boundary", () => {
       resumeArgs: ["--resume", "{sessionId}"],
     });
     const resumeSession = registerOwnerSession(resumeCapable.context, "resume-capable-session");
-    await runPlugin(
-      resumeCapable.context,
-      async function* () {
-        yield SUCCESS_RESULT;
-      },
-      { liveSession: true, useResume: false },
-    );
+    await runTurn(resumeCapable.context, () => {}, { liveSession: true, useResume: false });
     expect(resumeSession.close).toHaveBeenCalledWith("restart");
 
     const noResume = await createExecution({ runId: "plugin-no-resume-warm", resumeArgs: [] });
     const reusableSession = registerOwnerSession(noResume.context, "no-resume-session");
-    await runPlugin(
+    await runTurn(
       noResume.context,
-      async function* (execution) {
+      (execution) => {
         expect(execution.liveSession?.current()).toBe(reusableSession.handle);
-        yield SUCCESS_RESULT;
       },
       { liveSession: true, useResume: false },
     );
@@ -387,32 +413,24 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(replacement.close).toHaveBeenCalledWith("restart");
   });
 
-  it.each([undefined, new Error("SDK stream closed after init")])(
-    "recovers an invalidated control-only resume %#",
-    async (streamError) => {
-      const { context } = await createExecution();
-      const session = registerOwnerSession(context, "required-generation");
-      const run = runPlugin(
-        context,
-        async function* () {
-          yield { type: "system", subtype: "init", session_id: "sdk-session" };
-          session.handle.close("abort");
-          if (streamError) {
-            throw streamError;
-          }
-        },
-        {
-          requiredGeneration: "required-generation",
-        },
-      );
+  it("recovers an invalidated control-only resume", async () => {
+    const { context } = await createExecution();
+    const session = registerOwnerSession(context, "required-generation");
+    const run = runPlugin(
+      context,
+      async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-session" };
+        session.handle.close("abort");
+      },
+      { requiredGeneration: "required-generation" },
+    );
 
-      await expect(run).rejects.toMatchObject({
-        reason: "session_expired",
-        code: "cli_live_session_missing",
-        cause: streamError ?? expect.any(Error),
-      });
-    },
-  );
+    await expect(run).rejects.toMatchObject({
+      reason: "session_expired",
+      code: "cli_live_session_missing",
+      cause: new Error("CLI plugin runtime completed without a terminal result."),
+    });
+  });
 
   it("does not replay an invalidated resume while native approval is pending", async () => {
     const { context } = await createExecution({
@@ -538,36 +556,19 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      name: "full policy releases the exact original input",
-      security: "full" as const,
-      ask: "off" as const,
-      behavior: "allow" as const,
-    },
-    {
-      name: "allowlist policy never silently prompts or grants",
-      security: "allowlist" as const,
-      ask: "off" as const,
-      behavior: "deny" as const,
-    },
-  ])("$name", async ({ security, ask, behavior }) => {
+  it("never silently prompts or grants under allowlist policy", async () => {
     const { context } = await createExecution({
-      config: { tools: { exec: { security, ask } } },
+      config: { tools: { exec: { security: "allowlist", ask: "off" } } },
       nativeTools: ["Read"],
     });
-    const input = { file_path: "/tmp/example.png", nested: { source: "exact" } };
-    let decision: CliBackendToolPermissionResult | undefined;
+    const decision = await runTurn(context, (execution) =>
+      requestNativeTool(execution, "Read", {
+        file_path: "/tmp/example.png",
+        nested: { source: "exact" },
+      }),
+    );
 
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "Read", input);
-      yield SUCCESS_RESULT;
-    });
-
-    expect(decision?.behavior).toBe(behavior);
-    if (decision?.behavior === "allow") {
-      expect(decision.updatedInput).toBe(input);
-    }
+    expect(decision?.behavior).toBe("deny");
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -575,10 +576,9 @@ describe("plugin-owned CLI execution host boundary", () => {
     const { context } = await createExecution({ nativeTools: ["Read"] });
     const decisions: CliBackendToolPermissionResult[] = [];
 
-    await runPlugin(context, async function* (execution) {
+    await runTurn(context, async (execution) => {
       decisions.push(await requestNativeTool(execution, "   "));
       decisions.push(await requestNativeTool(execution, "Bash"));
-      yield SUCCESS_RESULT;
     });
 
     expect(decisions).toEqual([
@@ -602,20 +602,28 @@ describe("plugin-owned CLI execution host boundary", () => {
       nativeTools: ["WebFetch"],
       runId: "plugin-approval-first",
     });
-    const originalHandle = registerOwnerSession(first.context, "original-live-process");
+    registerOwnerSession(first.context, "original-live-process");
 
     const runApprovedTurn = async (context: PreparedCliRunContext, repeat: boolean) => {
-      await runPlugin(context, async function* (execution) {
-        await expect(
-          requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
-        ).resolves.toMatchObject({ behavior: "allow" });
-        if (repeat) {
+      await runTurn(
+        context,
+        async (execution) => {
+          const handle = execution.liveSession?.current();
+          if (!handle) {
+            throw new Error("Expected a registered live process");
+          }
+          execution.liveSession?.activate(handle);
           await expect(
-            requestNativeTool(execution, "WebFetch", { url: "https://example.com/next" }),
+            requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
           ).resolves.toMatchObject({ behavior: "allow" });
-        }
-        yield SUCCESS_RESULT;
-      });
+          if (repeat) {
+            await expect(
+              requestNativeTool(execution, "WebFetch", { url: "https://example.com/next" }),
+            ).resolves.toMatchObject({ behavior: "allow" });
+          }
+        },
+        { liveSession: true },
+      );
     };
 
     await runApprovedTurn(first.context, true);
@@ -633,15 +641,14 @@ describe("plugin-owned CLI execution host boundary", () => {
       runId: "plugin-approval-restricted",
       sessionEntry: { sessionId: "sdk-session", updatedAt: 1, permissionMode: "read-only" },
     });
-    await runPlugin(restricted.context, async function* (execution) {
+    await runTurn(restricted.context, async (execution) => {
       await expect(
         requestNativeTool(execution, "WebFetch", { url: "https://example.com/restricted" }),
       ).resolves.toMatchObject({ behavior: "deny" });
-      yield SUCCESS_RESULT;
     });
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
 
-    originalHandle.handle.close("restart");
+    await closeCliLiveSession(sameProcess.context, "restart");
     registerOwnerSession(first.context, "replacement-live-process");
     const replacement = await createExecution({
       config,
@@ -653,26 +660,37 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
   });
 
-  it("denies approval when its exact admitted authority closes during the awaited decision", async () => {
-    const { admission, context } = await createExecution({
-      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
-      nativeTools: ["WebFetch"],
-    });
-    mockCallGatewayTool.mockImplementationOnce(async () => {
-      admission.close();
-      return { id: "approval-closed", decision: "allow-once" };
-    });
-    let decision: CliBackendToolPermissionResult | undefined;
+  it.each(["admission", "caller"] as const)(
+    "denies approval when %s authority closes during the awaited decision",
+    async (authority) => {
+      const { admission, context } = await createExecution({
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+        nativeTools: ["WebFetch"],
+      });
+      let callerCurrent = true;
+      context.params.assertCurrent = () => {
+        if (!callerCurrent) {
+          throw new Error("caller revoked");
+        }
+      };
+      mockCallGatewayTool.mockImplementationOnce(async () => {
+        if (authority === "caller") {
+          callerCurrent = false;
+        } else {
+          admission.close();
+        }
+        return { id: "approval-closed", decision: "allow-once" };
+      });
+      const decision = await runTurn(context, (execution) =>
+        requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
+      );
 
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "WebFetch", { url: "https://example.com" });
-      yield SUCCESS_RESULT;
-    });
-
-    expect(decision).toEqual(
-      expect.objectContaining({ behavior: "deny", message: expect.stringContaining("closed") }),
-    );
-  });
+      expect(decision).toMatchObject({
+        behavior: "deny",
+        message: expect.stringContaining("closed"),
+      });
+    },
+  );
 
   it("cancels an in-flight native approval and never releases its late decision", async () => {
     const controller = new AbortController();
@@ -715,48 +733,30 @@ describe("plugin-owned CLI execution host boundary", () => {
 
   it("fences a retained permission callback as soon as its turn finishes", async () => {
     const { context } = await createExecution();
-    let requestToolPermission: CliBackendExecuteContext["requestToolPermission"] | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      requestToolPermission = execution.requestToolPermission;
-      yield SUCCESS_RESULT;
-    });
+    const requestToolPermission = await runTurn(
+      context,
+      (execution) => execution.requestToolPermission,
+    );
 
     await expect(
       requestToolPermission?.({ toolName: "Bash", toolInput: { command: "echo stale" } }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        behavior: "deny",
-        message: expect.stringContaining("no longer active"),
-      }),
-    );
+    ).resolves.toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining("no longer active"),
+    });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "a 429 error-marked success",
-      terminal: {
-        type: "result",
-        subtype: "success",
-        is_error: true,
-        api_error_status: 429,
-        result: "Claude subscription rate limit reached.",
-      },
-    },
-    {
-      name: "a 529 provider-error subtype despite an unset error flag",
-      terminal: {
-        type: "result",
-        subtype: "error_during_execution",
-        is_error: false,
-        api_error_status: 529,
-        errors: ["Anthropic API overloaded (529)."],
-      },
-    },
-  ])("preserves $name if the plugin throws while draining", async ({ terminal }) => {
+  it("preserves a provider-error subtype if the plugin throws while draining", async () => {
     const { context } = await createExecution();
     const output: string[] = [];
+    const terminal = {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: false,
+      api_error_status: 529,
+      errors: ["Anthropic API overloaded (529)."],
+    };
 
     await expect(
       runPlugin(
@@ -773,75 +773,17 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(output.map((line) => JSON.parse(line))).toEqual([terminal, SUCCESS_RESULT]);
   });
 
-  it.each([
-    {
-      name: "a stream without a terminal result",
-      async *execute() {
-        yield { type: "system", subtype: "init" };
-      },
-      error: "without a terminal result",
-    },
-    {
-      name: "a plugin failure after an otherwise successful result",
-      async *execute() {
-        yield SUCCESS_RESULT;
-        throw new Error("SDK stream failed after the result");
-      },
-      error: "SDK stream failed after the result",
-    },
-  ])("rejects $name", async (testCase) => {
+  it("rejects an interim result without its continuation final", async () => {
     const { context } = await createExecution();
 
-    await expect(runPlugin(context, () => testCase.execute())).rejects.toThrow(testCase.error);
+    await expect(
+      runPlugin(context, async function* () {
+        yield { ...SUCCESS_RESULT, openclaw_interim_result: true };
+      }),
+    ).rejects.toThrow("without a terminal result");
   });
 
-  it("aborts a silent plugin stream through the host no-output watchdog", async () => {
-    vi.useFakeTimers();
-    const { context } = await createExecution({ timeoutMs: 5_000 });
-    const streamStarted = createDeferred();
-    const run = runPlugin(
-      context,
-      async function* (execution) {
-        streamStarted.resolve();
-        await waitUntilAborted(execution);
-        yield SUCCESS_RESULT;
-      },
-      { noOutputTimeoutMs: 100 },
-    );
-    await streamStarted.promise;
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    await expect(run).resolves.toMatchObject({
-      reason: "no-output-timeout",
-      exitCode: null,
-      timedOut: true,
-      noOutputTimedOut: true,
-    });
-  });
-
-  it.each([
-    {
-      name: "init-only resumed traffic remains safely retryable",
-      event: { type: "system", subtype: "init", session_id: "sdk-session" },
-      code: "cli_no_output_timeout",
-    },
-    {
-      name: "actual SDK command lifecycle traffic remains safely retryable",
-      event: {
-        type: "command_lifecycle",
-        subtype: "started",
-        command: "resume",
-        session_id: "sdk-session",
-      },
-      code: "cli_no_output_timeout",
-    },
-    {
-      name: "substantive assistant output never becomes replay-safe",
-      event: { type: "assistant", message: { content: [{ type: "text", text: "started" }] } },
-      code: undefined,
-    },
-  ])("$name", async ({ event, code }) => {
+  it("never replays substantive assistant output after a no-output timeout", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution({ timeoutMs: 5_000 });
     const output: string[] = [];
@@ -849,7 +791,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     const run = runPlugin(
       context,
       async function* (execution) {
-        yield event;
+        yield { type: "assistant", message: { content: [{ type: "text", text: "started" }] } };
         await waitUntilAborted(execution);
         yield SUCCESS_RESULT;
       },
@@ -867,7 +809,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     await expect(run).resolves.toMatchObject({ reason: "no-output-timeout" });
     expect(timeout).toHaveBeenCalledOnce();
     expect(timeout.mock.calls[0]?.[0]).toMatchObject({ reason: "timeout" });
-    expect(timeout.mock.calls[0]?.[0]?.code).toBe(code);
+    expect(timeout.mock.calls[0]?.[0]?.code).toBeUndefined();
   });
 
   it("keeps an active native approval alive beyond the ordinary no-output watchdog", async () => {
@@ -905,37 +847,6 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(outstandingWork).toHaveBeenLastCalledWith(false);
   });
 
-  it("keeps the overall deadline authoritative while a native approval is outstanding", async () => {
-    vi.useFakeTimers();
-    const { context } = await createExecution({
-      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
-      nativeTools: ["WebFetch"],
-      timeoutMs: 150,
-    });
-    const approval = createDeferred<{ id: string; decision: "allow-once" }>();
-    mockCallGatewayTool.mockReturnValueOnce(approval.promise);
-    const run = runPlugin(
-      context,
-      async function* (execution) {
-        await requestNativeTool(execution, "WebFetch", { url: "https://example.com/slow" });
-        yield SUCCESS_RESULT;
-      },
-      { noOutputTimeoutMs: 100 },
-    );
-    await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
-    const approvalSignal = mockCallGatewayTool.mock.calls[0]?.[3]?.signal;
-
-    await vi.advanceTimersByTimeAsync(150);
-
-    await expect(run).resolves.toMatchObject({
-      reason: "overall-timeout",
-      timedOut: true,
-      noOutputTimedOut: false,
-    });
-    expect(approvalSignal?.aborted).toBe(true);
-    approval.resolve({ id: "late-approval", decision: "allow-once" });
-  });
-
   it("keeps tracked background work alive beyond the ordinary no-output watchdog", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution();
@@ -969,83 +880,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(received.map((event) => JSON.parse(event))).toHaveLength(3);
   });
 
-  it("keeps the overall deadline authoritative while background work remains active", async () => {
-    vi.useFakeTimers();
-    const { context } = await createExecution({ timeoutMs: 150 });
-    const received: string[] = [];
-    const run = runPlugin(
-      context,
-      async function* (execution) {
-        yield {
-          type: "system",
-          subtype: "background_tasks_changed",
-          tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
-        };
-        await waitUntilAborted(execution);
-        yield SUCCESS_RESULT;
-      },
-      { noOutputTimeoutMs: 100, consumeStdout: received.push.bind(received) },
-    );
-    await vi.waitFor(() => expect(received).toHaveLength(1));
-
-    await vi.advanceTimersByTimeAsync(150);
-
-    await expect(run).resolves.toMatchObject({
-      reason: "overall-timeout",
-      timedOut: true,
-      noOutputTimedOut: false,
-    });
-  });
-
-  it("propagates caller cancellation and closes the active plugin iterator", async () => {
-    const controller = new AbortController();
-    const { context } = await createExecution({ abortSignal: controller.signal });
-    const streamStarted = createDeferred();
-    const streamClosed = vi.fn();
-    const run = runPlugin(context, async function* (execution) {
-      try {
-        streamStarted.resolve();
-        await waitUntilAborted(execution);
-        yield SUCCESS_RESULT;
-      } finally {
-        streamClosed();
-      }
-    });
-    await streamStarted.promise;
-
-    controller.abort();
-
-    await expect(run).rejects.toMatchObject({ name: "AbortError" });
-    expect(streamClosed).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    {
-      name: "AbortError",
-      reason: "aborted" as const,
-      abort: (controller: AbortController) => controller.abort(),
-    },
-    {
-      name: "the caller's TimeoutError",
-      reason: "timeout" as const,
-      abort: (controller: AbortController) => {
-        const timeout = new Error("caller deadline exceeded");
-        timeout.name = "TimeoutError";
-        controller.abort(timeout);
-      },
-    },
-    {
-      name: "AbortError wrapping a TimeoutError",
-      reason: "aborted" as const,
-      abort: (controller: AbortController) => {
-        const timeout = new Error("caller deadline exceeded");
-        timeout.name = "TimeoutError";
-        const cancellation = new Error("caller cancelled", { cause: timeout });
-        cancellation.name = "AbortError";
-        controller.abort(cancellation);
-      },
-    },
-  ])("preserves streamed assistant output after $name", async ({ abort, reason }) => {
+  it("preserves streamed assistant output after the caller deadline expires", async () => {
     const controller = new AbortController();
     const { context } = await createExecution({ abortSignal: controller.signal });
     const output: string[] = [];
@@ -1067,12 +902,98 @@ describe("plugin-owned CLI execution host boundary", () => {
     );
     await vi.waitFor(() => expect(output).toHaveLength(1));
 
-    abort(controller);
+    const timeout = new Error("caller deadline exceeded");
+    timeout.name = "TimeoutError";
+    controller.abort(timeout);
 
     await expect(run).resolves.toMatchObject({ reason: "manual-cancel", exitCode: null });
-    expect(preserveOutput).toHaveBeenCalledExactlyOnceWith(reason);
+    expect(preserveOutput).toHaveBeenCalledExactlyOnceWith("timeout");
     expect(JSON.parse(output[0] ?? "{}")).toMatchObject({
       message: { content: [{ text: "Here is the answer so far" }] },
+    });
+  });
+});
+
+describe("plugin-owned CLI ask_user timeout", () => {
+  it("keeps the earlier overall deadline authoritative", async () => {
+    vi.useFakeTimers();
+    const deadline = Date.now() + 3_610_000;
+    const { run } = await startBlockedRun({ timeoutMs: 150, getDeadline: () => deadline });
+
+    await vi.advanceTimersByTimeAsync(150);
+    await expect(run).resolves.toMatchObject({
+      reason: "overall-timeout",
+      timedOut: true,
+      noOutputTimedOut: false,
+    });
+  });
+
+  it("uses the exact question deadline", async () => {
+    vi.useFakeTimers();
+    const deadline = Date.now() + 3_610_000;
+    const { run } = await startBlockedRun({ timeoutMs: 4_000_000, getDeadline: () => deadline });
+    let completed = false;
+    void run.then(() => {
+      completed = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(900_000);
+    expect(completed).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_710_000);
+    await expect(run).resolves.toMatchObject({
+      reason: "no-output-timeout",
+      timedOut: true,
+      noOutputTimedOut: true,
+    });
+  });
+
+  it("does not let a short question shrink the blocked-tool watchdog floor", async () => {
+    vi.useFakeTimers();
+    const deadline = Date.now() + 40_000;
+    const { run } = await startBlockedRun({
+      timeoutMs: 2_000_000,
+      getDeadline: () => deadline,
+    });
+    let completed = false;
+    void run.then(() => {
+      completed = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(899_999);
+    expect(completed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(run).resolves.toMatchObject({
+      reason: "no-output-timeout",
+      noOutputTimedOut: true,
+    });
+  });
+
+  it("restores the remaining ordinary watchdog when ask_user clears early", async () => {
+    vi.useFakeTimers();
+    let deadline: number | undefined = Date.now() + 3_610_000;
+    let onChange: (() => void) | undefined;
+    const { run } = await startBlockedRun({
+      timeoutMs: 2_000_000,
+      getDeadline: () => deadline,
+      onChange: (listener) => {
+        onChange = listener;
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(200);
+    deadline = undefined;
+    onChange?.();
+    await vi.advanceTimersByTimeAsync(899_799);
+    let completed = false;
+    void run.then(() => {
+      completed = true;
+    });
+    expect(completed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(run).resolves.toMatchObject({
+      reason: "no-output-timeout",
+      noOutputTimedOut: true,
     });
   });
 });

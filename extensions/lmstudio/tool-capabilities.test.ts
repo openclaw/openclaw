@@ -88,8 +88,11 @@ describe("LM Studio configured model tool capabilities", () => {
     {
       label: "all schema-approved compatibility fields",
       configuredCompat: {
+        codeMode: "preferred",
         supportsStore: false,
         supportsPromptCacheKey: false,
+        supportsResponsesContinuation: false,
+        supportsInstructions: true,
         supportsDeveloperRole: false,
         supportsReasoningEffort: true,
         supportsTemperature: false,

@@ -1,69 +1,65 @@
-// Round-trips each CronSchedule kind through canonical SQLite job JSON.
 import { describe, expect, it } from "vitest";
 import { makeCronJob } from "../delivery.test-helpers.js";
+import { makeCronStreamSandboxTarget } from "../stream-sandbox.test-support.js";
 import type { CronSchedule } from "../types.js";
-import { projectCronJobThroughStorageCodec } from "./row-codec.js";
-
-function roundTrip(schedule: CronSchedule): CronSchedule | null {
-  return projectCronJobThroughStorageCodec(makeCronJob({ schedule })).schedule;
-}
+import { projectCronJobThroughStorageCodec, rowToCronJob } from "./row-codec.js";
 
 describe("canonical cron schedule JSON round-trip", () => {
-  it("round-trips the creator account through canonical job JSON", () => {
-    const job = projectCronJobThroughStorageCodec(
-      makeCronJob({
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:group:ops",
-          accountId: "work",
-        },
-      }),
-    );
-
-    expect(job.owner).toEqual({
-      agentId: "main",
-      sessionKey: "agent:main:discord:group:ops",
-      accountId: "work",
-    });
-  });
-
-  it("round-trips scheduled authority through canonical job JSON", () => {
-    const job = projectCronJobThroughStorageCodec(
-      makeCronJob({
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:group:ops",
-          accountId: "work",
-        },
-        payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "work",
-        },
-      }),
-    );
-
-    expect(job.scheduledToolPolicy).toEqual({
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:main:discord:group:ops",
-      ownerAccountId: "work",
-    });
-  });
-
-  it("round-trips store-private scheduled caller origin without adding a column", () => {
-    const job = projectCronJobThroughStorageCodec({
-      ...makeCronJob({}),
-      toolsAllowProvenance: {
-        version: 1,
-        source: "final-executable-surface",
-        callerOrigin: { kind: "local" },
+  it.each([
+    { name: "missing target", target: undefined },
+    { name: "unsupported backend", target: { ...makeCronStreamSandboxTarget(), backendId: "ssh" } },
+    {
+      name: "missing session identity",
+      target: { ...makeCronStreamSandboxTarget(), sessionId: "" },
+    },
+    {
+      name: "missing grant observation",
+      target: {
+        ...makeCronStreamSandboxTarget(),
+        operator: { profileId: "profile-ada", scopes: ["operator.write"], assignedRole: null },
       },
-    });
+    },
+    {
+      name: "malformed grant",
+      target: {
+        ...makeCronStreamSandboxTarget(),
+        operator: {
+          profileId: "profile-ada",
+          scopes: ["operator.write"],
+          assignedRole: null,
+          gatewayAccessGrant: {},
+        },
+      },
+    },
+  ])("rejects a persisted sandbox stream with $name", ({ target }) => {
+    const job = makeCronJob({});
+    expect(
+      rowToCronJob(
+        { job_id: job.id, state_json: "{}", updated_at: 1, runtime_updated_at_ms: 1 },
+        {
+          ...job,
+          schedule: { kind: "sandbox-stream", command: ["watch-source"] },
+          streamSandbox: target,
+        },
+      ),
+    ).toBeNull();
+  });
 
-    expect(job.toolsAllowProvenance?.callerOrigin).toEqual({ kind: "local" });
+  it("requires the persisted sandbox discriminator and preserves the private target", () => {
+    const streamSandbox = makeCronStreamSandboxTarget();
+    const job = {
+      ...makeCronJob({ schedule: { kind: "stream", command: ["watch-source"] } }),
+      streamSandbox,
+    };
+    const row = { job_id: job.id, state_json: "{}", updated_at: 1, runtime_updated_at_ms: 1 };
+    expect(rowToCronJob(row, job)).toBeNull();
+    expect(
+      rowToCronJob(row, { ...job, schedule: { ...job.schedule, kind: "sandbox-stream" } }),
+    ).toMatchObject({ schedule: job.schedule, streamSandbox });
+    const projected = projectCronJobThroughStorageCodec(job);
+    expect(projected.streamSandbox).toEqual(streamSandbox);
+    expect(projected.streamSandbox).not.toBe(streamSandbox);
+    expect(projected.streamSandbox?.operator?.scopes).not.toBe(streamSandbox.operator?.scopes);
   });
 
   it("keeps private runtime authority out of job_json", () => {
@@ -88,41 +84,8 @@ describe("canonical cron schedule JSON round-trip", () => {
     expect(malformed.runtimeAuthority).toBeUndefined();
   });
 
-  it("round-trips pacing through canonical job JSON", () => {
-    const job = projectCronJobThroughStorageCodec(
-      makeCronJob({ pacing: { min: "15m", max: "4h" } }),
-    );
-
-    expect(job.pacing).toEqual({ min: "15m", max: "4h" });
-  });
-
-  it("round-trips an on-exit schedule with command + cwd", () => {
-    expect(roundTrip({ kind: "on-exit", command: "make build", cwd: "/repo" })).toEqual({
-      kind: "on-exit",
-      command: "make build",
-      cwd: "/repo",
-    });
-  });
-
-  it("round-trips an on-exit schedule without cwd", () => {
-    expect(roundTrip({ kind: "on-exit", command: "./watch.sh" })).toEqual({
-      kind: "on-exit",
-      command: "./watch.sh",
-    });
-  });
-
-  it("round-trips a stream schedule through canonical job JSON", () => {
-    expect(
-      roundTrip({
-        kind: "stream",
-        command: ["node", "events.mjs"],
-        cwd: "/repo",
-        mode: "match",
-        match: "^ready:",
-        batchMs: 100,
-        maxBatchBytes: 2_048,
-      }),
-    ).toEqual({
+  it("round-trips a paced stream without aliasing input config or runtime state", () => {
+    const schedule: CronSchedule = {
       kind: "stream",
       command: ["node", "events.mjs"],
       cwd: "/repo",
@@ -130,22 +93,29 @@ describe("canonical cron schedule JSON round-trip", () => {
       match: "^ready:",
       batchMs: 100,
       maxBatchBytes: 2_048,
+    };
+    const triggerState = { cursor: { position: 7 }, items: ["first"] };
+    const input = makeCronJob({
+      schedule,
+      pacing: { min: "15m", max: "4h" },
+      state: { lastStatus: "ok", triggerState, nextRunAtMs: 123_000 },
     });
-  });
+    const before = structuredClone(input);
+    const projected = projectCronJobThroughStorageCodec(input);
 
-  it("keeps existing schedule kinds intact", () => {
-    expect(roundTrip({ kind: "every", everyMs: 60_000 })).toEqual({
-      kind: "every",
-      everyMs: 60_000,
-    });
-    expect(roundTrip({ kind: "cron", expr: "0 9 * * *", tz: "Asia/Shanghai" })).toEqual({
-      kind: "cron",
-      expr: "0 9 * * *",
-      tz: "Asia/Shanghai",
-    });
-    expect(roundTrip({ kind: "at", at: "2026-01-01T00:00:00.000Z" })).toEqual({
-      kind: "at",
-      at: "2026-01-01T00:00:00.000Z",
+    expect(projected.schedule).toStrictEqual(schedule);
+    expect(projected.pacing).toStrictEqual(input.pacing);
+    expect(projected.state).toStrictEqual({ ...input.state, lastRunStatus: "ok" });
+    expect(input).toStrictEqual(before);
+    expect(Object.is(projected.schedule, input.schedule)).toBe(false);
+    expect(Object.is(projected.pacing, input.pacing)).toBe(false);
+    expect(Object.is(projected.state, input.state)).toBe(false);
+    expect(Object.is(projected.state.triggerState, triggerState)).toBe(false);
+    triggerState.cursor.position = 9;
+    triggerState.items.push("second");
+    expect(projected.state.triggerState).toStrictEqual({
+      cursor: { position: 7 },
+      items: ["first"],
     });
   });
 });

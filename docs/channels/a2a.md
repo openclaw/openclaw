@@ -90,7 +90,9 @@ By default, the request waits for the agent response. A completed response conta
 }
 ```
 
-Include `message.contextId` on subsequent requests to continue the same conversation. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
+Include `message.contextId` on subsequent requests to continue the same conversation with a new task. Omit `message.taskId`: continuing an existing task is not supported, including while that task is working. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
+
+If `message.taskId` is supplied, unknown, expired, or other peers' task IDs return JSON-RPC error `-32001`. An owned task with a conflicting `message.contextId` returns `-32602`; otherwise, the request returns `-32004` for unsupported task continuation. None of these requests starts new work or changes the referenced task.
 
 To return immediately while the agent continues working, add `"configuration": { "returnImmediately": true }` alongside `"message"` in `params`. The task initially reports `TASK_STATE_WORKING`. Requests that exceed `replyTimeoutMs` also return the current working task instead of canceling it.
 
@@ -114,7 +116,7 @@ curl http://127.0.0.1:18789/a2a/v1 \
 
 The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`. Older clients can use `tasks/get` as a compatibility alias.
 
-`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin-facing abort seam, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
+`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin API for stopping it, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
 
 ## Configure outbound peers
 
@@ -139,6 +141,13 @@ Add a peer URL when OpenClaw should send messages to another A2A agent. Set `out
 
 Address outbound messages to `a2a:hermes`. The plugin sends `SendMessage` directly to the configured URL without performing Agent Card discovery. Outbound messages reuse a stable conversation context per peer. A peer without a configured `url` cannot receive outbound messages.
 
+Agent replies, including queued followups, deliver only terminal reply content to A2A peers.
+Host status notices, including metadata-only diagnostics, and run-failure messages are not
+forwarded as new peer messages or task artifacts. A failed agent run instead marks its
+originating task `TASK_STATE_FAILED` with the reason `Agent run failed`, including when the
+run was queued. If collect mode combines requests, a failed run marks every originating
+task failed. This does not change error reporting on human-facing channels.
+
 ## Configuration reference
 
 | Key                          | Type     | Default  | Description                                                                    |
@@ -161,19 +170,23 @@ Each authenticated peer and A2A `contextId` pair gets its own agent session. A2A
 isolated direct-message scope rather than inheriting `session.dmScope`, so remote peer content never
 joins the operator's main session and one peer cannot read another peer's conversation history.
 
+For agent bindings, use the configured peer name as the direct-peer ID, such as
+`hermes`. A context-specific `hermes:<contextId>` binding takes precedence over that stable peer
+binding, and the stable peer binding takes precedence over broader A2A account or channel routes.
+
 ## Security
 
 Agent Card discovery is intentionally public: anyone who can reach the gateway can read the instance description and exposed agent IDs. Use `exposeAgents` to limit disclosure, and expose the gateway through HTTPS when it is reachable over an untrusted network.
 
-Every JSON-RPC request requires a configured peer bearer token; there is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
+Every JSON-RPC request requires a configured peer bearer token. There is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
 
-A2A peers send tasks, not user commands. Messages beginning with `/` are rejected with `TASK_STATE_REJECTED` and an explanation. Command-like text inside an ordinary task stays literal; it cannot change session settings or resolve approvals. This also applies when the peer sets the protocol message role to `ROLE_USER`: that field does not authenticate a human user.
+A2A peers send tasks, not user commands. Messages beginning with `/` are rejected with `TASK_STATE_REJECTED` and an explanation. Command-like text inside an ordinary task stays literal. It cannot change session settings or resolve approvals. This also applies when the peer sets the protocol message role to `ROLE_USER`: that field does not authenticate a human user.
 
-Ordinary tasks retain the tools and permissions of their routed agent. Work requiring approval still needs an authorized operator's decision through a supported user channel or the Control UI. Existing integrations that sent slash commands over A2A must use plain-text tasks for agent work and an authorized user surface for commands; there is no peer command opt-in.
+Ordinary tasks retain the tools and permissions of their routed agent. Work requiring approval still needs an authorized operator's decision through a supported user channel or the Control UI. Existing integrations that sent slash commands over A2A must use plain-text tasks for agent work and an authorized user surface for commands. There is no peer command opt-in.
 
 While an exec approval is pending, the original task stays working. After the operator decides, that same agent run receives the result and completes the task through its original reply path. An inbound peer does not need an outbound `url` to receive that completion through `GetTask`.
 
-Requests are limited to 1 MiB, JSON-RPC batches to 30 entries, and serialized JSON-RPC responses to 1 MiB. Extracted message text is capped at 64 KiB and includes an explicit truncation marker when shortened. The default sliding-window limit is 30 requests per minute for each peer; schema-invalid requests count toward that limit. Set `rateLimitPerMinute` to `0` only on a separately protected network. Rate-limited requests return a JSON-RPC error while keeping HTTP status 200.
+Requests are limited to 1 MiB, JSON-RPC batches to 30 entries, and serialized JSON-RPC responses to 1 MiB. Extracted message text is capped at 64 KiB and includes an explicit truncation marker when shortened. The default sliding-window limit is 30 requests per minute for each peer. Schema-invalid requests count toward that limit. Set `rateLimitPerMinute` to `0` only on a separately protected network. Rate-limited requests return a JSON-RPC error while keeping HTTP status 200.
 
 Outbound destinations come only from operator-configured peer URLs. Inbound callers cannot supply a proxy target or redirect OpenClaw to another destination.
 
@@ -181,7 +194,15 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
-Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries; restarting the gateway discards all tasks and task history.
+The Agent Card advertises `pushNotifications: false`. Push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`), as required by the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/#334-capability-validation). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
+
+A repeated `messageId` from the same authenticated peer returns the existing task and its current
+state while that task is retained. It does not start another agent turn, even if the retry omits
+`contextId`. Use a new `messageId` for new work. Replies are associated with the task that started
+the turn, including when messages in one context finish out of order. A finished turn with no
+reply text completes without an artifact; stopping the channel fails unfinished tasks.
+
+Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries. Restarting the gateway discards all tasks and task history.
 
 ## Related
 
@@ -189,3 +210,4 @@ Tasks remain in memory only. Completed and other terminal tasks are retained for
 - [Channel routing](/channels/channel-routing)
 - [Gateway security](/gateway/security)
 - [Channel plugin SDK](/plugins/sdk-channel-plugins)
+- [A2A plugin reference](/plugins/reference/a2a) — manifest, config, and tool reference for the plugin

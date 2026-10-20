@@ -2,7 +2,11 @@ import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 /** Adjusts cross-tool guidance from the final authorized tool set. */
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { describeExecTool, describeProcessTool } from "./bash-tools.descriptions.js";
+import {
+  describeExecTool,
+  describeProcessTool,
+  EXEC_AUTO_REVIEW_GUIDANCE,
+} from "./bash-tools.descriptions.js";
 import { describeAgentsListTool, describeAgentsWaitTool } from "./tool-description-presets.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -33,9 +37,21 @@ const TOOL_FOLLOWUPS = [
   ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
   [
     "sessions_yield",
+    "sessions_send",
+    "Does not message other sessions.",
+    "Does not message other sessions; use sessions_send.",
+  ],
+  [
+    "sessions_yield",
     "agents_wait",
     "Collector runs require explicit collection instead.",
     "Collector runs require agents_wait instead.",
+  ],
+  [
+    "nodes",
+    "exec",
+    "fs.listDir returns sub-directories only)",
+    "fs.listDir returns sub-directories only; use the exec tool with host=node to list files)",
   ],
 ] as const;
 
@@ -54,8 +70,8 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
     if (availableTools.has("conversations_list") && deliveryTools.length > 0) {
       const guidance = `For an exact external destination, use \`conversations_list\` plus ${deliveryTools.map((name) => `\`${name}\``).join("/")}.`;
       description = description.replace(
-        " Thread chats rejected:",
-        ` ${guidance} Thread chats rejected:`,
+        / (?=Thread chats rejected:|Missing configured-agent main created\.)/,
+        ` ${guidance} `,
       );
     }
   }
@@ -70,15 +86,21 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
         `No spawn for quick lookup/single read. Check spawns via ${guidance}.`,
       );
     }
+    // Only subagents exposes execution and delivery status; history is a transcript.
+    // Diagnose missing announcing results without routine polling or treating
+    // intentional cancellation as authority to restart work.
+    if (availableTools.has("subagents")) {
+      description = description.replace(
+        "After spawn, do non-overlap work; follow the receipt's completion mode.",
+        "After spawn, do non-overlap work; follow the receipt's completion mode. When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
+      );
+    }
   }
   return description;
 }
 
 /** Return tools with cross-tool guidance adjusted for the tools that survived filtering. */
-export function applyToolAvailabilityDescriptions(
-  tools: AnyAgentTool[],
-  params?: { agentId?: string },
-): AnyAgentTool[] {
+export function applyToolAvailabilityDescriptions(tools: AnyAgentTool[]): AnyAgentTool[] {
   finalizeAgentToolAvailability(tools);
   const availableTools = new Set(tools.map((tool) => tool.name));
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
@@ -88,7 +110,11 @@ export function applyToolAvailabilityDescriptions(
     if (tool.name === "exec") {
       return replaceDescription(
         tool,
-        describeExecTool({ agentId: params?.agentId, hasCronTool, hasProcessTool }),
+        describeExecTool({
+          hasCronTool,
+          hasProcessTool,
+          autoReview: tool.description.includes(EXEC_AUTO_REVIEW_GUIDANCE),
+        }),
       );
     }
     if (tool.name === "process") {

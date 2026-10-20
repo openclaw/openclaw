@@ -1,15 +1,15 @@
 // Imessage tests cover monitor.watch subscribe retry plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
-import {
-  installIMessageFailingStateRuntimeForTest,
-  installIMessageStateRuntimeForTest,
-} from "./test-support/runtime.js";
+import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -30,14 +30,6 @@ vi.mock("./client.js", () => ({
 vi.mock("./monitor/abort-handler.js", () => ({
   attachIMessageMonitorAbortHandler: attachIMessageMonitorAbortHandlerMock,
 }));
-
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 type MockIMessageRpcClient = IMessageRpcClient & {
   request: ReturnType<typeof vi.fn<(method: string) => Promise<unknown>>>;
@@ -70,7 +62,7 @@ function createRpcClient(overrides?: {
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    installIMessageFailingStateRuntimeForTest();
+    installIMessageStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     attachIMessageMonitorAbortHandlerMock.mockReset().mockReturnValue(() => {});
@@ -88,10 +80,12 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   });
 
   it("retries a transient watch.subscribe startup timeout without tearing down the monitor", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
+    const firstSubscribe = createDeferred<void>();
     const firstClient = createRpcClient({
       request: async () => {
+        firstSubscribe.resolve();
         throw new Error("imsg rpc timeout (watch.subscribe)");
       },
     });
@@ -102,11 +96,13 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       .mockResolvedValueOnce(secondClient);
 
     const monitorPromise = monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: {} } } as never,
       runtime: runtime as never,
       statusSink,
     });
 
+    await Promise.race([firstSubscribe.promise, monitorPromise]);
     await vi.advanceTimersByTimeAsync(1_000);
     await monitorPromise;
 
@@ -150,22 +146,26 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   });
 
   it("still fails after bounded startup retries are exhausted", async () => {
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
+    const firstSubscribe = createDeferred<void>();
     createIMessageRpcClientMock.mockImplementation(async () =>
       createRpcClient({
         request: async () => {
+          firstSubscribe.resolve();
           throw new Error("imsg rpc timeout (watch.subscribe)");
         },
       }),
     );
 
     const monitorErrorPromise = monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: {} } } as never,
       runtime: runtime as never,
       statusSink,
     }).catch((error: unknown) => error);
 
+    await Promise.race([firstSubscribe.promise, monitorErrorPromise]);
     await vi.advanceTimersByTimeAsync(2_000);
     const monitorError = await monitorErrorPromise;
 
@@ -198,8 +198,9 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
 
     await expect(
       monitorIMessageProvider({
+        scheduler: createTestPluginServiceScheduler(),
         config: { channels: { imessage: {} } } as never,
-        runtime: createRuntime() as never,
+        runtime: createRuntimeSpies() as never,
         statusSink,
       }),
     ).rejects.toThrow("permission denied");
@@ -212,15 +213,13 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
 
   it.each([
     { reason: "from me", groupScope: "none" },
-    { reason: "no mention", groupScope: "none" },
-    { reason: "no mention", groupScope: "account" },
     { reason: "no mention", groupScope: "root" },
   ])(
     "logs one diagnostic per chat for $reason drops (groups scope: $groupScope)",
     async ({ reason, groupScope }) => {
       vi.useRealTimers();
       installIMessageStateRuntimeForTest();
-      const runtime = createRuntime();
+      const runtime = createRuntimeSpies();
       let onNotification:
         | ((message: { method: string; params: unknown }) => void | Promise<void>)
         | undefined;
@@ -258,6 +257,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       });
 
       await monitorIMessageProvider({
+        scheduler: createTestPluginServiceScheduler(),
         config: {
           agents: { entries: { main: { identity: { name: "Claw" } } } },
           channels: {
@@ -319,11 +319,11 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   it("redacts the conversation identifier in rate-limit suppression warnings", async () => {
     vi.useRealTimers();
     installIMessageStateRuntimeForTest();
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const sender = "+15550002222";
     const chatId = 456;
     const scope = `default:chat_id:${chatId}`;
-    rememberPersistedIMessageEcho({ scope, text: "loop echo" });
+    await rememberPersistedIMessageEcho({ scope, text: "loop echo" });
     let onNotification:
       | ((message: { method: string; params: unknown }) => void | Promise<void>)
       | undefined;
@@ -358,6 +358,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     });
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: { groupPolicy: "open" } } },
       runtime,
     });

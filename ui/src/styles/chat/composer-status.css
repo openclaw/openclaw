@@ -1,4 +1,3 @@
-/* Compaction indicator */
 .compaction-indicator {
   align-self: center;
   display: inline-flex;
@@ -171,8 +170,8 @@
 }
 
 .compaction-indicator--fallback {
-  color: var(--warn-strong);
-  border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
 }
 
 .compaction-indicator--fallback-cleared {

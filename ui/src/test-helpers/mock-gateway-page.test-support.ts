@@ -1,4 +1,3 @@
-import { Script } from "node:vm";
 import { JSDOM } from "jsdom";
 import { it } from "vitest";
 
@@ -36,14 +35,16 @@ export function flushMockTimers(): Promise<void> {
 export const mockGatewayTest = it.extend<{ gatewayPage: MockGatewayPage }>({
   gatewayPage: async ({ task }, use) => {
     const dom = new JSDOM("", { url: "http://mock-control-ui/", runScripts: "outside-only" });
+    // Bun exposes a VM Window proxy that jsdom does not register as an EventTarget.
+    // The global-call receiver uses this private realm's admitted Window instead.
+    dom.window.addEventListener = dom.window.addEventListener.bind(undefined);
     const responses: ResponseFrame[] = [];
     try {
       await use({
         window: dom.window as unknown as Window & typeof globalThis,
         execute: (script) => {
-          new Script(script, { filename: `mock-gateway:${task.name}` }).runInContext(
-            dom.getInternalVMContext(),
-          );
+          // outside-only supplies the private realm's eval; never use the host's eval.
+          dom.window.eval(`${script}\n//# sourceURL=mock-gateway:${encodeURIComponent(task.name)}`);
         },
         connect: (url = "ws://mock-gateway") => {
           const socket = new dom.window.WebSocket(url);

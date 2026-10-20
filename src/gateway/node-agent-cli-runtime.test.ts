@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -17,12 +18,15 @@ vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
   }),
 }));
 
-vi.mock("./node-command-policy.js", () => ({
+vi.mock("./node-command-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./node-command-policy.js")>()),
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
 }));
 
 import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
+import { NodeRegistry } from "./node-registry.js";
+import { makeClient } from "./node-registry.test-helpers.js";
 
 describe("invokeNodeClaudeCliRun", () => {
   beforeEach(() => {
@@ -90,5 +94,57 @@ describe("invokeNodeClaudeCliRun", () => {
         }),
       }),
     );
+  });
+
+  it("withholds private history revoked while node pairing is pending", async () => {
+    const pairingEntered = createDeferred();
+    const pairing = createDeferred<{ identity: string; generation: string }>();
+    const resolveCurrentPairingState = vi.fn(() => {
+      pairingEntered.resolve();
+      return pairing.promise;
+    });
+    const registry = new NodeRegistry({ resolveCurrentPairingState });
+    const transport = { send: vi.fn(() => false), sendRaw: vi.fn(() => false) };
+    registry.registerTransport(
+      makeClient("conn-1", "node-1", [], { commands: ["agent.cli.claude.run.v1"] }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-1" },
+      transport,
+    );
+    mocks.get.mockImplementation((nodeId: string) => registry.get(nodeId));
+    mocks.invoke.mockImplementation((params: Parameters<NodeRegistry["invoke"]>[0]) =>
+      registry.invoke(params),
+    );
+    mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+    let readable = true;
+    const revoked = new Error("session history access revoked");
+    const assertReadable = vi.fn(async () => {
+      if (!readable) {
+        throw revoked;
+      }
+    });
+    const invocation = invokeNodeClaudeCliRun({
+      nodeId: "node-1",
+      argv: ["-p"],
+      stdin: "private conversation history",
+      assertReadable,
+      timeoutMs: 10_000,
+      idleTimeoutMs: 1_000,
+      onProgress: () => {},
+    });
+    try {
+      await Promise.race([pairingEntered.promise, invocation]);
+      expect(resolveCurrentPairingState).toHaveBeenCalledOnce();
+      expect(assertReadable).not.toHaveBeenCalled();
+      expect(transport.send).not.toHaveBeenCalled();
+      readable = false;
+      pairing.resolve({ identity: "identity-a", generation: "generation-1" });
+      await expect(invocation).rejects.toBe(revoked);
+      expect(assertReadable).toHaveBeenCalledOnce();
+      expect(transport.send).not.toHaveBeenCalled();
+      expect(transport.sendRaw).not.toHaveBeenCalled();
+    } finally {
+      pairing.resolve({ identity: "identity-a", generation: "generation-1" });
+      registry.unregister("conn-1");
+    }
   });
 });

@@ -9,11 +9,13 @@ export const relayMocks = {
   close: vi.fn(),
   connected: true,
   stallProfileQueryEose: false,
+  stallThreadRootQueryEose: false,
   stallRoomEoseChannelId: undefined as string | undefined,
   membershipEvents: [] as Event[],
   roomMetadataEvents: [] as Event[],
   profileEvents: [] as Event[],
   roomHistoryEvents: [] as Event[],
+  threadRootEvents: [] as Event[],
   beforeRoomHistoryEvent: undefined as ((event: Event) => void) | undefined,
   subscriptions: [] as Array<{
     filter: Filter;
@@ -54,11 +56,18 @@ export function mockBuzzRelay() {
         const filter = filters[0] ?? {};
         const close = vi.fn();
         relayMocks.subscriptions.push({ filter, filters, handlers, close });
-        if (filter.kinds?.includes(39002)) {
+        if (filter.ids) {
+          for (const event of relayMocks.threadRootEvents) {
+            handlers.onevent(event);
+          }
+          if (!relayMocks.stallThreadRootQueryEose) {
+            queueMicrotask(() => handlers.oneose?.());
+          }
+        } else if (filter.kinds?.includes(39002)) {
           for (const event of relayMocks.membershipEvents) {
             handlers.onevent(event);
           }
-          handlers.oneose?.();
+          queueMicrotask(() => handlers.oneose?.());
         } else if (filter.kinds?.includes(40099) || filter.kinds?.includes(9002)) {
           const roomId = filter["#h"]?.[0];
           for (const currentFilter of filters) {
@@ -74,7 +83,7 @@ export function mockBuzzRelay() {
             }
           }
           if (roomId !== relayMocks.stallRoomEoseChannelId) {
-            handlers.oneose?.();
+            queueMicrotask(() => handlers.oneose?.());
           }
         } else if (filter.kinds?.includes(39000)) {
           for (const event of relayMocks.roomMetadataEvents) {
@@ -83,7 +92,7 @@ export function mockBuzzRelay() {
               handlers.onevent(event);
             }
           }
-          handlers.oneose?.();
+          queueMicrotask(() => handlers.oneose?.());
         } else if (filter.kinds?.includes(0)) {
           for (const event of relayMocks.profileEvents) {
             if (!filter.authors || filter.authors.includes(event.pubkey)) {
@@ -92,7 +101,7 @@ export function mockBuzzRelay() {
           }
           const isProfileSyncQuery = filters.some((entry) => entry.kinds?.includes(10_100));
           if (!isProfileSyncQuery || !relayMocks.stallProfileQueryEose) {
-            handlers.oneose?.();
+            queueMicrotask(() => handlers.oneose?.());
           }
         }
         return {

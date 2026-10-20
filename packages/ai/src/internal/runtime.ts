@@ -1,3 +1,4 @@
+export { getEventStreamCompletion } from "@openclaw/llm-core/event-stream";
 export * from "./default-runtime.js";
 export * from "../env-api-keys.js";
 export * from "../model-utils.js";
@@ -8,7 +9,7 @@ export * from "../utils/headers.js";
 export * from "../utils/json-parse.js";
 export * from "../utils/llm-request-activity.js";
 export * from "../utils/oauth/openai-chatgpt-jwt.js";
-export * from "../utils/overflow.js";
+export { isContextOverflow } from "../utils/overflow.js";
 export * from "../utils/reasoning-tag-text-partitioner.js";
 export * from "../utils/sanitize-unicode.js";
 export * from "../utils/stream-first-event-timeout.js";

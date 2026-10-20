@@ -1,4 +1,3 @@
-// Session level override helpers normalize per-session logging and behavior levels.
 import {
   normalizeTraceLevel,
   normalizeVerboseLevel,
@@ -7,27 +6,28 @@ import {
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
 
-const INVALID_VERBOSE_LEVEL_ERROR = 'invalid verboseLevel (use "on"|"off"|"full")';
-
 // Session-level override parsers use tri-state results: undefined means no
 // change, null clears the saved override, and a level writes the override.
+function parseLevelOverride<Level extends string>(
+  raw: unknown,
+  normalize: (value: string) => Level | undefined,
+  error: string,
+): { ok: true; value: Level | null | undefined } | { ok: false; error: string } {
+  if (raw === null || raw === undefined) {
+    return { ok: true, value: raw };
+  }
+  const normalized = typeof raw === "string" ? normalize(raw) : undefined;
+  return normalized ? { ok: true, value: normalized } : { ok: false, error };
+}
+
 export function parseVerboseOverride(
   raw: unknown,
 ): { ok: true; value: VerboseLevel | null | undefined } | { ok: false; error: string } {
-  if (raw === null) {
-    return { ok: true, value: null };
-  }
-  if (raw === undefined) {
-    return { ok: true, value: undefined };
-  }
-  if (typeof raw !== "string") {
-    return { ok: false, error: INVALID_VERBOSE_LEVEL_ERROR };
-  }
-  const normalized = normalizeVerboseLevel(raw);
-  if (!normalized) {
-    return { ok: false, error: INVALID_VERBOSE_LEVEL_ERROR };
-  }
-  return { ok: true, value: normalized };
+  return parseLevelOverride(
+    raw,
+    normalizeVerboseLevel,
+    'invalid verboseLevel (use "on"|"off"|"full")',
+  );
 }
 
 // Mutates a persisted session entry after parsing. Callers keep parse/apply
@@ -46,20 +46,7 @@ export function applyVerboseOverride(entry: SessionEntry, level: VerboseLevel | 
 export function parseTraceOverride(
   raw: unknown,
 ): { ok: true; value: TraceLevel | null | undefined } | { ok: false; error: string } {
-  if (raw === null) {
-    return { ok: true, value: null };
-  }
-  if (raw === undefined) {
-    return { ok: true, value: undefined };
-  }
-  if (typeof raw !== "string") {
-    return { ok: false, error: 'invalid traceLevel (use "on"|"off"|"raw")' };
-  }
-  const normalized = normalizeTraceLevel(raw);
-  if (!normalized) {
-    return { ok: false, error: 'invalid traceLevel (use "on"|"off"|"raw")' };
-  }
-  return { ok: true, value: normalized };
+  return parseLevelOverride(raw, normalizeTraceLevel, 'invalid traceLevel (use "on"|"off"|"raw")');
 }
 
 // Mutates trace override with the same tri-state contract as verbose level.

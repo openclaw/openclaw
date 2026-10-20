@@ -1,6 +1,7 @@
 // Root help tests cover top-level help rendering and command visibility.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderRootHelpText } from "./root-help.js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
+import { outputRootHelp } from "./root-help.js";
 
 const getPluginCliCommandDescriptorsMock = vi.fn(
   async (_configForTest?: unknown, _env?: unknown, _loaderOptions?: unknown) => [
@@ -30,31 +31,22 @@ vi.mock("./core-command-descriptors.js", () => ({
   getCoreCliCommandsWithSubcommands: () => [],
 }));
 
-vi.mock("./subcli-descriptors.js", () => ({
-  SUB_CLI_DESCRIPTORS: [
-    {
-      name: "config",
-      description: "Manage config",
-      hasSubcommands: true,
-    },
-  ],
-  getSubCliEntriesCore: () => [
-    {
-      name: "config",
-      description: "Manage config",
-      hasSubcommands: true,
-    },
-  ],
-  getSubCliCommandsWithSubcommands: () => ["config"],
-}));
-
 vi.mock("../../plugins/cli-root-descriptors.js", () => ({
   getPluginCliCommandDescriptors: (...args: [unknown?, unknown?, unknown?]) =>
     getPluginCliCommandDescriptorsMock(...args),
 }));
 
 describe("root help", () => {
+  let text = "";
   beforeEach(() => {
+    const originalEnv = captureEnv(["OPENCLAW_ENABLE_PRIVATE_QA_CLI"]);
+    onTestFinished(() => originalEnv.restore());
+    text = "";
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      text += String(chunk);
+      return true;
+    });
+    onTestFinished(() => write.mockRestore());
     getPluginCliCommandDescriptorsMock.mockClear();
   });
 
@@ -68,7 +60,7 @@ describe("root help", () => {
     };
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-root-help-state" } as NodeJS.ProcessEnv;
 
-    await renderRootHelpText({ config, env, pluginSdkResolution: "src" });
+    await outputRootHelp({ config, env, pluginSdkResolution: "src" });
 
     expect(getPluginCliCommandDescriptorsMock).toHaveBeenCalledWith(config, env, {
       pluginSdkResolution: "src",
@@ -76,18 +68,33 @@ describe("root help", () => {
   });
 
   it("includes plugin CLI descriptors alongside core and sub-CLI commands", async () => {
-    const text = await renderRootHelpText({ includePluginDescriptors: true });
+    await outputRootHelp({ config: {} });
 
     expect(text).toContain("status");
-    expect(text).toContain("config");
+    expect(text).toContain("gateway *");
     expect(text).toContain("matrix");
     expect(text).toContain("matrix *");
     expect(text).toContain("Matrix channel utilities");
   });
 
   it("does not load plugin CLI descriptors by default", async () => {
-    await renderRootHelpText();
+    await outputRootHelp();
 
     expect(getPluginCliCommandDescriptorsMock).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, "1"])(
+    "shows private QA help only when enabled (%s) (#83926)",
+    async (enabled) => {
+      if (enabled === undefined) {
+        delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+      } else {
+        process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = enabled;
+      }
+
+      await outputRootHelp();
+
+      expect(/^\s+qa(?:\s+\*)?\s+Run QA scenarios/m.test(text)).toBe(enabled === "1");
+    },
+  );
 });

@@ -1,12 +1,16 @@
-// Memory Host SDK module implements embeddings remote provider behavior.
 import {
   resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderOptions,
+} from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
+import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
 // Remote embedding provider factory for OpenAI-compatible embeddings APIs.
 
@@ -16,6 +20,7 @@ export type RemoteEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
   model: string;
 };
 
@@ -25,13 +30,20 @@ export function createRemoteEmbeddingProvider(params: {
   client: RemoteEmbeddingClient;
   errorPrefix: string;
   maxInputTokens?: number;
+  /** Provider-documented cap on input items per embeddings request. */
+  maxInputsPerRequest?: number;
   /** Keep query arrays in one request when the provider has no query/document wire distinction. */
   batchQueryInputs?: boolean;
+  /** Additional payload fields; model and input remain owned by the shared request path. */
+  buildRequestFields?: (kind: "query" | "document") => Record<string, unknown>;
 }): EmbeddingProvider {
   const { client } = params;
   const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
-  const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (
+    input: string[],
+    options?: EmbeddingProviderCallOptions,
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -40,8 +52,14 @@ export function createRemoteEmbeddingProvider(params: {
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
-      signal,
-      body: { model: client.model, input },
+      resolveRequestHeaders: client.resolveRequestHeaders,
+      signal: options?.signal,
+      onUsage: options?.onUsage,
+      body: {
+        ...params.buildRequestFields?.(options?.inputType === "query" ? "query" : "document"),
+        model: client.model,
+        input,
+      },
       errorPrefix: params.errorPrefix,
     });
   };
@@ -50,19 +68,20 @@ export function createRemoteEmbeddingProvider(params: {
     id: params.id,
     model: client.model,
     ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
+    maxInputsPerRequest: params.maxInputsPerRequest,
     embed: async (input, options) => {
       const text = typeof input === "string" ? input : input.text;
-      const [vec] = await embedMany([text], options?.signal);
+      const [vec] = await embedMany([text], options);
       return vec ?? [];
     },
     embedBatch: async (inputs, options) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
       if (options?.inputType === "query" && params.batchQueryInputs !== true) {
         return await Promise.all(
-          texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
+          texts.map(async (text) => (await embedMany([text], options))[0] ?? []),
         );
       }
-      return await embedMany(texts, options?.signal);
+      return await embedMany(texts, options);
     },
   };
 }
@@ -70,15 +89,17 @@ export function createRemoteEmbeddingProvider(params: {
 /** Resolve a normalized remote embedding client from provider config and model options. */
 export async function resolveRemoteEmbeddingClient(params: {
   provider: RemoteEmbeddingProviderId;
+  capability?: string;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
+  const client = await resolveRemoteEmbeddingBearerClient({
     provider: params.provider,
+    capability: params.capability,
     options: params.options,
     defaultBaseUrl: params.defaultBaseUrl,
   });
   const model = params.normalizeModel(params.options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  return { ...client, model };
 }

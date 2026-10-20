@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  resolveControlUiAuthCandidates,
-  resolveControlUiAuthHeader,
-  resolveControlUiAuthToken,
-} from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates, resolveControlUiAuthToken } from "./control-ui-auth.ts";
 
 describe("Control UI credentials", () => {
   it.each([
@@ -35,6 +31,14 @@ describe("Control UI credentials", () => {
       expected: ["same-token", "password"],
     },
     {
+      name: "uses one Bearer candidate when both fields carry the Gateway secret",
+      source: {
+        settings: { token: "gateway-secret" },
+        password: "gateway-secret",
+      },
+      expected: ["gateway-secret"],
+    },
+    {
       name: "rejects embedded header newlines before selecting a credential",
       source: {
         hello: { auth: { deviceToken: "bad\ndevice" } },
@@ -52,6 +56,5 @@ describe("Control UI credentials", () => {
   ])("$name", ({ source, expected }) => {
     expect(resolveControlUiAuthCandidates(source)).toEqual(expected);
     expect(resolveControlUiAuthToken(source)).toBe(expected[0] ?? null);
-    expect(resolveControlUiAuthHeader(source)).toBe(expected[0] ? `Bearer ${expected[0]}` : null);
   });
 });

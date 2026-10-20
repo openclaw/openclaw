@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "../test-helpers/load-styles.ts";
 
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM identity", () => {
   it("moves existing row DOM when a new session shifts the list", async () => {
-    await import("./app-sidebar.ts");
+    await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessionsHarness, createSessionState, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
     const alphaKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
@@ -31,7 +32,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
     expect(alphaBefore).not.toBeNull();
     expect(betaBefore).not.toBeNull();
     expect(alphaBefore?.querySelector("a")?.getAttribute("href")).toBe(
-      "/control/dashboard/main/release-board-11111111?nav=collapsed",
+      "/control/dashboard/main/release-board-11111111111141118111111111111111",
     );
 
     // A newly created session sorts first (createdAt desc) and shifts every
@@ -46,7 +47,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
       gamma.createdAt = Date.now();
     }
     harness.publishList(next);
-    await sidebar.updateComplete;
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    await settleLitElement(sidebar);
 
     const rowKeys = Array.from(sidebar.querySelectorAll("[data-session-tree]")).map((row) =>
       row.getAttribute("data-session-tree"),
@@ -55,10 +59,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
     expect(rowFor(alphaKey)).toBe(alphaBefore);
     expect(rowFor("agent:main:beta")).toBe(betaBefore);
     expect(alphaBefore?.querySelector("a")?.getAttribute("href")).toBe(
-      "/control/chat/main/renamed-board-11111111?nav=collapsed",
+      "/control/chat/main/renamed-board-11111111111141118111111111111111",
     );
-    expect(betaBefore?.querySelector("a")?.getAttribute("href")).toBe(
-      "/control/chat/main/beta?nav=collapsed",
-    );
+    expect(betaBefore?.querySelector("a")?.getAttribute("href")).toBe("/control/chat/main/beta");
   });
 });

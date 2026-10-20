@@ -6,9 +6,12 @@ import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { shouldIncludeHook } from "./config.js";
-import { resolveInternalHookSelection } from "./configured.js";
-import { resolveHookKey } from "./frontmatter.js";
+import {
+  type InternalHookSelection,
+  isHookLoadable,
+  isHookNameSelected,
+  resolveInternalHookSelection,
+} from "./configured.js";
 import { buildImportUrl } from "./import-url.js";
 import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import {
@@ -54,18 +57,16 @@ export async function prepareInternalHooks(
     managedHooksDir?: string;
     bundledHooksDir?: string;
     failureMode?: "atomic" | "best-effort";
+    selection?: InternalHookSelection;
   },
 ): Promise<PreparedInternalHooks> {
   const enabled = cfg.hooks?.internal?.enabled !== false;
   const previousGeneration = hookOwner.generation;
   const registrations: HookGeneration["registrations"] = [];
   let loadedCount = 0;
-  const selection = resolveInternalHookSelection(cfg);
-  const isNamed = (names: Set<string> | undefined, entry: HookPolicyEntry) =>
-    Boolean(names?.has(entry.hook.name) || names?.has(resolveHookKey(entry.hook.name, entry)));
+  const selection = opts?.selection ?? (await resolveInternalHookSelection(cfg));
   const shouldLoadHook = (entry: HookPolicyEntry) =>
-    (!selection.names || isNamed(selection.names, entry)) &&
-    shouldIncludeHook({ entry, config: cfg });
+    isHookLoadable({ entry, config: cfg, names: selection.names });
   const discovery = selection.configured
     ? prepareWorkspaceHookEntries(workspaceDir, {
         config: cfg,
@@ -76,8 +77,8 @@ export async function prepareInternalHooks(
               requireValidHook: shouldLoadHook,
               previousSources: previousGeneration.discovery?.sources.filter(
                 (entry) =>
-                  !isNamed(previousGeneration.discovery?.declaredNames, entry) ||
-                  isNamed(selection.declaredNames, entry),
+                  !isHookNameSelected(previousGeneration.discovery?.declaredNames, entry) ||
+                  isHookNameSelected(selection.declaredNames, entry),
               ),
             }
           : {}),
@@ -136,9 +137,6 @@ export async function prepareInternalHooks(
       }
       registrations.push(...events.map((event) => ({ event, handler })));
       loadedCount++;
-      log.debug(
-        `Prepared hook: ${safeLogValue(entry.hook.name)} -> ${events.map((event) => safeLogValue(event)).join(", ")}${exportName !== "default" ? ` (export: ${safeLogValue(exportName)})` : ""}`,
-      );
     } catch (error) {
       const message = `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(formatErrorMessage(error))}`;
       if (opts?.failureMode !== "best-effort") {

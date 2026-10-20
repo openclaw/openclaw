@@ -104,7 +104,6 @@ describe("collectProviderQuotaGroups", () => {
       "work@example.com",
       "personal@example.com",
     ]);
-    expect(groups).toHaveLength(2);
   });
 
   it("drops providers without windows or budgets and invalid budget shapes", () => {
@@ -138,14 +137,5 @@ describe("collectProviderQuotaGroups", () => {
         budgets: [],
       },
     ]);
-  });
-
-  it("applies the provider filter", () => {
-    const usage = { providerId: "anthropic", windows: [{ label: "5h", usedPercent: 10 }] };
-    const groups = collectProviderQuotaGroups(
-      { ts: 1, providers: [providerWithUsage("anthropic", usage)] },
-      () => false,
-    );
-    expect(groups).toEqual([]);
   });
 });

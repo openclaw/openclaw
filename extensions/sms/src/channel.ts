@@ -1,4 +1,3 @@
-// Sms plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -46,7 +45,7 @@ import {
 } from "./phone.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import {
-  createSmsMessageReceipt,
+  createSmsSendResult,
   prepareSmsMediaAttempt,
   sendPreparedSmsMediaAttempt,
   sendSmsTextChunks,
@@ -120,7 +119,11 @@ const collectSmsOpenDmFindings = createConditionalWarningCollector.findings({
   title: "SMS security warning",
 });
 
-function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
+function applySmsAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: SmsSetupInput;
+}): OpenClawConfig {
   const patch: Record<string, unknown> = {};
   for (const key of [
     "accountSid",
@@ -133,19 +136,10 @@ function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
     "dmPolicy",
     "allowFrom",
   ] as const) {
-    if (input[key] !== undefined) {
-      patch[key] = input[key];
+    if (params.input[key] !== undefined) {
+      patch[key] = params.input[key];
     }
   }
-  return patch;
-}
-
-function applySmsAccountConfig(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  input: SmsSetupInput;
-}): OpenClawConfig {
-  const patch = smsSetupPatch(params.input);
   const channels = { ...params.cfg.channels };
   const current = { ...(channels[CHANNEL_ID] as Record<string, unknown> | undefined) };
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
@@ -206,33 +200,6 @@ const smsSetupContract = defineChannelSetupContract({
   adapter: { applyAccountConfig: applySmsAccountConfig },
 });
 
-function createSmsReceipt(params: {
-  results: Array<{ sid: string; to: string; from?: string; status?: string }>;
-  kind: "text" | "media";
-}) {
-  const first = params.results[0];
-  if (!first) {
-    throw new Error("SMS send did not return a Twilio Message SID.");
-  }
-  const receipt = createSmsMessageReceipt(params);
-  return {
-    channel: CHANNEL_ID,
-    messageId: first.sid,
-    chatId: first.to,
-    receipt,
-  };
-}
-
-function resolveSmsTextChunkLimit(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  fallbackLimit?: number;
-}): number {
-  return (
-    resolveSmsAccount(params.cfg, params.accountId).textChunkLimit || params.fallbackLimit || 1500
-  );
-}
-
 async function sendSmsText(ctx: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -253,7 +220,7 @@ async function sendSmsText(ctx: {
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     onDeliveryResult: ctx.onDeliveryResult,
   });
-  return createSmsReceipt({ results, kind: "text" });
+  return createSmsSendResult({ results, kind: "text" });
 }
 
 type SmsAttachmentContext = {
@@ -342,7 +309,7 @@ async function sendPreparedSmsAttachment(ctx: SmsAttachmentContext) {
     },
     onDeliveryResult: ctx.onDeliveryResult,
   });
-  return createSmsReceipt({ results, kind: "media" });
+  return createSmsSendResult({ results, kind: "media" });
 }
 
 const smsMessageAdapter = defineChannelMessageAdapter({
@@ -379,8 +346,8 @@ const smsMessageAdapter = defineChannelMessageAdapter({
         await attemptToken.attempt.cleanupHostedMedia();
       },
     },
-    text: async (ctx) => await sendSmsText(ctx),
-    media: async (ctx) => await sendPreparedSmsAttachment(ctx),
+    text: sendSmsText,
+    media: sendPreparedSmsAttachment,
   },
 });
 
@@ -444,10 +411,9 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     },
     messaging: {
       targetPrefixes: ["twilio-sms"],
-      normalizeTarget: (target) => normalizeSmsPhoneNumber(target),
-      inferTargetChatType: ({ to }) =>
-        looksLikeSmsPhoneNumber(normalizeSmsPhoneNumber(to)) ? "direct" : undefined,
-      resolveOutboundSessionRoute: (params) => resolveSmsOutboundSessionRoute(params),
+      normalizeTarget: normalizeSmsPhoneNumber,
+      inferTargetChatType: ({ to }) => (looksLikeSmsPhoneNumber(to) ? "direct" : undefined),
+      resolveOutboundSessionRoute: resolveSmsOutboundSessionRoute,
       targetResolver: {
         looksLikeId: looksLikeSmsPhoneNumber,
         hint: "<+15551234567>",
@@ -543,7 +509,8 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     chunker: chunkTextForOutbound,
     chunkerMode: "text",
     textChunkLimit: 1500,
-    resolveEffectiveTextChunkLimit: resolveSmsTextChunkLimit,
+    resolveEffectiveTextChunkLimit: ({ cfg, accountId }) =>
+      resolveSmsAccount(cfg, accountId).textChunkLimit,
     resolveTarget: ({ cfg, to, accountId }) => {
       const explicit = normalizeSmsPhoneNumber(to ?? "");
       if (explicit) {
