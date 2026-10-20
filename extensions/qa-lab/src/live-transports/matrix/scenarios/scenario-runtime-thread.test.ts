@@ -90,7 +90,7 @@ describe("Matrix top-level scenario reporting", () => {
         expect(result).toEqual({
           body: triggerBody,
           driverEventId: "$trigger",
-          reply: { bodyPreview: marker, ...reply },
+          reply,
           token: marker,
         });
       } else {

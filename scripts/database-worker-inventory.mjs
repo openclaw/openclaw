@@ -2623,17 +2623,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/claws/provenance-read.kernel.ts",
-    [
-      {
-        tier: "W",
-        operations: ["readClawOrphanWorkspaceInDatabase"],
-        evidence:
-          "Legacy read-only worker handler in src/state/openclaw-state-read.worker.ts; retained inventory inspection contract.",
-      },
-    ],
-  ],
-  [
     "src/claws/workspace.ts",
     [
       {
