@@ -6,6 +6,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   publicationMethods,
   waitForWatchedSessionKey,
@@ -27,44 +28,26 @@ const scopes = ["operator.sessions.read", "operator.sessions.write"];
 suite.define(() => {
   it("retires the visible PR badge and chat chip after read access is revoked on reconnect", async () => {
     await suite.withPage(options, async ({ page }) => {
-      const row = createControlUiSessionRow(
-        "agent:main:scope-badge",
-        "Scoped workspace",
-        Date.now(),
-        {
-          worktree: {
-            id: "wt-scope",
-            branch: "feature/scope",
-            repoRoot: "/synthetic/scope-review",
-          },
-          pullRequest: { numbers: [42], state: "open" },
-          sharingRole: "owner",
-          owner: {
-            actor: {
-              type: "human",
-              id: "synthetic-scope-viewer",
-              label: "Synthetic scope viewer",
-            },
-          },
-          visibility: "shared",
-          spawnedCwd: "/synthetic/scope-review",
+      const viewer = { id: "scope-viewer", name: "Scoped viewer" };
+      const row = createControlUiSessionRow("agent:main:scope-badge", "Scoped", Date.now(), {
+        worktree: {
+          id: "wt-scope",
+          branch: "feature/scope",
+          repoRoot: "/synthetic/scope-review",
         },
-      );
+        pullRequest: { numbers: [42], state: "open" },
+        sharingRole: "owner",
+        owner: { actor: { type: "human", id: viewer.id, label: viewer.name } },
+        visibility: "shared",
+        spawnedCwd: "/synthetic/scope-review",
+      });
       const gateway = await installMockGateway(page, {
-        communityInvite: false,
         sessionKey: row.key,
         sessions: [row],
         workspace: "/synthetic/scope-review",
         workspaceGit: true,
-        presenceUsers: [
-          { self: true, id: "synthetic-scope-viewer", name: "Synthetic scope viewer" },
-        ],
-        historyMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "The scoped session remains readable." }],
-          },
-        ],
+        presenceUsers: [{ self: true, ...viewer }],
+        historyMessages: [chatMessage("assistant", "The scoped session remains readable.")],
         operatorScopes: ["operator.read", "operator.write"],
         featureMethods: ["chat.metadata", "chat.startup", subscribe],
         methodResponses: { [subscribe]: { subscribed: true } },
@@ -110,7 +93,6 @@ suite.define(() => {
       await indicator.waitFor({ state: "hidden" });
       await expect.poll(() => chatChip.count()).toBe(0);
       expect(await gateway.getRequests(subscribe)).toHaveLength(priorRequests);
-      expect(await chatChip.count()).toBe(0);
       expect(await indicator.count()).toBe(0);
       expect(
         await evaluateControlUiContext(page, (context) => {
@@ -128,7 +110,6 @@ suite.define(() => {
     await suite.withPage(options, async ({ page }) => {
       const row = createControlUiSessionRow("agent:main:main", "Scoped workspace", Date.now());
       const gateway = await installMockGateway(page, {
-        communityInvite: false,
         sessionKey: row.key,
         sessions: [row],
         operatorScopes: scopes,

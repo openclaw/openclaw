@@ -6,17 +6,6 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI reasoning visibility" });
-const message = (
-  role: string,
-  content: unknown,
-  timestamp: number,
-  extra: Record<string, unknown> = {},
-) => ({
-  role,
-  content,
-  timestamp,
-  ...extra,
-});
 
 suite.define(() => {
   it.each([
@@ -34,28 +23,21 @@ suite.define(() => {
       const conclusion = "Compare both outputs.";
       const finalText = "The answer is ready.";
       const thinking = `${reasoningText}\n\n\`\`\`ts\n${code}\`\`\`\n\n${conclusion}`;
-      const toolCall = {
-        type: "toolCall",
-        id: "read-evidence",
-        name: "read",
-        arguments: { path: "evidence.txt" },
-      };
-      const tools = [
-        message("assistant", [toolCall], 2_500),
-        message("toolResult", "Evidence checked.", 3_000, {
-          toolCallId: "read-evidence",
-          toolName: "read",
-        }),
-      ];
+      const tool = { type: "toolCall", id: "read", name: "read" };
       const gateway = await installMockGateway(page, {
         sessionKey,
         sessionInfo: { reasoningLevel },
-        sessions: [{ key: sessionKey, kind: "direct", reasoningLevel, updatedAt: 4_000 }],
+        sessions: [{ key: sessionKey, kind: "direct", reasoningLevel }],
         historyMessages: [
-          message("user", "Check the evidence.", 1_000),
-          message("assistant", [{ type: "thinking", thinking }], 2_000),
-          ...(withTools ? tools : []),
-          message("assistant", [{ type: "text", text: finalText }], 4_000),
+          { role: "user", content: "Check the evidence." },
+          { role: "assistant", content: [{ type: "thinking", thinking }] },
+          ...(withTools
+            ? [
+                { role: "assistant", content: [tool] },
+                { role: "toolResult", toolCallId: "read", toolName: "read", content: "Read." },
+              ]
+            : []),
+          { role: "assistant", content: [{ type: "text", text: finalText }] },
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -90,14 +72,12 @@ suite.define(() => {
 
       const menuTrigger = pane.locator(".chat-header-session-menu__trigger");
       const menu = pane.locator("openclaw-chat-header-session-menu > .chat-header-session-menu");
-      const localReasoning = menu.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      const toggle = menu.getByRole("menuitemcheckbox", { name: "Reasoning" });
       for (const showReasoning of [false, true]) {
         await menuTrigger.click();
         await menu.getByRole("menuitem", { name: "View", exact: true }).click();
-        await localReasoning.click();
-        await expect
-          .poll(() => localReasoning.getAttribute("aria-checked"))
-          .toBe(String(showReasoning));
+        await toggle.click();
+        await expect.poll(() => toggle.getAttribute("aria-checked")).toBe(String(showReasoning));
         await menuTrigger.click();
         await expect
           .poll(() => reasoning.isVisible())

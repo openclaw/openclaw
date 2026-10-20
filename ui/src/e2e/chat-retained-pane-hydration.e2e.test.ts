@@ -40,15 +40,8 @@ suite.define(() => {
         ],
         historyMessages: [{ role: "assistant", content: "Retained session transcript." }],
         methodResponses: {
-          "artifacts.list": { artifacts: [] },
           "sessions.branches.list": { branches: [] },
           "sessions.companion.state": { exchanges: [] },
-          "sessions.files.list": {
-            browser: { entries: [], path: "" },
-            files: [],
-            gitCheckout: false,
-            root: "",
-          },
           "sessions.list": chatSessionListResponse(
             sessionKeys.map((key, index) => ({
               key,
@@ -93,10 +86,8 @@ suite.define(() => {
         .poll(() => hydrationSince(sessionKeys[2], before), { timeout: 10_000 })
         .toEqual(hydrationMethods);
       const requests = (await gateway.getRequests()).slice(before);
-      expect(requests.filter((request) => request.method === "sessions.files.list")).toHaveLength(
-        0,
-      );
-      expect(requests.filter((request) => request.method === "artifacts.list")).toHaveLength(0);
+      const eagerMethods = new Set(["sessions.files.list", "artifacts.list"]);
+      expect(requests.filter(({ method }) => eagerMethods.has(method))).toEqual([]);
       await visiblePane.getByText("Retained session transcript.", { exact: true }).waitFor();
       expect(sessionKeys.map((key) => sessionHydrationMethods(requests, key).length)).toEqual([
         0, 0, 2,

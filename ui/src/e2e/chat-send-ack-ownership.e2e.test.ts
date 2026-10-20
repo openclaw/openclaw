@@ -7,19 +7,15 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI failed input ACK ownership" });
 
 suite.define(() => {
-  it.each([
-    {
-      name: "keeps the active response and Stop target after a steer timeout ACK",
-      ownership: "adopted-a",
-    },
-    {
-      name: "keeps unadopted successor tool activity after a steer timeout ACK",
-      ownership: "unadopted-c",
-    },
-  ] as const)("$name", async ({ ownership }) => {
+  it.each(["adopted-a", "unadopted-c"])("%s survives a steer timeout", async (ownership) => {
     await suite.withPage({ viewport: { width: 1200, height: 800 } }, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, { sessionKey });
+      const chat = (payload: Record<string, unknown>) =>
+        gateway.emitGatewayEvent("chat", { sessionKey, ...payload });
+      const bubble = (text: string) =>
+        page.locator(".chat-bubble").getByText(text, { exact: true });
+      const toolText = "Successor C tool proof";
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
       await page.locator("[data-settings-send-shortcut]").selectOption("enter");
@@ -32,15 +28,14 @@ suite.define(() => {
       const stop = page.getByRole("button", { name: "Stop generating" });
       await stop.waitFor();
       const progress = "Original run continues working.";
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
+      await chat({
         runId,
         seq: 1,
         state: "delta",
         deltaText: progress,
         message: { role: "assistant", content: [{ type: "text", text: progress }] },
       });
-      const reply = page.locator(".chat-bubble").getByText(progress, { exact: true });
+      const reply = bubble(progress);
       await reply.waitFor();
 
       await gateway.deferNext("chat.send", { queueMode: "steer" });
@@ -51,28 +46,17 @@ suite.define(() => {
       const steerRunId = String(asOptionalRecord(steer.params)?.idempotencyKey);
       expect(steerRunId).not.toBe(runId);
       await composer.fill("Keep this next message draft.");
-      const successorTool = page
-        .locator(".chat-tool-msg-summary")
-        .filter({ hasText: "Successor C tool proof" });
+      const successorTool = page.locator(".chat-tool-msg-summary").filter({ hasText: toolText });
       if (ownership === "unadopted-c") {
         await gateway.emitChatFinal({ runId, text: "Original task completed." });
-        await page
-          .locator(".chat-bubble")
-          .getByText("Original task completed.", { exact: true })
-          .waitFor();
-        const successorRunId = "observer-tool-run";
+        await bubble("Original task completed.").waitFor();
+        const observerRun = "observer-tool-run";
         // C is another client's run: no local send or text delta adopts it here.
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey,
-          runId: successorRunId,
-          seq: 1,
-          state: "status",
-          phase: "starting_model",
-        });
+        await chat({ runId: observerRun, seq: 1, state: "status", phase: "starting_model" });
         await gateway.emitGatewayEvent("session.tool", {
           sessionKey,
           agentId: "main",
-          runId: successorRunId,
+          runId: observerRun,
           seq: 2,
           ts: Date.now(),
           stream: "tool",
@@ -80,7 +64,7 @@ suite.define(() => {
             phase: "start",
             toolCallId: "observer-tool-call",
             name: "exec",
-            args: { command: "printf 'Successor C tool proof'" },
+            args: { command: `printf '${toolText}'` },
           },
         });
         await successorTool.waitFor();
@@ -89,11 +73,8 @@ suite.define(() => {
       }
 
       // Mirrors a targeted cancellation of the separate pre-ACK steer controller.
-      await gateway.resolveDeferred("chat.send", {
-        runId: steerRunId,
-        status: "timeout",
-        stopReason: "rpc",
-      });
+      const timeout = { runId: steerRunId, status: "timeout", stopReason: "rpc" };
+      await gateway.resolveDeferred("chat.send", timeout);
       await page
         .getByTitle("The run ended before the message was accepted.", { exact: true })
         .waitFor();
@@ -101,17 +82,8 @@ suite.define(() => {
 
       if (ownership === "adopted-a") {
         expect(await reply.isVisible()).toBe(true);
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey,
-          runId,
-          seq: 2,
-          state: "delta",
-          deltaText: " Still streaming.",
-        });
-        await page
-          .locator(".chat-bubble")
-          .getByText(`${progress} Still streaming.`, { exact: true })
-          .waitFor();
+        await chat({ runId, seq: 2, state: "delta", deltaText: " Still streaming." });
+        await bubble(`${progress} Still streaming.`).waitFor();
         await composer.fill("");
         await stop.click();
         const aborted = await gateway.waitForRequest("chat.abort");
@@ -119,7 +91,7 @@ suite.define(() => {
       } else {
         expect(await successorTool.isVisible()).toBe(true);
         expect(await successorTool.locator(".chat-tool-row__cmd").textContent()).toContain(
-          "Successor C tool proof",
+          toolText,
         );
       }
       expect(await gateway.getRequests("chat.send")).toHaveLength(2);
