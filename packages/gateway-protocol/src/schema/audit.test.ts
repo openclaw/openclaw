@@ -1,20 +1,27 @@
 import { Compile } from "typebox/compile";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import { validateAuditActivityListParams, validateAuditListParams } from "../index.js";
 import {
   AuditActivityEventV1Schema,
   AuditActivityInboundMessageV1Schema,
 } from "./audit-activity.js";
 import { AuditEventSchema } from "./audit.js";
+import { validation, withOverrides } from "./protocol-validation.test-support.js";
 
+const legacy = validation(validateAuditListParams);
+const activity = validation(validateAuditActivityListParams);
 const accountRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
+const metadata = {
+  eventId: "event-1",
+  sequence: 1,
+  sourceSequence: 2,
+  occurredAt: 3,
+  redaction: "metadata_only",
+};
 const inbound = {
+  ...metadata,
   eventType: "inbound_message",
   schemaVersion: 1,
-  eventId: "event-message-1",
-  sequence: 2,
-  sourceSequence: 3,
-  occurredAt: 4,
   kind: "message",
   action: "message.inbound.processed",
   status: "succeeded",
@@ -23,37 +30,24 @@ const inbound = {
   channel: "telegram",
   conversationKind: "direct",
   outcome: "completed",
-  redaction: "metadata_only",
 };
 
-describe("legacy audit protocol schemas", () => {
-  it("accepts only the shipped audit.list filters", () => {
-    const filters = {
-      agentId: "main",
-      kind: "tool_action",
-      status: "failed",
-      limit: 500,
-      cursor: "42",
-    };
-    expect(validateAuditListParams(filters)).toBe(true);
-    expect(validateAuditListParams({ status: "unknown" })).toBe(true);
-    for (const invalid of [
+describe("audit protocol schemas", () => {
+  it("accepts only shipped legacy audit filters", () => {
+    legacy.accepts(
+      { agentId: "main", kind: "tool_action", status: "failed", limit: 500, cursor: "42" },
+      { status: "unknown" },
+    );
+    legacy.rejects(
       { kind: "message" },
       { direction: "outbound" },
       { includeMessages: true },
       { limit: 501 },
-    ]) {
-      expect(validateAuditListParams(invalid)).toBe(false);
-    }
+    );
   });
-
   it("preserves the shipped run/tool event shape", () => {
-    const validate = Compile(AuditEventSchema);
     const event = {
-      eventId: "event-1",
-      sequence: 1,
-      sourceSequence: 2,
-      occurredAt: 3,
+      ...metadata,
       kind: "tool_action",
       action: "tool.action.finished",
       status: "failed",
@@ -64,48 +58,38 @@ describe("legacy audit protocol schemas", () => {
       runId: "run-1",
       toolCallId: "call-fingerprint",
       toolName: "exec",
-      redaction: "metadata_only",
     };
-
-    expect(validate.Check(event)).toBe(true);
-    expect(validate.Check({ ...event, schemaVersion: 1 })).toBe(false);
-    expect(validate.Check({ ...event, result: "secret" })).toBe(false);
+    const validate = Compile(AuditEventSchema);
+    const proof = validation((value) => validate.Check(value));
+    proof.accepts(event);
+    proof.rejects({ ...event, schemaVersion: 1 }, { ...event, result: "secret" });
   });
-});
-
-describe("audit activity protocol schemas", () => {
-  it("accepts bounded message filters", () => {
-    const filters = { kind: "message", direction: "outbound", channel: "telegram", limit: 500 };
-    expect(validateAuditActivityListParams(filters)).toBe(true);
-    expect(validateAuditActivityListParams({ direction: "inbound" })).toBe(true);
-    expect(validateAuditActivityListParams({ direction: "sideways" })).toBe(false);
-    expect(validateAuditActivityListParams({ limit: 501 })).toBe(false);
+  it("accepts bounded activity message filters", () => {
+    activity.accepts(
+      { kind: "message", direction: "outbound", channel: "telegram", limit: 500 },
+      { direction: "inbound" },
+    );
+    activity.rejects({ direction: "sideways" }, { limit: 501 });
   });
-
-  it("uses an integer V1 schema version and exact HMAC references", () => {
-    const validate = Compile(AuditActivityInboundMessageV1Schema);
+  it.each([
+    ["inbound", AuditActivityInboundMessageV1Schema],
+    ["activity union", AuditActivityEventV1Schema],
+  ] as const)("enforces V1 privacy and terminal consistency via %s", (_name, schema) => {
+    const validate = Compile(schema);
+    const proof = validation((value) => validate.Check(value));
     const event = { ...inbound, accountRef };
-    expect(validate.Check(event)).toBe(true);
-    for (const invalid of [
-      { schemaVersion: 1.5 },
-      { schemaVersion: 2 },
-      { accountRef: "hmac256:account" },
-      { actor: { type: "channel_sender", id: "raw-user" } },
-      { text: "secret message" },
-    ]) {
-      expect(validate.Check({ ...event, ...invalid })).toBe(false);
-    }
-  });
-
-  it("rejects contradictory inbound message terminals", () => {
-    const validate = Compile(AuditActivityEventV1Schema);
-    expect(validate.Check(inbound)).toBe(true);
-    for (const invalid of [
-      { outcome: "failed", errorCode: "message_processing_failed" },
-      { reasonCode: "duplicate" },
-      { status: "unknown", outcome: "unknown" },
-    ]) {
-      expect(validate.Check({ ...inbound, ...invalid })).toBe(false);
-    }
+    proof.accepts(inbound, event);
+    proof.rejects(
+      ...[
+        { schemaVersion: 1.5 },
+        { schemaVersion: 2 },
+        { accountRef: "hmac256:account" },
+        { actor: { type: "channel_sender", id: "raw-user" } },
+        { text: "secret message" },
+        { outcome: "failed", errorCode: "message_processing_failed" },
+        { reasonCode: "duplicate" },
+        { status: "unknown", outcome: "unknown" },
+      ].map(withOverrides(event)),
+    );
   });
 });
