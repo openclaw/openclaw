@@ -1,4 +1,4 @@
-import path from "node:path";
+import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -17,8 +17,8 @@ import {
 } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { claimTarget, seedClaim } from "./worker-turn-rpc-fixtures.test-support.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
-import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 
 describe("worker inference reconnect source ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -28,20 +28,14 @@ describe("worker inference reconnect source ownership", () => {
     async (change) => {
       const environmentId = "inference-reconnect-worker";
       const sessionId = "inference-reconnect-session";
-      const environment = await support.seedAttachedIdentity(environmentId, sessionId);
-      const { claim, store: placements } = await claimWorkerPlacement({
-        environmentId,
-        ownerEpoch: environment.ownerEpoch,
-        sessionId,
-      });
+      const {
+        claim,
+        store: placements,
+        environmentIdentity: environment,
+      } = await seedClaim(environmentId, sessionId);
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
-      const target = {
-        agentId: "main",
-        sessionId,
-        sessionKey: `agent:main:${sessionId}`,
-        storePath: path.join(support.testState.root, "sessions.json"),
-      };
+      const target = claimTarget(sessionId);
       const bind = () =>
         bindWorkerTurnOwner(placements, claim, undefined, instance, target, () => {
           if (!placements.validateTurnClaim(claim)) {
@@ -50,9 +44,7 @@ describe("worker inference reconnect source ownership", () => {
         });
       await bind();
       const original = getWorkerTurnExecutionIdentityCapability(placements, claim);
-      if (!original) {
-        throw new Error("Reconnect fixture did not capture its original source");
-      }
+      assert(original, "Reconnect fixture did not capture its original source");
       const entered = createDeferred();
       const proceed = createDeferred();
       const nativeStore = createWorkerInferenceStore({
@@ -83,16 +75,22 @@ describe("worker inference reconnect source ownership", () => {
       });
       let first: ReturnType<typeof rpc.startInference> | undefined;
       let reconnected: ReturnType<typeof rpc.startInference> | undefined;
+      const renewCredential = (credential: string) => {
+        const credentialHash = hashWorkerCredential(credential, claim);
+        return support.testState.store
+          .renewCredential({
+            environmentId,
+            expectedOwnerEpoch: environment.ownerEpoch,
+            credentialHash,
+            sessionId,
+            rpcSetVersion: environment.rpcSetVersion,
+            expiresAtMs: environment.credentialExpiresAtMs,
+          })
+          .then(() => credentialHash);
+      };
       try {
         const credential = "inference-reconnect-fixture";
-        await support.testState.store.renewCredential({
-          environmentId,
-          expectedOwnerEpoch: environment.ownerEpoch,
-          credentialHash: hashWorkerCredential(credential, claim),
-          sessionId,
-          rpcSetVersion: environment.rpcSetVersion,
-          expiresAtMs: environment.credentialExpiresAtMs,
-        });
+        await renewCredential(credential);
         const admission = await rpc.admitWorker({
           environmentId,
           credential,
@@ -102,9 +100,7 @@ describe("worker inference reconnect source ownership", () => {
           rpcSetVersion: environment.rpcSetVersion,
           handshake: support.BOOTSTRAP_RECEIPT,
         });
-        if (!admission.ok) {
-          throw new Error("Reconnect fixture worker admission failed");
-        }
+        assert(admission.ok, "Reconnect fixture worker admission failed");
         const identity = admission.identity;
         const request = support.inferenceRequest(identity);
         const firstSink = createSink("original-connection");
@@ -121,22 +117,12 @@ describe("worker inference reconnect source ownership", () => {
           // Same claim, run, target, and registry authority; only the bound source owner changes.
           await bind();
           const successor = getWorkerTurnExecutionIdentityCapability(placements, claim);
-          if (!successor) {
-            throw new Error("Reconnect fixture did not capture its successor source");
-          }
+          assert(successor, "Reconnect fixture did not capture its successor source");
           expect(successor).not.toBe(original);
           expect(() => successor.receiptAuthority()).not.toThrow();
           expect(() => original.receiptAuthority()).toThrow("worker turn authority changed");
         } else {
-          const credentialHash = hashWorkerCredential("reconnected-fixture", claim);
-          await support.testState.store.renewCredential({
-            environmentId,
-            expectedOwnerEpoch: identity.ownerEpoch,
-            credentialHash,
-            sessionId,
-            rpcSetVersion: identity.rpcSetVersion,
-            expiresAtMs: identity.credentialExpiresAtMs,
-          });
+          const credentialHash = await renewCredential("reconnected-fixture");
           nextIdentity = { ...identity, credentialHash };
           expect(getWorkerTurnExecutionIdentityCapability(placements, claim)).toBe(original);
           expect(() => original.receiptAuthority()).not.toThrow();
@@ -155,9 +141,7 @@ describe("worker inference reconnect source ownership", () => {
           expect(nextSink.frames).toEqual([]);
         } else {
           for (const result of results) {
-            if (!result.ok) {
-              throw new Error("Current source could not reconnect its transport");
-            }
+            assert(result.ok, "Current source could not reconnect its transport");
             expect(result.result.status).toBe("accepted");
             result.launch();
           }

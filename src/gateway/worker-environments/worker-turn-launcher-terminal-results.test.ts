@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Value } from "typebox/value";
@@ -60,6 +61,8 @@ import {
 import {
   completedWorkerMessage,
   environmentForTunnel,
+  localResult,
+  runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
 import {
   createWorkerTurnTunnel,
@@ -91,6 +94,21 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 import { gitInit } from "./workspace-recovery.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
+
+function environmentWithTunnel(
+  tunnel: WorkerTunnelHandle,
+  overrides: Partial<WorkerTurnEnvironmentService> = {},
+): WorkerTurnEnvironmentService {
+  return {
+    ...unusedEnvironments(),
+    get: vi.fn(attachedEnvironment),
+    acquireTurnCredential: vi.fn(async () => credential()),
+    acknowledgeCredentialDelivery: vi.fn(async () => true),
+    startTunnel: vi.fn(async () => tunnel),
+    destroy: vi.fn(async () => attachedEnvironment()),
+    ...overrides,
+  };
+}
 
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -199,9 +217,7 @@ describe("worker turn launcher terminal results", () => {
         },
         { ownsContext: true, trackOwner: true },
       );
-      if (!dispatchClaim) {
-        throw new Error("expected dispatch run context");
-      }
+      assert(dispatchClaim, "expected dispatch run context");
       const workerTurn = turn(runId);
       let identity: WorkerConnectionIdentity;
       const tunnel = createWorkerTurnTunnel({
@@ -300,9 +316,7 @@ describe("worker turn launcher terminal results", () => {
           if (reconciliationFails) {
             throw reconciliationError;
           }
-          if (request.source.kind !== "local") {
-            throw new Error("expected local workspace source");
-          }
+          assert(request.source.kind === "local", "expected local workspace source");
           await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
@@ -314,23 +328,18 @@ describe("worker turn launcher terminal results", () => {
           };
         }),
       }) satisfies WorkerTunnelHandle;
-      const environments: WorkerTurnEnvironmentService = {
-        ...unusedEnvironments(),
+      const environments = environmentWithTunnel(tunnel, {
         get: vi.fn(() => environment),
         acquireTurnCredential: vi.fn(async (claim) => {
           grant.turnClaim = claim;
           grant.deliveryId = hashWorkerCredential(grant.credential, claim);
           return grant;
         }),
-        acknowledgeCredentialDelivery: vi.fn(async () => true),
-        startTunnel: vi.fn(async () => tunnel),
         destroy: vi.fn(async () => environment),
-      };
+      });
       const reconcileActivePlacement = vi.fn(async () => {
         const [pending] = await placements.listPendingWorkspaceResultsAsync();
-        if (!pending) {
-          throw new Error("expected pending workspace result");
-        }
+        assert(pending, "expected pending workspace result");
         expect(pending).toMatchObject({ sessionId: SESSION_ID, runId });
         await placements.failWorkspaceResultAndReleaseTurn(pending, reconciliationError);
       });
@@ -341,14 +350,8 @@ describe("worker turn launcher terminal results", () => {
       });
       const uninstall = installSessionPlacementAdmissionProvider(provider);
       try {
-        const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-        const execute = vi.fn(() =>
-          provider.executeTurn(
-            { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-            workerTurn,
-            runLocal,
-          ),
-        );
+        const runLocal = vi.fn(localResult);
+        const execute = vi.fn(() => provider.executeTurn(runIdentity(runId), workerTurn, runLocal));
         const config = {
           ...workerTurn.config,
           agents: {
@@ -384,7 +387,7 @@ describe("worker turn launcher terminal results", () => {
               manifestPlugins: [],
               fallbacksOverride: ["openai/gpt-5.6-sol"],
             },
-            identity: { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+            identity: runIdentity(runId),
             harness: {
               workspaceDir: root,
               sessionKey: SESSION_KEY,
@@ -501,9 +504,7 @@ describe("worker turn launcher terminal results", () => {
     );
     const targetRecovery = vi.fn(async () => {
       const [pending] = await placements.listPendingWorkspaceResultsAsync();
-      if (!pending) {
-        throw new Error("expected pending workspace result");
-      }
+      assert(pending, "expected pending workspace result");
       await placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
     });
     const stopCleanup = vi.fn(async () => ({
@@ -568,14 +569,7 @@ describe("worker turn launcher terminal results", () => {
         throw tunnelFailure;
       }),
     });
-    const environments: WorkerTurnEnvironmentService = {
-      ...unusedEnvironments(),
-      get: vi.fn(() => attachedEnvironment()),
-      acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () => tunnel),
-      destroy,
-    };
+    const environments = environmentWithTunnel(tunnel, { destroy });
     const reconcileActivePlacement = vi.fn(dispatch.reconcileActive);
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
@@ -588,16 +582,7 @@ describe("worker turn launcher terminal results", () => {
       abortSignal: stopController.signal,
     };
     const running = provider
-      .executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-reconcile-tunnel-loss",
-        },
-        workerTurn,
-        async () => ({ meta: { durationMs: 1 } }),
-      )
+      .executeTurn(runIdentity(workerTurn.runId), workerTurn, localResult)
       .catch((error: unknown) => error);
     await transferEntered.promise;
     const stopping = dispatch
@@ -637,9 +622,7 @@ describe("worker turn launcher terminal results", () => {
     await seedActivePlacement();
     await gitInit(root);
     const source = placements.get(SESSION_ID);
-    if (source?.state !== "active") {
-      throw new Error("Expected active source");
-    }
+    assert(source?.state === "active", "Expected active source");
     const request = {
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
@@ -754,14 +737,7 @@ describe("worker turn launcher terminal results", () => {
         }),
     });
     vi.mocked(harness.environments.startTunnel).mockResolvedValue(tunnel);
-    const environments: WorkerTurnEnvironmentService = {
-      ...unusedEnvironments(),
-      get: vi.fn(() => attachedEnvironment()),
-      acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () => tunnel),
-      destroy,
-    };
+    const environments = environmentWithTunnel(tunnel, { destroy });
     const reconcileActivePlacement = vi.fn(dispatch.reconcileActive);
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
@@ -775,19 +751,12 @@ describe("worker turn launcher terminal results", () => {
     const running = withSessionTurn(
       { sessionKey: SESSION_KEY, sessionId: SESSION_ID, storePath: sessionTarget.storePath },
       async (operation, signal) => {
-        if (!operation) {
-          throw new Error("Expected the worker's admitted controller operation");
-        }
+        assert(operation, "Expected the worker's admitted controller operation");
         admittedOperation = operation;
         return await provider.executeTurn(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: "run-reconcile-tunnel-loss",
-          },
+          runIdentity(workerTurn.runId),
           { ...workerTurn, replyOperation: operation, abortSignal: signal },
-          async () => ({ meta: { durationMs: 1 } }),
+          localResult,
         );
       },
     ).catch((error: unknown) => error);
@@ -975,14 +944,9 @@ describe("worker turn launcher terminal results", () => {
       const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
 
       const result = await provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-worker-usage",
-        },
+        runIdentity("run-worker-usage"),
         turn("run-worker-usage"),
-        async () => ({ meta: { durationMs: 1 } }),
+        localResult,
       );
 
       expect(result.meta.finalAssistantVisibleText ?? "").toBe(visibleText ?? "");

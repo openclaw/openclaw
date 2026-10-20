@@ -57,31 +57,28 @@ export function registerWorkerNativeInferenceRpcTests(): void {
       const request = support.inferenceRequest(identity);
       const send = vi.fn();
       const sink = { connectionId: "worker-local-proxy-attempt", send };
+      const start = (overrides: Partial<typeof request> = {}) =>
+        workerService.startInference(identity, { ...request, ...overrides }, sink);
 
-      expect(
-        await workerService.startInference(
-          identity,
-          { ...request, sessionId: "session-other" },
-          sink,
-        ),
-      ).toEqual({ ok: false, reason: "session-not-attached" });
-      expect(
-        await workerService.startInference(identity, { ...request, runId: "run-other" }, sink),
-      ).toEqual({ ok: false, reason: "session-not-attached" });
-      expect(
-        await workerService.startInference(
-          identity,
-          { ...request, runEpoch: request.runEpoch + 1 },
-          sink,
-        ),
-      ).toEqual({ ok: false, reason: "epoch-mismatch" });
+      expect(await start({ sessionId: "session-other" })).toEqual({
+        ok: false,
+        reason: "session-not-attached",
+      });
+      expect(await start({ runId: "run-other" })).toEqual({
+        ok: false,
+        reason: "session-not-attached",
+      });
+      expect(await start({ runEpoch: request.runEpoch + 1 })).toEqual({
+        ok: false,
+        reason: "epoch-mismatch",
+      });
       placementStore.validateWorkerTurn.mockReturnValue(false);
-      expect(await workerService.startInference(identity, request, sink)).toEqual({
+      expect(await start()).toEqual({
         ok: false,
         closeReason: "placement-mismatch",
       });
       placementStore.validateWorkerTurn.mockReturnValue(true);
-      const started = await workerService.startInference(identity, request, sink);
+      const started = await start();
       expect(executeInference).not.toHaveBeenCalled();
       expect(send).not.toHaveBeenCalled();
       if (providerId === "device") {

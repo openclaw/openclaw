@@ -17,10 +17,26 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 
-describe.each(["local", "repository"] as const)("%s workspace media policy", (kind) => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+beforeEach(setupWorkerTurnLauncherTest);
+afterEach(cleanupWorkerTurnLauncherTest);
 
+function mediaTunnel(
+  stageAttachments: WorkerTunnelHandle["stageAttachments"],
+  environmentId = "media-policy-environment",
+): WorkerTunnelHandle {
+  return {
+    environmentId,
+    ownerEpoch: 1,
+    stageAttachments,
+    syncWorkspace: vi.fn(),
+    reconcileWorkspace: vi.fn(),
+    quiesceWorkspace: vi.fn(),
+    runWorkspaceCommand: vi.fn(),
+    stop: vi.fn(),
+  };
+}
+
+describe.each(["local", "repository"] as const)("%s workspace media policy", (kind) => {
   async function fixture(workspaceOnly: boolean) {
     const gatewayWorkspace = path.join(root, "gateway-agent-workspace");
     const localWorkspace = path.join(root, "session-workspace");
@@ -49,16 +65,7 @@ describe.each(["local", "repository"] as const)("%s workspace media policy", (ki
         }
       },
     );
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: "media-policy-environment",
-      ownerEpoch: 1,
-      stageAttachments,
-      syncWorkspace: vi.fn(),
-      reconcileWorkspace: vi.fn(),
-      quiesceWorkspace: vi.fn(),
-      runWorkspaceCommand: vi.fn(),
-      stop: vi.fn(),
-    };
+    const tunnel = mediaTunnel(stageAttachments);
     const input = turn("media-policy");
     const prepare = async (media: MediaFact[]) =>
       await prepareWorkerTurnMedia({
@@ -137,9 +144,6 @@ describe.each(["local", "repository"] as const)("%s workspace media policy", (ki
 });
 
 describe("device-folder media policy", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
-
   it("refuses current attachments and does not restage a refused one from history", async () => {
     const saved = await saveMediaBuffer(Buffer.from("Refused note"), "text/plain", "inbound");
     const fact: MediaFact = { path: saved.path, contentType: "text/plain" };
@@ -150,16 +154,7 @@ describe("device-folder media policy", () => {
         workspace: { kind: "device-folder", deviceId: "device-1", path: "/srv/project" },
         remoteWorkspaceDir: "/srv/project",
         history,
-        tunnel: {
-          environmentId: "device-folder-environment",
-          ownerEpoch: 1,
-          stageAttachments,
-          syncWorkspace: vi.fn(),
-          reconcileWorkspace: vi.fn(),
-          quiesceWorkspace: vi.fn(),
-          runWorkspaceCommand: vi.fn(),
-          stop: vi.fn(),
-        },
+        tunnel: mediaTunnel(stageAttachments, "device-folder-environment"),
         signal: new AbortController().signal,
         isAuthorized: () => true,
       });

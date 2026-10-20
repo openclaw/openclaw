@@ -21,14 +21,11 @@ import { createWorkerLiveTrajectoryRecorder } from "./live-event-projection.js";
 import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
-  ENVIRONMENT_ID,
-  OWNER_EPOCH,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  createWorkerTurnTunnel,
   credential,
-  measureLaunchTurn,
-  readLaunchToolNames,
   placements,
   root,
   seedActivePlacement,
@@ -117,18 +114,12 @@ describe("worker turn trajectory authority", () => {
           throw stop;
         },
       );
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
-        readLaunchToolNames,
-        runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      };
+      });
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
         environments: {
