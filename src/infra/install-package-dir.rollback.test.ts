@@ -259,23 +259,38 @@ describe("installPackageDir rollback", () => {
     },
   );
 
-  it("reports incomplete recovery when a deferred backup cannot be restored", async () => {
-    const { install, targetDir } = await createFixture("deferred-restore-blocked");
-    const result = await install({
-      afterBackup: async () => {
-        await fs.mkdir(targetDir, { recursive: true });
-        await writeText(targetDir, "successor", "successor.txt");
-        return { ok: false as const, error: "backup rejected" };
-      },
-    });
+  it.each([false, true])(
+    "reports incomplete recovery when a deferred backup cannot be restored (inode reused=%s)",
+    async (reuseIdentity) => {
+      const { install, targetDir } = await createFixture("deferred-restore-blocked");
+      const original = await fs.lstat(targetDir, { bigint: true });
+      const result = await install({
+        afterBackup: async () => {
+          await fs.mkdir(targetDir, { recursive: true });
+          await writeText(targetDir, "successor", "successor.txt");
+          if (reuseIdentity) {
+            const lstat = fsSync.lstatSync.bind(fsSync);
+            vi.spyOn(fsSync, "lstatSync").mockImplementation((candidate, options) => {
+              const current = lstat(candidate, options);
+              if (samePath(candidate, targetDir) && current && typeof current.ino === "bigint") {
+                Object.defineProperty(current, "ino", { value: original.ino });
+              }
+              return current;
+            });
+          }
+          return { ok: false as const, error: "backup rejected" };
+        },
+      });
 
-    expect(result).toMatchObject({
-      ok: false,
-      recoveryIncomplete: true,
-      error: expect.stringContaining("backup retained"),
-    });
-    await expectText(targetDir, "successor", "successor.txt");
-  });
+      expect(result).toMatchObject({
+        ok: false,
+        recoveryIncomplete: true,
+        error: expect.stringContaining("backup retained"),
+      });
+      await expectText(targetDir, "successor", "successor.txt");
+      await expectMissing(path.join(targetDir, "marker.txt"));
+    },
+  );
 
   it("preserves the Windows EPERM backup copy fallback", async () => {
     const { sourceDir, targetDir } = await createFixture("windows-backup-eperm");

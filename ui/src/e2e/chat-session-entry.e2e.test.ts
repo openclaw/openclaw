@@ -183,8 +183,6 @@ suite.define(() => {
             __openclaw: { id: `entry-${index}`, seq: index + 1 },
           }));
           const gateway = await installMockGateway(page, {
-            // Cold entry is complete when the paint recorder finishes; sidebar needs a settled Home.
-            awaitInitialRoster: entry === "sidebar",
             sessionKey: target,
             sessionTranscripts:
               entry === "sidebar"
@@ -221,9 +219,7 @@ suite.define(() => {
             suite.server.baseUrl,
             entry === "sidebar" ? homeKey : target,
           );
-          await page.goto(entry === "boot" ? `${suite.server.baseUrl}chat` : url, {
-            waitUntil: entry === "sidebar" ? "load" : "domcontentloaded",
-          });
+          await page.goto(entry === "boot" ? `${suite.server.baseUrl}chat` : url);
           if (entry === "sidebar") {
             await page.getByText(chooseSession).waitFor();
             if (width === 390) {

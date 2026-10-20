@@ -650,6 +650,8 @@ export async function installPackageDir<
         sourceHardlinks,
         to: backupPath,
       });
+      // Only incomplete displacement can leave the original at the target path.
+      originalIdentity = undefined;
     } catch (err) {
       return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
     }

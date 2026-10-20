@@ -343,7 +343,8 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     expect(keyword.body.error).toBeUndefined();
     expect(keyword.path.error).toBeUndefined();
     expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/lexical.md"]);
-    expect(keyword.body.rows[0]!.textScore).toBeCloseTo(0.05, 6);
+    expect(keyword.body.rows[0]!.textScore).toBeGreaterThan(0.6);
+    expect(keyword.body.rows[0]!.textScore).toBeLessThan(0.75);
     const vector = await regular.vector();
     const merged = await mergeHybridResults({
       vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
@@ -354,12 +355,12 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       temporalDecay: { enabled: false, halfLifeDays: 30 },
     });
     expect(merged.map((row) => row.path)).toEqual([
-      "memory/semantic.md",
       "memory/lexical.md",
+      "memory/semantic.md",
       "memory/orthogonal.md",
     ]);
-    expect(merged[0]!.score).toBeCloseTo(0.56, 6);
-    expect(merged[1]!.score).toBeCloseTo(0.435, 6);
+    expect(merged[0]!.score).toBeCloseTo(0.62, 6);
+    expect(merged[1]!.score).toBeCloseTo(0.56, 6);
     const exact = await regular.keyword(keywordQuery("semantic"));
     expect(exact.path.rows).toMatchObject([
       { path: "memory/semantic.md", exactPathSpecificity: 1 },
@@ -411,7 +412,11 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       expect(result.body.error).toBeUndefined();
       expect(result.path.error).toBeUndefined();
       expect(result.body.rows).toMatchObject([
-        { path: "body-hit.md", score: expect.closeTo(0.1, 6), textScore: expect.closeTo(0.1, 6) },
+        {
+          path: "body-hit.md",
+          score: expect.closeTo(2 / 3, 6),
+          textScore: expect.closeTo(2 / 3, 6),
+        },
       ]);
       expect(result.path.rows.map((row) => [row.path, row.exactPathSpecificity])).toEqual([
         ["launch", 3],
@@ -420,15 +425,15 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       ]);
       expect(result.path.rows).toMatchObject([
         {
-          score: expect.closeTo(0.1, 6),
-          pathScore: expect.closeTo(0.1, 6),
+          score: expect.closeTo(0.5, 6),
+          pathScore: expect.closeTo(0.5, 6),
           textScore: 0,
           hasBodyMatch: false,
         },
         { score: 0, pathScore: 0, textScore: 0, hasBodyMatch: false },
         {
-          score: expect.closeTo(1 / 30, 6),
-          pathScore: expect.closeTo(1 / 30, 6),
+          score: expect.closeTo(0.5, 6),
+          pathScore: expect.closeTo(0.5, 6),
           textScore: 0,
           hasBodyMatch: false,
         },

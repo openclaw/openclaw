@@ -20,7 +20,10 @@ import {
   createSessionObserverAudienceLifecycle,
 } from "./session-observer-audience.js";
 import { createSessionObserverCompanionSnapshotReader } from "./session-observer-companion.js";
-import { createSessionObserverCompletion } from "./session-observer-completion.js";
+import {
+  createSessionObserverCompletion,
+  reportSessionObserverDegradation,
+} from "./session-observer-completion.js";
 import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
 import { createSessionObserverLifecycle } from "./session-observer-lifecycle.js";
 import { createSessionObserverModelSlots } from "./session-observer-model-slots.js";
@@ -414,12 +417,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           }
           state.consecutiveFailures += 1;
           if (state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-            observerLog.warn("session observer disabled after consecutive failures", {
-              sessionKey: state.sessionKey,
-              runId: state.runId,
-              consecutiveFailures: state.consecutiveFailures,
-              error: formatErrorMessage(error),
-            });
+            reportSessionObserverDegradation(state, error, deps.getConfig());
             if (final || state.finalPending || state.terminalHealth) {
               retireTerminalState(state);
             } else {

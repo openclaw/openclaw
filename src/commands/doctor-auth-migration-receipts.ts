@@ -489,10 +489,10 @@ export function resumePendingAuthProfileMigrationArchives(
   return changes;
 }
 
-export function hasTerminalAuthProfileMigrationReceipt(
-  sourceKey: string,
-  env?: NodeJS.ProcessEnv,
-): boolean {
+/** Finish a reappeared source under the caller's source-file lock, without replaying credentials. */
+export function archivePreviouslyMigratedAuthProfileSource(
+  receipt: AuthProfileMigrationSourceReceipt,
+): string | null {
   const row = withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) =>
       executeSqliteQueryTakeFirstSync(
@@ -500,11 +500,35 @@ export function hasTerminalAuthProfileMigrationReceipt(
         getNodeSqliteKysely<MigrationDatabase>(db)
           .selectFrom("migration_sources")
           .select("status")
-          .where("source_key", "=", sourceKey),
+          .where("source_key", "=", receipt.sourceKey),
       ),
-    { env },
+    { env: receipt.env },
   );
-  return row?.status === "completed" || row?.status === "archived-unparsed";
+  if (row?.status !== "completed" && row?.status !== "archived-unparsed") {
+    return null;
+  }
+  const directory = path.dirname(receipt.sourcePath);
+  const prefix = `${path.basename(receipt.sourcePath)}.migrated-`;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.startsWith(prefix)) {
+      continue;
+    }
+    const archivePath = path.join(directory, entry.name);
+    try {
+      if (sha256Hex(fs.readFileSync(archivePath)) !== receipt.sourceSha256) {
+        continue;
+      }
+    } catch {
+      // An unreadable archive cannot prove that another copy of these bytes survives.
+      continue;
+    }
+    // Include replacement archives: the terminal receipt may name a lost original.
+    assertAuthProfileMigrationSourcesUnchanged([receipt.sourcePath], [receipt]);
+    fs.unlinkSync(receipt.sourcePath);
+    return archivePath;
+  }
+  archiveAuthProfileMigrationSource(receipt);
+  return receipt.archivePath;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

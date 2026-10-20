@@ -76,7 +76,10 @@ import {
   resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
-import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  cliBackendSupportsExactToolAvailability,
+  resolveCliBackendConfig,
+} from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
@@ -286,12 +289,7 @@ async function prepareCliRunContextWithinReadFence(
   }
   params = prepareCliRunModelAuthority(params);
   const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
-  const canEnforceExactToolAvailability =
-    backendResolved.nativeToolMode === "selectable" &&
-    ((backendResolved.toolAvailabilityEnforcement === "execution-args" &&
-      backendResolved.resolveExecutionArgs !== undefined) ||
-      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
-        backendResolved.prepareExecution !== undefined));
+  const canEnforceExactToolAvailability = cliBackendSupportsExactToolAvailability(backendResolved);
   using callerToolAuthorityResources = new DisposableStack();
   const callerToolAuthority = callerToolAuthorityResources.use(
     captureCliRunToolAuthority(params, {
@@ -710,12 +708,13 @@ async function prepareCliRunContextWithinReadFence(
       "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
     );
   }
-  const { nodeWorkshopEnabled, hostOwnedTools } = mcp.resolveCliMcpToolOwnership(params, {
-    backend: backendResolved,
-    enabled: bundleMcpEnabled,
-    nodePlacement: nodeClaudePlacement,
-    skipPreparation: skipsTurnPreparation,
-  });
+  const { nodeWorkshopEnabled, hostOwnedTools, bridgeConfiguredMcp } =
+    mcp.resolveCliMcpToolOwnership(params, {
+      backend: backendResolved,
+      enabled: bundleMcpEnabled,
+      nodePlacement: nodeClaudePlacement,
+      skipPreparation: skipsTurnPreparation,
+    });
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined && canUseGatewayTools && params.disableTools !== true;
   const skillLibraryAuthoring: RunCliAgentParams["skillLibraryAuthoring"] =
@@ -747,12 +746,24 @@ async function prepareCliRunContextWithinReadFence(
       }
     : undefined;
   params.assertCurrent?.();
-  // Exclusive runs cannot hand configured MCP servers to the CLI. Serve them
-  // through the loopback bridge so every turn lists the same tools.
+  const resolveNativeMcpCapabilityProfile = () =>
+    mcp.resolveCliNativeMcpPolicy(params, {
+      config: runConfig,
+      policySessionKey,
+      policyAgentId,
+      modelProvider,
+      modelId,
+      workspaceDir,
+      cwd,
+      runtimeToolsAllowPolicy,
+    });
+  // Keep configured MCP on the bridge even when local Claude retains native
+  // tools for node exec. Exact tool selection remains a separate policy.
   await using loopbackBundleMcp =
     mcpLoopbackRuntime &&
     mcpContextBase &&
-    (params.cliToolAvailability !== undefined ||
+    (bridgeConfiguredMcp ||
+      params.cliToolAvailability !== undefined ||
       shouldMaterializeRuntimePolicy ||
       promptBuildRestrictsTools)
       ? await prepareCliLoopbackBundleMcp({
@@ -761,17 +772,7 @@ async function prepareCliRunContextWithinReadFence(
           workspaceDir,
           agentId: sessionAgentId,
           agentDir,
-          resolveCapabilityProfile: () =>
-            mcp.resolveCliNativeMcpPolicy(params, {
-              config: runConfig,
-              policySessionKey,
-              policyAgentId,
-              modelProvider,
-              modelId,
-              workspaceDir,
-              cwd,
-              runtimeToolsAllowPolicy,
-            }),
+          resolveCapabilityProfile: resolveNativeMcpCapabilityProfile,
           runtimeToolsAllow: runtimeToolsAllowPolicy,
         })
       : undefined;
@@ -1102,32 +1103,27 @@ async function prepareCliRunContextWithinReadFence(
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
         ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
-    const nativeMcpCapabilityProfile = await mcp.resolveCliNativeMcpPolicy(params, {
-      config: runConfig,
-      policySessionKey,
-      policyAgentId,
-      modelProvider,
-      modelId,
-      workspaceDir,
-      cwd,
-      runtimeToolsAllowPolicy,
-    });
+    const exclusiveMcp = exclusiveTools || bridgeConfiguredMcp;
+    const nativeMcpCapabilityProfile = await resolveNativeMcpCapabilityProfile();
     const preparedBackend = await prepareCliBundleMcpConfig({
       enabled: bundleMcpEnabled || systemAgentMcpConfig !== undefined,
       mode: backendResolved.bundleMcpMode,
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
-      toolOverrides: params.toolOverrides,
+      // The bridged catalog already applies configured-server overrides.
+      toolOverrides:
+        exclusiveMcp && !systemAgentMcpConfig
+          ? { ...params.toolOverrides, mcpServers: undefined, mcpToolsDeny: undefined }
+          : params.toolOverrides,
       agentDir,
-      // Restricted runs serve only the loopback server; merging user/plugin
-      // MCP servers would let the run reach tools outside its allowlist.
+      // Bridged and restricted runs exclude native servers outside their catalog.
       ...(systemAgentMcpConfig
         ? { exclusiveConfig: systemAgentMcpConfig }
-        : exclusiveTools && loopbackServerConfig
+        : exclusiveMcp && loopbackServerConfig
           ? { exclusiveConfig: loopbackServerConfig }
           : {}),
-      additionalConfig: exclusiveTools ? undefined : loopbackServerConfig,
+      additionalConfig: exclusiveMcp ? undefined : loopbackServerConfig,
       env:
         mcpLoopbackRuntime && mcpClientGrant
           ? {
@@ -1136,18 +1132,15 @@ async function prepareCliRunContextWithinReadFence(
             }
           : undefined,
       warn: (message) => cliBackendLog.warn(message),
-      ...(!systemAgentMcpConfig && !exclusiveTools
-        ? {
-            nativeMcpPolicy: {
+      nativeMcpPolicy:
+        !systemAgentMcpConfig && !exclusiveMcp
+          ? {
               sessionId: params.sessionId,
-              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              sessionKey: params.sessionKey,
               capabilityProfile: nativeMcpCapabilityProfile,
-              ...(runtimeToolsAllowPolicy !== undefined
-                ? { runtimeToolsAllow: runtimeToolsAllowPolicy }
-                : {}),
-            },
-          }
-        : {}),
+              runtimeToolsAllow: runtimeToolsAllowPolicy,
+            }
+          : undefined,
     });
     const cleanupPreparedBackend = sequenceCliCleanups(
       preparedBackend.cleanup && (() => preparedBackend.cleanup?.()),

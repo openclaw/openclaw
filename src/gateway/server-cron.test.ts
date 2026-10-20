@@ -114,20 +114,12 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-function enqueueSystemEvent(text: string, opts?: unknown) {
-  return mocks.enqueue(text, opts);
-}
-
-function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
-  const result = mocks.enqueue(text, opts);
-  if (result === false || result === null) {
-    return null;
-  }
-  return mocks.removeEvent;
-}
-
 // mock-isolation: Cron cases capture queue entries and receipts without the process event queue.
-vi.mock("../infra/system-events.js", () => ({ enqueueSystemEvent, enqueueSystemEventWithReceipt }));
+vi.mock("../infra/system-events.js", async () => {
+  const { createCronSystemEventMocks } =
+    await import("./server-cron.system-event-receipt.test-support.js");
+  return createCronSystemEventMocks(mocks.enqueue, mocks.removeEvent);
+});
 
 vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),

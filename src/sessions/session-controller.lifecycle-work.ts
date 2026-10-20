@@ -196,6 +196,20 @@ export function captureGatewaySessionWorkAdmissionInterruption(
         }
       });
       return {
+        inspectPending: () => {
+          const pending = effects.filter((effect) => effect.phase !== "released");
+          const first = pending[0];
+          return {
+            effects: pending.length,
+            phase: first?.phase,
+            sessionKey: first?.ref.target.sessionKey,
+            runId: first ? getSessionEffectRun(first)?.runId : undefined,
+            interrupted: first ? Boolean(first.interrupted) : undefined,
+            sourcePhase: first?.sourceInput?.phase,
+            operationPhase: first?.ref.operation?.phase,
+            settling: first?.isSettling?.(),
+          };
+        },
         released: Promise.allSettled(cancellations).then((results) => {
           const failures = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : [],

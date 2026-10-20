@@ -132,13 +132,23 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
         admission: { ...anchor, logicalTurnId: entryId, role: "user" as const },
       };
     });
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    let payloadBindings = 0;
+    const observer = observeSqliteReadSql(
+      requireNodeSqlite().StatementSync.prototype,
+      (sql, bindings) => {
+        if (sql.includes(' as "event_json"')) {
+          payloadBindings += bindings.length;
+        }
+      },
+    );
     try {
       expect(await collectSessionMemoryEntries(requests)).toMatchObject([
         { entry: { content: "User: First." } },
         { entry: { content: "User: First.\nUser: Second." } },
       ]);
       expect(observer.queries.filter((sql) => sql.includes(' as "event_json"'))).toHaveLength(1);
+      // Each admission range needs at most one session and one sequence bound.
+      expect(payloadBindings).toBeLessThanOrEqual(4);
     } finally {
       observer.restore();
     }

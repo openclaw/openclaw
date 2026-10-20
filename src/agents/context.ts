@@ -196,14 +196,12 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   }
 }
 
-export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
+export function ensureContextWindowCacheLoaded(): Promise<void> {
   if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise) {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
-  const cfg = cfgOverride
-    ? primeConfiguredContextWindowsFromConfig(cfgOverride)
-    : primeConfiguredContextWindows();
+  const cfg = primeConfiguredContextWindows();
   if (!cfg) {
     return Promise.resolve();
   }

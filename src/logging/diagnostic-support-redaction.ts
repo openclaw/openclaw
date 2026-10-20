@@ -522,6 +522,13 @@ export function redactPublicSupportDiagnosticLine(
   context: SupportRedactionContext,
 ): string {
   const line = redactSupportDiagnosticLine(value, context);
+  if (
+    /^Client credential socket material is invalid\.(?: Failed migrating shared state database schema at \[redacted-path\])?$/u.test(
+      line,
+    )
+  ) {
+    return "Client credential socket material is invalid.";
+  }
   const startupSignal = /^startup crash with signal (SIG[A-Z0-9]+)$/u.exec(line)?.[1];
   if (
     !/[\r\n\u2028\u2029]/u.test(value) &&
@@ -582,7 +589,7 @@ export function redactPublicSupportDiagnosticLine(
       "managed update handoff control input closed",
       "managed update ownership transfer failed",
       "requester-revoked",
-      "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+      "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.",
     ].includes(line)
   ) {
     return line;
