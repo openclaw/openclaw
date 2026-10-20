@@ -1,6 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, expect, it, vi } from "vitest";
-import { observe } from "./session-catalog-list-operation.test-support.js";
 import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
 import { commandRpcMocks, config, idleThread } from "./session-catalog.test-helpers.js";
 
@@ -35,8 +34,10 @@ function fixture(partial: boolean) {
       nextCursor: null,
     });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-  const result = observe(list(partial));
-  return { started, response, reply, list, onHost, publications, controller, result };
+  const settled = vi.fn();
+  const result = list(partial);
+  void result.then(settled, settled);
+  return { started, response, reply, list, onHost, publications, controller, result, settled };
 }
 
 it.each([
@@ -51,17 +52,13 @@ it.each([
     try {
       await f.started.promise;
       await vi.advanceTimersByTimeAsync(250);
-      if (outcome === "success") {
-        expect.soft(f.result.state.settled).toBe(partial);
-      } else {
-        expect(f.result.state.settled).toBe(true);
-      }
+      const completion = outcome === "success" ? expect.soft(f.settled) : expect(f.settled);
+      completion.toHaveBeenCalledTimes(Number(partial));
       expect(f.onHost).not.toHaveBeenCalled();
-      if (f.result.state.settled) {
-        await expect(f.result.done).resolves.toMatchObject({
-          status: "fulfilled",
-          value: [{ hostId: "gateway:local", connected: true, pending: true, sessions: [] }],
-        });
+      if (f.settled.mock.calls.length) {
+        await expect(f.result).resolves.toMatchObject([
+          { hostId: "gateway:local", connected: true, pending: true, sessions: [] },
+        ]);
       }
       if (outcome === "success") {
         await vi.advanceTimersByTimeAsync(1_750);
@@ -75,7 +72,7 @@ it.each([
           f.response.reject(error);
         }
       }
-      await f.result.done;
+      await f.result;
       await Promise.all(f.publications);
       expect(f.onHost).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining(
@@ -101,7 +98,7 @@ it.each([
       }
     } finally {
       f.reply();
-      await f.result.done;
+      await f.result.catch(() => undefined);
       await Promise.allSettled(f.publications);
       vi.useRealTimers();
     }

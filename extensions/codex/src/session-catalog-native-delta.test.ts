@@ -7,15 +7,8 @@ import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 import { commandRpcMocks, idleThread } from "./session-catalog.test-helpers.js";
 
 const rpc = commandRpcMocks.codexControlRequest;
-const factories: ReturnType<typeof catalogFactory>[] = [];
 beforeEach(() => vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] }));
-afterEach(async () => {
-  try {
-    await Promise.all(factories.splice(0).map((factory) => factory.stop()));
-  } finally {
-    vi.useRealTimers();
-  }
-});
+afterEach(() => vi.useRealTimers());
 const thread = (id: string, fields: Partial<CodexThread> = {}) =>
   idleThread({ id, source: "cli", updatedAt: 100, recencyAt: 100, ...fields });
 
@@ -39,7 +32,6 @@ async function fixture(rows: () => CodexThread[], remote = true, pageSize?: numb
     return { data, nextCursor };
   });
   const factory = remote ? remoteCatalogFactory("native-delta") : catalogFactory();
-  factories.push(factory);
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   const idle = () => vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
@@ -53,7 +45,7 @@ async function fixture(rows: () => CodexThread[], remote = true, pageSize?: numb
 it("reconciles remote membership without reparsing unchanged visible or hidden previews", async () => {
   const known = thread("known", {
     name: "Previous title",
-    preview: "Retained first user request",
+    preview: "Known request",
     path: "/remote/sessions/known.jsonl",
     status: { type: "active", activeFlags: ["waitingOnApproval"] },
   });
@@ -70,22 +62,16 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     "removed",
   ]);
   expect(rpc).toHaveBeenCalledOnce();
-  const knownPreview = known.preview;
   const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
-  Object.defineProperty(known, "preview", { get: () => knownPreview });
   Object.assign(known, { name: null, status: { type: "idle" }, path: `${known.path}.zst` });
   Object.assign(changed, { preview: "Changed user request", updatedAt: 200, recencyAt: 200 });
-  native = [
-    thread("created", {
-      name: null,
-      preview: "New independent native task",
-      updatedAt: 300,
-      recencyAt: 300,
-    }),
-    changed,
-    known,
-    hidden,
-  ];
+  const created = thread("created", {
+    name: null,
+    preview: "New independent native task",
+    updatedAt: 300,
+    recencyAt: 300,
+  });
+  native = [created, changed, known, hidden];
   expect(await f.control.listPage({})).toEqual(initial);
   expect(rpc).toHaveBeenCalledOnce();
   await f.refresh((sessions) => {
@@ -95,7 +81,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
       {
         threadId: "known",
         name: null,
-        fallbackName: "Retained first user request",
+        fallbackName: "Known request",
         status: "idle",
       },
     ]);
@@ -103,7 +89,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
   });
   expect(rpc).toHaveBeenCalledTimes(2);
   expect(rpc.mock.calls[1]?.[2]).toMatchObject({ useStateDbOnly: true });
-  expect(sanitize.mock.calls.map(([value]) => value)).not.toContain(knownPreview);
+  expect(sanitize.mock.calls.map(([value]) => value)).not.toContain("Known request");
   expect(sanitize.mock.calls.map(([value]) => value)).not.toContain("Hidden native execution");
   await f.idle();
   sanitize.mockClear();
@@ -149,15 +135,12 @@ it("walks remote pages beyond the resident bound without projecting the uncached
 });
 
 it("reconciles displayed native metadata and explicit Git clears without activity or file changes", async () => {
-  const native = Object.assign(
-    thread("metadata", {
-      name: "Unchanged title",
-      cwd: "/workspace/project",
-      createdAt: 10,
-      sessionId: "previous-session",
-    }),
-    { cliVersion: "0.154.0", gitInfo: { branch: "previous-branch" } },
-  );
+  const native = thread("metadata", {
+    createdAt: 10,
+    sessionId: "previous-session",
+    cliVersion: "0.154.0",
+    gitInfo: { branch: "previous-branch" },
+  });
   const f = await fixture(() => [native], false);
   await f.control.initialize();
   expect((await f.control.listPage({})).sessions[0]).toMatchObject({

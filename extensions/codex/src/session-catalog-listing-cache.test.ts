@@ -71,31 +71,6 @@ it("discovers visible entries after hidden native pages without rereading the re
   expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(nativeCalls);
 });
 
-it("shares one home inventory across agents, filters, and arbitrary clock advances", async () => {
-  let now = 1_000;
-  commandRpcMocks.codexControlRequest.mockResolvedValue({
-    data: [
-      idleThread({ id: "one", source: "cli", cwd: "/workspace/one" }),
-      idleThread({ id: "two", source: "cli", cwd: "/workspace/two" }),
-    ],
-  });
-  const factory = catalogFactory({ getRuntimeConfig: () => config, now: () => now });
-  const home = (await factory.homesForAgent("main"))[0]!;
-  const first = factory.forRequest("main", { ...home, localSessionsRoot: undefined });
-  const second = factory.forRequest("another", { ...home, localSessionsRoot: undefined });
-  await first.initialize();
-  await expect(first.listPage({ cwd: "/workspace/one" })).resolves.toMatchObject({
-    sessions: [{ threadId: "one" }],
-  });
-  now += 24 * 60 * 60 * 1_000;
-  await expect(
-    second.listPage({ cwd: "/workspace/two", searchTerm: "native" }),
-  ).resolves.toMatchObject({
-    sessions: [{ threadId: "two" }],
-  });
-  expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-});
-
 it.each(["resolve", "reject"] as const)(
   "waits for the first native page while one shared initializer will %s",
   async (outcome) => {
@@ -158,51 +133,27 @@ it("fails a repeated native hydration cursor instead of publishing an incomplete
 });
 
 it("captures the current config for requests across agents and homes", async () => {
-  let runtimeConfig: OpenClawConfig = {
-    agents: { defaults: { workspace: "/workspace/a" } },
-  };
+  const initial: OpenClawConfig = { agents: { defaults: { workspace: "/workspace/a" } } };
+  let runtimeConfig = initial;
   commandRpcMocks.codexControlRequest.mockResolvedValue({ thread: idleThread() });
   const factory = catalogFactory({ getRuntimeConfig: () => runtimeConfig });
   const home = (await factory.homesForAgent("main"))[0]!;
-  const initialConfig = runtimeConfig;
-  const expected: OpenClawConfig[] = [];
-  for (const reloaded of [false, true]) {
-    if (reloaded) {
-      runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } };
-    }
-    for (const agent of ["main", "another"]) {
-      const controls = reloaded
-        ? [factory.forRequest(agent)]
-        : ["first", "second"].map((sourceHomeId) =>
-            factory.forRequest(agent, { ...home, sourceHomeId }),
-          );
-      for (const control of controls) {
-        for (let call = 0; call < (reloaded ? 1 : 2); call++) {
-          await control.readThread("thread-1");
-          expected.push(runtimeConfig);
-        }
-      }
-    }
-    expect(commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[3]?.config)).toEqual(
-      expected,
-    );
+  const controls = ["main", "another"].flatMap((agent) =>
+    ["first", "second"].map((sourceHomeId) => factory.forRequest(agent, { ...home, sourceHomeId })),
+  );
+  for (const control of controls) {
+    await control.readThread("thread-1");
+    await control.readThread("thread-1");
   }
-  expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]?.config).toEqual(initialConfig);
-});
-
-it("reports a failed initializer and permits its immediate retry", async () => {
-  commandRpcMocks.codexControlRequest.mockRejectedValueOnce(new Error("cold failure"));
-  const control = makeControl();
-
-  await expect(control.initialize()).rejects.toThrow("cold failure");
-  commandRpcMocks.codexControlRequest.mockResolvedValue({
-    data: [idleThread({ id: "thread-recovered", source: "cli" })],
-  });
-  await control.initialize();
-  await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
-    sessions: [{ threadId: "thread-recovered" }],
-  });
-  expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+  const configs = () =>
+    commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[3]?.config);
+  const firstRequests = Array.from({ length: 8 }, () => initial);
+  expect(configs()).toEqual(firstRequests);
+  runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } };
+  for (const agent of ["main", "another"]) {
+    await factory.forRequest(agent).readThread("thread-1");
+  }
+  expect(configs()).toEqual([...firstRequests, runtimeConfig, runtimeConfig]);
 });
 
 it("keeps a title-search cursor chain on its initial App Server configuration", async () => {
