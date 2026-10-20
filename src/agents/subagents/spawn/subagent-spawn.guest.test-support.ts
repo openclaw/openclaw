@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
+import { normalizeAcceptedSessionSpawnResult as acceptedSpawn } from "../../accepted-session-spawn.js";
 import {
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
@@ -53,15 +53,10 @@ export function registerGuestSpawnCases(
         typeof import("../announce/subagent-announce.js")
       >("../announce/subagent-announce.js");
       const delivered = createDeferred<Awaited<ReturnType<typeof runSubagentAnnounceFlow>>>();
-      vi.mocked(runSubagentAnnounceFlow).mockImplementation(async (params) => {
-        try {
-          const result = await nativeAnnounce.runSubagentAnnounceFlow(params);
-          delivered.resolve(result);
-          return result;
-        } catch (error) {
-          delivered.reject(error);
-          throw error;
-        }
+      vi.mocked(runSubagentAnnounceFlow).mockImplementation((params) => {
+        const result = nativeAnnounce.runSubagentAnnounceFlow(params);
+        void result.then(delivered.resolve, delivered.reject);
+        return result;
       });
       const started = createDeferred();
       const modelResult = createDeferred<EmbeddedAgentRunResult>();
@@ -101,8 +96,7 @@ export function registerGuestSpawnCases(
       const failures: unknown[] = [];
       await collectFailure(failures, async () => {
         const result = await createBoundSpawnInvocation(bound, hiddenSpawn)();
-        expect(result.details, JSON.stringify(result)).toMatchObject({ status: "accepted" });
-        const details = result.details as { childSessionKey: string; runId: string };
+        const details = expectDefined(acceptedSpawn(result), "accepted child");
         childRunId = details.runId;
         await options.waitForEmbeddedRun(bound, details.runId, started.promise);
         expect(readSession(details.childSessionKey)).toMatchObject({
@@ -116,9 +110,7 @@ export function registerGuestSpawnCases(
             requesterAgentId: "main",
             requesterTurnRunId: bound.parentRunId,
             requesterYielded: false,
-            acceptedSessionSpawns: [
-              expectDefined(normalizeAcceptedSessionSpawnResult(result), "accepted child"),
-            ],
+            acceptedSessionSpawns: [details],
           }),
         ).toBe(true);
         bound.admission.close();

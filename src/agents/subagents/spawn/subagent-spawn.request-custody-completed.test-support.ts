@@ -152,6 +152,9 @@ function commandSession(result: { details?: unknown }, label: string) {
   }
   return expectDefined(getSession(details.sessionId), label);
 }
+function completionReceipt({ execution, completion, endedReason }: SubagentRunRecord) {
+  return { execution, completion, endedReason };
+}
 
 export function registerCompletedRequestCustodySpawnCases(options: RequestCustodySpawnCaseOptions) {
   const { parentSessionKey, parentRunId } = options;
@@ -286,13 +289,10 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           });
           return visibleResult("Completed child result");
         });
-      options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-        try {
-          return await native.runEmbeddedAgent(params);
-        } catch (error) {
-          commandReady.reject(error);
-          throw error;
-        }
+      options.runEmbeddedAgent.mockImplementationOnce((params) => {
+        const result = native.runEmbeddedAgent(params);
+        void result.catch(commandReady.reject);
+        return result;
       });
       const failures: unknown[] = [];
       await collectFailure(failures, async () => {
@@ -320,20 +320,14 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         childRunId = accepted.runId;
         childSessionKey = accepted.childSessionKey;
         const runningCommand = await withinTest(commandReady.promise, signal);
-        let receipt:
-          | Pick<SubagentRunRecord, "execution" | "completion" | "endedReason">
-          | undefined;
+        let receipt: ReturnType<typeof completionReceipt> | undefined;
         if (mode === "consumed-active-revoked") {
           expect(subagentRuns.get(childRunId)?.execution.endedAt).toBeUndefined();
         } else {
           completeModel.resolve();
           inspectTerminal();
           const completed = await withinTest(terminal.promise, signal);
-          receipt = structuredClone({
-            execution: completed.execution,
-            completion: completed.completion,
-            endedReason: completed.endedReason,
-          });
+          receipt = structuredClone(completionReceipt(completed));
           expect(completed.execution.outcome).toMatchObject({ status: "ok" });
           expect(completed.completion?.resultText).toBe("Completed child result");
         }
@@ -589,11 +583,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             killReconciliation: { taskCancellationAccepted: true },
           });
         } else {
-          expect({
-            execution: after.execution,
-            completion: after.completion,
-            endedReason: after.endedReason,
-          }).toEqual(receipt);
+          expect(completionReceipt(after)).toEqual(receipt);
           expect(after.killReconciliation).toBeUndefined();
         }
         expect(after.killIntent).toBeUndefined();

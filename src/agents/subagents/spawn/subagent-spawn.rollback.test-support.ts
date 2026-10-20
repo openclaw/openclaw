@@ -122,114 +122,130 @@ export function registerOperatorSpawnRollbackCases(
   },
 ) {
   it.each([
-    { phase: "preparation", label: "revoked-source preparation", scope: "operator.write" },
-    {
-      phase: "accepted registration",
-      label: "revoked-source accepted registration",
-      scope: "operator.write",
-    },
-    { phase: "uncertain registration", label: "uncertain registration", scope: "operator.write" },
-    {
-      phase: "accepted registration",
-      label: "guest revoked-source accepted registration",
-      scope: "operator.sessions.write",
-    },
-  ] as const)(
-    "rolls back an ordinary operator spawn and joins cleanup after $label failure",
-    async ({ phase, scope: operatorScope }) => {
-      const guest = operatorScope === "operator.sessions.write";
-      const source = createSpawnOperatorSource(
-        guest ? ensureProfileForEmail("rollback-guest@example.test").id : "spawn-operator",
-        [operatorScope],
-      );
-      const bound = await options.createBoundParent(source.authority, {
-        guestProfileId: guest ? source.authority.profileId : undefined,
+    { phase: "preparation", actor: "operator" },
+    { phase: "accepted registration", actor: "operator" },
+    { phase: "uncertain registration", actor: "operator" },
+    { phase: "accepted registration", actor: "guest" },
+    { phase: "failed cancellation", actor: "operator" },
+    { phase: "failed cancellation", actor: "system" },
+  ] as const)("settles spawn rollback after $phase ($actor)", async ({ phase, actor }) => {
+    const cancelFails = phase === "failed cancellation";
+    const guest = actor === "guest";
+    const source =
+      actor === "system"
+        ? undefined
+        : cancelFails
+          ? createSpawnOperatorSource()
+          : createSpawnOperatorSource(
+              guest ? ensureProfileForEmail("rollback-guest@example.test").id : "spawn-operator",
+              [guest ? "operator.sessions.write" : "operator.write"],
+            );
+    const bound = await options.createBoundParent(
+      source?.authority,
+      cancelFails ? undefined : { guestProfileId: guest ? source?.authority.profileId : undefined },
+    );
+    const { context, runtime } = await options.createBoundGateway(bound);
+    const readSession = sessionReader(bound.storePath);
+    const preserveSession = cancelFails || phase === "uncertain registration";
+    let childSessionKey: string | undefined;
+    let childRunId: string | undefined;
+    let childOwner: RpcSourceRef | undefined;
+    const childExecution =
+      phase === "preparation" ? undefined : abortableChild(options.runEmbeddedAgent);
+    let invocation: Promise<unknown> | undefined;
+    let registrationWrite: ReturnType<typeof interceptChildRegistrationWrite> | undefined;
+    let retainedChildIdentity: { sessionId: string; lifecycleRevision?: string } | undefined;
+    const cleanupAttemptSettled = createDeferred();
+    let abortAttempts = 0;
+    const registrationFailure = new SubagentRegistryWriteError(
+      preserveSession ? "unknown" : "not-committed",
+      new Error("fixture registry write failed"),
+    );
+    const dispatchSessionMethod = runtime.recovery.dispatchSessionMethod;
+    const cleanupDispatch = preserveSession
+      ? vi.spyOn(runtime.recovery, "dispatchSessionMethod").mockImplementation(async (...args) => {
+          if (cancelFails) {
+            if (args[0] !== "chat.abort") {
+              return await dispatchSessionMethod(...args);
+            }
+            abortAttempts += 1;
+            throw new Error("accepted-child abort failed");
+          }
+          try {
+            return await dispatchSessionMethod(...args);
+          } finally {
+            cleanupAttemptSettled.resolve();
+          }
+        })
+      : undefined;
+    const failures: unknown[] = [];
+    if (phase === "preparation") {
+      spawnTesting.setDepsForTest({
+        forkSessionEntryFromParent: async (params) => {
+          childSessionKey = params.sessionKey;
+          source?.revoke();
+          return { status: "failed" };
+        },
       });
-      const { context, runtime } = await options.createBoundGateway(bound);
-      const readSession = sessionReader(bound.storePath);
-      const preserveSession = phase === "uncertain registration";
-      let childSessionKey: string | undefined;
-      let childRunId: string | undefined;
-      const childExecution =
-        phase === "preparation" ? undefined : abortableChild(options.runEmbeddedAgent);
-      let invocation: Promise<unknown> | undefined;
-      let registrationWrite: ReturnType<typeof interceptChildRegistrationWrite> | undefined;
-      let retainedChildIdentity: { sessionId: string; lifecycleRevision?: string } | undefined;
-      const cleanupAttemptSettled = createDeferred();
-      const dispatchSessionMethod = runtime.recovery.dispatchSessionMethod;
-      const cleanupDispatch = preserveSession
-        ? vi
-            .spyOn(runtime.recovery, "dispatchSessionMethod")
-            .mockImplementation(async (...args) => {
-              try {
-                return await dispatchSessionMethod(...args);
-              } finally {
-                cleanupAttemptSettled.resolve();
-              }
-            })
-        : undefined;
-      const failures: unknown[] = [];
-      if (phase === "preparation") {
-        spawnTesting.setDepsForTest({
-          forkSessionEntryFromParent: async (params) => {
-            childSessionKey = params.sessionKey;
-            source.revoke();
-            return { status: "failed" };
-          },
-        });
-      } else {
-        registrationWrite = interceptChildRegistrationWrite(
-          bound.parentSessionKey,
-          async (record) => {
-            childSessionKey = record.child_session_key;
-            childRunId = record.run_id;
+    } else {
+      registrationWrite = interceptChildRegistrationWrite(
+        bound.parentSessionKey,
+        async (record) => {
+          childSessionKey = record.child_session_key;
+          childRunId = record.run_id;
+          childOwner = expectDefined(
+            rpcSourceTesting.get(record.run_id),
+            "accepted child execution owner",
+          );
+          if (!cancelFails) {
             expect(subagentRuns.has(record.run_id)).toBe(false);
-            const acceptedRun = expectDefined(
-              rpcSourceTesting.get(record.run_id),
-              "accepted child execution owner",
+            expect(getRpcSourceIdentity(childOwner).sessionKey).toBe(record.child_session_key);
+          }
+          const captureIdentity = () => {
+            const { sessionId, lifecycleRevision } = expectDefined(
+              readSession(record.child_session_key),
+              "uncertain registration child session",
             );
-            expect(getRpcSourceIdentity(acceptedRun).sessionKey).toBe(record.child_session_key);
-            if (phase === "uncertain registration") {
-              await childExecution?.started.promise;
-              expect(
-                expectDefined(childExecution?.state.signal, "running child abort signal").aborted,
-              ).toBe(false);
-              expect(rpcSourceTesting.get(record.run_id)).toBe(acceptedRun);
-              const childEntry = expectDefined(
-                readSession(record.child_session_key),
-                "uncertain registration child session",
-              );
-              retainedChildIdentity = {
-                sessionId: childEntry.sessionId,
-                lifecycleRevision: childEntry.lifecycleRevision,
-              };
-              expect(getRpcSourceIdentity(acceptedRun)).toMatchObject({
-                sessionKey: record.child_session_key,
-                sessionId: childEntry.sessionId,
-              });
-            }
-            if (phase === "accepted registration") {
-              source.revoke();
-            }
-            throw new SubagentRegistryWriteError(
-              phase === "uncertain registration" ? "unknown" : "not-committed",
-              new Error("ordinary child registry write failed"),
-            );
-          },
-        );
-      }
-      await collectFailure(failures, async () => {
-        const pending = createBoundSpawnInvocation(bound, {
-          context: phase === "preparation" ? "fork" : "isolated",
-        })();
-        invocation = pending;
-        const completion = preserveSession
+            retainedChildIdentity = { sessionId, lifecycleRevision };
+          };
+          if (cancelFails) {
+            captureIdentity();
+          }
+          if (preserveSession) {
+            await childExecution?.started.promise;
+          }
+          if (phase === "uncertain registration") {
+            expect(
+              expectDefined(childExecution?.state.signal, "running child abort signal").aborted,
+            ).toBe(false);
+            expect(rpcSourceTesting.get(record.run_id)).toBe(childOwner);
+            captureIdentity();
+            expect(getRpcSourceIdentity(childOwner)).toMatchObject({
+              sessionKey: record.child_session_key,
+              sessionId: retainedChildIdentity?.sessionId,
+            });
+          }
+          if (phase === "accepted registration") {
+            source?.revoke();
+          }
+          throw registrationFailure;
+        },
+      );
+    }
+    await collectFailure(failures, async () => {
+      const invoke = createBoundSpawnInvocation(bound, {
+        context: phase === "preparation" ? "fork" : "isolated",
+      });
+      const pending = cancelFails ? invoke("uncertain-registration") : invoke();
+      invocation = pending;
+      const completion =
+        phase === "uncertain registration"
           ? (async () => {
               await Promise.race([cleanupAttemptSettled.promise, pending]);
               const childKey = expectDefined(childSessionKey, "registered child session");
               const runId = expectDefined(childRunId, "registered child run");
               const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
-              source.authority.assertCurrent();
+              expectDefined(source, "operator source").authority.assertCurrent();
               expect(
                 expectDefined(childExecution?.state.signal, "accepted child abort signal").aborted,
               ).toBe(true);
@@ -243,149 +259,51 @@ export function registerOperatorSpawnRollbackCases(
               return result;
             })()
           : pending;
-        const result = await withTimeout(completion, 60_000, {
-          message: "ordinary spawn rollback cleanup did not settle",
-        });
-        const childKey = expectDefined(childSessionKey, "created child session");
-        expect(result.details).toMatchObject({ status: "error", childSessionKey: childKey });
-        if (preserveSession) {
-          const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
-          expect(dispatch.mock.calls.some(([method]) => method === "sessions.delete")).toBe(false);
-          expect(readSession(childKey)).toMatchObject(
-            expectDefined(retainedChildIdentity, "original retained child identity"),
-          );
-          expect(options.runEmbeddedAgent).toHaveBeenCalledOnce();
-          expect(childExecution?.state.signal).toBeDefined();
-          expect(registrationWrite?.failure).toHaveBeenCalledOnce();
-        } else {
-          expect(readSession(childKey)).toBeUndefined();
-        }
-        expect(readSession(bound.parentSessionKey)).toMatchObject({ sessionId: "parent-session" });
-        if (phase === "preparation") {
-          expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
-        } else {
-          const runId = expectDefined(childRunId, "accepted child run");
-          expect(rpcSourceTesting.has(runId)).toBe(false);
-          expect(context.dedupe.get(`agent:${runId}`)).toMatchObject({
-            payload: { runId, status: expect.stringMatching(/^(error|timeout)$/) },
-          });
-          expect(subagentRuns.has(runId)).toBe(false);
-          if (childExecution?.state.signal) {
-            expect(childExecution.state.signal.aborted).toBe(true);
-            expect(childExecution.state.settled).toBe(true);
-          } else {
-            expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
-          }
-        }
+      const result = await withTimeout(completion, 60_000, {
+        message: `${phase}: rollback cleanup did not settle`,
       });
-      childExecution?.started.resolve();
-      spawnTesting.setDepsForTest();
-      registrationWrite?.restore();
-      cancelFixtureChildren(bound, "spawn rollback fixture cleanup");
+      const childKey = expectDefined(childSessionKey, "created child session");
+      expect(result.details).toMatchObject({ status: "error", childSessionKey: childKey });
       if (preserveSession) {
-        await invocation?.catch(() => {});
-      }
-      failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
-      if (preserveSession) {
-        await collectFailure(failures, settleSubagentRegistryPersistenceWork);
-      }
-      cleanupDispatch?.mockRestore();
-      await collectFailure(failures, async () => {
-        await resetSubagentRegistryForTests({ persist: false });
-        expect(source.holds).toBe(0);
-      });
-      options.throwBoundFailures(failures);
-    },
-  );
-
-  it.each([true, false])(
-    "reports failed registration cancellation and settles its child at shutdown (operator=%s)",
-    async (operator) => {
-      const source = operator ? createSpawnOperatorSource() : undefined;
-      const bound = await options.createBoundParent(source?.authority);
-      const { context, runtime } = await options.createBoundGateway(bound);
-      const readSession = sessionReader(bound.storePath);
-      const childExecution = abortableChild(options.runEmbeddedAgent);
-      const failures: unknown[] = [];
-      const registrationFailure = new SubagentRegistryWriteError(
-        "unknown",
-        new Error("ordinary child registry outcome is unknown"),
-      );
-      let child:
-        | {
-            runId: string;
-            sessionKey: string;
-            entry: RpcSourceRef;
-            sessionIdentity: { sessionId: string; lifecycleRevision?: string };
-          }
-        | undefined;
-      let abortAttempts = 0;
-      let invocation: Promise<unknown> | undefined;
-      const dispatchSessionMethod = runtime.recovery.dispatchSessionMethod;
-      const cleanupDispatch = vi
-        .spyOn(runtime.recovery, "dispatchSessionMethod")
-        .mockImplementation(async (...args) => {
-          if (args[0] !== "chat.abort") {
-            return await dispatchSessionMethod(...args);
-          }
-          abortAttempts += 1;
-          throw new Error("accepted-child abort failed");
-        });
-      const registrationWrite = interceptChildRegistrationWrite(
-        bound.parentSessionKey,
-        async (record) => {
-          const entry = expectDefined(
-            rpcSourceTesting.get(record.run_id),
-            "accepted child execution owner",
-          );
-          const session = expectDefined(
-            readSession(record.child_session_key),
-            "uncertain registration child session",
-          );
-          child = {
-            runId: record.run_id,
-            sessionKey: record.child_session_key,
-            entry,
-            sessionIdentity: {
-              sessionId: session.sessionId,
-              lifecycleRevision: session.lifecycleRevision,
-            },
-          };
-          await childExecution.started.promise;
-          throw registrationFailure;
-        },
-      );
-      await collectFailure(failures, async () => {
-        const pending = createBoundSpawnInvocation(bound, { context: "isolated" })(
-          "uncertain-registration",
+        const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
+        expect(dispatch.mock.calls.some(([method]) => method === "sessions.delete")).toBe(false);
+        expect(readSession(childKey)).toMatchObject(
+          expectDefined(retainedChildIdentity, "original retained child identity"),
         );
-        invocation = pending;
-        const result = await withTimeout(pending, 60_000, {
-          message: "registration failure waited for accepted-child execution",
+        expect(options.runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(childExecution?.state.signal).toBeDefined();
+        expect(registrationWrite?.failure).toHaveBeenCalledOnce();
+      } else {
+        expect(readSession(childKey)).toBeUndefined();
+      }
+      expect(readSession(bound.parentSessionKey)).toMatchObject({ sessionId: "parent-session" });
+      if (phase === "preparation") {
+        expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
+      } else if (!cancelFails) {
+        const runId = expectDefined(childRunId, "accepted child run");
+        expect(rpcSourceTesting.has(runId)).toBe(false);
+        expect(context.dedupe.get(`agent:${runId}`)).toMatchObject({
+          payload: { runId, status: expect.stringMatching(/^(error|timeout)$/) },
         });
-        const accepted = expectDefined(child, "accepted child before registration failure");
-        const signal = expectDefined(childExecution.state.signal, "running accepted child");
+        expect(subagentRuns.has(runId)).toBe(false);
+        if (childExecution?.state.signal) {
+          expect(childExecution.state).toMatchObject({ signal: { aborted: true }, settled: true });
+        } else {
+          expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
+        }
+      }
+      if (cancelFails) {
+        const runId = expectDefined(childRunId, "accepted child before registration failure");
+        const execution = expectDefined(childExecution, "running accepted child");
         const details = expectDefined(asOptionalRecord(result.details), "spawn failure details");
-        expect(details).toMatchObject({
-          status: "error",
-          childSessionKey: accepted.sessionKey,
-          runId: accepted.runId,
-        });
+        expect(details).toMatchObject({ runId });
         expect(details.error).toContain(registrationFailure.message);
         expect(details.error).toContain("termination is not confirmed");
         expect(details.error).toContain("Its session is retained");
         expect(abortAttempts).toBe(1);
-        expect(signal.aborted).toBe(false);
-        expect(childExecution.state.settled).toBe(false);
-        expect(rpcSourceTesting.get(accepted.runId)).toBe(accepted.entry);
-        expect(subagentRuns.has(accepted.runId)).toBe(false);
-        expect(readSession(accepted.sessionKey)).toMatchObject(accepted.sessionIdentity);
-        expect(cleanupDispatch.mock.calls.some(([method]) => method === "sessions.delete")).toBe(
-          false,
-        );
-        expect(options.runEmbeddedAgent).toHaveBeenCalledOnce();
-        expect(registrationWrite.failure).toHaveBeenCalledOnce();
-
+        expect(execution.state).toMatchObject({ signal: { aborted: false }, settled: false });
+        expect(rpcSourceTesting.get(runId)).toBe(childOwner);
+        expect(subagentRuns.has(runId)).toBe(false);
         bound.execution.beginClose();
         runtime.close();
         await prepareGatewayRunShutdown({
@@ -403,28 +321,40 @@ export function registerOperatorSpawnRollbackCases(
           () => [bound.execution],
           () => {},
         );
-        expect(signal.aborted).toBe(true);
-        expect(childExecution.state.settled).toBe(true);
-        expect(rpcSourceTesting.has(accepted.runId)).toBe(false);
+        expect(execution.state).toMatchObject({ signal: { aborted: true }, settled: true });
+        expect(rpcSourceTesting.has(runId)).toBe(false);
         expect(abortAttempts).toBe(1);
-      });
-      childExecution.started.resolve();
-      if (child) {
-        requestRpcSourceCancellation(child.entry, new Error("uncertain spawn fixture cleanup"));
       }
-      cancelFixtureChildren(bound, "uncertain spawn fixture cleanup");
-      registrationWrite.restore();
+    });
+    childExecution?.started.resolve();
+    if (!cancelFails) {
+      spawnTesting.setDepsForTest();
+      registrationWrite?.restore();
+    }
+    const cleanupMessage = "spawn rollback fixture cleanup";
+    if (cancelFails && childOwner) {
+      requestRpcSourceCancellation(childOwner, new Error(cleanupMessage));
+    }
+    cancelFixtureChildren(bound, cleanupMessage);
+    if (cancelFails) {
+      registrationWrite?.restore();
+    }
+    if (preserveSession) {
       await invocation?.catch((error: unknown) => {
-        failures.push(error);
+        if (cancelFails) {
+          failures.push(error);
+        }
       });
-      failures.push(...(await options.closeBoundGateway(bound, runtime, child?.runId)));
+    }
+    failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
+    if (preserveSession) {
       await collectFailure(failures, settleSubagentRegistryPersistenceWork);
-      cleanupDispatch.mockRestore();
-      await collectFailure(failures, async () => {
-        await resetSubagentRegistryForTests({ persist: false });
-        expect(source?.holds ?? 0).toBe(0);
-      });
-      options.throwBoundFailures(failures);
-    },
-  );
+    }
+    cleanupDispatch?.mockRestore();
+    await collectFailure(failures, async () => {
+      await resetSubagentRegistryForTests({ persist: false });
+      expect(source?.holds ?? 0).toBe(0);
+    });
+    options.throwBoundFailures(failures);
+  });
 }
