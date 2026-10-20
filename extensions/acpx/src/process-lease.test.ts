@@ -1,4 +1,3 @@
-// ACPX tests cover process lease plugin behavior.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -35,12 +34,17 @@ function makeLease(index: number): AcpxProcessLease {
 
 describe("createAcpxProcessLeaseStore", () => {
   let stateDir = "";
-  let env: NodeJS.ProcessEnv;
+  let store: ReturnType<typeof createAcpxProcessLeaseStore>;
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
     stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-acpx-leases-"));
-    env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    store = createAcpxProcessLeaseStore({
+      store: openAcpxProcessLeaseStateStore((options) =>
+        createPluginStateKeyedStoreForTests("acpx", { ...options, env }),
+      ),
+    });
   });
 
   afterEach(async () => {
@@ -48,16 +52,7 @@ describe("createAcpxProcessLeaseStore", () => {
     await rm(stateDir, { recursive: true, force: true });
   });
 
-  function createStore() {
-    return createAcpxProcessLeaseStore({
-      store: openAcpxProcessLeaseStateStore((options) =>
-        createPluginStateKeyedStoreForTests("acpx", { ...options, env }),
-      ),
-    });
-  }
-
   it("removes terminal leases from the live lease namespace", async () => {
-    const store = createStore();
     const openLease = makeLease(1);
     const closedLease = makeLease(2);
     await store.save(openLease);
@@ -70,7 +65,6 @@ describe("createAcpxProcessLeaseStore", () => {
   });
 
   it("rejects capacity overflow without evicting existing process ownership", async () => {
-    const store = createStore();
     await Promise.all(
       Array.from({ length: ACPX_PROCESS_LEASE_MAX_ENTRIES }, (_, index) =>
         store.save(makeLease(index)),
@@ -87,48 +81,41 @@ describe("createAcpxProcessLeaseStore", () => {
   });
 });
 
-describe("withAcpxLeaseArgs", () => {
-  it("preserves portable lease wrapper args", () => {
-    const command = withAcpxLeaseArgs({
-      command: ["node", "C:/openclaw/acpx/codex-acp-wrapper.mjs", ""],
-      leaseId: "lease test",
-      gatewayInstanceId: "gateway-test",
-    });
-
-    expect(command).toEqual([
-      "node",
-      "C:/openclaw/acpx/codex-acp-wrapper.mjs",
-      "",
-      OPENCLAW_ACPX_LEASE_ID_ARG,
-      "lease test",
-      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-      "gateway-test",
-    ]);
+it("preserves portable lease wrapper args", () => {
+  const command = withAcpxLeaseArgs({
+    command: ["node", "C:/openclaw/acpx/codex-acp-wrapper.mjs", ""],
+    leaseId: "lease test",
+    gatewayInstanceId: "gateway-test",
   });
+
+  expect(command).toEqual([
+    "node",
+    "C:/openclaw/acpx/codex-acp-wrapper.mjs",
+    "",
+    OPENCLAW_ACPX_LEASE_ID_ARG,
+    "lease test",
+    OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+    "gateway-test",
+  ]);
 });
 
-describe("readAcpxProcessLeaseIdentity", () => {
-  it("reads quoted portable lease wrapper args", () => {
-    expect(
-      readAcpxProcessLeaseIdentity(
-        [
-          "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs --label owner's-choice",
-          OPENCLAW_ACPX_LEASE_ID_ARG,
-          "'lease test'",
-          OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-          '"gateway test"',
-        ].join(" "),
-      ),
-    ).toEqual({
-      leaseId: "lease test",
-      gatewayInstanceId: "gateway test",
-    });
-  });
+it("reads quoted portable lease wrapper args", () => {
+  expect(
+    readAcpxProcessLeaseIdentity(
+      [
+        "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs --label owner's-choice",
+        OPENCLAW_ACPX_LEASE_ID_ARG,
+        "'lease test'",
+        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+        '"gateway test"',
+      ].join(" "),
+    ),
+  ).toEqual({ leaseId: "lease test", gatewayInstanceId: "gateway test" });
+});
 
-  it("rejects incomplete lease identity", () => {
-    expect(
-      readAcpxProcessLeaseIdentity(`node wrapper.mjs ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-test`),
-    ).toBeUndefined();
-    expect(readAcpxProcessLeaseIdentity(undefined)).toBeUndefined();
-  });
+it("rejects incomplete lease identity", () => {
+  expect(
+    readAcpxProcessLeaseIdentity(`node wrapper.mjs ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-test`),
+  ).toBeUndefined();
+  expect(readAcpxProcessLeaseIdentity(undefined)).toBeUndefined();
 });

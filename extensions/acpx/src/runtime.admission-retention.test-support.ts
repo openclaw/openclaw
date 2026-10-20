@@ -22,6 +22,8 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
   const directory = path.join(state.root, "peer");
   await fs.mkdir(directory);
   const references: Array<{ label: string; value: WeakRef<object> }> = [];
+  const track = (label: string, value: object) =>
+    references.push({ label, value: new WeakRef(value) });
   const ids: number[] = [];
   let failLaunch = true;
   let lookupResult: "missing" | "error" | undefined;
@@ -33,10 +35,7 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
         if (lookupResult) {
           const generation = acpxOperationScope.getStore()?.generation;
           assert.ok(generation, "Lookup must retain its owner until the read settles");
-          references.push({
-            label: `lookup:${generation.id}`,
-            value: new WeakRef(generation),
-          });
+          track(`lookup:${generation.id}`, generation);
           if (lookupResult === "error") {
             throw new Error("synthetic lookup failure");
           }
@@ -59,13 +58,10 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
         assert.equal(generation.afterReset, scenario === "after-reset");
         ids.push(generation.id);
         if (failLaunch) {
-          references.push({ label: `generation:${generation.id}`, value: new WeakRef(generation) });
+          track(`generation:${generation.id}`, generation);
           if (scenario === "after-reset") {
             assert.ok(generation.delegate);
-            references.push({
-              label: `delegate:${generation.id}`,
-              value: new WeakRef(generation.delegate),
-            });
+            track(`delegate:${generation.id}`, generation.delegate);
           }
           throw new Error("synthetic admission launch failure");
         }

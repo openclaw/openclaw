@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
+import { fixtureSession, type RuntimeHandle } from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
 
 const peer = fileURLToPath(
@@ -28,52 +29,45 @@ it("isolates native delegated writes from classic ACP policy without retaining t
       timeoutMs: 5_000,
     });
     const nativeTarget = {
-      sessionKey: "native",
+      ...fixtureSession("native"),
       agentId: "main",
-      agent: "fixture",
-      mode: "persistent" as const,
       cwd: nativeCwd,
       bridgeSession: { agentId: "main", sessionKey: "native-chat", native: true },
     };
-    const prompt = async (input: Parameters<AcpxRuntime["startTurn"]>[0]) => {
-      const turn = runtime.startTurn(input);
+    const approve = async () => ({ outcome: "allow_once" as const });
+    const prompt = async (handle: RuntimeHandle, requestId: string, approved = false) => {
+      const turn = runtime.startTurn({
+        handle,
+        text: requestId,
+        mode: "prompt",
+        requestId,
+        ...(approved ? { onPermissionRequest: approve } : {}),
+      });
       for await (const event of turn.events) {
         void event;
       }
-      return await turn.result;
+      return (await turn.result).status;
     };
+    const effectPath = (cwd: string) => path.join(cwd, "native-effect.txt");
+    const expectEffect = async () =>
+      expect(await fs.readFile(effectPath(nativeCwd), "utf8")).toBe("approved native effect");
+    const expectNoEffect = async (cwd: string) =>
+      expect(fs.readFile(effectPath(cwd))).rejects.toMatchObject({ code: "ENOENT" });
     try {
       let native = await runtime.ensureSession(nativeTarget);
       const classic = await runtime.ensureSession({
-        sessionKey: "classic",
+        ...fixtureSession("classic"),
         agentId: "main",
-        agent: "fixture",
-        mode: "persistent",
         cwd: classicCwd,
       });
       const [nativeResult, classicResult] = await Promise.all([
-        prompt({
-          handle: native,
-          text: "Write the approved native effect.",
-          mode: "prompt",
-          requestId: "native-allowed",
-          onPermissionRequest: async () => ({ outcome: "allow_once" }),
-        }),
-        prompt({
-          handle: classic,
-          text: "Write the approved native effect.",
-          mode: "prompt",
-          requestId: "classic-allowed",
-        }),
+        prompt(native, "native-allowed", true),
+        prompt(classic, "classic-allowed"),
       ]);
-      expect(nativeResult).toMatchObject({ status: "completed" });
-      expect(await fs.readFile(path.join(nativeCwd, "native-effect.txt"), "utf8")).toBe(
-        "approved native effect",
-      );
-      expect(classicResult).toMatchObject({ status: "failed" });
-      await expect(fs.readFile(path.join(classicCwd, "native-effect.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      expect(nativeResult).toBe("completed");
+      await expectEffect();
+      expect(classicResult).toBe("failed");
+      await expectNoEffect(classicCwd);
 
       await expect(
         runtime.ensureSession({ ...nativeTarget, bridgeSession: undefined }),
@@ -87,28 +81,13 @@ it("isolates native delegated writes from classic ACP policy without retaining t
           await runtime.prepareFreshSession({ handle: native });
           native = await runtime.ensureSession(nativeTarget);
         }
-        await fs.unlink(path.join(nativeCwd, "native-effect.txt"));
-        const unowned = await prompt({
-          handle: native,
-          text: "Write again without a live native approval owner.",
-          mode: "prompt",
-          requestId: `native-unowned-${transition}`,
-        });
-        expect(unowned).toMatchObject({ status: "completed" });
-        await expect(fs.readFile(path.join(nativeCwd, "native-effect.txt"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        const approved = await prompt({
-          handle: native,
-          text: "Write with a new live native approval.",
-          mode: "prompt",
-          requestId: `native-reapproved-${transition}`,
-          onPermissionRequest: async () => ({ outcome: "allow_once" }),
-        });
-        expect(approved).toMatchObject({ status: "completed" });
-        expect(await fs.readFile(path.join(nativeCwd, "native-effect.txt"), "utf8")).toBe(
-          "approved native effect",
+        await fs.unlink(effectPath(nativeCwd));
+        await expect(prompt(native, `native-unowned-${transition}`)).resolves.toBe("completed");
+        await expectNoEffect(nativeCwd);
+        await expect(prompt(native, `native-reapproved-${transition}`, true)).resolves.toBe(
+          "completed",
         );
+        await expectEffect();
       }
     } finally {
       await runtime.shutdown();

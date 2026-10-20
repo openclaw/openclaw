@@ -12,28 +12,24 @@ const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 describe("Pi paired-node session catalog", () => {
   it("bridges list and read requests without undefined transport fields", async () => {
     let provider: TestSessionCatalogProvider | undefined;
-    const invoke = vi
-      .fn()
-      .mockResolvedValueOnce({
-        payloadJSON: JSON.stringify({
-          sessions: [
-            {
-              threadId: "pi-remote",
-              status: "stored",
-              source: "pi-cli",
-              archived: false,
-              canContinue: false,
-              canArchive: false,
-            },
-          ],
-        }),
-      })
-      .mockResolvedValueOnce({
-        payloadJSON: JSON.stringify({
-          threadId: "pi-remote",
-          items: [{ type: "agentMessage", text: "remote answer" }],
-        }),
-      });
+    const invoke = vi.fn();
+    const respond = (payload: unknown) =>
+      invoke.mockResolvedValueOnce({ payloadJSON: JSON.stringify(payload) });
+    const session = (threadId: unknown, source?: string) => ({
+      threadId,
+      status: "stored",
+      source,
+      archived: false,
+      canContinue: false,
+      canArchive: false,
+    });
+    const nodeError = [
+      expect.objectContaining({
+        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
+      }),
+    ];
+    respond({ sessions: [session("pi-remote", "pi-cli")] });
+    respond({ threadId: "pi-remote", items: [{ type: "agentMessage", text: "remote answer" }] });
     const api = {
       pluginConfig: {},
       runtime: {
@@ -63,8 +59,19 @@ describe("Pi paired-node session catalog", () => {
     registerPiSessionCatalog(api);
     const catalog = provider;
     expect(catalog).toBeDefined();
-    await catalog!.list({ hostIds: ["node:node-1"] });
-    await catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" });
+    const list = (cursor?: string) =>
+      catalog!.list({
+        hostIds: ["node:node-1"],
+        ...(cursor === undefined ? {} : { cursors: { "node:node-1": cursor } }),
+      });
+    const read = (cursor?: string) =>
+      catalog!.read({
+        hostId: "node:node-1",
+        threadId: "pi-remote",
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+    await list();
+    await read();
 
     expect(invoke).toHaveBeenNthCalledWith(1, {
       nodeId: "node-1",
@@ -81,106 +88,31 @@ describe("Pi paired-node session catalog", () => {
       scopes: ["operator.write"],
     });
 
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        sessions: [
-          {
-            threadId: 123,
-            status: "stored",
-            archived: false,
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      }),
-    });
-    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        sessions: [
-          {
-            threadId: "--help",
-            status: "stored",
-            archived: false,
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      }),
-    });
-    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        threadId: "pi-remote",
-        items: [{ type: "invalid", text: "bad" }],
-      }),
-    });
-    await expect(catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" })).rejects.toThrow(
-      "invalid transcript page",
-    );
+    respond({ sessions: [session(123)] });
+    await expect(list()).resolves.toEqual(nodeError);
+    respond({ sessions: [session("--help")] });
+    await expect(list()).resolves.toEqual(nodeError);
+    respond({ threadId: "pi-remote", items: [{ type: "invalid", text: "bad" }] });
+    await expect(read()).rejects.toThrow("invalid transcript page");
 
     invoke.mockClear();
-    await expect(
-      catalog!.read({ hostId: "node:node-1", threadId: "pi-remote", cursor: "" }),
-    ).rejects.toThrow("cursor is invalid");
-    await expect(
-      catalog!.list({
-        hostIds: ["node:node-1"],
-        cursors: { "node:node-1": "" },
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
+    await expect(read("")).rejects.toThrow("cursor is invalid");
+    await expect(list("")).resolves.toEqual(nodeError);
     expect(invoke).not.toHaveBeenCalled();
 
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({ sessions: [], nextCursor: " wrapped " }),
-    });
-    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        threadId: "pi-remote",
-        items: [],
-        nextCursor: " wrapped ",
-      }),
-    });
-    await expect(catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" })).rejects.toThrow(
-      "invalid cursor",
-    );
+    respond({ sessions: [], nextCursor: " wrapped " });
+    await expect(list()).resolves.toEqual(nodeError);
+    respond({ threadId: "pi-remote", items: [], nextCursor: " wrapped " });
+    await expect(read()).rejects.toThrow("invalid cursor");
 
     const exactCursor = Buffer.from(JSON.stringify({ offset: 1 }), "utf8").toString("base64url");
-    invoke.mockResolvedValueOnce({ payloadJSON: JSON.stringify({ sessions: [] }) });
-    await catalog!.list({
-      hostIds: ["node:node-1"],
-      cursors: { "node:node-1": exactCursor },
-    });
+    respond({ sessions: [] });
+    await list(exactCursor);
     expect(invoke).toHaveBeenLastCalledWith(
       expect.objectContaining({ params: { cursor: exactCursor } }),
     );
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({ threadId: "pi-remote", items: [] }),
-    });
-    await catalog!.read({
-      hostId: "node:node-1",
-      threadId: "pi-remote",
-      cursor: exactCursor,
-    });
+    respond({ threadId: "pi-remote", items: [] });
+    await read(exactCursor);
     expect(invoke).toHaveBeenLastCalledWith(
       expect.objectContaining({ params: { threadId: "pi-remote", cursor: exactCursor } }),
     );
