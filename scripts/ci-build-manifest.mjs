@@ -987,6 +987,7 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
   "src/state/openclaw-agent-*",
   "src/config/sessions/**",

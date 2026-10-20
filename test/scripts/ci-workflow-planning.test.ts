@@ -176,6 +176,7 @@ describe("PostgreSQL conformance selection", () => {
     [["extensions/workboard/src/store.test.ts"], true],
     [["src/config/zod-schema.database.ts"], true],
     [["scripts/test-database-conformance.mjs"], true],
+    [[".github/actions/postgres-conformance/action.yml"], true],
     [["scripts/test-database-conformance-preload.mjs"], true],
     [["scripts/lib/weighted-test-shards.mts"], true],
     [["config/postgres-conformance-timings.json"], true],
