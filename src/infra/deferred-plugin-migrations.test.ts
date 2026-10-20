@@ -15,7 +15,6 @@ import {
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import * as stateDatabaseHandles from "../state/openclaw-state-db-handle.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -37,7 +36,6 @@ import {
 } from "./deferred-plugin-migrations.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import * as kyselyCache from "./kysely-sync-cache-state.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "./sqlite-worker-contract.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
@@ -65,6 +63,7 @@ describe("deferred configured-plugin migrations", () => {
   };
   let env: NodeJS.ProcessEnv;
   let stateDir: string;
+  const receiptDefaults = { startedAt: 1, finishedAt: null, upsert: true };
   const read = () => readDeferredPluginMigrations({ env });
   const completions = () => readDeferredPluginMigrationCompletions({ env });
   const record = (
@@ -96,15 +95,7 @@ describe("deferred configured-plugin migrations", () => {
 
   function writeReceipt(runId: string, status: string, reportJson: string) {
     runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        recordLegacyMigrationRun(db, {
-          runId,
-          startedAt: 1,
-          finishedAt: null,
-          status,
-          reportJson,
-          upsert: true,
-        }),
+      ({ db }) => recordLegacyMigrationRun(db, { ...receiptDefaults, runId, status, reportJson }),
       { env },
     );
   }
@@ -181,7 +172,7 @@ describe("deferred configured-plugin migrations", () => {
             },
           },
           async () => {
-            const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+            using _ = probe.admission(workerAdmission, (request, grant, admit) => {
               if (
                 request.stage === stage &&
                 isRecord(request.facts) &&
@@ -192,11 +183,7 @@ describe("deferred configured-plugin migrations", () => {
               }
               return admit(request, grant);
             });
-            try {
-              await record();
-            } finally {
-              spy.mockRestore();
-            }
+            await record();
           },
         ),
       ).rejects.toThrow("Plugin repair requester revoked");
@@ -265,7 +252,7 @@ describe("deferred configured-plugin migrations", () => {
 
   it("rechecks obligations created before missing-state publication acquires ownership", () => {
     const acquire = stateOwners.acquireStateDatabaseSchemaLease;
-    const acquisition = vi
+    using _ = vi
       .spyOn(stateOwners, "acquireStateDatabaseSchemaLease")
       .mockImplementationOnce((databasePath) => {
         writePending(pending);
@@ -273,23 +260,19 @@ describe("deferred configured-plugin migrations", () => {
         return acquire(databasePath);
       });
     const output = vi.fn();
-    try {
-      expect(() => publish(output)).toThrow("Plugin migration obligations changed");
-      expect(output).not.toHaveBeenCalled();
-      expect(read()).toEqual([pending]);
-    } finally {
-      acquisition.mockRestore();
-    }
+    expect(() => publish(output)).toThrow("Plugin migration obligations changed");
+    expect(output).not.toHaveBeenCalled();
+    expect(read()).toEqual([pending]);
   });
 
   it("closes historical publication state when statement-cache cleanup fails", () => {
     prepareHistoricalState();
     const open = stateDatabaseHandles.openTrackedStateDatabase;
     let opened: DatabaseSync | undefined;
-    const openedSpy = vi
+    using _ = vi
       .spyOn(stateDatabaseHandles, "openTrackedStateDatabase")
       .mockImplementation((...args) => (opened = open(...args)));
-    const clear = vi.spyOn(kyselyCache, "clearNodeSqliteKyselyCacheForDatabase");
+    using clear = vi.spyOn(kyselyCache, "clearNodeSqliteKyselyCacheForDatabase");
     const output = vi.fn(() => {
       clear.mockImplementationOnce(() => {
         throw new Error("Synthetic statement-cache cleanup failure");
@@ -301,8 +284,6 @@ describe("deferred configured-plugin migrations", () => {
       expect(output).toHaveBeenCalledOnce();
       expect(opened?.isOpen).toBe(false);
     } finally {
-      clear.mockRestore();
-      openedSpy.mockRestore();
       if (opened?.isOpen) {
         opened.close();
       }
@@ -393,30 +374,17 @@ describe("deferred configured-plugin migrations", () => {
 
   it("removes historical completion facts when work is deferred without changing other metadata", async () => {
     const { db } = openOpenClawStateDatabase({ env });
-    const metadata = getNodeSqliteKysely<Pick<DB, "schema_meta">>(db);
-    const checkpointKeys = ["state-migrations", "startup-migrations"];
-    const fixtureKeys = [...checkpointKeys, "unrelated-metadata"];
+    const fixtureKeys = ["state-migrations", "startup-migrations", "unrelated-metadata"];
     const readFixtureMetadata = () =>
-      executeSqliteQuerySync(
-        db,
-        metadata.selectFrom("schema_meta").selectAll().where("meta_key", "in", fixtureKeys),
-      ).rows;
+      db.prepare("SELECT * FROM schema_meta WHERE meta_key IN (?, ?, ?)").all(...fixtureKeys);
     runOpenClawStateWriteTransaction(
       ({ db: writeDb }) => {
-        executeSqliteQuerySync(
-          writeDb,
-          metadata.insertInto("schema_meta").values(
-            fixtureKeys.map((metaKey) => ({
-              meta_key: metaKey,
-              role: "global",
-              schema_version: 3,
-              agent_id: null,
-              app_version: "2026.9.3\n3\ntest-build\nconfig\ndoctor-config\nplugins",
-              created_at: 1,
-              updated_at: 1,
-            })),
-          ),
+        const insert = writeDb.prepare(
+          "INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at) VALUES (?, 'global', 3, NULL, ?, 1, 1)",
         );
+        for (const key of fixtureKeys) {
+          insert.run(key, "2026.9.3\n3\ntest-build\nconfig\ndoctor-config\nplugins");
+        }
       },
       { env },
     );
@@ -512,12 +480,11 @@ describe("deferred configured-plugin migrations", () => {
           ["unrelated-migration", "pending"],
         ] as const) {
           recordLegacyMigrationRun(db, {
+            ...receiptDefaults,
             runId,
-            startedAt: 1,
             finishedAt: 2,
             status,
             reportJson: "{",
-            upsert: true,
           });
         }
       },
@@ -603,47 +570,35 @@ describe("deferred configured-plugin migrations", () => {
 });
 
 describe("deferred plugin migration repair guidance", () => {
-  const pending = {
-    pluginId: "fixture-plugin",
-    reason: "Package repair deferred.",
-    command: "openclaw update repair",
-  };
+  const command = "openclaw update repair";
+  const retry = 'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.';
 
   it.each([
-    { markers: ["OPENCLAW_UPDATE_IN_PROGRESS"], command: pending.command, laterPass: true },
+    {
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      command,
+      next: 'Let the current update or repair finish. If this warning remains afterward, run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
+    },
     // Post-core convergence is the final migration pass, even inside an update child.
     {
-      markers: ["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"],
-      command: pending.command,
-      laterPass: false,
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+      command,
+      next: retry,
     },
-    { markers: [], command: pending.command, laterPass: false },
-    { markers: [], command: "openclaw doctor --fix", laterPass: false },
-  ])(
-    "formats repair guidance for markers $markers / $command",
-    ({ markers, command, laterPass }) => {
-      const message = formatDeferredPluginMigration(
-        { ...pending, command },
-        Object.fromEntries(markers.map((marker) => [marker, "1"])),
-      );
-      expect(message).toContain('Plugin "fixture-plugin" data/settings upgrade is unfinished:');
-      expect(message).toContain(pending.reason);
-      expect(message).toContain("Your existing data and settings have been kept.");
-      if (laterPass) {
-        expect(message).toContain("Let the current update or repair finish.");
-        expect(message).toContain(
-          'If this warning remains afterward, run "openclaw update repair"',
-        );
-      } else {
-        expect(message).not.toContain("Let the current");
-        if (command === pending.command) {
-          expect(message).toContain(
-            'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
-          );
-        } else {
-          expect(message.match(/openclaw doctor --fix/g)).toHaveLength(1);
-        }
-      }
+    { env: {}, command, next: retry },
+    {
+      env: {},
+      command: "openclaw doctor --fix",
+      next: 'Run "openclaw doctor --fix" to retry the upgrade.',
     },
-  );
+  ])("formats repair guidance for $env / $command", ({ env, command: repairCommand, next }) => {
+    const pending = {
+      pluginId: "fixture-plugin",
+      reason: "Package repair deferred.",
+      command: repairCommand,
+    };
+    expect(formatDeferredPluginMigration(pending, env)).toBe(
+      `Plugin "fixture-plugin" data/settings upgrade is unfinished: Package repair deferred. Your existing data and settings have been kept. ${next}`,
+    );
+  });
 });

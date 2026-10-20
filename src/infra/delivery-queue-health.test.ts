@@ -37,6 +37,13 @@ describe("delivery queue health publication", () => {
   let tmpDir: string;
   const QUEUE = "test-q";
   type Seed = Parameters<typeof seedDeliveryQueueEntry>[0];
+  const entryFixture = <const T extends Partial<Seed["entry"]>>(id: string, fields: T) => ({
+    id,
+    enqueuedAt: 1,
+    retryCount: 0,
+    ...fields,
+  });
+  const boundedRetention = { idPrefix: "expiry-", maxAgeMs: 60_000, maxEntries: 10 };
   const seed = (
     entry: Pick<Seed["entry"], "id"> & Partial<Seed["entry"]>,
     status: Seed["status"] = "pending",
@@ -45,7 +52,7 @@ describe("delivery queue health publication", () => {
     seedDeliveryQueueEntry({
       queueName,
       // Terminalization compares serialized entries, including property order.
-      entry: { id: entry.id, enqueuedAt: 1, retryCount: 0, ...entry },
+      entry: entryFixture(entry.id, entry),
       status,
       stateDir,
     });
@@ -80,7 +87,7 @@ describe("delivery queue health publication", () => {
           : [],
       );
       await touchConfig();
-      const requests = vi.spyOn(Worker.prototype, "postMessage");
+      using requests = vi.spyOn(Worker.prototype, "postMessage");
       const observer = observeParentSqlite();
       try {
         expect(await count()).toEqual(expected);
@@ -88,7 +95,6 @@ describe("delivery queue health publication", () => {
         expect(requests).not.toHaveBeenCalled();
         expect(observer.counts).toEqual(emptySqliteCounts());
       } finally {
-        requests.mockRestore();
         observer.restore();
       }
     },
@@ -96,15 +102,12 @@ describe("delivery queue health publication", () => {
 
   it("refreshes health after worker failure and in-process completion", async () => {
     const queueName = "outbound-preparing-v1";
-    const entry = {
-      id: "health-worker",
-      enqueuedAt: 1,
-      retryCount: 0,
-      retainOnFailure: true as const,
-      preparationState: "claimed" as const,
+    const entry = entryFixture("health-worker", {
+      retainOnFailure: true,
+      preparationState: "claimed",
       preparationOwnerId: "health-owner",
       preparationLeaseExpiresAt: Date.now() + 60_000,
-    };
+    });
     seed(entry, "pending", queueName);
     const context = captureDeliveryQueueStateContext(stateDir);
     expect(await countFailedDeliveryQueueEntries(stateDir, context)).toEqual([]);
@@ -147,7 +150,7 @@ describe("delivery queue health publication", () => {
   );
 
   it("does not publish rolled-back health or retain health across database replacement", async () => {
-    const entry = { id: "health-rollback", enqueuedAt: 1, retryCount: 0 };
+    const entry = entryFixture("health-rollback", {});
     seed(entry, "failed");
     const expected = await count();
     const database = openTestDatabase();
@@ -168,69 +171,56 @@ describe("delivery queue health publication", () => {
   it("skips empty tombstone sweeps until a producer commits a terminal row", async () => {
     await pruneExpiredDeliveryQueueTombstones(stateDir);
     await touchConfig();
-    const requests = vi.spyOn(Worker.prototype, "postMessage");
-    try {
-      await pruneExpiredDeliveryQueueTombstones(stateDir);
-      await pruneExpiredDeliveryQueueTombstones(stateDir);
-      expect(requests).not.toHaveBeenCalled();
+    using requests = vi.spyOn(Worker.prototype, "postMessage");
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
+    expect(requests).not.toHaveBeenCalled();
 
-      seed({ id: "expired-ordinary", enqueuedAt: Date.now() - 31 * 86_400_000 }, "completed");
-      await pruneExpiredDeliveryQueueTombstones(stateDir);
-      expect(load("expired-ordinary")).toBeNull();
+    seed({ id: "expired-ordinary", enqueuedAt: Date.now() - 31 * 86_400_000 }, "completed");
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
+    expect(load("expired-ordinary")).toBeNull();
 
-      await pruneExpiredDeliveryQueueTombstones(stateDir);
-      requests.mockClear();
-      await pruneExpiredDeliveryQueueTombstones(stateDir);
-      expect(requests).not.toHaveBeenCalled();
-    } finally {
-      requests.mockRestore();
-    }
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
+    requests.mockClear();
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
+    expect(requests).not.toHaveBeenCalled();
   });
 
   it("expires a newly terminalized bounded receipt only after its exact deadline", () => {
     const database = openTestDatabase();
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    const completionRetention = { idPrefix: "expiry-", maxAgeMs: 60_000, maxEntries: 10 };
-    const entry = {
-      id: "expiry-bounded",
+    using now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const entry = entryFixture("expiry-bounded", {
       enqueuedAt: Date.now(),
-      retryCount: 0,
-      completionRetention,
-    };
+      completionRetention: boundedRetention,
+    });
+    pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+    seed(entry);
+    expect(
+      terminalizePendingDeliveryQueueEntryInDatabase(
+        database,
+        prepareDeliveryQueueTerminalEntry({ queueName: QUEUE, id: entry.id, entry }),
+      ),
+    ).toEqual({ status: "terminalized", retained: true });
+    pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+    const observer = observeParentSqlite();
     try {
+      now.mockReturnValue(1_060_000);
       pruneExpiredDeliveryQueueTombstonesInDatabase(database);
-      seed(entry);
-      expect(
-        terminalizePendingDeliveryQueueEntryInDatabase(
-          database,
-          prepareDeliveryQueueTerminalEntry({ queueName: QUEUE, id: entry.id, entry }),
-        ),
-      ).toEqual({ status: "terminalized", retained: true });
-      pruneExpiredDeliveryQueueTombstonesInDatabase(database);
-      const observer = observeParentSqlite();
-      try {
-        now.mockReturnValue(1_060_000);
-        pruneExpiredDeliveryQueueTombstonesInDatabase(database);
-        expect(observer.counts).toEqual(emptySqliteCounts());
-      } finally {
-        observer.restore();
-      }
-      expect(load(entry.id)).not.toBeNull();
-      now.mockReturnValue(1_060_001);
-      pruneExpiredDeliveryQueueTombstonesInDatabase(database);
-      expect(load(entry.id)).toBeNull();
+      expect(observer.counts).toEqual(emptySqliteCounts());
     } finally {
-      now.mockRestore();
+      observer.restore();
     }
+    expect(load(entry.id)).not.toBeNull();
+    now.mockReturnValue(1_060_001);
+    pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+    expect(load(entry.id)).toBeNull();
   });
 
   it("does not retain a rolled-back empty expiry over a committed tombstone", () => {
     const database = openTestDatabase();
-    const entry = {
-      id: "expiry-rollback",
+    const entry = entryFixture("expiry-rollback", {
       enqueuedAt: Date.now() - 31 * 86_400_000,
-      retryCount: 0,
-    };
+    });
     seed(entry, "completed");
     expect(() =>
       runSqliteImmediateTransactionSync(database.db, () => {
@@ -247,11 +237,7 @@ describe("delivery queue health publication", () => {
 
   it("keeps very long bounded retention exact without summing timestamps in JavaScript", () => {
     const database = openTestDatabase();
-    const completionRetention = {
-      idPrefix: "expiry-",
-      maxAgeMs: Number.MAX_SAFE_INTEGER,
-      maxEntries: 10,
-    };
+    const completionRetention = { ...boundedRetention, maxAgeMs: Number.MAX_SAFE_INTEGER };
     for (const [id, enqueuedAt] of [
       ["future", Date.now()],
       ["past", 1],

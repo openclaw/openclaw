@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -10,6 +10,8 @@ import { getPairedDevice, listDevicePairing, requestDevicePairing } from "./devi
 
 const roots = createSuiteTempRootTracker({ prefix: "openclaw-pairing-approval-policy-" });
 const operator = { deviceId: "browser", role: "operator", scopes: ["operator.read"] };
+const caller = { callerScopes: operator.scopes };
+const profile = { roles: [operator.role], scopes: operator.scopes };
 const requestOperator = (baseDir: string) =>
   requestDevicePairing({ ...operator, publicKey: "browser-key" }, baseDir);
 const issueToken = (baseDir: string, generation: string, isIssuanceCurrent?: () => boolean) =>
@@ -47,68 +49,53 @@ afterAll(async () => {
   await roots.cleanup();
 });
 
-describe("automatic pairing policy at commit", () => {
-  it("preserves the current token when a stale handshake waits for the issuance lock", async () => {
-    const baseDir = await roots.make();
-    const pending = await requestOperator(baseDir);
-    await approveDevicePairing(
-      pending.request.requestId,
-      { callerScopes: ["operator.read"] },
-      baseDir,
-    );
-    const original = await issueToken(baseDir, "current");
-    assert(original);
-    let allowed = true;
-    await withHeldPairingLock(async (unlock) => {
-      const issuing = issueToken(baseDir, "stale", () => allowed);
-      allowed = false;
-      await unlock();
-      expect(Boolean(await issuing)).toBe(false);
-      const current = await getPairedDevice("browser", baseDir);
-      const currentToken = current?.tokens?.operator;
-      assert(currentToken);
-      expect(currentToken.token === original.token).toBe(true);
-      expect(currentToken.issuer?.generation).toBe("current");
+it("preserves the current token when a stale handshake waits for the issuance lock", async () => {
+  const baseDir = await roots.make();
+  const pending = await requestOperator(baseDir);
+  await approveDevicePairing(pending.request.requestId, caller, baseDir);
+  const original = await issueToken(baseDir, "current");
+  assert(original);
+  let allowed = true;
+  await withHeldPairingLock(async (unlock) => {
+    const issuing = issueToken(baseDir, "stale", () => allowed);
+    allowed = false;
+    await unlock();
+    expect(Boolean(await issuing)).toBe(false);
+    const current = await getPairedDevice("browser", baseDir);
+    expect(current?.tokens?.operator).toMatchObject({
+      token: original.token,
+      issuer: { generation: "current" },
     });
   });
-
-  it.each(["owner", "bootstrap"] as const)(
-    "keeps %s approval pending when its policy is revoked while waiting for the lock",
-    async (lane) => {
-      const baseDir = await roots.make();
-      const pending = await requestOperator(baseDir);
-      let allowed = true;
-      const options = { isApprovalCurrent: () => allowed };
-      const approve = () =>
-        lane === "bootstrap"
-          ? approveBootstrapDevicePairing(
-              pending.request.requestId,
-              { roles: ["operator"], scopes: ["operator.read"] },
-              options,
-              baseDir,
-            )
-          : approveDevicePairing(
-              pending.request.requestId,
-              { ...options, callerScopes: ["operator.read"] },
-              baseDir,
-            );
-      await withHeldPairingLock(async (unlock) => {
-        const approval = approve();
-        allowed = false;
-        await unlock();
-
-        await expect(approval).resolves.toEqual({
-          status: "forbidden",
-          reason: "approval-policy-changed",
-        });
-        await expect(getPairedDevice("browser", baseDir)).resolves.toBeNull();
-        expect((await listDevicePairing(baseDir)).pending.map((entry) => entry.requestId)).toEqual([
-          pending.request.requestId,
-        ]);
-
-        allowed = true;
-        await expect(approve()).resolves.toMatchObject({ status: "approved" });
-      });
-    },
-  );
 });
+
+it.each(["owner", "bootstrap"] as const)(
+  "keeps %s approval pending when its policy is revoked while waiting for the lock",
+  async (lane) => {
+    const baseDir = await roots.make();
+    const pending = await requestOperator(baseDir);
+    let allowed = true;
+    const options = { isApprovalCurrent: () => allowed };
+    const approve = () =>
+      lane === "bootstrap"
+        ? approveBootstrapDevicePairing(pending.request.requestId, profile, options, baseDir)
+        : approveDevicePairing(pending.request.requestId, { ...options, ...caller }, baseDir);
+    await withHeldPairingLock(async (unlock) => {
+      const approval = approve();
+      allowed = false;
+      await unlock();
+
+      await expect(approval).resolves.toEqual({
+        status: "forbidden",
+        reason: "approval-policy-changed",
+      });
+      await expect(getPairedDevice("browser", baseDir)).resolves.toBeNull();
+      expect((await listDevicePairing(baseDir)).pending.map((entry) => entry.requestId)).toEqual([
+        pending.request.requestId,
+      ]);
+
+      allowed = true;
+      await expect(approve()).resolves.toMatchObject({ status: "approved" });
+    });
+  },
+);

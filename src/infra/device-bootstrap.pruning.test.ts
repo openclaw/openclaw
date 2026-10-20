@@ -49,14 +49,20 @@ describe("device setup completion pruning", () => {
             ? "prune"
             : null,
     );
-    const execute = vi.spyOn(database.db, "exec");
+    using cleanup = new DisposableStack();
+    cleanup.defer(statements.restore);
+    const execute = cleanup.use(vi.spyOn(database.db, "exec"));
     // Observe command SQL locally; the worker cases below exercise the live host port.
-    const admission = vi
-      .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
-      .mockImplementation(() => undefined);
-    const publication = vi
-      .spyOn(workerAdmission, "deferSqliteWorkerCommitReceipt")
-      .mockImplementation(() => undefined);
+    cleanup.use(
+      vi
+        .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
+        .mockImplementation(() => undefined),
+    );
+    cleanup.use(
+      vi
+        .spyOn(workerAdmission, "deferSqliteWorkerCommitReceipt")
+        .mockImplementation(() => undefined),
+    );
     const prune = (nowMs: number) =>
       runWithSqliteWorkerStateContext({ environment: env }, () =>
         deviceBootstrapOperations["bootstrap.prune"](
@@ -71,16 +77,9 @@ describe("device setup completion pruning", () => {
           },
         ),
       );
-    try {
-      expect(prune(1_000)).toMatchObject({ removed: 0, nextExpiryAtMs: null });
-      expect(statements.counts).toEqual({ expiry: 1, prune: 0 });
-      expect(execute.mock.calls.some(([sql]) => /^(?:BEGIN|SAVEPOINT)\b/iu.test(sql))).toBe(false);
-    } finally {
-      admission.mockRestore();
-      publication.mockRestore();
-      execute.mockRestore();
-      statements.restore();
-    }
+    expect(prune(1_000)).toMatchObject({ removed: 0, nextExpiryAtMs: null });
+    expect(statements.counts).toEqual({ expiry: 1, prune: 0 });
+    expect(execute.mock.calls.some(([sql]) => /^(?:BEGIN|SAVEPOINT)\b/iu.test(sql))).toBe(false);
   });
 
   it("refreshes the host expiry cache after a worker write and prunes at its deadline", async () => {
@@ -99,42 +98,37 @@ describe("device setup completion pruning", () => {
         startDevicePairSetupMaintenance({ scheduler: scheduler.scope(), onError });
         await clock.wake();
         expect(clock.armedAtMs).toBeNull();
-        const issued = await issueDevicePairSetupBootstrapToken({
+        const { token, setupId } = await issueDevicePairSetupBootstrapToken({
           baseDir,
           profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
         });
+        const credential = { baseDir, token, deviceId: "device-123" };
+        const completion = () => readDevicePairSetupCompletion({ baseDir, setupId });
+        const expiresAtMs = recordedAtMs + 20 * 60 * 1000;
         await verifyDeviceBootstrapToken({
-          token: issued.token,
-          deviceId: "device-123",
+          ...credential,
           publicKey: "public-key-123",
           role: "node",
           scopes: [],
-          baseDir,
         });
         await consumeDeviceBootstrapTokenWithSetupCompletion({
-          baseDir,
-          token: issued.token,
-          deviceId: "device-123",
+          ...credential,
           completedAtMs: recordedAtMs,
         });
-        await expect(
-          readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
-        ).resolves.toMatchObject({
-          setupId: issued.setupId,
+        await expect(completion()).resolves.toMatchObject({
+          setupId,
           deviceId: "device-123",
-          retainUntilMs: recordedAtMs + 20 * 60 * 1000,
+          retainUntilMs: expiresAtMs,
         });
         await clock.wake();
-        expect(clock.armedAtMs).toBe(recordedAtMs + 20 * 60 * 1000);
+        expect(clock.armedAtMs).toBe(expiresAtMs);
 
-        await clock.advanceTo(recordedAtMs + 20 * 60 * 1000 - 1);
-        expect(readRetainedSetupIds()).toEqual([{ setup_id: issued.setupId }]);
-        await clock.advanceTo(recordedAtMs + 20 * 60 * 1000);
+        await clock.advanceTo(expiresAtMs - 1);
+        expect(readRetainedSetupIds()).toEqual([{ setup_id: setupId }]);
+        await clock.advanceTo(expiresAtMs);
         // The status reader also prunes; inspect storage before invoking it.
         expect(readRetainedSetupIds()).toEqual([]);
-        await expect(
-          readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
-        ).resolves.toBeNull();
+        await expect(completion()).resolves.toBeNull();
         expect(onError).not.toHaveBeenCalled();
 
         await scheduler.stop();
