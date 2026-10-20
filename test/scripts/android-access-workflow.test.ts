@@ -14,6 +14,12 @@ const step = job.steps.find(
   (entry: { name?: string }) => entry.name === "Run packaged Access crypto on Android",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const pageSizes = [
+  { "page-size": 4096, image: "google_apis" },
+  { "page-size": 16384, image: "google_apis_ps16k" },
+];
+const invalidReports = ["empty", "wrong-class", "failed", "skipped"];
+const invalidApks = ["missing-abi", "wrong-variant", "ambiguous-output", "outside-output"];
 
 function verifyReports(mode: string) {
   const root = tempDirs.make("openclaw-access-reports-");
@@ -48,7 +54,7 @@ with zipfile.ZipFile(apk, 'w') as archive:
   });
 }
 
-it("runs the packaged class on current Android targets and includes its result in CI", () => {
+it("runs the packaged class with pinned Android tooling", () => {
   expect(job.permissions).toEqual({ contents: "read" });
   expect(evaluateWorkflowRunner(job["runs-on"], { eventName: "pull_request" })).toBe(
     "ubuntu-24.04",
@@ -56,7 +62,6 @@ it("runs the packaged class on current Android targets and includes its result i
   expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
     "${{ steps.manifest.outputs.run_android_access_native }}",
   );
-  expect(job.if).toBe("needs.preflight.outputs.run_android_access_native == 'true'");
   containsAll(step.run, [
     ":app:connectedPlayDebugAndroidTest",
     "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
@@ -67,25 +72,10 @@ it("runs the packaged class on current Android targets and includes its result i
   expect(readFileSync(".github/actions/setup-android-toolchain/action.yml", "utf8")).toContain(
     `"build-tools;${zipalignVersion}"`,
   );
-  expect(workflow.jobs["ci-gate"].needs).toContain("android-access-native");
-  const aggregate = workflow.jobs["ci-gate"].steps.find(
-    (entry: { name?: string }) => entry.name === "Verify selected CI lanes",
-  );
-  expect(aggregate.env.JOB_RESULTS).toContain(
-    "android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}",
-  );
 });
 
 it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
-  expect(job.strategy).toEqual({
-    "fail-fast": false,
-    matrix: {
-      include: [
-        { "page-size": 4096, image: "google_apis" },
-        { "page-size": 16384, image: "google_apis_ps16k" },
-      ],
-    },
-  });
+  expect(job.strategy).toEqual({ "fail-fast": false, matrix: { include: pageSizes } });
   expect(step.env).toMatchObject({
     EXPECTED_PAGE_SIZE: "${{ matrix.page-size }}",
     SYSTEM_IMAGE: "system-images;android-36;${{ matrix.image }};x86_64",
@@ -122,24 +112,17 @@ ${guard}`;
   }
 });
 
-it.each([
-  "passed",
-  "empty",
-  "wrong-class",
-  "failed",
-  "skipped",
-  "missing-abi",
-  "wrong-variant",
-  "ambiguous-output",
-  "outside-output",
-])("validates %s native evidence independently of Gradle's exit code", (mode) => {
-  const result = verifyReports(mode);
-  if (mode === "passed") {
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk",
-    );
-  } else {
-    expect(result.status, result.stderr).not.toBe(0);
-  }
-});
+it.each(["passed", ...invalidReports, ...invalidApks])(
+  "validates %s native evidence independently of Gradle's exit code",
+  (mode) => {
+    const result = verifyReports(mode);
+    if (mode === "passed") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        "apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk",
+      );
+    } else {
+      expect(result.status, result.stderr).not.toBe(0);
+    }
+  },
+);

@@ -104,11 +104,7 @@ it.each([
   const facts = nativeFacts(
     phases.map((phase) => `OPENCLAW_ANDROID_PHASE_READY ${phase}\n`).join("") + text,
   );
-  expect(facts).toEqual({
-    ...nativeDefaults,
-    [expected]: true,
-    phaseReady: phaseReady(true),
-  });
+  expect(facts).toEqual({ ...nativeDefaults, [expected]: true, phaseReady: phaseReady(true) });
   expect(JSON.stringify(facts)).not.toMatch(
     /private|token|INSTRUMENTATION_|Process crashed|OK \(1 test\)/u,
   );

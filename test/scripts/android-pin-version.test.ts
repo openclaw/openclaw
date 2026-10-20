@@ -62,10 +62,7 @@ it.each(pinCases)("pins $name", ({ options, packageVersion, version, code }) => 
     prefix: "openclaw-android-pin-",
   });
   const result = pinAndroidVersion({
-    explicitVersion: "2026.6.5",
-    explicitVersionCode: null,
-    fromGateway: false,
-    rootDir,
+    ...parseArgs(["--version", "2026.6.5", "--root", rootDir]),
     sync,
     ...options,
   });

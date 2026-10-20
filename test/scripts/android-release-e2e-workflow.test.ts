@@ -23,8 +23,8 @@ ok(qualify, "Android validation must have its qualification job");
 const selectionDir = "${{ env.GATEWAY_SELECTION_DIR }}";
 const runnerTemp = "${{ runner.temp }}";
 
-function evaluateAdmission(condition: string, context: Record<string, unknown>): boolean {
-  return Boolean(runInNewContext(condition.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), context));
+function admission(condition: string, context: Record<string, unknown>) {
+  return expect(Boolean(runInNewContext(condition.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), context)));
 }
 
 const sha = "a".repeat(40);
@@ -51,13 +51,11 @@ it.each([
     run_android_job: "true",
     ...change,
   };
-  expect(
-    evaluateAdmission(job.if, {
-      github: { event_name: defaults.event_name, sha },
-      inputs: { release_gate: defaults.release_gate },
-      needs: { preflight: { outputs: defaults } },
-    }),
-  ).toBe(selected);
+  admission(job.if, {
+    github: { event_name: defaults.event_name, sha },
+    inputs: { release_gate: defaults.release_gate },
+    needs: { preflight: { outputs: defaults } },
+  }).toBe(selected);
 });
 
 it.each(["success", "failure", "cancelled", "skipped"])(
@@ -77,9 +75,9 @@ it.each(["success", "failure", "cancelled", "skipped"])(
       vars: {},
       cancelled: () => false,
     };
-    expect(evaluateAdmission(storeQualify.if ?? "", context)).toBe(true);
+    admission(storeQualify.if ?? "", context).toBe(true);
     expect(release.needs).toBe("qualify");
-    expect(evaluateAdmission(release.if ?? "", context)).toBe(result === "success");
+    admission(release.if ?? "", context).toBe(result === "success");
     expect(storeQualify.with).toEqual({ target_sha: "${{ github.sha }}" });
     expect(storeQualify.permissions).toEqual({ actions: "read", contents: "read" });
   },
