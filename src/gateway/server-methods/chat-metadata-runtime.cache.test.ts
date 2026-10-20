@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
-import { onTestFinished, expect, test, vi } from "vitest";
+import { onTestFinished, assert, expect, test, vi } from "vitest";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
@@ -18,9 +18,7 @@ test("rejects a retired owner instead of retrying compact metadata indefinitely"
   isCurrent
     .mockClear()
     .mockReturnValueOnce(false)
-    .mockImplementation(() => {
-      throw new Error("Compact metadata repeatedly read a retired owner");
-    });
+    .mockImplementation(() => assert.fail("Compact metadata repeatedly read a retired owner"));
   await expect(harness.read({ includeModels: false })).rejects.toThrow(
     'prepared chat metadata owner retired for agent "main"',
   );
@@ -31,19 +29,11 @@ test("projects each session's account provenance when metadata reuses its catalo
   const harness = createChatMetadataHarness();
   onTestFinished(() => harness.runtime.stop());
   await harness.refresh();
+  const id = "test:shared";
   for (const source of ["user", "user-link", "user"] as const) {
-    const metadata = await harness.read({
-      sessionEntry: {
-        authProfileOverride: "test:shared",
-        authProfileOverrideSource: source,
-      },
-    });
-    expect(metadata.accountSelection).toEqual({
-      kind: "shared",
-      authProfileId: "test:shared",
-      label: "test:shared",
-      source,
-    });
+    const sessionEntry = { authProfileOverride: id, authProfileOverrideSource: source };
+    const { accountSelection } = await harness.read({ sessionEntry });
+    expect(accountSelection).toEqual({ kind: "shared", authProfileId: id, label: id, source });
   }
   expect(harness.buildProjection).toHaveBeenCalledOnce();
 });
@@ -52,22 +42,17 @@ test.each(["neutral", "profile"] as const)(
   "releases session entries after caching a %s catalog",
   async (variant) => {
     class SessionInput {
-      sessionId = "retired-input";
       authProfileOverride = variant === "profile" ? "test:shared" : undefined;
     }
     const control = new WeakRef({});
-    expect(control.deref()).toBeDefined();
     const harness = createChatMetadataHarness();
     onTestFinished(() => harness.runtime.stop());
     await harness.refresh();
     const metadata = await harness.read({ sessionEntry: new SessionInput() });
     await setImmediate();
-    const retained = queryObjects(SessionInput);
+    expect(queryObjects(SessionInput)).toBe(0);
     expect(control.deref()).toBeUndefined();
-    expect(retained).toBe(0);
-    expect(await harness.read()).toMatchObject({
-      models: metadata.models,
-    });
+    expect(await harness.read()).toMatchObject({ models: metadata.models });
     expect(metadata.models).toEqual([expect.objectContaining({ id: "first" })]);
   },
 );

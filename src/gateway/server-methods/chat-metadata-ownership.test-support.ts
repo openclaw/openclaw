@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { expect, it, type Mock } from "vitest";
+import { assert, expect, it, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 type PersonalMetadataFixture = {
@@ -30,11 +31,7 @@ function registerCases(
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       const fixture = create();
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      expect(await run(fixture, kind)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
+      expectRpcError(await run(fixture, kind), { code: "FORBIDDEN" });
     });
   });
 }
@@ -48,12 +45,10 @@ export function registerMetadataCallerCases(create: () => PersonalMetadataFixtur
       client.connect.scopes = ["operator.admin"];
       let requestedProfile = authProfileId;
       if (caller === "foreign admin") {
-        const {
-          id: profileId,
-          displayName,
-          updatedAt,
-        } = ensureProfileForEmail("metadata-other@example.test");
-        client.authenticatedUserProfile = { profileId, displayName, updatedAt, hasAvatar: false };
+        assert(client.authenticatedUserProfile);
+        client.authenticatedUserProfile.profileId = ensureProfileForEmail(
+          "metadata-other@example.test",
+        ).id;
       } else if (caller === "unidentified admin") {
         delete client.authenticatedUserProfile;
       } else if (caller === "synthetic owner") {

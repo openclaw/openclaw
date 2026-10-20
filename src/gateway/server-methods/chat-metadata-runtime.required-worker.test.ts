@@ -107,10 +107,7 @@ test.each([
   { agentHarnessId: "codex", modelSelectionLocked: true, agentRuntimeOverride: "openclaw" },
 ])("retains upstream availability for explicit runtime selection %j", async (sessionEntry) => {
   const harness = await workerHarness();
-  const result = await harness.read({
-    sessionKey: "agent:main:saved",
-    sessionEntry,
-  });
+  const result = await harness.read({ sessionKey: "agent:main:saved", sessionEntry });
   // Required placement does not override explicit runtime/account choices.
   expect(result.models).toEqual(models);
 });

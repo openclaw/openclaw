@@ -33,6 +33,7 @@ import {
   prepareAttachmentFixture,
 } from "./chat-send-attachments.test-support.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const it = test.extend<{ state: OpenClawTestState }>({
@@ -82,14 +83,6 @@ async function unexpectedWorkspaceAccess(): Promise<never> {
   throw new Error("unexpected workspace access");
 }
 
-function expectUnavailable(respond: unknown, error: Record<string, unknown> = {}) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "UNAVAILABLE", ...error }),
-  );
-}
-
 it.for(["off", "all"] as const)(
   "prepares both owners' global attachments with sandbox %s",
   async (mode, { state }) => {
@@ -103,11 +96,7 @@ it.for(["off", "all"] as const)(
           agentId,
           sessionKey: "global",
         }),
-        session: {
-          cfg,
-          sessionKey: "global",
-          agentId,
-        },
+        session: { cfg, sessionKey: "global", agentId },
       });
       expect(respond.mock.calls).toEqual([]);
       assert(result.ok, "attachment preparation failed");
@@ -189,7 +178,8 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
     });
     if (selection === "unrelated" || selection === "removed") {
       expect(result.ok).toBe(false);
-      expectUnavailable(respond, {
+      expectRpcError(respond, {
+        code: "UNAVAILABLE",
         message: expect.stringContaining("Local sandbox managed workspace owner changed"),
       });
       continue;
@@ -242,7 +232,7 @@ it.for([
     if (canTransfer && stopped) {
       expect(prepared.ok).toBe(false);
       expect(sandboxSpy).not.toHaveBeenCalled();
-      expectUnavailable(respond);
+      expectRpcError(respond, { code: "UNAVAILABLE" });
       return;
     }
     assert(prepared.ok, "attachment preparation failed");
@@ -440,7 +430,10 @@ it.for([
           expect(stageSpy).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: signal }));
         }
       } else {
-        expectUnavailable(respond, { message: expect.stringContaining(ordinaryFailure.message) });
+        expectRpcError(respond, {
+          code: "UNAVAILABLE",
+          message: expect.stringContaining(ordinaryFailure.message),
+        });
         const failure = failureSpy.mock.calls[0]?.[2];
         assert(
           failure instanceof attachments.MediaOffloadError,
