@@ -1,10 +1,9 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import type { CronJob, CronRunLogEntry } from "../api/types.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import type { CronRunLogEntry } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { cronJob, cronList, cronRuns, openCronHistory } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron recorded delivery suppression",
@@ -13,41 +12,33 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("shows recorded suppression independently of delivery failure in both history views", async () => {
-    const job: CronJob = {
-      id: "delivery-history-proof",
-      name: "Delivery history proof",
-      enabled: true,
+    const job = cronJob("delivery-history-proof", "Delivery history proof", {
       createdAtMs: 1_000,
       updatedAtMs: 2_000,
-      schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Check for pending work." },
       delivery: { mode: "announce", channel: "last", bestEffort: true },
-      state: {},
-    };
+    });
+    const completedRun = {
+      jobId: job.id,
+      action: "finished",
+      status: "ok",
+      completionStatus: "succeeded",
+      delivered: false,
+      deliveryStatus: "not-delivered",
+      summary: "Polling completed.",
+    } as const;
     const entries: CronRunLogEntry[] = [
       {
         ts: 4_000,
-        jobId: job.id,
-        action: "finished",
-        status: "ok",
-        completionStatus: "succeeded",
-        delivered: false,
-        deliveryStatus: "not-delivered",
+        ...completedRun,
         deliverySuppressionReason: "silent",
-        summary: "Polling completed.",
       },
       {
         ts: 3_000,
-        jobId: job.id,
-        action: "finished",
-        status: "ok",
-        completionStatus: "succeeded",
-        delivered: false,
-        deliveryStatus: "not-delivered",
+        ...completedRun,
         deliveryError: "Synthetic delivery target unavailable.",
-        summary: "Polling completed.",
       },
     ];
     await suite.withPage(
@@ -57,23 +48,8 @@ suite.define(() => {
         page.on("pageerror", (error) => pageErrors.push(error.message));
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "cron.list": cronListResponseFixture({
-              jobs: [job],
-              snapshotRevision: "delivery-history-proof",
-              total: 1,
-              offset: 0,
-              limit: 50,
-              nextOffset: null,
-              hasMore: false,
-            }),
-            "cron.runs": {
-              entries,
-              total: entries.length,
-              offset: 0,
-              limit: 50,
-              nextOffset: null,
-              hasMore: false,
-            },
+            "cron.list": cronListResponseFixture(cronList([job], "delivery-history-proof")),
+            "cron.runs": cronRuns(entries),
             "cron.status": { enabled: true, triggersEnabled: true, jobs: 1 },
           },
         });
@@ -82,23 +58,7 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
 
         for (const scope of ["all", "job"] as const) {
-          if (scope === "job") {
-            await page.locator('[data-test-id="cron-tab-all"]').click();
-            await page
-              .locator(`[data-test-id="cron-row-${job.id}"] .cron-table__name-text`)
-              .click();
-            await page.locator('[data-test-id="cron-detail-tab-history"]').click();
-          }
-          await expect
-            .poll(async () =>
-              (await gateway.getRequests("cron.runs")).some((request) => {
-                const params = request.params as { scope?: string; id?: string };
-                return params.scope === scope && (scope === "all" || params.id === job.id);
-              }),
-            )
-            .toBe(true);
-          const history = page.locator(scope === "all" ? ".cron-activity" : ".cron-history");
-          await history.waitFor({ state: "visible" });
+          const history = await openCronHistory(page, gateway, job.id, scope);
           const runs = history.locator(".cron-run-entry");
           await expect.poll(() => runs.count()).toBe(2);
           const suppressed = runs.nth(0);
@@ -119,16 +79,6 @@ suite.define(() => {
           expect(await suppressed.textContent()).not.toContain(
             "Synthetic delivery target unavailable.",
           );
-          const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR;
-          const artifactDir = artifactRoot
-            ? createControlUiE2eArtifactDir("cron-run-suppression", artifactRoot)
-            : undefined;
-          if (artifactDir) {
-            // Only the synthetic suppressed row is captured, never the error row.
-            await suppressed.screenshot({
-              path: path.join(artifactDir, `${scope}-suppressed.png`),
-            });
-          }
           // Keep both consumers observable in the original failing run.
           expect
             .soft(await suppressed.textContent(), `${scope} recorded suppression`)
