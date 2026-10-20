@@ -1,23 +1,21 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
-import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
+export { activateSessionMenuValue as selectFilter } from "../app-sidebar-menu.ts";
 import * as S from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
+import { nextFrame } from "../modal-dialog.ts";
 import { flush } from "../solid-settle.ts";
+import { agentList, sessionList } from "./compact.test-support.ts";
 
 type Row = GatewaySessionRow;
-export const roster: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
-  agents: [
-    { id: "main", name: "Harbor", identity: { emoji: "⚓" } },
-    { id: "recent", name: "Scout" },
-    { id: "working", name: "Forge" },
-    { id: "system", name: "System helper", kind: "system" },
-  ],
-};
+export const roster = agentList([
+  { id: "main", name: "Harbor", identity: { emoji: "⚓" } },
+  { id: "recent", name: "Scout" },
+  { id: "working", name: "Forge" },
+  { id: "system", name: "System helper", kind: "system" },
+]);
 export const owners = [
   { type: "human", id: "profile-ada", label: "Ada" },
   { type: "human", id: "profile-sam", label: "Sam" },
@@ -72,20 +70,10 @@ export async function mountRoster(
         child("archived", "archive", 2_000, 0, { archived: true, unread: true }),
       ];
     });
-  const result: SessionsListResult = {
-    ts: now,
-    path: "",
-    count: fixtureRows.length,
-    defaults: { model: null, modelProvider: null, contextTokens: null },
-    owners: [...owners],
-    sessions: fixtureRows,
-  };
+  const result: SessionsListResult = { ...sessionList(fixtureRows, now), owners: [...owners] };
   const request = createGatewayRequestMock(async (method, params) => {
-    if (method === "sessions.list") {
-      return result;
-    }
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
+    if (method === "sessions.list" || method === "sessions.subscribe") {
+      return method === "sessions.list" ? result : { subscribed: true };
     }
     if (
       method === "sessions.describe" &&
@@ -128,9 +116,7 @@ export async function mountRoster(
 
 export async function settleRoster(sidebar: S.SidebarLifecycleState) {
   if ("__vitest_browser__" in globalThis) {
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await nextFrame();
   }
   await sidebar.updateComplete;
   await vi.dynamicImportSettled();
@@ -138,25 +124,21 @@ export async function settleRoster(sidebar: S.SidebarLifecycleState) {
   await sidebar.updateComplete;
 }
 
-export function agentIds(sidebar: HTMLElement) {
-  return [...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-roster__row")].map(
-    (row) => row.dataset.agentId,
-  );
+function dataValues(sidebar: HTMLElement, selector: string, key: string) {
+  return Array.from(sidebar.querySelectorAll<HTMLElement>(selector), (row) => row.dataset[key]);
 }
-
-export function sessionKeys(sidebar: HTMLElement) {
-  return [...sidebar.querySelectorAll<HTMLElement>(".sidebar-recent-session")].map(
-    (row) => row.dataset.sessionKey,
-  );
-}
+export const agentIds = (sidebar: HTMLElement) =>
+  dataValues(sidebar, ".sidebar-agent-roster__row", "agentId");
+export const sessionKeys = (sidebar: HTMLElement) =>
+  dataValues(sidebar, ".sidebar-recent-session", "sessionKey");
 
 export async function toggleRoster(sidebar: HTMLElement, agentId = "main") {
-  const trigger = sidebar.querySelector<HTMLButtonElement>(
-    ".sidebar-agent-card__main, .sidebar-workspace-header__main",
+  const trigger = expectDefined(
+    sidebar.querySelector<HTMLButtonElement>(
+      ".sidebar-agent-card__main, .sidebar-workspace-header__main",
+    ),
+    "Missing agent switch control",
   );
-  if (!trigger) {
-    throw new Error("Missing agent switch control");
-  }
   const value = sidebar.querySelector(".sidebar-workspace-header__main")
     ? `agent:${encodeURIComponent(agentId)}`
     : "scope:all";
@@ -165,5 +147,3 @@ export async function toggleRoster(sidebar: HTMLElement, agentId = "main") {
   await vi.waitFor(() => expect(sidebar.querySelector(selector)).not.toBeNull());
   sidebar.querySelector<HTMLElement>(selector)?.click();
 }
-
-export const selectFilter = activateSessionMenuValue;

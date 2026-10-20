@@ -129,17 +129,14 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   expect(view.all("[data-viewer-id]")).toHaveLength(0);
 
   const links = () =>
-    Array.from(
-      document.querySelectorAll<HTMLAnchorElement>(
-        ".person-activity-hovercard section:last-of-type a",
-      ),
-    );
-  const publish = async (rows: typeof result.sessions) => {
+    Array.from(cardElement()?.querySelectorAll<HTMLAnchorElement>("section:last-of-type a") ?? []);
+  const publish = async (rows: typeof result.sessions, expected = links()) => {
     sessions.publishList({ result: { ...result, sessions: rows } });
     if (cardElement()) {
       await activityQuery?.refresh();
     }
     await settleLitElement(sidebar);
+    expect(links()).toEqual(expected);
   };
   const initial = links();
   initial[2]!.focus();
@@ -148,23 +145,22 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
     row.updatedAt = now + index * 1000;
   });
   await publish(updated);
-  expect(links()).toEqual(initial);
   expect(document.activeElement).toBe(initial[2]);
   expect(initial[2]!.querySelector("time")?.dateTime).toBe(new Date(now + 6000).toISOString());
 
-  await publish(updated.filter((row) => row.key !== "agent:research:recent-3"));
-  expect(links()).toEqual(initial.slice(0, 2));
+  await publish(
+    updated.filter((row) => row.key !== "agent:research:recent-3"),
+    initial.slice(0, 2),
+  );
   expect(document.activeElement).toBe(trigger);
   await publish(updated);
-  expect(links()).toEqual(initial.slice(0, 2));
   await publish(
     updated.map((row) =>
       row.key === "agent:research:recent-2" ? { ...row, owner: owner("bob") } : row,
     ),
+    initial.slice(0, 1),
   );
-  expect(links()).toEqual(initial.slice(0, 1));
   await publish(updated);
-  expect(links()).toEqual(initial.slice(0, 1));
 
   const reopen = async () => {
     trigger.blur();
@@ -178,7 +174,6 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   await reopen();
   expect(links()).toHaveLength(0);
   await publish(updated);
-  expect(links()).toHaveLength(0);
   escape();
   await reopen();
   expect(links().map((link) => link.getAttribute("href"))).toEqual(
