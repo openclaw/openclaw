@@ -71,30 +71,23 @@ describe("resolveSessionGitCoauthorPrompt", () => {
     ).toBe(prompt);
   });
 
-  it.each(["agent:main:task", "agent:main:cron:nightly"])(
-    "resolves credit for a stable session %s",
-    async (sessionKey) => {
-      const params = { ...session, sessionKey };
-
-      expect(await resolveSessionGitCoauthorPrompt(params)).toBe(expectedPrompt);
-      expect(resolveGitCoauthorAttribution).toHaveBeenCalledExactlyOnceWith({
-        ...params,
-        storePath: undefined,
-      });
-    },
-  );
-
-  it("pins credit to the supplied session and store", async () => {
-    const params = {
+  it.each<Parameters<typeof resolveSessionGitCoauthorPrompt>[0]>([
+    { sessionKey: "agent:main:task" },
+    { sessionKey: "agent:main:cron:nightly" },
+    {
       config: {},
       agentId: "work",
       sessionKey: "agent:work:shared",
       sessionId: "work-session",
       storePath: "/isolated/session-store/sessions.json",
-    };
-
+    },
+  ])("pins credit to $sessionKey and its supplied store", async (overrides) => {
+    const params = { ...session, ...overrides };
     expect(await resolveSessionGitCoauthorPrompt(params)).toBe(expectedPrompt);
-    expect(resolveGitCoauthorAttribution).toHaveBeenCalledExactlyOnceWith(params);
+    expect(resolveGitCoauthorAttribution).toHaveBeenCalledExactlyOnceWith({
+      ...params,
+      storePath: params.storePath,
+    });
   });
 
   it.each([

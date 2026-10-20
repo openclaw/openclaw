@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareGitHubAppInstallation } from "./github-app-installation.js";
@@ -25,8 +25,26 @@ const installation = {
   suspended_at: null,
   permissions,
 };
-function selection(): GitHubAppSelection {
-  return {
+let selected: GitHubAppSelection;
+let config: OpenClawConfig;
+function prepare(assertCurrent = () => {}) {
+  return prepareGitHubAppInstallation({ selection: selected, host, apiBaseUrl, assertCurrent });
+}
+function prepareRead(options: Partial<Parameters<typeof prepareGitHubReadIdentity>[0]> = {}) {
+  return prepareGitHubReadIdentity({
+    config,
+    agentId: "main",
+    assertActive: () => {},
+    getCurrentConfig: () => config,
+    refresh: async () => {},
+    ...options,
+  });
+}
+let overrides: Record<string, unknown>;
+let fetcher: ReturnType<typeof vi.fn<(url: string, init: RequestInit) => Promise<Response>>>;
+let onRequest: ((path: string) => void) | undefined;
+beforeEach(() => {
+  selected = {
     profileId: "ghp_00000000000000000000000000000001",
     kind: "app-installation",
     app: {
@@ -39,26 +57,13 @@ function selection(): GitHubAppSelection {
       keyVersion: "synthetic-v1",
     },
   };
-}
-function prepare(assertCurrent = () => {}) {
-  return prepareGitHubAppInstallation({ selection: selection(), host, apiBaseUrl, assertCurrent });
-}
-function configure(selected = selection()): OpenClawConfig {
-  const config: OpenClawConfig = {
+  config = {
     gateway: { github: { host, apiBaseUrl } },
     tools: { github: selected },
   };
   setRuntimeConfigSnapshot(config);
-  return config;
-}
-let tokenNumber = 0;
-let overrides: Record<string, unknown>;
-let fetcher: ReturnType<typeof vi.fn<(url: string, init: RequestInit) => Promise<Response>>>;
-let onRequest: ((path: string) => void) | undefined;
-beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-10T10:00:00Z"));
-  tokenNumber = 0;
   overrides = {};
   onRequest = undefined;
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
@@ -72,17 +77,16 @@ beforeEach(() => {
         total_count: 1,
         repositories: [{ id: 404, full_name: "example/project" }],
       },
+      "/app/installations/202/access_tokens": {
+        token: "synthetic-installation",
+        expires_at: "2026-10-10T11:00:00.000Z",
+        permissions,
+      },
     };
     if (init.method === "DELETE") {
       return new Response(null, { status: 204 });
     }
-    const body = path.endsWith("/access_tokens")
-      ? {
-          token: `synthetic-installation-${++tokenNumber}`,
-          expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
-          permissions,
-        }
-      : bodies[path];
+    const body = bodies[path];
     if (!body) {
       throw new Error("Unexpected endpoint");
     }
@@ -98,133 +102,110 @@ afterEach(() => {
   setRuntimeConfigSnapshot({});
 });
 
-describe("selected GitHub App issuer", () => {
-  it("issues exact repository permissions and bot identity and revokes the retained execution grant", async () => {
+it("issues exact repository permissions and bot identity and revokes the retained execution grant", async () => {
+  const issued = await prepare();
+  expect(issued.account).toEqual({ accountId: 9001, login: "factory[bot]", avatarUrl: null });
+  const body = fetcher.mock.calls.find(([url]) => url.endsWith("/access_tokens"))?.[1].body;
+  if (typeof body !== "string") {
+    throw new Error("Expected bounded installation request");
+  }
+  expect(JSON.parse(body)).toEqual({
+    repository_ids: [404],
+    permissions: { contents: "write", metadata: "read" },
+  });
+  expect(fetcher.mock.calls.some(([url]) => url === `${apiBaseUrl}/user`)).toBe(false);
+  await issued.revoke();
+  await expect(issued.readToken()).rejects.toThrow("changed");
+  expect(fetcher.mock.calls.at(-1)).toMatchObject([
+    `${apiBaseUrl}/installation/token`,
+    { method: "DELETE" },
+  ]);
+});
+it("rejects a suspended installation before minting and never reads human credentials", async () => {
+  overrides["/app/installations/202"] = {
+    ...installation,
+    suspended_at: "2026-10-10T09:00:00Z",
+  };
+  await expect(prepare()).rejects.toThrow();
+  expect(
+    fetcher.mock.calls.some(([url]) => url.endsWith("/access_tokens") || url.endsWith("/user")),
+  ).toBe(false);
+});
+it.each([401, 500])(
+  "settles invalid-token revocation while preserving live-token cleanup failure (%s)",
+  async (status) => {
     const issued = await prepare();
-    expect(issued.account).toEqual({ accountId: 9001, login: "factory[bot]", avatarUrl: null });
-    const body = fetcher.mock.calls.find(([url]) => url.endsWith("/access_tokens"))?.[1].body;
-    if (typeof body !== "string") {
-      throw new Error("Expected bounded installation request");
+    fetcher.mockResolvedValueOnce(new Response(null, { status }));
+    if (status === 401) {
+      await expect(issued.revoke()).resolves.toBeUndefined();
+    } else {
+      await expect(issued.revoke()).rejects.toThrow("revocation failed");
     }
-    expect(JSON.parse(body)).toEqual({
-      repository_ids: [404],
-      permissions: { contents: "write", metadata: "read" },
-    });
-    expect(fetcher.mock.calls.some(([url]) => url === `${apiBaseUrl}/user`)).toBe(false);
-    await issued.revoke();
-    await expect(issued.readToken()).rejects.toThrow("changed");
-    expect(fetcher.mock.calls.at(-1)).toMatchObject([
-      `${apiBaseUrl}/installation/token`,
-      { method: "DELETE" },
-    ]);
-  });
-  it("rejects a suspended installation before minting and never reads human credentials", async () => {
-    overrides["/app/installations/202"] = {
-      ...installation,
-      suspended_at: "2026-10-10T09:00:00Z",
-    };
-    await expect(prepare()).rejects.toThrow();
-    expect(
-      fetcher.mock.calls.some(([url]) => url.endsWith("/access_tokens") || url.endsWith("/user")),
-    ).toBe(false);
-  });
-  it.each([401, 500])(
-    "settles invalid-token revocation while preserving live-token cleanup failure (%s)",
-    async (status) => {
-      const issued = await prepare();
-      fetcher.mockResolvedValueOnce(new Response(null, { status }));
-      if (status === 401) {
-        await expect(issued.revoke()).resolves.toBeUndefined();
-      } else {
-        await expect(issued.revoke()).rejects.toThrow("revocation failed");
-      }
-      await expect(issued.readToken()).rejects.toThrow();
-    },
-  );
+    await expect(issued.readToken()).rejects.toThrow();
+  },
+);
 
-  it("checks authority after issuance and revokes a token that cannot be admitted", async () => {
-    let current = true;
-    onRequest = (path) => {
-      if (path.endsWith("/access_tokens")) {
-        current = false;
+it("checks authority after issuance and revokes a token that cannot be admitted", async () => {
+  let current = true;
+  onRequest = (path) => {
+    if (path.endsWith("/access_tokens")) {
+      current = false;
+    }
+  };
+  await expect(
+    prepare(() => {
+      if (!current) {
+        throw new Error("Execution revoked");
       }
-    };
-    await expect(
-      prepare(() => {
-        if (!current) {
-          throw new Error("Execution revoked");
-        }
-      }),
-    ).rejects.toThrow("Execution revoked");
-    expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
+    }),
+  ).rejects.toThrow("Execution revoked");
+  expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
+});
+it("reports the selected App contract without minting an execution token during status", async () => {
+  expect(
+    (await resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope: "system" }))
+      .effective,
+  ).toEqual({
+    source: "system-configured",
+    credentialKind: "app-installation",
+    credentialState: "configured_unavailable",
+    account: null,
+    gitAuthor: { name: null, email: null },
+    evidence: "none",
+    accessExpiresAtMs: null,
+    refreshState: "not_applicable",
+    oauthScopes: [],
+    repositoryGrants: "unknown",
   });
-  it("reports the selected App contract without minting an execution token during status", async () => {
-    const config = configure();
-    expect(
-      (await resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope: "system" }))
-        .effective,
-    ).toEqual({
-      source: "system-configured",
-      credentialKind: "app-installation",
-      credentialState: "configured_unavailable",
-      account: null,
-      gitAuthor: { name: null, email: null },
-      evidence: "none",
-      accessExpiresAtMs: null,
-      refreshState: "not_applicable",
-      oauthScopes: [],
-      repositoryGrants: "unknown",
-    });
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-  it("refuses unsupported App publication and shell preparation before credential lookup", async () => {
-    const config = configure();
+  expect(fetcher).not.toHaveBeenCalled();
+});
+it.each([
+  [prepareGitHubPublicationIdentity, "unavailable"],
+  [prepareGitHubToolEnvironment, "select native or OAuth"],
+  [() => prepareRead(), "unavailable"],
+] as const)(
+  "refuses unsupported App preparation before credential lookup: %s",
+  async (attempt, reason) => {
     vi.stubEnv("FACTORY_AUTH_MODE", "github");
-    await expect(prepareGitHubPublicationIdentity({ config, agentId: "main" })).rejects.toThrow(
-      "unavailable",
-    );
-    expect(() => prepareGitHubToolEnvironment({ config, agentId: "main" })).toThrow(
-      "select native or OAuth",
-    );
+    await expect(async () => attempt({ config, agentId: "main" })).rejects.toThrow(reason);
     expect(fetcher).not.toHaveBeenCalled();
+  },
+);
+it("retains request-owned App cleanup and retires reads when the selected App changes", async () => {
+  vi.stubEnv("FACTORY_AUTH_MODE", "github");
+  const admission = vi.fn(async () => undefined);
+  const identity = await prepareRead({
+    allowAppInstallation: true,
+    readNativeCredential: admission,
   });
-  it("retains request-owned App cleanup and retires reads when the selected App changes", async () => {
-    const selected = selection();
-    let config = configure(selected);
-    vi.stubEnv("FACTORY_AUTH_MODE", "github");
-    const admission = vi.fn(async () => undefined);
-    const identity = await prepareGitHubReadIdentity({
-      config,
-      agentId: "main",
-      allowAppInstallation: true,
-      readNativeCredential: admission,
-      assertActive: () => {},
-      getCurrentConfig: () => config,
-      refresh: async () => {},
-    });
-    expect(admission).toHaveBeenCalledOnce();
-    await expect(identity.start(() => "repository read")).resolves.toBe("repository read");
-    config = {
-      ...config,
-      tools: { github: { ...selected, app: { ...selected.app, keyVersion: "rotated" } } },
-    };
-    await expect(identity.start(() => "stale read")).rejects.toThrow("changed");
-    await identity.revoke?.();
-    expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
-    await expect(identity.start(() => "closed read")).rejects.toThrow("changed");
-  });
-
-  it("refuses App reads without a cleanup owner before minting", async () => {
-    const config = configure();
-    await expect(
-      prepareGitHubReadIdentity({
-        config,
-        agentId: "main",
-        assertActive: () => {},
-        getCurrentConfig: () => config,
-        refresh: async () => {},
-      }),
-    ).rejects.toThrow("unavailable");
-    expect(fetcher).not.toHaveBeenCalled();
-  });
+  expect(admission).toHaveBeenCalledOnce();
+  await expect(identity.start(() => "repository read")).resolves.toBe("repository read");
+  config = {
+    ...config,
+    tools: { github: { ...selected, app: { ...selected.app, keyVersion: "rotated" } } },
+  };
+  await expect(identity.start(() => "stale read")).rejects.toThrow("changed");
+  await identity.revoke?.();
+  expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
+  await expect(identity.start(() => "closed read")).rejects.toThrow("changed");
 });
