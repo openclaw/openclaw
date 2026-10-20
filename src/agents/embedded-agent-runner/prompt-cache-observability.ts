@@ -147,14 +147,15 @@ function unpackHistoryFingerprint(fingerprint: PromptHistoryFingerprint) {
   const [, contentKind, blocks]: [string, "string" | "blocks", string[]] = JSON.parse(
     fingerprint.identity,
   );
-  const [envelopeFields, blockFields]: [[string, string][], [string, string][][]] = JSON.parse(
-    fingerprint.details,
-  );
+  const fields = fingerprint.details.map(([layout, ...digests]) => {
+    const keys: string[] = JSON.parse(layout!);
+    return new Map(keys.map((key, index) => [key, digests[index]!]));
+  });
   return {
     contentKind,
     blocks,
-    envelopeFields: new Map(envelopeFields),
-    blockFields: blockFields.map((fields) => new Map(fields)),
+    envelopeFields: fields[0]!,
+    blockFields: fields.slice(1),
   };
 }
 
@@ -522,6 +523,22 @@ export function beginPromptCacheObservation(
   const history = params.messages.map((message, index) =>
     fingerprintMessage(message, previous?.history[index]),
   );
+  // Worker transfer duplicates strings. Share layouts and repeated field hashes
+  // within this history; the temporary index does not outlive preparation.
+  const sharedFields = new Map<string, string>();
+  for (const fingerprint of history) {
+    for (const fields of fingerprint.details) {
+      for (let index = 0; index < fields.length; index++) {
+        const value = fields[index]!;
+        const shared = sharedFields.get(value);
+        if (shared !== undefined) {
+          fields[index] = shared;
+        } else {
+          sharedFields.set(value, value);
+        }
+      }
+    }
+  }
   const changes = previous
     ? [
         ...(previous.unmeasuredChanges ?? []),

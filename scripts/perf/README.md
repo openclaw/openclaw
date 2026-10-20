@@ -832,6 +832,13 @@ as the Gateway and uses V8's count-only object query; it retains no instance
 references. Bundled entries are rejected because their constructor identity
 differs. Counts cover the main isolate only, and the queries force additional
 collections, so omit the census from latency/GC acceptance runs.
+Add `--entry src/entry.ts --fingerprint-retention` to attribute retained prompt-cache
+diagnostics after the measured reopen. It waits one more idle interval, verifies
+that session runtime objects are disposed, then reports forced-GC heap, external,
+and array-buffer deltas after clearing the diagnostic owner. This preserves the
+diagnostic baseline throughout the measured reopen and keeps attribution's extra
+collections outside latency and GC windows. External memory includes array buffers;
+do not add those two deltas together.
 Add `--heap-snapshot` in a separate diagnostic pass for `initial.heapsnapshot`,
 `post-work.heapsnapshot`, `post-idle.heapsnapshot`, and `post-reopen.heapsnapshot`
 to count retained managers, sessions, agents, and their transcript retainers.

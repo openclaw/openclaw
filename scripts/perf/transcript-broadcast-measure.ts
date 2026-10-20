@@ -99,6 +99,7 @@ const { values } = parseArgs({
     "prompt-kib": { type: "string", default: "128" },
     "heap-snapshot": { type: "boolean", default: false },
     "session-census": { type: "boolean", default: false },
+    "fingerprint-retention": { type: "boolean", default: false },
     "session-row-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
@@ -148,11 +149,11 @@ if (values["seed-history"] && !historyTurns) {
 const soakScenario = scenario === "memory-soak";
 const reasoningScenario = retentionScenario || idleScenario || soakScenario;
 if (
-  values["session-census"] &&
+  (values["session-census"] || values["fingerprint-retention"]) &&
   (!idleScenario || path.resolve(values.entry) !== path.resolve("src/entry.ts"))
 ) {
   throw new Error(
-    "--session-census requires --scenario session-idle-retention --entry src/entry.ts",
+    "--session-census and --fingerprint-retention require --scenario session-idle-retention --entry src/entry.ts",
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
@@ -2982,6 +2983,34 @@ try {
       ]);
     }
   }
+  let fingerprintRetention;
+  if (values["fingerprint-retention"]) {
+    // Keep the diagnostic baseline through reopening. Attribute retention only
+    // after another disposal interval, outside the measured latency/GC windows.
+    console.log("PHASE fingerprint-retention-idle");
+    await delay(durationMs);
+    assertGatewayAlive();
+    const before = await readGatewayResources(gateway, {
+      collectGarbage: true,
+      sessionCensus: true,
+    });
+    const census = before.sessionCensus;
+    if (!census || census.SessionManager || census.AgentSession || census.Agent) {
+      throw new Error("Fingerprint retention requires all session runtime objects to be disposed");
+    }
+    const after = await readGatewayResources(gateway, {
+      collectGarbage: true,
+      clearPromptCacheObservations: true,
+    });
+    fingerprintRetention = {
+      before,
+      after,
+      heapBytes: before.memory.heapUsed - after.memory.heapUsed,
+      externalBytes: before.memory.external - after.memory.external,
+      arrayBufferBytes: before.memory.arrayBuffers - after.memory.arrayBuffers,
+    };
+    console.log(`FINGERPRINT_RETENTION ${JSON.stringify(fingerprintRetention)}`);
+  }
   const wholeSoakDiagnostics = await finishWholeSoakDiagnostics?.();
   let wholeSoakAllocation;
   if (soakAllocationPath) {
@@ -3140,6 +3169,7 @@ try {
           promptBytes,
           initialRetainedResources,
           postIdleResources,
+          fingerprintRetention,
           heapGrowthAfterIdleBytes:
             postIdleResources && initialRetainedResources
               ? postIdleResources.memory.heapUsed - initialRetainedResources.memory.heapUsed

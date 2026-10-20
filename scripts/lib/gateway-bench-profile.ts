@@ -57,6 +57,7 @@ export type GatewayBenchCommand =
       initial?: boolean;
       collectGarbage?: boolean;
       sessionCensus?: boolean;
+      clearPromptCacheObservations?: boolean;
       snapshotPath?: string;
     };
 
@@ -259,6 +260,7 @@ export async function readGatewayResources(
     initial?: boolean;
     collectGarbage?: boolean;
     sessionCensus?: boolean;
+    clearPromptCacheObservations?: boolean;
     snapshotPath?: string;
   } = {},
 ): Promise<GatewayResourceSnapshot> {

@@ -10,7 +10,7 @@ const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw"]);
 export type PromptHistoryFingerprint = {
   role: string;
   identity: string;
-  details: string;
+  details: string[][];
   stringBlock?: WeakRef<PromptStringFingerprint>;
 };
 
@@ -98,7 +98,11 @@ export function fingerprintMessage(
 ): PromptHistoryFingerprint {
   const cached = messageFingerprints.get(message);
   if (cached) {
-    return previous?.identity === cached.identity ? previous : cached;
+    if (previous?.identity === cached.identity) {
+      messageFingerprints.set(message, previous);
+      return previous;
+    }
+    return cached;
   }
   const { content } = message;
   let stringBlock: PromptHistoryFingerprint["stringBlock"];
@@ -132,10 +136,11 @@ export function fingerprintMessage(
     role: message.role,
     identity,
     // Idle baselines retain compact hashes; field Maps are only needed on divergence.
-    details: JSON.stringify([
-      [...envelope.fields],
-      fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS).map(({ fields }) => Array.from(fields)),
-    ]),
+    details: [envelope, ...fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS)].map(({ fields }) => {
+      const packed = Array.from(fields.values());
+      packed.unshift(JSON.stringify(Array.from(fields.keys())));
+      return packed;
+    }),
     stringBlock,
   };
   if (isOwnedTranscriptPayload(message)) {
