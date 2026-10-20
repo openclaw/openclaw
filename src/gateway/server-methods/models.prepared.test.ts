@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { apiKey, harnessRegistry } from "../../agents/model-catalog-fixtures.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -119,21 +120,21 @@ it("retains the model-list projection until its catalog facts change", async () 
         harness.setOwner({ ...owner, config: next });
         await harness.runtime.refresh();
       };
-      const prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
       try {
+        using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
         expect(JSON.stringify(await read())).toBe(JSON.stringify(expected));
         await expect(readCommands()).resolves.toMatchObject({
           commands: [{ name: "command-1-1" }],
         });
-        const enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
-        const resolvePolicy = vi.spyOn(
-          providerPolicySurface,
-          "resolveDirectBundledProviderPolicySurface",
-        );
-        const prepareStatement = vi.spyOn(DatabaseSync.prototype, "prepare");
-        const executeStatement = vi.spyOn(DatabaseSync.prototype, "exec");
-        try {
+        {
+          using enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
+          using resolvePolicy = vi.spyOn(
+            providerPolicySurface,
+            "resolveDirectBundledProviderPolicySurface",
+          );
+          using prepareStatement = vi.spyOn(DatabaseSync.prototype, "prepare");
+          using executeStatement = vi.spyOn(DatabaseSync.prototype, "exec");
           expect(await Promise.all(Array.from({ length: 10 }, read))).toEqual(
             Array.from({ length: 10 }, () => expected),
           );
@@ -143,11 +144,6 @@ it("retains the model-list projection until its catalog facts change", async () 
           expect(unpreparedRead).not.toHaveBeenCalled();
           // One provider lookup per read is sufficient; prepared rows retain their identities.
           expect(resolvePolicy.mock.calls.length).toBeLessThanOrEqual(10);
-        } finally {
-          enterPluginScope.mockRestore();
-          resolvePolicy.mockRestore();
-          prepareStatement.mockRestore();
-          executeStatement.mockRestore();
         }
         harness.setSkillsVersion(2);
         await publishConfig({
@@ -208,7 +204,6 @@ it("retains the model-list projection until its catalog facts change", async () 
         expect(prepareProjection).toHaveBeenCalledTimes(3);
         expect(unpreparedRead).not.toHaveBeenCalled();
       } finally {
-        prepareProjection.mockRestore();
         await harness.runtime.stop();
         clearRuntimeConfigSnapshot();
       }
@@ -271,28 +266,17 @@ it("bounds saved-session reads while projecting configured models and runtime ch
           },
         );
       }
-      const pluginRegistry = createEmptyPluginRegistry();
       const loadNativeCatalog = vi.fn(async () => catalog);
-      pluginRegistry.agentHarnesses.push({
-        pluginId: "codex",
-        source: "test",
-        harness: {
-          id: "codex",
-          label: "Catalog fixture",
-          authBootstrap: "harness",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("Model listing must not run inference");
-          },
-          loadModelCatalog: loadNativeCatalog,
-          readModelCatalogReadiness: () => ({ accountType: "apiKey", authMode: "api_key" }),
-        },
+      const pluginRegistry = harnessRegistry("codex", {
+        authBootstrap: "harness",
+        loadModelCatalog: loadNativeCatalog,
+        readModelCatalogReadiness: () => ({ accountType: "apiKey", authMode: "api_key" }),
       });
       const authStore: AuthProfileStore = {
         version: 1,
         profiles: {
-          "openai:fixture": { type: "api_key", provider: "openai", key: "synthetic-test-key" },
-          "openai:alternate": { type: "api_key", provider: "openai", key: "synthetic-other-key" },
+          "openai:fixture": apiKey("openai", "synthetic-test-key"),
+          "openai:alternate": apiKey("openai", "synthetic-other-key"),
         },
       };
       const context = createModelsListTestContext({
@@ -327,9 +311,9 @@ it("bounds saved-session reads while projecting configured models and runtime ch
       context.readPreparedModelsList = harness.runtime.readModelsList;
       const params = { agentId: "main", sessionKey, view: "configured" as const };
       const read = modelsReader(context, params);
-      const sessionRead = vi.spyOn(sessionReads, "withGatewaySessionEntry");
-      const prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
       try {
+        using sessionRead = vi.spyOn(sessionReads, "withGatewaySessionEntry");
+        using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
         const result = await read();
         expect({
@@ -400,8 +384,6 @@ it("bounds saved-session reads while projecting configured models and runtime ch
         });
         expect(prepareProjection).toHaveBeenCalledTimes(2);
       } finally {
-        sessionRead.mockRestore();
-        prepareProjection.mockRestore();
         await harness.runtime.stop();
       }
     },

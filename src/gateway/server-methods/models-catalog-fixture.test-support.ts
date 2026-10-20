@@ -1,5 +1,7 @@
 import type { Server } from "node:http";
 import { expect } from "vitest";
+import { createAuthProfileStoreFixture } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
+import { apiKey } from "../../agents/model-catalog-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "../client.js";
@@ -118,15 +120,11 @@ export function catalogSessionRpc(client: GatewayClient) {
 }
 
 export function createCatalogAuthProfiles(keys: Record<string, string>) {
-  return {
-    version: 1,
-    profiles: Object.fromEntries(
-      Object.entries(keys).map(([provider, key]) => [
-        `${provider}:default`,
-        { type: "api_key" as const, provider, key },
-      ]),
+  return createAuthProfileStoreFixture(
+    Object.fromEntries(
+      Object.entries(keys).map(([provider, key]) => [`${provider}:default`, apiKey(provider, key)]),
     ),
-  };
+  );
 }
 
 export function catalogModelIds(

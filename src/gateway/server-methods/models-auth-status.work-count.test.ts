@@ -4,11 +4,8 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
-import {
-  createAuthProfileStoreFixture,
-  createOAuthRefreshCredential,
-} from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as authProfileSnapshots from "../../agents/auth-profiles/runtime-snapshots.js";
+import { authStore, oauth } from "../../agents/model-catalog-fixtures.test-support.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
@@ -19,15 +16,22 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 // Config publication replaces the object, so every read shares one unchanged config.
 const config = {};
 const agentDir = resolveAgentDir(config, "main");
-const store = createAuthProfileStoreFixture({
-  "openai:default": createOAuthRefreshCredential({ expires: 1_000_000 }),
-});
+const store = authStore({ "openai:default": oauth("openai", 1_000_000) });
 
 const mocks = vi.hoisted(() => ({
   buildAuthHealthSummary: vi.fn(),
   loadDeferredCatalog: vi.fn(),
   readPreparedCatalog: vi.fn(),
-  loadProviderUsageSummary: vi.fn(),
+  loadProviderUsageSummary: vi.fn(
+    async ({ providers }: { providers: string[] }): Promise<UsageSummary> => ({
+      updatedAt: 0,
+      providers: providers.map((provider) => ({
+        provider,
+        displayName: provider,
+        windows: [{ label: "5h", usedPercent: 10 }],
+      })),
+    }),
+  ),
   listProviderUsagePluginDescriptors: vi.fn(() => [
     { provider: "anthropic", displayName: "Claude" },
     { provider: "deepseek", displayName: "DeepSeek" },
@@ -74,10 +78,10 @@ function createOptions(method: string) {
 }
 
 beforeEach(() => {
-  for (const names of Object.values(resolveProviderAuthLookupMaps({ env: {} }).envCandidateMap)) {
-    for (const name of names) {
-      vi.stubEnv(name, "");
-    }
+  for (const name of Object.values(
+    resolveProviderAuthLookupMaps({ env: {} }).envCandidateMap,
+  ).flat()) {
+    vi.stubEnv(name, "");
   }
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.clearAllMocks();
@@ -85,26 +89,15 @@ beforeEach(() => {
   // usage.status resolves the agent directory without the prepared owner; both must agree.
   replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
   vi.spyOn(authProfileSnapshots, "refreshRuntimeAuthProfileStoreSources").mockResolvedValue();
-  const owner = {
+  mocks.readPreparedCatalog.mockResolvedValue({
     agentId: "main",
     agentDir,
     workspaceDir: "/tmp/workspace",
     config,
     authStore: store,
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
-  };
-  mocks.readPreparedCatalog.mockResolvedValue(owner);
+  });
   mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
-  mocks.loadProviderUsageSummary.mockImplementation(
-    async ({ providers }: { providers: string[] }): Promise<UsageSummary> => ({
-      updatedAt: 0,
-      providers: providers.map((provider) => ({
-        provider,
-        displayName: provider,
-        windows: [{ label: "5h", usedPercent: 10 }],
-      })),
-    }),
-  );
 });
 
 afterEach(() => {
@@ -132,7 +125,7 @@ it("serves repeated Models page loads from one auth and usage refresh per provid
   await loadPage();
   const work = () => ({
     probes: mocks.loadProviderUsageSummary.mock.calls
-      .map(([call]) => (call as { providers: string[] }).providers)
+      .map(([call]) => call.providers)
       .toSorted((left, right) => left.length - right.length),
     healthBuilds: mocks.buildAuthHealthSummary.mock.calls.length,
     descriptorScans: mocks.listProviderUsagePluginDescriptors.mock.calls.length,
