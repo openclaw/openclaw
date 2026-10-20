@@ -12,6 +12,7 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { ClawCreatorReview } from "../claws/creator-review.tsx";
 import type { DropIndicator } from "./chat-page-drop-indicator.ts";
 import { registerUnboundPane } from "./chat-pane-elements.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
@@ -392,6 +393,7 @@ export function ChatPageBody(props: {
       {(snapshot) => (
         <div class="chat-split-view__drop-container" ref={props.containerRef}>
           <SplitLayout snapshot={snapshot()} />
+          <ClawCreatorReview />
           <Show when={props.indicator}>
             {(indicator) => (
               <div
