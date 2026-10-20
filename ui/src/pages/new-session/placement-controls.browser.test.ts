@@ -2,7 +2,6 @@ import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { PlaceBrowserState } from "./place-browser-state.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import { pickerParams } from "./where-chip.test-support.ts";
@@ -42,25 +41,27 @@ it.each([
     const profileId = shortLabels ? "prod" : "production-europe-development";
     const workspaceLabel = shortLabels ? "app" : "customer-analytics-dashboard";
     const workspace = `/workspace/${workspaceLabel}`;
-    const where = pickerParams(
-      true,
-      undefined,
-      {
-        cloudProfileId: profileId,
-        cloudProfiles: [
-          {
-            id: profileId,
-            providerId: "crabbox",
-            providerDisplayId: "aws",
-            operatingSystems: [{ id: "windows", label: "Windows (WSL2)", default: true }],
-            machines: [{ id: "large", label: "Large", default: true }],
-          },
-        ],
-      },
-      { popoverOpen: false },
-    );
-    const onApplyFolder = vi.fn();
+    const where = pickerParams(true, undefined, {
+      cloudProfileId: profileId,
+      cloudProfiles: [
+        {
+          id: profileId,
+          providerId: "crabbox",
+          providerDisplayId: "aws",
+          operatingSystems: [{ id: "windows", label: "Windows (WSL2)", default: true }],
+          machines: [{ id: "large", label: "Large", default: true }],
+        },
+      ],
+    });
+    const { place } = where.params;
+    vi.spyOn(place.browser, "popoverOpen").mockReturnValue(false);
+    vi.spyOn(place, "folder", "get").mockReturnValue(workspace);
+    vi.spyOn(place, "workspacePath").mockReturnValue(workspace);
+    vi.spyOn(place, "browseAvailable").mockReturnValue(true);
+    vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
+    const onApplyFolder = vi.spyOn(place, "applyFolder").mockImplementation(() => {});
     const project = {
+      params: where.params,
       state: resolveProjectChip({
         folder: workspace,
         workspace,
@@ -70,48 +71,11 @@ it.each([
         recents: [],
         projectQuery: "",
       }),
-      browseAvailable: true,
-      isAdmin: true,
-      canWrite: true,
-      folder: workspace,
-      workspace,
-      projects: [],
-      projectQuery: "",
-      projectSearchAvailable: false,
-      projectAddAvailable: false,
-      remoteProjects: [],
-      selectedRemoteProject: null,
-      projectSearchCredentialMissing: false,
-      projectSearchLoading: false,
-      projectSearchError: null,
-      projectId: "",
-      browserLabel: "Gateway",
-      submitting: false,
-      pendingPlacement: false,
-      popoverOpen: false,
-      browserOpen: false,
-      browser: new PlaceBrowserState(vi.fn(), vi.fn()),
-      registerProjectPath: null,
-      registeringProject: false,
-      onPopoverShow: vi.fn(),
-      onPopoverHide: vi.fn(),
-      onPopoverAfterHide: vi.fn(),
-      onSelectProject: vi.fn(),
-      onProjectQueryInput: vi.fn(),
-      onSelectRemoteProject: vi.fn(),
-      onApplyFolder,
-      onBrowse: vi.fn(),
-      onBrowserBack: vi.fn(),
-      onRegisterProject: vi.fn(),
-      onClose: vi.fn(),
+      nativeTerminal: false,
     };
-    mountSolid(
-      () => [
-        createComponent(WhereChip, { params: where }),
-        createComponent(ProjectChip, { params: project }),
-      ],
-      { container: controls },
-    );
+    mountSolid(() => [createComponent(WhereChip, where), createComponent(ProjectChip, project)], {
+      container: controls,
+    });
     await document.fonts.ready;
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));

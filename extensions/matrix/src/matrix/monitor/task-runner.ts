@@ -17,26 +17,28 @@ export function createMatrixMonitorTaskRunner(params: {
   const shutdownController = new AbortController();
   let closed = false;
 
+  const runTask = (task: () => Promise<void>): Promise<void> => {
+    if (closed) {
+      return Promise.reject(new Error("Matrix monitor is stopped"));
+    }
+    // Retained descendants keep the runner's shutdown signal after their task settles.
+    const taskPromise = monitorTaskSignal.run(shutdownController.signal, () =>
+      Promise.resolve().then(task),
+    );
+    const observed = taskPromise.catch(() => {}).finally(() => inFlight.delete(observed));
+    inFlight.add(observed);
+    return taskPromise;
+  };
+
   const runDetachedTask = (label: string, task: () => Promise<void>): Promise<void> => {
     if (closed) {
       return Promise.resolve();
     }
-    // Retained descendants keep the runner's shutdown signal after their task settles.
-    const trackedTask: Promise<void> = monitorTaskSignal
-      .run(shutdownController.signal, () => Promise.resolve().then(task))
-      .catch((error: unknown) => {
-        const message = String(error);
-        params.logVerboseMessage(`matrix: ${label} failed (${message})`);
-        params.logger.warn("matrix background task failed", {
-          task: label,
-          error: message,
-        });
-      })
-      .finally(() => {
-        inFlight.delete(trackedTask);
-      });
-    inFlight.add(trackedTask);
-    return trackedTask;
+    return runTask(task).catch((error: unknown) => {
+      const message = String(error);
+      params.logVerboseMessage(`matrix: ${label} failed (${message})`);
+      params.logger.warn("matrix background task failed", { task: label, error: message });
+    });
   };
 
   const waitForIdle = async (): Promise<void> => {
@@ -64,6 +66,7 @@ export function createMatrixMonitorTaskRunner(params: {
       closed = true;
       shutdownController.abort();
     },
+    runTask,
     runDetachedTask,
     waitForIdle,
   };

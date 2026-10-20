@@ -53,6 +53,7 @@ export function DashboardsPage(props: DashboardsPageProps) {
         list.replaceSource({ sessions: context.sessions, scope });
       }
     };
+    // Selection receipts replace the list scope before it can request another agent's page.
     const stopScope = context.agentSelection.subscribe(synchronizeScope);
     synchronizeScope();
     // Append during the owner's completion notification, before its request drain settles.

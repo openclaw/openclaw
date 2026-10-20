@@ -7,7 +7,7 @@ import type {
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
@@ -16,8 +16,8 @@ import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
 import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { publishChatRunState } from "./chat-state-render.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
@@ -90,7 +90,6 @@ export function buildPendingInputQueueItems(
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
   searchQuery?: string,
-  browserInputs: readonly ChatQueueItem[] = [],
   workspaceSyncPendingRunIds: readonly string[] = [],
   workerSetupPending = false,
   messageRecovery?: ChatMessageRecovery,
@@ -104,26 +103,14 @@ export function buildPendingInputItems(
     ) {
       continue;
     }
-    let pendingStatus: PendingInputStatus;
-    if (input.state === "queued") {
-      pendingStatus = "queued";
-      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
-        pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
-      }
-    } else {
-      pendingStatus =
-        input.state === "interrupted" &&
-        input.runId &&
-        browserInputs.some(
-          (item) =>
-            item.sendRunId === input.runId &&
-            item.sendState !== "failed" &&
-            item.sendState !== "held",
-        )
-          ? "resuming"
-          : input.state === "cancelled"
-            ? "cancelled"
-            : "interrupted";
+    let pendingStatus: PendingInputStatus =
+      input.state === "queued" || input.state === "cancelled" ? input.state : "interrupted";
+    if (
+      input.state === "queued" &&
+      input.runId &&
+      (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))
+    ) {
+      pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
     }
     // Custody keeps submission correlation outside the message; use it for
     // presentation without inventing transcript or execution identity.
@@ -299,7 +286,7 @@ export function applyChatPendingInputs(
   ) {
     void requestPendingInputPage(state, view.queueBefore, "discovery");
   }
-  publishChatRunState(state);
+  chatRunPresentation(state).publish();
 }
 
 async function requestPendingInputPage(
@@ -323,7 +310,7 @@ async function requestPendingInputPage(
   view.request = request;
   view.error = undefined;
   if (kind === "navigation") {
-    publishChatRunState(state);
+    chatRunPresentation(state).publish();
   }
   const current = () => ownsPendingInputRequest(state, view, request);
   try {
@@ -377,7 +364,7 @@ async function requestPendingInputPage(
     if (view.request === request) {
       view.request = undefined;
       if (getChatPendingInputs(state) === view) {
-        publishChatRunState(state);
+        chatRunPresentation(state).publish();
       }
     }
   }

@@ -7,6 +7,7 @@ import {
   type WatchScope,
   type WatchSubscription,
 } from "@openclaw/fs-safe/watch";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import {
   FS_RECONCILE_MS,
   resolveFsObservationMode,
@@ -269,12 +270,7 @@ export function createConfigFileAdapter(opts: {
             next.stability.close(),
             ...[...next.sources.values()].map((source) => source.subscription.close()),
           ]).then(([, ...results]) => {
-            const errors = results.flatMap((result) =>
-              result.status === "rejected" ? [result.reason] : [],
-            );
-            if (errors.length) {
-              throw new AggregateError(errors, "Config observation retirement failed");
-            }
+            throwSettledAggregate(results, "Config observation retirement failed");
           });
         }
         return closing;
@@ -382,12 +378,7 @@ export function createConfigFileAdapter(opts: {
       if (previous) {
         void retire(previous).catch(() => {});
       }
-      const errors = (await Promise.allSettled(retiring)).flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Config watcher shutdown failed");
-      }
+      throwSettledAggregate(await Promise.allSettled(retiring), "Config watcher shutdown failed");
     },
     status: () => status,
   };

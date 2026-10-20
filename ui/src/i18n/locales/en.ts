@@ -1917,6 +1917,9 @@ export const en: TranslationMap & {
     suspended: "Suspended",
     retryNow: "Retry now",
     queued: "{count} queued",
+    offlineChangesDiscarded: "Offline changes discarded: {count}",
+    offlineChangesReloadBlocked:
+      "Offline changes are waiting to reconnect. Reloading would discard them.",
     sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
     sessionMoveUncertain:
       "The session move could not be confirmed. Refresh and check its group before retrying. {error}",
@@ -2275,6 +2278,19 @@ export const en: TranslationMap & {
     errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
     checkStatus: "Check status",
     details: "Details",
+    usageLimit: {
+      title: "ChatGPT usage limit reached",
+      businessBody:
+        "You’ve reached your workspace's limit for using your ChatGPT plan in other apps. Copy a message below to ask your workspace admin for increased usage limits.",
+      consumerBody: "Review your usage settings in ChatGPT.",
+      request:
+        "I’ve reached the limit for using my ChatGPT plan in OpenClaw. Could you increase our workspace’s usage limits so I can continue?\n\nGo to admin.openai.com → Workspace → Usage limits. Thank you!",
+      copy: "Copy request for admin",
+      copied: "Request copied. Send it to your workspace admin.",
+      copyFailed:
+        "Couldn't copy the request. Select and copy the text below, then send it to your workspace admin.",
+      manage: "Manage usage",
+    },
     copyError: "Copy error",
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",
@@ -3154,12 +3170,10 @@ export const en: TranslationMap & {
       },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
-      resuming:
-        "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
-        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+        "Interrupted before the agent started it. If it does not resume, copy it and send again.",
       earlier: "Show earlier messages",
       latest: "Show latest messages",
     },

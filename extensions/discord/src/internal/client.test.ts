@@ -257,58 +257,46 @@ describe("Client gateway event queue", () => {
     return new Client({ clientId: "app1", token: "token", eventQueue }, { listeners });
   }
 
-  it("holds a timed-out listener slot until its underlying promise resolves", async () => {
-    vi.useFakeTimers();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("holds a listener slot until its underlying promise resolves", async () => {
+    const firstStarted = createDeferred<void>();
     const firstSettlement = createDeferred<void>();
     const started: string[] = [];
     const first = listener(async () => {
       started.push("first");
+      firstStarted.resolve();
       await firstSettlement.promise;
     });
     const second = listener(async () => {
       started.push("second");
     });
-    const client = createQueuedClient([first, second], { listenerTimeout: 10, maxConcurrency: 1 });
+    const client = createQueuedClient([first, second], { maxConcurrency: 1 });
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
-    await vi.advanceTimersByTimeAsync(10);
+    await firstStarted.promise;
 
     expect(started).toEqual(["first"]);
 
     firstSettlement.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-
+    await dispatch;
     expect(started).toEqual(["first", "second"]);
     expect(first.handle).toHaveBeenCalledTimes(1);
     expect(second.handle).toHaveBeenCalledTimes(1);
-    await expect(dispatch).resolves.toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("logs a listener failure that arrives after its dispatch timeout", async () => {
-    vi.useFakeTimers();
+  it("logs a listener failure when its underlying promise rejects", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const settlement = createDeferred<void>();
-    const lateError = new Error("late listener failure");
+    const failure = new Error("listener failure");
     const waiting = listener(async () => await settlement.promise);
-    const client = createQueuedClient([waiting], { listenerTimeout: 10, maxConcurrency: 1 });
+    const client = createQueuedClient([waiting], { maxConcurrency: 1 });
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
-    await vi.advanceTimersByTimeAsync(10);
+    settlement.reject(failure);
     await expect(dispatch).resolves.toBeUndefined();
 
-    settlement.reject(lateError);
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(errorSpy).toHaveBeenNthCalledWith(
-      1,
-      "[EventQueue] Listener Object timed out after 10ms for event READY",
-    );
-    expect(errorSpy).toHaveBeenNthCalledWith(
-      2,
-      "[EventQueue] Listener Object failed after timeout for event READY:",
-      lateError,
+    expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+      "[EventQueue] Listener Object failed for event READY:",
+      failure,
     );
   });
 
@@ -323,7 +311,6 @@ describe("Client gateway event queue", () => {
     const client = createQueuedClient([waiting], {
       maxConcurrency: 1,
       maxQueueSize: 1,
-      listenerTimeout: 1_000,
     });
 
     const first = client.dispatchGatewayEvent("READY", {});

@@ -8,7 +8,7 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
 // Music generation status tests cover duplicate guards and explicit status
 // actions for background music tasks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as musicGenerationRuntime from "../../music-generation/runtime.js";
+import * as musicGenerationRegistry from "../../media-generation/registry.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
@@ -30,7 +30,7 @@ const mediaActivityMocks = vi.hoisted(() => {
 
 function resetMusicStatusMocks() {
   vi.restoreAllMocks();
-  vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
+  vi.spyOn(musicGenerationRegistry, "listMusicGenerationProviders").mockReturnValue([]);
   mediaActivityMocks.listOperations.mockReset();
   mediaActivityMocks.listOperations.mockReturnValue([]);
   mediaActivityMocks.listMediaGenerationOperations.mockReset();

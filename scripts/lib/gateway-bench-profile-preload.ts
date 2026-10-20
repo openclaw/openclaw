@@ -179,12 +179,11 @@ if (isMainThread) {
           });
           await inspector.post("Profiler.start");
         } else {
-          // Include dead allocations as well as survivors: retained heap alone
-          // misses the short-lived objects that cause busy-Gateway GC pressure.
+          // Churn includes dead allocations; retention captures only survivors.
           const options = {
             samplingInterval: GATEWAY_HEAP_SAMPLE_INTERVAL,
-            includeObjectsCollectedByMajorGC: true,
-            includeObjectsCollectedByMinorGC: true,
+            includeObjectsCollectedByMajorGC: message.includeCollectedObjects ?? true,
+            includeObjectsCollectedByMinorGC: message.includeCollectedObjects ?? true,
           };
           await inspector.post("HeapProfiler.startSampling", options);
         }

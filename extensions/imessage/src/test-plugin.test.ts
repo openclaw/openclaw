@@ -25,10 +25,7 @@ import type { IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { sendMessageIMessage } from "./send.js";
 
-beforeEach(() => {
-  clearIMessageApprovalReactionTargetsForTest();
-});
-
+beforeEach(clearIMessageApprovalReactionTargetsForTest);
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -39,74 +36,78 @@ function mockCliSend() {
   return run;
 }
 
-type IMessageMessageAdapter = NonNullable<typeof imessagePlugin.message>;
-type IMessageMessageSender = NonNullable<IMessageMessageAdapter["send"]>;
 const IMESSAGE_WORKSPACE_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
   "base64",
 );
 
-function requireMessageAdapter(): IMessageMessageAdapter {
-  const adapter = imessagePlugin.message;
-  if (!adapter) {
-    throw new Error("Expected iMessage message adapter");
+function required<T>(value: T | undefined): T {
+  if (value === undefined) {
+    throw new Error("Expected iMessage adapter capability");
   }
-  return adapter;
+  return value;
 }
 
-function requireMessageSendText(
-  adapter: IMessageMessageAdapter,
-): NonNullable<IMessageMessageSender["text"]> {
-  const text = adapter.send?.text;
-  if (!text) {
-    throw new Error("Expected iMessage message adapter text sender");
-  }
-  return text;
+function messageContext<T>(send: T) {
+  return { cfg: {}, to: "+15551234567", text: "", deps: { imessage: send } };
 }
 
-function requireMessageSendMedia(
-  adapter: IMessageMessageAdapter,
-): NonNullable<IMessageMessageSender["media"]> {
-  const media = adapter.send?.media;
-  if (!media) {
-    throw new Error("Expected iMessage message adapter media sender");
-  }
-  return media;
+function mediaAccessFor(workspaceDir: string) {
+  const readFile = vi.fn((filePath: string) => fs.promises.readFile(filePath));
+  return { localRoots: [workspaceDir], workspaceDir, readFile };
 }
+
+function delivery(messageId: string) {
+  return { channel: "imessage" as const, messageId };
+}
+
+function receipt(messageId: string, kind: "text" | "media" | "voice" = "text", replyToId?: string) {
+  return createMessageReceiptFromOutboundResults({
+    results: [delivery(messageId)],
+    kind,
+    replyToId,
+  });
+}
+
+function nativeSender(request: () => Promise<unknown>) {
+  const client = { request, stop: vi.fn(async () => {}) } as unknown as IMessageRpcClient;
+  return vi.fn<typeof sendMessageIMessage>((to, text, options) =>
+    sendMessageIMessage(to, text, { ...options, client }),
+  );
+}
+
+function attachment(stateDir: string, filename: string, contents: Buffer) {
+  const workspaceDir = fs.realpathSync(stateDir);
+  const sourcePath = path.join(workspaceDir, filename);
+  fs.writeFileSync(sourcePath, contents);
+  return { sourcePath, mediaAccess: mediaAccessFor(workspaceDir) };
+}
+
+const durableConfig: OpenClawConfig = { channels: { imessage: { accounts: { default: {} } } } };
 
 describe("imessagePlugin contracts", () => {
   it("tells the model to omit redacted current-conversation targets", () => {
-    const hints = imessagePlugin.agentPrompt?.messageToolHints?.({
-      cfg: {},
-      accountId: "default",
-    });
+    const hints = imessagePlugin.agentPrompt?.messageToolHints?.({ cfg: {}, accountId: "default" });
 
     expect(hints?.join("\n")).toContain("omit target");
     expect(hints?.join("\n")).toContain("never copy a redacted display value");
   });
 
   it("rejects unqualified provider identifiers and exposes qualification guidance", async () => {
-    const targetResolver = imessagePlugin.messaging?.targetResolver;
-    const resolveTarget = targetResolver?.resolveTarget;
-    if (!resolveTarget) {
-      throw new Error("Expected iMessage target resolver");
-    }
+    const targetResolver = required(imessagePlugin.messaging?.targetResolver);
+    const resolveTarget = required(targetResolver.resolveTarget);
 
     expect(targetResolver.hint).toBe(
       "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
     );
 
     await expect(
-      resolveTarget({
-        cfg: {} as OpenClawConfig,
-        input: "C0AG22RN7L3",
-        normalized: "+02273",
-      }),
+      resolveTarget({ cfg: {}, input: "C0AG22RN7L3", normalized: "+02273" }),
     ).resolves.toBeNull();
 
     await expect(
       resolveTarget({
-        cfg: {} as OpenClawConfig,
+        cfg: {},
         input: "auto:Alice Smith",
         normalized: "auto:AliceSmith",
       }),
@@ -128,26 +129,14 @@ describe("imessagePlugin contracts", () => {
   });
 
   it("preserves the local approval prompt suppressor through attached-result composition", () => {
-    const suppressor = imessagePlugin.outbound?.shouldSuppressLocalPayloadPrompt;
-    if (!suppressor) {
-      throw new Error("iMessage outbound approval suppressor unavailable");
-    }
+    const suppressor = required(imessagePlugin.outbound?.shouldSuppressLocalPayloadPrompt);
 
     expect(
       suppressor({
         cfg: {
-          channels: {
-            imessage: {
-              enabled: true,
-              allowFrom: ["+15551230000"],
-            },
-          },
-          approvals: {
-            exec: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+          channels: { imessage: { enabled: true, allowFrom: ["+15551230000"] } },
+          approvals: { exec: { enabled: true } },
+        },
         accountId: "default",
         payload: {
           text: "Approval required.",
@@ -160,24 +149,15 @@ describe("imessagePlugin contracts", () => {
             },
           },
         },
-        hint: {
-          kind: "approval-pending",
-          approvalKind: "exec",
-          nativeRouteActive: true,
-        },
+        hint: { kind: "approval-pending", approvalKind: "exec", nativeRouteActive: true },
       }),
     ).toBe(true);
   });
 
   it("keeps shared forwarded approvals reaction-resolvable through outbound hooks", async () => {
-    const beforeDeliverPayload = imessagePlugin.outbound?.beforeDeliverPayload;
-    const afterDeliverPayload = imessagePlugin.outbound?.afterDeliverPayload;
-    if (!beforeDeliverPayload || !afterDeliverPayload) {
-      throw new Error("Expected iMessage approval delivery hooks");
-    }
-    const cfg = {
-      channels: { imessage: { enabled: true } },
-    } as OpenClawConfig;
+    const beforeDeliverPayload = required(imessagePlugin.outbound?.beforeDeliverPayload);
+    const afterDeliverPayload = required(imessagePlugin.outbound?.afterDeliverPayload);
+    const cfg = { channels: { imessage: { enabled: true } } };
     const payload = buildTypedExecApprovalPendingReplyPayload({
       approvalId: "exec-shared-hook",
       approvalSlug: "shared-hook",
@@ -185,11 +165,7 @@ describe("imessagePlugin contracts", () => {
       host: "gateway",
       allowedDecisions: ["allow-once", "deny"],
     });
-    const target = {
-      channel: "imessage",
-      to: "+15551230000",
-      accountId: "default",
-    };
+    const target = { channel: "imessage", to: "+15551230000", accountId: "default" };
 
     await beforeDeliverPayload({
       cfg,
@@ -239,57 +215,39 @@ describe("imessagePlugin contracts", () => {
       return {
         messageId,
         sentText: opts?.mediaUrl ? "<media:image>" : "hello",
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: "imessage", messageId }],
-          kind: opts?.audioAsVoice ? "voice" : opts?.mediaUrl ? "media" : "text",
-          ...(opts?.replyToId ? { replyToId: opts.replyToId } : {}),
-        }),
+        receipt: receipt(
+          messageId,
+          opts?.audioAsVoice ? "voice" : opts?.mediaUrl ? "media" : "text",
+          opts?.replyToId,
+        ),
       };
     };
-    const adapter = requireMessageAdapter();
-    const sendText = requireMessageSendText(adapter);
-    const sendMedia = requireMessageSendMedia(adapter);
+    const adapter = required(imessagePlugin.message);
+    const sendText = required(adapter.send?.text);
+    const sendMedia = required(adapter.send?.media);
+    const context = messageContext(sendIMessage);
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "imessageMessage",
       adapter,
       proofs: {
         text: async () => {
-          const result = await sendText({
-            cfg: {} as never,
-            to: "+15551234567",
-            text: "hello",
-            deps: { imessage: sendIMessage },
-          } as Parameters<typeof sendText>[0] & {
-            deps: { imessage: typeof sendIMessage };
-          });
+          const result = await sendText({ ...context, text: "hello" });
           expect(result.receipt.platformMessageIds).toEqual(["imsg-text-1"]);
         },
         media: async () => {
           const result = await sendMedia({
-            cfg: {} as never,
-            to: "+15551234567",
+            ...context,
             text: "caption",
             mediaUrl: "/tmp/image.png",
             mediaLocalRoots: ["/tmp"],
             audioAsVoice: true,
-            deps: { imessage: sendIMessage },
-          } as Parameters<typeof sendMedia>[0] & {
-            deps: { imessage: typeof sendIMessage };
           });
           expect(result.receipt.platformMessageIds).toEqual(["imsg-media-1"]);
           expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
         },
         replyTo: async () => {
-          const result = await sendText({
-            cfg: {} as never,
-            to: "+15551234567",
-            text: "reply",
-            replyToId: "reply-1",
-            deps: { imessage: sendIMessage },
-          } as Parameters<typeof sendText>[0] & {
-            deps: { imessage: typeof sendIMessage };
-          });
+          const result = await sendText({ ...context, text: "reply", replyToId: "reply-1" });
           expect(result.receipt.replyToId).toBe("reply-1");
         },
         messageSendingHooks: () => {
@@ -313,138 +271,81 @@ describe("imessagePlugin contracts", () => {
         async (
           _to: string,
           _text: string,
-          options: { mediaAccess?: typeof mediaAccess; mediaReadFile?: typeof legacyReader },
+          _options: { mediaAccess?: typeof mediaAccess; mediaReadFile?: typeof legacyReader },
         ) => ({
           messageId: "p:0/trusted-media",
-          options,
-          receipt: createMessageReceiptFromOutboundResults({
-            results: [{ channel: "imessage", messageId: "p:0/trusted-media" }],
-            kind: "media",
-          }),
+          receipt: receipt("p:0/trusted-media", "media"),
         }),
       );
       const context = {
-        cfg: {} as never,
-        to: "+15551234567",
+        ...messageContext(sendIMessage),
         text: "caption",
         mediaUrl: "workspace-image.png",
         mediaAccess,
         mediaLocalRoots: ["/untrusted/legacy"],
         mediaReadFile: legacyReader,
-        deps: { imessage: sendIMessage },
       };
 
-      if (adapterKind === "message") {
-        const sendMedia = requireMessageSendMedia(requireMessageAdapter());
-        await sendMedia(
-          context as Parameters<typeof sendMedia>[0] & {
-            deps: { imessage: typeof sendIMessage };
-          },
-        );
-      } else {
-        const sendMedia = imessagePlugin.outbound?.sendMedia;
-        if (!sendMedia) {
-          throw new Error("Expected the actual iMessage outbound adapter");
-        }
-        await sendMedia(context);
-      }
+      const sendMedia = required(
+        adapterKind === "message"
+          ? imessagePlugin.message?.send?.media
+          : imessagePlugin.outbound?.sendMedia,
+      );
+      await sendMedia(context);
 
       const forwarded = sendIMessage.mock.calls[0]?.[2];
       expect(forwarded?.mediaAccess).toBe(mediaAccess);
       expect(forwarded?.mediaReadFile).toBe(legacyReader);
-      expect(forwarded).toEqual(
-        expect.objectContaining({ mediaLocalRoots: ["/untrusted/legacy"] }),
-      );
+      expect(forwarded).toMatchObject({ mediaLocalRoots: ["/untrusted/legacy"] });
     },
   );
 
   it("rejects a host media reader without explicit approved roots", async () => {
     const readFile = vi.fn(async () => IMESSAGE_WORKSPACE_PNG);
-    const sendMedia = requireMessageSendMedia(requireMessageAdapter());
+    const sendMedia = required(imessagePlugin.message?.send?.media);
     const nativeSend = vi.fn(sendMessageIMessage);
 
     await expect(
       sendMedia({
-        cfg: {} as never,
-        to: "+15551234567",
-        text: "",
+        ...messageContext(nativeSend),
         mediaUrl: "workspace-image.png",
         mediaAccess: { workspaceDir: "/trusted/workspace", readFile },
-        deps: { imessage: nativeSend },
-      } as Parameters<typeof sendMedia>[0] & {
-        deps: { imessage: typeof nativeSend };
       }),
     ).rejects.toThrow("Host media read requires explicit localRoots");
 
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "workspace traversal despite wider conflicting legacy roots",
-      filename: "../outside.png",
-      contents: IMESSAGE_WORKSPACE_PNG,
-      readerCalls: 0,
-      expectedCode: "path-not-allowed",
-    },
-    {
-      name: "private log document",
-      filename: "debug.log",
-      contents: Buffer.from("private operator logs"),
-      readerCalls: 1,
-      expectedCode: "path-not-allowed",
-    },
-    {
-      name: "untrusted HTML before the host reader",
-      filename: "report.html",
-      contents: Buffer.from("<!doctype html><h1>untrusted</h1>"),
-      readerCalls: 0,
-      expectedCode: "path-not-allowed",
-    },
-    {
-      name: "plain text disguised as a PDF",
-      filename: "report.pdf",
-      contents: Buffer.from("private text without a PDF signature"),
-      readerCalls: 1,
-      expectedCode: "path-not-allowed",
-    },
-    {
-      name: "binary data disguised as plain text",
-      filename: "report.txt",
-      contents: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
-      readerCalls: 1,
-      expectedCode: "path-not-allowed",
-    },
+  it.each<[string, string, Buffer, number]>([
+    ["workspace traversal despite wider legacy roots", "../outside.png", IMESSAGE_WORKSPACE_PNG, 0],
+    ["private log document", "debug.log", Buffer.from("private operator logs"), 1],
+    ["HTML before the host reader", "report.html", Buffer.from("<html>untrusted</html>"), 0],
+    ["plain text disguised as a PDF", "report.pdf", Buffer.from("not a PDF"), 1],
+    ["binary data disguised as plain text", "report.txt", Buffer.from([0x50, 0x4b, 0x03, 0x04]), 1],
   ])(
-    "rejects $name before native iMessage delivery",
-    async ({ filename, contents, readerCalls, expectedCode }) => {
+    "rejects %s before native iMessage delivery",
+    async (_name, filename, contents, readerCalls) => {
       await withStateDirEnv("openclaw-imessage-media-policy-", async ({ stateDir }) => {
         const stateRoot = fs.realpathSync(stateDir);
         const workspaceDir = path.join(stateRoot, "workspace");
         fs.mkdirSync(workspaceDir);
         fs.writeFileSync(path.resolve(workspaceDir, filename), contents);
-        const readFile = vi.fn(async (filePath: string) => await fs.promises.readFile(filePath));
+        const mediaAccess = mediaAccessFor(workspaceDir);
         const conflictingReader = vi.fn(async () => Buffer.from("conflicting reader"));
         const runCliJson = mockCliSend().mockResolvedValue({ messageId: "must-not-send" });
-        const nativeSend = sendMessageIMessage;
-        const sendMedia = requireMessageSendMedia(requireMessageAdapter());
+        const sendMedia = required(imessagePlugin.message?.send?.media);
 
         await expect(
           sendMedia({
-            cfg: {} as never,
-            to: "+15551234567",
-            text: "",
+            ...messageContext(sendMessageIMessage),
             mediaUrl: filename,
-            mediaAccess: { localRoots: [workspaceDir], workspaceDir, readFile },
+            mediaAccess,
             mediaLocalRoots: [stateRoot],
             mediaReadFile: conflictingReader,
-            deps: { imessage: nativeSend },
-          } as Parameters<typeof sendMedia>[0] & {
-            deps: { imessage: typeof nativeSend };
           }),
-        ).rejects.toMatchObject({ code: expectedCode });
+        ).rejects.toMatchObject({ code: "path-not-allowed" });
 
-        expect(readFile).toHaveBeenCalledTimes(readerCalls);
+        expect(mediaAccess.readFile).toHaveBeenCalledTimes(readerCalls);
         expect(conflictingReader).not.toHaveBeenCalled();
         expect(runCliJson).not.toHaveBeenCalled();
       });
@@ -452,26 +353,15 @@ describe("imessagePlugin contracts", () => {
   );
 
   it("carries the stable iMessage GUID beside the broad adapter delivery identity", async () => {
-    const sendText = requireMessageSendText(requireMessageAdapter());
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [{ channel: "imessage", messageId: "42" }],
-      kind: "text",
-    });
+    const sendText = required(imessagePlugin.message?.send?.text);
     const sendIMessage = async () => ({
       messageId: "42",
       guid: "p:0/stable-guid",
       sentText: "hello",
-      receipt,
+      receipt: receipt("42"),
     });
 
-    const result = await sendText({
-      cfg: {} as never,
-      to: "+15551234567",
-      text: "hello",
-      deps: { imessage: sendIMessage },
-    } as Parameters<typeof sendText>[0] & {
-      deps: { imessage: typeof sendIMessage };
-    });
+    const result = await sendText({ ...messageContext(sendIMessage), text: "hello" });
 
     expect(result.messageId).toBe("42");
     expect(result.receipt.primaryPlatformMessageId).toBe("42");
@@ -481,45 +371,33 @@ describe("imessagePlugin contracts", () => {
     });
   });
 
-  it("preserves provider-accepted attachment progress through actual durable core without replay", async () => {
-    const cfg = {
-      channels: { imessage: { accounts: { default: {} } } },
-    } as OpenClawConfig;
-    const captionError = new Error("caption failed after native attachment acceptance");
-    const captionClient = {
-      request: vi.fn(async () => {
-        throw captionError;
-      }),
-      stop: vi.fn(async () => {}),
-    } as unknown as IMessageRpcClient;
-    const attachmentBytes = IMESSAGE_WORKSPACE_PNG;
-    const runCliJson = mockCliSend().mockImplementation(async (args) => {
-      const attachmentPath = args[args.indexOf("--file") + 1];
-      expect(attachmentPath).toBeDefined();
-      expect(fs.readFileSync(attachmentPath!)).toEqual(attachmentBytes);
-      return { messageId: "p:0/durable-accepted-attachment" };
+  describe("durable attachments", () => {
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "imessage", plugin: imessagePlugin, source: "test" }]),
+      );
     });
-    const nativeSend = vi.fn<typeof sendMessageIMessage>(async (to, text, options) =>
-      sendMessageIMessage(to, text, {
-        ...options,
-        client: captionClient,
-      }),
-    );
-    const onDeliveryResult = vi.fn();
+    afterEach(resetPluginRuntimeStateForTest);
 
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "imessage", plugin: imessagePlugin, source: "test" }]),
-    );
-    try {
+    it("preserves provider-accepted attachment progress through actual durable core without replay", async () => {
+      const captionError = new Error("caption failed after native attachment acceptance");
+      const nativeSend = nativeSender(async () => {
+        throw captionError;
+      });
+      const bytes = IMESSAGE_WORKSPACE_PNG;
+      const runCliJson = mockCliSend().mockImplementation(async (args) => {
+        const attachmentPath = args[args.indexOf("--file") + 1];
+        expect(attachmentPath).toBeDefined();
+        expect(fs.readFileSync(attachmentPath!)).toEqual(bytes);
+        return { messageId: "p:0/durable-accepted-attachment" };
+      });
+      const onDeliveryResult = vi.fn();
+
       await withStateDirEnv("openclaw-imessage-durable-attachment-", async ({ stateDir }) => {
-        const workspaceDir = fs.realpathSync(stateDir);
-        const sourcePath = path.join(workspaceDir, "workspace-image.png");
-        fs.writeFileSync(sourcePath, attachmentBytes);
-        const readFile = vi.fn(async (filePath: string) => await fs.promises.readFile(filePath));
-        const mediaAccess = { localRoots: [workspaceDir], workspaceDir, readFile };
-
+        const { sourcePath, mediaAccess } = attachment(stateDir, "workspace-image.png", bytes);
+        const { readFile } = mediaAccess;
         const result = await sendDurableMessageBatch({
-          cfg,
+          cfg: durableConfig,
           channel: "imessage",
           to: "+15550004567",
           durability: "required",
@@ -529,26 +407,15 @@ describe("imessagePlugin contracts", () => {
           payloads: [{ text: "undelivered caption", mediaUrl: path.basename(sourcePath) }],
         });
 
-        if (result.status === "failed") {
-          throw result.error;
-        }
         expect(result).toMatchObject({
           status: "partial_failed",
           sentBeforeError: true,
           receipt: { platformMessageIds: ["p:0/durable-accepted-attachment"] },
-          results: [
-            {
-              channel: "imessage",
-              messageId: "p:0/durable-accepted-attachment",
-            },
-          ],
+          results: [delivery("p:0/durable-accepted-attachment")],
           payloadOutcomes: [{ status: "failed", sentBeforeError: true }],
         });
         expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            channel: "imessage",
-            messageId: "p:0/durable-accepted-attachment",
-          }),
+          expect.objectContaining(delivery("p:0/durable-accepted-attachment")),
         );
         expect(readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
         const forwardedMediaAccess = nativeSend.mock.calls[0]?.[2]?.mediaAccess;
@@ -558,54 +425,35 @@ describe("imessagePlugin contracts", () => {
         await drainPendingDeliveries({
           drainKey: "imessage:default",
           logLabel: "iMessage accepted attachment recovery",
-          cfg,
+          cfg: durableConfig,
           stateDir,
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           selectEntry: (entry) => ({ match: entry.channel === "imessage" }),
         });
         expect(runCliJson).toHaveBeenCalledTimes(1);
       });
-    } finally {
-      resetPluginRuntimeStateForTest();
-    }
-  });
-
-  it("halts native caption delivery when actual durable progress custody rejects", async () => {
-    const cfg = {
-      channels: { imessage: { accounts: { default: {} } } },
-    } as OpenClawConfig;
-    const custodyError = new Error("durable accepted-attachment custody rejected");
-    const captionRequest = vi.fn(async () => ({ guid: "p:0/caption-must-not-send" }));
-    const captionClient = {
-      request: captionRequest,
-      stop: vi.fn(async () => {}),
-    } as unknown as IMessageRpcClient;
-    const attachmentBytes = Buffer.from("%PDF-1.4\n% actual durable custody failure\n");
-    const runCliJson = mockCliSend().mockResolvedValue({
-      messageId: "p:0/durable-custody-attachment",
-    });
-    const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
-      await sendMessageIMessage(to, text, { ...options, client: captionClient });
-    const onDeliveryResult = vi.fn(async () => {
-      throw custodyError;
     });
 
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "imessage", plugin: imessagePlugin, source: "test" }]),
-    );
-    try {
+    it("halts native caption delivery when actual durable progress custody rejects", async () => {
+      const custodyError = new Error("durable accepted-attachment custody rejected");
+      const captionRequest = vi.fn(async () => ({ guid: "p:0/caption-must-not-send" }));
+      const nativeSend = nativeSender(captionRequest);
+      const bytes = Buffer.from("%PDF-1.4\n% actual durable custody failure\n");
+      const runCliJson = mockCliSend().mockResolvedValue({
+        messageId: "p:0/durable-custody-attachment",
+      });
+      const onDeliveryResult = vi.fn(async () => {
+        throw custodyError;
+      });
+
       await withStateDirEnv("openclaw-imessage-durable-custody-", async ({ stateDir }) => {
-        const workspaceDir = fs.realpathSync(stateDir);
-        const sourcePath = path.join(workspaceDir, "custody-report.pdf");
-        fs.writeFileSync(sourcePath, attachmentBytes);
-        const readFile = vi.fn(async (filePath: string) => await fs.promises.readFile(filePath));
-
+        const { sourcePath, mediaAccess } = attachment(stateDir, "custody-report.pdf", bytes);
         const result = await sendDurableMessageBatch({
-          cfg,
+          cfg: durableConfig,
           channel: "imessage",
           to: "+15550004567",
           durability: "required",
-          mediaAccess: { localRoots: [workspaceDir], workspaceDir, readFile },
+          mediaAccess,
           deps: { imessage: nativeSend },
           onDeliveryResult,
           payloads: [{ text: "caption must not send", mediaUrl: sourcePath }],
@@ -614,20 +462,13 @@ describe("imessagePlugin contracts", () => {
         expect(result).toMatchObject({
           status: "partial_failed",
           sentBeforeError: true,
-          results: [
-            {
-              channel: "imessage",
-              messageId: "p:0/durable-custody-attachment",
-            },
-          ],
+          results: [delivery("p:0/durable-custody-attachment")],
         });
         expect(onDeliveryResult).toHaveBeenCalledOnce();
         expect(runCliJson).toHaveBeenCalledOnce();
-        expect(readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
+        expect(mediaAccess.readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
         expect(captionRequest).not.toHaveBeenCalled();
       });
-    } finally {
-      resetPluginRuntimeStateForTest();
-    }
+    });
   });
 });

@@ -353,10 +353,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     }
   }
 
-  preloadCatalogRenderer() {
-    return this.catalogRendererImport.load();
-  }
-
   setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;

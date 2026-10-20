@@ -138,6 +138,9 @@ describe("comment actions outside the transcript", () => {
     )!;
     const focus = vi.spyOn(textarea, "focus");
     container.querySelector(".chat-thread")!.remove();
+    await waitForSolid(() =>
+      expect(container.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
+    );
     container.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });

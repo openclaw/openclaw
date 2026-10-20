@@ -23,6 +23,7 @@ import type {
   SessionEntryLifecycleUpsert,
   SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type {
   SessionEntryMaintenanceAgeChange,
@@ -299,7 +300,11 @@ export type SqliteArchiveReclamationPlan = Exclude<
   SessionMaintenanceMetadataCommand
 >;
 
-export type SqliteSessionReclamationResult =
+export type SqliteSessionReclamationResult = SqliteSessionReclamationValue & {
+  conversationPublication?: readonly ConversationPublication[];
+};
+
+type SqliteSessionReclamationValue =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }

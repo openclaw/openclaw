@@ -33,6 +33,10 @@ backup.
 
 ## Update implementation contract
 
+Background discovery failures are logged and retried at the next scheduled check.
+Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
+are reported by the scheduler without restarting the Gateway.
+
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
 Before replacing a Git checkout's build or an installed package, the updater
@@ -40,6 +44,10 @@ retains its running runtime. Late module imports and background workers keep
 using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
+
+Managed update helpers route diagnostic logs to stderr so debug logging cannot
+interrupt their control handshake. This applies to the installed updater; a newer
+candidate cannot change an older updater's pre-activation handshake.
 
 If native service inspection becomes unavailable after admission, the updater
 refuses activation before stopping the Gateway or replacing its package. When
@@ -127,6 +135,22 @@ Retained plugin databases, including plugin shared-state stores, are not checked
 against the agent schema. Their plugin owns migration; they remain in the
 snapshot and rollback inventory even when the plugin is disabled. The primary
 shared-state database is checked against the shared-state schema.
+
+The local client credential cutover preserves private identities and cached tokens
+in `client/credentials.sqlite`, separate from shared Gateway state. The preparatory
+release does not create that file. Earlier SQLite drivers capture the shared
+credential tables before the cutover and restore them on automatic rollback; the
+old version ignores the remaining local file. Credentials issued between upgrade
+and rollback are lost, and those clients must pair again. A later upgrade rebuilds
+that stale local file from restored shared state instead of merging it. PostgreSQL
+installations use an engine-aware driver with local-family capture support, so
+rollback restores the shared and local stores together. See
+[credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
+
+Independent native credential sources remain unchanged during import and remain
+readable by the previous app after rollback. Reusing the same source preserves
+local refreshes; a changed or restored source rebuilds its local copy while
+retaining consumed legacy-JSON claims.
 
 OpenClaw.app runs plugin convergence through the selected runtime's Doctor while
 the app owns Gateway activation. This aligns managed official npm plugins with the new

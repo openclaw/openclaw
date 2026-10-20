@@ -21,7 +21,7 @@ import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.t
 // Durable runtime budgets for the chat streaming surface. Byte budgets
 // (scripts/check-control-ui-performance.mts) cannot see rendering work, so
 // these tests protect the landed streaming optimizations at the DOM boundary:
-// the animation-frame render queue (ui/src/pages/chat/chat-state-render.ts),
+// the animation-frame render queue (ui/src/pages/chat/chat-run-presentation.ts),
 // the bounded live tool stream (ui/src/pages/chat/tool-stream.ts), and the
 // transcript/heap cost of long sessions. Structural counts are exact and
 // machine-speed independent; wall-clock/heap ceilings carry several-fold
@@ -197,7 +197,7 @@ async function installRenderProbe(page: ChatFlowPage) {
       "index",
     ];
     const sourceNames = new Set([
-      "chat-state-render",
+      "chat-run-presentation",
       "chat-state-controller",
       "chat-state-events",
       "chat-state-refresh",

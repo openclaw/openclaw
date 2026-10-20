@@ -37,10 +37,10 @@ import {
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
+import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
-import "./sidebar-collapse-toggle.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { renderNewSessionLink } from "./solid/new-session-link.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import {
   SessionGlyph,
   renderSessionUnreadBadge,
@@ -80,24 +80,18 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     >
       {renderSidebarAgentCard(host)}
       <div class="sidebar-rail__create">
-        {renderNewSessionLink({
-          get basePath() {
-            return host.basePath;
-          },
-          get agentId() {
-            return host.expandedAgentId();
-          },
-          class: "sidebar-rail__button sidebar-new-session",
-          get label() {
-            return t("agentChip.newConversation");
-          },
-          showShortcut: true,
-          get disabledReason() {
+        <NewSessionLink
+          basePath={host.basePath}
+          agentId={host.expandedAgentId()}
+          class="sidebar-rail__button sidebar-new-session"
+          label={t("agentChip.newConversation")}
+          showShortcut
+          disabledReason={(() => {
             const access = newSessionAccess();
             return access.allowed ? undefined : access.reason;
-          },
-          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-        })}
+          })()}
+          onOpen={(agentId, target) => host.requestOpenNewSession(agentId, target)}
+        />
       </div>
       <div class="sidebar-rail__views">
         <For each={views}>
@@ -535,7 +529,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
     >
       <div class="sidebar-pages__heading sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
         <span>{t("nav.pages")}</span>
-        <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
+        <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
       </div>
       <openclaw-mcp-app-catalog surface="sidebar" />
       <For each={entries()} keyed={serializeSidebarEntry}>

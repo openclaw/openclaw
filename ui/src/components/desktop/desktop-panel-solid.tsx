@@ -1,10 +1,11 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { merge, onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
+import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
@@ -28,7 +29,6 @@ import {
   type DesktopPictureInPicture,
 } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
-import dockStyles from "../dock-panel-solid.css?inline";
 import desktopStyles from "./desktop-panel.css?inline";
 
 type Methods = { handleToggleRequest(event: Event): void };
@@ -272,17 +272,7 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
           }}
           onClose={props.view.onClose}
           content={content}
-          connection={{
-            surfaceRef: props.view.surfaceRef,
-            get controlling() {
-              return props.view.controlling;
-            },
-            get desktopApps() {
-              return props.view.desktopApps;
-            },
-            get launchingApp() {
-              return props.view.launchingApp;
-            },
+          connection={merge(() => props.view, {
             get showApps() {
               const target = props.view.focusTarget();
               return (
@@ -290,20 +280,13 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
                 desktopSourceForEnvironment({ id: target.source }).kind === "environment"
               );
             },
-            get sizing() {
-              return props.view.sizing;
-            },
             get pictureInPictureControl() {
               return pictureInPictureControl();
             },
             get audioControl() {
               return audioControl();
             },
-            onLaunch: (app) => props.view.onLaunch(app),
-            onTakeControl: () => props.view.onTakeControl(),
-            onControlToggle: () => props.view.onControlToggle(),
-            onDisconnect: () => props.view.onDisconnect(),
-          }}
+          })}
         />
       )}
     </>

@@ -61,7 +61,6 @@ function fixture(resourceBasePath = "/control") {
     branding: resolveThemeBranding(undefined),
     mode: "dark",
     resolvedMode: "dark",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,

@@ -265,6 +265,15 @@ If local session state requires Doctor, status prints any installation drift to 
 - `status --all` includes a **Telemetry exporters** diagnosis with the latest
   trusted per-signal exporter state and transport. Endpoint values, headers,
   certificates, payloads, and raw errors are not shown.
+- Missing log files are omitted from `status --all`. Unreadable logs show an
+  unavailable message with guidance to check the file path and permissions.
+
+## Plugin health
+
+Plugin-health collection warns when persisted quarantine records cannot be read
+and continues with the available health information. The inventory may be
+incomplete; run `openclaw doctor` to inspect state storage. The warning does not
+include stored records or raw database errors.
 
 ## Plugin reload
 

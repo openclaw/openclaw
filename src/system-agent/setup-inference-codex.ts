@@ -266,9 +266,7 @@ export async function stageCodexCandidate(
       allowKeychainPrompt: true,
     });
     if (!credential) {
-      const choices = (
-        ctx.deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
-      )({
+      const choices = resolveManifestProviderAuthChoices({
         config,
         workspaceDir: ctx.workspace,
         includeUntrustedWorkspacePlugins: false,

@@ -133,10 +133,13 @@ type ToolUseResultPairingOptions = {
 
 export { stripToolResultDetails } from "../shared/model-context-message.js";
 
-function collectFollowingToolResults(
+export function collectFollowingToolResults(
   messages: AgentMessage[],
   index: number,
-  currentToolCalls: ReturnType<typeof extractToolCallsFromAssistant>,
+  currentToolCalls?: ReturnType<typeof extractToolCallsFromAssistant>,
+  hasAssistantToolCall: (message: Extract<AgentMessage, { role: "assistant" }>) => boolean = (
+    message,
+  ) => extractToolCallsFromAssistant(message).length > 0,
 ): { ids: Set<string>; displaced: boolean } {
   const ids = new Set<string>();
   let sawNonToolResult = false;
@@ -147,11 +150,13 @@ function collectFollowingToolResults(
       sawNonToolResult = true;
       continue;
     }
-    if (message.role === "assistant" && extractToolCallsFromAssistant(message).length > 0) {
+    if (message.role === "assistant" && hasAssistantToolCall(message)) {
       break;
     }
     if (message.role === "toolResult") {
-      const normalizedLegacyResult = normalizeLegacyToolResultId(message, currentToolCalls);
+      const normalizedLegacyResult = currentToolCalls
+        ? normalizeLegacyToolResultId(message, currentToolCalls)
+        : message;
       const resultIds = extractToolResultIds(normalizedLegacyResult);
       for (const id of resultIds) {
         ids.add(id);

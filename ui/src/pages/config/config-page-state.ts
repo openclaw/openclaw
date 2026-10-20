@@ -6,6 +6,7 @@ import type {
   SessionsCatalogListResult,
   SystemInfoResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type * as Push from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -65,7 +66,7 @@ import {
   defaultConfigSelection,
   normalizeConfigSelection,
   type ConfigSelection,
-  SCOPED_CONFIG_SECTION_KEYS,
+  ADVANCED_EXCLUDED_SECTIONS,
   type ConfigPageId,
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
@@ -79,9 +80,10 @@ import {
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
+  type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
 import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
-import type { ConfigProps, ConfigViewState } from "./view-types.ts";
+import type * as View from "./view-state.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -112,7 +114,7 @@ export function createConfigPage(
     onSettled(afterCommit);
   };
   const [presentation, setPresentation] = createStore<{
-    formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>>;
+    formModes: Partial<Record<ConfigPageId, View.ConfigFormMode>>;
     selections: Partial<Record<ConfigPageId, ConfigSelection>>;
   }>({ formModes: {}, selections: {} });
   let pageId: ConfigPageId = "advanced";
@@ -136,7 +138,7 @@ export function createConfigPage(
   let installedSessionSourcePluginIds: Set<string> | null = null;
   let sessionSourcePluginsLoading = false;
   const customThemeImportOwner = new themeImport.CustomThemeImportOwner(invalidate);
-  let configViewState: ConfigViewState = createConfigViewState();
+  let configViewState: View.ConfigViewState = createConfigViewState();
   let runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   let updateStatusClient: GatewayBrowserClient | null = null;
   let mediaDeviceWatch: (() => void) | null = null;
@@ -602,38 +604,11 @@ export function createConfigPage(
     invalidate();
   }
 
-  function setActiveSection(section: string | null) {
-    setPresentation((draft) => {
-      draft.selections[pageId] = { activeSection: section, activeSubsection: null };
-    });
-    invalidate();
-  }
-
-  function setActiveSubsection(section: string | null) {
-    setPresentation((draft) => {
-      draft.selections[pageId] = {
-        ...(draft.selections[pageId] ?? defaultConfigSelection(pageId)),
-        activeSubsection: section,
-      };
-    });
-    invalidate();
-  }
-
   function applySettings(patch: Partial<UiSettings>, selectedTheme?: ThemeName) {
     settings = selectedTheme ? selectThemeSettings(selectedTheme, patch) : patchSettings(patch);
     // theme.refresh() also republishes non-theme appearance prefs (text
     // scale, lobster pet visits/sounds) to app-host subscribers.
     context.theme.refresh();
-    invalidate();
-  }
-
-  function setLocale(locale: Locale | undefined) {
-    if (locale === undefined) {
-      resetSyncedPref("locale");
-      return;
-    }
-    settings = patchSettings({ locale });
-    void i18n.setLocale(locale);
     invalidate();
   }
 
@@ -679,25 +654,6 @@ export function createConfigPage(
     }
   }
 
-  function setTheme(theme: ThemeName) {
-    const preference = currentSyncedPref("theme");
-    const reset = preference.overridden && theme === preference.resetValue;
-    if (reset) {
-      resetSyncedPref("theme");
-    } else {
-      applySettings({}, theme);
-    }
-  }
-
-  function setThemeMode(mode: ThemeMode) {
-    const preference = currentSyncedPref("themeMode");
-    if (preference.overridden && mode === preference.resetValue) {
-      resetSyncedPref("themeMode");
-    } else {
-      context.theme.setMode(mode);
-    }
-  }
-
   async function selectCamera(deviceId: string) {
     const request = ++cameraSelectionRequest;
     const videoDeviceId = deviceId.trim() || undefined;
@@ -721,32 +677,6 @@ export function createConfigPage(
     }
   }
 
-  async function importCustomTheme() {
-    await customThemeImportOwner.import({
-      config: context.runtimeConfig.state,
-      hasCustomTheme: Boolean(settings.customTheme),
-      readTheme: () => settings.theme,
-      load: importCustomThemeFromUrl,
-      apply: (customTheme, activate) =>
-        applySettings({ customTheme }, activate ? "custom" : settings.theme),
-      messages: {
-        blocked: (reason) => t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),
-        imported: (label) => t("configPage.themeImported", { name: label }),
-      },
-    });
-  }
-
-  function clearCustomTheme() {
-    customThemeImportOwner.clear({
-      apply: () =>
-        applySettings(
-          { customTheme: undefined },
-          settings.theme === "custom" ? "claw" : settings.theme,
-        ),
-      message: t("configPage.themeRemoved"),
-    });
-  }
-
   function isUpdateBusy(): boolean {
     const update = context.overlays.snapshot;
     return update.updateRunning || update.updateReconciliationPending;
@@ -766,14 +696,14 @@ export function createConfigPage(
     );
   }
 
-  function configProps(): ConfigProps {
+  function configProps() {
     revision();
     const configObject = readConfigObject();
     const runtimeConfig = context.runtimeConfig;
     const configState = runtimeConfig.state;
     const includeSections = configSectionKeysForPage(pageId);
     // Advanced shows everything without a curated home elsewhere.
-    const excludeSections = pageId === "advanced" ? [...SCOPED_CONFIG_SECTION_KEYS] : undefined;
+    const excludeSections = pageId === "advanced" ? ADVANCED_EXCLUDED_SECTIONS : undefined;
     const currentSelection = presentation.selections[pageId] ?? defaultConfigSelection(pageId);
     const selection = normalizeConfigSelection(
       pageId,
@@ -806,7 +736,7 @@ export function createConfigPage(
         mutate(...args);
       };
     return {
-      onAppearanceChange: (patch) => applySettings(patch),
+      onAppearanceChange: applySettings,
       raw: configState.configRaw,
       originalRaw: configState.configRawOriginal,
       valid: configState.configValid,
@@ -831,18 +761,35 @@ export function createConfigPage(
       formValue: configState.configForm,
       activeSection,
       activeSubsection,
-      onRawChange: withConfigMutation((next) => runtimeConfig.setRaw(next)),
-      onFormModeChange: (mode) => {
+      onRawChange: withConfigMutation((next: string) => runtimeConfig.setRaw(next)),
+      onFormModeChange: (mode: View.ConfigFormMode) => {
         setPresentation((draft) => {
           draft.formModes[pageId] = mode;
         });
         invalidate();
       },
       onViewStateChange: () => invalidate(),
-      onFormPatch: withConfigMutation((path, value) => runtimeConfig.patchForm(path, value)),
-      onFormRemove: withConfigMutation((path) => runtimeConfig.removeFormValue(path)),
-      onSectionChange: (section) => setActiveSection(section),
-      onSubsectionChange: (section) => setActiveSubsection(section),
+      onFormPatch: withConfigMutation((path: Array<string | number>, value: unknown) =>
+        runtimeConfig.patchForm(path, value),
+      ),
+      onFormRemove: withConfigMutation((path: Array<string | number>) =>
+        runtimeConfig.removeFormValue(path),
+      ),
+      onSectionChange: (section: string | null) => {
+        setPresentation((draft) => {
+          draft.selections[pageId] = { activeSection: section, activeSubsection: null };
+        });
+        invalidate();
+      },
+      onSubsectionChange: (section: string | null) => {
+        setPresentation((draft) => {
+          draft.selections[pageId] = {
+            ...(draft.selections[pageId] ?? defaultConfigSelection(pageId)),
+            activeSubsection: section,
+          };
+        });
+        invalidate();
+      },
       onSave: () => void runtimeConfig.save(),
       onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
@@ -861,8 +808,8 @@ export function createConfigPage(
       fontChat: settings.fontChat,
       fontUiProvenance: currentSyncedPref("fontUi").provenance,
       fontChatProvenance: currentSyncedPref("fontChat").provenance,
-      setFontUi: (font) => setFont("fontUi", font),
-      setFontChat: (font) => setFont("fontChat", font),
+      setFontUi: (font: TypefaceId | undefined) => setFont("fontUi", font),
+      setFontChat: (font: TypefaceId | undefined) => setFont("fontChat", font),
       systemLocale: i18n.getSystemLocale(),
       localeOverride: isSupportedLocale(localePref.value) ? localePref.value : undefined,
       localeOverridden: localePref.overridden,
@@ -870,12 +817,34 @@ export function createConfigPage(
       localeResetValue: isSupportedLocale(localePref.resetValue)
         ? localePref.resetValue
         : undefined,
-      onLocaleChange: (locale) => setLocale(locale),
+      onLocaleChange: (locale: Locale | undefined) => {
+        if (locale === undefined) {
+          resetSyncedPref("locale");
+          return;
+        }
+        settings = patchSettings({ locale });
+        void i18n.setLocale(locale);
+        invalidate();
+      },
       themeCatalog: pageId === "appearance" ? context.theme.catalog : undefined,
       onRetryThemeCatalog: () => context.theme.retryCatalog?.(),
-      setTheme: (theme) => setTheme(theme),
-      setThemeMode: (mode) => setThemeMode(mode),
-      setAccent: (accent) =>
+      setTheme: (theme: ThemeName) => {
+        const preference = currentSyncedPref("theme");
+        if (preference.overridden && theme === preference.resetValue) {
+          resetSyncedPref("theme");
+        } else {
+          applySettings({}, theme);
+        }
+      },
+      setThemeMode: (mode: ThemeMode) => {
+        const preference = currentSyncedPref("themeMode");
+        if (preference.overridden && mode === preference.resetValue) {
+          resetSyncedPref("themeMode");
+        } else {
+          context.theme.setMode(mode);
+        }
+      },
+      setAccent: (accent: string | undefined) =>
         accent === undefined ? resetSyncedPref("accent") : applySettings({ accent }),
       hasCustomTheme: Boolean(settings.customTheme),
       customThemeLabel: settings.customTheme?.label ?? null,
@@ -884,14 +853,37 @@ export function createConfigPage(
       customThemeImportBusy: customThemeImportOwner.snapshot.busy,
       customThemeImportMessage: customThemeImportOwner.snapshot.message,
       customThemeImportExpanded: customThemeImportOwner.snapshot.expanded,
-      onCustomThemeImportUrlChange: (next) => customThemeImportOwner.setUrl(next),
-      onImportCustomTheme: () => void importCustomTheme(),
-      onClearCustomTheme: () => clearCustomTheme(),
+      onCustomThemeImportUrlChange: (next: string) => customThemeImportOwner.setUrl(next),
+      onImportCustomTheme: () => {
+        void customThemeImportOwner.import({
+          config: context.runtimeConfig.state,
+          hasCustomTheme: Boolean(settings.customTheme),
+          readTheme: () => settings.theme,
+          load: importCustomThemeFromUrl,
+          apply: (customTheme, activate) =>
+            applySettings({ customTheme }, activate ? "custom" : settings.theme),
+          messages: {
+            blocked: (reason) =>
+              t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),
+            imported: (label) => t("configPage.themeImported", { name: label }),
+          },
+        });
+      },
+      onClearCustomTheme: () => {
+        customThemeImportOwner.clear({
+          apply: () =>
+            applySettings(
+              { customTheme: undefined },
+              settings.theme === "custom" ? "claw" : settings.theme,
+            ),
+          message: t("configPage.themeRemoved"),
+        });
+      },
       onOpenCustomThemeImport: () => customThemeImportOwner.open(),
       ...tabIconProps(),
       textScale: settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: settings.textScale !== undefined,
-      setTextScale: (value) =>
+      setTextScale: (value: number) =>
         applySettings({
           textScale:
             value === UI_APPEARANCE_DEFAULTS.textScale ? undefined : normalizeTextScale(value),
@@ -902,7 +894,8 @@ export function createConfigPage(
       hiddenSessionCatalogLabels,
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       terminalFontFamily: settings.terminalFontFamily,
-      setTerminalFontFamily: (value) => applySettings({ terminalFontFamily: value }),
+      setTerminalFontFamily: (value: string | undefined) =>
+        applySettings({ terminalFontFamily: value }),
       chatMessageMaxWidth: settings.chatMessageMaxWidth,
       chatShowTaskProgress:
         settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
@@ -920,12 +913,12 @@ export function createConfigPage(
       sessionObserverModels,
       sessionObserverModelsUnavailable,
       sessionObserverDisabled: sessionObserverBusy,
-      setSessionObserverEnabled: (enabled) =>
+      setSessionObserverEnabled: (enabled: boolean) =>
         void runtimeConfig.patch({
           raw: buildSessionObserverTogglePatch(enabled),
           note: t("configView.sessionObserver.toggleNote"),
         }),
-      setSessionObserverUtilityModel: (modelSelection) =>
+      setSessionObserverUtilityModel: (modelSelection: SessionObserverModelSelection) =>
         void runtimeConfig
           .patch({
             raw: buildSessionObserverUtilityModelPatch(modelSelection, utilityModel),
@@ -967,24 +960,24 @@ export function createConfigPage(
       },
       composerHoldToRecord: settings.composerHoldToRecord !== false,
       onMicrophoneRefresh: () => void refreshMediaDevices("microphone", true),
-      onMicrophoneSelect: (deviceId) =>
+      onMicrophoneSelect: (deviceId: string) =>
         applySettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined }),
       camera: {
         ...mediaDevices.camera,
         selectedDeviceId: settings.realtimeTalkVideoDeviceId ?? "",
       },
       onCameraRefresh: () => void refreshMediaDevices("camera", true),
-      onCameraSelect: (deviceId) => void selectCamera(deviceId),
+      onCameraSelect: (deviceId: string) => void selectCamera(deviceId),
       gatewayUrl: context.gateway.connection.gatewayUrl,
       assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: pageId === "advanced" ? undefined : titleForRoute(pageId),
       showSectionDocs: pageId !== "communications",
       showRootTab: !includeSections?.length,
-      includeSections: includeSections ? [...includeSections] : undefined,
+      includeSections,
       excludeSections,
       includeVirtualSections: pageId === "appearance" || pageId === "notifications",
-      settingsLayout: pageId === "advanced" ? "accordion" : undefined,
+      settingsLayout: pageId === "advanced" ? ("accordion" as const) : undefined,
       nativeNotifications: notifications?.read(),
       onNativeNotificationsRequestPermission: () =>
         context.nativeNotifications?.requestPermission(),
@@ -993,11 +986,11 @@ export function createConfigPage(
       onWebPushSubscribe: () => void context.webPush.run({ kind: "enable" }),
       onWebPushUnsubscribe: () => void context.webPush.run({ kind: "disable" }),
       onWebPushTest: () => void context.webPush.run({ kind: "test" }),
-      onWebPushSetUserPreferences: (preferences) =>
+      onWebPushSetUserPreferences: (preferences: Push.WebPushNotificationPreferences) =>
         void context.webPush.run({ kind: "set", scope: "user", preferences }),
-      onWebPushSetDevicePreferences: (preferences) =>
+      onWebPushSetDevicePreferences: (preferences: Push.WebPushDevicePreferences) =>
         void context.webPush.run({ kind: "set", scope: "device", preferences }),
-    } satisfies ConfigProps;
+    };
   }
   const refresh = () => {
     synchronize();

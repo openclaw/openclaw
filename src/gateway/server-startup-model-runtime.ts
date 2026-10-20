@@ -87,29 +87,11 @@ export async function publishConfiguredModelRuntimeSnapshots(params: {
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
     ...(params.startupTrace
       ? {
-          onBuildStats: (stats) =>
+          onBuildStats: ({ sourceConcurrencyLimit, fullCatalogConcurrencyLimit, ...metrics }) =>
             params.startupTrace?.detail("sidecars.model-runtime-build", [
-              ["agentCount", stats.agentCount],
-              ["workspaceGroupCount", stats.workspaceGroupCount],
-              ["configuredFactsGroupCount", stats.configuredFactsGroupCount],
-              ["catalogSourceCount", stats.catalogSourceCount],
-              ["credentialGroupCount", stats.credentialGroupCount],
-              ["catalogGroupCount", stats.catalogGroupCount],
-              ["runtimeRegistryCount", stats.runtimeRegistryCount],
-              ["configuredRuntimeModelCount", stats.configuredRuntimeModelCount],
-              ["generatedCatalogPluginCount", stats.generatedCatalogPluginCount],
-              ["generatedCatalogReadCount", stats.generatedCatalogReadCount],
-              ["workspaceFactsMs", stats.workspaceFactsMs],
-              ["runtimePluginMs", stats.runtimePluginMs],
-              ["pluginMetadataMs", stats.pluginMetadataMs],
-              ["staticProviderCatalogMs", stats.staticProviderCatalogMs],
-              ["ambientCredentialsMs", stats.ambientCredentialsMs],
-              ["agentFactsMs", stats.agentFactsMs],
-              ["configuredProjectionMs", stats.configuredProjectionMs],
-              ["catalogSourceMs", stats.catalogSourceMs],
-              ["registryMs", stats.registryMs],
-              ["sourceConcurrencyLimitCount", stats.sourceConcurrencyLimit],
-              ["fullCatalogConcurrencyLimitCount", stats.fullCatalogConcurrencyLimit],
+              ...Object.entries(metrics),
+              ["sourceConcurrencyLimitCount", sourceConcurrencyLimit],
+              ["fullCatalogConcurrencyLimitCount", fullCatalogConcurrencyLimit],
             ]),
         }
       : {}),

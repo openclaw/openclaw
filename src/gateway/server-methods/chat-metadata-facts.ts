@@ -1,6 +1,6 @@
 import { withAgentRosterFactsBatch } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import {
   withPreparedModelRuntimeReadBatch,
   type GetPublishedPreparedModelCatalogOwnerParams,
@@ -9,13 +9,14 @@ import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-run
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type {
   ChatMetadataProjectionFacts,
   prepareChatMetadataModelProjection,
 } from "./chat-metadata-session-projection.js";
-import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
@@ -32,17 +33,10 @@ export type PreparedGenerationFacts = {
 
 export type ChatMetadataRuntimeDeps = {
   getConfig: () => OpenClawConfig;
-  getContext: () => GatewayModelCatalogContext;
   getPreparedOwner: (
     params: GetPublishedPreparedModelCatalogOwnerParams,
   ) => PreparedModelRuntimeSnapshot | undefined;
-  getPreparedAuthStore: (
-    agentDir?: string,
-    inheritedAuthDir?: string,
-  ) => AuthProfileStore | undefined;
   getAuthStoreRevision: (agentDir?: string) => number;
-  getSkillsVersion: (workspaceDir?: string) => number;
-  getPluginRegistryVersion: () => number;
   buildCommands: (params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -106,7 +100,10 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
               agentId,
               owner,
               authStore: fullCatalogAuth?.authStore ??
-                deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
+                getPreparedRuntimeAuthProfileStoreSnapshot(
+                  owner.agentDir,
+                  owner.inheritedAuthDir,
+                ) ?? {
                   version: 1,
                   profiles: {},
                 },
@@ -115,7 +112,7 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
               modelCatalog: catalog,
               // Failure is visible metadata; in-flight discovery does not invalidate usable rows.
               catalogRefreshFailed: catalog.refreshFailed === true,
-              skillsVersion: deps.getSkillsVersion(workspaceDir),
+              skillsVersion: getSkillsSnapshotVersion(workspaceDir),
             },
           ];
         }),
@@ -124,7 +121,7 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
   return {
     config,
     configKey: resolveRuntimeModelConfigCacheKey(config),
-    pluginRegistryVersion: deps.getPluginRegistryVersion(),
+    pluginRegistryVersion: getActivePluginRegistryVersion(),
     agents,
   };
 }

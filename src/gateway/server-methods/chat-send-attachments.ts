@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { MediaFact } from "../../media/media-facts.js";
+import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -26,6 +26,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
+import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
@@ -251,6 +252,11 @@ export async function prepareChatSendAttachments(params: {
     const explicitOriginTargets = await resolveExplicitOriginBindingTargets(explicitOrigin);
     assertInputCurrent();
     explicitOriginTargetsPlugin = explicitOriginTargets.plugin;
+    const recoveredInput = readChatInputRecoveryAdmission(clientRunId);
+    if (recoveredInput) {
+      // Accepted media retains its managed sources; the normal prompt owner hydrates them.
+      mediaPathOffloads = readPersistedMediaFacts(recoveredInput.target.message) ?? [];
+    }
 
     if (normalizedAttachments.length > 0) {
       // Refuse before parsing or persistence; device folders cannot receive staged files.

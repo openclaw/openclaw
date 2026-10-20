@@ -83,11 +83,7 @@ import {
 } from "./subagent-announce-output.js";
 import type { PreparedAnnounceResult } from "./subagent-announce-result.js";
 import { describeChildrenEndedWithoutResult } from "./subagent-announce.requester-settle-message.js";
-import {
-  callSubagentLifecycleGateway,
-  dispatchGatewayMethodInProcess,
-  getRuntimeConfig,
-} from "./subagent-announce.runtime.js";
+import { callSubagentLifecycleGateway, getRuntimeConfig } from "./subagent-announce.runtime.js";
 
 const loadSubagentRegistryRuntime = createLazyPromise(
   () => import("../registry/subagent-registry.js"),
@@ -349,12 +345,7 @@ async function runSubagentAnnounceFlowBound(
         isChildSessionEffectsAllowed: () =>
           childSessionEffectsAllowed() && completionDeliveryAllowed(),
         resolveGatewayContext: params.resolveGatewayContext,
-        deps: {
-          callGateway: callSubagentLifecycleGateway,
-          dispatchGatewayMethodInProcess,
-          getRuntimeConfig,
-          replaceSubagentRunAfterSteer: subagentRegistryRuntime.replaceSubagentRunAfterSteerCore,
-        },
+        replaceSubagentRunAfterSteer: subagentRegistryRuntime.replaceSubagentRunAfterSteerCore,
         signal: params.signal,
       });
       if (woke) {

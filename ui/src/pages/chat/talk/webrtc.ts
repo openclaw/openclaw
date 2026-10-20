@@ -194,12 +194,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     return "ready";
   }
 
-  async setVideoEnabled(enabled: boolean): Promise<void> {
-    await this.camera.setEnabled(enabled);
+  setVideoEnabled(enabled: boolean): Promise<void> {
+    return this.camera.setEnabled(enabled);
   }
 
-  async switchCamera(videoDeviceId: string | undefined): Promise<void> {
-    await this.camera.switchDevice(videoDeviceId);
+  switchCamera(videoDeviceId: string | undefined): Promise<void> {
+    return this.camera.switchDevice(videoDeviceId);
   }
 
   private isCurrentPeer(peer: RTCPeerConnection): boolean {
@@ -350,7 +350,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
               emitTalkEvent: this.emitTalkEvent,
               onControlResult: (result) => this.interruptSuppressedControlResponse(result),
               speakControlResult: (message) => this.sendControlSpeechMessage(message),
-              suppressSpeechForModes: ["cancel"],
             });
           }
         }

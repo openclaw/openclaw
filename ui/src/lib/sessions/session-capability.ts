@@ -26,10 +26,18 @@ import type {
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
 import type { BootRecord } from "../../app/boot-record.ts";
-import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import type {
+  ApplicationGateway,
+  ApplicationGatewayPhase,
+  ApplicationGatewaySnapshot,
+} from "../../app/gateway.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
-import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
+import type {
+  SessionCreateOutcome,
+  SessionCreateParams,
+  SessionCreateRequestOptions,
+} from "./create.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
 import type {
   GitHubPublicationOwner,
@@ -197,11 +205,14 @@ export type SessionResetOptions = {
 export type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 export type SessionGateway = {
+  defer?: ApplicationGateway["defer"];
   readonly connection?: { readonly gatewayUrl: string; readonly token?: string };
   readonly connectionRevision?: number;
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     phase: ApplicationGatewayPhase;
+    deferredIntentCount?: number;
+    deferredIntentDraining?: boolean;
     restartPending?: boolean;
     suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
     hello: GatewayHelloOk | null;
@@ -322,9 +333,12 @@ export type SessionCapability = {
   capturePermissionObservation: (key: string, agentId?: string | null) => () => boolean;
   createResult: (
     params?: SessionCreateParams,
-    options?: { reconciliation?: SessionCreateReconciliation },
+    options?: SessionCreateRequestOptions & { reconciliation?: SessionCreateReconciliation },
   ) => Promise<SessionCreateOutcome | null>;
-  create: (params?: SessionCreateParams) => Promise<string | null>;
+  create: (
+    params?: SessionCreateParams,
+    options?: SessionCreateRequestOptions,
+  ) => Promise<string | null>;
   recover: (params: SessionsRecoverParams) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   patchMany: (

@@ -12,6 +12,7 @@ import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import * as metadataWorker from "../plugins/plugin-metadata-state-worker.js";
 import { ExitError } from "../runtime.js";
+import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -127,10 +128,10 @@ it.each(["current", "webhook-repair"] as const)(
             /openclaw doctor --fix[\s\S]*Pinned channels\.nextcloud-talk\.accounts\.default\.legacyWebhook/,
           ),
         });
-        // Only the webhook receipt needs a read; plugin metadata is already prepared.
+        // Startup already prepared the webhook receipt and plugin metadata.
         expect(
           migrationReads.filter((sql) => /\bfrom\s+"?config_machine_state"?/i.test(sql)),
-        ).toHaveLength(1);
+        ).toHaveLength(0);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
@@ -156,6 +157,10 @@ it.each(["current", "webhook-repair"] as const)(
         expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
         expect(migrations).toHaveBeenCalledTimes(1);
         expect(verificationReads).toEqual([0, 0]);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        expect(deleteConfigMachineState(`webhookListeners:${configPath}`)).toBe(true);
+        expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
+        expect(readConfigMachineState(`webhookListeners:${configPath}`)).toBe(true);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await fs.writeFile(configPath, replacement);
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });

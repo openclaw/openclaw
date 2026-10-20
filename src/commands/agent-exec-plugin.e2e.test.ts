@@ -315,7 +315,15 @@ it("runs an operator-installed harness without retaining run state", async () =>
     code: 1,
     stdout: expect.not.stringContaining("PLUGIN_HARNESS_OK"),
   });
-  expect((await fs.readdir(stateDir)).toSorted()).toEqual(["extensions", "openclaw.json", "state"]);
+  expect((await fs.readdir(stateDir)).toSorted()).toEqual([
+    "client",
+    "extensions",
+    "openclaw.json",
+    "state",
+  ]);
+  const credentialFiles = await fs.readdir(path.join(stateDir, "client"));
+  expect(credentialFiles).toContain("credentials.sqlite");
+  expect(credentialFiles.every((file) => file.startsWith("credentials.sqlite"))).toBe(true);
   const registryFiles = await fs.readdir(path.join(stateDir, "state"));
   expect(registryFiles).toContain("openclaw.sqlite");
   expect(registryFiles.every((file) => file.startsWith("openclaw.sqlite"))).toBe(true);

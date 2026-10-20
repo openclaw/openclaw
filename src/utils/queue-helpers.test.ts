@@ -79,7 +79,7 @@ describe("queue summary helpers", () => {
 
   it("renders pending summary state without mutating it", () => {
     const state = { droppedCount: 2, summaryLines: ["first", "second"] };
-    const prompt = previewQueueSummaryPrompt({ state, noun: "message" });
+    const prompt = previewQueueSummaryPrompt(state);
 
     expect(prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
     expect(prompt).toContain("first");

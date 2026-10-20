@@ -176,7 +176,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       accountId,
       typing: {
         start: async () => {
-          if (!(account.config.typingIndicator ?? true)) {
+          if (!account.config.typingIndicator) {
             return;
           }
           if (!typingTargetMessageId) {

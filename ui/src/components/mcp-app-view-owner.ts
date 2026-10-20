@@ -48,6 +48,7 @@ export function createMcpAppView(
   host: McpAppViewElement,
   context: ApplicationContext,
   afterSettlement: (callback: () => void) => void,
+  publishState: () => void,
 ) {
   let inactive: "ended" | "reconstructed" | null = null;
   let errorState: unknown = null;
@@ -57,8 +58,6 @@ export function createMcpAppView(
   let setupAbort: AbortController | undefined;
   let requestAbort = new AbortController();
   const confirmation = createMcpAppConfirm();
-  const listeners = new Set<() => void>();
-  const publishState = () => listeners.forEach((listener) => listener());
   let started = false;
   let disposed = false;
   let retired = false;
@@ -135,6 +134,7 @@ export function createMcpAppView(
   function start() {
     started = true;
     let { client, phase, hello } = context.gateway.snapshot;
+    // Connection receipts retire frame requests before a replacement binding is admitted.
     stopConnection = context.gateway.subscribe((snapshot) => {
       if (snapshot.client !== client || snapshot.phase !== phase || snapshot.hello !== hello) {
         connectionChanged();
@@ -143,6 +143,7 @@ export function createMcpAppView(
       // Scope, generation, and access can change without replacing the snapshot's objects.
       inputChanged();
     });
+    // The protocol owner updates the iframe's native title outside Solid rendering.
     stopLocale = i18n.subscribe(updateTitle);
     inputChanged();
   }
@@ -692,6 +693,7 @@ export function createMcpAppView(
           await refreshModelContext();
         }
       };
+      // Theme receipts update the remote app's host context through its live bridge.
       addResourceCleanup(createdResources, context.theme.subscribe(updateHostContext));
       if (typeof ResizeObserver !== "undefined") {
         const hostResizeObserver = new ResizeObserver(updateHostContext);
@@ -723,10 +725,6 @@ export function createMcpAppView(
     read: () => ({ inactive, error: errorState }),
     setMount: (element: HTMLDivElement) => {
       mountElement = element;
-    },
-    subscribe(notify: () => void) {
-      listeners.add(notify);
-      return () => listeners.delete(notify);
     },
   };
 }

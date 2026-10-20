@@ -28,6 +28,9 @@ import {
   sendApnsPluginApprovalResolvedWake,
   shouldClearStoredApnsRegistration,
 } from "./push-apns.js";
+import * as apnsRelay from "./push-apns.relay.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const testAuthPrivateKey = generateKeyPairSync("ec", {
   namedCurve: "prime256v1",
@@ -84,7 +87,7 @@ function createRelayApnsSendFixture(params: {
 }) {
   const environment = params.environment ?? "production";
   return {
-    send: vi.fn().mockResolvedValue(params.sendResult),
+    send: vi.spyOn(apnsRelay, "sendApnsRelayPush").mockResolvedValue(params.sendResult),
     registration: {
       nodeId: params.nodeId,
       transport: "relay" as const,
@@ -100,10 +103,6 @@ function createRelayApnsSendFixture(params: {
     relayConfig: {
       baseUrl: "https://relay.openclaw.test",
       timeoutMs: 2_500,
-    },
-    gatewayIdentity: {
-      deviceId: "gateway-device-1",
-      privateKeyPem: testAuthPrivateKey,
     },
   };
 }
@@ -551,7 +550,7 @@ describe("push APNs send semantics", () => {
   });
 
   it("sends relay background pushes and falls back to the relay handle suffix", async () => {
-    const { send, registration, relayConfig, gatewayIdentity } = createRelayApnsSendFixture({
+    const { send, registration, relayConfig } = createRelayApnsSendFixture({
       nodeId: "ios-node-relay-wake",
       tokenDebugSuffix: undefined,
       sendResult: {
@@ -567,8 +566,6 @@ describe("push APNs send semantics", () => {
       nodeId: "ios-node-relay-wake",
       wakeReason: "queue.retry",
       relayConfig,
-      relayGatewayIdentity: gatewayIdentity,
-      relayRequestSender: send,
     });
 
     expect(send).toHaveBeenCalledTimes(1);
@@ -577,7 +574,6 @@ describe("push APNs send semantics", () => {
     expect(sent).toMatchObject({
       sendGrant: "send-grant-123",
       relayHandle: "relay-handle-12345678",
-      gatewayDeviceId: "gateway-device-1",
       pushType: "background",
       priority: "5",
     });

@@ -6,6 +6,7 @@ import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identi
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyMediaAttachment,
   type ReplyPayload,
@@ -13,6 +14,9 @@ import {
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
@@ -26,9 +30,12 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { throwIfAborted } from "./abort.js";
 import {
@@ -55,13 +62,17 @@ import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
-import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import {
   executeSendAction,
   hasCorePresentationDelivery,
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+
+// Keep the TTS runtime lazy so ordinary sends do not pay the provider import cost.
+const loadMessageActionTtsRuntime = createLazyRuntimeModule(
+  () => import("../../tts/tts.runtime.js"),
+);
 
 function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["type"] {
   return value === "image" || value === "audio" || value === "video" || value === "file"
@@ -458,16 +469,46 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   };
   throwIfAborted(abortSignal);
 
-  const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
-    payload: sendPayload.payload,
-    cfg,
-    channel,
-    accountId,
-    agentId,
-    sessionKey: input.sessionKey,
-    inboundAudio: input.inboundAudio,
-    dryRun,
-  });
+  let ttsPayload = sendPayload.payload;
+  if (!dryRun) {
+    const sessionKey = input.sessionKey?.trim();
+    let ttsAuto: TtsAutoMode | undefined;
+    if (sessionKey) {
+      try {
+        const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+        ttsAuto = (await readSessionEntryReadOnlyInWorker({ agentId, sessionKey, storePath }))
+          ?.ttsAuto;
+      } catch {
+        // Missing or unreadable session stores should not block message delivery.
+      }
+    }
+    const explicitTts = getReplyPayloadMetadata(ttsPayload)?.ttsExplicit === true;
+    const preparedTtsPreferences = await prepareTtsPreferences();
+    if (
+      explicitTts ||
+      shouldAttemptTtsPayload({
+        cfg,
+        preparedTtsPreferences,
+        ttsAuto,
+        agentId,
+        channelId: channel,
+        accountId: accountId ?? undefined,
+      })
+    ) {
+      const { maybeApplyTtsToPayload } = await loadMessageActionTtsRuntime();
+      ttsPayload = await maybeApplyTtsToPayload({
+        payload: ttsPayload,
+        preparedTtsPreferences,
+        cfg,
+        channel,
+        kind: "final",
+        inboundAudio: input.inboundAudio,
+        ttsAuto,
+        agentId,
+        accountId: accountId ?? undefined,
+      });
+    }
+  }
   if (ttsPayload !== sendPayload.payload) {
     sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
     applySendPayloadPartsToActionParams(params, sendPayload);

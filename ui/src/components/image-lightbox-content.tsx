@@ -16,12 +16,7 @@ import {
   trapLightboxTabFocus,
 } from "./image-lightbox-gallery.ts";
 import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
-import {
-  LightboxAction,
-  LightboxChrome,
-  LightboxImageQualityStatus,
-  lightboxImageStyle,
-} from "./image-lightbox-view.tsx";
+import { LightboxAction, LightboxChrome, lightboxImageStyle } from "./image-lightbox-view.tsx";
 import type { ImageLightboxProps } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 import imageLightboxStyles from "./image-lightbox.css?inline";
@@ -547,12 +542,25 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
           onDownloadImage={downloadCurrentImage}
           onClose={emitClose}
         >
-          <LightboxImageQualityStatus
-            focusableRef={focusableRef}
-            upgrading={galleryState().upgrading}
-            failed={galleryState().upgradeFailed}
-            onRetry={() => gallery.retryDisplayImage()}
-          />
+          <Show when={galleryState().upgrading || galleryState().upgradeFailed}>
+            <div class="image-quality-status" role="status" aria-live="polite">
+              <span>
+                {galleryState().upgrading
+                  ? t("chat.imageLightbox.loadingDetail")
+                  : t("chat.imageLightbox.detailFailed")}
+              </span>
+              <Show when={galleryState().upgradeFailed}>
+                <button
+                  ref={focusableRef()}
+                  type="button"
+                  class="action"
+                  onClick={() => gallery.retryDisplayImage()}
+                >
+                  {t("common.retry")}
+                </button>
+              </Show>
+            </div>
+          </Show>
           <div
             class={[
               "stage",

@@ -32,7 +32,6 @@ export function AgentFilePreview<T>(props: {
   const hide = (event: Event) => {
     if (event.target === modal) {
       setOpen(false);
-      flush();
     }
   };
   onSettled(() => {

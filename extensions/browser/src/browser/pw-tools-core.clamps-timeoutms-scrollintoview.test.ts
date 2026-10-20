@@ -7,7 +7,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.interactions.js");
+const mod = await import("./pw-tools-core.interactions.actions.js");
 
 describe("pw-tools-core", () => {
   it.each([

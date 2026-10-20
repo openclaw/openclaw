@@ -4,12 +4,7 @@ import {
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { registerListener } from "../../../src/shared/listeners.js";
 import { listen } from "../lib/reactive/listener.ts";
-import type {
-  ApplicationGateway,
-  ApplicationTheme,
-  ApplicationThemePalette,
-  ApplicationThemeServerSelection,
-} from "./context.ts";
+import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
@@ -100,7 +95,6 @@ export function createApplicationTheme(
 ): ApplicationTheme & { dispose: () => void } {
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
-  let serverSelection: ApplicationThemeServerSelection | null = null;
   let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
@@ -244,6 +238,7 @@ export function createApplicationTheme(
     typeof globalThis.addEventListener === "function"
       ? listen(globalThis, "storage", onStorage)
       : undefined;
+  // Connection changes refresh scoped preferences and the document's theme owner.
   const stopGateway = gateway.subscribe(() => {
     void loadCatalog();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
@@ -275,16 +270,10 @@ export function createApplicationTheme(
       const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
       return resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark";
     },
-    get serverSelection() {
-      return serverSelection;
-    },
     get appliedPalette() {
       return appliedPalette;
     },
-    recordServerSelection(theme, scope) {
-      serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
-      publish();
-    },
+    recordServerSelection: publish,
     setMode(mode: ThemeMode) {
       patchSettings({ themeMode: mode });
     },

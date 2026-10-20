@@ -26,10 +26,8 @@ import {
   restoreRoleRefsForTarget,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
-import {
-  clickViaPlaywright,
-  setFileChooserFilesViaPlaywright,
-} from "./pw-tools-core.interactions.js";
+import { clickViaPlaywright } from "./pw-tools-core.interactions.actions.js";
+import { setFileChooserFilesViaPlaywright } from "./pw-tools-core.interactions.content.js";
 import {
   awaitActionWithAbort,
   assertInteractionCurrent,

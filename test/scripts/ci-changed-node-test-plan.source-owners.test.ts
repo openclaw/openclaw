@@ -843,7 +843,9 @@ describe("CI changed Node test plan", () => {
         expect(selectedJob.runner).toBe(fullJob.runner);
         const singleton = selectedJob.groups?.length === 1 && fullJob.planConcurrency === 2;
         expect(selectedJob.env).toEqual(
-          singleton ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" } : fullJob.env,
+          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+            ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+            : fullJob.env,
         );
         expect(selectedJob.planConcurrency).toBe(singleton ? 1 : fullJob.planConcurrency);
         expect(selectedJob.pretestBuildMode).toBe(fullJob.pretestBuildMode);

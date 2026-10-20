@@ -44,7 +44,7 @@ function InitialsAvatar(props: {
 /** Small author marker shared by transcript bubbles and the pending-send queue. */
 export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
   const gateway = useAvatarGatewayContext();
-  const label = createMemo(() => formatSenderLabel(props.sender));
+  const label = () => formatSenderLabel(props.sender);
   const avatar = createMemo(() => {
     gateway();
     const value = props.sender ? resolveAvatar(props.sender) : undefined;

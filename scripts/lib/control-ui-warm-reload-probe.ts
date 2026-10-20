@@ -13,6 +13,21 @@ export function warmReloadProbe() {
     boardFrames: number;
   }> = [];
   const rows = new Set<Element>();
+  type ElementPaint = PerformanceEntry & {
+    identifier: string;
+    renderTime: number;
+    intersectionRect: DOMRectReadOnly;
+    element: Element | null;
+  };
+  const transcriptPaints: Array<{ renderTime: number; element: string; rowKey: string | null }> =
+    [];
+  const largestPaints: Array<{
+    renderTime: number;
+    loadTime: number;
+    size: number;
+    element: string | null;
+    transcript: boolean;
+  }> = [];
   let removedRows = 0;
   let stopped = false;
   let cachedRows: Element[] = [];
@@ -29,6 +44,43 @@ export function warmReloadProbe() {
   observe("paint", (entries) => {
     for (const entry of entries) {
       milestones[entry.name] = entry.startTime;
+    }
+  });
+  const elementLabel = (element: Element) =>
+    `${element.localName}${element.classList.length ? `.${[...element.classList].join(".")}` : ""}`;
+  observe("element", (entries) => {
+    for (const entry of entries) {
+      // Element Timing is implemented by Chromium but absent from lib.dom.
+      const paint = entry as ElementPaint;
+      const row = paint.element?.closest(".chat-virtual-row");
+      if (
+        paint.identifier !== "openclaw-transcript" ||
+        !row ||
+        !paint.element ||
+        paint.renderTime <= 0 ||
+        paint.intersectionRect.width <= 0 ||
+        paint.intersectionRect.height <= 0
+      ) {
+        continue;
+      }
+      milestones.firstTranscriptPaint ??= paint.renderTime;
+      transcriptPaints.push({
+        renderTime: paint.renderTime,
+        element: elementLabel(paint.element),
+        rowKey: row.getAttribute("data-virtual-row-key"),
+      });
+    }
+  });
+  observe("largest-contentful-paint", (entries) => {
+    for (const entry of entries) {
+      const paint = entry as LargestContentfulPaint;
+      largestPaints.push({
+        renderTime: paint.renderTime,
+        loadTime: paint.loadTime,
+        size: paint.size,
+        element: paint.element ? elementLabel(paint.element) : null,
+        transcript: Boolean(paint.element?.closest(".chat-virtual-row")),
+      });
     }
   });
   observe("layout-shift", (entries) => {
@@ -113,6 +165,7 @@ export function warmReloadProbe() {
   });
   const observer = new MutationObserver((records) => {
     const regions = new Map<string, number>();
+    const textRoots = new Set<Element>();
     for (const record of records) {
       const element =
         record.target instanceof Element ? record.target : record.target.parentElement;
@@ -122,6 +175,21 @@ export function warmReloadProbe() {
         ? "transcript"
         : (element?.closest("openclaw-chat-pane, openclaw-app-sidebar")?.localName ?? "shell");
       regions.set(region, (regions.get(region) ?? 0) + 1);
+      const textRoot = element?.closest(".chat-text");
+      if (textRoot) {
+        textRoots.add(textRoot);
+      }
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) {
+          continue;
+        }
+        if (node.matches(".chat-text")) {
+          textRoots.add(node);
+        }
+        for (const root of node.querySelectorAll(".chat-text")) {
+          textRoots.add(root);
+        }
+      }
       for (const node of record.removedNodes) {
         if (!(node instanceof Element)) {
           continue;
@@ -133,6 +201,21 @@ export function warmReloadProbe() {
           if (rows.has(row)) {
             removedRows++;
           }
+        }
+      }
+    }
+    // Tag direct text owners before paint. A row/container attribute does not
+    // cover descendant block text, and a DOM/rAF timestamp is not presentation.
+    for (const root of textRoots) {
+      if (!root.closest(".chat-virtual-row")) {
+        continue;
+      }
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let text: Node | null;
+      while ((text = walker.nextNode())) {
+        const parent = text.parentElement;
+        if (text.textContent?.trim() && parent && !parent.hasAttribute("elementtiming")) {
+          parent.setAttribute("elementtiming", "openclaw-transcript");
         }
       }
     }
@@ -199,6 +282,8 @@ export function warmReloadProbe() {
       const perf = Reflect.get(window, "__perf");
       return {
         milestones,
+        transcriptPaints,
+        largestPaints,
         reads,
         transactions,
         shifts,

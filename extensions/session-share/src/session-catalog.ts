@@ -474,7 +474,6 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     audience: "session-viewers",
     async list(query) {
       query.signal?.throwIfAborted();
-      const config = api.runtime.config.current();
       let nodes: CatalogNode[];
       try {
         nodes = (await (query.listNodes?.() ?? api.runtime.nodes.list())).nodes;
@@ -483,9 +482,6 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         throw error;
       }
       query.signal?.throwIfAborted();
-      if (api.runtime.config.current() !== config) {
-        return [];
-      }
       reconcile(nodes);
       const requested = query.hostIds ? new Set(query.hostIds) : undefined;
       const eligible = nodes
@@ -507,7 +503,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         }),
       );
       query.signal?.throwIfAborted();
-      if (context !== owner || api.runtime.config.current() !== config) {
+      if (context !== owner) {
         return [];
       }
       return hosts;
@@ -538,7 +534,6 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         },
       });
       const page = parseSessionShareTranscriptPage(raw, request.threadId);
-      const config = api.runtime.config.current();
       const linkParticipant = bindingFor(nodeId).linkGitHubIdentities
         ? (
             await prepareSessionCatalogGitHubLinker({
@@ -546,11 +541,6 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
             })
           ).linkParticipant
         : undefined;
-      if (api.runtime.config.current() !== config) {
-        throw new Error(
-          "Session Share configuration changed while preparing the page. Retry the request.",
-        );
-      }
       return {
         ...page,
         hostId: request.hostId,

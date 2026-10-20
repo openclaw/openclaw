@@ -744,12 +744,15 @@ describe("tui command handlers", () => {
     expect(h.sendChat).not.toHaveBeenCalled();
     expectCall(h.addSystem, [`session change in progress; wait for /${command} to finish`]);
     if (command === "new") {
-      expect(h.createSession).toHaveBeenCalledExactlyOnceWith({
-        key: expect.stringMatching(/^tui-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/),
-        agentId: "work",
-        parentSessionKey: "global",
-        succeedsParent: true,
-      });
+      expect(h.createSession).toHaveBeenCalledExactlyOnceWith(
+        {
+          key: expect.stringMatching(/^tui-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/),
+          agentId: "work",
+          parentSessionKey: "global",
+          succeedsParent: true,
+        },
+        { sessionKey: "global", agentId: "work" },
+      );
     } else {
       expectCall(h.resetSession, ["agent:main:main", "reset", undefined], "once");
     }

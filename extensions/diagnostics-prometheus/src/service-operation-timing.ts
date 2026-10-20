@@ -133,6 +133,30 @@ export function recordOperationTimingEvent(
       if (!metadata.trusted) {
         return;
       }
+      if (evt.name === "sessions.diff" || evt.name === "checkout.diff") {
+        const outcome = evt.details?.outcome;
+        if (outcome !== "cache-hit" && outcome !== "cache-miss") {
+          return;
+        }
+        for (const stage of [
+          "admission",
+          "checkout-resolve",
+          "cache-validate",
+          "worker-queue",
+          "git-wall",
+          "encode",
+        ]) {
+          const elapsed = evt.details?.[stage];
+          store.histogram(
+            "openclaw_diff_stage_seconds",
+            "Elapsed local diff stages; cache validation includes its worker queue and Git wall time.",
+            { method: evt.name, stage, outcome },
+            typeof elapsed === "number" ? seconds(elapsed) : undefined,
+            RPC_DURATION_BUCKETS_SECONDS,
+          );
+        }
+        return;
+      }
       if (evt.name === "worktree.preparation") {
         recordWorktreePreparation(store, evt);
         return;

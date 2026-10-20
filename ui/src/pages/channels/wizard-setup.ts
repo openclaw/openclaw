@@ -1,7 +1,7 @@
 import { createSignal, createStore, onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { createChannelWizard, type ChannelWizardState } from "./wizard-runner.ts";
 
 type WizardSetupDeps = {
@@ -36,16 +36,11 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     () => t("channels.setup.sessionExpired"),
   );
   // Completion account identity stays synchronous with the RPC runner.
-  const state = projectSource(wizard, {
-    read: (source) => ({ wizard: source.state, whatsappAccountId }),
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const state = projectMutableSource(wizard, (source) => ({
+    wizard: source.state,
+    whatsappAccountId,
+  }));
+  publish = state.publish;
   onCleanup(() => {
     disposed = true;
     // The Gateway retains an unfinished session, so teardown cancels it.

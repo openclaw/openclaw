@@ -2,6 +2,7 @@
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { NODE_CLAUDE_SKILLS_MESSAGE_BYTES } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -18,7 +19,6 @@ import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeWorkerProcessesChanged } from "../worker/worker-process-observation.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
@@ -100,7 +100,7 @@ type ActiveNodeInvoke = {
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
 
 function ensureNodePathEnv(): string {
-  ensureOpenClawCliOnPath({ pathEnv: process.env.PATH ?? "" });
+  ensureOpenClawCliOnPath();
   const current = process.env.PATH ?? "";
   if (current.trim()) {
     return current;
@@ -114,7 +114,7 @@ async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>
   const errors = [
     ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
   ];
-  throwNodeHostCleanupErrors(errors, "node-host runtime cleanup failed");
+  throwCollectedErrors(errors, "node-host runtime cleanup failed");
 }
 
 export async function prepareNodeHostRuntime(params?: {

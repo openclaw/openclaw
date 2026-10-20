@@ -61,7 +61,7 @@ async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<voi
   if (parsed.profile) {
     applyCliProfileEnv({ profile: parsed.profile });
   }
-  loadCliDotEnv({ quiet: true });
+  loadCliDotEnv();
   enableConsoleCapture();
   await assertSupportedRuntime(undefined, undefined, parsed.argv, true, { ...process.env });
   const startupPolicy = resolveCliStartupPolicy({

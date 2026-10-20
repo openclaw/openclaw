@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
+import { captureNativeSignalBridge } from "../../infra/embedded-state-lock.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
@@ -21,8 +22,10 @@ const runner = vi.hoisted(() =>
 // mock-isolation: Controlled completion tails exercise cleanup without starting inference.
 vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: runner }));
 
+const createNativeBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
+const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
 let state: OpenClawTestState;
-let signals: EventEmitter;
+let signals: ReturnType<typeof captureNativeSignalBridge>;
 const provider = {
   apiKey: "config-key",
   baseUrl: "https://fixture.invalid/v1",
@@ -39,27 +42,30 @@ beforeEach(async () => {
   state = await createOpenClawTestState({
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
   });
-  signals = new EventEmitter();
+  signals = captureNativeSignalBridge(createNativeBridge);
+  vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+    signals.create,
+  );
+  const options = {
+    allowInTests: true,
+    env: state.env,
+    lockDir: state.path("locks"),
+    readProcessStartTime: () => 123456,
+    timeoutMs: 100,
+  };
+  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
+    acquireNativeStateLock({ ...params, options }),
+  );
 });
 afterEach(async () => {
-  vi.restoreAllMocks();
-  runner.mockReset();
-  await state.cleanup();
+  try {
+    signals.dispose();
+  } finally {
+    vi.restoreAllMocks();
+    runner.mockReset();
+    await state.cleanup();
+  }
 });
-
-function stateOwnership() {
-  return {
-    mode: "exclusive" as const,
-    process: signals,
-    gatewayLockOptions: {
-      allowInTests: true,
-      env: state.env,
-      lockDir: state.path("locks"),
-      readProcessStartTime: () => 123456,
-      timeoutMs: 100,
-    },
-  };
-}
 
 async function probeParams(concurrency: number) {
   const cfg: OpenClawConfig = { models: { providers: { "probe-control": provider } } };
@@ -78,7 +84,7 @@ async function probeParams(concurrency: number) {
       concurrency,
       maxTokens: 8,
     },
-    stateOwnership: stateOwnership(),
+    stateOwnership: { mode: "exclusive" as const },
   };
 }
 
@@ -171,9 +177,9 @@ it("does not acquire probe state from a closed caller scope", async () => {
   const inParent = parent.run(() => AsyncLocalStorage.snapshot());
   await parent.drain();
   const run = vi.fn(async () => undefined);
-  await expect(inParent(() => withAuthProbeStateOwnership(stateOwnership(), run))).rejects.toThrow(
-    "Async work scope is closed",
-  );
+  await expect(
+    inParent(() => withAuthProbeStateOwnership({ mode: "exclusive" }, run)),
+  ).rejects.toThrow("Async work scope is closed");
   expect(run).not.toHaveBeenCalled();
   expectOwnership(false);
 });

@@ -28,6 +28,7 @@ import {
 } from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
+  hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerReply,
 } from "./sqlite-worker-contract.js";
 import {
@@ -866,9 +867,11 @@ describe("SQLite worker store", () => {
   it("reports an uncertain result when serialization fails after commit without replaying the write", async () => {
     const file = databasePath();
     const store = await open(file);
-    await expect(
-      store.execute({ type: "commitUnserializable", input: { value: "committed once" } }),
-    ).rejects.toMatchObject({ code: "outcome-unknown" });
+    const failure = await store
+      .execute({ type: "commitUnserializable", input: { value: "committed once" } })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "outcome-unknown" });
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
     expect(await read(store)).toEqual(["committed once"]);
     expect(await append(store, "next write")).toMatchObject({ writes: 2 });
     await store.close();

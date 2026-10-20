@@ -70,7 +70,6 @@ export function renderChatComposerView(
     },
   );
 
-  const activeSession = createMemo(() => props.selectedSession);
   const resumeRecovery = createMemo(() => {
     const recovery = props.goalRecovery;
     return recovery?.action === "resume" &&
@@ -79,7 +78,6 @@ export function renderChatComposerView(
       ? recovery
       : undefined;
   });
-  const composerControls = createMemo(() => props.composerControls ?? undefined);
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
@@ -95,9 +93,7 @@ export function renderChatComposerView(
       props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode !==
       "environment",
   );
-  const slashMenuAnnouncementId = createMemo(() =>
-    paneDomId(props.paneId, "slash-active-announcement"),
-  );
+  const slashMenuAnnouncementId = () => paneDomId(props.paneId, "slash-active-announcement");
   // Owner refreshes replace the banner and callback values, not the focused action's DOM.
   const disabledBanner = (
     <Show when={props.disabledBanner?.presentation !== "hidden" ? props.disabledBanner : undefined}>
@@ -171,7 +167,7 @@ export function renderChatComposerView(
   const showComposerInput = createMemo(
     () => context().showComposer && props.disabledBanner?.kind !== "composer-replacement",
   );
-  const disabledReasonId = createMemo(() => paneDomId(props.paneId, "disabled-reason"));
+  const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
     showComposerInput() ? (
       <>
@@ -193,11 +189,11 @@ export function renderChatComposerView(
       </>
     ) : undefined,
   );
-  const composerError = createMemo(() => context().mentionError || context().interaction.error());
-  const predictionAnnouncement = createMemo(() => {
+  const composerError = () => context().mentionError || context().interaction.error();
+  const predictionAnnouncement = () => {
     const text = context().predictionText;
     return text ? t("chat.composer.predictionAvailable", { text }) : "";
-  });
+  };
   const primaryComposerStatus = createMemo(() =>
     props.disabledReason
       ? {
@@ -548,12 +544,12 @@ export function renderChatComposerView(
               <div class="agent-chat__composer-trail">
                 <div class="agent-chat__composer-meta agent-chat__composer-context">
                   <ContextNotice
-                    session={activeSession()}
+                    session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}
                   />
                 </div>
-                <Show when={composerControls()}>
+                <Show when={props.composerControls}>
                   {(controls) => {
                     const Controls = dynamic(() => controls().component);
                     return (

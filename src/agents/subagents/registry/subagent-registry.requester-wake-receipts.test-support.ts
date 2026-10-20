@@ -296,17 +296,14 @@ export function registerRequesterWakeReceiptBoundaryTests({
     const beta = visibleChild("beta");
     await spawnVisibleChild({ ...alpha, requesterTurnRunId });
     await spawnVisibleChild({ ...beta, requesterTurnRunId });
-    const heldReceipts =
-      !rejectRequesterWake && !emptyReply
-        ? holdRequesterWakeReceipts({ holdOutcome: outcomeDrift })
-        : undefined;
-
     holdAgentCall(beta.childSessionKey);
     emitCompleted(alpha.runId, alpha.childSessionKey, "alpha complete");
     await waitForAgentCallCount(1);
     const beforeCleanup = Date.now();
     await waitForDeliveredCleanup(alpha.runId, { allowPendingRequesterSettleWake: true });
     expect(Date.now(), "cleanup observation must not spend the retry clock").toBe(beforeCleanup);
+    // Join the ordinary singleton retirement before installing holds for the yielded cohort.
+    await flushOwnedWork();
     const modelRouteChange = "Model route changed: requested/model → actual/model.";
     emitCompleted(beta.runId, beta.childSessionKey, "beta complete", modelRouteChange);
     await waitForAgentCallCount(2);
@@ -328,6 +325,10 @@ export function registerRequesterWakeReceiptBoundaryTests({
       return { value: undefined, postimages: new Map([[next.runId, next]]) };
     });
 
+    const heldReceipts =
+      !rejectRequesterWake && !emptyReply
+        ? holdRequesterWakeReceipts({ holdOutcome: outcomeDrift })
+        : undefined;
     const settleWakeOwner = outcomeDrift || rejectPersistence ? observeRootWork() : undefined;
     const yieldTool = createRequesterYieldTool(requesterSessionKey, requesterTurnRunId);
     await expect(

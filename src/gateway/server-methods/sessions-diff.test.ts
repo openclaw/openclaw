@@ -876,6 +876,9 @@ describe("loadSessionDiff", () => {
       append("tracked.txt", "after\n");
       write("loose.txt", "new\n");
       write("ignored.txt", "hidden\n");
+      const linkedDirectory = tempDir("openclaw-diff-directory-link-");
+      fs.mkdirSync(path.join(linkedDirectory, ".git"));
+      fs.symlinkSync(linkedDirectory, path.join(repoRoot, "directory-link"));
       const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       const full = await readDiff();
       const summary = await readDiff({ summaryOnly: true });

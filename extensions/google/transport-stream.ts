@@ -560,19 +560,10 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
 
 function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
   const controller = new AbortController();
+  const signal = parent ? AbortSignal.any([parent, controller.signal]) : controller.signal;
   let timedOut = false;
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const abortFromParent = () => {
-    controller.abort(parent?.reason);
-  };
-  if (parent) {
-    if (parent.aborted) {
-      abortFromParent();
-    } else {
-      parent.addEventListener("abort", abortFromParent, { once: true });
-    }
-  }
-  if (!controller.signal.aborted && timeoutMs > 0) {
+  if (!signal.aborted && timeoutMs > 0) {
     timeout = setTimeout(() => {
       timedOut = true;
       timeout = undefined;
@@ -587,32 +578,10 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
     }
   };
   return {
-    signal: controller.signal,
+    signal,
     timedOut: () => timedOut,
     clearDeadline,
-    cleanup: () => {
-      clearDeadline();
-      parent?.removeEventListener("abort", abortFromParent);
-    },
   };
-}
-
-async function* iterateGoogleSseChunks(
-  iterator: AsyncIterator<GoogleSseChunk>,
-  cleanup?: () => void,
-): AsyncGenerator<GoogleSseChunk> {
-  try {
-    for (;;) {
-      const next = await iterator.next();
-      if (next.done) {
-        return;
-      }
-      yield next.value;
-    }
-  } finally {
-    cleanup?.();
-    await iterator.return?.();
-  }
 }
 
 type GoogleSseAttempt =
@@ -641,7 +610,7 @@ async function openGoogleSseAttempt(params: {
       : undefined;
   const signal = attemptSignal?.signal ?? params.parentSignal;
   const handleTimedOperationError = (error: unknown): GoogleSseAttempt => {
-    attemptSignal?.cleanup();
+    attemptSignal?.clearDeadline();
     if (attemptSignal?.timedOut() && !params.parentSignal?.aborted) {
       return { type: "timeout" };
     }
@@ -671,7 +640,7 @@ async function openGoogleSseAttempt(params: {
     return handleTimedOperationError(error);
   }
   if (!response.ok) {
-    attemptSignal?.cleanup();
+    attemptSignal?.clearDeadline();
     throw await createProviderHttpError(response, params.errorPrefix);
   }
   const chunks = parseGoogleSseChunks(response, signal);
@@ -689,7 +658,7 @@ async function openGoogleSseAttempt(params: {
   return {
     type: "ready",
     ...(!first.done ? { firstChunk: first.value } : {}),
-    chunks: iterateGoogleSseChunks(iterator, attemptSignal.cleanup),
+    chunks,
   };
 }
 

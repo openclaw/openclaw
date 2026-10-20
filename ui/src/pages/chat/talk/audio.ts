@@ -35,12 +35,7 @@ export function floatToG711Ulaw(samples: Float32Array): Uint8Array {
   return bytes;
 }
 
-export type RealtimeTalkAudioFrame = {
-  peak: number;
-  rms: number;
-};
-
-export function measureRealtimeTalkAudioFrame(samples: Float32Array): RealtimeTalkAudioFrame {
+export function measureRealtimeTalkAudioFrame(samples: Float32Array) {
   let peak = 0;
   let sumSquares = 0;
   for (const rawSample of samples) {

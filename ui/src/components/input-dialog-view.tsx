@@ -23,9 +23,11 @@ export function InputDialogView(props: {
   const entryValue = (raw: string) => (initialOptions.requireValue ? raw.trim() : raw);
   const submitBlocked = (raw: string) => {
     const value = entryValue(raw);
+    const connected = gateway?.read().snapshot.phase === "connected";
+    const canSubmit = initialOptions.canSubmit?.();
     return (
-      initialOptions.canSubmit?.() === false ||
-      (gateway !== undefined && gateway.read().snapshot.phase !== "connected") ||
+      canSubmit === false ||
+      (gateway !== undefined && !connected && canSubmit !== true) ||
       (initialOptions.requireValue === true && !value.length) ||
       (initialOptions.requireChange === true && value === (initialOptions.defaultValue ?? ""))
     );

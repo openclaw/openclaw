@@ -98,6 +98,9 @@ it.each(["owner", "tile"] as const)(
     expect(status()?.textContent).toContain("Preparing 3 attachments");
     expect(status()?.classList.contains("sr-only")).toBe(true);
     expect(status()?.querySelector(".btn__spinner")).toBeNull();
+    await waitForFast(() =>
+      expect(container.querySelectorAll(".chat-attachment-thumb")).toHaveLength(3),
+    );
     const tiles = [...container.querySelectorAll(".chat-attachment-thumb")];
     expect(tiles).toHaveLength(3);
     expect(tiles.every((tile) => tile.getAttribute("aria-busy") === "true")).toBe(true);

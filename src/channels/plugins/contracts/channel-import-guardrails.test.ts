@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SourceFile } from "typescript/unstable/ast";
+import type { SourceFile } from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
 import { collectModuleReferencesFromSource } from "../../../../scripts/lib/guard-inventory-utils.mjs";

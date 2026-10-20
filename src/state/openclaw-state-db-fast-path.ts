@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { runWithSqliteCleanup } from "../infra/sqlite-lifecycle-errors.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   assertSqliteSchemaContains,
@@ -8,8 +9,10 @@ import {
   readSqliteSchemaCookie,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { hasLegacyCronRunLogs } from "../infra/state-migrations.cron-run-logs.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import {
   getStateRuntimeSchemaAdmission,
   publishStateRuntimeSchemaAdmission,
@@ -34,8 +37,13 @@ export function needsOpenClawStateDatabaseSchemaRepair(
   integrityCheck: "quick" | "full" = "quick",
 ): boolean {
   let database: DatabaseSync | undefined;
+  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   try {
-    database = openNodeSqliteDatabase(pathname, { readOnly: true });
+    // A native source read can reset the captured WAL index before migration takes custody.
+    prepared = hasUpdateDoctorMigrationCapture()
+      ? prepareSqliteReadOnlyLocationSync(pathname)
+      : undefined;
+    database = openNodeSqliteDatabase(prepared?.location ?? pathname, { readOnly: true });
     if (scope === "automatic" && getStateRuntimeSchemaAdmission(database)?.startupReady) {
       return false;
     }
@@ -55,7 +63,9 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     // Preserve the repair path's existing diagnostics for unreadable or noncanonical databases.
     return true;
   } finally {
-    database?.close();
+    runWithSqliteCleanup({ release: () => prepared?.cleanup() }, "State schema inspection", () =>
+      database?.close(),
+    );
   }
 }
 

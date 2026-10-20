@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "openai": "7.31.0",
-    "zod": "4.6.5"
+    "openai": "7.32.0",
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

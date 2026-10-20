@@ -509,7 +509,7 @@ function ChatHeaderSessionMenuContent(
   );
 }
 
-defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
+export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
   "openclaw-chat-header-session-menu",
   ChatHeaderSessionMenuContent,
   {

@@ -177,8 +177,6 @@ export function AgentOverview(
   const disabled = createMemo(
     () => !params.canUpdateConfig || !configForm() || params.configLoading || params.configSaving,
   );
-  const thinkingDefault = createMemo(() => params.agent.thinkingDefault ?? "-");
-
   const identityDraft = createMemo(() => params.identityDraft, { equals: false });
   const identityName = createMemo(
     () =>
@@ -411,7 +409,7 @@ export function AgentOverview(
           ],
           ["agents.context.primaryModel", <code>{context().model}</code>],
           ["agents.context.runtime", <code>{context().runtime}</code>],
-          ["agents.context.thinkingDefault", <code>{thinkingDefault()}</code>],
+          ["agents.context.thinkingDefault", <code>{params.agent.thinkingDefault ?? "-"}</code>],
           ["agents.context.skillsFilter", context().skillsLabel],
         ])}
       </SettingsSection>

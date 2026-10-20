@@ -6,6 +6,7 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, formatErrorMessageWithCode, hasErrnoCode, isErrno } from "./errors.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
@@ -474,12 +475,7 @@ export async function capturePackageLaunchers(
             native
               ? fs.readdir(params.stage.layout.binDir)
               : reader.entries(params.stage.layout.binDir)
-          ).catch((error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return [];
-            }
-            throw error;
-          }),
+          ).catch((error: unknown) => ignoreMissingPath(error) ?? []),
         );
   if (shimEntries.length > 0) {
     snapshot.backupDir = await fs.mkdtemp(

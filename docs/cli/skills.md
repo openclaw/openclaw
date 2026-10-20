@@ -99,6 +99,9 @@ default agent.
 Search results add `v` only to numeric version labels, preserving existing prefixes
 and build names. JSON output keeps the registry's original version values.
 
+An unreadable or malformed saved ClawHub sign-in configuration is reported as a
+warning. Requests can continue anonymously; fix that configuration or sign in again.
+
 The skills table renders horizontal tabs as single spaces so descriptions
 stay aligned with the neighboring columns.
 JSON output preserves tabs and line endings in descriptions and paths as escaped

@@ -8,8 +8,8 @@ function entry<S extends string, D extends string>(sourceWorkerName: S, distWork
 export const updateExecutorNativeEntrypoints = {
   gatewayLock: entry("../../infra/gateway-lock", "infra/gateway-lock.js"),
   databaseGenerations: entry(
-    "../../infra/update-database-generations",
-    "infra/update-database-generations.js",
+    "../../infra/update-physical-database-generations",
+    "infra/update-physical-database-generations.js",
   ),
   postUpdate: entry("update-command-post-update", "cli/update-cli/update-command-post-update.js"),
   terminal: entry("update-command-terminal", "cli/update-cli/update-command-terminal.js"),
@@ -92,6 +92,10 @@ export const updateExecutorNativeEntrypoints = {
     "test-support/update-include-delegated.js",
   ),
   configIO: entry("../../config/io.factory", "config/io.factory.js"),
+  directoryObservation: entry(
+    "../../infra/owned-directory-observation",
+    "infra/owned-directory-observation.js",
+  ),
   leaseFixture: entry(
     "update-command-lease.test-support",
     "cli/update-cli/update-command-lease.test-support.js",

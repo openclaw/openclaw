@@ -49,7 +49,6 @@ import "./components/chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
-  HeaderMenuQuickAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
@@ -219,14 +218,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           params: { key: row.key, label: null },
           sessionScope: true,
           session: row,
+          allowDeferred: true,
         })
       : null;
-    const renameDisabledReason =
-      this.state?.connected !== true || !renameAccess
-        ? t("sessionsView.actionRequiresConnection")
-        : renameAccess.allowed
-          ? undefined
-          : renameAccess.reason;
+    const renameDisabledReason = !renameAccess
+      ? t("sessionsView.actionRequiresConnection")
+      : renameAccess.allowed
+        ? undefined
+        : renameAccess.reason;
     const configuredMainKey = resolveUiConfiguredMainKey({
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
@@ -283,7 +282,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const discussion = this.resolveSessionDiscussionAction();
     const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
     const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
-    const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sessionRailVisible =
       this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "companion");
     const subagentsVisible =
@@ -425,9 +423,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       },
     );
     const defaultAction = !catalog && this.dashboardDefaultMenuAction(row, currentLayout);
-    const layoutMenuActions: HeaderMenuQuickAction[] = defaultAction
-      ? [{ id: "dashboard-default", icon: "check", ...defaultAction }]
-      : [];
     const placement = resolveChatPanePlacement({
       gatewaySnapshot: this.context.gateway.snapshot,
       requiredProfile: this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
@@ -520,9 +515,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               showOwner: showOwnerChip && !this.mergedChrome,
               onOpen: () => void this.loadSessionSharing(row),
               onVisibilityChange: (visibility: SessionVisibility) =>
-                void this.setSessionVisibility(row, visibility),
+                void this.mutateSessionSharing(row, { visibility }),
               onMemberChange: (identityId: string, member: boolean) =>
-                void this.setSessionMember(row, identityId, member),
+                void this.mutateSessionSharing(row, { identityId, member }),
             }
           : null,
     );
@@ -532,6 +527,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       () => this.headerBoardMenu && { ...this.headerBoardMenu, onSelect: this.onHeaderBoardSelect },
     );
     const parentSession = this.observedParentSessionRow();
+    const subagents = projectSubagentStatus(
+      {
+        ...this.projectChildRoster(this.resolveChatReadTarget()),
+        selectedSession: row,
+        messages: this.state?.chatMessages ?? [],
+      },
+      false,
+    );
     const header: ChatPaneHeaderProps = {
       onHeaderRef: this.registerHeaderElement,
       paneId: this.paneId,
@@ -571,19 +574,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
       panelMenuActions,
-      layoutMenuActions,
-      runningSubagentCount: projectSubagentStatus(
-        {
-          ...this.projectChildRoster(this.resolveChatReadTarget()),
-          selectedSession: row,
-          messages: this.state?.chatMessages ?? [],
-        },
-        false,
-      ).running,
+      layoutMenuActions: defaultAction
+        ? [{ id: "dashboard-default", icon: "check", ...defaultAction }]
+        : [],
+      runningSubagentCount: subagents.running,
+      onOpenSubagents: subagents.listed ? detailsControl?.chat?.onOpenSubagents : undefined,
       sidebarLayout: currentLayout,
       panelDefinitions,
       onLayoutChange: (layout, options) => this.state?.updateSidebarLayout(layout, options),
-      onToggleSidePanel: toggleSidePanel,
+      onToggleSidePanel: () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout),
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       detailsControl,
       onOpenDetails: detailsControl ? this.onHeaderDetails : undefined,

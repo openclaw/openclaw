@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createChannelIngressQueueForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   migrationById,
@@ -12,7 +15,6 @@ import {
   writeSqliteDedupeSource,
 } from "./doctor-contract-api.test-support.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
-import { createMatrixInboundEventDeduper } from "./src/matrix/monitor/inbound-dedupe.js";
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
@@ -125,10 +127,14 @@ describe("matrix doctor archive scan boundaries", () => {
       } else {
         expect(result.changes).toEqual(dedupeMigrationResult(activeRoots, 2).changes);
         for (const [i, accountId] of accounts.entries()) {
-          const deduper = createMatrixInboundEventDeduper({ auth: { accountId }, env: params.env });
-          await expect(
-            deduper.claim({ roomId: "!room:example.org", eventId: `$active-${i}` }),
-          ).resolves.toEqual({ kind: "duplicate" });
+          const queue = createChannelIngressQueueForTests({
+            channelId: "matrix",
+            accountId,
+            stateDir,
+          });
+          await expect(queue.enqueue(`$active-${i}`, {})).resolves.toMatchObject({
+            kind: "completed",
+          });
         }
       }
       for (const root of excludedRoots) {

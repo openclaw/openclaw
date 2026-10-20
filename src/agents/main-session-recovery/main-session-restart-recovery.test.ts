@@ -4029,13 +4029,12 @@ describe("main-session-restart-recovery", () => {
       expectedSessionId: "main-session",
       sessionKey: "agent:main:main",
       storePath,
-      gatewayRuntime: {
-        prepareRestartRecovery: () => undefined,
-        dispatchSessionMethod: vi.fn(),
+      gatewayRuntime: createMockGatewayRecoveryRuntime({
+        resumeChatInput: async () => {
+          throw new Error("Unexpected chat input recovery");
+        },
         dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
-        waitForAgent: vi.fn(),
-        sendRecoveryNotice: vi.fn(),
-      },
+      }),
     });
 
     expect(result).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });

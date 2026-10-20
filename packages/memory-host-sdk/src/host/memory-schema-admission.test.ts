@@ -122,12 +122,21 @@ it.each(["commit", "rollback", "later DDL", "revocation"])(
   },
 );
 
-it("skips fresh-shadow data repair but backfills later imports across handles", () => {
+it("skips fresh-shadow legacy inspection and data repair but backfills later imports", () => {
   const filename = path.join(tempDirs.make("memory-admission-"), "memory.sqlite");
   using sibling = openNodeSqliteDatabase(filename);
   admitSqliteSchema(sibling);
+  const legacyInspections = {
+    retiredFormat: /PRAGMA main\.table_xinfo\(meta\)/iu,
+    storageShape: /SELECT name, type FROM pragma_table_info/iu,
+    recallColumns: /PRAGMA table_info\(memory_index_chunks\)/iu,
+    sourceIdentity: /PRAGMA main\.table_xinfo\(memory_index_sources\)/iu,
+    retiredIndex: /DROP INDEX IF EXISTS idx_memory_index_chunks_path;/iu,
+  };
+  const legacySql: string[] = [];
   const dataRepairSql: string[] = [];
   using observed = observe((sql) => {
+    legacySql.push(sql);
     if (
       /\bWITH missing AS MATERIALIZED\b|\bSELECT COUNT\(\*\) FROM memory_index_chunks\b|^\s*(?:DELETE FROM|INSERT INTO) memory_index_(?:chunks_fts|paths_fts)\b/iu.test(
         sql,
@@ -145,6 +154,14 @@ it("skips fresh-shadow data repair but backfills later imports across handles", 
     }),
   ).toEqual({ ftsAvailable: true });
   expect(dataRepairSql).toEqual([]);
+  for (const [kind, pattern] of Object.entries(legacyInspections)) {
+    expect
+      .soft(
+        legacySql.filter((sql) => pattern.test(sql)),
+        kind,
+      )
+      .toEqual([]);
+  }
   for (let opening = 0; opening < 2; opening++) {
     using db = openNodeSqliteDatabase(filename);
     observed.expectAdmission(db);

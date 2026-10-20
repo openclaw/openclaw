@@ -12,7 +12,7 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-c
 import { openTrackedStateDatabase } from "../../state/openclaw-state-db-handle.js";
 import * as rootContext from "../../state/openclaw-state-worker-context.js";
 import * as sharedWorker from "../../state/openclaw-state-worker-store.js";
-import { registerAuthProfileFileChangeListener } from "./file-state.js";
+import { authProfileFileChanges } from "./file-state.js";
 import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { noteRuntimeAuthProfileStorePersistedMutation } from "./runtime-snapshots.js";
 import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
@@ -35,6 +35,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let databasePath: string;
 let rootCurrent: boolean;
 const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+const publishFileChange = authProfileFileChanges.onChange;
 function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
   const reader = prepareAgentAuthProfileRowsRead({ databasePath, agentId: "main", env });
   readers.add(reader);
@@ -43,12 +44,13 @@ function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
 
 async function changeDatabase(write: () => void) {
   const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory }) => {
-      if (directory === path.dirname(databasePath)) {
-        unsubscribe();
+    authProfileFileChanges.onChange = async (change) => {
+      await publishFileChange?.(change);
+      if (change.directory === path.dirname(databasePath)) {
+        authProfileFileChanges.onChange = publishFileChange;
         resolve();
       }
-    });
+    };
   });
   write();
   await vi.advanceTimersByTimeAsync(30_000);
@@ -77,6 +79,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  authProfileFileChanges.onChange = publishFileChange;
   await Promise.all([...readers].map((reader) => reader.dispose()));
   readers.clear();
   await closeOpenClawStateDatabaseAsync();

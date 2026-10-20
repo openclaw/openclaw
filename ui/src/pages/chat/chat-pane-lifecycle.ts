@@ -46,12 +46,10 @@ import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
 import { focusChatComposerFromPrintableKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
-import {
-  subscribeChatPaneSnapshotInvalidation,
-  subscribeChatPaneStartup,
-} from "./chat-pane-startup-subscriptions.ts";
+import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -74,7 +72,8 @@ import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
-import { admitInitialTurnHandoff, subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
+import { subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { closeSlot } from "./sidebar-layout.ts";
 
@@ -442,7 +441,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         if (state && modelAuthEventInvalidates(event)) {
           state.modelAuthStatusResult = null;
-          state.modelAuthStatusError = null;
           void refreshChatModelAuthStatus(state);
         }
         if (
@@ -507,7 +505,18 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.applySessionsState(this.context.sessions.state);
     // Roster receipts also evict deleted history, settle pending aborts, and admit queued sends.
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
-    chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
+    chatState.addCleanup(
+      this.context.placementStartup.subscribe(() => {
+        const state = this.state;
+        if (state) {
+          // Admit each accepted initial turn before waking followers parked behind recovery.
+          admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
+          if (!parseCatalogSessionKey(state.sessionKey)) {
+            void resumeStoredChatOutboxes(state);
+          }
+        }
+      }),
+    );
     chatState.addCleanup(
       subscribeChatPaneSnapshotInvalidation(
         () => this.state,

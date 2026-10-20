@@ -2377,7 +2377,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.11.1"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.12.1"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1

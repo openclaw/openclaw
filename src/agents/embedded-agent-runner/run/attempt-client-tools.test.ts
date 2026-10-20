@@ -237,9 +237,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     async (executionPath) => {
       const previousMode = isEmbeddedMode();
       const previousBroker = getEmbeddedPluginApprovalBroker();
-      const broker = new EmbeddedPluginApprovalBroker();
       const requested = createDeferredCore();
-      broker.subscribe((event) => {
+      const broker = new EmbeddedPluginApprovalBroker((event) => {
         if (event.event === "plugin.approval.requested") {
           requested.resolve();
         }

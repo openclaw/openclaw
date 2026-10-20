@@ -28,6 +28,7 @@ type Props = {
   pageSessionKey: string;
   pageAgentId: string;
   store?: CustodianSessionStore;
+  onStore?: (store: CustodianSessionStore) => void;
 };
 export type OpenClawAssistantPanelContent = SolidBridgeElement<Props>;
 
@@ -49,7 +50,7 @@ function ActiveCustodian(props: {
 
 export const AssistantPanelContent = defineSolidBridge<Props>(
   "openclaw-assistant-panel-content",
-  (props, element): SolidJSX.Element => {
+  (props): SolidJSX.Element => {
     const store = () => props.store ?? custodianSessionStore;
     const projection = createMemo(() =>
       projectSource(
@@ -70,11 +71,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
         },
       ),
     );
-    onSettled(() => {
-      element.dispatchEvent(
-        new CustomEvent("assistant-custodian-store", { detail: store(), bubbles: true }),
-      );
-    });
+    onSettled(() => props.onStore?.(store()));
     const variant = () => projection().read().store.activeVariant;
     const workContext = createMemo(() => {
       const current = projection().read().context;
@@ -111,6 +108,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
       pageSessionKey: { default: "" },
       pageAgentId: { default: "" },
       store: { default: undefined, attribute: false },
+      onStore: { default: undefined, attribute: false },
     },
   },
 );
@@ -133,10 +131,7 @@ declare module "@solidjs/web" {
         "prop:sessionContext"?: Props["sessionContext"];
         "prop:context"?: Props["context"];
         "prop:store"?: Props["store"];
-        "onAssistant-custodian-store"?: EventHandlerUnion<
-          OpenClawAssistantPanelContent,
-          CustomEvent<CustodianSessionStore>
-        >;
+        "prop:onStore"?: Props["onStore"];
       };
       "openclaw-home-session": AssistantElementAttributes<"openclaw-home-session"> & {
         "prop:workContext"?: ChatWorkContext;

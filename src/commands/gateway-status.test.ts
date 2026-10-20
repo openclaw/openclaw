@@ -235,6 +235,15 @@ const localGatewayConfig = (token = "ltok", tls = false): OpenClawConfig => ({
   },
 });
 
+const gatewaySelf = {
+  text: "Gateway fixture",
+  host: "gateway-host",
+  ip: "192.0.2.10",
+  version: "2026.5.22",
+  platform: "linux",
+};
+const gatewayProcessSelf = { ...gatewaySelf, instanceId: "gateway-instance-1" };
+
 describe("gateway-status command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -251,6 +260,112 @@ describe("gateway-status command", () => {
     expect(runtimeLogs.join("\n")).toContain("Gateway Status");
     expect(runtimeLogs.join("\n")).toContain("Discovery (this machine)");
     expect(runtimeLogs.join("\n")).toContain("Targets");
+  });
+
+  it("warns with diagnostic next steps when no probes or Bonjour discovery find a gateway", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
+    probeGateway.mockImplementation(async ({ url }) =>
+      createUnreachableGatewayProbe(url, "connection refused"),
+    );
+
+    await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: false,
+      primaryTargetId: null,
+      warnings: [
+        {
+          code: "no_gateway_reachable",
+          message:
+            "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+          targetIds: ["localLoopback"],
+        },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      name: "suppresses warning for SSH tunnel and configured remote with the same self identity",
+      ssh: "user@gateway-host",
+      localSelf: gatewayProcessSelf,
+      remoteSelf: { ...gatewayProcessSelf, host: "GATEWAY-HOST" },
+      expectedTargetIds: null,
+      primaryTargetId: "sshTunnel",
+    },
+    {
+      name: "suppresses warning for the same self identity on different transport ports",
+      ssh: null,
+      localSelf: gatewayProcessSelf,
+      remoteSelf: gatewayProcessSelf,
+      expectedTargetIds: null,
+      primaryTargetId: "explicit",
+    },
+    {
+      name: "warns when same-host probes do not report process identity",
+      ssh: null,
+      localSelf: gatewaySelf,
+      remoteSelf: gatewaySelf,
+      expectedTargetIds: ["explicit", "localLoopback"],
+      primaryTargetId: "explicit",
+    },
+    {
+      name: "warns when probes report distinct identities",
+      ssh: "user@gateway-a",
+      localSelf: { ...gatewayProcessSelf, host: "gateway-a", instanceId: "gateway-instance-a" },
+      remoteSelf: {
+        ...gatewayProcessSelf,
+        host: "gateway-b",
+        ip: "192.0.2.11",
+        instanceId: "gateway-instance-b",
+      },
+      expectedTargetIds: ["sshTunnel", "configRemote"],
+      primaryTargetId: "sshTunnel",
+    },
+    {
+      name: "warns when probe identity is unknown",
+      ssh: "user@gateway-host",
+      localSelf: null,
+      remoteSelf: null,
+      expectedTargetIds: ["sshTunnel", "configRemote"],
+      primaryTargetId: "sshTunnel",
+    },
+  ])("$name", async ({ ssh, localSelf, remoteSelf, expectedTargetIds, primaryTargetId }) => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(
+      ssh ? makeRemoteGatewayConfig("ws://gateway-host:18789") : localGatewayConfig(),
+    );
+    probeGateway.mockImplementation(async ({ url }) => {
+      const self = url.includes("127.0.0.1") ? localSelf : remoteSelf;
+      return {
+        ...mocks.successfulProbe(url),
+        presence: self ? [{ ...self, ts: 0, mode: "gateway", reason: "self" }] : null,
+      };
+    });
+
+    await runGatewayStatus(runtime, {
+      timeout: "1000",
+      json: true,
+      ...(ssh ? { ssh } : { url: "ws://gateway-host:28789", token: "explicit-token" }),
+    });
+
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: true,
+      primaryTargetId,
+      warnings: expectedTargetIds
+        ? [
+            {
+              code: "multiple_gateways",
+              message:
+                "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+              targetIds: expectedTargetIds,
+            },
+          ]
+        : [],
+    });
   });
 
   it("rejects configured and ambient credentials before probing an explicit URL", async () => {

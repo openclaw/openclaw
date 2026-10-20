@@ -233,9 +233,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "xAI API key missing",
-          baseUrl:
-            normalizeOptionalString(req.cfg?.models?.providers?.xai?.baseUrl) ??
-            DEFAULT_XAI_VIDEO_BASE_URL,
+          baseUrl: req.cfg?.models?.providers?.xai?.baseUrl,
           defaultBaseUrl: DEFAULT_XAI_VIDEO_BASE_URL,
           request: sanitizeConfiguredModelProviderRequest(req.cfg?.models?.providers?.xai?.request),
           provider: "xai",

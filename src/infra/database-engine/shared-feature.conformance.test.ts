@@ -13,7 +13,7 @@ import {
 } from "../../config/io.health-state.kernel.js";
 import { isMissingPluginStateTableError } from "../../plugin-state/plugin-state-store.database.js";
 import { DebugProxyCaptureKernel } from "../../proxy-capture/store.kernel.js";
-import { recordSessionStateEventInDatabase } from "../../sessions/session-state-events.kernel.js";
+import { recordSessionStateEventsInDatabase } from "../../sessions/session-state-events.kernel.js";
 import {
   readAgentProvenanceBatchInDatabase,
   recordAgentProvenanceInDatabase,
@@ -225,19 +225,39 @@ it.skipIf(!connection)(
           dedupeKey: "conformance-event",
         };
         const first = runSqliteImmediateTransactionSync(db, () =>
-          recordSessionStateEventInDatabase(db, input, 100),
+          recordSessionStateEventsInDatabase(db, [{ event: input, now: 100 }]),
         );
-        expect(first.row).toMatchObject({ sequence: 1, summary: "Created" });
+        expect(first.rows[0]).toMatchObject({ sequence: 1, summary: "Created" });
         expect(
           remote.query("SELECT last_sequence, updated_at FROM session_state_heads").rows,
         ).toEqual([{ last_sequence: 1, updated_at: 100 }]);
         const duplicate = runSqliteImmediateTransactionSync(db, () =>
-          recordSessionStateEventInDatabase(db, { ...input, summary: "Ignored" }, 200),
+          recordSessionStateEventsInDatabase(db, [
+            { event: { ...input, summary: "Ignored" }, now: 200 },
+          ]),
         );
         expect(duplicate).toEqual(first);
         expect(
           remote.query("SELECT last_sequence, updated_at FROM session_state_heads").rows,
         ).toEqual([{ last_sequence: 1, updated_at: 100 }]);
+
+        const batch = runSqliteImmediateTransactionSync(db, () =>
+          recordSessionStateEventsInDatabase(db, [
+            { event: { ...input, dedupeKey: "batch-main-first" }, now: 300 },
+            { event: { ...input, agentId: "other", dedupeKey: "batch-other" }, now: 400 },
+            { event: { ...input, dedupeKey: "batch-main-last" }, now: 500 },
+            { event: input, now: 600 },
+          ]),
+        );
+        expect(batch.rows).toHaveLength(4);
+        expect(
+          remote.query(
+            "SELECT agent_id, last_sequence, updated_at FROM session_state_heads ORDER BY agent_id",
+          ).rows,
+        ).toEqual([
+          { agent_id: "main", last_sequence: batch.rows[2]!.sequence, updated_at: 500 },
+          { agent_id: "other", last_sequence: batch.rows[1]!.sequence, updated_at: 400 },
+        ]);
 
         for (const agentId of ["alpha", "beta"]) {
           recordAgentProvenanceInDatabase(db, {

@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";

@@ -212,6 +212,7 @@ export function renderSidebarIdentityMenuForMenus(
         profileViewer: profileViewer(),
         canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
         themeMode: host.themeMode,
+        onThemeChange: (mode, element) => host.sessionDataContext?.theme.setMode(mode, element),
         triggerWidth: position.width,
         ...menus.positionedMenuHandlers("identity"),
         onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
@@ -270,10 +271,6 @@ export function renderSidebarSessionMenuForMenus(
     rows().every((row) => canArchiveSessionRow(row, mainKey())),
   );
   const deleteAllowed = createMemo(() => canDeleteSessionRows(rows(), mainKey()));
-  // Hidden runs have no row of their own; their parent menu acknowledges them.
-  const hiddenUnreadRuns = createMemo(() =>
-    rows().flatMap((row) => row.subagentSummary?.unreadHiddenRuns ?? []),
-  );
   const allUnread = createMemo(() =>
     rows().every((row) => row.unread || (row.subagentSummary?.unreadHiddenRuns?.length ?? 0) > 0),
   );
@@ -409,49 +406,6 @@ export function renderSidebarSessionMenuForMenus(
               });
             }
             break;
-          case "toggle-pin":
-            host.sessionOrganizer.setPersonalSessionPin(
-              session().key,
-              !host.sessionOrganizer.isPersonalSessionPin(session().key),
-            );
-            break;
-          case "toggle-involving-me":
-            void host.sessionOrganizer.setSessionInvolvement(
-              session(),
-              !session().hiddenFromInvolvingMe,
-            );
-            break;
-          case "toggle-unread":
-            if (hiddenUnreadRuns().length > 0) {
-              void host.sessionOrganizer.runBatchSessionAction(action, rows(), allUnread());
-            } else {
-              void host.sessionOrganizer.patchSession(
-                session(),
-                { unread: !session().unread },
-                { sessionScope: true },
-              );
-            }
-            break;
-          case "rename":
-            void host.sessionOrganizer.renameSession(session());
-            break;
-          case "set-color":
-            void host.sessionOrganizer.patchSession(session(), { color: action.color });
-            break;
-          case "set-icon":
-            void host.sessionOrganizer.patchSession(session(), { icon: action.icon });
-            break;
-          case "set-communication":
-            void host.sessionOrganizer.patchSession(session(), {
-              communication: action.communication,
-            });
-            break;
-          case "reset-appearance":
-            void host.sessionOrganizer.patchSession(session(), { icon: null, color: null });
-            break;
-          case "assign-owner":
-            void host.sessionOrganizer.assignSessionOwner(session(), action.owner);
-            break;
           case "move-session": {
             const placementSession = currentPlacementSession();
             const scopeGeneration = host.sessionData.sessionScopeGeneration;
@@ -470,9 +424,6 @@ export function renderSidebarSessionMenuForMenus(
             }
             break;
           }
-          case "fork":
-            void host.sessionOrganizer.forkSession(session());
-            break;
           case "plugin":
             if (actionContext?.plugins) {
               void runControlUiPluginAction({
@@ -491,52 +442,8 @@ export function renderSidebarSessionMenuForMenus(
               });
             }
             break;
-          case "move-to-top-level":
-            void host.sessionOrganizer.promoteSession(session());
-            break;
-          case "move-to-group":
-            if (action.category === null || session().category !== action.category) {
-              void host.sessionOrganizer.assignSessionCategory(session(), action.category);
-            }
-            break;
-          case "new-group":
-            void host.sessionOrganizer.createSessionGroup([session()]);
-            break;
-          case "snooze":
-            void host.sessionOrganizer.snoozeSessionWithUndo(
-              session(),
-              action.snoozedUntil,
-              action.rememberCustom,
-            );
-            break;
-          case "wake":
-            void host.sessionOrganizer.patchSession(
-              session(),
-              { snoozedUntil: null },
-              { sessionScope: true },
-            );
-            break;
-          case "toggle-archived":
-            if (session().archived) {
-              void host.sessionOrganizer.patchSession(
-                session(),
-                { archived: false },
-                {
-                  sessionScope: true,
-                },
-              );
-            } else {
-              void host.sessionOrganizer.archiveSessionWithUndo(session());
-            }
-            break;
-          case "stop-cloud-worker":
-            void host.sessionOrganizer.stopCloudWorker(session());
-            break;
-          case "delete":
-            void host.sessionOrganizer.deleteSession(session());
-            break;
           default:
-            action satisfies never;
+            void host.sessionOrganizer.runSessionAction(session(), action);
         }
       }}
     />

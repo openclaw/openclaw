@@ -53,6 +53,32 @@ describe("Feishu account resolution", () => {
     const cfg = createFeishuTestConfig(config);
     expect(resolveDefaultFeishuAccountSelection(cfg)).toEqual({ accountId, source });
   });
+  it("resolves a punctuation-bearing account key to its own configuration and credentials", () => {
+    const cfg = createFeishuTestConfig({
+      ...credentials,
+      tools: { perm: true },
+      accounts: {
+        "sales.eu": {
+          appId: "app-sales",
+          appSecret: "sec-sales", // pragma: allowlist secret
+          tools: { perm: false },
+        },
+      },
+    });
+
+    // By exact raw key ...
+    const byKey = resolveFeishuAccount({ cfg, accountId: "sales.eu" });
+    expect(byKey.appId).toBe("app-sales");
+    expect(byKey.config.tools?.perm).toBe(false);
+
+    // ... and by its normalized alias. A normalized alias must never
+    // silently inherit the root account's credentials or tool policy.
+    const byAlias = resolveFeishuAccount({ cfg, accountId: "sales-eu" });
+    expect(byAlias.accountId).toBe("sales-eu");
+    expect(byAlias.appId).toBe("app-sales");
+    expect(byAlias.config.tools?.perm).toBe(false);
+  });
+
   it("resolves env SecretRef objects in inspect mode", () => {
     withEnv({ [FEISHU_SELECTED_SECRET_ENV]: " secret_from_env " }, () => {
       const cfg = asConfig({ ...credentials, appSecret: envRef() as never });

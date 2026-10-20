@@ -718,9 +718,32 @@ is uncertain, writer admission and cleanup custody remain held until execution e
 
 During startup, reaching the inspection's foreground deadline records pending
 preparation and marks that agent **degraded** while the Gateway continues with healthy agents.
-Its sessions remain unavailable, and its database is excluded from automatic
-migration and ordinary writes. The inspection continues in the background within
-the same concurrency limit. Expiring the wait does not establish corruption.
+Its database remains excluded from automatic migration and ordinary writes until
+admission completes.
+Session and agent write RPCs targeting a preparing agent return a retryable startup-unavailable
+error before handler work begins. The reference Gateway client waits by retrying
+that refused request with the same request ID and input, within its original
+deadline and cancellation signal. Expiry or cancellation stops retries; no write
+remains parked at the server. Clients without this retry behavior receive the
+unavailable error immediately and can retry after preparation finishes.
+TUI and Control UI sends and new sessions use the shared five-minute startup
+budget for their client-owned response deadline. Submitted chat messages keep
+waiting when a retained pane is hidden. Stop, discard, or disposing the initiating
+view cancels pending admission retries; unfinished new-session creation also
+cancels when navigation retires its initiating view. SDK, native, and tool callers
+retain their own deadlines.
+Channel ingress and direct agent execution wait for existing preparation without
+holding database or session locks, for up to five minutes plus one minute per
+remaining two-agent inspection batch. Reads keep their existing readiness behavior,
+and admitted requests do not join another agent's preparation.
+Cron configuration and wake RPCs refuse preparing targets before writing.
+Scheduled cron jobs for preparing agents retain queued custody without consuming running
+slots or inheriting the foreground request timeout. Cron initialization continues while
+those jobs observe readiness in the background. Admission completion wakes their queue;
+healthy agents remain eligible. Service or Gateway shutdown cancels the readiness observation
+and leaves those receipts queued for ordinary recovery.
+The inspection continues in the background within
+the same concurrency limit. Expiring either wait does not establish corruption.
 
 A successful inspection alone does not make the agent available. The Gateway
 opens each agent's database and completes its session validation and transcript
@@ -1214,6 +1237,34 @@ Follow [Downgrade](/install/updating#downgrade) for the managed rollback path,
 retained-originals limits, and restoring a verified pre-update backup. A complete
 recovery point includes the matching package, config, shared state, and every
 agent database. Keep writers stopped while activating restored state.
+
+### Client credential cutover rollback
+
+Before shared state schema 29, client private identities, cached tokens, and
+native socket material live in the shared database. An automatic rollback to
+that format restores the pre-upgrade shared database with those tables intact.
+The older app ignores `client/credentials.sqlite`; do not copy its newer rows
+back manually. Credentials issued between upgrade and rollback are lost and
+affected clients must pair again.
+
+On the next upgrade, Doctor checks the local migration receipt against the
+restored shared source and rebuilds stale local credentials from that source.
+A partial `copied` receipt never permits normal client access. Updated native
+clients refuse a replaced shared source until the matching Doctor repairs the
+binding. Older native clients refuse retired shared credential tables; update
+the app instead of lowering schema markers. PostgreSQL recovery also restores
+the local family captured by its engine-aware driver. Ordinary exported backups
+omit the native socket secret and initialize it again on restore.
+
+An independent native credential source is copied without changing its database,
+permissions, journals, or directory contents. It receives no retirement marker,
+so the old app can still read it after rollback. The local copy records the source
+identity and content hash: an unchanged source preserves refreshed local tokens,
+while a changed or restored source rebuilds the copy. Consumed legacy JSON claims
+survive that rebuild, preventing revoked credentials from being reimported.
+WAL-mode independent sources require the previous release's export or restore
+workflow; the importer refuses them before opening SQLite rather than changing
+their shared-memory files or ignoring committed WAL data.
 
 ### Example: state schema 21 to 20
 

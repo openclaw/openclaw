@@ -283,7 +283,6 @@ function* createOpenClawToolsSteps(
           agentId: sessionAgentId,
           workspaceDir,
           sandbox,
-          deferAutoModelResolution: true,
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-tool");

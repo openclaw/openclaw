@@ -219,18 +219,18 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         )}
         <For each={turns()} keyed={false}>
           {(turn) => {
-            const answered = createMemo(() => {
+            const answered = () => {
               const value = turn();
               return value.status === "answered" ? value : undefined;
-            });
-            const failed = createMemo(() => {
+            };
+            const failed = () => {
               const value = turn();
               return value.status === "failed" ? value : undefined;
-            });
-            const working = createMemo(() => {
+            };
+            const working = () => {
               const value = turn();
               return value.status === "pending" ? value : undefined;
-            });
+            };
             return (
               <article
                 class={[

@@ -26,7 +26,7 @@ import type {
   ReplyDispatchBeforeDeliverOptions as ReplyRuntimeBeforeDeliverOptions,
   ReplyDispatcher as ReplyRuntimeDispatcher,
 } from "openclaw/plugin-sdk/reply-runtime";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import {

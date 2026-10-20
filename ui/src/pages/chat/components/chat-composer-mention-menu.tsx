@@ -1,6 +1,6 @@
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-client/browser";
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { createMemo, createStore, For, Repeat, Show } from "solid-js";
+import { createStore, For, Repeat, Show } from "solid-js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
@@ -401,10 +401,10 @@ export type HumanMentionMenu = ReturnType<typeof createHumanMentionMenu>;
 export function HumanMentionMenuView(props: { args: [HumanMentionMenu, HumanMentionMenuHost] }) {
   const menu = () => props.args[0];
   const host = () => props.args[1];
-  const result = createMemo(() => {
+  const result = () => {
     const search = menu().state.search;
     return search?.kind === "ready" ? search.result : undefined;
-  });
+  };
   const limited = () => host().getMentions().length >= MAX_HUMAN_MENTIONS;
   const loading = () => menu().state.search?.kind === "loading";
   const message = () =>

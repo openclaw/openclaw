@@ -82,13 +82,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   );
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(initialParams.timeoutMs);
   const laneTaskAbortController = new AbortController();
-  const laneTaskReleaseController = new AbortController();
   // Queue cancellation remains authoritative before execution and during a
   // later isolated finalizer, after the original attempt's listeners close.
   const abortSignal = AbortSignal.any([
     ...(initialParams.abortSignal ? [initialParams.abortSignal] : []),
     laneTaskAbortController.signal,
-    laneTaskReleaseController.signal,
   ]);
   let laneTaskProgressAtMs = Date.now();
   let laneTaskStartedAtMs = laneTaskProgressAtMs;
@@ -581,18 +579,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           watchdog.beginTerminal(Date.now() + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS);
         }
       };
-      const releaseExecution = () => {
-        operation?.abort(laneTaskReleaseController.signal.reason);
-        watchdog.beginTerminal(Date.now());
-        void watchdog.tick();
-      };
       abortSignal.addEventListener("abort", abortExecution, { once: true });
-      laneTaskReleaseController.signal.addEventListener("abort", releaseExecution, { once: true });
       if (abortSignal.aborted) {
         abortExecution();
-      }
-      if (laneTaskReleaseController.signal.aborted) {
-        releaseExecution();
       }
       const unsubscribe = opts?.taskTimeoutSubscribe?.(setLaneTaskDeadline);
       try {
@@ -605,7 +594,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         execution.close();
         unsubscribe?.();
         abortSignal.removeEventListener("abort", abortExecution);
-        laneTaskReleaseController.signal.removeEventListener("abort", releaseExecution);
         executionWatchdog = undefined;
         if (!operation) {
           watchdog.close();
@@ -681,7 +669,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     enqueueSession,
     abortSignal,
     laneTaskAbortController,
-    laneTaskReleaseController,
     noteLaneTaskProgress,
     setLaneTaskDeadline,
     createAttemptControls,

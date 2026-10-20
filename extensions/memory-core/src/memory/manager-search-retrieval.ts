@@ -172,12 +172,12 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
 
   protected async finalizeKeywordOnlyResults(params: {
     results: KeywordSearchHit[];
-    temporalDecay?: { enabled: boolean; halfLifeDays: number };
+    temporalDecay: { enabled: boolean; halfLifeDays: number };
     maxResults: number;
     minScore: number;
     activeProjectKeys?: readonly string[];
   }): Promise<MemoryRetrievalResult[]> {
-    const appliesTemporalDecay = params.temporalDecay?.enabled === true;
+    const appliesTemporalDecay = params.temporalDecay.enabled;
     const decayInputs = appliesTemporalDecay
       ? params.results.map((entry) => {
           if (entry.exactPathSpecificity === 0) {

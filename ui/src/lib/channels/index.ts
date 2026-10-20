@@ -502,6 +502,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
         await refreshChannels(true);
       }
     });
+  // Gateway changes retire pairing and WhatsApp epochs independently, so pairing scope changes cannot cancel logins.
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connected = snapshot.phase === "connected";
@@ -545,8 +546,6 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       }
     }
     if (clientChanged || connectionChanged || pairingAuthChanged) {
-      // Pairing authorization has its own epoch so scope changes cannot cancel
-      // unrelated channel login/logout operations on the same connection.
       lifecycle.pairingEpoch += 1;
       if (clientChanged || pairingAuthChanged) {
         state.pairingSnapshot = null;

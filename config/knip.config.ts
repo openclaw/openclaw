@@ -78,6 +78,8 @@ const repositoryScriptEntries = [
   "scripts/build-decision-transport-bench.mts!",
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
+  // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
+  "scripts/perf/chat-metadata-burst-measure.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
@@ -89,6 +91,10 @@ const repositoryScriptEntries = [
   "scripts/perf/history-diff-measure.ts!",
   // scripts/perf/README.md invokes this checkout-diff measurement CLI by path.
   "scripts/perf/checkout-diff-measure.ts!",
+  // scripts/perf/README.md invokes this isolated viewer-presence measurement CLI.
+  "scripts/perf/presence-churn-measure.ts!",
+  // scripts/perf/README.md invokes this isolated session-roster measurement CLI.
+  "scripts/perf/session-roster-churn-measure.ts!",
   "scripts/perf/seal-version-restart.ts!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
@@ -217,6 +223,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
+  // run.sh preloads this fixture adapter through NODE_OPTIONS by path.
+  "scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
@@ -498,6 +506,7 @@ const rootEntries = [
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
+  "src/worker/worker-deploy-client-credentials.ts!",
   "src/worker/worker-deploy-entry.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-file-tool-read.ts!",

@@ -39,7 +39,6 @@ import { createModelProviderProfileActions } from "./profile-actions-controller.
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
-import type { ModelProvidersViewProps } from "./view.tsx";
 
 export function createModelProviders(
   context: ApplicationContext,
@@ -52,8 +51,8 @@ export function createModelProviders(
   const gatewayState = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.settingsAgentSelection);
   const overlays = projectOverlays(context.overlays);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   const mutationBlockedReason = (): string | null =>
     modelProviderConfigMutationBlockedReason(context) ??
     (state.selectedAgentId ? null : t("agents.noAgents"));
@@ -229,8 +228,10 @@ export function createModelProviders(
   const projection = projectSource(state, {
     read: (value) => value,
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => {
+        publish = undefined;
+      };
     },
     equality: "revision",
   });
@@ -336,7 +337,7 @@ export function createModelProviders(
     syncAgent();
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
-      listeners.clear();
+      publish = undefined;
       connected = false;
       for (const cleanup of cleanups) {
         cleanup();
@@ -621,14 +622,14 @@ export function createModelProviders(
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");
     const pageLogin = login.pageActions;
-    const props: ModelProvidersViewProps = {
+    const props = {
       installedAgents: undefined,
       providerQuery: providerQuery(),
       onProviderQueryChange: setProviderQuery,
       onConnectProvider: () => void login.connectProvider(values.configuredModels),
       usageClient: !mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
       usageAgentId: state.selectedAgentId,
-      registerAccountUsage: (element) => {
+      registerAccountUsage: (element: ModelAccountUsageElement) => {
         accountUsages.add(element);
         return () => accountUsages.delete(element);
       },
@@ -666,26 +667,29 @@ export function createModelProviders(
               context.runtimeConfig.refresh({ background: true }),
               refresh("forced", core.retryProvider),
             ])),
-      onOpenKeyEditor: (provider) => {
+      onOpenKeyEditor: (provider: string) => {
         setState("keyEditorProvider", provider);
         setState("keyDraft", "");
         setMessage(provider, null);
       },
       onCloseKeyEditor: () => closeKeyEditor(),
-      onKeyDraftChange: (value) => setState("keyDraft", value),
-      onSaveKey: (provider, configKey) =>
+      onKeyDraftChange: (value: string) => setState("keyDraft", value),
+      onSaveKey: (provider: string, configKey: string) =>
         void mutateApiKey(provider, configKey, state.keyDraft.trim()),
-      onRemoveKey: (provider, configKey) => void mutateApiKey(provider, configKey, null),
-      onProbe: (cardId, providers) => void profileActions.probe(cardId, providers),
-      onRequestLogout: (pending) => void profileActions.requestLogout(pending),
-      onProfileOrderChange: (cardId, provider, profileIds) =>
+      onRemoveKey: (provider: string, configKey: string) =>
+        void mutateApiKey(provider, configKey, null),
+      onProbe: (cardId: string, providers: string[]) =>
+        void profileActions.probe(cardId, providers),
+      onRequestLogout: (pending: Parameters<typeof profileActions.requestLogout>[0]) =>
+        void profileActions.requestLogout(pending),
+      onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) =>
         profileActions.setOrder(cardId, provider, profileIds),
       onAddProviderToggle: () => {
         setAddProviderOpen((open) => !open);
         setState("addProviderKey", "");
         setMessage("add", null);
       },
-      onAddProviderKeyChange: (value) => setState("addProviderKey", value),
+      onAddProviderKeyChange: (value: string) => setState("addProviderKey", value),
       onAddProvider: () => {
         const provider = state.addProviderId;
         if (provider) {

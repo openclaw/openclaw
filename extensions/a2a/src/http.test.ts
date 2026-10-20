@@ -5,6 +5,7 @@ import path from "node:path";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createMockIncomingRequest,
@@ -16,8 +17,10 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveA2aChannelAccount } from "./accounts.js";
-import { createA2aHttpHandler } from "./http.js";
-import { A2aTaskStore } from "./task-store.js";
+import { a2aChannelPlugin } from "./channel.js";
+import { createA2aGatewayFixture } from "./gateway.test-support.js";
+import type { dispatchA2aInbound } from "./inbound.js";
+import type { A2aTaskStore } from "./task-store.js";
 import type { A2aChannelConfig } from "./types.js";
 
 type HttpReply = { status: number; json(): Promise<unknown>; text(): Promise<string> };
@@ -49,45 +52,76 @@ vi.mock("node:timers", async (importOriginal) => {
   };
 });
 
-const activeStores = new Set<A2aTaskStore>();
+const { createdStores, dispatchers } = vi.hoisted(() => ({
+  createdStores: [] as A2aTaskStore[],
+  dispatchers: new WeakMap<
+    A2aTaskStore,
+    (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>
+  >(),
+}));
+vi.mock("./task-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./task-store.js")>();
+  return {
+    ...actual,
+    A2aTaskStore: class extends actual.A2aTaskStore {
+      constructor() {
+        super();
+        createdStores.push(this);
+      }
+    },
+  };
+});
+vi.mock("./inbound.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound.js")>()),
+  dispatchA2aInbound: async (message: Parameters<typeof dispatchA2aInbound>[0]) =>
+    dispatchers.get(message.store)?.(message),
+}));
+const activeAccounts: Array<{ controller: AbortController; lifecycle: Promise<unknown> }> = [];
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  for (const store of activeStores) {
-    store.stop();
+afterEach(async () => {
+  for (const { controller, lifecycle } of activeAccounts.splice(0)) {
+    controller.abort();
+    await lifecycle;
   }
-  activeStores.clear();
+  resetPluginRuntimeStateForTest();
+  vi.restoreAllMocks();
 });
 
 async function startHttpHarness(options?: {
   config?: OpenClawConfig;
   a2aConfig?: Partial<A2aChannelConfig>;
-  onDispatch?: Parameters<typeof createA2aHttpHandler>[0]["dispatchInbound"];
+  onDispatch?: (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>;
 }) {
-  const taskStore = new A2aTaskStore();
-  activeStores.add(taskStore);
-  const handler = createA2aHttpHandler({
-    config: options?.config ?? {},
-    a2aConfig: {
+  const { registry, controller, ctx } = createA2aGatewayFixture({
+    cfg: options?.config ?? {},
+    version: VERSION,
+    config: {
       peers: { alpha: { token: "alpha-secret" }, beta: { token: "beta-secret" } },
       ...options?.a2aConfig,
     },
-    version: VERSION,
+  });
+  const lifecycle = Promise.resolve(a2aChannelPlugin.gateway!.startAccount!(ctx));
+  activeAccounts.push({ controller, lifecycle });
+  const taskStore = createdStores.pop();
+  const handler = registry.httpRoutes.find((route) => route.path === "/a2a/v1")?.handler;
+  if (!taskStore || !handler) {
+    throw new Error("A2A account did not register its HTTP route");
+  }
+  dispatchers.set(
     taskStore,
-    dispatchInbound:
-      options?.onDispatch ??
+    options?.onDispatch ??
       (async (message) => {
         taskStore.complete(message.taskId, `echo: ${message.text}`);
       }),
-  });
+  );
   const baseUrl = "http://gateway.example.test";
 
-  async function dispatchRequest(dispatch: {
+  const dispatchRequest = async (dispatch: {
     method: "GET" | "POST";
     endpoint: string;
     body?: string;
     token?: string | null;
-  }) {
+  }) => {
     const request = createMockIncomingRequest(dispatch.body === undefined ? [] : [dispatch.body]);
     request.method = dispatch.method;
     request.url = dispatch.endpoint;
@@ -119,7 +153,7 @@ async function startHttpHarness(options?: {
       json: async (): Promise<unknown> => JSON.parse(response.body ?? ""),
       text: async () => response.body ?? "",
     };
-  }
+  };
 
   return {
     baseUrl,

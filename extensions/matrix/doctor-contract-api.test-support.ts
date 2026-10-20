@@ -6,17 +6,65 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  createChannelIngressQueueForTests,
   getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctorForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type { MatrixStoredCredentialRecord } from "./src/matrix/credentials-state.js";
 
+// Released Matrix replay markers retain their identities for 30 days.
+export const MATRIX_INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 export function createContext(
   env?: NodeJS.ProcessEnv,
   inheritStoreEnv = true,
 ): PluginDoctorStateMigrationContext {
   return {
+    readPluginStateEntriesInKeyRange(namespace, range) {
+      return createPluginStateSyncKeyedStoreForTests<unknown>("matrix", {
+        namespace,
+        maxEntries: 20_000,
+        defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
+        env,
+      })
+        .entries()
+        .filter(
+          (entry) =>
+            entry.key.startsWith(range.prefix) && (!range.after || entry.key > range.after),
+        )
+        .toSorted((a, b) => a.key.localeCompare(b.key))
+        .slice(0, range.limit)
+        .map((entry) =>
+          Object.assign(entry, {
+            valueJson: JSON.stringify(entry.value),
+            expiresAt: entry.expiresAt ?? null,
+          }),
+        );
+    },
+    channelIngressQueues: [
+      {
+        channelId: "matrix",
+        listChannelIngressQueueAccountIds: async () => [],
+        openChannelIngressQueueForInspection: <TPayload, TMetadata>({
+          accountId,
+        }: { accountId?: string } = {}) =>
+          createChannelIngressQueueForTests<TPayload, TMetadata>({
+            channelId: "matrix",
+            accountId,
+            stateDir: env?.OPENCLAW_STATE_DIR,
+          }),
+        openChannelIngressQueue: <TPayload, TMetadata, TCompletedMetadata>({
+          accountId,
+        }: { accountId?: string } = {}) =>
+          createChannelIngressQueueForTests<TPayload, TMetadata, TCompletedMetadata>({
+            channelId: "matrix",
+            accountId,
+            stateDir: env?.OPENCLAW_STATE_DIR,
+          }),
+      },
+    ],
     getPluginStateCapacity: () => getPluginStateCapacityForTests("matrix", env),
     importPluginStateEntries: (options, entries) =>
       importPluginStateEntriesForDoctorForTests("matrix", options, entries),
@@ -108,7 +156,7 @@ export async function migrationById(id: string) {
 export function dedupeMigrationResult(roots: string[], imported: number, total = imported) {
   return {
     changes: [
-      `Migrated Matrix inbound dedupe markers to the claimable dedupe store (${imported} of ${total} entries)`,
+      `Migrated Matrix inbound dedupe markers to the durable ingress spool (${imported} of ${total} entries)`,
       ...roots.map((root) => `Retired Matrix inbound dedupe rows for ${root}`),
       `Recorded Matrix inbound dedupe migration completion (${roots.length} SQLite roots scanned)`,
     ],
