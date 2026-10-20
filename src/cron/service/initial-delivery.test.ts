@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
-import type { CronJobCreate } from "../types.js";
+import type { CronJob, CronJobCreate } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 
 function createInput(
@@ -20,21 +20,12 @@ function createInput(
   };
 }
 
-describe("resolveInitialCronDelivery", () => {
-  it("defaults isolated script output to announce", () => {
-    expect(
-      resolveInitialCronDelivery(
-        createInput("isolated", { kind: "script", script: "return { notify: 'hello' }" }),
-      ),
-    ).toEqual({ mode: "announce" });
-  });
-
-  it("does not default main-session output or system-event delivery", () => {
-    expect(resolveInitialCronDelivery(createInput("main"))).toBeUndefined();
-    expect(
-      resolveInitialCronDelivery(createInput("isolated", { kind: "systemEvent", text: "tick" })),
-    ).toBeUndefined();
-  });
+it.each([
+  ["isolated", { kind: "script", script: "return { notify: 'hello' }" }, { mode: "announce" }],
+  ["main", { kind: "agentTurn", message: "hello" }, undefined],
+  ["isolated", { kind: "systemEvent", text: "tick" }, undefined],
+] as const)("resolves initial delivery for %s %j", (target, payload, expected) => {
+  expect(resolveInitialCronDelivery(createInput(target, payload))).toEqual(expected);
 });
 
 // Direct service callers do not pass through normalizeCronJobCreate, so keep
@@ -59,14 +50,14 @@ describe("CronService initial delivery", () => {
     await cron.start();
   });
   afterEach(() => cron.stop());
+  async function expectPersistedAnnounce(job: CronJob) {
+    expect(job.delivery).toEqual({ mode: "announce" });
+    await expect(cron.readJob(job.id)).resolves.toMatchObject({ delivery: { mode: "announce" } });
+  }
   it.each(["current", "session:project-alpha"] as const)(
     "persists announce delivery for direct %s jobs",
     async (sessionTarget) => {
-      const added = await cron.add(createInput(sessionTarget));
-      expect(added.delivery).toEqual({ mode: "announce" });
-      await expect(cron.readJob(added.id)).resolves.toMatchObject({
-        delivery: { mode: "announce" },
-      });
+      await expectPersistedAnnounce(await cron.add(createInput(sessionTarget)));
     },
   );
 
@@ -88,8 +79,6 @@ describe("CronService initial delivery", () => {
       updated: false,
       job: { delivery: { mode: "announce" } },
     });
-    await expect(cron.readJob(converged.job.id)).resolves.toMatchObject({
-      delivery: { mode: "announce" },
-    });
+    await expectPersistedAnnounce(converged.job);
   });
 });
