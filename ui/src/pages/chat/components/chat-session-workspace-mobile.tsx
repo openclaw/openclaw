@@ -9,8 +9,10 @@ import { formatByteSize } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
-import type { SessionWorkspaceProps } from "./chat-session-workspace.ts";
-import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
+import type {
+  SessionWorkspaceFilter,
+  SessionWorkspaceProps,
+} from "./chat-sidebar-content-types.ts";
 import "./chat-session-workspace-mobile.css";
 
 type SessionFile = SessionWorkspaceListResult["files"][number];
