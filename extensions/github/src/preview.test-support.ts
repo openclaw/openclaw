@@ -8,6 +8,30 @@ export function githubJson(body: unknown, status = 200): Response {
   });
 }
 
+export const avatarDataUrl = "data:image/png;base64,iVBORw==";
+
+export function previewFetch(
+  respond: (url: string, init?: RequestInit) => Response | Promise<Response>,
+) {
+  return vi.fn<typeof fetch>(async (input, init) => respond(requestUrl(input), init));
+}
+
+export function conditionalJson(body: unknown, etag: string) {
+  const response = githubJson(body);
+  response.headers.set("etag", etag);
+  return response;
+}
+
+export function coauthorTrailers(...authors: [string, number][]) {
+  const message = authors
+    .map(
+      ([name, id]) =>
+        `Co-authored-by: ${name} <${id}+${name.toLowerCase()}@users.noreply.github.com>`,
+    )
+    .join("\n");
+  return [{ commit: { message } }];
+}
+
 export function previewTarget(number: number, kind: "issue" | "pull" = "issue", repo = "openclaw") {
   return { kind, number, owner: "openclaw", repo };
 }
