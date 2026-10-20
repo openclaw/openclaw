@@ -130,6 +130,9 @@ up to 80 recent rows (plus rows from the same history entry) for a warm reload.
 The snapshot also retains the slash-command catalog and its revision. Warm
 startup reuses that list when the Gateway confirms it is unchanged; config,
 plugin, and skill changes refresh it through the existing metadata owner.
+Saved dashboards restore independently of transcript validation, so a slow
+transcript download does not delay their layout. The Gateway still revalidates
+the board, its grants, and document tickets on connection.
 Older history loads from the Gateway as you scroll up. Cache upgrades discard
 older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history

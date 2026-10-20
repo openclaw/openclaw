@@ -148,11 +148,14 @@ const activeStores = new Set<SessionSnapshotStore>();
 async function parseSnapshotRecord(
   value: unknown,
   sessionKey?: string,
+  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
 ): Promise<SessionSnapshotRecord | null> {
   const parsed = json.parseSnapshot(recordSchema, value);
   if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
     return null;
   }
+  // Board validation belongs to its provider, independently of transcript receipts.
+  onBoard?.(parsed.snapshot.board);
   const historyState = parsed.snapshot.historyState;
   if (historyState !== undefined) {
     const { isChatHistoryState } =
@@ -484,7 +487,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
-  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
+  async read(
+    sessionKey: string,
+    onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+  ): Promise<ChatSessionSnapshot | null> {
     const isCurrent = this.captureReadScope(sessionKey);
     const prewarm = consumePrewarmedChatSnapshot(sessionKey);
     const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
@@ -495,7 +501,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     if (asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION) {
       return null;
     }
-    const record = await parseSnapshotRecord(value, sessionKey);
+    const record = await parseSnapshotRecord(value, sessionKey, onBoard);
     if (!isCurrent()) {
       return null;
     }
