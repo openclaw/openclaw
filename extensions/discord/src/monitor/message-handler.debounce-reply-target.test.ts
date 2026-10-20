@@ -1,7 +1,7 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 
 installDiscordIngressTestRuntime();
-import { beforeEach, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   createDiscordMessageHandler,
   preflightDiscordMessageMock,
@@ -26,47 +26,38 @@ function createTextMessageData(messageId: string, channelId = "ch-1") {
   };
 }
 
-describe("Discord reply-target debounce partitioning", () => {
-  beforeEach(() => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
+it("keeps replies to a different message out of an ordinary debounced batch", async () => {
+  const params = createDiscordHandlerParams();
+  params.cfg.messages = { inbound: { debounceMs: 20 } };
+  preflightDiscordMessageMock.mockImplementation(
+    async (preflightParams: { data: ReturnType<typeof createTextMessageData> }) => ({
+      ...createDiscordQueuePreflightContext(preflightParams.data.channel_id),
+      message: preflightParams.data.message,
+      messageText: preflightParams.data.message.content,
+    }),
+  );
+  const handler = createDiscordMessageHandler(params);
+  const ordinary = createTextMessageData("m-ordinary");
+  const reply = createTextMessageData("m-other-bot-reply");
+  Object.assign(reply.message, {
+    messageReference: {
+      type: 0,
+      message_id: "m-other-bot",
+      channel_id: reply.channel_id,
+    },
+    referencedMessage: {
+      id: "m-other-bot",
+      author: { id: "other-bot", bot: true },
+    },
   });
 
-  it("keeps replies to a different message out of an ordinary debounced batch", async () => {
-    const params = createDiscordHandlerParams();
-    params.cfg.messages = { inbound: { debounceMs: 20 } };
-    preflightDiscordMessageMock.mockImplementation(
-      async (preflightParams: { data: ReturnType<typeof createTextMessageData> }) => ({
-        ...createDiscordQueuePreflightContext(preflightParams.data.channel_id),
-        message: preflightParams.data.message,
-        messageText: preflightParams.data.message.content,
-      }),
-    );
-    const handler = createDiscordMessageHandler(params);
-    const ordinary = createTextMessageData("m-ordinary");
-    const reply = createTextMessageData("m-other-bot-reply");
-    Object.assign(reply.message, {
-      messageReference: {
-        type: 0,
-        message_id: "m-other-bot",
-        channel_id: reply.channel_id,
-      },
-      referencedMessage: {
-        id: "m-other-bot",
-        author: { id: "other-bot", bot: true },
-      },
-    });
+  await handler(ordinary as never, {} as never);
+  await handler(reply as never, {} as never);
 
-    await handler(ordinary as never, {} as never);
-    await handler(reply as never, {} as never);
-
-    await expect.poll(() => preflightDiscordMessageMock.mock.calls.length).toBe(2);
-    expect(
-      preflightDiscordMessageMock.mock.calls.map(
-        ([call]) =>
-          (call as { data: ReturnType<typeof createTextMessageData> }).data.message.content,
-      ),
-    ).toEqual(["hello", "hello"]);
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-  });
+  await expect.poll(() => preflightDiscordMessageMock.mock.calls.length).toBe(2);
+  expect(preflightDiscordMessageMock.mock.calls.map(([call]) => call)).toMatchObject([
+    { data: { message: { content: "hello" } } },
+    { data: { message: { content: "hello" } } },
+  ]);
+  expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
 });

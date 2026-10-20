@@ -68,9 +68,6 @@ describe("resolveReferencedReplyMediaList", () => {
     expect(result).toEqual([]);
     expect(saveRemoteMediaMock).not.toHaveBeenCalled();
   });
-});
-
-describe("Discord media SSRF policy", () => {
   it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
     mockDownload("b.png");
     await resolveMediaList(

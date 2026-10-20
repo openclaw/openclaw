@@ -7,7 +7,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "../../doctor-contract-api.js";
 import { setDiscordRuntime } from "../runtime.js";
 import {
@@ -17,12 +17,18 @@ import {
 
 type DiscordRuntime = Parameters<typeof setDiscordRuntime>[0];
 
-const tempDirs: string[] = [];
+let stateDir: string;
+let env: NodeJS.ProcessEnv;
+const scope = { userId: "456" };
+const record = (modelRef: string) => recordDiscordModelPickerRecentModel({ env, scope, modelRef });
+const read = (options: { allowedModelRefs?: Set<string> } = {}) =>
+  readDiscordModelPickerRecentModels({ env, scope, ...options });
+const openStore = (namespace = "model-picker-preferences", maxEntries = 2_000) =>
+  createPluginStateKeyedStoreForTests("discord", { namespace, maxEntries, env });
 
-async function createStateEnv(userId = "456") {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-picker-"));
-  tempDirs.push(dir);
-  const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+beforeEach(async () => {
+  stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-picker-"));
+  env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   setDiscordRuntime({
     state: {
       openKeyedStore: (options: OpenKeyedStoreOptions) =>
@@ -32,19 +38,12 @@ async function createStateEnv(userId = "456") {
         }),
     },
   } as unknown as DiscordRuntime);
-  const scope = { userId };
-  return {
-    env,
-    record: (modelRef: string) => recordDiscordModelPickerRecentModel({ env, scope, modelRef }),
-    read: (options: { allowedModelRefs?: Set<string> } = {}) =>
-      readDiscordModelPickerRecentModels({ env, scope, ...options }),
-  };
-}
+});
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await fs.rm(stateDir, { recursive: true, force: true });
 });
 
 describe("discord model picker preferences", () => {
@@ -61,12 +60,10 @@ describe("discord model picker preferences", () => {
   });
 
   it("filters recent models using an allowlist", async () => {
-    const { record, read } = await createStateEnv();
     await record("openai/gpt-4o");
     await record("openai/gpt-4.1");
-    expect(await read({ allowedModelRefs: new Set(["openai/gpt-4.1"]) })).toEqual([
-      "openai/gpt-4.1",
-    ]);
+    const allowedModelRefs = new Set(["openai/gpt-4.1"]);
+    expect(await read({ allowedModelRefs })).toEqual(["openai/gpt-4.1"]);
   });
 
   it("prunes older stored models beyond the recent limit", async () => {
@@ -94,12 +91,7 @@ describe("discord model picker preferences", () => {
   });
 
   it("falls back to empty recents when stored state is malformed", async () => {
-    const { env, record, read } = await createStateEnv("789");
-    const store = createPluginStateKeyedStoreForTests<unknown>("discord", {
-      namespace: "model-picker-preferences",
-      maxEntries: 2_000,
-      env,
-    });
+    const store = openStore();
     await record("openai/gpt-4.1");
     const [stored] = await store.entries();
     expect(stored).toBeDefined();
@@ -109,7 +101,6 @@ describe("discord model picker preferences", () => {
   });
 
   it("treats plugin-state failures as optional preference misses", async () => {
-    const { record, read } = await createStateEnv("state-failure-user");
     setDiscordRuntime({
       state: {
         openKeyedStore: () => {
@@ -123,14 +114,11 @@ describe("discord model picker preferences", () => {
   });
 
   it("preserves concurrent model picker selections for the same scope", async () => {
-    const { record, read } = await createStateEnv("concurrent-user");
     await Promise.all([record("openai/gpt-4.1"), record("openai/gpt-4o")]);
     expect(new Set(await read())).toEqual(new Set(["openai/gpt-4o", "openai/gpt-4.1"]));
   });
 
   it("retires the July command cache while preserving July SQLite state", async () => {
-    const { env } = await createStateEnv();
-    const stateDir = env.OPENCLAW_STATE_DIR!;
     const migration = stateMigrations.find((entry) => entry.id === "discord-legacy-state")!;
     const input = {
       config: {},
@@ -143,16 +131,8 @@ describe("discord model picker preferences", () => {
         }),
       },
     };
-    const preferences = createPluginStateKeyedStoreForTests("discord", {
-      namespace: "model-picker-preferences",
-      maxEntries: 2_000,
-      env: input.env,
-    });
-    const bindings = createPluginStateKeyedStoreForTests("discord", {
-      namespace: "thread-bindings",
-      maxEntries: 10_000,
-      env: input.env,
-    });
+    const preferences = openStore();
+    const bindings = openStore("thread-bindings", 10_000);
     const preference = {
       scopeKey: "discord:default:dm:user:123",
       modelRef: "openai/gpt-4.1",
@@ -180,8 +160,7 @@ describe("discord model picker preferences", () => {
 
     const result = await migration.migrateLegacyState(input);
 
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([expect.stringContaining(sourcePath)]);
+    expect(result).toMatchObject({ warnings: [], changes: [expect.stringContaining(sourcePath)] });
     await expect(fs.lstat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await preferences.lookup(preferenceKey)).toEqual(preference);
     expect(await bindings.lookup("default:july-thread")).toEqual(binding);

@@ -28,7 +28,15 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async (importOrigina
 const GUILD_ID = "guild-1";
 const CHANNEL_ID = "channel-1";
 const SESSION_KEY = "agent:codex:acp:binding:discord:default:abc123";
-const AUTHOR = { id: "user-1", bot: false, username: "alice" };
+function createMessage(content = "", mentionedUsers: Array<{ id: string }> = []) {
+  return createDiscordMessage({
+    id: "1002",
+    channelId: CHANNEL_ID,
+    content,
+    mentionedUsers,
+    author: { id: "user-1", bot: false, username: "alice" },
+  });
+}
 
 function createConfiguredDiscordRoute() {
   const conversation = { channel: "discord", accountId: "default", conversationId: CHANNEL_ID };
@@ -90,33 +98,22 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
   });
 
   it("does not initialize configured ACP bindings for rejected messages", async () => {
-    const message = createDiscordMessage({
-      id: "m-1",
-      channelId: CHANNEL_ID,
-      content: "<@bot-1> hello",
-      mentionedUsers: [{ id: "bot-1" }],
-      author: AUTHOR,
-    });
-    expect(await preflightDiscordMessage(preflightParams(message, false))).toBeNull();
+    const input = createMessage("<@bot-1> hello", [{ id: "bot-1" }]);
+    expect(await preflightDiscordMessage(preflightParams(input, false))).toBeNull();
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("hydrates sticker-only guild messages before admitting the configured ACP route", async () => {
-    const message = createDiscordMessage({
-      id: "1002",
-      channelId: CHANNEL_ID,
-      content: "",
-      author: AUTHOR,
-    });
+    const input = createMessage();
     const restGet = vi.fn(async () => ({
-      ...message.rawData,
+      ...input.rawData,
       sticker_items: [{ id: "sticker-1", name: "wave" }],
     }));
     const client = Object.assign(createGuildTextClient(CHANNEL_ID), {
       rest: { get: restGet },
     }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
-    const result = await preflightDiscordMessage(preflightParams(message, true, client));
+    const result = await preflightDiscordMessage(preflightParams(input, true, client));
     expect(restGet).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({

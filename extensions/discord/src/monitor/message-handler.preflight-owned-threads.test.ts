@@ -17,52 +17,42 @@ beforeEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
 afterEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
 
 const botThread = { ownerId: "openclaw-bot", admitted: true };
+const humanId = "111111111111111111";
 
 describe("Discord bot-owned thread mention gating", () => {
   it("validates guild and channel overrides without adding a default", () => {
-    const config = DiscordConfigSchema.parse({
+    const guild = DiscordConfigSchema.parse({
       guilds: {
         "123": {
           requireMentionInBotThreads: false,
           channels: { "456": { requireMentionInBotThreads: true }, "789": {} },
         },
       },
-    });
-    expect(config.guilds?.["123"]?.requireMentionInBotThreads).toBe(false);
-    expect(config.guilds?.["123"]?.channels?.["456"]?.requireMentionInBotThreads).toBe(true);
-    expect(config.guilds?.["123"]?.channels?.["789"]?.requireMentionInBotThreads).toBeUndefined();
-    expect(
-      DiscordConfigSchema.safeParse({ guilds: { "123": { requireMentionInBotThreads: "false" } } })
-        .success,
-    ).toBe(false);
+    }).guilds?.["123"];
+    expect({
+      guild: guild?.requireMentionInBotThreads,
+      channel: guild?.channels?.["456"]?.requireMentionInBotThreads,
+      unset: guild?.channels?.["789"]?.requireMentionInBotThreads,
+    }).toEqual({ guild: false, channel: true, unset: undefined });
+    const invalid = { ...guild, requireMentionInBotThreads: "false" };
+    expect(DiscordConfigSchema.safeParse({ guilds: { "123": invalid } }).success).toBe(false);
   });
   it.each([
-    { ...botThread, name: "bot-created thread", requireMentionInBotThreads: false },
+    { ...botThread, name: "bot-created thread", strict: false },
     { ...botThread, name: "automatically created thread", autoThread: true },
-    {
-      ...botThread,
-      name: "strict thread explicit mention",
-      requireMentionInBotThreads: true,
-      mentioned: true,
-    },
+    { ...botThread, name: "strict explicit mention", strict: true, mentioned: true },
     {
       name: "strict thread implicit reply",
       ownerId: "openclaw-bot",
-      guildRequirement: false,
-      normalRequirement: false,
-      requireMentionInBotThreads: true,
+      relaxedParent: true,
+      strict: true,
       replyToBot: true,
       admitted: false,
     },
-    {
-      name: "human-created thread",
-      requireMentionInBotThreads: false,
-      ownerId: "111111111111111111",
-      admitted: false,
-    },
+    { name: "human-created thread", strict: false, ownerId: humanId, admitted: false },
     {
       name: "disallowed sender in bot-created thread",
-      requireMentionInBotThreads: false,
+      strict: false,
       ownerId: "openclaw-bot",
       users: ["222222222222222222"],
       admitted: false,
@@ -73,9 +63,7 @@ describe("Discord bot-owned thread mention gating", () => {
     const message = createDiscordMessage({
       id: "unmentioned-follow-up",
       channelId,
-      content: scenario.mentioned
-        ? "<@openclaw-bot> Can you explain the next step?"
-        : "Can you explain the next step?",
+      content: scenario.mentioned ? "<@openclaw-bot> next?" : "next?",
       mentionedUsers: scenario.mentioned ? [{ id: "openclaw-bot" }] : [],
       referencedMessage: scenario.replyToBot
         ? createDiscordMessage({
@@ -85,32 +73,27 @@ describe("Discord bot-owned thread mention gating", () => {
             author: { id: "openclaw-bot", bot: true },
           })
         : undefined,
-      author: { id: "111111111111111111", bot: false, username: "Pat" },
+      author: { id: humanId, bot: false, username: "Pat" },
     });
     const result = await preflightDiscordMessage({
       ...createDiscordPreflightArgs({
         cfg: DEFAULT_PREFLIGHT_CFG,
         discordConfig: {},
-        data: createGuildEvent({
-          channelId,
-          guildId: "guild-1",
-          author: message.author,
-          message,
-        }),
+        data: createGuildEvent({ channelId, guildId: "guild-1", author: message.author, message }),
         client: createThreadClient({ threadId: channelId, parentId, ownerId: scenario.ownerId }),
       }),
       groupPolicy: "allowlist",
       guildEntries: {
         "guild-1": {
           requireMention: true,
-          requireMentionInBotThreads: scenario.guildRequirement,
+          requireMentionInBotThreads: scenario.relaxedParent ? false : undefined,
           channels: {
             [parentId]: {
               enabled: true,
-              requireMention: scenario.normalRequirement ?? true,
-              requireMentionInBotThreads: scenario.requireMentionInBotThreads,
+              requireMention: !scenario.relaxedParent,
+              requireMentionInBotThreads: scenario.strict,
               autoThread: scenario.autoThread,
-              users: scenario.users ?? ["111111111111111111"],
+              users: scenario.users ?? [humanId],
             },
           },
         },
@@ -121,7 +104,7 @@ describe("Discord bot-owned thread mention gating", () => {
       return;
     }
     expect(result).toMatchObject({
-      shouldRequireMention: scenario.requireMentionInBotThreads === true,
+      shouldRequireMention: scenario.strict === true,
       messageChannelId: channelId,
       effectiveWasMentioned: scenario.mentioned === true,
     });

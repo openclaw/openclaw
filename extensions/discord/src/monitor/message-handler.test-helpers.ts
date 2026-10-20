@@ -51,8 +51,8 @@ export function createDiscordHandlerParams(overrides?: {
   };
 }
 
-export function createDiscordPreflightContext(channelId = "ch-1") {
-  const message = { id: `msg-${channelId}`, channel_id: channelId, attachments: [] };
+export function createDiscordPreflightContext(channelId = "ch-1", messageId = `msg-${channelId}`) {
+  const message = { id: messageId, channel_id: channelId, attachments: [] };
   return {
     data: { channel_id: channelId, message: { ...message, attachments: [] } },
     message,
@@ -68,12 +68,8 @@ export function createDiscordPreflightContext(channelId = "ch-1") {
   };
 }
 
-export function createIngressLifecycle(): DiscordIngressLifecycle & {
-  onAdopted: ReturnType<typeof vi.fn>;
-  onFailed: ReturnType<typeof vi.fn>;
-  onCancelled: ReturnType<typeof vi.fn>;
-  onAbandoned: ReturnType<typeof vi.fn>;
-} {
+export function createIngressLifecycle(): DiscordIngressLifecycle &
+  Record<"onAdopted" | "onFailed" | "onCancelled" | "onAbandoned", ReturnType<typeof vi.fn>> {
   return {
     abortSignal: new AbortController().signal,
     onAdopted: vi.fn(async () => {}),
@@ -85,9 +81,9 @@ export function createIngressLifecycle(): DiscordIngressLifecycle & {
   };
 }
 
-export function createDiscordQueuePreflightContext(channelId = "ch-1") {
+export function createDiscordQueuePreflightContext(channelId = "ch-1", messageId?: string) {
   return {
-    ...createDiscordPreflightContext(channelId),
+    ...createDiscordPreflightContext(channelId, messageId),
     ...createHandlerContext(),
     isDirectMessage: false,
     isGuildMessage: true,
@@ -99,13 +95,5 @@ export function createDiscordQueuePreflightContextForMessage(data: {
   channel_id: string;
   message: { id: string };
 }) {
-  const ctx = createDiscordQueuePreflightContext(data.channel_id);
-  return {
-    ...ctx,
-    message: { ...ctx.message, id: data.message.id },
-    data: {
-      ...ctx.data,
-      message: { ...ctx.data.message, id: data.message.id },
-    },
-  };
+  return createDiscordQueuePreflightContext(data.channel_id, data.message.id);
 }
