@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { formatInlineCodeSpan } from "../../../src/shared/markdown-code.js";
 import { i18n } from "../i18n/index.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment, withControlUiBasePath } from "./markdown.test-support.ts";
@@ -25,6 +26,16 @@ describe("toSanitizedMarkdownHtml", () => {
     const link = render("[tailscale docs](https://docs.openclaw.ai/tailscale)").querySelector("a");
     expect(link?.getAttribute("href")).toBe("https://docs.openclaw.ai/tailscale");
     expect(link?.classList.contains("chat-link-tail-blur")).toBe(false);
+  });
+
+  it("keeps tool-authored edge spaces through the renderer", () => {
+    // CommonMark strips one space from each end of code-span content, so the
+    // shared formatter's padding is only useful if the real renderer leaves the
+    // authored spaces intact. The boundary-backtick form needs both guards.
+    const spaceGuard = render(formatInlineCodeSpan(" 1 "));
+    expect(spaceGuard.querySelector("code")?.textContent).toBe(" 1 ");
+    const backtickGuard = render(formatInlineCodeSpan(" `code` "));
+    expect(backtickGuard.querySelector("code")?.textContent).toBe(" `code` ");
   });
 
   it("normalizes Unicode and CR line breaks before rendering", () => {
