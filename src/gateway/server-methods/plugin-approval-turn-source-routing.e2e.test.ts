@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import { writeJson } from "../../plugins/generated-plugin-test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
@@ -115,38 +116,29 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     configureManualGatewayBackgroundEnv(tempHome);
     const configPath = path.join(stateDir, "openclaw.json");
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        plugins: {
-          enabled: true,
-          allow: ["approval-route-probe"],
-          slots: { memory: "none" },
-          entries: { "approval-route-probe": { enabled: true } },
-        },
-      }),
-    );
+    writeJson(configPath, {
+      plugins: {
+        enabled: true,
+        allow: ["approval-route-probe"],
+        slots: { memory: "none" },
+        entries: { "approval-route-probe": { enabled: true } },
+      },
+    });
     const bundledDir = path.join(tempHome, "bundled-plugins");
     const pluginDir = path.join(bundledDir, "approval-route-probe");
     await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/approval-route-probe",
-        version: "1.0.0",
-        type: "commonjs",
-        main: "index.cjs",
-        openclaw: { extensions: ["./index.cjs"] },
-      }),
-    );
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "approval-route-probe",
-        configSchema: { type: "object", additionalProperties: false },
-        contracts: { tools: ["approval_route_probe", "approval_hook_probe"] },
-      }),
-    );
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/approval-route-probe",
+      version: "1.0.0",
+      type: "commonjs",
+      main: "index.cjs",
+      openclaw: { extensions: ["./index.cjs"] },
+    });
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "approval-route-probe",
+      configSchema: { type: "object", additionalProperties: false },
+      contracts: { tools: ["approval_route_probe", "approval_hook_probe"] },
+    });
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `module.exports = { id: "approval-route-probe", register(api) {
@@ -166,9 +158,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
           description: "Request a plugin approval from the current tool context",
           parameters: { type: "object", properties: {} },
           execute: async () => {
-            const result = await api.runtime.gateway.request(
-              "plugin.approval.request",
-              {
+            const request = {
                 pluginId: api.id,
                 title: "Review test action",
                 description: "No effect; approval delivery test only",
@@ -178,8 +168,9 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
                   ? { approvalReviewerDeviceIds: ctx.approvalReviewerDeviceIds }
                   : {}),
                 timeoutMs: 3_000,
-              },
-              { scopes: ["operator.approvals"], timeoutMs: 4_000 },
+            };
+            const result = await api.runtime.gateway.request(
+              "plugin.approval.request", request, { scopes: ["operator.approvals"], timeoutMs: 4_000 },
             );
             return { content: [{ type: "text", text: result.decision ?? "cancelled" }] };
           },
@@ -223,15 +214,12 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
   });
 
   afterEach(async () => {
-    if (approvalClient) {
-      await disconnectGatewayClient(approvalClient).catch(() => undefined);
-      approvalClient = undefined;
+    for (const client of [approvalClient, toolCaller, requester]) {
+      if (client) {
+        await disconnectGatewayClient(client).catch(() => undefined);
+      }
     }
-    if (toolCaller) {
-      await disconnectGatewayClient(toolCaller).catch(() => undefined);
-      toolCaller = undefined;
-    }
-    await disconnectGatewayClient(requester).catch(() => undefined);
+    approvalClient = toolCaller = undefined;
     await server?.close();
     await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }).catch(() => undefined);
     envSnapshot.restore();
@@ -241,29 +229,29 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
   });
 
   // The E2E setup retires active plugins after each `it`, so each test owns a fresh Gateway.
-  it("expires with decision:null when no turn-source route and no approval client", async () => {
-    const result = await requestApproval();
-
-    expect(result).toMatchObject({ decision: null });
-    expect((result as { id?: string }).id).toMatch(/^plugin:/);
-  });
-
-  it("returns accepted when a real approval client is connected", async () => {
-    approvalClient = await connect({
-      clientDisplayName: "plugin approval client",
-      scopes: [APPROVALS_SCOPE],
-      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-    });
-
-    const result = await requestApproval();
-
-    expect(result).toMatchObject({ status: "accepted" });
-    expect((result as { id?: string }).id).toMatch(/^plugin:/);
-    await approvalClient.request("plugin.approval.resolve", {
-      id: (result as { id: string }).id,
-      decision: "allow-once",
-    });
-  });
+  it.each([false, true])(
+    "uses the real delivery route (approval client connected: %s)",
+    async (connected) => {
+      if (connected) {
+        approvalClient = await connect({
+          clientDisplayName: "plugin approval client",
+          scopes: [APPROVALS_SCOPE],
+          caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+        });
+      }
+      const result = await requestApproval();
+      expect(result).toMatchObject({
+        id: expect.stringMatching(/^plugin:/),
+        ...(connected ? { status: "accepted" } : { decision: null }),
+      });
+      if (approvalClient) {
+        await approvalClient.request("plugin.approval.resolve", {
+          id: (result as { id: string }).id,
+          decision: "allow-once",
+        });
+      }
+    },
+  );
 
   it("routes a plugin tool approval only to the host-selected reviewer device", async () => {
     toolCaller = await connect({

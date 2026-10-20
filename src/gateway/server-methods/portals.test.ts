@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import type {
   PortalOpenResult,
   PortalSummary,
@@ -7,8 +6,8 @@ import type {
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-method-policy.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { makeClient } from "../server-broadcast.test-helpers.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
 import { portalHandlers } from "./portals.js";
 
 const publicPortal = {
@@ -49,7 +48,15 @@ function harness(service?: GatewayPortalService, scopes = ["operator.write"]) {
     } as never);
     return respond;
   };
-  return { broadcast, invoke };
+  const expectSuccess = async (method: string, params: Record<string, unknown>, result: unknown) =>
+    expect((await invoke(method, params)).mock.calls[0]).toEqual([true, result, undefined]);
+  const expectChanged = (portals: PortalSummary[]) =>
+    expect(broadcast).toHaveBeenLastCalledWith("portal.changed", { portals }, { dropIfSlow: true });
+  return { invoke, expectSuccess, expectChanged };
+}
+
+function expectFailure(response: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expect(response).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
 describe("portal gateway methods", () => {
@@ -71,34 +78,13 @@ describe("portal gateway methods", () => {
         portals = [];
       }),
     });
-    const { invoke, broadcast } = harness(service);
-
-    expect((await invoke("portal.list", {})).mock.calls[0]).toEqual([
-      true,
-      { portals: [] },
-      undefined,
-    ]);
-    expect((await invoke("portal.open", { port: 3000, title: "App" })).mock.calls[0]).toEqual([
-      true,
-      portal,
-      undefined,
-    ]);
+    const { expectSuccess, expectChanged } = harness(service);
+    await expectSuccess("portal.list", {}, { portals: [] });
+    await expectSuccess("portal.open", { port: 3000, title: "App" }, portal);
     expect(service.open).toHaveBeenCalledWith({ targetPort: 3000, title: "App" });
-    expect(broadcast).toHaveBeenLastCalledWith(
-      "portal.changed",
-      { portals: [publicPortal] },
-      { dropIfSlow: true },
-    );
-    expect((await invoke("portal.close", { id: "missing" })).mock.calls[0]).toEqual([
-      true,
-      { closed: true },
-      undefined,
-    ]);
-    expect(broadcast).toHaveBeenLastCalledWith(
-      "portal.changed",
-      { portals: [] },
-      { dropIfSlow: true },
-    );
+    expectChanged([publicPortal]);
+    await expectSuccess("portal.close", { id: "missing" }, { closed: true });
+    expectChanged([]);
   });
 
   it("returns portal credentials only to write-capable operators", async () => {
@@ -114,19 +100,11 @@ describe("portal gateway methods", () => {
   it("rejects malformed requests before service access and reports absent transports", async () => {
     const service = createService({ list: vi.fn(() => []), listWorkerPortals: vi.fn(() => []) });
     const invalid = await harness(service).invoke("portal.open", { port: 0 });
-    expect(invalid).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectFailure(invalid, { code: "INVALID_REQUEST" });
     expect(service.open).not.toHaveBeenCalled();
 
     const unavailable = await harness().invoke("portal.list", {});
-    expect(unavailable).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST", message: "portals unavailable" }),
-    );
+    expectFailure(unavailable, { code: "INVALID_REQUEST", message: "portals unavailable" });
   });
 
   it("returns Error messages without the Error prefix", async () => {
@@ -137,39 +115,22 @@ describe("portal gateway methods", () => {
     });
 
     const response = await harness(service).invoke("portal.open", { port: 3000 });
-    expect(response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: "portal bind failed" }),
-    );
+    expectFailure(response, { code: "UNAVAILABLE", message: "portal bind failed" });
   });
 
   it("delivers portal changes only to read-capable operators", () => {
-    const events = new Map<string, string[]>();
-    const client = (id: string, role: "node" | "operator", scopes: string[]): GatewayWsClient => {
-      events.set(id, []);
-      return {
-        connId: id,
-        usesSharedGatewayAuth: false,
-        connect: { role, scopes } as GatewayWsClient["connect"],
-        socket: {
-          readyState: WebSocket.OPEN,
-          bufferedAmount: 0,
-          close: vi.fn(),
-          send: (value: string) =>
-            events.get(id)?.push((JSON.parse(value) as { event: string }).event),
-        } as never,
-      };
-    };
-    const clients = new GatewayClientRegistry([
-      client("pairing", "operator", ["operator.pairing"]),
-      client("node", "node", ["operator.read"]),
-      client("read", "operator", ["operator.read"]),
-      client("write", "operator", ["operator.write"]),
-    ]);
+    const peers = [
+      makeClient("pairing", "operator", ["operator.pairing"]),
+      makeClient("node", "node", ["operator.read"]),
+      makeClient("read", "operator", ["operator.read"]),
+      makeClient("write", "operator", ["operator.write"]),
+    ];
+    const clients = new GatewayClientRegistry(peers.map(({ client }) => client));
     createGatewayBroadcaster({ clients }).broadcast("portal.changed", { portals: [portal] });
 
-    expect(Object.fromEntries(events)).toEqual({
+    expect(
+      Object.fromEntries(peers.map(({ client, socket }) => [client.connId, socket.events])),
+    ).toEqual({
       pairing: [],
       node: [],
       read: ["portal.changed"],
