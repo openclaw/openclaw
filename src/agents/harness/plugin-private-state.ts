@@ -5,6 +5,7 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { foldRuntimeEventContext } from "./plugin-attempt-params.js";
 
 export function withoutPluginHarnessPrivateState(
   params: EmbeddedRunAttemptInternalParams & { __openclawSourceReplyDeliveryRuntime?: unknown },
@@ -55,6 +56,9 @@ export function prepareHarnessFinalizationParams(
   const boundary = "plugin harness finalization handoff";
   return {
     ...finalizationParams,
+    // Current-turn metadata, delivery formatting and runtime events reach the finalizer the same
+    // way they reach dispatch: in the current inbound context, never the reusable system prompt.
+    currentInboundContext: foldRuntimeEventContext(finalizationParams),
     model: unwrapModelHeaderSentinelsForProviderEgress(finalizationParams.model, boundary),
     resolvedApiKey: finalizationParams.resolvedApiKey
       ? unwrapSecretSentinelsForProviderEgress(finalizationParams.resolvedApiKey, boundary)

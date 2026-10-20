@@ -25,6 +25,7 @@ vi.mock("../agents/command/cli-compaction.js", () => {
   };
 });
 
+// mock-isolation: Default command fixtures keep attempts in memory instead of starting external runtimes.
 vi.mock("../agents/command/attempt-execution.runtime.js", () => {
   return {
     buildAcpResult: vi.fn(),
@@ -98,6 +99,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         bootstrapContextMode: opts.bootstrapContextMode,
         bootstrapContextRunKind: opts.bootstrapContextRunKind,
         internalEvents: opts.internalEvents,
+        runtimeContextFragments: opts.runtimeContextFragments,
         inputProvenance: opts.inputProvenance,
         streamParams: opts.streamParams,
         agentDir: params.agentDir,

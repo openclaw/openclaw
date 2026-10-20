@@ -103,11 +103,36 @@ it.each([
     }
     expect(envelope).toMatchObject({
       transcriptCommandBody: softResetTail || "[OpenClaw session reset]",
-      currentInboundContext: undefined,
+      currentInboundContext: {
+        fragments: [
+          { kind: "runtime-instruction", text: expect.stringContaining("### Message Context") },
+        ],
+      },
     });
     expect(envelope.transcriptCommandBody).not.toContain("Startup context");
   },
 );
+
+it("keeps trusted message metadata in the current turn, out of the reusable system prompt", async () => {
+  const sessionCtx = context("Tldr", {
+    Provider: "telegram",
+    ChatType: "group",
+    MessageSid: "42",
+    InboundEventKind: "user_request",
+  });
+  const prepared = await prepareReplyRunContext(
+    baseParams({ isNewSession: false, ctx: sessionCtx, sessionCtx }),
+  );
+  if (prepared.kind !== "ready") {
+    throw new Error("Expected prepared reply context");
+  }
+  const prompt = currentPrompt(
+    prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase }),
+  );
+  expect(prepared.extraSystemPromptParts.join("\n\n")).not.toContain("### Message Context");
+  expect(prompt.split("### Message Context").length - 1).toBe(1);
+  expect(prompt.indexOf("### Message Context")).toBeLessThan(prompt.lastIndexOf("Tldr"));
+});
 
 it("keeps Telegram reply text beside its marker", async () => {
   const sessionCtx = context("Tldr", {
@@ -145,9 +170,15 @@ it("labels the current message after thread starter", async () => {
     { threadContextNote: threadNote, systemEventBlocks: ["System: reaction added"] },
   );
 
+  const metadata = envelope.currentInboundContext?.fragments?.find((fragment) =>
+    fragment.text.startsWith("### Message Context"),
+  );
+  expect(metadata?.kind).toBe("runtime-instruction");
+  expect(metadata?.text).toContain('"channel": "discord"');
   expect(currentPrompt(envelope)).toBe(
     [
       'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"chat_id":"123","is_group_chat":true}\n```',
+      metadata?.text,
       threadNote,
       "System: reaction added",
       "[Current message - respond to this]",

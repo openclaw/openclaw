@@ -8,7 +8,10 @@ import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as harnessRegistry from "../agents/harness/registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  retainGatewayRootWorkAdmissionContinuation,
+} from "../process/gateway-work-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import { collectHistoryTextValues } from "./session-history-fixtures.test-support.js";
@@ -389,7 +392,7 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("retains the session fixture while admitted dispatch settles after callback failure", async () => {
+  test("retains the session fixture until admitted root release after callback failure", async () => {
     const runId = "idem-fixture-dispatch-throw";
     const dispatchStarted = createDeferred();
     const releaseDispatch = createDeferred();
@@ -397,7 +400,9 @@ describe("gateway server chat", () => {
     const callbackError = new Error("fixture callback failed");
     let fixtureDir = "";
     let storePath = "";
+    const retainedRoot: { release?: () => void } = {};
     dispatchInboundMessageMock.mockImplementationOnce(async () => {
+      retainedRoot.release = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
       dispatchStarted.resolve();
       await releaseDispatch.promise;
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
@@ -426,8 +431,16 @@ describe("gateway server chat", () => {
       expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
       expect(testState.sessionStorePath).toBe(storePath);
       expect((await fs.stat(fixtureDir)).isDirectory()).toBe(true);
+      releaseDispatch.resolve();
+      await gatewaySuite.requestExecution.waitForDispatch(runId);
+      // Dispatch settlement can precede its retained root's final release.
+      expect(retainedRoot.release).toBeDefined();
+      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+      expect(testState.sessionStorePath).toBe(storePath);
+      expect((await fs.stat(fixtureDir)).isDirectory()).toBe(true);
     } finally {
       releaseDispatch.resolve();
+      retainedRoot.release?.();
       await completion;
       await settleGatewayFixture();
     }

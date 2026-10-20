@@ -80,8 +80,12 @@ export async function preparePluginHarnessParams(
 // Plugin harnesses read only the prepared inbound context, so a runtime-event turn
 // (prompt RUNTIME_EVENT_USER_PROMPT) must carry its events there or the model never
 // sees them. Uses the embedded/CLI fragment builder and the steer's projection.
-function foldRuntimeEventContext(
-  params: import("./types.js").AgentHarnessAttemptParamsV2,
+// Dispatch and settled finalization both use it, so each handoff folds exactly once.
+export function foldRuntimeEventContext(
+  params: Pick<
+    import("./types.js").AgentHarnessAttemptParamsV2,
+    "internalEvents" | "runtimeContextFragments" | "currentInboundContext"
+  >,
 ): import("./types.js").AgentHarnessAttemptParamsV2["currentInboundContext"] {
   const fragments = buildAgentInternalEventContext(
     params.internalEvents,

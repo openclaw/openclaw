@@ -118,9 +118,11 @@ it.each([
         createThrowingTestRuntime(),
       );
 
-      const prompt = vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
+      const attempt = vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0];
+      const prompt =
+        attempt?.runtimeContextFragments?.map((fragment) => fragment.text).join("\n\n") ?? "";
       const markup = testCase.rich ? "markdown_telegram_rich" : "markdown";
-      expect(prompt.startsWith("Announce the child result.\n\n### Delivery Format")).toBe(true);
+      expect(attempt?.extraSystemPrompt).toBe("Announce the child result.");
       expect(prompt.split("### Delivery Format")).toHaveLength(2);
       expect(prompt).toContain(`"text_markup": "${markup}"`);
     });

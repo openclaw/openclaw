@@ -363,6 +363,7 @@ export async function prepareEmbeddedSessionState(params: {
       allowBootstrap: true,
     });
   let conversationPrompt: string | undefined;
+  let inboundMetaPrompt: string | undefined;
   // Reuse conversation guidance without borrowing the originating sender's authority.
   if (
     sessionEntry &&
@@ -396,10 +397,8 @@ export async function prepareEmbeddedSessionState(params: {
       }),
     });
     if (sourceContext) {
-      // Metadata describes the conversation; delivery preflight owns formatting.
-      const metadata = buildInboundMetaSystemPrompt(ctx, cfg, { includeFormattingHints: false });
+      inboundMetaPrompt = buildInboundMetaSystemPrompt(ctx, cfg, { includeFormattingHints: false });
       conversationPrompt = [
-        deliveryFormat ? `${metadata}\n${deliveryFormat}` : metadata,
         sourceContext,
         shared &&
           buildGroupIntro({
@@ -413,17 +412,22 @@ export async function prepareEmbeddedSessionState(params: {
         .join("\n\n");
     }
   }
+  const currentTurnContext = [inboundMetaPrompt, deliveryFormat].filter(Boolean).join("\n");
   const preparedOpts =
-    conversationPrompt || deliveryFormat
+    conversationPrompt || currentTurnContext
       ? {
           ...opts,
-          extraSystemPrompt: [
-            conversationPrompt,
-            opts.extraSystemPrompt,
-            !conversationPrompt && deliveryFormat,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
+          extraSystemPrompt: conversationPrompt
+            ? [conversationPrompt, opts.extraSystemPrompt].filter(Boolean).join("\n\n")
+            : opts.extraSystemPrompt,
+          ...(currentTurnContext
+            ? {
+                runtimeContextFragments: [
+                  ...(opts.runtimeContextFragments ?? []),
+                  { kind: "runtime-instruction" as const, text: currentTurnContext },
+                ],
+              }
+            : {}),
           ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
         }
       : opts;
