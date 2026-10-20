@@ -1,22 +1,15 @@
-// Parallel readers must be rejected before a cold, dirty, or stale runtime can rebuild.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  writeBuildStamp,
-  writeRuntimePostBuildStamp,
-} from "../scripts/lib/local-build-metadata.mts";
+import * as metadata from "../scripts/lib/local-build-metadata.mts";
 import { writeUpdateCompatibilityChunks } from "../scripts/lib/update-compat-chunks.mts";
 import { listCoreRuntimePostBuildOutputs } from "../scripts/runtime-postbuild.mts";
 import { writeBuildInfo } from "../scripts/write-build-info.ts";
 import { inspectControlUiRootAssets } from "../src/infra/control-ui-assets.ts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
-import {
-  previousReleaseInventory,
-  writeUpdateCompatibilityBuildFixture,
-} from "./scripts/update-compat-chunks.test-support.js";
+import * as compat from "./scripts/update-compat-chunks.test-support.js";
 import { assertPrebuiltUiE2eRuntime } from "./vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
 
 let root: string;
@@ -35,29 +28,24 @@ function git(...args: string[]) {
     "commit.gpgsign=false",
     "core.hooksPath=/dev/null",
   ];
-  return execFileSync("git", [...config.flatMap((entry) => ["-c", entry]), ...args], {
+  execFileSync("git", [...config.flatMap((entry) => ["-c", entry]), ...args], {
     cwd: root,
-    encoding: "utf8",
     stdio: "pipe",
-  }).trim();
+  });
 }
 
 const readBuildInfo = () =>
   JSON.parse(fs.readFileSync(path.join(root, "dist/build-info.json"), "utf8"));
 
-function writeMatchingUi() {
+function stampBuild() {
+  writeBuildInfo({ rootDir: root, env: fixtureBuildEnv });
   const { buildId } = readBuildInfo();
   write(
     "dist/control-ui/index.html",
     `<html data-openclaw-control-ui-build-id="${buildId}-${"a".repeat(64)}"><script src="./assets/entry.js"></script></html>`,
   );
-}
-
-function stampBuild() {
-  writeBuildInfo({ rootDir: root, env: fixtureBuildEnv });
-  writeMatchingUi();
-  writeBuildStamp({ cwd: root });
-  writeRuntimePostBuildStamp({ cwd: root });
+  metadata.writeBuildStamp({ cwd: root });
+  metadata.writeRuntimePostBuildStamp({ cwd: root });
 }
 
 beforeEach(() => {
@@ -70,11 +58,11 @@ beforeEach(() => {
   git("init", "--quiet");
   git("add", ".");
   git("commit", "--quiet", "-m", "fixture");
-  writeUpdateCompatibilityBuildFixture(root);
+  compat.writeUpdateCompatibilityBuildFixture(root);
   writeUpdateCompatibilityChunks({
     distDir: path.join(root, "dist"),
     sourceDir: root,
-    inventory: previousReleaseInventory,
+    inventory: compat.previousReleaseInventory,
   });
   for (const file of [
     "dist/entry.js",
@@ -163,10 +151,9 @@ await startVitest("test", [], {
     { cwd: repoRoot, timeout: 15_000 },
   );
   expect(result.error, result.stderr).toBeUndefined();
-  expect(result.signal, result.stderr).toBeNull();
+  expect(result, result.stderr).toMatchObject({ signal: null, status: drift ? 1 : 0 });
   const report = JSON.parse(fs.readFileSync(reportFile, "utf8"));
   expect(report.numPassedTests, JSON.stringify(report) + result.stderr).toBe(1);
-  expect(result.status, result.stderr).toBe(drift ? 1 : 0);
   if (drift) {
     expect(result.stderr).toContain("runtime generation changed during the run");
   }

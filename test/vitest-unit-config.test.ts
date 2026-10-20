@@ -6,11 +6,10 @@ import {
   createUnitVitestConfigWithOptions,
 } from "./vitest/vitest.unit.config.ts";
 
-const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
-const patternFile = (name: string, patterns: string[]) =>
-  patternFiles.writePatternFile(name, patterns);
-
-afterEach(() => patternFiles.cleanup());
+const { writePatternFile: patternFile, cleanup } = createPatternFileHelper(
+  "openclaw-vitest-unit-config-",
+);
+afterEach(cleanup);
 
 describe("unit vitest config", () => {
   it.each([false, true])(
