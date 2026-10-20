@@ -6,8 +6,7 @@ import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const repoRoot = path.resolve(import.meta.dirname, "../..");
-const docsListScriptPath = path.join(repoRoot, "scripts", "docs-list.js");
+const docsListScriptPath = path.resolve(import.meta.dirname, "../../scripts/docs-list.js");
 
 function makeDocs(files: Record<string, string>) {
   const root = tempDirs.make("openclaw-docs-list-");
@@ -60,23 +59,17 @@ summary: "Page"
 # This metadata comment must not become a heading
 ... # end
 # Visible title
-
 ## \`API[*]\` <script>alert(1)</script>
-
 ### <scr<script>ipt>alert(1)</script>
-
 #### \`![label](https://example.test/image)\`
-
 \`\`\`md
 ### Hidden fenced heading
 \`\`\`
-
 \`\`\`\`md
 \`\`\`json
 ### Hidden nested fenced heading
 \`\`\`
 \`\`\`\`
-
 ~~~md
 ### Hidden fenced heading with a suffixed closer
 ~~~json
@@ -105,25 +98,17 @@ summary: "Page"
     expect(existsSync(path.join(docs, "docs_map.md"))).toBe(false);
   });
 
-  it("keeps example headings hidden with backtick nonbreaking space", () => {
+  it.each([
+    ["nonbreaking space", "```md", "```\u00a0\n## Still hidden\n```"],
+    ["tabs", "```", "```\t\t"],
+  ])("recognizes closing fences with %s", (_name, opening, closing) => {
     const { docs } = makeDocs({
-      "page.md":
-        "```md\n# Hidden example\n```\u00a0\n## Still hidden\n```\n# Visible after close\n",
+      "page.md": `${opening}\n# Hidden example\n${closing}\n# Visible after close\n`,
     });
     const output = renderDocsHeadingMap(docs);
 
     expect(output).not.toContain("H1: Hidden example");
     expect(output).not.toContain("H2: Still hidden");
-    expect(output).toContain("H1: Visible after close");
-  });
-
-  it("resumes headings after a valid closing fence with tabs", () => {
-    const { docs } = makeDocs({
-      "page.md": "```\n# Hidden example\n```\t\t\n# Visible after close\n",
-    });
-    const output = renderDocsHeadingMap(docs);
-
-    expect(output).not.toContain("H1: Hidden example");
     expect(output).toContain("H1: Visible after close");
   });
 

@@ -22,11 +22,7 @@ function fixture() {
     state: {},
     wakeMode: "next-heartbeat",
   };
-  const dreaming = {
-    ...heartbeat,
-    id: "dreaming",
-    enabled: false,
-  };
+  const dreaming = { ...heartbeat, id: "dreaming", enabled: false };
   const row = (definition: typeof heartbeat, ordinal: number, timestamp: number) => {
     const { enabled: _enabled, state: _state, ...grant } = definition;
     return {

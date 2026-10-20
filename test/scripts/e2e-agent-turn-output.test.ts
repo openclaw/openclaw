@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const marker = "OPENCLAW_E2E_OK";
+const reply = (text = marker) => ({ payloads: [{ text }] });
 function writeLog(content: string) {
   const logPath = join(tempDirs.make("openclaw-e2e-output-"), "output.log");
   writeFileSync(logPath, content);
@@ -25,30 +26,20 @@ const extract = (value: object) => extractAgentReplyTexts(JSON.stringify(value))
 
 describe("scripts/e2e/lib/agent-turn-output", () => {
   it("extracts local and gateway agent reply payload text", () => {
-    expect(
-      extract({
-        payloads: [{ text: "OPENCLAW_E2E_OK_LOCAL" }],
-        meta: { finalAssistantVisibleText: "visible" },
-      }),
-    ).toEqual(["visible", "OPENCLAW_E2E_OK_LOCAL"]);
+    expect(extract({ ...reply("local"), meta: { finalAssistantVisibleText: "visible" } })).toEqual([
+      "visible",
+      "local",
+    ]);
 
     expect(
       extract({
-        result: {
-          payloads: [{ text: "OPENCLAW_E2E_OK_GATEWAY" }],
-          meta: { finalAssistantRawText: "raw" },
-        },
+        result: { ...reply("gateway"), meta: { finalAssistantRawText: "raw" } },
       }),
-    ).toEqual(["raw", "OPENCLAW_E2E_OK_GATEWAY"]);
+    ).toEqual(["raw", "gateway"]);
   });
 
   it("does not accept reply-shaped JSON embedded in diagnostic lines", () => {
-    rejectReply(
-      [
-        `echo ${JSON.stringify({ payloads: [{ text: marker }] })}`,
-        JSON.stringify({ payloads: [{ text: "real reply without marker" }] }),
-      ].join("\n"),
-    );
+    rejectReply([`echo ${JSON.stringify(reply())}`, JSON.stringify(reply("unmarked"))].join("\n"));
   });
 
   it.each([
@@ -87,11 +78,9 @@ describe("scripts/e2e/lib/agent-turn-output", () => {
 
   it("ignores stale reply markers outside the recent output tail", () => {
     rejectReply(
-      [
-        JSON.stringify({ payloads: [{ text: marker }] }),
-        "x".repeat(2_200_000),
-        JSON.stringify({ payloads: [{ text: "current reply without marker" }] }),
-      ].join("\n"),
+      [JSON.stringify(reply()), "x".repeat(2_200_000), JSON.stringify(reply("unmarked"))].join(
+        "\n",
+      ),
     );
   });
 

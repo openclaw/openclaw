@@ -16,8 +16,6 @@ const timeout = (value?: string) =>
 
 function makeTempRoot(entry?: string): string {
   const root = tempRoots.make("openclaw-cli-startup-build-");
-  mkdirSync(path.join(root, "scripts"), { recursive: true });
-  writeFileSync(path.join(root, "scripts", "build-all.mts"), "", "utf8");
   if (entry) {
     mkdirSync(path.join(root, "dist"));
     writeFileSync(path.join(root, "dist", entry), "export {};\n");
