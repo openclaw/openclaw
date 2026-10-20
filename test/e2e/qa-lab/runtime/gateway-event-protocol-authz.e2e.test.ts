@@ -17,15 +17,9 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-type RecordingSocket = {
-  readyState: number;
-  bufferedAmount: number;
-  close: ReturnType<typeof vi.fn>;
-  sent: Array<{ event?: string }>;
-  send: ReturnType<typeof vi.fn>;
-};
+type RecordingSocket = ReturnType<typeof makeRecordingSocket>;
 
-function makeRecordingSocket(): RecordingSocket {
+function makeRecordingSocket() {
   const sent: Array<{ event?: string }> = [];
   return {
     readyState: WebSocket.OPEN,
@@ -70,18 +64,25 @@ afterEach(() => {
 
 describe("Gateway event and protocol authorization", () => {
   it("applies the production event recipient matrix and rejects unsafe plugin broadcasts", () => {
-    const pairingSocket = makeRecordingSocket();
-    const nodeSocket = makeRecordingSocket();
-    const readSocket = makeRecordingSocket();
-    const writeSocket = makeRecordingSocket();
-    const adminSocket = makeRecordingSocket();
-    const clients = new GatewayClientRegistry([
-      makeClient("pairing", pairingSocket, "operator", ["operator.pairing"]),
-      makeClient("node", nodeSocket, "node", ["operator.read"]),
-      makeClient("read", readSocket, "operator", ["operator.read"]),
-      makeClient("write", writeSocket, "operator", ["operator.write"]),
-      makeClient("admin", adminSocket, "operator", ["operator.admin"]),
-    ]);
+    const writeEvents = [
+      "chat",
+      "plugin.example.default",
+      "plugin.example.read",
+      "plugin.example.write",
+    ];
+    const recipients: Array<["node" | "operator", string[], string[]]> = [
+      ["operator", ["operator.pairing"], []],
+      ["node", ["operator.read"], []],
+      ["operator", ["operator.read"], ["chat", "plugin.example.read"]],
+      ["operator", ["operator.write"], writeEvents],
+      ["operator", ["operator.admin"], writeEvents],
+    ];
+    const sockets = recipients.map(() => makeRecordingSocket());
+    const clients = new GatewayClientRegistry(
+      recipients.map(([role, scopes], index) =>
+        makeClient(String(index), sockets[index]!, role, scopes),
+      ),
+    );
     const { broadcast, broadcastPluginEvent } = createGatewayBroadcaster({ clients });
 
     broadcast("chat", { sessionKey: "agent:main:main", message: "scoped" });
@@ -90,21 +91,9 @@ describe("Gateway event and protocol authorization", () => {
     broadcastPluginEvent("plugin.example.read", { revision: 2 }, "operator.read");
     broadcastPluginEvent("plugin.example.write", { revision: 3 }, "operator.write");
 
-    expect(sentEvents(pairingSocket)).toEqual([]);
-    expect(sentEvents(nodeSocket)).toEqual([]);
-    expect(sentEvents(readSocket)).toEqual(["chat", "plugin.example.read"]);
-    expect(sentEvents(writeSocket)).toEqual([
-      "chat",
-      "plugin.example.default",
-      "plugin.example.read",
-      "plugin.example.write",
-    ]);
-    expect(sentEvents(adminSocket)).toEqual([
-      "chat",
-      "plugin.example.default",
-      "plugin.example.read",
-      "plugin.example.write",
-    ]);
+    for (const [index, recipient] of recipients.entries()) {
+      expect(sentEvents(sockets[index]!)).toEqual(recipient[2]);
+    }
 
     const unsafe = broadcastPluginEvent as unknown as (
       event: string,

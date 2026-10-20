@@ -56,6 +56,112 @@ type WireWrite = {
   identityOmitted?: true;
 };
 type CrablineAdapter = Awaited<ReturnType<typeof startOpenClawCrablineAdapter>>;
+type Cleanup = () => Promise<void>;
+type Gateway = Awaited<ReturnType<ReturnType<typeof createQaGatewayChild>["start"]>>;
+
+async function writeEvidence(name: string, data: unknown) {
+  const directory = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, name), JSON.stringify(data, null, 2));
+}
+
+async function cleanupAll(cleanups: Cleanup[], message: string) {
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) {
+    throw new AggregateError(errors, message);
+  }
+}
+
+async function createPresentationTransport(
+  channel: "slack" | "discord",
+  cleanups: Cleanup[],
+  directory: string,
+  options?: Parameters<typeof startPresentationApi>[3],
+) {
+  const writes: WireWrite[] = [];
+  const adapter = await startOpenClawCrablineAdapter({
+    channel,
+    recorderPath: path.join(directory, "provider.jsonl"),
+  });
+  cleanups.push(() => adapter.close());
+  const api = await startPresentationApi(adapter, writes, directory, options);
+  cleanups.push(() => api.stop());
+  return { writes, adapter, api };
+}
+
+async function createDirectory(prefix: string, cleanups: Cleanup[]) {
+  const directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), prefix));
+  cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+async function waitForChannel(gateway: Gateway, channel: string, fields: string[]) {
+  await waitForFact(async () => {
+    const status = asRecord(await gateway.call("channels.status", { probe: false }));
+    const accounts = asRecord(status.channelAccounts)[channel];
+    return (
+      Array.isArray(accounts) &&
+      accounts.some((account) => fields.every((field) => asRecord(account)[field] === true))
+    );
+  }, `${channel} ready`);
+}
+
+function presentationGatewayOptions(
+  adapter: CrablineAdapter,
+  api: Awaited<ReturnType<typeof startPresentationApi>>,
+  providerBaseUrl: string,
+): Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0] {
+  return {
+    repoRoot: process.cwd(),
+    providerBaseUrl,
+    providerMode: "mock-openai",
+    primaryModel: MODEL,
+    alternateModel: MODEL,
+    controlUiEnabled: false,
+    transportBaseUrl: api.baseUrl,
+    transport: {
+      requiredPluginIds: adapter.requiredPluginIds,
+      createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
+    },
+    runtimeEnvPatch: {
+      ...adapter.createProviderReadinessEnv({}),
+      ...(adapter.manifest.provider === "slack"
+        ? { SLACK_API_URL: `${api.baseUrl}/api/` }
+        : { NODE_EXTRA_CA_CERTS: api.caPath }),
+    },
+  };
+}
+
+async function deliverSlackEvent(adapter: CrablineAdapter, gateway: Gateway, event: unknown) {
+  if (adapter.manifest.provider !== "slack") {
+    throw new Error("expected Slack fixture");
+  }
+  const body = JSON.stringify(event);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = createHmac("sha256", adapter.manifest.signingSecret)
+    .update(`v0:${timestamp}:${body}`)
+    .digest("hex");
+  const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": `v0=${signature}`,
+    },
+    body,
+  });
+  expect(
+    delivered.ok,
+    `HTTP ${delivered.status}: ${(await delivered.text()).slice(0, 2000)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
+  ).toBe(true);
+}
 
 function createGroupOnlyGatewayConfig(adapter: CrablineAdapter): OpenClawConfig {
   const config = adapter.createGatewayConfig() as OpenClawConfig;
@@ -482,6 +588,20 @@ function progressConfig(
   };
 }
 
+function progressCase(
+  channel: "discord" | "slack",
+  tools: boolean,
+  overrides: Partial<{
+    native: boolean;
+    thread: string;
+    rejectStop: boolean;
+    compact: boolean;
+    failTool: boolean;
+  }> = {},
+) {
+  return { channel, tools, native: false, thread: "root", rejectStop: false, ...overrides };
+}
+
 async function waitForFact(
   predicate: () => boolean | Promise<boolean>,
   description: string,
@@ -508,10 +628,7 @@ async function startTablePresentationFixture(
   cleanups: Array<() => Promise<void>>,
 ) {
   const { channel, native, tools, compact, rejectStop } = params;
-  const directory = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
-  );
-  cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await createDirectory("channel-progress-", cleanups);
   const mutationPluginId = "qa-progress-mutation";
   const mutationPluginDir = path.join(directory, mutationPluginId);
   if (rejectStop) {
@@ -553,17 +670,10 @@ export default {
 };`,
     );
   }
-  const writes: WireWrite[] = [];
-  const adapter = await startOpenClawCrablineAdapter({
-    channel,
-    recorderPath: path.join(directory, "provider.jsonl"),
-  });
-  cleanups.push(() => adapter.close());
-  const api = await startPresentationApi(adapter, writes, directory, {
+  const { writes, adapter, api } = await createPresentationTransport(channel, cleanups, directory, {
     rejectStop,
     clearOrigin: params.clearOrigin,
   });
-  cleanups.push(() => api.stop());
   const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
   cleanups.push(() => provider.stop());
   const owner = createQaGatewayChild();
@@ -577,25 +687,8 @@ export default {
       ),
     }),
   );
-  const environment = adapter.createProviderReadinessEnv({});
-  if (channel === "slack") {
-    environment.SLACK_API_URL = `${api.baseUrl}/api/`;
-  } else {
-    environment.NODE_EXTRA_CA_CERTS = api.caPath;
-  }
   const gateway = await owner.start({
-    repoRoot: process.cwd(),
-    providerBaseUrl: `${provider.baseUrl}/v1`,
-    providerMode: "mock-openai",
-    primaryModel: MODEL,
-    alternateModel: MODEL,
-    controlUiEnabled: false,
-    transportBaseUrl: api.baseUrl,
-    transport: {
-      requiredPluginIds: adapter.requiredPluginIds,
-      createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
-    },
-    runtimeEnvPatch: environment,
+    ...presentationGatewayOptions(adapter, api, `${provider.baseUrl}/v1`),
     mutateConfig: (config) => {
       const configured = progressConfig(config, channel, native, tools, compact);
       if (rejectStop) {
@@ -620,17 +713,7 @@ export default {
       return configured;
     },
   });
-  await waitForFact(async () => {
-    const status = asRecord(await gateway.call("channels.status", { probe: false }));
-    const accounts = asRecord(status.channelAccounts)[channel];
-    return (
-      Array.isArray(accounts) &&
-      accounts.some((account) => {
-        const state = asRecord(account);
-        return state.running === true && state.connected === true;
-      })
-    );
-  }, `${channel} ready`);
+  await waitForChannel(gateway, channel, ["running", "connected"]);
   return { writes, adapter, api, gateway };
 }
 
@@ -645,43 +728,19 @@ describe("channel progress presentation through an isolated Gateway", () => {
   afterAll(async () => {
     // The identical Slack cases run last; startup and every acquired owner stay joined through teardown.
     await Promise.allSettled(sharedSlackFixture ? [sharedSlackFixture] : []);
-    const errors: unknown[] = [];
-    for (const cleanup of sharedSlackCleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "shared Slack presentation fixture cleanup failed");
-    }
+    await cleanupAll(sharedSlackCleanups, "shared Slack presentation fixture cleanup failed");
   });
   afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "progress fixture cleanup failed");
-    }
+    await cleanupAll(cleanups, "progress fixture cleanup failed");
   });
 
   it("retires unphased Slack previews across tool-only assistant messages", async () => {
-    const directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "slack-preview-"));
-    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
-    const writes: WireWrite[] = [];
-    const adapter = await startOpenClawCrablineAdapter({
-      channel: "slack",
-      recorderPath: path.join(directory, "provider.jsonl"),
-    });
-    cleanups.push(() => adapter.close());
-    const api = await startPresentationApi(adapter, writes, directory);
-    cleanups.push(() => api.stop());
+    const directory = await createDirectory("slack-preview-", cleanups);
+    const { writes, adapter, api } = await createPresentationTransport(
+      "slack",
+      cleanups,
+      directory,
+    );
     const requestLog = path.join(directory, "model-requests.jsonl");
     const provider = spawn(
       process.execPath,
@@ -731,21 +790,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
-      repoRoot: process.cwd(),
-      // The source QA fixture uses prebuilt dist without installed-package repair.
-      providerBaseUrl: `http://127.0.0.1:${providerPort}/v1`,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
-      alternateModel: MODEL,
-      controlUiEnabled: false,
-      transportBaseUrl: api.baseUrl,
+      ...presentationGatewayOptions(adapter, api, `http://127.0.0.1:${providerPort}/v1`),
       transport: {
         requiredPluginIds: adapter.requiredPluginIds,
         createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
-      },
-      runtimeEnvPatch: {
-        ...adapter.createProviderReadinessEnv({}),
-        SLACK_API_URL: `${api.baseUrl}/api/`,
       },
       mutateConfig: (config) => {
         const configured = progressConfig(config, "slack", false, true);
@@ -759,13 +807,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         return configured;
       },
     });
-    await waitForFact(async () => {
-      const status = asRecord(await gateway.call("channels.status", { probe: false }));
-      const accounts = asRecord(status.channelAccounts).slack;
-      return (
-        Array.isArray(accounts) && accounts.some((account) => asRecord(account).running === true)
-      );
-    }, "Slack preview ready");
+    await waitForChannel(gateway, "slack", ["running"]);
     const inbound = adapter.createInbound({
       input: {
         conversation: { id: "C12345678", kind: "group" },
@@ -782,21 +824,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
     if (adapter.manifest.provider !== "slack") {
       throw new Error("expected Slack fixture");
     }
-    const body = JSON.stringify(asRecord(await injected.json()).event);
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const signature = createHmac("sha256", adapter.manifest.signingSecret)
-      .update(`v0:${timestamp}:${body}`)
-      .digest("hex");
-    const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-slack-request-timestamp": timestamp,
-        "x-slack-signature": `v0=${signature}`,
-      },
-      body,
-    });
-    expect(delivered.ok, await delivered.text()).toBe(true);
+    await deliverSlackEvent(adapter, gateway, asRecord(await injected.json()).event);
     const finalText = "PREVIEW_FINAL_25592";
     await waitForFact(
       () => [...api.messages.values()].some((message) => message.text === finalText),
@@ -823,34 +851,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
         : [],
     );
     expect(toolResultCounts).toEqual([0, 1, 2]);
-    const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-    await fs.mkdir(evidenceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(evidenceDir, "slack-preview-retirement.json"),
-      JSON.stringify(
-        {
-          kind: "mock-gateway",
-          channel: "slack",
-          status: "pass",
-          providerApi: "openai-completions",
-          previewWasVisible,
-          toolResultCounts,
-          remainingMessages,
-          writes: writes
-            .filter((write) => write.accepted)
-            .map(({ route, accepted }) => ({ route, accepted })),
-        },
-        null,
-        2,
-      ),
-    );
   }, 120_000);
 
   it("records suppressed Slack announcements without claiming delivery", async () => {
-    const directory = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "slack-announce-"),
-    );
-    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+    const directory = await createDirectory("slack-announce-", cleanups);
     const cancelledMarker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
     const deliveredMarker = "QA-SUBAGENT-TERMINAL-RESTART-OK";
     const observerModel = "mock-openai/observer-failure-fixture";
@@ -875,14 +879,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }
     };`,
     );
-    const writes: WireWrite[] = [];
-    const adapter = await startOpenClawCrablineAdapter({
-      channel: "slack",
-      recorderPath: path.join(directory, "provider.jsonl"),
-    });
-    cleanups.push(() => adapter.close());
-    const api = await startPresentationApi(adapter, writes, directory);
-    cleanups.push(() => api.stop());
+    const { writes, adapter, api } = await createPresentationTransport(
+      "slack",
+      cleanups,
+      directory,
+    );
     const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL, observerModel] });
     cleanups.push(() => provider.stop());
     const completions: string[] = [];
@@ -894,7 +895,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
       completion: boolean;
       requestText: string;
     }> = [];
-    let observerRequests = 0;
     let releaseRequester: (() => void) | undefined;
     let requesterHeld = false;
     const slowRequesterCases = new Set<string>();
@@ -942,7 +942,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
           requestText: currentText.slice(0, 1_000),
         });
         if (String(parseBody(raw).model).endsWith("observer-failure-fixture")) {
-          observerRequests += 1;
           response.writeHead(400, { "content-type": "application/json" });
           response.end(
             JSON.stringify({
@@ -1023,22 +1022,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
-      repoRoot: process.cwd(),
-      providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      ...presentationGatewayOptions(adapter, api, `http://127.0.0.1:${address.port}/v1`),
       mockSessionObserverUrl: provider.sessionObserverUrl,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
       alternateModel: observerModel,
-      controlUiEnabled: false,
-      transportBaseUrl: api.baseUrl,
-      transport: {
-        requiredPluginIds: adapter.requiredPluginIds,
-        createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
-      },
-      runtimeEnvPatch: {
-        ...adapter.createProviderReadinessEnv({}),
-        SLACK_API_URL: `${api.baseUrl}/api/`,
-      },
       mutateConfig: (config) => ({
         ...config,
         logging: { ...config.logging, consoleStyle: "json" },
@@ -1066,8 +1052,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }),
     });
     cleanups.push(async () => {
-      const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      await fs.mkdir(evidenceDir, { recursive: true });
       const root = inboundMessages[0];
       const mockThread =
         root && adapter.manifest.provider === "slack"
@@ -1084,42 +1068,29 @@ describe("channel progress presentation through an isolated Gateway", () => {
               ).json(),
             )
           : {};
-      await fs.writeFile(
-        path.join(evidenceDir, "slack-announcement-diagnostics.json"),
-        JSON.stringify(
-          {
-            providerRequests,
-            completions,
-            tasks,
-            inboundMessages,
-            mockThreadMessages: Array.isArray(mockThread.messages)
-              ? mockThread.messages
-                  .map(asRecord)
-                  .map(({ channel, ts, thread_ts }) => ({ channel, ts, thread_ts }))
-              : mockThread,
-            slackSends: writes
-              .filter((write) => write.route.endsWith("chat.postMessage"))
-              .map(({ body, accepted, rejected }) => ({
-                channel: body.channel,
-                thread_ts: body.thread_ts,
-                text: body.text,
-                accepted,
-                rejected,
-              })),
-            logs: gateway.logs().replaceAll(gateway.token, "[redacted]"),
-          },
-          null,
-          2,
-        ),
-      );
+      await writeEvidence("slack-announcement-diagnostics.json", {
+        providerRequests,
+        completions,
+        tasks,
+        inboundMessages,
+        mockThreadMessages: Array.isArray(mockThread.messages)
+          ? mockThread.messages
+              .map(asRecord)
+              .map(({ channel, ts, thread_ts }) => ({ channel, ts, thread_ts }))
+          : mockThread,
+        slackSends: writes
+          .filter((write) => write.route.endsWith("chat.postMessage"))
+          .map(({ body, accepted, rejected }) => ({
+            channel: body.channel,
+            thread_ts: body.thread_ts,
+            text: body.text,
+            accepted,
+            rejected,
+          })),
+        logs: gateway.logs().replaceAll(gateway.token, "[redacted]"),
+      });
     });
-    await waitForFact(async () => {
-      const status = asRecord(await gateway.call("channels.status", { probe: false }));
-      const accounts = asRecord(status.channelAccounts).slack;
-      return (
-        Array.isArray(accounts) && accounts.some((account) => asRecord(account).running === true)
-      );
-    }, "Slack ready");
+    await waitForChannel(gateway, "slack", ["running"]);
     const observerEvents: Array<Record<string, unknown>> = [];
     const client = await connectGatewayClient({
       url: gateway.wsUrl,
@@ -1157,24 +1128,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       inboundMessages.push({ channel: event.channel, ts: event.ts, thread_ts: event.thread_ts });
       threadId ??= readStringValue(asRecord(receipt.message).ts);
       expect(threadId).toBeTypeOf("string");
-      const body = JSON.stringify(receipt.event);
-      const timestamp = String(Math.floor(Date.now() / 1000));
-      const signature = createHmac("sha256", adapter.manifest.signingSecret)
-        .update(`v0:${timestamp}:${body}`)
-        .digest("hex");
-      const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-slack-request-timestamp": timestamp,
-          "x-slack-signature": `v0=${signature}`,
-        },
-        body,
-      });
-      expect(
-        delivered.ok,
-        `HTTP ${delivered.status}: ${(await delivered.text()).slice(0, 2000)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
-      ).toBe(true);
+      await deliverSlackEvent(adapter, gateway, receipt.event);
       if (caseName === "visible") {
         await waitForFact(() => Boolean(releaseRequester), "requester model admission").catch(
           (error: unknown) => {
@@ -1259,55 +1213,19 @@ describe("channel progress presentation through an isolated Gateway", () => {
     // provider transport starts from overlapping runs cannot be partitioned by warning order.
     expect(observerFailures().every((failure) => failure.attempts === 2)).toBe(true);
     expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
-    const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-    await fs.mkdir(evidenceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(evidenceDir, "slack-announcement-receipts.json"),
-      JSON.stringify(
-        {
-          kind: "mock-gateway",
-          channel: "slack",
-          status: "pass",
-          completions,
-          tasks: tasks.map(({ title, status, deliveryStatus, error }) => ({
-            title,
-            status,
-            deliveryStatus,
-            error,
-          })),
-          suppressedSlackWrites: 0,
-          deliveredSlackMessages: 1,
-          observerRequests,
-          observerFailures: observerFailures().map(({ message, error, runId, attempts }) => ({
-            message,
-            error,
-            runId,
-            attempts,
-          })),
-          observedRuns: new Set(observerEvents.map((event) => event.runId)).size,
-        },
-        null,
-        2,
-      ),
-    );
   }, 240_000);
 
   it("retains ambiguous Discord announcement custody after an unidentified send", async () => {
-    const directory = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "discord-announce-"),
-    );
-    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+    const directory = await createDirectory("discord-announce-", cleanups);
     const marker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
-    const writes: WireWrite[] = [];
-    const adapter = await startOpenClawCrablineAdapter({
-      channel: "discord",
-      recorderPath: path.join(directory, "provider.jsonl"),
-    });
-    cleanups.push(() => adapter.close());
-    const api = await startPresentationApi(adapter, writes, directory, {
-      unidentifiedFinalMarker: marker,
-    });
-    cleanups.push(() => api.stop());
+    const { writes, adapter, api } = await createPresentationTransport(
+      "discord",
+      cleanups,
+      directory,
+      {
+        unidentifiedFinalMarker: marker,
+      },
+    );
     const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
     cleanups.push(() => provider.stop());
     let completions = 0;
@@ -1436,22 +1354,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
-      repoRoot: process.cwd(),
-      providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      ...presentationGatewayOptions(adapter, api, `http://127.0.0.1:${address.port}/v1`),
       mockSessionObserverUrl: provider.sessionObserverUrl,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
-      alternateModel: MODEL,
-      controlUiEnabled: false,
-      transportBaseUrl: api.baseUrl,
-      transport: {
-        requiredPluginIds: adapter.requiredPluginIds,
-        createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
-      },
-      runtimeEnvPatch: {
-        ...adapter.createProviderReadinessEnv({}),
-        NODE_EXTRA_CA_CERTS: api.caPath,
-      },
       mutateConfig: (config) => ({
         ...config,
         channels: {
@@ -1475,58 +1379,43 @@ describe("channel progress presentation through an isolated Gateway", () => {
     let delivery:
       | { status?: string; disposition?: string; nextAttemptAt?: number; lastError?: string | null }
       | undefined;
-    const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
     cleanups.push(async () => {
-      await fs.mkdir(evidenceDir, { recursive: true });
-      await fs.writeFile(
-        path.join(evidenceDir, "discord-announcement-diagnostics.json"),
-        JSON.stringify(
-          {
-            task,
-            taskRuns,
-            taskRunId,
-            childSessionKey,
-            allTaskSummaries,
-            requesterSessionId,
-            requesterSettledBeforeWorker,
-            parentAcknowledged,
-            providerRequests,
-            upstreamRequests: await fetch(`${provider.baseUrl}/debug/requests`).then(
-              async (response) => {
-                const requests: unknown = await response.json();
-                return Array.isArray(requests)
-                  ? requests.map((request) => {
-                      const record = asRecord(request);
-                      const args = asRecord(record.plannedToolArgs);
-                      return {
-                        requestKind: record.requestKind,
-                        plannedToolName: record.plannedToolName,
-                        label: args.label,
-                        task: readStringValue(args.task)?.slice(0, 300),
-                      };
-                    })
-                  : [];
-              },
-            ),
-            queued,
-            queueRows,
-            delivery,
-            completions,
-            writes,
-            logs: gateway.logs().replaceAll(gateway.token, "[redacted]"),
+      await writeEvidence("discord-announcement-diagnostics.json", {
+        task,
+        taskRuns,
+        taskRunId,
+        childSessionKey,
+        allTaskSummaries,
+        requesterSessionId,
+        requesterSettledBeforeWorker,
+        parentAcknowledged,
+        providerRequests,
+        upstreamRequests: await fetch(`${provider.baseUrl}/debug/requests`).then(
+          async (response) => {
+            const requests: unknown = await response.json();
+            return Array.isArray(requests)
+              ? requests.map((request) => {
+                  const record = asRecord(request);
+                  const args = asRecord(record.plannedToolArgs);
+                  return {
+                    requestKind: record.requestKind,
+                    plannedToolName: record.plannedToolName,
+                    label: args.label,
+                    task: readStringValue(args.task)?.slice(0, 300),
+                  };
+                })
+              : [];
           },
-          null,
-          2,
         ),
-      );
+        queued,
+        queueRows,
+        delivery,
+        completions,
+        writes,
+        logs: gateway.logs().replaceAll(gateway.token, "[redacted]"),
+      });
     });
-    await waitForFact(async () => {
-      const status = asRecord(await gateway.call("channels.status", { probe: false }));
-      const accounts = asRecord(status.channelAccounts).discord;
-      return (
-        Array.isArray(accounts) && accounts.some((account) => asRecord(account).connected === true)
-      );
-    }, "Discord ready");
+    await waitForChannel(gateway, "discord", ["connected"]);
     const inbound = adapter.createInbound({
       input: {
         conversation: { id: "123456789012345678", kind: "group" },
@@ -1616,70 +1505,23 @@ describe("channel progress presentation through an isolated Gateway", () => {
       ),
     ).toHaveLength(1);
     expect(completions).toBe(1);
-    await fs.mkdir(evidenceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(evidenceDir, "discord-announcement-receipts.json"),
-      JSON.stringify(
-        {
-          kind: "mock-gateway",
-          channel: "discord",
-          status: "pass",
-          taskDeliveryStatus: task?.deliveryStatus,
-          delivery,
-          queued,
-          acceptedMessages: 1,
-          omittedResponseIdentities: 1,
-          completions,
-        },
-        null,
-        2,
-      ),
-    );
   }, 180_000);
 
   it.each([
-    { channel: "discord" as const, native: false, thread: "root", rejectStop: false, tools: true },
-    { channel: "discord" as const, native: false, thread: "root", rejectStop: false, tools: false },
-    { channel: "slack" as const, native: true, thread: "root", rejectStop: false, tools: true },
-    { channel: "slack" as const, native: true, thread: "root", rejectStop: false, tools: false },
-    { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: false },
-    { channel: "slack" as const, native: true, thread: "root", rejectStop: true, tools: true },
-    {
-      channel: "slack" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: false,
-      compact: true,
-    },
-    {
-      channel: "slack" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: true,
-      compact: true,
-    },
-    {
-      channel: "discord" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: false,
-      failTool: true,
-    },
-    {
-      channel: "discord" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: true,
-      failTool: true,
-    },
+    progressCase("discord", true),
+    progressCase("discord", false),
+    progressCase("slack", true, { native: true }),
+    progressCase("slack", false, { native: true }),
+    progressCase("slack", false),
+    progressCase("slack", true, { native: true, rejectStop: true }),
+    progressCase("slack", false, { compact: true }),
+    progressCase("slack", true, { compact: true }),
+    progressCase("discord", false, { failTool: true }),
+    progressCase("discord", true, { failTool: true }),
     // Keep this static fixture last so no other Gateway overlaps its lifetime.
-    { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: true },
-    { channel: "slack" as const, native: false, thread: "reply", rejectStop: false, tools: true },
-    { channel: "slack" as const, native: false, thread: "current", rejectStop: false, tools: true },
+    progressCase("slack", true),
+    progressCase("slack", true, { thread: "reply" }),
+    progressCase("slack", true, { thread: "current" }),
   ])(
     "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools, compact=$compact, failTool=$failTool)",
     async ({ channel, native, thread, rejectStop, tools, compact = false, failTool = false }) => {
@@ -1769,21 +1611,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           expect(event.thread_ts).toBe(threadId);
           expect(inboundMessageId).not.toBe(threadId);
         }
-        const body = JSON.stringify(payload.event);
-        const timestamp = String(Math.floor(Date.now() / 1000));
-        const signature = createHmac("sha256", adapter.manifest.signingSecret)
-          .update(`v0:${timestamp}:${body}`)
-          .digest("hex");
-        const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-slack-request-timestamp": timestamp,
-            "x-slack-signature": `v0=${signature}`,
-          },
-          body,
-        });
-        expect(delivered.ok, `HTTP ${delivered.status}: ${await delivered.text()}`).toBe(true);
+        await deliverSlackEvent(adapter, gateway, payload.event);
       } else {
         await injected.arrayBuffer();
       }
@@ -1888,49 +1716,40 @@ describe("channel progress presentation through an isolated Gateway", () => {
         ),
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
-      const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
       const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}${tools ? "" : "-quiet"}${compact ? "-compact" : ""}${failTool ? "-failed-tool" : ""}`;
-      await fs.mkdir(evidenceDir, { recursive: true });
-      await fs.writeFile(
-        path.join(evidenceDir, `${evidenceName}-diagnostic.json`),
-        JSON.stringify(
-          {
-            rejectStop,
-            originCleared,
-            writes: caseWrites()
-              .slice(-80)
-              .map(({ at, method, route, body, accepted }) => ({
-                at,
-                method,
-                route: route.slice(0, 250),
-                markerFields: Object.entries(body)
-                  .filter(([, value]) => JSON.stringify(value)?.includes(FINAL_MARKER))
-                  .map(([key]) => key),
-                rendered: Object.fromEntries(
-                  ["content", "text", "blocks", "chunks"]
-                    .filter((key) => body[key] !== undefined)
-                    .map((key) => [
-                      key,
-                      (typeof body[key] === "string" ? body[key] : JSON.stringify(body[key])).slice(
-                        0,
-                        250,
-                      ),
-                    ]),
-                ),
-                accepted,
-              })),
-            acceptedMessages: [...api.messages]
-              .filter(([, message]) => !sharedSlack || message.channel === conversationId)
-              .slice(-80)
-              .map(([id, message]) => ({
-                id,
-                text: (readStringValue(message.text ?? message.content) ?? "").slice(0, 250),
-              })),
-          },
-          null,
-          2,
-        ),
-      );
+      await writeEvidence(`${evidenceName}-diagnostic.json`, {
+        rejectStop,
+        originCleared,
+        writes: caseWrites()
+          .slice(-80)
+          .map(({ at, method, route, body, accepted }) => ({
+            at,
+            method,
+            route: route.slice(0, 250),
+            markerFields: Object.entries(body)
+              .filter(([, value]) => JSON.stringify(value)?.includes(FINAL_MARKER))
+              .map(([key]) => key),
+            rendered: Object.fromEntries(
+              ["content", "text", "blocks", "chunks"]
+                .filter((key) => body[key] !== undefined)
+                .map((key) => [
+                  key,
+                  (typeof body[key] === "string" ? body[key] : JSON.stringify(body[key])).slice(
+                    0,
+                    250,
+                  ),
+                ]),
+            ),
+            accepted,
+          })),
+        acceptedMessages: [...api.messages]
+          .filter(([, message]) => !sharedSlack || message.channel === conversationId)
+          .slice(-80)
+          .map(([id, message]) => ({
+            id,
+            text: (readStringValue(message.text ?? message.content) ?? "").slice(0, 250),
+          })),
+      });
       expect(finalWrites()).toHaveLength(1);
       expect(finalMessages()).toHaveLength(1);
       if (rejectStop) {
@@ -1973,29 +1792,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         expect(tasks.at(-1)?.status).toBe("complete");
       }
-      await fs.writeFile(
-        path.join(evidenceDir, `${evidenceName}.json`),
-        JSON.stringify(
-          {
-            kind: "mock-gateway",
-            channel,
-            native,
-            rejectStop,
-            originCleared,
-            thread,
-            threadId,
-            inboundMessageId,
-            status: "pass",
-            progressWrites: progressWrites.length,
-            finalWrites: finalWrites().length,
-            distinctWorkingReactions: reactionNames.size,
-            taskIds: new Set(tasks.map((task) => task.id)).size,
-            toolRows: tools,
-          },
-          null,
-          2,
-        ),
-      );
       if (channel === "discord") {
         const text = [
           "QA-PREFIX-REPORT",
@@ -2053,20 +1849,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
           expect(Array.from(String(display.content)).length).toBeLessThanOrEqual(1997);
         }
         expect(displays.map((display) => display.content).join("")).toBe(text);
-        await fs.writeFile(
-          path.join(evidenceDir, `discord-portable-prefix-tool-progress-${tools}.json`),
-          JSON.stringify(
-            {
-              kind: "mock-gateway",
-              status: "pass",
-              expectedText: text,
-              body: write.body,
-              accepted: write.accepted,
-            },
-            null,
-            2,
-          ),
-        );
       }
     },
     180_000,

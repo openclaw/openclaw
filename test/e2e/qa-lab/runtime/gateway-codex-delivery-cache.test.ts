@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -71,7 +71,6 @@ describe("Codex delivery-mode prompt caching", () => {
           const conversation = { id: "delivery-cache", kind: "direct" as const };
           const deliveryRequestsByTurn: MockOpenAiRequestSnapshot[] = [];
           const instructionBytesByTurn: string[] = [];
-          const fragmentBytes: number[] = [];
           for (const [index, mode] of ["automatic", "message_tool_only", undefined].entries()) {
             const cursor = (await readRequests()).at(-1)?.cursor ?? 0;
             const sinceIndex = state
@@ -148,8 +147,7 @@ describe("Codex delivery-mode prompt caching", () => {
                 ? "not automatically delivered"
                 : "delivers your final response automatically",
             );
-            fragmentBytes.push(Buffer.byteLength(policy));
-            expect(fragmentBytes.at(-1)).toBeLessThan(1_000);
+            expect(Buffer.byteLength(policy)).toBeLessThan(1_000);
             if (index > 0) {
               expect(
                 input
@@ -172,26 +170,6 @@ describe("Codex delivery-mode prompt caching", () => {
             expect(deliveryRequest.body.prompt_cache_key).toEqual(expect.any(String));
             expect(deliveryRequest.body.tools).toEqual(expect.any(Array));
           }
-          console.info(
-            "[codex-delivery-cache-runtime-proof]",
-            JSON.stringify({
-              head,
-              turns: deliveryRequestsByTurn.length,
-              nativeSessions: new Set(
-                deliveryRequestsByTurn.map((request) => request.body.prompt_cache_key),
-              ).size,
-              instructionsSha256: createHash("sha256")
-                .update(instructionBytesByTurn[0]!)
-                .digest("hex"),
-              toolsSha256: createHash("sha256")
-                .update(JSON.stringify(deliveryRequestsByTurn[0]!.body.tools))
-                .digest("hex"),
-              fragmentBytes,
-              deliveredMessages: state
-                .getSnapshot()
-                .messages.filter((m) => m.direction === "outbound").length,
-            }),
-          );
         },
         () => stopQaGatewayFixture(owner),
         () => mock?.stop(),
