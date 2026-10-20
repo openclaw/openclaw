@@ -15,10 +15,23 @@ export const sourcePreviewFixture = {
 export function sourcePreviewHistory(sessionUrl?: string) {
   const fixture = sourcePreviewFixture;
   const start = Date.UTC(2026, 8, 14, 12, 0);
-  const metadata = (seq: number) => ({
+  const message = (seq: number, role: string, text: string, extra = {}) => ({
     __openclaw: { id: `source-preview-${seq}`, seq, runId: fixture.runId },
     timestamp: start + seq * 5_000,
+    role,
+    content: [{ type: "text", text }],
+    ...extra,
   });
+  const toolExchange = (seq: number, id: string, name: string, args: object, details: object) => [
+    message(seq, "assistant", "", {
+      content: [{ type: "toolCall", id, name, arguments: args }],
+    }),
+    message(seq + 1, "toolResult", JSON.stringify(details), {
+      toolCallId: id,
+      toolName: name,
+      details,
+    }),
+  ];
   const search = {
     kind: "results",
     provider: "fixture",
@@ -65,66 +78,17 @@ export function sourcePreviewHistory(sessionUrl?: string) {
     externalContent: { untrusted: true, source: "web_fetch", wrapped: true },
   };
   return [
-    {
-      ...metadata(1),
-      role: "user",
-      content: [{ type: "text", text: "Help me pack for a weekend bike trip." }],
-    },
-    {
-      ...metadata(2),
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "source-search",
-          name: "web_search",
-          arguments: { query: search.query },
-        },
-      ],
-    },
-    {
-      ...metadata(3),
-      role: "toolResult",
-      toolCallId: "source-search",
-      toolName: "web_search",
-      details: search,
-      content: [{ type: "text", text: JSON.stringify(search) }],
-    },
-    {
-      ...metadata(4),
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "source-fetch",
-          name: "web_fetch",
-          arguments: { url: fixture.checklistUrl },
-        },
-      ],
-    },
-    {
-      ...metadata(5),
-      role: "toolResult",
-      toolCallId: "source-fetch",
-      toolName: "web_fetch",
-      details: page,
-      content: [{ type: "text", text: JSON.stringify(page) }],
-    },
-    {
-      ...metadata(6),
-      role: "assistant",
-      phase: "final_answer",
-      stopReason: "stop",
-      content: [
-        {
-          type: "text",
-          text:
-            fixture.answer +
-            (sessionUrl
-              ? `\n\nRelated: [trip planning session](${sessionUrl}) · [route planner issue](https://github.com/example/route-planner/issues/42).`
-              : ""),
-        },
-      ],
-    },
+    message(1, "user", "Help me pack for a weekend bike trip."),
+    ...toolExchange(2, "source-search", "web_search", { query: search.query }, search),
+    ...toolExchange(4, "source-fetch", "web_fetch", { url: fixture.checklistUrl }, page),
+    message(
+      6,
+      "assistant",
+      fixture.answer +
+        (sessionUrl
+          ? `\n\nRelated: [trip planning session](${sessionUrl}) · [route planner issue](https://github.com/example/route-planner/issues/42).`
+          : ""),
+      { phase: "final_answer", stopReason: "stop" },
+    ),
   ];
 }

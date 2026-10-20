@@ -12,15 +12,22 @@ suite.define(() => {
     async (scenario) => {
       const saveWarning =
         scenario === "button" || scenario === "command" || scenario === "deferred save";
+      const viewport = { width: 1200, height: 800 };
       const pageOptions = {
-        viewport: { width: 1200, height: 800 },
-        ...(saveWarning
-          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1200, height: 800 } } }
-          : {}),
+        viewport,
+        ...(saveWarning ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
       };
       await suite.withPage(pageOptions, async ({ page }) => {
         const sessionKey = "agent:main:main";
         const gateway = await installMockGateway(page, { sessionKey });
+        const emitReply = (runId: string, state: "delta" | "aborted", text: string) =>
+          gateway.emitGatewayEvent("chat", {
+            sessionKey,
+            runId,
+            state,
+            ...(state === "delta" ? { deltaText: text } : {}),
+            message: { role: "assistant", content: [{ type: "text", text }] },
+          });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const composer = page.locator(".agent-chat__input textarea");
         const send = page.getByRole("button", { name: "Send message", exact: true });
@@ -31,13 +38,7 @@ suite.define(() => {
         expect(original.params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
         const runId = String(asOptionalRecord(original.params)?.idempotencyKey);
         const progress = "Original task is working.";
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey,
-          runId,
-          state: "delta",
-          deltaText: progress,
-          message: { role: "assistant", content: [{ type: "text", text: progress }] },
-        });
+        await emitReply(runId, "delta", progress);
         await page.locator(".chat-bubble").getByText(progress, { exact: true }).waitFor();
         const abortMethod = scenario === "command" ? "sessions.abort" : "chat.abort";
         await gateway.deferNext(abortMethod);
@@ -53,12 +54,7 @@ suite.define(() => {
         );
 
         if (scenario !== "current") {
-          await gateway.emitGatewayEvent("chat", {
-            sessionKey,
-            runId,
-            state: "aborted",
-            message: { role: "assistant", content: [{ type: "text", text: progress }] },
-          });
+          await emitReply(runId, "aborted", progress);
           await stop.waitFor({ state: "detached" });
         }
         let visibleReply = progress;
@@ -69,13 +65,7 @@ suite.define(() => {
           const replacementRunId = String(asOptionalRecord(replacement.params)?.idempotencyKey);
           expect(replacementRunId).not.toBe(runId);
           visibleReply = "Replacement task is working.";
-          await gateway.emitGatewayEvent("chat", {
-            sessionKey,
-            runId: replacementRunId,
-            state: "delta",
-            deltaText: visibleReply,
-            message: { role: "assistant", content: [{ type: "text", text: visibleReply }] },
-          });
+          await emitReply(replacementRunId, "delta", visibleReply);
         }
         const reply = page.locator(".chat-bubble").getByText(visibleReply, { exact: true });
         await reply.waitFor();

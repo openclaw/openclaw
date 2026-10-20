@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
@@ -30,16 +29,6 @@ for (const stopMethod of ["button", "slash"] as const) {
   let provider: Awaited<ReturnType<typeof startBackgroundWorkProvider>>;
   let artifactDir: string;
   const viewport = { width: 1440, height: 1000 };
-  const proof: Record<string, unknown> = {
-    provider: "synthetic loopback Responses provider",
-    gateway: "isolated real Gateway serving this checkout's built Control UI",
-    viewport,
-    stopMethod,
-    complete: false,
-  };
-  const saveProof = () =>
-    fs.writeFile(path.join(artifactDir, "proof.json"), JSON.stringify(proof, null, 2) + "\n");
-
   const suite = createControlUiE2eSuite({
     name: `Composer ${stopMethod} Stop owns ordinary yielded execution through a real Gateway`,
     startServerBeforeBrowser: true,
@@ -49,15 +38,8 @@ for (const stopMethod of ["button", "slash"] as const) {
       provider = await startBackgroundWorkProvider({ ordinaryExec: true });
       const cleanup = () =>
         runQaGatewayFixture(
-          async () => {
-            await instance?.cleanup();
-            proof.gatewayStopped = !instance?.child;
-          },
-          async () => {
-            await provider.stop();
-            proof.providerStopped = true;
-          },
-          saveProof,
+          () => instance?.cleanup(),
+          () => provider.stop(),
         );
       try {
         instance = await createBackgroundWorkInstance(provider.port, true);
@@ -98,7 +80,6 @@ for (const stopMethod of ["button", "slash"] as const) {
       animations: "disabled",
     });
     await fs.writeFile(path.join(artifactDir, name + ".png"), frame.png);
-    await saveProof();
   }
 
   suite.define(() => {
@@ -119,7 +100,6 @@ for (const stopMethod of ["button", "slash"] as const) {
             );
           });
           const page = await context.newPage();
-          const video = page.video();
           const wire = observeBackgroundWorkRpc(page, signal);
           try {
             await runCli([
@@ -148,12 +128,6 @@ for (const stopMethod of ["button", "slash"] as const) {
             expect(served.equals(built), "served UI must be this checkout's built bundle").toBe(
               true,
             );
-            proof.uiAsset = {
-              path: script,
-              sha256: createHash("sha256").update(served).digest("hex"),
-            };
-
-            proof.stage = "ordinary exec yields while the request remains active";
             await composer.fill(
               "Start an ordinary command and a helper, then wait for my instruction.",
             );
@@ -188,7 +162,6 @@ for (const stopMethod of ["button", "slash"] as const) {
             const stop = pane.getByRole("button", { name: "Stop generating", exact: true });
             await capture(page, "request-running", pane, [stop, output]);
 
-            proof.stage = "composer Stop cancels the request";
             const beforeStop = wire.completed.length;
             if (stopMethod === "button") {
               await stop.hover();
@@ -214,13 +187,7 @@ for (const stopMethod of ["button", "slash"] as const) {
             await provider.wait(provider.parentClosed, signal);
             await provider.wait(provider.childClosed, signal);
             await stop.waitFor({ state: "hidden" });
-            proof.childClosed = true;
-            proof.processOpenAfterStopReply = provider.processIsOpen();
-            proof.stage = "wait for physical process cleanup";
-            await saveProof();
-            expect(proof.processOpenAfterStopReply, "Stop must join physical command cleanup").toBe(
-              false,
-            );
+            expect(provider.processIsOpen(), "Stop must join physical command cleanup").toBe(false);
             await provider.wait(provider.processClosed, signal);
             expect(provider.processIsOpen()).toBe(false);
             provider.releaseProcess();
@@ -235,10 +202,8 @@ for (const stopMethod of ["button", "slash"] as const) {
             expect(terminal.response.ok).toBe(true);
             await processes.getByText("Stopped", { exact: true }).waitFor();
             expect(await output.textContent()).toContain(fixture.output);
-            proof.processSocketClosed = true;
             await capture(page, "request-stopped", pane, [composer, output]);
 
-            proof.stage = "new human instruction still completes";
             expect(provider.parentRequests()).toBe(3);
             await composer.fill(fixture.nextPrompt);
             await pane.getByRole("button", { name: "Send message", exact: true }).click();
@@ -254,17 +219,9 @@ for (const stopMethod of ["button", "slash"] as const) {
             expect(wire.completed.filter((rpc) => rpc.request.method === "chat.send")).toHaveLength(
               2,
             );
-            proof.parentModelRequests = provider.parentRequests();
-            proof.newInstructionCompleted = true;
-            proof.stage = "complete";
-            proof.complete = true;
             await capture(page, "new-instruction-completed", pane, [composer, output]);
           } finally {
             await suite.closeBrowserContext(context);
-            if (video) {
-              proof.recording = path.basename(await video.path());
-            }
-            await saveProof();
           }
         },
       });
