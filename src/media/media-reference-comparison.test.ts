@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeMediaReferenceForComparison } from "./media-reference-comparison.js";
+import { normalizeMediaReferenceForComparison as normalize } from "./media-reference-comparison.js";
 
 describe("normalizeMediaReferenceForComparison", () => {
   it("matches encoded file URLs with equivalent absolute paths", () => {
@@ -32,9 +32,7 @@ describe("normalizeMediaReferenceForComparison", () => {
   it.runIf(process.platform === "win32")(
     "matches Windows network file URLs across scheme casing",
     () => {
-      expect(normalizeMediaReferenceForComparison("FILE://server/share.png")).toBe(
-        normalizeMediaReferenceForComparison("file://server/share.png"),
-      );
+      expect(normalize("FILE://server/share.png")).toBe(normalize("file://server/share.png"));
     },
   );
 
@@ -60,44 +58,26 @@ describe("normalizeMediaReferenceForComparison", () => {
   });
 
   it("preserves remote and relative references after trimming", () => {
-    expect(normalizeMediaReferenceForComparison(" https://example.test/a/../b.png ")).toBe(
-      "https://example.test/a/../b.png",
+    expect(normalize(" https://example.test/a/../b.png ")).toBe("https://example.test/a/../b.png");
+    expect(normalize("./output/../generated.png")).toBe("./output/../generated.png");
+    expect(normalize("file://server/share.png")).not.toBe(normalize("server/share.png"));
+    expect(normalize("FILE://server/share.png")).not.toBe(normalize("server/share.png"));
+    expect(normalize("FILE:/tmp/a%2Fb.png")).not.toBe(normalize("/tmp/a/b.png"));
+    expect(normalize("//cdn.example/share.png")).toBe("//cdn.example/share.png");
+    expect(normalize("//cdn.example/share.png")).not.toBe(normalize("/cdn.example/share.png"));
+    expect(normalize("file:////cdn.example/share.png")).not.toBe(
+      normalize("//cdn.example/share.png"),
     );
-    expect(normalizeMediaReferenceForComparison("./output/../generated.png")).toBe(
-      "./output/../generated.png",
+    expect(normalize("file:////cdn.example/share.png")).not.toBe(
+      normalize("/cdn.example/share.png"),
     );
-    expect(normalizeMediaReferenceForComparison("file://server/share.png")).not.toBe(
-      normalizeMediaReferenceForComparison("server/share.png"),
-    );
-    expect(normalizeMediaReferenceForComparison("FILE://server/share.png")).not.toBe(
-      normalizeMediaReferenceForComparison("server/share.png"),
-    );
-    expect(normalizeMediaReferenceForComparison("FILE:/tmp/a%2Fb.png")).not.toBe(
-      normalizeMediaReferenceForComparison("/tmp/a/b.png"),
-    );
-    expect(normalizeMediaReferenceForComparison("//cdn.example/share.png")).toBe(
-      "//cdn.example/share.png",
-    );
-    expect(normalizeMediaReferenceForComparison("//cdn.example/share.png")).not.toBe(
-      normalizeMediaReferenceForComparison("/cdn.example/share.png"),
-    );
-    expect(normalizeMediaReferenceForComparison("file:////cdn.example/share.png")).not.toBe(
-      normalizeMediaReferenceForComparison("//cdn.example/share.png"),
-    );
-    expect(normalizeMediaReferenceForComparison("file:////cdn.example/share.png")).not.toBe(
-      normalizeMediaReferenceForComparison("/cdn.example/share.png"),
-    );
-    expect(normalizeMediaReferenceForComparison("file:////cdn.example/a//share.png")).toBe(
-      normalizeMediaReferenceForComparison("file:////cdn.example/a/share.png"),
+    expect(normalize("file:////cdn.example/a//share.png")).toBe(
+      normalize("file:////cdn.example/a/share.png"),
     );
   });
 
   it("keeps malformed local file URLs comparable with their paths", () => {
-    expect(normalizeMediaReferenceForComparison("file:///tmp/100%.png")).toBe(
-      normalizeMediaReferenceForComparison("/tmp/100%.png"),
-    );
-    expect(normalizeMediaReferenceForComparison("file:///tmp/link/../asset%.png")).toBe(
-      "/tmp/link/../asset%.png",
-    );
+    expect(normalize("file:///tmp/100%.png")).toBe(normalize("/tmp/100%.png"));
+    expect(normalize("file:///tmp/link/../asset%.png")).toBe("/tmp/link/../asset%.png");
   });
 });
