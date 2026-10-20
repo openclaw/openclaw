@@ -6,11 +6,7 @@ function fixture(complete?: (value: string) => void, error?: (error: unknown) =>
     onError = vi.fn(error),
     notify = vi.fn();
   const task = vi.fn((value: Promise<string>, _options: { signal: AbortSignal }) => value);
-  const request = createPageRequest(notify, {
-    task,
-    onComplete,
-    onError,
-  });
+  const request = createPageRequest(notify, { task, onComplete, onError });
   return { request, notify, task, onComplete, onError };
 }
 

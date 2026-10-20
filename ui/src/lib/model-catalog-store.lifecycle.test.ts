@@ -1,6 +1,6 @@
 import {
   GatewayProtocolRequestError,
-  GatewayProtocolRequestTimeoutError,
+  GatewayProtocolRequestTimeoutError as TimeoutError,
 } from "@openclaw/gateway-client/browser";
 import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -13,20 +13,14 @@ import { loadModelCatalog, peekModelCatalog } from "./model-catalog-store.ts";
 const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
 const stale = { models: [{ id: "stale", provider: "test", name: "Stale" }] };
 const fresh = { models: [{ id: "fresh", provider: "test", name: "Fresh" }] };
-const superseded: ErrorShape = {
-  code: "UNAVAILABLE",
-  message: "Session changed while preparing its model catalog.",
-  retryable: true,
-  retryAfterMs: 0,
-};
+const superseded = { code: "UNAVAILABLE", message: "Changed", retryable: true, retryAfterMs: 0 };
 
 const agentStarting: ErrorShape = {
-  code: "UNAVAILABLE",
-  message: "Agent main has not completed startup inspection and preparation.",
+  ...superseded,
   details: { code: "agent-database-inspection-pending", agentId: "main" },
-  retryable: true,
   retryAfterMs: 250,
 };
+const timeout = (timeoutMs: number) => ({ name: TimeoutError.name, timeoutMs, requestSent: true });
 
 function protocolFixture(requestTimeoutMs?: number) {
   vi.useFakeTimers();
@@ -102,11 +96,7 @@ it("preserves inherited transport deadlines and explicit unbounded requests", as
   const fixture = protocolFixture(25);
   const inherited = fixture.read();
   const unbounded = fixture.read({ timeoutMs: null });
-  const expired = expect(inherited).rejects.toMatchObject({
-    name: GatewayProtocolRequestTimeoutError.name,
-    timeoutMs: 25,
-    requestSent: true,
-  });
+  const expired = expect(inherited).rejects.toMatchObject(timeout(25));
   await vi.advanceTimersByTimeAsync(100);
   await expired;
   fixture.respond(1, fresh);
@@ -157,11 +147,7 @@ it.each(["ready", "silent read", "failed", "disconnected"] as const)(
       expect(fixture.peek()).toEqual(fresh);
     } else if (outcome === "silent read") {
       await vi.advanceTimersByTimeAsync(100);
-      expect(await result).toMatchObject({
-        name: GatewayProtocolRequestTimeoutError.name,
-        timeoutMs: 100,
-        requestSent: true,
-      });
+      expect(await result).toMatchObject(timeout(100));
     } else if (outcome === "failed") {
       fixture.fail(5, {
         ...agentStarting,

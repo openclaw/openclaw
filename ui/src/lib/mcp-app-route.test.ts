@@ -36,19 +36,14 @@ it("keeps internal server routes in their own namespace", () => {
 });
 
 it("resolves vendor plugin and marketplace without guessing a server name", () => {
+  const entrypoint = { type: "global" as const };
+  const entry = { title: "App", toolName: root.toolName, resourceUri: "ui://app", entrypoint };
   const server = (serverName: string, pluginId?: string, marketplace?: string) => ({
     serverName,
     label: serverName,
     pluginId,
     marketplace,
-    entrypoints: [
-      {
-        title: "Library",
-        toolName: "cad.library",
-        resourceUri: "ui://parts/library",
-        entrypoint: { type: "global" as const },
-      },
-    ],
+    entrypoints: [entry],
   });
   const servers = [
     server("parts-runtime", "vendor-parts", "team market"),

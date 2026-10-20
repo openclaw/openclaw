@@ -3,7 +3,10 @@ import type { UsersListResult } from "../../../packages/gateway-protocol/src/sch
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { profileAvatarUrl, profileDirectory } from "./profile-directory.ts";
 
@@ -19,44 +22,40 @@ const photo = {
   githubIdentity: null,
 };
 
-function setup(
-  request: Parameters<typeof createTestGatewayClient>[0],
+const rosterHello = (scopes = ["operator.read"]) => gatewayHelloForMethods(["users.list"], scopes);
+
+function fixture(
+  initial?: (typeof photo)[],
   overrides: Partial<ApplicationGateway["snapshot"]> = {},
+  handler?: GatewayRequestHandler,
 ) {
-  const fixture = createApplicationGateway();
-  const { gateway } = fixture;
+  const reply = createDeferred<UsersListResult>();
+  const request = vi.fn(handler ?? (() => reply.promise));
+  if (initial) {
+    request.mockResolvedValueOnce({ profiles: initial });
+  }
+  const source = createApplicationGateway();
+  const { gateway } = source;
   const publish = (patch: Partial<ApplicationGateway["snapshot"]>) =>
-    fixture.publish({ ...gateway.snapshot, ...patch });
+    source.publish({ ...gateway.snapshot, ...patch });
   publish({
     phase: "connected",
-    hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
+    hello: rosterHello(),
     client: createTestGatewayClient(request),
     ...overrides,
   });
   const directory = profileDirectory(gateway);
   const stop = directory.subscribe(vi.fn());
   onTestFinished(stop);
-  return { gateway, publish, directory, stop };
-}
-
-function pendingDirectory(
-  initial?: (typeof photo)[],
-  overrides: Partial<ApplicationGateway["snapshot"]> = {},
-) {
-  const reply = createDeferred<UsersListResult>();
-  const request = vi.fn(() => reply.promise);
-  if (initial) {
-    request.mockResolvedValueOnce({ profiles: initial });
-  }
-  return { ...setup(request, overrides), reply, request };
+  return { gateway, publish, directory, stop, reply, request };
 }
 
 it.each(["account", "recovery scope"])(
   "retires profiles when the same client's %s changes",
   async (change) => {
-    const hello = gatewayHelloForMethods(["users.list"], ["operator.read"]);
+    const hello = rosterHello();
     hello.auth!.recoveryScope = "alice-scope";
-    const { publish, directory, reply } = pendingDirectory([photo], {
+    const { publish, directory, reply } = fixture([photo], {
       hello,
       selfUser: { id: "alice", name: "Alice" },
     });
@@ -79,14 +78,14 @@ it.each(["account", "recovery scope"])(
 );
 
 it("retains profiles during a blip and clears them on fresh access loss", async () => {
-  const hello = gatewayHelloForMethods(["users.list"], ["operator.read"]);
-  const { publish, directory, reply } = pendingDirectory([photo], { hello });
+  const hello = rosterHello();
+  const { publish, directory, reply } = fixture([photo], { hello });
   await directory.load();
   publish({ phase: "reconnecting", hello: null });
   expect(directory.get("photo")).toEqual(photo);
   publish({ phase: "connected", hello });
   expect(directory.get("photo")).toEqual(photo);
-  publish({ hello: gatewayHelloForMethods(["users.list"], []) });
+  publish({ hello: rosterHello([]) });
   expect(directory.get("photo")).toBeUndefined();
   reply.resolve({ profiles: [photo] });
   await directory.load();
@@ -94,7 +93,7 @@ it("retains profiles during a blip and clears them on fresh access loss", async 
 });
 
 it("shares directory reads, resolves merged identities, and advertises uploaded and email-backed photos", async () => {
-  const { gateway, directory, stop: first, request, reply } = pendingDirectory();
+  const { gateway, directory, stop: first, request, reply } = fixture();
   const second = profileDirectory(gateway).subscribe(vi.fn());
   expect(request).toHaveBeenCalledTimes(1);
   expect(profileAvatarUrl(directory.get("photo"))).toBeUndefined();
@@ -119,7 +118,7 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
 });
 
 it("retires directory facts and ignores pending replies when the connection is replaced", async () => {
-  const { publish, directory, stop, reply } = pendingDirectory();
+  const { publish, directory, stop, reply } = fixture();
   const old = directory.load();
   publish({ phase: "offline" });
   reply.resolve({ profiles: [photo] });
@@ -136,15 +135,14 @@ it("retires directory facts and ignores pending replies when the connection is r
 });
 
 it("waits for roster access while a profile-only guest stays on known identity", async () => {
-  const request = vi.fn(async () => ({ profiles: [photo] }));
-  const { publish, directory } = setup(request, {
-    hello: gatewayHelloForMethods(["users.list"], ["operator.sessions.write"]),
-  });
+  const { publish, directory, request } = fixture(
+    undefined,
+    { hello: rosterHello(["operator.sessions.write"]) },
+    async () => ({ profiles: [photo] }),
+  );
   await directory.load();
   expect(request).not.toHaveBeenCalled();
-  publish({
-    hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
-  });
+  publish({ hello: rosterHello() });
   await directory.load();
   expect(request).toHaveBeenCalledTimes(1);
   expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
