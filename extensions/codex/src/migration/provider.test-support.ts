@@ -27,6 +27,12 @@ const credentialStorage = vi.hoisted(() => ({
   requiredMode: undefined as string | undefined,
   accountType: "apiKey",
   accountReadFails: false,
+  startupAccountUpdate: undefined as string | undefined,
+}));
+// account/updated notifications the mocked native delivers during the read window.
+const credentialReaderNotifications = vi.hoisted(() => ({
+  delivered: [] as string[],
+  handlers: [] as Array<(notification: { method: string; params?: unknown }) => void>,
 }));
 
 vi.mock("../app-server/managed-binary.js", async (importOriginal) => ({
@@ -43,10 +49,21 @@ vi.mock("../app-server/client.js", () => ({
       return {
         initialize: async () => undefined,
         getRuntimeIdentity: () => ({ codexHome: options.env.CODEX_HOME }),
-        getModelCatalogRevision: () => 0,
+        getModelCatalogRevision: () => credentialReaderNotifications.delivered.length,
         getCloseError: () => undefined,
         close: () => undefined,
         closeAndWait: closeCredentialReader,
+        addNotificationHandler: (
+          handler: (notification: { method: string; params?: unknown }) => void,
+        ) => {
+          credentialReaderNotifications.handlers.push(handler);
+          return () => {
+            const index = credentialReaderNotifications.handlers.indexOf(handler);
+            if (index >= 0) {
+              credentialReaderNotifications.handlers.splice(index, 1);
+            }
+          };
+        },
         async request(method: string) {
           if (method === "account/read") {
             if (credentialStorage.accountReadFails) {
@@ -55,6 +72,17 @@ vi.mock("../app-server/client.js", () => ({
             return { account: { type: credentialStorage.accountType }, requiresOpenaiAuth: true };
           }
           if (method === "config/read") {
+            // The native app-server announces the current account on its own
+            // shortly after initialize, while the reader is still reading config.
+            if (credentialStorage.startupAccountUpdate) {
+              const authMode = credentialStorage.startupAccountUpdate;
+              credentialStorage.startupAccountUpdate = undefined;
+              credentialReaderNotifications.delivered.push(authMode);
+              const handlers = [...credentialReaderNotifications.handlers];
+              for (const handler of handlers) {
+                handler({ method: "account/updated", params: { authMode } });
+              }
+            }
             return { config: { cli_auth_credentials_store: credentialStorage.mode } };
           }
           if (method === "configRequirements/read") {
@@ -256,6 +284,9 @@ beforeEach(() => {
   credentialStorage.requiredMode = undefined;
   credentialStorage.accountType = "apiKey";
   credentialStorage.accountReadFails = false;
+  credentialStorage.startupAccountUpdate = undefined;
+  credentialReaderNotifications.delivered = [];
+  credentialReaderNotifications.handlers = [];
   appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   sourceAppServerClientScope.mockImplementation(
     async (

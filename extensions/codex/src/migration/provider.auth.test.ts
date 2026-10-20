@@ -316,6 +316,67 @@ describe("Codex migration credential inspection and persistence", () => {
     },
   );
 
+  it.each(["chatgpt", "chatgptAuthTokens"])(
+    "imports OAuth despite the startup account/updated announcement (%s)",
+    async (authMode) => {
+      const access = fakeJwt({ exp: 2_000_000_000 });
+      await writeAuth({
+        auth_mode: "chatgpt",
+        tokens: { access_token: access, refresh_token: "fixture-refresh" },
+      });
+      credentialStorage.startupAccountUpdate = authMode;
+
+      const credentials = await readCodexCliCredentialsAsync({
+        codexHome: fixture.codexHome,
+        allowKeychainPrompt: true,
+      });
+
+      expect(credentials?.oauth).toMatchObject({ access, refresh: "fixture-refresh" });
+    },
+  );
+
+  it("keeps the API key credential through a same-route account/updated", async () => {
+    await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-key" });
+    credentialStorage.startupAccountUpdate = "apiKey";
+
+    const credentials = await readCodexCliCredentialsAsync({
+      codexHome: fixture.codexHome,
+      credentialKind: "api_key",
+      allowKeychainPrompt: true,
+    });
+
+    expect(credentials?.apiKey).toMatchObject({ key: "fixture-key" });
+  });
+
+  it("discards OAuth when the account switches to an API key mid-read", async () => {
+    const access = fakeJwt({ exp: 2_000_000_000 });
+    await writeAuth({
+      auth_mode: "chatgpt",
+      tokens: { access_token: access, refresh_token: "fixture-refresh" },
+    });
+    credentialStorage.startupAccountUpdate = "apiKey";
+
+    const credentials = await readCodexCliCredentialsAsync({
+      codexHome: fixture.codexHome,
+      allowKeychainPrompt: true,
+    });
+
+    expect(credentials?.oauth).toBeUndefined();
+  });
+
+  it("discards the API key credential when the account switches to ChatGPT mid-read", async () => {
+    await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-key" });
+    credentialStorage.startupAccountUpdate = "chatgpt";
+
+    const credentials = await readCodexCliCredentialsAsync({
+      codexHome: fixture.codexHome,
+      credentialKind: "api_key",
+      allowKeychainPrompt: true,
+    });
+
+    expect(credentials?.apiKey).toBeUndefined();
+  });
+
   it("imports auth into the selected agent directory under the effective OpenClaw home", async () => {
     const effectiveHome = path.join(fixture.root, "openclaw-home");
     vi.stubEnv("OPENCLAW_HOME", effectiveHome);

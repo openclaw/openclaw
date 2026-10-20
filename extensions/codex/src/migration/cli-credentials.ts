@@ -140,57 +140,83 @@ async function readNativeCredential(
   if (client.getRuntimeIdentity()?.codexHome !== home) {
     return undefined;
   }
-  const revision = client.getModelCatalogRevision();
-  const configured = await client.request<CodexConfigReadResponse>(
-    "config/read",
-    { includeLayers: false, cwd: home },
-    { signal },
-  );
-  const required = await client.request<CodexConfigRequirementsReadResponse>(
-    "configRequirements/read",
-    {},
-    { signal },
-  );
-  // The native requirements override configuration; File is the pinned dependency's default.
-  const mode =
-    required.requirements?.cli_auth_credentials_store ??
-    configured.config.cli_auth_credentials_store ??
-    "file";
-  let record: Record<string, unknown> | undefined;
-  if (mode === "file") {
-    record = await readAuthFile(home);
-  } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
-    const encrypted = await readCodexExperimentalFeature(
-      (params) =>
-        client.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params, {
-          signal,
-        }),
-      "secret_auth_storage",
+  const observedAccountModes: (string | undefined)[] = [];
+  const removeNotificationHandler = client.addNotificationHandler((notification) => {
+    if (notification.method !== "account/updated") {
+      return;
+    }
+    const params = asOptionalRecord(notification.params);
+    observedAccountModes.push(
+      params && typeof params.authMode === "string" ? params.authMode : undefined,
     );
-    if (encrypted !== false) {
+  });
+  try {
+    const configured = await client.request<CodexConfigReadResponse>(
+      "config/read",
+      { includeLayers: false, cwd: home },
+      { signal },
+    );
+    const required = await client.request<CodexConfigRequirementsReadResponse>(
+      "configRequirements/read",
+      {},
+      { signal },
+    );
+    // The native requirements override configuration; File is the pinned dependency's default.
+    const mode =
+      required.requirements?.cli_auth_credentials_store ??
+      configured.config.cli_auth_credentials_store ??
+      "file";
+    let record: Record<string, unknown> | undefined;
+    if (mode === "file") {
+      record = await readAuthFile(home);
+    } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
+      const encrypted = await readCodexExperimentalFeature(
+        (params) =>
+          client.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params, {
+            signal,
+          }),
+        "secret_auth_storage",
+      );
+      if (encrypted !== false) {
+        return undefined;
+      }
+      record = await readDirectKeyring(home, signal);
+    }
+    signal.throwIfAborted();
+    if (!record) {
       return undefined;
     }
-    record = await readDirectKeyring(home, signal);
-  }
-  signal.throwIfAborted();
-  if (!record) {
-    return undefined;
-  }
-  const oauth = options.credentialKind === "api_key" ? undefined : parseOAuthCredential(record);
-  let apiKey = options.credentialKind === "oauth" ? undefined : parseApiKeyCredential(record);
-  if (apiKey) {
-    // Account lookup gates the API key only; legacy OAuth remains independently importable.
-    const account = await client
-      .request<CodexGetAccountResponse>("account/read", { refreshToken: false }, { signal })
-      .catch(() => undefined);
-    if (account?.account?.type !== "apiKey" || !account.requiresOpenaiAuth) {
-      apiKey = undefined;
+    const oauth = options.credentialKind === "api_key" ? undefined : parseOAuthCredential(record);
+    let apiKey = options.credentialKind === "oauth" ? undefined : parseApiKeyCredential(record);
+    if (apiKey) {
+      // Account lookup gates the API key only; legacy OAuth remains independently importable.
+      const account = await client
+        .request<CodexGetAccountResponse>("account/read", { refreshToken: false }, { signal })
+        .catch(() => undefined);
+      if (account?.account?.type !== "apiKey" || !account.requiresOpenaiAuth) {
+        apiKey = undefined;
+      }
     }
+    signal.throwIfAborted();
+    // The native app-server announces the current account on its own shortly after
+    // initialize. Same-route account/updated notifications (startup announcements,
+    // token rotation) are transparent; a cross-route mode change invalidates the
+    // read. A different user signing in on the same route mid-read is accepted.
+    const transparent = observedAccountModes.every((authMode) => {
+      if (authMode === "apiKey") {
+        return !oauth;
+      }
+      if (authMode === "chatgpt" || authMode === "chatgptAuthTokens") {
+        return !apiKey;
+      }
+      return false;
+    });
+    return !client.getCloseError() && transparent
+      ? { ...(oauth ? { oauth } : {}), ...(apiKey ? { apiKey } : {}) }
+      : undefined;
+  } finally {
+    removeNotificationHandler();
   }
-  signal.throwIfAborted();
-  return !client.getCloseError() && client.getModelCatalogRevision() === revision
-    ? { ...(oauth ? { oauth } : {}), ...(apiKey ? { apiKey } : {}) }
-    : undefined;
 }
 
 function jwtExpiry(token: string): number | undefined {
