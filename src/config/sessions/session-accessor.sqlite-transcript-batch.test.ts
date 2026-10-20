@@ -29,6 +29,15 @@ function message(id: string, parentId: string | null, timestamp: number) {
   };
 }
 
+function indexState(count: number, leaf: string) {
+  return {
+    active_event_count: count,
+    active_message_count: count,
+    indexed_seq: count - 1,
+    leaf_event_id: leaf,
+  };
+}
+
 function fixture() {
   const original = createSessionCompoundWorkerFixture();
   const { database, scope } = original;
@@ -39,29 +48,38 @@ function fixture() {
     append: (
       rows: Parameters<typeof appendTranscriptEventsInTransaction>[2],
       options?: Parameters<typeof appendTranscriptEventsInTransaction>[3],
-    ) => appendTranscriptEventsInTransaction(database, scope, rows, options),
+      target = scope,
+    ) => appendTranscriptEventsInTransaction(database, target, rows, options),
     single: (event: Parameters<typeof appendTranscriptEventInTransaction>[2]) =>
       appendTranscriptEventInTransaction(database, scope, event),
     all: (sql: string) => database.db.prepare(sql).all(scope.sessionId),
     get: (sql: string) => database.db.prepare(sql).get(scope.sessionId),
-    identities: () =>
+    identities: (sessionId = scope.sessionId) =>
       database.db
         .prepare(
           "SELECT event_id, seq FROM transcript_event_identities WHERE session_id = ? ORDER BY seq",
         )
-        .all(scope.sessionId),
+        .all(sessionId),
   };
 }
 
-it("creates a new transcript root and keeps its ownership and sequence on later batches", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { database, scope, write } = fixture();
+function withFixture(run: (context: ReturnType<typeof fixture>) => void) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => run(fixture()));
+}
+
+function withCounts<T>(counter: { counts: T; restore: () => void }, run: () => void) {
+  try {
+    run();
+    return counter.counts;
+  } finally {
+    counter.restore();
+  }
+}
+
+it("creates a new transcript root and keeps its ownership and sequence on later batches", () =>
+  withFixture(({ database, scope, write, append, identities }) => {
     const fresh = { ...scope, sessionId: "fresh", sessionKey: "agent:main:fresh" };
-    write(() => {
-      expect(
-        appendTranscriptEventsInTransaction(database, fresh, [message("first", null, 1)]),
-      ).toBe(1);
-    });
+    write(() => expect(append([message("first", null, 1)], undefined, fresh)).toBe(1));
     expect(
       database.db
         .prepare(
@@ -73,92 +91,59 @@ it("creates a new transcript root and keeps its ownership and sequence on later 
       session_key: fresh.sessionKey,
       generation: expect.any(String),
     });
-    write(() => {
-      expect(
-        appendTranscriptEventsInTransaction(database, fresh, [message("next", "first", 2)]),
-      ).toBe(1);
-    });
+    write(() => expect(append([message("next", "first", 2)], undefined, fresh)).toBe(1));
     expect(() =>
       write(() => {
-        appendTranscriptEventsInTransaction(
-          database,
-          { ...fresh, sessionKey: "agent:main:wrong" },
-          [message("wrong", "next", 3)],
-        );
+        append([message("wrong", "next", 3)], undefined, {
+          ...fresh,
+          sessionKey: "agent:main:wrong",
+        });
       }),
     ).toThrow("is owned by agent:main:fresh");
-    expect(
-      database.db
-        .prepare(
-          "SELECT event_id, seq FROM transcript_event_identities WHERE session_id = ? ORDER BY seq",
-        )
-        .all(fresh.sessionId),
-    ).toEqual([
+    expect(identities(fresh.sessionId)).toEqual([
       { event_id: "first", seq: 0 },
       { event_id: "next", seq: 1 },
     ]);
-  });
-});
+  }));
 
-it("batches bounded inserts while preserving order and subsequent identity rejection", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { database, events, write, append, single, all, identities } = fixture();
+it("batches bounded inserts while preserving order and subsequent identity rejection", () =>
+  withFixture(({ database, events, write, append, single, all, identities }) => {
     const rows = Array.from({ length: 1030 }, (_, index) =>
       message(`row-${index}`, index === 0 ? null : `row-${index - 1}`, index + 1),
     );
-    const writes = trackSqliteStatementExecutions(
-      database.db,
+    const buckets = [
       [
-        "identities",
-        "payloads",
-        "active",
-        "identityReads",
-        "ftsIdentities",
-        "ftsContent",
         "classificationReads",
-      ],
-      (sql) => {
-        if (
+        (sql: string) =>
           /^select /i.test(sql) &&
           sql.includes('from "session_transcript_active_events"') &&
-          !sql.includes('from "session_transcript_index_state"')
-        ) {
-          return "classificationReads";
-        }
-        if (/^insert into "session_transcript_fts_rows"/i.test(sql)) {
-          return "ftsIdentities";
-        }
-        if (sql.includes('insert into "session_transcript_fts"')) {
-          return "ftsContent";
-        }
-        if (/^insert into "transcript_event_identities"/i.test(sql)) {
-          return "identities";
-        }
-        if (/^insert into "transcript_events"/i.test(sql)) {
-          return "payloads";
-        }
-        if (/^insert into "session_transcript_active_events"/i.test(sql)) {
-          return "active";
-        }
-        return /^select /i.test(sql) && sql.includes('from "transcript_event_identities"')
-          ? "identityReads"
-          : null;
-      },
+          !sql.includes('from "session_transcript_index_state"'),
+      ],
+      ["ftsIdentities", (sql: string) => /^insert into "session_transcript_fts_rows"/i.test(sql)],
+      ["ftsContent", (sql: string) => sql.includes('insert into "session_transcript_fts"')],
+      ["identities", (sql: string) => /^insert into "transcript_event_identities"/i.test(sql)],
+      ["payloads", (sql: string) => /^insert into "transcript_events"/i.test(sql)],
+      ["active", (sql: string) => /^insert into "session_transcript_active_events"/i.test(sql)],
+      [
+        "identityReads",
+        (sql: string) =>
+          /^select /i.test(sql) && sql.includes('from "transcript_event_identities"'),
+      ],
+    ] as const;
+    const writes = trackSqliteStatementExecutions(
+      database.db,
+      buckets.map(([key]) => key),
+      (sql) => buckets.find(([, matches]) => matches(sql))?.[0] ?? null,
     );
-    try {
-      write(() => expect(append(rows)).toBe(1030));
-      expect(writes.counts).toEqual({
-        identities: 3,
-        payloads: 3,
-        active: 3,
-        identityReads: 1,
-        ftsIdentities: 3,
-        ftsContent: 3,
-        classificationReads: 0,
-      });
-    } finally {
-      writes.restore();
-    }
+    expect(withCounts(writes, () => write(() => expect(append(rows)).toBe(1030)))).toEqual({
+      identities: 3,
+      payloads: 3,
+      active: 3,
+      identityReads: 1,
+      ftsIdentities: 3,
+      ftsContent: 3,
+      classificationReads: 0,
+    });
     write(() => {
       expect(single(rows[512]!)).toBe(false);
       expect(append([rows[1029]!, message("tail", "row-1029", 2000)])).toBe(1);
@@ -172,8 +157,7 @@ it("batches bounded inserts while preserving order and subsequent identity rejec
     expect(identities()).toEqual(
       [...rows, { id: "tail" }].map((row, seq) => ({ event_id: row.id, seq })),
     );
-  });
-});
+  }));
 
 it.each(
   (["dedupe", "preserve-owner", "relocate-owner"] as const).flatMap((mode) =>
@@ -181,9 +165,8 @@ it.each(
   ),
 )(
   "preserves $mode key ownership within buffered rows and across flushes for $source",
-  async ({ mode, source }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { database, scope, events, write, append, single } = fixture();
+  ({ mode, source }) =>
+    withFixture(({ database, scope, events, write, append, single }) => {
       const seed = message("seed", null, 1);
       seed.message.idempotencyKey = "seeded";
       write(() => single(seed));
@@ -222,23 +205,17 @@ it.each(
             "SELECT event_id, message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND message_idempotency_key IN (?, ?) ORDER BY message_idempotency_key",
           )
           .all(scope.sessionId, "shared", "seeded"),
-      ).toEqual([
-        {
-          event_id: mode === "relocate-owner" ? "row-518" : "seed",
-          message_idempotency_key: "seeded",
-        },
-        {
-          event_id: mode === "relocate-owner" ? "row-519" : "row-0",
-          message_idempotency_key: "shared",
-        },
-      ]);
-    });
-  },
+      ).toEqual(
+        [
+          ["seeded", mode === "relocate-owner" ? "row-518" : "seed"],
+          ["shared", mode === "relocate-owner" ? "row-519" : "row-0"],
+        ].map(([message_idempotency_key, event_id]) => ({ event_id, message_idempotency_key })),
+      );
+    }),
 );
 
-it("rejects a scalar duplicate without an identity read or advancing transcript order", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { database, events, write, single, get, identities } = fixture();
+it("rejects a scalar duplicate without an identity read or advancing transcript order", () =>
+  withFixture(({ database, events, write, single, get, identities }) => {
     const first = { ...message("first", null, 1), message: { role: "user", content: "first" } };
     const next = { ...message("next", "first", 3), message: { role: "user", content: "next" } };
     const reads = trackSqliteStatementExecutions(database.db, ["identities"], (sql) =>
@@ -246,22 +223,21 @@ it("rejects a scalar duplicate without an identity read or advancing transcript 
         ? "identities"
         : null,
     );
-    try {
-      write(() => {
-        expect(single(first)).toBe(JSON.stringify(first));
-        expect(
-          single({
-            ...first,
-            timestamp: 2,
-            message: { role: "user", content: "rejected replacement" },
-          }),
-        ).toBe(false);
-        expect(single(next)).toBe(JSON.stringify(next));
-      });
-      expect(reads.counts).toEqual({ identities: 0 });
-    } finally {
-      reads.restore();
-    }
+    expect(
+      withCounts(reads, () =>
+        write(() => {
+          expect(single(first)).toBe(JSON.stringify(first));
+          expect(
+            single({
+              ...first,
+              timestamp: 2,
+              message: { role: "user", content: "rejected replacement" },
+            }),
+          ).toBe(false);
+          expect(single(next)).toBe(JSON.stringify(next));
+        }),
+      ),
+    ).toEqual({ identities: 0 });
     expect(events()).toEqual([first, next]);
     expect(identities()).toEqual([
       { event_id: "first", seq: 0 },
@@ -271,18 +247,11 @@ it("rejects a scalar duplicate without an identity read or advancing transcript 
       get(
         "SELECT active_event_count, active_message_count, indexed_seq, leaf_event_id FROM session_transcript_index_state WHERE session_id = ?",
       ),
-    ).toEqual({
-      active_event_count: 2,
-      active_message_count: 2,
-      indexed_seq: 1,
-      leaf_event_id: "next",
-    });
-  });
-});
+    ).toEqual(indexState(2, "next"));
+  }));
 
-it("settles batch recency and index once, including rejected attempts and a later rewrite", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { database, scope, events, write, get, append: appendBatch } = fixture();
+it("settles batch recency and index once, including rejected attempts and a later rewrite", () =>
+  withFixture(({ database, scope, events, write, get, append: appendBatch }) => {
     const append = (rows: ReturnType<typeof message>[]) =>
       appendBatch(rows, { idempotencyKeyMode: "dedupe" });
     const window = () =>
@@ -314,33 +283,26 @@ it("settles batch recency and index once, including rejected attempts and a late
           : null;
       },
     );
-    try {
-      write(() =>
-        expect(
-          append([
-            message("one", "root", 20),
-            message("two", "one", 30),
-            message("two", "one", 25),
-            {
-              ...message("rejected", "two", 40),
-              message: { role: "user", content: "retry", idempotencyKey: "one" },
-            },
-          ]),
-        ).toBe(2),
-      );
-      expect(writes.counts).toEqual({ window: 1, index: 1, reads: 2, ensures: 0 });
-    } finally {
-      writes.restore();
-    }
+    expect(
+      withCounts(writes, () =>
+        write(() =>
+          expect(
+            append([
+              message("one", "root", 20),
+              message("two", "one", 30),
+              message("two", "one", 25),
+              {
+                ...message("rejected", "two", 40),
+                message: { role: "user", content: "retry", idempotencyKey: "one" },
+              },
+            ]),
+          ).toBe(2),
+        ),
+      ),
+    ).toEqual({ window: 1, index: 1, reads: 2, ensures: 0 });
     expect(events().map((event) => event.id)).toEqual(["root", "one", "two"]);
     expect(window()).toEqual({ updated_at: 40, transcript_updated_at: 1001 });
-    expect(index()).toEqual({
-      active_event_count: 3,
-      active_message_count: 3,
-      indexed_seq: 2,
-      leaf_event_id: "two",
-      needs_rebuild: 0,
-    });
+    expect(index()).toEqual({ ...indexState(3, "two"), needs_rebuild: 0 });
     expect(generation()).toBe(originalGeneration);
     write(() => expect(append([message("two", "one", 50)])).toBe(0));
     expect(window()).toEqual({ updated_at: 50, transcript_updated_at: 1001 });
@@ -351,21 +313,13 @@ it("settles batch recency and index once, including rejected attempts and a late
     expect(rewrittenGeneration).not.toBe(originalGeneration);
     write(() => expect(append([message("after", "reset", 70)])).toBe(1));
     expect(generation()).toBe(rewrittenGeneration);
-    expect(index()).toEqual({
-      active_event_count: 2,
-      active_message_count: 2,
-      indexed_seq: 1,
-      leaf_event_id: "after",
-      needs_rebuild: 0,
-    });
-  });
-});
+    expect(index()).toEqual({ ...indexState(2, "after"), needs_rebuild: 0 });
+  }));
 
 it.each(["commit prefix", "rollback"] as const)(
   "settles a throwing iterator before %s",
-  async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { events, write, append: appendBatch, all, get } = fixture();
+  (outcome) =>
+    withFixture(({ events, write, append: appendBatch, all, get }) => {
       vi.spyOn(Date, "now").mockReturnValue(1000);
       write(() => appendBatch([message("root", null, 10)]));
       const feedback: boolean[] = [];
@@ -405,6 +359,5 @@ it.each(["commit prefix", "rollback"] as const)(
         leaf_event_id: retained ? "two" : "root",
         active_message_count: retained ? 3 : 1,
       });
-    });
-  },
+    }),
 );

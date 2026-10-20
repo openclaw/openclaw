@@ -131,28 +131,22 @@ it.each(["archived_at", "last_interaction_at"] as const)(
   "refuses a stale %s projection instead of changing the owner's classification",
   (column) => {
     const { update, read } = ownerFixture("active-owner", { lastInteractionAt: 200 });
-    // These projection-only writes do not invalidate canonical entry certification.
     update(column, 1);
     expect(read).toThrow("requires repair");
   },
 );
 
-it("refuses a stale updatedAt projection on an otherwise valid row", () => {
-  const { update, read, write } = ownerFixture("updated-owner");
+it.each([
+  ["updated-owner", "updated_at", 1],
+  [
+    "duplicate-custody",
+    "entry_json",
+    '{"sessionId":"duplicate-custody","updatedAt":100,"lifecycleRevision":"old","lifecycleRevision":"current"}',
+  ],
+] as const)("refuses corrupt %s state even when certified", (sessionId, column, value) => {
+  const { update, read, write } = ownerFixture(sessionId);
   write(() => {
-    update("updated_at", 1);
-    update("entry_valid", 1);
-  });
-  expect(read).toThrow("requires repair");
-});
-
-it("refuses duplicate custody members admitted by the logical JSON reader", () => {
-  const { update, read, write } = ownerFixture("duplicate-custody");
-  write(() => {
-    update(
-      "entry_json",
-      '{"sessionId":"duplicate-custody","updatedAt":100,"lifecycleRevision":"old","lifecycleRevision":"current"}',
-    );
+    update(column, value);
     update("entry_valid", 1);
   });
   expect(read).toThrow("requires repair");

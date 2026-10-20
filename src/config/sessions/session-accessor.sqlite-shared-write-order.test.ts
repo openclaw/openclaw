@@ -51,17 +51,11 @@ function pauseDiscovery(
 
 it.each([false, true])(
   "retains shared-store patch order while discovering the physical owner (source guard=%s)",
-  async (sourceGuard) => {
-    await withOpenClawTestState(
+  (sourceGuard) =>
+    withOpenClawTestState(
       { label: "session-shared-write-order", scenario: "minimal" },
       async (state) => {
         const { storePath, scope } = sharedStore(state, "fifo", "shared");
-        const pending: Promise<unknown>[] = [];
-        const own = <T>(promise: Promise<T>): Promise<T> => {
-          pending.push(promise);
-          void promise.catch(() => {});
-          return promise;
-        };
         const firstEntered = createDeferred();
         const releaseFirst = createDeferred();
         const secondQueued = createDeferred();
@@ -79,20 +73,20 @@ it.each([false, true])(
           });
         const order: string[] = [];
         const patch = (label: string) =>
-          own(
-            patchSessionEntryCore(
-              scope,
-              () => {
-                order.push(label);
-                return { label };
-              },
-              {
-                skipMaintenance: true,
-                ...(sourceGuard ? { workerGuard: { source: () => {} } } : {}),
-              },
-            ),
+          patchSessionEntryCore(
+            scope,
+            () => {
+              order.push(label);
+              return { label };
+            },
+            {
+              skipMaintenance: true,
+              ...(sourceGuard ? { workerGuard: { source: () => {} } } : {}),
+            },
           );
         const first = patch("first");
+        void first.catch(() => {});
+        let second: ReturnType<typeof patch> | undefined;
         try {
           await awaitGateBeforeSettlement(
             firstEntered.promise,
@@ -100,7 +94,8 @@ it.each([false, true])(
             "First patch settled before physical-owner discovery",
           );
           watchSecond = true;
-          const second = patch("second");
+          second = patch("second");
+          void second.catch(() => {});
           await awaitGateBeforeSettlement(
             secondQueued.promise,
             second,
@@ -112,17 +107,16 @@ it.each([false, true])(
           expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "shared", label: "second" });
         } finally {
           releaseFirst.resolve();
-          await Promise.allSettled(pending);
+          await Promise.allSettled([first, second]);
           observation.mockRestore();
           queued.mockRestore();
         }
       },
-    );
-  },
+    ),
 );
 
-it("completes a shared-store patch inside its existing foreground writer", async () => {
-  await withOpenClawTestState(
+it("completes a shared-store patch inside its existing foreground writer", () =>
+  withOpenClawTestState(
     { label: "session-shared-write-reentry", scenario: "minimal" },
     async (state) => {
       const { storePath, database, scope } = sharedStore(state, "nested", "nested");
@@ -173,11 +167,10 @@ it("completes a shared-store patch inside its existing foreground writer", async
         queued.mockRestore();
       }
     },
-  );
-});
+  ));
 
-it("rejects a shared-store replacement during discovery before invoking the updater", async () => {
-  await withOpenClawTestState(
+it("rejects a shared-store replacement during discovery before invoking the updater", () =>
+  withOpenClawTestState(
     { label: "session-shared-write-replacement", scenario: "minimal" },
     async (state) => {
       const { storePath, scope } = sharedStore(state, "replaced", "original");
@@ -208,5 +201,4 @@ it("rejects a shared-store replacement during discovery before invoking the upda
         observation.mockRestore();
       }
     },
-  );
-});
+  ));
