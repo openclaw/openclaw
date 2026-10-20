@@ -155,7 +155,12 @@ describe("actor transcript anchor projection", () => {
         hot,
         null,
       ),
-    ).toThrow(SessionTranscriptReadFenceError);
+    ).toThrow(
+      expect.objectContaining({
+        name: "SessionTranscriptReadFenceError",
+        message: "Completed-turn transcript anchor changed (generation)",
+      }),
+    );
     expect(() =>
       read(
         {
