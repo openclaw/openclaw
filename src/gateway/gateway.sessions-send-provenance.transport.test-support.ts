@@ -69,8 +69,6 @@ export async function writeSinkPlugin(workspace: string, sinkUrl: string) {
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-            isEnabled: () => true,
-            isConfigured: () => true,
           },
           actions: {
             describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),

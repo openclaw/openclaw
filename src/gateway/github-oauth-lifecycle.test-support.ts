@@ -33,12 +33,11 @@ export function configForScope(
   scope: GitHubIdentityScope,
   selected?: GitHubToolIdentityConfig,
 ): OpenClawConfig {
-  return scope === "system"
-    ? { tools: selected ? { github: selected } : {}, agents: { entries: { main: {} } } }
-    : {
-        tools: { github: identity(OTHER_PROFILE) },
-        agents: { entries: { main: { tools: selected ? { github: selected } : {} } } },
-      };
+  const tools = selected ? { github: selected } : {};
+  return {
+    tools: scope === "system" ? tools : { github: identity(OTHER_PROFILE) },
+    agents: { entries: { main: scope === "system" ? {} : { tools } } },
+  };
 }
 
 export function configWithSelectedIdentity(
