@@ -13,14 +13,13 @@ const { getSessionEntryPatchDelivery } =
   await import("../config/sessions/session-entry-patch-delivery.test-support.js");
 const delivery = getSessionEntryPatchDelivery();
 const changed = "Session entry changed before the conditional patch committed";
-const withFixture = (
-  run: (fixture: ReturnType<typeof createSessionCompoundWorkerFixture>) => Promise<void>,
-) =>
+type Fixture = ReturnType<typeof createSessionCompoundWorkerFixture>;
+const withFixture = (run: (fixture: Fixture) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, async () =>
     run(createSessionCompoundWorkerFixture()),
   );
 const preparePatch = (
-  fixture: ReturnType<typeof createSessionCompoundWorkerFixture>,
+  fixture: Fixture,
   prepare: Parameters<typeof prepareSessionEntryPatch>[0]["prepare"],
   authority?: Parameters<typeof prepareSessionEntryPatch>[0]["authority"],
 ) => prepareSessionEntryPatch({ ...fixture.scope, prepare, authority, skipMaintenance: true });
@@ -69,28 +68,15 @@ it("commits a public conditional patch in the worker and rejects a replaced gene
     });
     expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
 
-    const absentScope = { ...fixture.scope, sessionKey: "agent:main:missing" };
     const fallbackEntry = { sessionId: "missing-session", updatedAt: 1 };
+    const missingPatch = (label: string, expected: { sessionId: string } | null) =>
+      patch(label, { sessionKey: "agent:main:missing", fallbackEntry, expected });
     await expect(
-      patch("must remain absent", {
-        ...absentScope,
-        expected: { sessionId: fallbackEntry.sessionId },
-        fallbackEntry,
-      }),
+      missingPatch("must remain absent", { sessionId: fallbackEntry.sessionId }),
     ).rejects.toThrow(changed);
-    const created = await patch("create once", {
-      ...absentScope,
-      expected: null,
-      fallbackEntry,
-    });
+    const created = await missingPatch("create once", null);
     expect(created).toMatchObject({ sessionId: fallbackEntry.sessionId, label: "create once" });
-    await expect(
-      patch("must not overwrite", {
-        ...absentScope,
-        expected: null,
-        fallbackEntry,
-      }),
-    ).rejects.toThrow(changed);
+    await expect(missingPatch("must not overwrite", null)).rejects.toThrow(changed);
 
     const beforeCommit = vi.fn(() => {
       delivery.beforeCommit = undefined;
@@ -104,51 +90,47 @@ it("commits a public conditional patch in the worker and rejects a replaced gene
   });
 });
 
-it("prepares once outside the transaction and rejects a changed snapshot without replay", async () => {
-  await withFixture(async (fixture) => {
-    const original = fixture.read()!;
-    const prepare = vi.fn(async () => ({ label: "must not persist" }));
-    const beforeCommit = vi.fn(() => {
-      delivery.beforeCommit = undefined;
-      replaceSessionEntrySync(fixture.scope, { ...original, label: "concurrent write" });
+it.each(["snapshot", "authority"] as const)(
+  "rejects a changed %s without replaying preparation",
+  async (change) => {
+    await withFixture(async (fixture) => {
+      const original = fixture.read()!;
+      const prepare = vi.fn(async () => ({ label: "must not persist" }));
+      let current = true;
+      const beforeCommit = vi.fn(() => {
+        delivery.beforeCommit = undefined;
+        if (change === "snapshot") {
+          replaceSessionEntrySync(fixture.scope, { ...original, label: "concurrent write" });
+        } else {
+          current = false;
+        }
+      });
+      delivery.beforeCommit = beforeCommit;
+      const authority =
+        change === "authority"
+          ? {
+              kind: "host" as const,
+              assertCurrent() {
+                if (!current) {
+                  throw new Error("Session operation revoked");
+                }
+              },
+            }
+          : undefined;
+      await expect(preparePatch(fixture, prepare, authority)).rejects.toThrow(
+        change === "snapshot" ? /changed/ : "Session operation revoked",
+      );
+      expect(beforeCommit).toHaveBeenCalledOnce();
+      expect(delivery.commands).toEqual([
+        "session.entry.patch.prepare",
+        "session.entry.patch.commit",
+      ]);
+      expect(prepare).toHaveBeenCalledOnce();
+      if (change === "snapshot") {
+        expect(fixture.read()?.label).toBe("concurrent write");
+      } else {
+        expect(fixture.read()).toEqual(original);
+      }
     });
-    delivery.beforeCommit = beforeCommit;
-    await expect(preparePatch(fixture, prepare)).rejects.toThrow(/changed/);
-    expect(beforeCommit).toHaveBeenCalledOnce();
-    expect(delivery.commands).toEqual([
-      "session.entry.patch.prepare",
-      "session.entry.patch.commit",
-    ]);
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(fixture.read()?.label).toBe("concurrent write");
-  });
-});
-
-it("rechecks host authority at worker admission after preparation", async () => {
-  await withFixture(async (fixture) => {
-    const original = fixture.read()!;
-    let current = true;
-    const prepare = vi.fn(async () => ({ label: "must not persist" }));
-    const beforeCommit = vi.fn(() => {
-      current = false;
-    });
-    delivery.beforeCommit = beforeCommit;
-    await expect(
-      preparePatch(fixture, prepare, {
-        kind: "host",
-        assertCurrent() {
-          if (!current) {
-            throw new Error("Session operation revoked");
-          }
-        },
-      }),
-    ).rejects.toThrow("Session operation revoked");
-    expect(beforeCommit).toHaveBeenCalledOnce();
-    expect(delivery.commands).toEqual([
-      "session.entry.patch.prepare",
-      "session.entry.patch.commit",
-    ]);
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(fixture.read()).toEqual(original);
-  });
-});
+  },
+);

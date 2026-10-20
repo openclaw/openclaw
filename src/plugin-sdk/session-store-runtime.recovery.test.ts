@@ -68,23 +68,13 @@ describe("session-store-runtime recovery boundary", () => {
     expect(getSessionEntry(scope)).not.toHaveProperty("pendingProjectGitUrl");
     expect(listSessionEntries(scope)[0]?.entry).not.toHaveProperty("pendingProjectGitUrl");
 
-    await patchSessionEntry({
-      ...scope,
-      update: () => ({ model: "gpt-5.5" }),
-    });
-    expect(read()).toMatchObject({
-      model: "gpt-5.5",
-      pendingProjectGitUrl,
-    });
-
-    await updateSessionStoreEntry({
-      ...scope,
-      update: () => ({ model: "gpt-5.6" }),
-    });
-    expect(read()).toMatchObject({
-      model: "gpt-5.6",
-      pendingProjectGitUrl,
-    });
+    for (const [mutate, model] of [
+      [patchSessionEntry, "gpt-5.5"],
+      [updateSessionStoreEntry, "gpt-5.6"],
+    ] as const) {
+      await mutate({ ...scope, update: () => ({ model }) });
+      expect(read()).toMatchObject({ model, pendingProjectGitUrl });
+    }
 
     await upsertSessionEntry({
       entry: { sessionId: "project-session", updatedAt: 20 },

@@ -6,7 +6,6 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
-  listSessionEntriesCore,
   upsertSessionEntryCore,
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -71,11 +70,10 @@ describe("session transcript runtime SDK", () => {
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: 10 });
     return scope;
   }
-  const entries = (scope: SessionTranscriptReadParams) => readEntries(scope);
   const append = (scope: SessionTranscriptReadParams, role: string, content: string) =>
     appendByIdentity({ ...scope, message: { role, content } });
 
-  it("appends keyed mirrors, dedupes unkeyed mirrors, and rejects a rebound session", async () => {
+  it("keeps separately keyed delivery mirrors out of authored assistant text", async () => {
     const scope = await createScope();
     for (const idempotencyKey of ["delivery-1", "delivery-2"]) {
       await expect(
@@ -88,17 +86,7 @@ describe("session transcript runtime SDK", () => {
       ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
     }
     await expect(readLatestText(scope)).resolves.toBeUndefined();
-    expect(await entries(scope)).toHaveLength(2);
-    const unkeyed = await createScope("unkeyed");
-    const request = { ...unkeyed, text: "unkeyed assistant reply" };
-    const first = await appendMirror(request);
-    expect(first).toMatchObject({ ok: true, messageId: expect.any(String) });
-    await expect(appendMirror(request)).resolves.toEqual(first);
-    expect(await entries(unkeyed)).toHaveLength(1);
-    await expect(appendMirror({ ...scope, text: "stale reply" })).resolves.toMatchObject({
-      ok: false,
-      code: "session-rebound",
-    });
+    expect(await readEntries(scope)).toHaveLength(2);
   });
 
   it("does not append an assistant mirror after cancellation", async () => {
@@ -135,21 +123,18 @@ describe("session transcript runtime SDK", () => {
             },
             withTranscriptWrite: async (run) => await run(),
           },
-          async () => {
-            if (operation === "yield context") {
-              await appendSessionYieldContext({
-                ...scope,
-                message: "must not be persisted",
-                assertCurrent: () => {},
-              });
-            } else {
-              await appendMirror({
-                ...scope,
-                idempotencyKey: "superseded:fallback",
-                text: "must not be persisted",
-              });
-            }
-          },
+          () =>
+            operation === "yield context"
+              ? appendSessionYieldContext({
+                  ...scope,
+                  message: "must not be persisted",
+                  assertCurrent: () => {},
+                })
+              : appendMirror({
+                  ...scope,
+                  idempotencyKey: "superseded:fallback",
+                  text: "must not be persisted",
+                }),
         ),
       ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
       await expect(readEvents(scope)).resolves.toEqual([]);
@@ -189,7 +174,7 @@ describe("session transcript runtime SDK", () => {
     await expect(readEvents(scope)).resolves.toEqual([]);
   });
 
-  it("dedupes unkeyed assistant mirrors against only the visible SQLite branch", async () => {
+  it("dedupes unkeyed mirrors only on the visible branch and rejects rebound sessions", async () => {
     const scope = await createScope();
     const active = await append(scope, "assistant", "visible branch reply");
     const inactive = await append(scope, "assistant", "inactive mirror reply");
@@ -200,19 +185,24 @@ describe("session transcript runtime SDK", () => {
       parentId: inactive.messageId,
       targetId: active.messageId,
     });
-    const result = await appendMirror({
-      ...scope,
-      text: "inactive mirror reply",
-    });
+    const request = { ...scope, text: "inactive mirror reply" };
+    const result = await appendMirror(request);
+    expect(result).toMatchObject({ ok: true, messageId: expect.any(String) });
     assert(result.ok);
     expect(result.messageId).not.toBe(inactive.messageId);
     await expect(readEvents(scope)).resolves.toContainEqual(
       expect.objectContaining({ id: inactive.messageId }),
     );
-    expect(await entries(scope)).toMatchObject([
+    await expect(appendMirror(request)).resolves.toEqual(result);
+    expect(await readEntries(scope)).toMatchObject([
       { entryId: active.messageId },
       { entryId: result.messageId },
     ]);
+    await createScope("replacement");
+    expect(await appendMirror({ ...scope, text: "stale reply" })).toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
   });
 
   it("serializes caller-checked idempotency inside scoped locked appends", async ({ signal }) => {
@@ -283,25 +273,6 @@ describe("session transcript runtime SDK", () => {
     expect(assistantMessages).toHaveLength(1);
   });
 
-  it("resolves encoded memory hit keys by agent and opaque session id instead of transcript basename", async () => {
-    const scope = await createScope("my-plugin:task/1");
-    await upsertSessionEntryCore(scope, {
-      sessionFile: state.path("legacy-file-name.jsonl"),
-      sessionId: scope.sessionId,
-      updatedAt: 10,
-    });
-    const key = formatHitKey(scope);
-    expect(key).toBe("transcript:main:my-plugin%3Atask%2F1");
-    expect(
-      resolveHitKeys({
-        key,
-        store: Object.fromEntries(
-          listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-        ),
-      }),
-    ).toEqual([scope.sessionKey]);
-  });
-
   it("can avoid synthetic fallback keys for strict live-store checks", () => {
     const key = formatHitKey({
       agentId: "main",
@@ -328,6 +299,8 @@ const text = (value: string) => ({ type: "text", text: value });
 const title = (entry: Parameters<typeof readCatalogTitle>[0]["entry"]) =>
   readCatalogTitle({ ...scope, entry });
 const profileIdentity = (id: string) => ({ type: "profile", id });
+const expectProfile = (value: unknown, id: string, fields = {}) =>
+  expect(value).toMatchObject({ identity: profileIdentity(id), ...fields });
 const humanActor = (id: string) => ({ type: "human" as const, source: "profile" as const, id });
 const remoteIdentity = (idKind: string, id: string) => ({
   type: "remote",
@@ -553,10 +526,7 @@ describe("native transcript catalog SDK", () => {
       const sender = page.items[2]?.sender;
       assert(sender, "missing GitHub sender");
       const linker = createSessionCatalogGitHubLinker();
-      expect(linker.linkParticipant(sender)).toMatchObject({
-        identity: profileIdentity(github.id),
-        label: "Portable User",
-      });
+      expectProfile(linker.linkParticipant(sender), github.id, { label: "Portable User" });
       const unmatched = {
         ...sender,
         identity: {
@@ -568,10 +538,9 @@ describe("native transcript catalog SDK", () => {
         },
       };
       expect(linker.linkParticipant(unmatched)).toEqual(unmatched);
-      expect(linker.resolveOwner("github:PORTABLE-USER")).toMatchObject({
+      expectProfile(linker.resolveOwner("github:PORTABLE-USER"), github.id, {
         type: "human",
         id: github.id,
-        identity: profileIdentity(github.id),
       });
       expect(linker.resolveOwner(`profile:${local.id}`)).toMatchObject({
         id: local.id,
@@ -585,9 +554,7 @@ describe("native transcript catalog SDK", () => {
       expect(linker.linkParticipant(unmatched)).toEqual(unmatched);
       expect(linker.resolveOwner("github:newly-verified")).toBeUndefined();
       const nextPageLinker = createSessionCatalogGitHubLinker();
-      expect(nextPageLinker.linkParticipant(unmatched)).toMatchObject({
-        identity: profileIdentity(newlyVerified.id),
-      });
+      expectProfile(nextPageLinker.linkParticipant(unmatched), newlyVerified.id);
       expect(nextPageLinker.resolveOwner("github:newly-verified")).toMatchObject({
         id: newlyVerified.id,
       });

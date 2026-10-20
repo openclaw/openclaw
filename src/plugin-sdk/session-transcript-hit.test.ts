@@ -11,6 +11,11 @@ import {
   resolveTranscriptStemToSessionKeys as resolveStemKeys,
 } from "./session-transcript-hit.js";
 
+const entry = (sessionId = "stem-a", overrides: Partial<SessionEntry> = {}): SessionEntry => ({
+  sessionId,
+  updatedAt: 1,
+  ...overrides,
+});
 const { loadGatewaySessionStore, loadGatewaySessionStoreAsync } = vi.hoisted(() => ({
   loadGatewaySessionStore: vi.fn(),
   loadGatewaySessionStoreAsync: vi.fn(),
@@ -30,35 +35,29 @@ it.each([
 ] as const)(
   "filters incognito rows from the %s plugin cross-session view",
   async (_label, load) => {
+    const visible = entry("visible");
     const snapshot = {
       storePath: "(multiple)",
       store: {
-        "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
-        "agent:main:dashboard:incognito-private": {
+        "agent:main:dashboard:visible": visible,
+        "agent:main:dashboard:incognito-private": entry("private", {
           incognito: true,
-          sessionId: "private",
           updatedAt: 2,
-        },
+        }),
       },
     };
     loadGatewaySessionStore.mockReturnValue(snapshot);
     loadGatewaySessionStoreAsync.mockResolvedValue(snapshot);
 
-    expect((await load({})).store).toEqual({
-      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
-    });
+    expect((await load({})).store).toEqual({ "agent:main:dashboard:visible": visible });
   },
 );
 
 it("extracts builtin live and archived transcript identities", () => {
   expect(extractStem("sessions/abc-uuid.jsonl")).toBe("abc-uuid");
-  expect(
-    extractIdentity("sessions/main/deleted-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z"),
-  ).toEqual({
-    stem: "deleted-uuid",
-    ownerAgentId: "main",
-    archived: true,
-  });
+  const archived = "sessions/main/deleted-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z";
+  const expected = { stem: "deleted-uuid", ownerAgentId: "main", archived: true };
+  expect(extractIdentity(archived)).toEqual(expected);
 });
 
 it("rejects paths outside the builtin transcript format", () => {
@@ -66,17 +65,11 @@ it("rejects paths outside the builtin transcript format", () => {
   expect(extractStem("sessions/weird.jsonl.backup.2026-01-01.zst")).toBeNull();
 });
 
-const baseEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
-  sessionId: "stem-a",
-  updatedAt: 1,
-  ...overrides,
-});
-
 it("returns every non-incognito key with an exact session identity", () => {
   const store: Record<string, SessionEntry> = {
-    "agent:main:s1": baseEntry(),
-    "agent:peer:s2": baseEntry(),
-    "agent:main:dashboard:incognito-private": baseEntry({ incognito: true }),
+    "agent:main:s1": entry(),
+    "agent:peer:s2": entry(),
+    "agent:main:dashboard:incognito-private": entry("stem-a", { incognito: true }),
   };
 
   expect(resolveStemKeys({ store, stem: "stem-a" }).toSorted()).toEqual([
@@ -86,32 +79,23 @@ it("returns every non-incognito key with an exact session identity", () => {
 });
 
 it("falls back to archived owner metadata after the live row is removed", () => {
-  expect(
-    resolveStemKeys({
-      store: {},
-      stem: "deleted-stem",
-      archivedOwnerAgentId: "main",
-    }),
-  ).toEqual(["agent:main:deleted-stem"]);
+  const keys = resolveStemKeys({ store: {}, stem: "deleted-stem", archivedOwnerAgentId: "main" });
+  expect(keys).toEqual(["agent:main:deleted-stem"]);
 });
 
-it("exports storage-neutral memory hit key helpers from the legacy hit subpath", () => {
-  const key = formatKey({
-    agentId: "main",
-    sessionId: "session:legacy",
-  });
+it.each([
+  ["session:legacy", "session%3Alegacy"],
+  ["my-plugin:task/1", "my-plugin%3Atask%2F1"],
+])("resolves encoded identity %s independently of transcript filenames", (sessionId, encoded) => {
+  const key = formatKey({ agentId: "main", sessionId });
   const store: Record<string, SessionEntry> = {
-    "agent:main:discord:direct:42": {
+    "agent:main:discord:direct:42": entry(sessionId, {
       sessionFile: "/tmp/not-the-identity.jsonl",
-      sessionId: "session:legacy",
       updatedAt: 10,
-    },
+    }),
   };
 
-  expect(key).toBe("transcript:main:session%3Alegacy");
-  expect(parseKey(key)).toMatchObject({
-    agentId: "main",
-    sessionId: "session:legacy",
-  });
+  expect(key).toBe(`transcript:main:${encoded}`);
+  expect(parseKey(key)).toMatchObject({ agentId: "main", sessionId });
   expect(resolveHitKeys({ key, store })).toEqual(["agent:main:discord:direct:42"]);
 });

@@ -28,24 +28,25 @@ it.each([
         },
       };
       await loadPinnedRuntimeConfigAsync(async () => ({ config: cfg }));
-      const skillsSnapshot = {
-        prompt: "Saved plugin skill instructions",
-        skills: [{ name: "plugin-fixture" }],
+      const fields = {
+        skillsSnapshot: {
+          prompt: "Saved plugin skill instructions",
+          skills: [{ name: "plugin-fixture" }],
+        },
+        systemPromptReport: {
+          source: "run",
+          generatedAt: 7,
+          systemPrompt: { chars: 83, projectContextChars: 31, nonProjectContextChars: 52 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 30, entries: [{ name: "plugin-fixture", blockChars: 30 }] },
+          tools: { listChars: 11, schemaChars: 19, entries: [] },
+        } satisfies NonNullable<SessionEntry["systemPromptReport"]>,
       };
       const updatedAt = Date.now();
-      const systemPromptReport: NonNullable<SessionEntry["systemPromptReport"]> = {
-        source: "run",
-        generatedAt: 7,
-        systemPrompt: { chars: 83, projectContextChars: 31, nonProjectContextChars: 52 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 30, entries: [{ name: "plugin-fixture", blockChars: 30 }] },
-        tools: { listChars: 11, schemaChars: 19, entries: [] },
-      };
       const entry = (sessionId: string, time = updatedAt) => ({
+        ...fields,
         sessionId,
         updatedAt: time,
-        skillsSnapshot,
-        systemPromptReport,
       });
       for (const agentId of ["main", "research", "retired"]) {
         await replaceSessionEntry(
@@ -63,10 +64,7 @@ it.each([
           incognito: true,
           skillsSnapshot: { prompt: "Private plugin instructions", skills: [] },
         });
-        expect(incognitoEntry).toMatchObject({
-          sessionId: "private-session",
-          incognito: true,
-        });
+        expect(incognitoEntry).toMatchObject({ sessionId: "private-session", incognito: true });
 
         // Drain fixture writes and their maintenance before observing the read itself.
         await closeOpenClawAgentDatabasesAsync();
@@ -93,8 +91,7 @@ it.each([
 
         expect(Object.keys(store).toSorted()).toEqual(expectedKeys);
         for (const storedEntry of Object.values(store)) {
-          expect.soft(storedEntry.skillsSnapshot).toEqual(skillsSnapshot);
-          expect.soft(storedEntry.systemPromptReport).toEqual(systemPromptReport);
+          expect.soft(storedEntry).toEqual(expect.objectContaining(fields));
         }
         const changedKey = expectedKeys[0]!;
         await replaceSessionEntry(

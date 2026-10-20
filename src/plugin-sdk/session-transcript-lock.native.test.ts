@@ -21,6 +21,10 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withSessionTranscriptWriteLock } from "./session-transcript-runtime.js";
 
+const message = (content: string) => ({ role: "assistant", content });
+const fail = async (error: Error): Promise<never> => {
+  throw error;
+};
 async function seed(env: NodeJS.ProcessEnv) {
   await captureRuntimeConfigAsyncReader()();
   const scope = { agentId: "main", sessionId: "locked", sessionKey: "agent:main:locked", env };
@@ -43,21 +47,19 @@ it("drains accepted operations after callback failure and seals the native conte
       retained = locked;
       accepted.push(
         locked.appendMessage({
-          message: { role: "assistant", content: "rejected" },
+          message: message("rejected"),
           prepareMessageAfterIdempotencyCheckAsync: async () => {
             entered.resolve();
             await release.promise;
-            throw preparationFailure;
+            return fail(preparationFailure);
           },
         }),
-      );
-      accepted.push(
         locked.appendMessageWithMessageSequence({
           eventId: "accepted",
-          message: { role: "assistant", content: "settled" },
+          message: message("settled"),
         }),
+        locked.readEvents(),
       );
-      accepted.push(locked.readEvents());
       throw callbackFailure;
     });
     const outcome = writing.catch((error: unknown) => error);
@@ -69,21 +71,18 @@ it("drains accepted operations after callback failure and seals the native conte
       assert(retained);
       await expect(retained.replaceEvents([])).rejects.toThrow("context is closed");
       release.resolve();
-      const failure = await withinTest(outcome, signal);
-      expect(failure).toBe(callbackFailure);
+      expect(await withinTest(outcome, signal)).toBe(callbackFailure);
       await expect(accepted[0]).rejects.toBe(preparationFailure);
       await expect(accepted[1]).resolves.toMatchObject({ result: { messageId: "accepted" } });
-      await expect(accepted[2]).resolves.toEqual(
+      expect(await accepted[2]).toEqual(
         expect.arrayContaining([expect.objectContaining({ id: "accepted" })]),
       );
       await expect(
         withTranscriptWriteLock(scope, async (locked) => {
           await expect(
             locked.appendMessage({
-              message: { role: "assistant", content: "handled refusal" },
-              prepareMessageAfterIdempotencyCheckAsync: async () => {
-                throw preparationFailure;
-              },
+              message: message("handled refusal"),
+              prepareMessageAfterIdempotencyCheckAsync: () => fail(preparationFailure),
             }),
           ).rejects.toBe(preparationFailure);
           return "recovered";
@@ -100,17 +99,14 @@ it("skips async preparation on replay and rejects a stale fresh preparation", as
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const scope = await seed(env);
     const database = openOpenClawAgentDatabase(scope);
-    const original: {
-      role: string;
-      content: string;
+    const original: ReturnType<typeof message> & {
       idempotencyKey: string;
       custom?: { toJSON(): never };
     } = {
-      role: "assistant",
-      content: "original",
+      ...message("original"),
       idempotencyKey: "original",
       custom: {
-        toJSON() {
+        toJSON: () => {
           throw new Error("Discarded input must not be serialized");
         },
       },
@@ -120,14 +116,12 @@ it("skips async preparation on replay and rejects a stale fresh preparation", as
     await append({
       eventId: "original",
       message: original,
-      prepareMessageAfterIdempotencyCheck: ({ custom: _custom, ...message }) => {
+      prepareMessageAfterIdempotencyCheck: ({ custom: _custom, ...prepared }) => {
         expect(database.db.isTransaction).toBe(true);
-        return message;
+        return prepared;
       },
     });
-    const prepare = vi.fn(async () => {
-      throw new Error("Replay must not prepare");
-    });
+    const prepare = vi.fn(() => fail(new Error("Replay must not prepare")));
     await expect(
       append({ message: original, prepareMessageAfterIdempotencyCheckAsync: prepare }),
     ).resolves.toMatchObject({ appended: false, messageId: "original" });
@@ -142,16 +136,16 @@ it("skips async preparation on replay and rejects a stale fresh preparation", as
     await expect(
       append({
         eventId: "stale",
-        message: { role: "assistant", content: "stale" },
-        prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+        message: message("stale"),
+        prepareMessageAfterIdempotencyCheckAsync: async (prepared) => {
           expect(database.db.isTransaction).toBe(false);
           expect(
             appendTranscriptMessageSync(scope, {
               eventId: "concurrent",
-              message: { role: "assistant", content: "concurrent" },
+              message: message("concurrent"),
             }).ok,
           ).toBe(true);
-          return message;
+          return prepared;
         },
       }),
     ).rejects.toThrow("SQLite transcript changed while preparing rewrite");
