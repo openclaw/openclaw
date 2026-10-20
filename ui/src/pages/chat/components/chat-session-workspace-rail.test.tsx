@@ -8,7 +8,6 @@ import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-worksp
 import {
   createSessionWorkspaceProps,
   type SessionWorkspaceHost,
-  type SessionWorkspaceProps,
 } from "./chat-session-workspace.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-content-types.ts";
 

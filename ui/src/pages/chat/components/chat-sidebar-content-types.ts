@@ -15,12 +15,19 @@ import type {
   ImageRenderOptions,
   ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
-import type { SessionWorkspaceProps } from "./chat-session-workspace.ts";
+import type { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
   SessionDiffFileTextLoader,
   SessionDiffLoader,
   SessionDiffOwner,
 } from "./session-diff-panel.tsx";
+
+type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
+export type SessionWorkspaceProps = Omit<
+  SessionWorkspaceView,
+  "connectionEpoch" | "onDownloadFile" | "onOpenDiff"
+> &
+  Partial<Pick<SessionWorkspaceView, "connectionEpoch" | "onDownloadFile" | "onOpenDiff">>;
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
