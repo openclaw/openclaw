@@ -21,6 +21,10 @@ import {
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionsSendReplyTarget } from "./sessions-delivery-target.js";
+import {
+  recoverSessionsSendReply,
+  SESSIONS_SEND_TRUNCATION_NOTE,
+} from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
@@ -103,6 +107,15 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
+    const recover = () =>
+      recoverSessionsSendReply({
+        runId: params.runId,
+        replyText: reply,
+        sessionKey: params.targetSessionKey,
+        agentId: params.targetAgentId,
+        callGateway: gatewayCall,
+      });
+
     // Self-sends deliver the original output under its captured session generation.
     const requesterAgentId =
       params.requesterAgentId ?? parseAgentSessionKey(params.requesterSessionKey)?.agentId;
@@ -155,7 +168,12 @@ export async function runSessionsSendA2AFlow(params: {
         }
         // Gateway sends need the selected owner for text routing and media roots;
         // carry the admitted target instead of relying on an implicit default.
-        const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(reply.trim());
+        const recovered = await recover();
+        const {
+          text: message,
+          mediaUrls,
+          audioAsVoice,
+        } = splitMediaFromOutput((recovered.replyText ?? reply).trim());
         if (!message && !mediaUrls?.length) {
           return;
         }
@@ -191,11 +209,12 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     if (params.requesterSessionKey) {
+      const recovered = await recover();
       await deliverRequesterReply({
         ...requesterStepContext,
         sessionKey: params.requesterSessionKey,
-        message: reply,
-        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.`,
+        message: recovered.replyText ?? reply,
+        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.${recovered.replyTruncated ? ` ${SESSIONS_SEND_TRUNCATION_NOTE}` : ""}`,
         sourceAgentId: params.targetAgentId,
       });
     }

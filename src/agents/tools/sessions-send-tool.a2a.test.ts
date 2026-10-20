@@ -103,6 +103,76 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    { available: true, self: false, throws: false },
+    { available: false, self: false, throws: false },
+    { available: false, self: false, throws: true },
+    { available: true, self: true, throws: false },
+    { available: false, self: true, throws: false },
+  ])(
+    "delivers long delayed replies with recovery $available, self=$self, throws=$throws",
+    async ({ available, self, throws }) => {
+      const full = "a".repeat(5_000) + "DELAYED_REPLY_TAIL";
+      const preview = "a".repeat(4_095) + "…";
+      const transport = callGatewayMock.getMockImplementation()!;
+      callGatewayMock.mockImplementation(async (opts: CallGatewayOptions) => {
+        if (opts.method === "chat.history") {
+          if (throws) {
+            throw new Error("History unavailable");
+          }
+          return {
+            messages: [
+              ...(available
+                ? [
+                    {
+                      role: "assistant",
+                      __openclaw: { runId: "run-delayed" },
+                      content: [{ type: "text", text: full }],
+                    },
+                  ]
+                : []),
+              {
+                role: "assistant",
+                __openclaw: { runId: "other-run" },
+                content: [{ type: "text", text: "Unrelated answer" }],
+              },
+            ],
+          };
+        }
+        return transport(opts);
+      });
+      const target = "agent:main:discord:channel:target-room";
+      await runSessionsSendA2AFlow({
+        callGateway: callGatewayMock,
+        runId: "run-delayed",
+        targetAgentId: "main",
+        targetSessionKey: target,
+        displayKey: target,
+        requesterSessionKey: self ? target : "agent:main:main",
+        requesterDeliveryGeneration,
+        replyTimeoutMs: 10_000,
+        reply: {
+          status: "ok",
+          replyText: preview,
+          terminalReply: { disposition: "visible", text: preview },
+        },
+      });
+      const delivered = self
+        ? (requireGatewayCall("send").params as Record<string, unknown>)
+        : firstMockArg(vi.mocked(runAgentStep), "requester reply");
+      expect(delivered.message).toBe(available ? full : preview);
+      if (!self && !available) {
+        expect(delivered.extraSystemPrompt).toContain("The reply may be truncated.");
+        expect(delivered.extraSystemPrompt).toContain(
+          "missing section or a file containing the full reply",
+        );
+        expect(delivered.extraSystemPrompt).toContain("do not repeat the original task");
+      } else {
+        expect(delivered.extraSystemPrompt ?? "").not.toContain("The reply may be truncated.");
+      }
+    },
+  );
+
   it("passes threadId through to gateway send for Telegram forum topics", async () => {
     await runSessionsSendA2AFlow({
       callGateway: callGatewayMock,
