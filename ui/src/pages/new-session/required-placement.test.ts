@@ -63,18 +63,13 @@ function fixture(
       };
     },
     placementPolicy: async () => {
-      const value = (await request("agents.list")) as {
+      const { requiredProfile: id, profiles } = (await request("agents.list")) as {
         requiredProfile?: string;
         profiles?: Array<typeof profile>;
       };
       return {
-        sessionPlacement: value.requiredProfile
-          ? {
-              requiredProfile: {
-                id: value.requiredProfile,
-                ...value.profiles?.find((entry) => entry.id === value.requiredProfile),
-              },
-            }
+        sessionPlacement: id
+          ? { requiredProfile: { id, ...profiles?.find((entry) => entry.id === id) } }
           : {},
       };
     },

@@ -17,13 +17,10 @@ async function fixture(isCurrent = () => true) {
       if (writes.length === 1) {
         await firstWrite.promise;
       }
-      for (const [key, value] of Object.entries(patch)) {
-        if (value === null) {
-          delete entries[key];
-        } else {
-          entries[key] = value;
-        }
-      }
+      Object.assign(entries, patch);
+      Object.keys(patch)
+        .filter((key) => patch[key] === null)
+        .forEach((key) => delete entries[key]);
       return { status: "ok" };
     }
     throw new Error(method);
@@ -35,6 +32,7 @@ async function fixture(isCurrent = () => true) {
     profileId: "alice",
   };
   const state = acquirePaletteIdentityPreferences(owner);
+  const save = state.setPalettePreference.bind(state);
   const stop = state.subscribe(() => {}, isCurrent);
   onTestFinished(() => {
     firstWrite.resolve();
@@ -46,7 +44,7 @@ async function fixture(isCurrent = () => true) {
     return listener;
   };
   await vi.waitFor(() => expect(state.mode).toBe("remote"));
-  return { owner, state, entries, writes, release: firstWrite.resolve, listen };
+  return { owner, state, entries, writes, release: firstWrite.resolve, listen, save };
 }
 
 afterEach(() => {
@@ -66,12 +64,10 @@ it("scopes its cache and reads without migrating or writing ordinary defaults", 
 
 it.each(["queued", "new"] as const)("rejects retired %s intent", async (phase) => {
   let current = phase === "queued";
-  const { state, writes, release } = await fixture(() => phase === "new" || current);
+  const { save, writes, release } = await fixture(() => phase === "new" || current);
   const first =
-    phase === "queued"
-      ? state.setPalettePreference({ agentId: "first", selection: {} }, () => true)
-      : undefined;
-  const rejected = state.setPalettePreference({ agentId: "retired", selection: {} }, () => current);
+    phase === "queued" ? save({ agentId: "first", selection: {} }, () => true) : undefined;
+  const rejected = save({ agentId: "retired", selection: {} }, () => current);
   if (first) {
     await vi.waitFor(() => expect(writes).toHaveLength(1));
     current = false;
@@ -83,14 +79,11 @@ it.each(["queued", "new"] as const)("rejects retired %s intent", async (phase) =
 });
 
 it("publishes a confirmed write to surviving current subscribers, not a retired initiator", async () => {
-  const { state, writes, release, listen } = await fixture();
+  const { save, writes, release, listen } = await fixture();
   let current = true;
   const retired = listen(() => current);
   const surviving = listen(() => true);
-  const saved = state.setPalettePreference(
-    { agentId: "main", selection: { worktree: true } },
-    () => current,
-  );
+  const saved = save({ agentId: "main", selection: { worktree: true } }, () => current);
   await vi.waitFor(() => expect(writes).toHaveLength(1));
   current = false;
   release();

@@ -17,11 +17,11 @@ function roster(defaultId: string, ids = [defaultId]) {
   };
 }
 
-function createContext(params: {
-  assistantAgentId: string | null;
-  agentsList: ApplicationContext["agents"]["state"]["agentsList"];
-  staleRosterClient?: boolean;
-}) {
+function createContext(
+  agentsList: ApplicationContext["agents"]["state"]["agentsList"] = null,
+  assistantAgentId = "main",
+  staleRosterClient = false,
+) {
   const request = vi.fn(async (method: string) => {
     if (method !== "sessions.catalog.list") {
       throw new Error(`unexpected request: ${method}`);
@@ -29,27 +29,16 @@ function createContext(params: {
     return { catalogs: [] };
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: Pick<
-    ApplicationGatewaySnapshot,
-    "client" | "phase" | "hello" | "assistantAgentId"
-  > = {
+  const snapshot: Pick<ApplicationGatewaySnapshot, "client" | "phase" | "assistantAgentId"> = {
     client,
     phase: "connected",
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["sessions.catalog.list"] },
-    },
-    assistantAgentId: params.assistantAgentId,
+    assistantAgentId,
   };
-  const ensureList = vi.fn(async () => params.agentsList);
+  const ensureList = vi.fn(async () => agentsList);
   const agentsState = {
-    client: params.staleRosterClient
-      ? ({ request: vi.fn() } as unknown as GatewayBrowserClient)
-      : client,
+    client: staleRosterClient ? ({ request: vi.fn() } as unknown as GatewayBrowserClient) : client,
     connected: true,
-    agentsList: params.agentsList,
+    agentsList,
   };
   const context = {
     gateway: { snapshot },
@@ -70,10 +59,10 @@ it.each(["current", "failed", "retired-agent"] as const)(
   "requires %s live discovery",
   async (outcome) => {
     const currentRoster = roster("current");
-    const { context, agentsState, ensureList, request } = createContext({
-      assistantAgentId: "old",
-      agentsList: outcome === "retired-agent" ? currentRoster : null,
-    });
+    const { context, agentsState, ensureList, request } = createContext(
+      outcome === "retired-agent" ? currentRoster : null,
+      "old",
+    );
     ensureList.mockImplementation(async () => {
       if (outcome === "current") {
         agentsState.agentsList = currentRoster;
@@ -100,7 +89,7 @@ it.each([
   { label: "control character", model: "example/model\n", expected: undefined },
   { label: "oversized", model: `example/${"x".repeat(2048)}`, expected: undefined },
 ])("validates $label model intent without creating a session", async ({ model, expected }) => {
-  const { context, request } = createContext({ assistantAgentId: "main", agentsList: null });
+  const { context, request } = createContext();
   const data = await load(
     context,
     expected
@@ -136,11 +125,7 @@ it.each(["unavailable", "missing"] as const)("rejects %s group defaults", async 
 });
 
 it("waits for the replacement client's roster before preserving a valid route agent", async () => {
-  const { agentsState, client, context, request } = createContext({
-    assistantAgentId: "roboclaw",
-    agentsList: roster("main"),
-    staleRosterClient: true,
-  });
+  const { agentsState, client, context, request } = createContext(roster("main"), "roboclaw", true);
 
   const pending = await load(context, "?agent=research&catalog=claude");
 
