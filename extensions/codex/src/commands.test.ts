@@ -3698,16 +3698,8 @@ function computerUseReadyStatus(): CodexComputerUseStatus {
     mcpServerName: "computer-use",
     marketplaceName: "desktop-tools",
     tools: ["list_apps"],
-    installation: {
-      status: "installed",
-      ok: true,
-      message: "Computer Use plugin is installed and enabled.",
-    },
-    exposure: {
-      status: "available",
-      ok: true,
-      message: "Computer Use MCP server computer-use exposes 1 tools.",
-    },
+    installation: "installed",
+    exposure: "available",
     liveTest: {
       status: "passed",
       ok: true,
