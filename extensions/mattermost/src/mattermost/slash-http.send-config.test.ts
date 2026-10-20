@@ -67,6 +67,8 @@ const mockState = vi.hoisted(() => ({
   listMattermostCommands: vi.fn(async () => []),
   dispatchInbound: vi.fn(async () => undefined),
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+  upsertPairingRequest: vi.fn(async () => ({ code: "", created: false })),
+  buildPairingReply: vi.fn(() => "unexpected pairing reply"),
 }));
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
@@ -94,7 +96,11 @@ vi.mock("../runtime.js", async (importOriginal) => ({
         resolveMarkdownTableMode: () => "off",
       },
       inbound: { dispatch: mockState.dispatchInbound },
-      pairing: { readAllowFromStore: vi.fn(async () => []) },
+      pairing: {
+        readAllowFromStore: vi.fn(async () => []),
+        upsertPairingRequest: mockState.upsertPairingRequest,
+        buildPairingReply: mockState.buildPairingReply,
+      },
       routing: {
         resolveAgentRoute: vi.fn(() => ({
           agentId: "agent-1",
@@ -396,5 +402,38 @@ describe("slash-http cfg threading", () => {
         }),
       }),
     );
+  });
+
+  it("falls back to a generic denial when the pairing queue returns no code", async () => {
+    mockState.parseSlashCommandPayload.mockReturnValueOnce({
+      token: "valid-token",
+      command: "/oc_status",
+      text: "status",
+      channel_id: "dm-1",
+      user_id: "user-4",
+      user_name: "fourth-user",
+      team_id: "team-1",
+    });
+    mockState.getMattermostCommand.mockResolvedValueOnce({
+      id: "cmd-status",
+      token: "valid-token",
+      team_id: "team-1",
+      trigger: "oc_status",
+      method: "P",
+      url: callbackUrlFixture,
+      delete_at: 0,
+    });
+    mockState.authorizeMattermostCommandInvocation.mockResolvedValueOnce({
+      ok: false,
+      denyReason: "dm-pairing",
+    });
+    const handler = createHandler({}, { id: "cmd-status", trigger: "oc_status" });
+    const response = createMockServerResponse();
+
+    await handler(createRequest(), response);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("Unauthorized.");
+    expect(mockState.buildPairingReply).not.toHaveBeenCalled();
   });
 });

@@ -20,6 +20,7 @@ import { buildMattermostModelPickerSelectMessageSid } from "./monitor-context.js
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import { dispatchMattermostInteractionReply } from "./monitor-interaction-dispatch.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
+import { resolveMattermostPairingReply } from "./pairing-reply.js";
 import { buildPreparedModelsProviderData } from "./runtime-api.js";
 
 export type MattermostModelPickerInteractionHandler = (params: {
@@ -77,13 +78,14 @@ export function createMattermostModelPickerInteractionHandler(
           id: params.payload.user_id,
           meta: { name: params.userName },
         });
-        return {
-          ephemeral_text: core.channel.pairing.buildPairingReply({
-            channel: "mattermost",
-            idLine: `Your Mattermost user id: ${params.payload.user_id}`,
-            code,
-          }),
-        };
+        const pairingReply = resolveMattermostPairingReply({
+          code,
+          userId: params.payload.user_id,
+          buildReply: core.channel.pairing.buildPairingReply,
+        });
+        if (pairingReply) {
+          return { ephemeral_text: pairingReply };
+        }
       }
       const denyText =
         auth.denyReason === "unknown-channel"

@@ -61,6 +61,56 @@ const scenarios = [
   })),
 ];
 const replyToId = "interaction:picker-post-1:select:openai/gpt-5.4";
+
+it("falls back to a generic denial when the pairing queue returns no code", async () => {
+  vi.clearAllMocks();
+  mocks.authorize.mockResolvedValue({ ok: false, denyReason: "dm-pairing" });
+  mocks.parseContext.mockReturnValue({
+    action: "list",
+    ownerUserId: "user-4",
+    page: 0,
+  });
+  const upsertPairingRequest = vi.fn(async () => ({ code: "", created: false }));
+  const buildPairingReply = vi.fn(() => "unexpected pairing reply");
+  const monitor = {
+    account: { accountId: "default", config: {} },
+    cfg: {},
+    core: {
+      channel: {
+        commands: { shouldHandleTextCommands: vi.fn(() => true) },
+        pairing: { buildPairingReply },
+        text: { hasControlCommand: vi.fn(() => true) },
+      },
+    },
+    pairing: {
+      readAllowFromStore: vi.fn(async () => []),
+      upsertPairingRequest,
+    },
+    resources: {
+      resolveChannelInfo: vi.fn(async () => ({ id: "dm-1", type: "D" })),
+    },
+    runtime: { error: vi.fn() },
+  } as unknown as MattermostMonitorContext;
+
+  const response = await createMattermostModelPickerInteractionHandler(monitor)({
+    payload: {
+      channel_id: "dm-1",
+      post_id: "picker-post-1",
+      user_id: "user-4",
+    },
+    userName: "fourth-user",
+    context: {},
+    post: { id: "picker-post-1", channel_id: "dm-1", message: "picker" },
+  });
+
+  expect(upsertPairingRequest).toHaveBeenCalledWith({
+    id: "user-4",
+    meta: { name: "fourth-user" },
+  });
+  expect(buildPairingReply).not.toHaveBeenCalled();
+  expect(response).toEqual({ ephemeral_text: "Unauthorized." });
+});
+
 it.each(scenarios)(
   "handles the $action picker with $catalogStatus catalog availability",
   async ({ action, catalogStatus }) => {

@@ -26,6 +26,7 @@ import {
   authorizeMattermostCommandInvocation,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
+import { resolveMattermostPairingReply } from "./pairing-reply.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
   buildPreparedModelsProviderData,
@@ -412,14 +413,14 @@ async function authorizeSlashInvocation(params: {
         id: senderId,
         meta: { name: senderName },
       });
-      return {
-        ok: false,
-        denyText: core.channel.pairing.buildPairingReply({
-          channel: "mattermost",
-          idLine: `Your Mattermost user id: ${senderId}`,
-          code,
-        }),
-      };
+      const pairingReply = resolveMattermostPairingReply({
+        code,
+        userId: senderId,
+        buildReply: core.channel.pairing.buildPairingReply,
+      });
+      if (pairingReply) {
+        return { ok: false, denyText: pairingReply };
+      }
     }
 
     const denyText =
