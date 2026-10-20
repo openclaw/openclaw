@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { CronPayload, CronPayloadPatch } from "../types.js";
 import { mergeCronPayload } from "./payload-merge.js";
 
@@ -102,8 +102,6 @@ const mergeCases = [
   },
 ] satisfies MergeCase[];
 
-describe("mergeCronPayload trigger tool caps", () => {
-  it.each(mergeCases)("$label", ({ existing, patch, expected }) => {
-    expect(mergeCronPayload(existing, patch)).toEqual(expected);
-  });
+it.each(mergeCases)("$label", ({ existing, patch, expected }) => {
+  expect(mergeCronPayload(existing, patch)).toEqual(expected);
 });

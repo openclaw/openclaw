@@ -29,7 +29,6 @@ beforeEach(async () => {
     storePath,
     cronEnabled: false,
     log: logger,
-    nowMs: Date.now,
     runIsolatedAgentJob: async () => ({ status: "ok", delivered: true }),
   });
 });
