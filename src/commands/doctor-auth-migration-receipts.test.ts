@@ -30,6 +30,34 @@ const { recordAuthProfileMigrationImported, restoreAuthProfileMigrationArchiveNo
   globalThis as Record<PropertyKey, unknown>
 )[Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")] as MigrationReceiptTestApi;
 
+function expectStatus(receipt: ReturnType<typeof prepareAuthProfileSourceReceipt>, status: string) {
+  const row = openOpenClawStateDatabase({ env: receipt.env })
+    .db.prepare("SELECT status FROM migration_sources WHERE source_key = ?")
+    .get(receipt.sourceKey);
+  expect(row).toEqual({ status });
+}
+
+function rollbackTarget(
+  receipt: ReturnType<typeof prepareAuthProfileSourceReceipt>,
+  value: unknown,
+) {
+  fs.mkdirSync(path.dirname(receipt.targetDatabasePath), { recursive: true });
+  using target = new DatabaseSync(receipt.targetDatabasePath);
+  const kind = receipt.targetTable === "auth_profile_state" ? "state" : "store";
+  target.exec(
+    `CREATE TABLE ${receipt.targetTable} (${kind}_key TEXT PRIMARY KEY, ${kind}_json TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
+  );
+  target
+    .prepare(`INSERT INTO ${receipt.targetTable} VALUES ('primary', ?, 1)`)
+    .run(JSON.stringify(value));
+  recordAuthProfileMigrationImported(receipt);
+  if (kind === "store") {
+    // Model a crash after the source rename but before the receipt completes.
+    fs.renameSync(receipt.sourcePath, receipt.archivePath);
+  }
+  target.prepare(`DELETE FROM ${receipt.targetTable}`).run();
+}
+
 describe("auth profile migration receipts", () => {
   const states: OpenClawTestState[] = [];
 
@@ -62,33 +90,18 @@ describe("auth profile migration receipts", () => {
 
   it("restores an archive for retry when its SQLite target was rolled back", async () => {
     const { state, sourcePath, receipt } = await makeReceipt();
-    fs.mkdirSync(path.dirname(receipt.targetDatabasePath), { recursive: true });
-    const target = new DatabaseSync(receipt.targetDatabasePath);
-    target.exec(
-      "CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
-    );
     const profileValue = { type: "oauth", provider: "openai", refresh: "not-a-real" };
-    target
-      .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
-      .run(JSON.stringify({ version: 1, profiles: { "openai:default": profileValue } }));
     receipt.expectedProfileSha256 = {
       "openai:default": digestAuthProfileMigrationValue(profileValue),
     };
-    recordAuthProfileMigrationImported(receipt);
-    // Model a crash after the source rename but before the receipt completes.
-    fs.renameSync(receipt.sourcePath, receipt.archivePath);
-    target.prepare("DELETE FROM auth_profile_store").run();
-    target.close();
+    rollbackTarget(receipt, { version: 1, profiles: { "openai:default": profileValue } });
 
     expect(resumePendingAuthProfileMigrationArchives(state.env)).toEqual([
       "Reset an interrupted auth migration receipt for retry.",
     ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(receipt.archivePath)).toBe(false);
-    const row = openOpenClawStateDatabase({ env: state.env })
-      .db.prepare("SELECT status FROM migration_sources WHERE source_key = ?")
-      .get(receipt.sourceKey);
-    expect(row).toEqual({ status: "retryable" });
+    expectStatus(receipt, "retryable");
   });
 
   it("does not overwrite a source recreated before archive restoration", async () => {
@@ -111,32 +124,19 @@ describe("auth profile migration receipts", () => {
     ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(receipt.archivePath)).toBe(false);
-    const row = openOpenClawStateDatabase({ env: state.env })
-      .db.prepare("SELECT status FROM migration_sources WHERE source_key = ?")
-      .get(receipt.sourceKey);
-    expect(row).toEqual({ status: "superseded" });
+    expectStatus(receipt, "superseded");
   });
 
   it("revalidates target state before resuming an archive", async () => {
     const { state, sourcePath, receipt } = await makeReceipt();
     receipt.targetTable = "auth_profile_state";
-    fs.mkdirSync(path.dirname(receipt.targetDatabasePath), { recursive: true });
-    const target = new DatabaseSync(receipt.targetDatabasePath);
-    target.exec(
-      "CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
-    );
     const persistedState = {
       version: 1,
       order: { openai: ["openai:default"] },
       lastGood: { openai: "openai:default" },
     };
-    target
-      .prepare("INSERT INTO auth_profile_state VALUES ('primary', ?, 1)")
-      .run(JSON.stringify(persistedState));
     receipt.expectedStateSha256 = digestAuthProfileMigrationValue(persistedState);
-    recordAuthProfileMigrationImported(receipt);
-    target.prepare("DELETE FROM auth_profile_state").run();
-    target.close();
+    rollbackTarget(receipt, persistedState);
 
     expect(resumePendingAuthProfileMigrationArchives(state.env)).toEqual([
       "Reset an interrupted auth migration receipt for retry.",
@@ -144,26 +144,21 @@ describe("auth profile migration receipts", () => {
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
-  it("does not replace a pending receipt owned by another doctor", async () => {
-    const { receipt } = await makeReceipt();
-    recordAuthProfileMigrationImported(receipt);
-    const competing = { ...receipt, runId: `${receipt.sourceKey}:competing` };
+  it.each(["imported", "completed"])(
+    "does not replace a %s receipt owned by another run",
+    async (status) => {
+      const { receipt } = await makeReceipt();
+      recordAuthProfileMigrationImported(receipt);
+      if (status === "completed") {
+        finalizeAuthProfileMigrationSource(receipt);
+      }
+      const replay = { ...receipt, runId: `${receipt.sourceKey}:replay` };
 
-    expect(() => recordAuthProfileMigrationImported(competing)).toThrow(
-      "auth profile migration source already owned by imported receipt",
-    );
-  });
-
-  it("does not replace a terminal receipt with a replay run", async () => {
-    const { receipt } = await makeReceipt();
-    recordAuthProfileMigrationImported(receipt);
-    finalizeAuthProfileMigrationSource(receipt);
-    const replay = { ...receipt, runId: `${receipt.sourceKey}:replay` };
-
-    expect(() => recordAuthProfileMigrationImported(replay)).toThrow(
-      "auth profile migration source already owned by completed receipt",
-    );
-  });
+      expect(() => recordAuthProfileMigrationImported(replay)).toThrow(
+        `auth profile migration source already owned by ${status} receipt`,
+      );
+    },
+  );
 
   it("preserves archived-unparsed status when resuming after rename", async () => {
     const { state, receipt } = await makeReceipt();
@@ -172,9 +167,6 @@ describe("auth profile migration receipts", () => {
     fs.renameSync(receipt.sourcePath, receipt.archivePath);
 
     resumePendingAuthProfileMigrationArchives(state.env);
-    const row = openOpenClawStateDatabase({ env: state.env })
-      .db.prepare("SELECT status FROM migration_sources WHERE source_key = ?")
-      .get(receipt.sourceKey);
-    expect(row).toEqual({ status: "archived-unparsed" });
+    expectStatus(receipt, "archived-unparsed");
   });
 });

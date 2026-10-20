@@ -79,22 +79,42 @@ async function withFixture(
   });
 }
 
-async function repair(env: NodeJS.ProcessEnv) {
+async function withMaintenance<T>(run: () => Promise<T>) {
   const maintenance = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent: () => {},
   });
   try {
-    return await maintenance.run(async () =>
-      repairDoctorAgentDeletionJournal({
-        preflight: await prepareDoctorDatabasePreflight(),
-        shouldRepair: true,
-        env,
-      }),
-    );
+    return await maintenance.run(run);
   } finally {
     await maintenance.close();
   }
+}
+
+const repair = (env: NodeJS.ProcessEnv) =>
+  withMaintenance(async () =>
+    repairDoctorAgentDeletionJournal({
+      preflight: await prepareDoctorDatabasePreflight(),
+      shouldRepair: true,
+      env,
+    }),
+  );
+const recoveryHolds = (env: NodeJS.ProcessEnv) =>
+  readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }));
+const backupPaths = (changes: string[]) =>
+  changes
+    .filter((change) => change.startsWith("Saved pre-migration SQLite backup: "))
+    .map((change) => change.slice("Saved pre-migration SQLite backup: ".length));
+const preservedBytes = '{"bytes":"preserved 🦞"}';
+const preservedValue = (database: DatabaseSync) =>
+  database.prepare("SELECT value_json FROM cache_entries WHERE key = 'preserved'").get()
+    ?.value_json;
+
+function copyAgent(source: string, target: string, agentId: string) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target);
+  using database = new DatabaseSync(target);
+  database.prepare("UPDATE schema_meta SET agent_id = ?").run(agentId);
 }
 
 function seedLegacyQuarantineHolds(env: NodeJS.ProcessEnv, held: HeldAgentDatabase[]) {
@@ -132,11 +152,7 @@ it.each(["openclaw", "crestodian"])(
         env.OPENCLAW_STATE_DIR!,
         "agents/main/agent/openclaw-agent.sqlite",
       );
-      fs.mkdirSync(path.dirname(ordinaryPath), { recursive: true });
-      fs.copyFileSync(agentPath, ordinaryPath);
-      using ordinary = new DatabaseSync(ordinaryPath);
-      ordinary.exec("UPDATE schema_meta SET agent_id = 'main'");
-      ordinary.close();
+      copyAgent(agentPath, ordinaryPath, "main");
       const ordinaryBytes = fs.readFileSync(ordinaryPath);
       const held = [
         { agentId, path: agentPath },
@@ -148,20 +164,15 @@ it.each(["openclaw", "crestodian"])(
 
       const result = await repair(env);
       expect(result.warnings.join("\n")).toContain(`Automatically restored agent ${agentId}`);
-      expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toEqual([held[1]]);
-      const backups = result.changes
-        .filter((change) => change.startsWith("Saved pre-migration SQLite backup: "))
-        .map((change) => change.slice("Saved pre-migration SQLite backup: ".length));
+      expect(recoveryHolds(env)).toEqual([held[1]]);
+      const backups = backupPaths(result.changes);
       expect(backups).toHaveLength(2);
       for (const backup of backups) {
         using database = new DatabaseSync(backup, { readOnly: true });
         expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
         if (backup.startsWith(agentPath)) {
           expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(24);
-          expect(
-            database.prepare("SELECT value_json FROM cache_entries WHERE key = 'preserved'").get()
-              ?.value_json,
-          ).toBe('{"bytes":"preserved 🦞"}');
+          expect(preservedValue(database)).toBe(preservedBytes);
         } else {
           expect(backup.startsWith(sharedPath)).toBe(true);
           const report = database
@@ -176,36 +187,25 @@ it.each(["openclaw", "crestodian"])(
         }
       }
 
-      const maintenance = createOpenClawDatabaseMaintenanceScope({
-        schemaMaintenance: true,
-        assertOwnerCurrent: () => {},
-      });
-      try {
-        await maintenance.run(async () => {
-          const next = await prepareDoctorDatabasePreflight();
-          expect(next.pendingMigrations).toContainEqual(
-            expect.objectContaining({ path: agentPath, foundVersion: 24 }),
-          );
-          await migrateLegacyMediaPersistence({
-            env,
-            preparedDiscovery: next.agentDatabaseMigrationDiscovery,
-          });
+      await withMaintenance(async () => {
+        const next = await prepareDoctorDatabasePreflight();
+        expect(next.pendingMigrations).toContainEqual(
+          expect.objectContaining({ path: agentPath, foundVersion: 24 }),
+        );
+        await migrateLegacyMediaPersistence({
+          env,
+          preparedDiscovery: next.agentDatabaseMigrationDiscovery,
         });
-      } finally {
-        await maintenance.close();
-      }
+      });
       using migrated = new DatabaseSync(agentPath, { readOnly: true });
       expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_AGENT_SCHEMA_VERSION,
       );
-      expect(
-        migrated.prepare("SELECT value_json FROM cache_entries WHERE key = 'preserved'").get()
-          ?.value_json,
-      ).toBe('{"bytes":"preserved 🦞"}');
+      expect(preservedValue(migrated)).toBe(preservedBytes);
       migrated.close();
       expect(fs.readFileSync(ordinaryPath)).toEqual(ordinaryBytes);
       expect((await repair(env)).changes).toEqual([]);
-      expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toEqual([held[1]]);
+      expect(recoveryHolds(env)).toEqual([held[1]]);
     }, agentId);
   },
 );
@@ -225,18 +225,10 @@ it.each(["different-agent", "noncanonical-path"])(
       const held = [{ agentId: "openclaw", path: pathname }];
       seedLegacyQuarantineHolds(env, held);
       const bytes = fs.readFileSync(pathname);
-      const maintenance = createOpenClawDatabaseMaintenanceScope({
-        schemaMaintenance: true,
-        assertOwnerCurrent: () => {},
-      });
-      try {
-        expect(
-          await maintenance.run(() => restoreDoctorMissingJournalStores({ env, held })),
-        ).toEqual({ changes: [], warnings: [], restored: [] });
-      } finally {
-        await maintenance.close();
-      }
-      expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toEqual(held);
+      expect(await withMaintenance(() => restoreDoctorMissingJournalStores({ env, held }))).toEqual(
+        { changes: [], warnings: [], restored: [] },
+      );
+      expect(recoveryHolds(env)).toEqual(held);
       expect(fs.readFileSync(pathname)).toEqual(bytes);
     }, "openclaw");
   },
@@ -255,11 +247,7 @@ it.each(["first-upgrade", "already-held"])(
           env.OPENCLAW_STATE_DIR!,
           "agents/ops/agent/openclaw-agent.sqlite",
         );
-        fs.mkdirSync(path.dirname(otherPath), { recursive: true });
-        fs.copyFileSync(agentPath, otherPath);
-        using other = new DatabaseSync(otherPath);
-        other.exec("UPDATE schema_meta SET agent_id = 'ops'");
-        other.close();
+        copyAgent(agentPath, otherPath, "ops");
         const config = JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH!, "utf8"));
         config.agents.ownership = "explicit";
         config.agents.entries.ops = {
@@ -304,20 +292,15 @@ it.each(["first-upgrade", "already-held"])(
       if (phase === "first-upgrade") {
         expect(result.warnings.join("\n")).toContain("Automatically restored agent ops");
       }
-      expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toEqual([]);
+      expect(recoveryHolds(env)).toEqual([]);
       expect(agentPaths.map((pathname) => fs.readFileSync(pathname))).toEqual(bytes);
-      const backups = result.changes
-        .filter((change) => change.startsWith("Saved pre-migration SQLite backup: "))
-        .map((change) => change.slice("Saved pre-migration SQLite backup: ".length));
+      const backups = backupPaths(result.changes);
       expect(backups).toHaveLength(agentPaths.length + 1);
       for (const backup of backups) {
         using database = new DatabaseSync(backup, { readOnly: true });
         expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
         if (agentPaths.some((pathname) => backup.startsWith(pathname))) {
-          expect(
-            database.prepare("SELECT value_json FROM cache_entries WHERE key='preserved'").get()
-              ?.value_json,
-          ).toBe('{"bytes":"preserved 🦞"}');
+          expect(preservedValue(database)).toBe(preservedBytes);
         } else {
           expect(
             database
@@ -374,7 +357,7 @@ it.each(["present-incomplete", "other-version", "rewritten-stamp"])(
       expect(result.warnings.join("\n")).not.toContain("Automatically restored");
       expect(result.warnings.join("\n")).toContain("held back");
       expect(result.warnings.join("\n")).toContain("agents add");
-      expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toContainEqual({
+      expect(recoveryHolds(env)).toContainEqual({
         agentId: "main",
         path: agentPath,
       });
@@ -425,7 +408,7 @@ it.each(["root", "included"])(
         expect(fs.readFileSync(changedPath, "utf8")).toBe(newerConfig);
         expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR!, "workspace"))).toBe(false);
         expect(fs.readFileSync(agentPath)).toEqual(bytes);
-        expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toContainEqual({
+        expect(recoveryHolds(env)).toContainEqual({
           agentId: "main",
           path: agentPath,
         });

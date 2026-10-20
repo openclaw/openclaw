@@ -14,23 +14,14 @@ export type DoctorConfigSnapshotFixtureParams = {
 
 export function setDoctorStdinTty(value: boolean | undefined): void {
   try {
-    Object.defineProperty(process.stdin, "isTTY", {
-      value,
-      configurable: true,
-    });
+    Object.defineProperty(process.stdin, "isTTY", { value, configurable: true });
   } catch {
     // ignore
   }
 }
 
 export function createCommandWithTimeoutResult() {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-  } as const;
+  return { stdout: "", stderr: "", code: 0, signal: null, killed: false } as const;
 }
 
 export function createLegacyConfigSnapshot() {
@@ -54,13 +45,11 @@ export function createDoctorServiceMocks() {
     findSystemGatewayServices: vi.fn().mockResolvedValue([]),
     renderGatewayServiceCleanupHints: vi.fn().mockReturnValue(["cleanup"]),
     auditGatewayServiceConfig: vi.fn().mockResolvedValue({ ok: true, issues: [] }),
-    buildGatewayInstallPlan: vi.mocked(
-      vi.fn().mockResolvedValue({
-        programArguments: ["node", "cli", "gateway", "--port", "18789"],
-        workingDirectory: "/tmp",
-        environment: {},
-      }),
-    ),
+    buildGatewayInstallPlan: vi.fn().mockResolvedValue({
+      programArguments: ["node", "cli", "gateway", "--port", "18789"],
+      workingDirectory: "/tmp",
+      environment: {},
+    }),
     resolveGatewayAuthTokenForService: vi.fn().mockResolvedValue({ token: undefined }),
     resolveGatewayProgramArguments: vi.fn().mockResolvedValue({
       programArguments: ["node", "cli", "gateway", "--port", "18789"],
@@ -131,11 +120,7 @@ export function createDoctorConfigTransform(
 }
 
 export function createDoctorRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
+  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
 export async function arrangeLegacyStateMigrationFixture(deps: {
@@ -144,12 +129,7 @@ export async function arrangeLegacyStateMigrationFixture(deps: {
   detectLegacyStateMigrations: MockFn;
   mockDoctorConfigSnapshot: () => void;
   runLegacyStateMigrations: MockFn;
-}): Promise<{
-  doctorCommand: unknown;
-  runtime: { log: MockFn; error: MockFn; exit: MockFn };
-  detectLegacyStateMigrations: MockFn;
-  runLegacyStateMigrations: MockFn;
-}> {
+}) {
   deps.mockDoctorConfigSnapshot();
 
   const { doctorCommand } = await import("./doctor.js");
@@ -158,10 +138,7 @@ export async function arrangeLegacyStateMigrationFixture(deps: {
   deps.detectLegacyStateMigrations.mockClear();
   deps.runLegacyStateMigrations.mockClear();
   deps.detectLegacyStateMigrations.mockResolvedValue(
-    deps.createDetection({
-      hasLegacySessions: true,
-      preview: ["- Legacy sessions detected"],
-    }),
+    deps.createDetection({ hasLegacySessions: true, preview: ["- Legacy sessions detected"] }),
   );
   deps.runLegacyStateMigrations.mockResolvedValueOnce({
     changes: ["migrated"],

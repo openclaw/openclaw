@@ -20,64 +20,64 @@ import {
 } from "./doctor.e2e-harness.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
+const newerSchemaError = /Doctor refused to continue.*database schema.*newer than this build/iu;
+const runDoctor = () => doctorCommand(createDoctorRuntime());
+
+function expectNoMigration() {
+  expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
+  expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+}
 
 describe("doctor database schema preflight", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ doctorCommand } = await import("./doctor.js"));
     vi.clearAllMocks();
+    mockDoctorConfigSnapshot();
   });
 
   it("refuses a newer shared database before offering an interactive update", async () => {
-    writeStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1);
-    mockDoctorConfigSnapshot();
+    writeSchemaVersion(
+      resolveOpenClawStateSqlitePath(process.env),
+      OPENCLAW_STATE_SCHEMA_VERSION + 1,
+    );
     mockInteractiveGitUpdate({ status: "ok" });
     const statePath = resolveOpenClawStateSqlitePath(process.env);
     const original = fs.readFileSync(statePath);
 
-    await expect(doctorCommand(createDoctorRuntime())).rejects.toThrow(
-      /Doctor refused to continue.*database schema.*newer than this build/iu,
-    );
+    await expect(runDoctor()).rejects.toThrow(newerSchemaError);
 
     expect(confirm).not.toHaveBeenCalled();
     expect(updateCommand).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+    expectNoMigration();
     expect(fs.readFileSync(statePath)).toEqual(original);
     expect(fs.readdirSync(path.dirname(statePath))).toEqual([path.basename(statePath)]);
   });
 
   it("lets a successful interactive update replace Doctor with newer agent schemas", async () => {
     writeNewerAgentSchema();
-    mockDoctorConfigSnapshot();
     mockInteractiveGitUpdate({ status: "ok" });
 
-    await expect(doctorCommand(createDoctorRuntime())).resolves.toBeUndefined();
+    await expect(runDoctor()).resolves.toBeUndefined();
 
     expect(updateCommand).toHaveBeenCalledOnce();
-    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+    expectNoMigration();
   });
 
   it("refuses newer agent schemas after an interactive update reports already-current", async () => {
     writeNewerAgentSchema();
-    mockDoctorConfigSnapshot();
     mockInteractiveGitUpdate({ status: "skipped", reason: "already-current" });
 
-    await expect(doctorCommand(createDoctorRuntime())).rejects.toThrow(
-      /Doctor refused to continue.*database schema.*newer than this build/iu,
-    );
+    await expect(runDoctor()).rejects.toThrow(newerSchemaError);
 
     expect(updateCommand).toHaveBeenCalledOnce();
-    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+    expectNoMigration();
   });
 
   it("diagnoses an unreadable shared state database", async () => {
     const statePath = resolveOpenClawStateSqlitePath(process.env);
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     fs.writeFileSync(statePath, "not a sqlite database");
-    mockDoctorConfigSnapshot();
 
     const failure = await doctorCommand(createDoctorRuntime(), { nonInteractive: true }).then(
       () => null,
@@ -85,15 +85,15 @@ describe("doctor database schema preflight", () => {
     );
 
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain(statePath);
-    expect((failure as Error).message).toMatch(/file is not a database/iu);
-    expect((failure as Error).message).toContain("left unchanged");
-    expect((failure as Error).message).toContain("restore this file from a verified backup");
-    expect((failure as Error).message).toContain("Stop OpenClaw processes");
-    expect((failure as Error).message).not.toContain("openclaw doctor --fix");
+    const message = (failure as Error).message;
+    expect(message).toContain(statePath);
+    expect(message).toContain("left unchanged");
+    expect(message).toContain("restore this file from a verified backup");
+    expect(message).toContain("Stop OpenClaw processes");
+    expect(message).toMatch(/file is not a database/iu);
+    expect(message).not.toContain("openclaw doctor --fix");
     expect(fs.readFileSync(statePath, "utf8")).toBe("not a sqlite database");
-    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+    expectNoMigration();
   });
 });
 
@@ -110,18 +110,8 @@ function mockInteractiveGitUpdate(
     killed: false,
   });
   updateCommand.mockImplementation(async ({ onResult }) => {
-    onResult?.({
-      ...outcome,
-      mode: "git",
-      root: "/repo",
-      steps: [],
-      durationMs: 0,
-    });
+    onResult?.({ ...outcome, mode: "git", root: "/repo", steps: [], durationMs: 0 });
   });
-}
-
-function writeStateSchemaVersion(version: number): void {
-  writeSchemaVersion(resolveOpenClawStateSqlitePath(process.env), version);
 }
 
 function writeNewerAgentSchema(): void {

@@ -14,6 +14,19 @@ import { maybeMigrateAuthProfileJsonStoresToSqlite } from "./doctor-auth-flat-pr
 
 const states: OpenClawTestState[] = [];
 const secretRef = { source: "env", provider: "default", id: "MY_PROVIDER_API_KEY" } as const;
+const unchanged = {
+  changes: [],
+  migratedProfileIds: new Set<string>(),
+  blockedProfileIds: new Set<string>(),
+  warnings: [],
+};
+const aliasCase = (
+  name: string,
+  profile: Record<string, unknown>,
+  expected: Record<string, unknown>,
+) => ({ name, profile, expected });
+const migrate = (env: NodeJS.ProcessEnv, prompter = { confirmAutoFix: async () => true }) =>
+  maybeMigrateAuthProfileJsonStoresToSqlite({ cfg: {}, prompter, env });
 
 async function makeTestState(): Promise<OpenClawTestState> {
   const state = await createOpenClawTestState({
@@ -54,42 +67,34 @@ afterEach(async () => {
 
 describe("canonical SQLite migration for historical API-key aliases", () => {
   it.each([
-    {
-      name: "inline snake-case key",
-      profile: { api_key: "fake-snake-case-key" },
-      expected: { key: "fake-snake-case-key" },
-    },
-    {
-      name: "snake-case SecretRef",
-      profile: { api_key: secretRef },
-      expected: { keyRef: secretRef },
-    },
-    {
-      name: "canonical inline key wins over the stale alias",
-      profile: { key: "fake-canonical-key", api_key: "fake-stale-key" },
-      expected: { key: "fake-canonical-key" },
-    },
-    {
-      name: "canonical keyRef wins over the stale alias",
-      profile: { keyRef: secretRef, api_key: "fake-stale-key" },
-      expected: { keyRef: secretRef },
-    },
-    {
-      name: "canonical inline SecretRef wins over the stale alias",
-      profile: { key: secretRef, api_key: "fake-stale-key" },
-      expected: { keyRef: secretRef },
-    },
+    aliasCase(
+      "inline snake-case key",
+      { api_key: "fake-snake-case-key" },
+      { key: "fake-snake-case-key" },
+    ),
+    aliasCase("snake-case SecretRef", { api_key: secretRef }, { keyRef: secretRef }),
+    aliasCase(
+      "canonical inline key wins over the stale alias",
+      { key: "fake-canonical-key", api_key: "fake-stale-key" },
+      { key: "fake-canonical-key" },
+    ),
+    aliasCase(
+      "canonical keyRef wins over the stale alias",
+      { keyRef: secretRef, api_key: "fake-stale-key" },
+      { keyRef: secretRef },
+    ),
+    aliasCase(
+      "canonical inline SecretRef wins over the stale alias",
+      { key: secretRef, api_key: "fake-stale-key" },
+      { keyRef: secretRef },
+    ),
   ])("preserves $name and archives untouched source bytes", async ({ profile, expected }) => {
     const state = await makeTestState();
     const authPath = await writeProfiles(state, profile, { order: true });
     const original = fs.readFileSync(authPath);
     const prompter = { confirmAutoFix: vi.fn(async () => true) };
 
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      prompter,
-      env: state.env,
-    });
+    const result = await migrate(state.env, prompter);
 
     expect(result.detected).toEqual([authPath]);
     expect(result.warnings).toEqual([]);
@@ -104,18 +109,7 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
     expect(archive).toBeDefined();
     expect(fs.readFileSync(path.join(path.dirname(authPath), archive!))).toEqual(original);
 
-    const rerun = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      prompter,
-      env: state.env,
-    });
-    expect(rerun).toEqual({
-      detected: [],
-      changes: [],
-      migratedProfileIds: new Set<string>(),
-      blockedProfileIds: new Set<string>(),
-      warnings: [],
-    });
+    expect(await migrate(state.env, prompter)).toEqual({ detected: [], ...unchanged });
     expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
   });
 
@@ -126,11 +120,7 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
       const agentDir = state.path(`external-${agentDirVariable.toLowerCase()}`);
       const authPath = await writeProfiles(state, { api_key: "fake-external-key" }, { agentDir });
 
-      const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-        cfg: {},
-        prompter: { confirmAutoFix: async () => true },
-        env: { ...state.env, [agentDirVariable]: agentDir },
-      });
+      const result = await migrate({ ...state.env, [agentDirVariable]: agentDir });
 
       expect(result.detected).toEqual([authPath]);
       expect(loadPersistedAuthProfileStore(agentDir)?.profiles["my-key"]).toMatchObject({
@@ -145,18 +135,11 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
     const authPath = await writeProfiles(state, { api_key: "fake-declined-key" });
     const original = fs.readFileSync(authPath);
 
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      prompter: { confirmAutoFix: async () => false },
-      env: state.env,
-    });
+    const result = await migrate(state.env, { confirmAutoFix: async () => false });
 
     expect(result).toEqual({
       detected: [authPath],
-      changes: [],
-      migratedProfileIds: new Set<string>(),
-      blockedProfileIds: new Set<string>(),
-      warnings: [],
+      ...unchanged,
     });
     expect(fs.readFileSync(authPath)).toEqual(original);
     expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
