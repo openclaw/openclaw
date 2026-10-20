@@ -27,6 +27,11 @@ type SystemNoticeKind = {
 };
 
 const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
+  exec: {
+    icon: "cpu",
+    labelKey: "chat.systemNotice.commandResult.label",
+    summaryKey: "chat.systemNotice.commandResult.summary",
+  },
   main_session_restart_recovery: {
     icon: "cpu",
     labelKey: "chat.systemNotice.restartRecovery.label",

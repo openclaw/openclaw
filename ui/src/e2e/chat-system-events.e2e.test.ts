@@ -64,6 +64,55 @@ const history = [
 ];
 
 suite.define(() => {
+  it("summarizes pending command output instead of rendering raw HTML", async () => {
+    await suite.withPage(
+      { viewport: { width: 1100, height: 900 }, colorScheme: "light" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "chat.startup": {
+              messages: [history[0]!],
+              sessionId: "exec-notice-proof",
+              pendingInputs: {
+                total: 1,
+                items: [
+                  {
+                    id: "exec-input",
+                    runId: "exec-run",
+                    acceptedAt: timestamp + 1,
+                    state: "queued",
+                    message: {
+                      ...message(
+                        "user",
+                        '[System] Exec completed (job-123, code 0) :: <a href="/contact" class="text-main">Contact</a>',
+                        "exec-input",
+                      ),
+                      provenance: { kind: "internal_system", sourceTool: "exec" },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const thread = page.locator(".chat-thread");
+        const notice = thread.locator(".chat-notice");
+        await notice.waitFor();
+        const dir = createControlUiE2eArtifactDir("exec-system-notice");
+        const frame = await takeControlUiScreenshotFrame(page, notice, [notice], {
+          animations: "disabled",
+          elements: [notice],
+        });
+        writeFileSync(path.join(dir, "notice.png"), frame.elements[0]!.png);
+        console.log(`Exec notice screenshot: ${dir}/notice.png`);
+        expect(await notice.textContent()).toContain("A background command returned a result.");
+        expect(await thread.textContent()).not.toContain("<a href");
+        expect(await thread.textContent()).not.toContain("job-123");
+      },
+    );
+  });
+
   it("shows a single event directly and bundles it when a second event arrives", async () => {
     await suite.withPage(
       { viewport: { width: 1100, height: 900 }, colorScheme: "light" },

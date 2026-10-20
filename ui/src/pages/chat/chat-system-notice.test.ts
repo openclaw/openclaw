@@ -210,6 +210,37 @@ describe("system notices through pending-to-history promotion", () => {
   });
 });
 
+describe("background command notices", () => {
+  it.each(["completed (job-123, code 0)", "failed (job-123, code 1)"])(
+    "summarizes %s without exposing command output or mutating the input",
+    (outcome) => {
+      const message = {
+        ...baseMessage,
+        content: `[System] Exec ${outcome} :: <a href="/contact" class="text-main">Contact</a>`,
+        provenance: { kind: "internal_system", sourceTool: "exec" },
+      };
+      const original = structuredClone(message);
+      for (const messages of [[], [message]]) {
+        const items = render(messages, pending(message));
+        expect(items).toMatchObject([
+          {
+            kind: "notice",
+            label: "System · command result",
+            text: "A background command returned a result.",
+          },
+        ]);
+        expect(JSON.stringify(items)).not.toContain("<a href");
+        expect(JSON.stringify(items)).not.toContain("job-123");
+      }
+      expect(message).toEqual(original);
+      const external = { ...message, provenance: { kind: "external_user", sourceTool: "exec" } };
+      expect(render([external], [])).toMatchObject([
+        { kind: "group", role: "user", messages: [{ message: external }] },
+      ]);
+    },
+  );
+});
+
 describe("plugin steering notices", () => {
   it.each([
     [{ pluginId: "release-helper", pluginName: "Release Helper" }, "Release Helper"],

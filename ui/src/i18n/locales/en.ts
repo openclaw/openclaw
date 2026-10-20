@@ -2647,6 +2647,10 @@ export const en: TranslationMap & {
     resumeInNewSession: "Resume in new session",
     resumingSession: "Resuming…",
     systemNotice: {
+      commandResult: {
+        label: "System · command result",
+        summary: "A background command returned a result.",
+      },
       event: "{count} system event",
       events: "{count} system events",
       updatesNotDelivered: "Updates not delivered",
