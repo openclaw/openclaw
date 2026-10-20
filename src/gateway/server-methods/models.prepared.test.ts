@@ -13,6 +13,7 @@ import * as providerPolicySurface from "../../plugins/provider-policy-surface.js
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { authorizationClient } from "../server-methods.authorization.test-support.js";
 import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
@@ -81,17 +82,12 @@ it("retains the model-list projection until its catalog facts change", async () 
       let currentConfig = config;
       context.getRuntimeConfig = () => currentConfig;
       const params = { agentId: "main", view: "all" as const };
-      const client: GatewayClient = {
-        internal: { syntheticClient: true },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: { id: "test", version: "1", platform: "test", mode: "test" },
-          role: "operator",
-          scopes: ["operator.read"],
-          caps: ["model-selection-policy"],
-        },
-      };
+      const client = authorizationClient(
+        "prepared",
+        ["operator.read"],
+        { internal: { syntheticClient: true } },
+        { caps: ["model-selection-policy"] },
+      );
       const expected = await modelsListResult.buildModelsListResult({
         source: { kind: "gateway", context },
         agentId: "main",
@@ -336,20 +332,22 @@ it("bounds saved-session reads while projecting configured models and runtime ch
       try {
         await harness.runtime.refresh();
         const result = await read();
-        expect(result?.models).toHaveLength(9);
-        expect(result?.models.every((model) => model.available)).toBe(true);
-        expect(result?.models.filter((model) => model.runtimeChoices?.length)).toHaveLength(3);
-        expect(result?.models.flatMap((model) => model.runtimeChoices ?? [])).toEqual(
-          Array.from({ length: 3 }, () =>
+        expect({
+          models: result?.models.length,
+          available: result?.models.every((model) => model.available),
+          withChoices: result?.models.filter((model) => model.runtimeChoices?.length).length,
+          choices: result?.models.flatMap((model) => model.runtimeChoices ?? []),
+          account: result?.accountSelection,
+        }).toMatchObject({
+          models: 9,
+          available: true,
+          withChoices: 3,
+          choices: Array.from({ length: 3 }, () =>
             expect.objectContaining({ agentRuntime: expect.objectContaining({ id: "codex" }) }),
           ),
-        );
-        const readsPerRequest = sessionRead.mock.calls.length;
-        expect(result?.accountSelection).toMatchObject({
-          kind: "shared",
-          authProfileId: "openai:fixture",
-          source: "user",
+          account: { kind: "shared", authProfileId: "openai:fixture", source: "user" },
         });
+        const readsPerRequest = sessionRead.mock.calls.length;
         sessionRead.mockClear();
         expect(await read()).toEqual(result);
         const warmReadsPerRequest = sessionRead.mock.calls.length;
