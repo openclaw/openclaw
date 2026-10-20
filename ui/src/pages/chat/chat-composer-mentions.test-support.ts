@@ -9,7 +9,6 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
-/* @vitest-environment jsdom */
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
@@ -73,11 +72,8 @@ export function composerFixture(
     ),
     selfUser: { id: "sender-one", identity: { type: "profile", id: "sender-one" } },
   });
-  const attachmentDraft = new NewSessionAttachmentDraft(
-    () => renderCurrent(),
-    () => {},
-  );
-  const modelControl = new NewSessionModelControl(() => renderCurrent());
+  const attachmentDraft = new NewSessionAttachmentDraft(renderCurrent, () => {});
+  const modelControl = new NewSessionModelControl(renderCurrent);
   onTestFinished(() => {
     retired = true;
     attachmentDraft.reset();
@@ -100,15 +96,10 @@ export function composerFixture(
     draft = next;
   };
   const props = createComposerProps();
-  const renderCurrent = () => {
+  function renderCurrent() {
     if (retired) {
       return;
     }
-    const directory = {
-      client,
-      ownerKey,
-      params: kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" },
-    };
     if (kind === "chat") {
       renderComposerInto(container, {
         ...props,
@@ -117,7 +108,9 @@ export function composerFixture(
         mentions,
         getDraft: () => draft,
         getMentions: () => mentions,
-        mentionDirectory: unsupported ? undefined : directory,
+        mentionDirectory: unsupported
+          ? undefined
+          : { client, ownerKey, params: { sessionKey: "agent:main:chat" } },
         mentionsUnsupported: unsupported,
         onDraftChange: onInput,
         onSlashCommand: slashCommand,
@@ -152,7 +145,7 @@ export function composerFixture(
         native = mountNewSessionComposer(() => nativeOptions, composerTextarea, container);
       }
     }
-  };
+  }
   renderCurrent();
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
   const edit = (
@@ -165,19 +158,19 @@ export function composerFixture(
       data?: string | null;
     } = {},
   ) => {
-    const inputType = options.inputType ?? "insertText";
+    const eventInit = {
+      bubbles: true,
+      inputType: options.inputType ?? "insertText",
+      data: options.data ?? next,
+    };
     textarea.setSelectionRange(
       options.start ?? textarea.value.length,
       options.end ?? options.start ?? textarea.value.length,
     );
-    textarea.dispatchEvent(
-      new InputEvent("beforeinput", { bubbles: true, inputType, data: options.data ?? next }),
-    );
+    textarea.dispatchEvent(new InputEvent("beforeinput", eventInit));
     textarea.value = next;
     textarea.setSelectionRange(options.caret ?? next.length, options.caret ?? next.length);
-    textarea.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType, data: options.data ?? next }),
-    );
+    textarea.dispatchEvent(new InputEvent("input", eventInit));
     renderCurrent();
   };
   const pressKey = (key: string, extra: KeyboardEventInit = {}) => {

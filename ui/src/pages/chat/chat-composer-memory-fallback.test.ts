@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import {
@@ -41,7 +41,7 @@ function globalHost(
       },
       [scopeKey]: {
         message: "newest draft",
-        attachments: winning,
+        attachments: [...winning],
         storageFailed: true,
         sequence: 2,
       },
@@ -52,36 +52,23 @@ function globalHost(
   } as unknown as ChatPageHost;
 }
 
-describe("chat composer memory fallback adoption", () => {
-  it("releases losing sibling fallback payloads when adoption drops them", () => {
-    const losing = storedAttachment("losing-sibling-attachment");
-    const winning = storedAttachment("winning-attachment");
-    const host = globalHost(losing, [winning]);
-
-    const ownership = retainChatComposerMemoryFallback(host, scope, {
-      message: "newest draft",
-      attachments: [winning],
-    });
-
-    expect(ownership).toEqual({ sequence: 2 });
+it.each([false, true])(
+  "adopts the newest fallback and releases only unowned payloads (live: %s)",
+  (live) => {
+    const sibling = storedAttachment("sibling");
+    const winning = live ? [] : [storedAttachment("winning")];
+    const host = globalHost(sibling, winning, live ? [sibling] : []);
+    expect(
+      retainChatComposerMemoryFallback(host, scope, {
+        message: "newest draft",
+        attachments: winning,
+      }),
+    ).toEqual({ sequence: 2 });
     expect(Object.keys(host.chatComposerFallbackByScope)).toEqual([scopeKey]);
-    expect(getChatAttachmentDataUrl({ id: losing.id, mimeType: losing.mimeType })).toBeNull();
-    expect(getChatAttachmentDataUrl({ id: winning.id, mimeType: winning.mimeType })).toBe(
-      "data:image/png;base64,winning-attachment",
-    );
-  });
-
-  it("keeps payloads shared with the live composer when a sibling is dropped", () => {
-    const shared = storedAttachment("shared-with-composer");
-    const host = globalHost(shared, [], [shared]);
-
-    retainChatComposerMemoryFallback(host, scope, {
-      message: "newest draft",
-      attachments: [],
-    });
-
-    expect(getChatAttachmentDataUrl({ id: shared.id, mimeType: shared.mimeType })).toBe(
-      "data:image/png;base64,shared-with-composer",
-    );
-  });
-});
+    for (const attachment of [sibling, ...winning]) {
+      expect(getChatAttachmentDataUrl({ id: attachment.id, mimeType: attachment.mimeType })).toBe(
+        live || attachment !== sibling ? `data:image/png;base64,${attachment.id}` : null,
+      );
+    }
+  },
+);

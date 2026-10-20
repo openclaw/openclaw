@@ -11,20 +11,24 @@ import {
 
 afterEach(() => resetComposerFixture());
 
-function usageProps(provider: string, displayName: string, plan: string, usedPercent: number) {
+function usageProps(refreshed = false) {
+  const [provider, displayName, plan, usedPercent, revision] = refreshed
+    ? (["anthropic", "Claude", "Max", 61, 2] as const)
+    : (["openai", "OpenAI", "Plus", 21, 1] as const);
   return createComposerProps({
     selectedSession: {
       key: "main",
       kind: "direct",
-      updatedAt: 1,
-      totalTokens: 1_000,
+      updatedAt: revision,
+      totalTokens: refreshed ? 190_000 : 1_000,
       contextTokens: 200_000,
       modelProvider: provider,
+      ...(refreshed ? { inputTokens: 9_000, outputTokens: 400 } : {}),
     },
     providerUsage: {
-      basePath: "/control",
+      basePath: refreshed ? "/updated" : "/control",
       modelAuthStatusResult: {
-        ts: 1,
+        ts: revision,
         providers: [
           {
             provider,
@@ -44,15 +48,13 @@ function usageProps(provider: string, displayName: string, plan: string, usedPer
 }
 
 it("keeps the context popover open and its usage link focused during live usage refreshes", async () => {
-  const props = usageProps("openai", "OpenAI", "Plus", 21);
+  const props = usageProps();
   const container = document.body.appendChild(createComposerContainer());
   renderComposerInto(container, props);
   const query = <T extends Element = HTMLElement>(selector: string) =>
     container.querySelector<T>(selector);
-  const details = query<HTMLDetailsElement>(".context-usage details");
-  if (!details) {
-    throw new Error("Expected the composer's context usage popover");
-  }
+  const details = query<HTMLDetailsElement>(".context-usage details")!;
+  expect(details).not.toBeNull();
   expect(details.querySelector(".context-usage__popover")).toBeNull();
   details.querySelector("summary")!.click();
   await waitForSolid(() =>
@@ -62,24 +64,11 @@ it("keeps the context popover open and its usage link focused during live usage 
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
 
-  const current = usageProps("anthropic", "Claude", "Max", 61);
+  const current = usageProps(true);
   renderComposerInto(container, {
     ...props,
-    selectedSession: {
-      ...current.selectedSession!,
-      updatedAt: 2,
-      totalTokens: 190_000,
-      inputTokens: 9_000,
-      outputTokens: 400,
-    },
-    providerUsage: {
-      ...current.providerUsage!,
-      basePath: "/updated",
-      modelAuthStatusResult: {
-        ...current.providerUsage!.modelAuthStatusResult!,
-        ts: 2,
-      },
-    },
+    selectedSession: current.selectedSession,
+    providerUsage: current.providerUsage,
   });
   flush();
 

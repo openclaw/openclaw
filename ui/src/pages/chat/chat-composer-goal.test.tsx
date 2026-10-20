@@ -1,14 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionGoal } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import type { ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
-import { resetChatComposerState } from "./components/chat-composer-state.ts";
 
 const goal: SessionGoal = {
   schemaVersion: 1,
@@ -22,126 +20,119 @@ const goal: SessionGoal = {
   continuationTurns: 0,
 };
 
-function mountGoal(initial: SessionGoal) {
-  const [readGoal, setGoal] = createSignal<SessionGoal | undefined>(initial, { equals: false });
-  const view = mountSolid(() => (
-    <ChatGoal goal={readGoal()} expanded={false} canAct={false} onExpandedChange={() => {}} />
-  ));
+type GoalProps = Parameters<typeof ChatGoal>[0];
+function mountGoal(initial: SessionGoal, options: Partial<GoalProps> = {}) {
+  const [props, setProps] = createSignal<GoalProps>({
+    goal: initial,
+    expanded: false,
+    canAct: false,
+    onExpandedChange: () => {},
+    ...options,
+  });
+  const view = mountSolid(() => <ChatGoal {...props()} />);
+  const update = (value: Partial<GoalProps>) => {
+    setProps((current) => ({ ...current, ...value }));
+    flush();
+  };
   flush();
   // The scroll affordance settles its frame before clock-lifecycle assertions.
   vi.advanceTimersToNextFrame();
   flush();
   return {
     container: view.container,
-    draw: (value: SessionGoal | undefined) => {
-      setGoal(() => value);
-      flush();
-    },
+    draw: (value: SessionGoal | undefined) => update({ goal: value }),
+    update,
+    query: <T extends Element = HTMLElement>(selector: string) =>
+      view.container.querySelector<T>(selector),
     unmount: view.unmount,
     elapsed: () => view.container.querySelector(".agent-chat__goal-elapsed")?.textContent,
   };
 }
 
-describe("goal elapsed presentation", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-    vi.useFakeTimers();
-    vi.setSystemTime(121_000);
-  });
+function advanceTime(milliseconds: number) {
+  vi.advanceTimersByTime(milliseconds);
+  flush();
+}
 
-  afterEach(() => {
-    resetChatComposerState();
-    document.body.replaceChildren();
-    vi.useRealTimers();
-  });
+beforeEach(async () => {
+  await i18n.setLocale("en");
+  vi.useFakeTimers();
+  vi.setSystemTime(121_000);
+});
 
-  it("keeps Resume progress and its saved retry in the goal pill", () => {
-    const onCheck = vi.fn(async () => true);
-    const [recovery, setRecovery] = createSignal<ChatGoalRecovery>({ pending: true, onCheck });
-    const [connected, setConnected] = createSignal(true);
-    const view = mountSolid(() => (
-      <ChatGoal
-        goal={{ ...goal, status: "paused", lastStatusNote: "Previous pause" }}
-        expanded={true}
-        canAct={false}
-        connected={connected()}
-        resumeRecovery={recovery()}
-        onExpandedChange={() => {}}
-      />
-    ));
-    flush();
-    expect(view.container.querySelector('[role="status"]')?.textContent).toBe("Resuming goal…");
-    expect(view.container.querySelector('[aria-busy="true"]')).not.toBeNull();
-    expect(view.container.querySelector(".session-run-spinner")).not.toBeNull();
-    expect(view.container.textContent).not.toContain("Previous pause");
-    setRecovery({ pending: false, onCheck });
-    flush();
-    expect(view.container.querySelector('[role="status"]')?.textContent).toBe(
-      "Resume not confirmed",
-    );
-    const retry = view.container.querySelector<HTMLButtonElement>(".agent-chat__goal-resume")!;
-    expect(retry.textContent).toBe("Retry resume");
-    retry.click();
-    expect(onCheck).toHaveBeenCalledOnce();
-    setConnected(false);
-    flush();
-    expect(retry.disabled).toBe(true);
-    expect(view.container.querySelector(".session-run-spinner")).toBeNull();
-  });
+afterEach(() => vi.useRealTimers());
 
-  it.each([
-    ["active", "2m 00s"],
-    ["paused", "1m 00s"],
-    ["blocked", "1m 00s"],
-    ["usage_limited", "1m 00s"],
-    ["budget_limited", "1m 00s"],
-    ["complete", "1m 00s"],
-  ] as const)("renders elapsed time immediately for %s goals", (status, elapsed) => {
-    const view = mountGoal({ ...goal, status });
-    expect(view.elapsed()).toBe(elapsed);
-  });
+it("keeps Resume progress and its saved retry in the goal pill", () => {
+  const onCheck = vi.fn(async () => true);
+  const view = mountGoal(
+    { ...goal, status: "paused", lastStatusNote: "Previous pause" },
+    {
+      expanded: true,
+      connected: true,
+      resumeRecovery: { pending: true, onCheck },
+    },
+  );
+  const { query } = view;
+  expect(query('[role="status"]')).toMatchObject({ textContent: "Resuming goal…" });
+  expect(query('[aria-busy="true"]')).not.toBeNull();
+  expect(query(".session-run-spinner")).not.toBeNull();
+  expect(view.container.textContent).not.toContain("Previous pause");
+  view.update({ resumeRecovery: { pending: false, onCheck } });
+  expect(query('[role="status"]')).toMatchObject({ textContent: "Resume not confirmed" });
+  const retry = query<HTMLButtonElement>(".agent-chat__goal-resume")!;
+  expect(retry.textContent).toBe("Retry resume");
+  retry.click();
+  expect(onCheck).toHaveBeenCalledOnce();
+  view.update({ connected: false });
+  expect(retry.disabled).toBe(true);
+  expect(query(".session-run-spinner")).toBeNull();
+});
 
-  it("replaces a live tick with the authoritative stop time and resumes ticking", () => {
-    const view = mountGoal(goal);
-    vi.advanceTimersByTime(1_000);
-    flush();
-    expect(view.elapsed()).toBe("2m 01s");
+it.each([
+  ["active", "2m 00s"],
+  ["paused", "1m 00s"],
+  ["blocked", "1m 00s"],
+  ["usage_limited", "1m 00s"],
+  ["budget_limited", "1m 00s"],
+  ["complete", "1m 00s"],
+] as const)("renders elapsed time immediately for %s goals", (status, elapsed) => {
+  const view = mountGoal({ ...goal, status });
+  expect(view.elapsed()).toBe(elapsed);
+});
 
-    view.draw({ ...goal, status: "paused", pausedAt: 46_000 });
-    expect(view.elapsed()).toBe("45s");
-    vi.advanceTimersByTime(60_000);
-    flush();
-    expect(view.elapsed()).toBe("45s");
+it("replaces a live tick with the authoritative stop time and resumes ticking", () => {
+  const view = mountGoal(goal);
+  advanceTime(1_000);
+  expect(view.elapsed()).toBe("2m 01s");
 
-    view.draw(goal);
-    expect(view.elapsed()).toBe("3m 01s");
-    vi.advanceTimersByTime(60_000);
-    flush();
-    expect(view.elapsed()).toBe("4m 01s");
+  const transitions: [SessionGoal, string, string][] = [
+    [{ ...goal, status: "paused", pausedAt: 46_000 }, "45s", "45s"],
+    [goal, "3m 01s", "4m 01s"],
+    [{ ...goal, status: "complete", completedAt: 151_000 }, "2m 30s", "2m 30s"],
+  ];
+  for (const [next, immediate, afterMinute] of transitions) {
+    view.draw(next);
+    expect(view.elapsed()).toBe(immediate);
+    advanceTime(60_000);
+    expect(view.elapsed()).toBe(afterMinute);
+  }
+});
 
-    view.draw({ ...goal, status: "complete", completedAt: 151_000 });
-    expect(view.elapsed()).toBe("2m 30s");
-    vi.advanceTimersByTime(60_000);
-    flush();
-    expect(view.elapsed()).toBe("2m 30s");
-  });
-
-  it("retires the active timer when the goal is removed", () => {
-    const view = mountGoal(goal);
+it.each(["remove", "unmount"])(
+  "retires the timer on %s and starts a fresh clock on remount",
+  (action) => {
+    let view = mountGoal(goal);
     expect(vi.getTimerCount()).toBe(1);
-    view.draw(undefined);
+    if (action === "remove") {
+      view.draw(undefined);
+    } else {
+      view.unmount();
+    }
     expect(view.container.querySelector(".agent-chat__goal")).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("retires the active timer on unmount and resumes from the current time on remount", () => {
-    let view = mountGoal(goal);
-    view.unmount();
-    expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(60_000);
-    flush();
+    advanceTime(60_000);
     view = mountGoal(goal);
     expect(view.elapsed()).toBe("3m 00s");
     expect(vi.getTimerCount()).toBe(1);
-  });
-});
+  },
+);
