@@ -43,6 +43,38 @@ available. For the current channel, its bare `19:...@thread.tacv2` ID and
 Graph form to select another channel. The selected conversation must still
 satisfy the configured access policy and the action's membership requirements.
 
+## Channel roster action
+
+Use `channel-info` with `includeMembers: true` to list the selected private channel's users. Omitting the flag preserves metadata-only behavior.
+
+```json5
+{
+  action: "channel-info",
+  channel: "msteams",
+  teamId: "<team-id>",
+  channelId: "<channel-id>",
+  includeMembers: true,
+}
+```
+
+The target must satisfy the existing native read policy. The configured Graph
+identity must also have permission to
+[list channel members](https://learn.microsoft.com/en-us/graph/api/channel-list-members?view=graph-rest-1.0);
+the default `member-info` permission baseline alone is not sufficient for private
+channels. This action does not request or grant permissions, install apps, or
+fall back to the parent team's roster after a denied read.
+
+A successful response adds `members`, `membersComplete: true`, `membersScope`
+(team, channel and membership type), and `membersFetchedAt` (the start of the
+observation). Other channel types (including shared channels), malformed responses,
+out-of-resource continuation links, permission failures and pagination beyond
+100 pages fail rather than return a supposedly complete roster.
+
+Completeness means every page was traversed, **not** an atomic membership
+snapshot or a guarantee against later membership changes. The user roster does
+not prove bot/app installation or private-channel message delivery; verify those
+separately.
+
 ## Native approval cards
 
 Microsoft Teams can deliver exec and plugin approval requests as Adaptive Cards in the originating conversation. Each card describes the requested command or plugin action and provides only the decisions allowed for that request, such as **Approve once**, **Always allow**, and **Deny**. After a decision or expiration, OpenClaw updates the original card with its final status.

@@ -546,6 +546,24 @@ it("makes required and serialized properties optional", async () => {
   expect(Type.Object({ action: Type.String(), ...properties }).required).toEqual(["action"]);
 });
 
+it("keeps Teams channel-info and its optional roster flag available cross-channel", async () => {
+  const { msteamsPlugin } = await import("../../../../extensions/msteams/api.js");
+  activate(msteamsPlugin);
+  const cfg = {
+    channels: {
+      msteams: { appId: "test-app", appPassword: "test-password", tenantId: "test-tenant" },
+    },
+  };
+  const actions = await runMessageActionDiscoveryAsync(
+    listCrossChannelSchemaSupportedMessageActionsSteps({ cfg, channel: "msteams" }),
+  );
+  expect(actions).toContain("channel-info");
+  const properties = await runMessageActionDiscoveryAsync(
+    resolveChannelMessageToolSchemaPropertiesSteps({ cfg, channel: "slack" }),
+  );
+  expect(properties.includeMembers).toMatchObject({ type: "boolean" });
+});
+
 it.each([true, false])("filters cross-channel schema actions: %s", async (scoped) => {
   activateDiscovery({
     actions: scoped ? ["read", "list-pins", "unpin"] : ["read", "unpin"],

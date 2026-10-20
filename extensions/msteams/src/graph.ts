@@ -204,6 +204,8 @@ export async function fetchAllGraphPages<T>(params: {
   findOne?: (item: T) => boolean;
   /** Find-only callers can skip retaining every traversed page. */
   collectItems?: boolean;
+  /** Require a list response and pin every page to the initial Graph resource. */
+  strict?: boolean;
 }): Promise<PaginatedResult<T>> {
   const maxPages = params.maxPages ?? 50;
   const items: T[] = [];
@@ -217,6 +219,17 @@ export async function fetchAllGraphPages<T>(params: {
       ...(params.deadline ? { deadline: params.deadline } : {}),
     });
 
+    if (params.strict && (!res || !Array.isArray(res.value))) {
+      throw new Error("Graph pagination returned an invalid list response");
+    }
+    const rawNext = res["@odata.nextLink"];
+    if (
+      params.strict &&
+      rawNext !== undefined &&
+      (typeof rawNext !== "string" || !rawNext.trim())
+    ) {
+      throw new Error("Graph pagination returned an invalid next link");
+    }
     const pageItems = res.value ?? [];
 
     const match = params.findOne ? pageItems.find(params.findOne) : undefined;
@@ -227,14 +240,32 @@ export async function fetchAllGraphPages<T>(params: {
       return { items, truncated: false, found: match };
     }
 
-    // @odata.nextLink is an absolute URL; strip the Graph root to get a relative path
-    const rawNext: string | undefined = res["@odata.nextLink"];
-    if (rawNext) {
-      nextPath = rawNext
-        .replace("https://graph.microsoft.com/v1.0", "")
-        .replace("https://graph.microsoft.com/beta", "");
+    if (rawNext && params.strict) {
+      const expected = new URL(GRAPH_ROOT + params.path);
+      const next = new URL(rawNext);
+      const expectedSegments = expected.pathname.split("/");
+      const nextSegments = next.pathname.split("/");
+      if (
+        next.origin !== expected.origin ||
+        next.username ||
+        next.password ||
+        next.hash ||
+        nextSegments.length !== expectedSegments.length ||
+        nextSegments.some(
+          (segment, index) =>
+            decodeURIComponent(segment) !== decodeURIComponent(expectedSegments[index] ?? ""),
+        )
+      ) {
+        throw new Error("Graph pagination left the requested resource; refusing to follow it");
+      }
+      // Preserve query bytes, but keep requests on the original encoded resource.
+      nextPath = params.path.split("?", 1)[0] + next.search;
     } else {
-      nextPath = undefined;
+      nextPath = rawNext
+        ? rawNext
+            .replace("https://graph.microsoft.com/v1.0", "")
+            .replace("https://graph.microsoft.com/beta", "")
+        : undefined;
     }
   }
 

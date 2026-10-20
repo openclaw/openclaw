@@ -668,15 +668,25 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             if (!graphTeamId || !graphChannelId) {
               throw new Error("Authorized Microsoft Teams channel target is invalid.");
             }
+            const includeMembers = ctx.params.includeMembers === true;
             const { getChannelInfoMSTeams } = await loadMSTeamsChannelRuntime();
             const result = await getChannelInfoMSTeams({
               cfg: ctx.cfg,
               accountId: actionAccountId,
               teamId: graphTeamId,
               channelId: graphChannelId,
+              ...(includeMembers ? { includeMembers: true } : {}),
             });
             return jsonMSTeamsOkActionResult("channel-info", {
               channelInfo: result.channel,
+              ...(result.members !== undefined
+                ? {
+                    members: result.members,
+                    membersComplete: result.membersComplete,
+                    membersFetchedAt: result.membersFetchedAt,
+                    membersScope: result.membersScope,
+                  }
+                : {}),
             });
           }
 

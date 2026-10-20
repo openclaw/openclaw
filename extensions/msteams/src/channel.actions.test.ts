@@ -284,6 +284,21 @@ describe("Teams action routing and authority", () => {
     );
   });
 
+  it("does not request includeMembers when the caller omits or falsifies it", async () => {
+    runtime.getChannelInfoMSTeams.mockResolvedValue({ channel: { id: graphChannel } });
+    await run("channel-info", {
+      teamId: graphTeam,
+      channelId: graphChannel,
+      includeMembers: false,
+    });
+    expect(runtime.getChannelInfoMSTeams).toHaveBeenCalledWith({
+      cfg,
+      accountId: undefined,
+      teamId: graphTeam,
+      channelId: graphChannel,
+    });
+  });
+
   it("requires a trusted Teams requester for group management", () => {
     const requires = msteamsPlugin.actions!.requiresTrustedRequesterSender!;
     for (const action of ["addParticipant", "removeParticipant", "renameGroup"] as const) {
