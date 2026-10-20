@@ -1883,6 +1883,18 @@ try {
           collectGarbage: !soakScenario || !values.allocations,
         })
       : undefined;
+  const soakAllocationPath =
+    soakScenario && values.allocations
+      ? path.join(output, "allocation-soak.heapprofile")
+      : undefined;
+  // A twenty-minute churn profile needs coarser sampling to bound native records and JSON export.
+  const soakSamplingIntervalBytes = 512 * 1024;
+  if (soakAllocationPath) {
+    // Reading or stopping a V8 sampling profile forces GC; keep one window for the entire soak.
+    await controlGatewayProfile(gateway, "heap", "start", soakAllocationPath, {
+      samplingIntervalBytes: soakSamplingIntervalBytes,
+    });
+  }
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
   const wholeSoakGcBefore = soakScenario ? gcTrace?.snapshot() : undefined;
@@ -2121,15 +2133,16 @@ try {
         await listWork;
       }
     };
-    const allocation = values.allocations
-      ? await measureGatewayAllocations(
-          gateway,
-          path.join(output, `allocation-${round}.heapprofile`),
-          turnScenario ? runCount : operations,
-          workload,
-        )
-      : undefined;
-    if (!values.allocations) {
+    const allocation =
+      values.allocations && !soakScenario
+        ? await measureGatewayAllocations(
+            gateway,
+            path.join(output, `allocation-${round}.heapprofile`),
+            turnScenario ? runCount : operations,
+            workload,
+          )
+        : undefined;
+    if (!values.allocations || soakScenario) {
       await workload();
     }
     const gcAfter = gcTrace?.snapshot();
@@ -2368,6 +2381,20 @@ try {
   ) {
     throw new Error("No main-isolate GC trace observed; promotion evidence is unavailable");
   }
+  let wholeSoakAllocation;
+  if (soakAllocationPath) {
+    // Stop after the GC/loop window so the profiler's forced collection cannot affect acceptance.
+    await controlGatewayProfile(gateway, "heap", "stop", soakAllocationPath);
+    const profile = readGatewayHeapProfile(soakAllocationPath, {
+      samplingIntervalBytes: soakSamplingIntervalBytes,
+    });
+    const completedTurns = samples.length * runCount;
+    wholeSoakAllocation = {
+      ...profile,
+      completedTurns,
+      allocatedMbPerTurn: profile.sampledAllocatedBytes / 1_000_000 / completedTurns,
+    };
+  }
   let retainedProfile;
   if (soakScenario) {
     await sampleMemory();
@@ -2495,6 +2522,7 @@ try {
           initialMemoryCollected: !values.allocations,
           memorySamples,
           retainedProfile,
+          wholeSoakAllocation,
           wholeSoakDiagnostics,
           wholeSoakGc,
         }

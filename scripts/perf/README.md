@@ -766,7 +766,13 @@ latencies in `rpcLatencyMs`, plus each cohort's foreground end-to-end
 `streamStart.turnLatencyMs` from admission through successful `agent.wait`.
 
 Each allocation profile includes collected objects and reports decimal
-`allocatedMbPerTurn`. With `--trace-gc`, the owned Node process runs
+`allocatedMbPerTurn`. Allocation soaks keep one continuous sampling window and
+report it as `wholeSoakAllocation` with `allocation-soak.heapprofile`. These long
+captures sample every 512 KiB on average to bound native sample records and the
+final JSON export; short allocation experiments retain their 32 KiB interval. V8 forces
+a major collection when a sampling profile is read or stopped, so the soak
+never reads the profile between cohorts and stops it only after recording the
+whole-window GC and event-loop metrics. With `--trace-gc`, the owned Node process runs
 `--trace-gc-nvp`; the collector uses its PID and Node's explicit main-thread
 identifier, excluding worker-isolate GC. `gcTrace` retains cumulative before and
 after snapshots, their difference, promoted bytes, decimal `promotedMbPerTurn`,
@@ -774,9 +780,12 @@ and minor/major pause seconds per minute. Unsupported or malformed main-isolate
 traces fail the capture instead of reporting zero promotion. `wholeSoakGc` and
 `wholeSoakDiagnostics` span all measured cohorts **and the idle gaps**, stopping
 before final forced collection and the edit control. The latter includes
-event-loop p99/max and GC duration by kind. Per-cohort allocation captures cover
-the workload and event drain, not the idle gap; whole-soak GC catches deferred
-major collections that a short allocation window can miss.
+event-loop p99/max and GC duration by kind. The continuous allocation window
+also covers the idle gaps, so both measurements include deferred work. Short
+non-soak allocation experiments still stop a profile per cohort; their GC
+results do not establish natural steady-state GC behavior. Sampling retains
+native sample metadata and adds stack-capture overhead; confirm marginal
+GC/latency results with a matching soak without allocation profiling.
 
 Run at least twenty measured minutes per side and compare at least two concurrent
 pairs with swapped CPU halves. Compare B minus A within each pair for allocation,

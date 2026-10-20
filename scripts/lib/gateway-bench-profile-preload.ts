@@ -201,7 +201,7 @@ if (isMainThread) {
         } else {
           // Churn includes dead allocations; retention captures only survivors.
           const options = {
-            samplingInterval: GATEWAY_HEAP_SAMPLE_INTERVAL,
+            samplingInterval: message.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
             includeObjectsCollectedByMajorGC: message.includeCollectedObjects ?? true,
             includeObjectsCollectedByMinorGC: message.includeCollectedObjects ?? true,
           };

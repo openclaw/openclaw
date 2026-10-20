@@ -79,6 +79,7 @@ export type GatewayProfileCommand = {
   profilePath: string;
   includeWorkers?: boolean;
   includeCollectedObjects?: boolean;
+  samplingIntervalBytes?: number;
 };
 
 export type GatewayCpuUsageSnapshot = {
@@ -250,7 +251,11 @@ export async function controlGatewayProfile(
   kind: GatewayProfileCommand["kind"],
   action: GatewayProfileCommand["action"],
   profilePath: string,
-  options: { includeWorkers?: boolean; includeCollectedObjects?: boolean } = {},
+  options: {
+    includeWorkers?: boolean;
+    includeCollectedObjects?: boolean;
+    samplingIntervalBytes?: number;
+  } = {},
 ): Promise<void> {
   await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -409,7 +414,7 @@ export function readGatewayCpuProfile(profilePath: string) {
 
 export function readGatewayHeapProfile(
   profilePath: string,
-  options: { includeCollectedObjects?: boolean } = {},
+  options: { includeCollectedObjects?: boolean; samplingIntervalBytes?: number } = {},
 ) {
   const profile: HeapProfiler.SamplingHeapProfile = JSON.parse(readFileSync(profilePath, "utf8"));
   const sites: Array<{ sampledBytes: number; stack: string[] }> = [];
@@ -433,7 +438,7 @@ export function readGatewayHeapProfile(
   return {
     ...readProfileArtifacts(profilePath),
     profilePath,
-    samplingIntervalBytes: GATEWAY_HEAP_SAMPLE_INTERVAL,
+    samplingIntervalBytes: options.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
     includesCollectedObjects: options.includeCollectedObjects ?? true,
     sampledAllocatedBytes,
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),
