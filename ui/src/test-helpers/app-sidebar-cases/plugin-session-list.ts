@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiReplacement,
   ControlUiSurfaceProps,
@@ -29,7 +29,9 @@ describe("AppSidebar session-list replacement", () => {
     "keeps host sessions current across modes (delegates built-in: %s)",
     async (delegates) => {
       const client = createTestGatewayClient(async () => ({}));
-      const sessions = createSessionsHarness("main", ["agent:main:main", "agent:main:first"]);
+      const initialKeys = ["agent:main:main", "agent:main:first"];
+      const nextKeys = ["agent:main:main", "agent:main:next"];
+      const sessions = createSessionsHarness("main", initialKeys);
       const context = createContext(createGateway(client), sessions.sessions, TWO_AGENTS);
       const reportError = vi.fn();
       Object.assign(context.plugins, { reportError });
@@ -62,6 +64,10 @@ describe("AppSidebar session-list replacement", () => {
         selections: new Map(),
       };
       runtime.start();
+      onTestFinished(() => {
+        owner.abort.abort();
+        runtime.dispose();
+      });
       const host = createControlUiPluginHost(() => context, runtime, owner);
       const createReplacement = (id: string): ControlUiReplacement<"session-list"> => ({
         id,
@@ -106,85 +112,71 @@ describe("AppSidebar session-list replacement", () => {
             }
           : undefined,
       );
-      try {
-        const { sidebar } = await mountSidebarContext(context);
-        expect(reportError).not.toHaveBeenCalled();
-        const keys = () =>
-          [...sidebar.querySelectorAll<HTMLElement>("[data-plugin-session-key]")].map(
-            (row) => row.dataset.pluginSessionKey,
-          );
-        await settleRoster(sidebar);
-        expect(keys()).toEqual([]);
-        selected = true;
-        pluginListeners.forEach((notify) => notify());
-        await settleRoster(sidebar);
-        await vi.waitFor(() => expect(keys()).toEqual(["agent:main:main", "agent:main:first"]));
-        const firstReplacement = sidebar.querySelector('[data-plugin-replacement="sessions"]');
-        expect(firstReplacement).not.toBeNull();
-        const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
-        replacement = createReplacement("other-sessions");
-        pluginListeners.forEach((notify) => notify());
-        await settleRoster(sidebar);
-        expect(sidebar.querySelector('[data-plugin-replacement="other-sessions"]')).not.toBeNull();
-        await settleRoster(sidebar);
-        expect(firstReplacement?.isConnected).toBe(false);
-        expect(keys()).toEqual(["agent:main:main", "agent:main:first"]);
-        expect(prepare).not.toHaveBeenCalled();
-        prepare.mockRestore();
-        await toggleRoster(sidebar);
-        await vi.waitFor(() =>
-          expect(sidebar.querySelector(".sidebar-session-toolbar")).not.toBeNull(),
+      const { sidebar } = await mountSidebarContext(context);
+      const find = (selector: string) => sidebar.querySelector(selector);
+      expect(reportError).not.toHaveBeenCalled();
+      const keys = () =>
+        [...sidebar.querySelectorAll<HTMLElement>("[data-plugin-session-key]")].map(
+          (row) => row.dataset.pluginSessionKey,
         );
-        expect(keys()).toEqual(["agent:main:main", "agent:main:first"]);
-        await vi.waitFor(() =>
-          expect(Boolean(sidebar.querySelector(".sidebar-agent-roster"))).toBe(delegates),
-        );
+      await settleRoster(sidebar);
+      expect(keys()).toEqual([]);
+      selected = true;
+      pluginListeners.forEach((notify) => notify());
+      await settleRoster(sidebar);
+      await vi.waitFor(() => expect(keys()).toEqual(initialKeys));
+      const firstReplacement = find('[data-plugin-replacement="sessions"]');
+      expect(firstReplacement).not.toBeNull();
+      const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
+      replacement = createReplacement("other-sessions");
+      pluginListeners.forEach((notify) => notify());
+      await settleRoster(sidebar);
+      expect(find('[data-plugin-replacement="other-sessions"]')).not.toBeNull();
+      await settleRoster(sidebar);
+      expect(firstReplacement?.isConnected).toBe(false);
+      expect(keys()).toEqual(initialKeys);
+      expect(prepare).not.toHaveBeenCalled();
+      prepare.mockRestore();
+      await toggleRoster(sidebar);
+      await vi.waitFor(() => expect(find(".sidebar-session-toolbar")).not.toBeNull());
+      expect(keys()).toEqual(initialKeys);
+      await vi.waitFor(() => expect(Boolean(find(".sidebar-agent-roster"))).toBe(delegates));
 
-        sessions.publishList(createSessionState("main", ["agent:main:main", "agent:main:next"]));
-        await vi.waitFor(() => expect(keys()).toEqual(["agent:main:main", "agent:main:next"]));
-        await toggleRoster(sidebar);
-        await vi.waitFor(() =>
-          expect(sidebar.querySelector(".sidebar-agent-card__main")).not.toBeNull(),
-        );
-        expect(keys()).toEqual(["agent:main:main", "agent:main:next"]);
-        const wide = createSessionState("main", [
-          "agent:main:main",
-          ...Array.from(
-            { length: SIDEBAR_SESSION_PAGE_SIZE + 3 },
-            (_, i) => `agent:main:work-${i}`,
+      sessions.publishList(createSessionState("main", nextKeys));
+      await vi.waitFor(() => expect(keys()).toEqual(nextKeys));
+      await toggleRoster(sidebar);
+      await vi.waitFor(() => expect(find(".sidebar-agent-card__main")).not.toBeNull());
+      expect(keys()).toEqual(nextKeys);
+      const wide = createSessionState("main", [
+        "agent:main:main",
+        ...Array.from({ length: SIDEBAR_SESSION_PAGE_SIZE + 3 }, (_, i) => `agent:main:work-${i}`),
+      ]);
+      wide.result!.sessions.forEach((row, index) => {
+        row.updatedAt = 100 - index;
+      });
+      sessions.publishList(wide);
+      await settleRoster(sidebar);
+      const last = wide.result!.sessions.at(-1)!;
+      expect(find(`[data-session-key="${last.key}"]`)).toBeNull();
+      const lastPluginRow = () => find(`[data-plugin-session-key="${last.key}"]`);
+      expect(lastPluginRow()).not.toBeNull();
+      sessions.publishList({
+        ...wide,
+        result: {
+          ...wide.result!,
+          sessions: wide.result!.sessions.map((row) =>
+            row.key === last.key
+              ? Object.assign({}, row, { label: "Latest replacement row" })
+              : row,
           ),
-        ]);
-        wide.result!.sessions.forEach((row, index) => {
-          row.updatedAt = 100 - index;
-        });
-        sessions.publishList(wide);
-        await settleRoster(sidebar);
-        const last = wide.result!.sessions.at(-1)!;
-        expect(sidebar.querySelector(`[data-session-key="${last.key}"]`)).toBeNull();
-        expect(sidebar.querySelector(`[data-plugin-session-key="${last.key}"]`)).not.toBeNull();
-        sessions.publishList({
-          ...wide,
-          result: {
-            ...wide.result!,
-            sessions: wide.result!.sessions.map((row) =>
-              row.key === last.key
-                ? Object.assign({}, row, { label: "Latest replacement row" })
-                : row,
-            ),
-          },
-        });
-        await settleRoster(sidebar);
-        expect(sidebar.querySelector(`[data-plugin-session-key="${last.key}"]`)?.textContent).toBe(
-          "Latest replacement row",
-        );
-        selected = false;
-        pluginListeners.forEach((notify) => notify());
-        await settleRoster(sidebar);
-        expect(keys()).toEqual([]);
-      } finally {
-        owner.abort.abort();
-        runtime.dispose();
-      }
+        },
+      });
+      await settleRoster(sidebar);
+      expect(lastPluginRow()?.textContent).toBe("Latest replacement row");
+      selected = false;
+      pluginListeners.forEach((notify) => notify());
+      await settleRoster(sidebar);
+      expect(keys()).toEqual([]);
     },
   );
 });
