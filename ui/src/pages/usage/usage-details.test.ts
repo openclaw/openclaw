@@ -8,6 +8,12 @@ import { createUsageDetailFixture } from "./usage-details.test-support.ts";
 import { cleanupUsagePageTest, contextWithClient } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
+const status = (error: string | null, hasLoaded = true, stale = false) => ({
+  error,
+  hasLoaded,
+  stale,
+  awaitingGateway: false,
+});
 describe("Usage detail requests", () => {
   it.each(["resolve", "reject"])(
     "commits only the latest time-series selection (%s)",
@@ -51,32 +57,17 @@ describe("Usage detail requests", () => {
     const previous = details.timeSeries.data;
 
     await details.timeSeries.load("agent:main:detail");
-    expect(details.timeSeries.status).toEqual({
-      error: "timeline unavailable",
-      hasLoaded: true,
-      stale: true,
-      awaitingGateway: false,
-    });
+    expect(details.timeSeries.status).toEqual(status("timeline unavailable", true, true));
     expect(details.timeSeries.data).toBe(previous);
 
     const retryLoad = details.timeSeries.load("agent:main:detail");
-    expect(details.timeSeries.status).toEqual({
-      error: null,
-      hasLoaded: true,
-      stale: true,
-      awaitingGateway: false,
-    });
+    expect(details.timeSeries.status).toEqual(status(null, true, true));
     const result = { points: [] } as unknown as SessionUsageTimeSeries;
     retry.resolve(result);
     await retryLoad;
 
     expect(details.timeSeries.data).toBe(result);
-    expect(details.timeSeries.status).toEqual({
-      error: null,
-      hasLoaded: true,
-      stale: false,
-      awaitingGateway: false,
-    });
+    expect(details.timeSeries.status).toEqual(status(null));
   });
 
   it("does not retain detail data when the selected session changes", async () => {
@@ -96,65 +87,48 @@ describe("Usage detail requests", () => {
     await details.timeSeries.load("agent:main:b");
     await details.sessionLogs.load("agent:main:b");
 
-    expect(details.timeSeries.data).toBeNull();
-    expect(details.timeSeries.status).toEqual({
-      error: "timeline unavailable",
-      hasLoaded: false,
-      stale: false,
-      awaitingGateway: false,
-    });
-    expect(details.sessionLogs.data).toBeNull();
-    expect(details.sessionLogs.status).toEqual({
-      error: "logs unavailable",
-      hasLoaded: false,
-      stale: false,
-      awaitingGateway: false,
-    });
+    for (const [detail, error] of [
+      [details.timeSeries, "timeline unavailable"],
+      [details.sessionLogs, "logs unavailable"],
+    ] as const) {
+      expect(detail.data).toBeNull();
+      expect(detail.status).toEqual(status(error, false));
+    }
   });
 
-  it.each(["draining"] as const)(
-    "clears retained details and preserves read authorization errors while %s",
-    async (suspensionPhase) => {
-      const pending = deferred<never>();
-      const authorizationError = new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "missing scope: operator.read",
-      });
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({ points: [{ timestamp: 1 }] })
-        .mockResolvedValueOnce({
-          logs: [{ timestamp: 1, role: "user", content: "sensitive" }],
-        })
-        .mockReturnValue(pending.promise);
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const { details } = createUsageDetailFixture(client, context);
+  it("clears retained details and preserves read authorization errors while draining", async () => {
+    const pending = deferred<never>();
+    const authorizationError = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "missing scope: operator.read",
+    });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ points: [{ timestamp: 1 }] })
+      .mockResolvedValueOnce({
+        logs: [{ timestamp: 1, role: "user", content: "sensitive" }],
+      })
+      .mockReturnValue(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client);
+    const { details } = createUsageDetailFixture(client, context);
 
-      await details.timeSeries.load("agent:main:detail");
-      await details.sessionLogs.load("agent:main:detail");
-      const timeline = details.timeSeries.load("agent:main:detail");
-      const conversation = details.sessionLogs.load("agent:main:detail");
-      context.setGatewaySnapshot({ suspensionPhase });
-      pending.reject(authorizationError);
-      await Promise.all([timeline, conversation]);
+    await details.timeSeries.load("agent:main:detail");
+    await details.sessionLogs.load("agent:main:detail");
+    const timeline = details.timeSeries.load("agent:main:detail");
+    const conversation = details.sessionLogs.load("agent:main:detail");
+    context.setGatewaySnapshot({ suspensionPhase: "draining" });
+    pending.reject(authorizationError);
+    await Promise.all([timeline, conversation]);
 
-      expect(details.timeSeries.data).toBeNull();
-      expect(details.timeSeries.status).toEqual({
-        error:
+    for (const detail of [details.timeSeries, details.sessionLogs]) {
+      expect(detail.data).toBeNull();
+      expect(detail.status).toEqual(
+        status(
           "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
-        hasLoaded: false,
-        stale: false,
-        awaitingGateway: false,
-      });
-      expect(details.sessionLogs.data).toBeNull();
-      expect(details.sessionLogs.status).toEqual({
-        error:
-          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
-        hasLoaded: false,
-        stale: false,
-        awaitingGateway: false,
-      });
-    },
-  );
+          false,
+        ),
+      );
+    }
+  });
 });

@@ -15,6 +15,13 @@ function createPolicy(isLoading = () => false) {
   };
 }
 
+async function exhaustRetries(policy: UsageRefreshPolicy, connection?: object) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    policy.setLastLoadedAtMs(Date.now(), { incomplete: true, connection });
+    await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
+  }
+}
+
 describe("UsageRefreshPolicy", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -28,26 +35,15 @@ describe("UsageRefreshPolicy", () => {
     vi.restoreAllMocks();
   });
 
-  it("defers stale work until the page is visible", () => {
-    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    const { policy, reload } = createPolicy();
-    policy.setLastLoadedAtMs(NOW_MS - USAGE_PAYLOAD_TTL_MS);
-
-    void policy.request("reconnect");
-    expect(reload).not.toHaveBeenCalled();
-
-    visibility.mockReturnValue("visible");
-    void policy.request("focus");
-    expect(reload).toHaveBeenCalledOnce();
-  });
-
-  it("retries interrupted work once active despite a fresh payload", () => {
-    let loading = true;
+  it.each([false, true])("defers hidden work until visible (interrupted: %s)", (interrupted) => {
+    let loading = interrupted;
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const { policy, reload } = createPolicy(() => loading);
-    policy.setLastLoadedAtMs(NOW_MS);
-    policy.interrupt();
-    loading = false;
+    policy.setLastLoadedAtMs(interrupted ? NOW_MS : NOW_MS - USAGE_PAYLOAD_TTL_MS);
+    if (interrupted) {
+      policy.interrupt();
+      loading = false;
+    }
 
     void policy.request("reconnect");
     expect(reload).not.toHaveBeenCalled();
@@ -59,10 +55,7 @@ describe("UsageRefreshPolicy", () => {
 
   it("restarts an exhausted retry budget for manual and focus cycles", async () => {
     const { policy, reload, onIncompleteUsageExhausted } = createPolicy();
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
-      await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
-    }
+    await exhaustRetries(policy);
     expect(reload).toHaveBeenCalledTimes(3);
     expect(policy.incompleteUsageExhausted).toBe(true);
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
@@ -82,10 +75,7 @@ describe("UsageRefreshPolicy", () => {
   it("replaces an exhausted retry budget when the connection changes", async () => {
     const { policy, reload } = createPolicy();
     const first = {};
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      policy.setLastLoadedAtMs(Date.now(), { incomplete: true, connection: first });
-      await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
-    }
+    await exhaustRetries(policy, first);
     expect(reload).toHaveBeenCalledTimes(3);
     expect(policy.incompleteUsageExhausted).toBe(true);
 
@@ -117,30 +107,22 @@ describe("UsageRefreshPolicy", () => {
     },
   );
 
-  it("replays a deferred provider retry as a provider-only retry", async () => {
-    let loading = true;
-    const { policy, reload } = createPolicy(() => loading);
-
-    await policy.request("poll");
-    expect(reload).not.toHaveBeenCalled();
-    loading = false;
-    policy.flushPending();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(reload).toHaveBeenLastCalledWith("poll");
-  });
-
-  it("lets a deferred broader refresh outrank a deferred provider retry", async () => {
-    let loading = true;
-    const { policy, reload } = createPolicy(() => loading);
-    policy.setLastLoadedAtMs(null);
-
-    await policy.request("poll");
-    await policy.request("focus");
-    await policy.request("poll");
-    loading = false;
-    policy.flushPending();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(reload).toHaveBeenLastCalledWith("focus");
-  });
+  it.each(["poll", "focus"] as const)(
+    "replays the highest-priority deferred reason: %s",
+    async (reason) => {
+      let loading = true;
+      const { policy, reload } = createPolicy(() => loading);
+      await policy.request("poll");
+      if (reason === "focus") {
+        await policy.request("focus");
+        await policy.request("poll");
+      }
+      expect(reload).not.toHaveBeenCalled();
+      loading = false;
+      policy.flushPending();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(reload).toHaveBeenLastCalledWith(reason);
+    },
+  );
 });

@@ -25,40 +25,28 @@ describe("usage-helpers", () => {
   });
 
   it("unions categorical values while intersecting categories and other constraints", () => {
+    const makeSession = (
+      key: string,
+      channel: string,
+      model: string,
+      totalTokens: number,
+      errors: number,
+      name: string,
+    ) => ({
+      key,
+      channel,
+      modelProvider: key,
+      model,
+      usage: {
+        totalTokens,
+        messageCounts: { errors },
+        toolUsage: { totalCalls: 1, tools: [{ name }] },
+      },
+    });
     const sessions = [
-      {
-        key: "openai",
-        channel: "discord",
-        modelProvider: "openai",
-        model: "gpt",
-        usage: {
-          totalTokens: 100,
-          messageCounts: { errors: 1 },
-          toolUsage: { totalCalls: 1, tools: [{ name: "read" }] },
-        },
-      },
-      {
-        key: "anthropic",
-        channel: "slack",
-        modelProvider: "anthropic",
-        model: "claude",
-        usage: {
-          totalTokens: 80,
-          messageCounts: { errors: 0 },
-          toolUsage: { totalCalls: 1, tools: [{ name: "write" }] },
-        },
-      },
-      {
-        key: "google",
-        channel: "discord",
-        modelProvider: "google",
-        model: "gemini",
-        usage: {
-          totalTokens: 60,
-          messageCounts: { errors: 1 },
-          toolUsage: { totalCalls: 1, tools: [{ name: "read" }] },
-        },
-      },
+      makeSession("openai", "discord", "gpt", 100, 1, "read"),
+      makeSession("anthropic", "slack", "claude", 80, 0, "write"),
+      makeSession("google", "discord", "gemini", 60, 1, "read"),
     ];
     const cases: Array<[query: string, keys: string[]]> = [
       ["provider:openai provider:anthropic", ["openai", "anthropic"]],
@@ -98,15 +86,11 @@ describe("usage-helpers", () => {
       "maxMessages:10",
     ];
 
-    for (const filter of filters.slice(0, 4)) {
-      const result = filterSessionsByQuery([a, b], filter);
-      expect(result.sessions).toEqual([a]);
-      expect(result.warnings).toEqual([]);
-    }
-    for (const filter of filters.slice(4)) {
-      const result = filterSessionsByQuery([a, b], filter);
-      expect(result.sessions).toEqual([b]);
-      expect(result.warnings).toEqual([]);
+    for (const [index, filter] of filters.entries()) {
+      expect(filterSessionsByQuery([a, b], filter)).toEqual({
+        sessions: [index < 4 ? a : b],
+        warnings: [],
+      });
     }
   });
 
@@ -140,9 +124,10 @@ describe("usage-helpers", () => {
     const empty = { key: "empty", usage: null };
 
     for (const value of ["tools", "errors", "context", "usage", "model", "provider"]) {
-      const result = filterSessionsByQuery([populated, empty], `has:${value}`);
-      expect(result.sessions).toEqual([populated]);
-      expect(result.warnings).toEqual([]);
+      expect(filterSessionsByQuery([populated, empty], `has:${value}`)).toEqual({
+        sessions: [populated],
+        warnings: [],
+      });
     }
     expect(filterSessionsByQuery([populated, empty], "has:__proto__")).toEqual({
       sessions: [populated, empty],
@@ -153,15 +138,11 @@ describe("usage-helpers", () => {
   it("rejects non-decimal numeric filter values", () => {
     const session = { key: "a", usage: { totalTokens: 10_000, totalCost: 0 } };
 
-    expect(filterSessionsByQuery([session], "minTokens:1e3").warnings).toEqual([
-      "Invalid number for minTokens",
-    ]);
-    expect(filterSessionsByQuery([session], "minTokens:0x1000").warnings).toEqual([
-      "Invalid number for minTokens",
-    ]);
-    expect(filterSessionsByQuery([session], "minTokens:9007199254740993").warnings).toEqual([
-      "Invalid number for minTokens",
-    ]);
+    for (const value of ["1e3", "0x1000", "9007199254740993"]) {
+      expect(filterSessionsByQuery([session], `minTokens:${value}`).warnings).toEqual([
+        "Invalid number for minTokens",
+      ]);
+    }
   });
 
   it("warns on unknown keys and invalid numbers", () => {
