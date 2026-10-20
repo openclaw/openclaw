@@ -53,10 +53,13 @@ export function buildCodexAppServerExitError(
 ): Error {
   const stderrPreview = redactCodexAppServerLinePreview(stderrTail);
   const suffix = stderrPreview ? ` stderr=${JSON.stringify(stderrPreview)}` : "";
-  return new Error(
-    `codex app-server exited: code=${formatExitValue(code)} signal=${formatExitValue(
-      signal,
-    )}${suffix}`,
+  return Object.assign(
+    new Error(
+      `codex app-server exited: code=${formatExitValue(code)} signal=${formatExitValue(
+        signal,
+      )}${suffix}`,
+    ),
+    { exitCode: code },
   );
 }
 

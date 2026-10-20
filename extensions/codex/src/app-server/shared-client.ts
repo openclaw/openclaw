@@ -36,8 +36,9 @@ import {
   recordCodexAppServerAuthHandoff,
 } from "./client-runtime.js";
 import {
+  markRetryableCodexInitializeTransportError,
   resolveRemainingAcquireTimeout,
-  withCodexWebSocketOpenRetry,
+  withCodexWebSocketStartupRetry,
   withCodexAppServerAcquireDeadline,
 } from "./client-startup-retry.js";
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
@@ -866,7 +867,7 @@ export async function createIsolatedCodexAppServerClient(
 }
 
 function startInitializedCodexAppServerClient(params: CodexAppServerClientStartupOptions) {
-  return withCodexWebSocketOpenRetry({
+  return withCodexWebSocketStartupRetry({
     timeoutMs: params.timeoutMs ?? 0,
     signal: params.abandonSignal
       ? AbortSignal.any([params.lifetime.controller.signal, params.abandonSignal])
@@ -1047,7 +1048,9 @@ async function startInitializedCodexAppServerClientOnce(
         ) {
           continue;
         }
-        throw error;
+        throw startOptions.transport === "websocket"
+          ? markRetryableCodexInitializeTransportError(error)
+          : error;
       }
       assertStartupCurrent();
       params.onInitializedClient?.();
