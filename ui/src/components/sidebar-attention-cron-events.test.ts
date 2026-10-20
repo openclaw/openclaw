@@ -13,6 +13,18 @@ import {
 } from "./sidebar-attention-store.test-support.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
+function publish(
+  harness: ReturnType<typeof createGatewayHarness>,
+  action: string,
+  job = eventJob(),
+) {
+  harness.emitEvent("cron", { action, jobId: job.id, job });
+}
+
+function calls(request: ReturnType<typeof inventoryRequest>, method = "cron.list") {
+  return request.mock.calls.filter(([called]) => called === method).length;
+}
+
 describe("sidebar cron event publication", () => {
   let store: SidebarAttentionStore | undefined;
 
@@ -34,45 +46,37 @@ describe("sidebar cron event publication", () => {
     store = harness.attention;
     await vi.advanceTimersByTimeAsync(0);
     expect(store?.entries).toMatchObject([{ label: "incident" }]);
-    const initialCalls = request.mock.calls.filter(([method]) => method === "cron.list").length;
+    const initialCalls = calls(request);
 
     for (let run = 1; run <= 23; run++) {
-      harness.emitEvent("cron", {
-        action: "started",
-        jobId: "incident",
-        job: eventJob({ state: { runningAtMs: run * 2_000, lastRunStatus: "ok" } }),
-      });
+      publish(
+        harness,
+        "started",
+        eventJob({ state: { runningAtMs: run * 2_000, lastRunStatus: "ok" } }),
+      );
       await vi.advanceTimersByTimeAsync(1_000);
-      harness.emitEvent("cron", {
-        action: "finished",
-        jobId: "incident",
-        job: eventJob({
+      publish(
+        harness,
+        "finished",
+        eventJob({
           name: `Run ${run}`,
           state: { lastRunStatus: "error", lastRunAtMs: run * 2_000 },
         }),
-      });
+      );
       await vi.advanceTimersByTimeAsync(1_000);
     }
     await vi.advanceTimersByTimeAsync(14_000);
-    expect(
-      request.mock.calls.filter(([method]) => method === "cron.list").length - initialCalls,
-    ).toBe(0);
-    expect(request.mock.calls.filter(([method]) => method === "cron.status")).toHaveLength(1);
+    expect(calls(request) - initialCalls).toBe(0);
+    expect(calls(request, "cron.status")).toBe(1);
     expect(store?.entries).toMatchObject([{ label: "Run 23" }]);
 
-    harness.emitEvent("cron", { action: "removed", jobId: "incident", job: eventJob() });
+    publish(harness, "removed");
     expect(store?.entries).toEqual([]);
     inventory = cronPage("new");
-    harness.emitEvent("cron", {
-      action: "added",
-      jobId: "new",
-      job: eventJob({ id: "new", name: "new" }),
-    });
+    publish(harness, "added", eventJob({ id: "new", name: "new" }));
     await vi.advanceTimersByTimeAsync(0);
     expect(store?.entries).toMatchObject([{ label: "new" }]);
-    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(
-      initialCalls + 1,
-    );
+    expect(calls(request)).toBe(initialCalls + 1);
   });
 
   it("does not restore a removed job when its in-flight run publishes a final snapshot", async () => {
@@ -83,13 +87,13 @@ describe("sidebar cron event publication", () => {
     store = harness.attention;
     await vi.advanceTimersByTimeAsync(0);
     inventory = cronPage();
-    harness.emitEvent("cron", { action: "removed", jobId: "incident", job: eventJob() });
+    publish(harness, "removed");
     expect(store?.entries).toEqual([]);
-    harness.emitEvent("cron", { action: "finished", jobId: "incident", job: eventJob() });
+    publish(harness, "finished");
     expect(store?.entries).toEqual([]);
     await vi.advanceTimersByTimeAsync(0);
     expect(store?.entries).toEqual([]);
-    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+    expect(calls(request)).toBe(2);
   });
 
   it.each([null, "main"])(
@@ -110,32 +114,20 @@ describe("sidebar cron event publication", () => {
       store.activate(SidebarAttentionStoreOwner);
       await vi.advanceTimersByTimeAsync(0);
 
-      harness.emitEvent("cron", {
-        action: "finished",
-        jobId: "incident",
-        job: eventJob({ agentId: undefined, name: "Inherited owner" }),
-      });
+      publish(harness, "finished", eventJob({ agentId: undefined, name: "Inherited owner" }));
       expect(store.entries).toMatchObject([{ label: "Inherited owner" }]);
-      expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+      expect(calls(request)).toBe(1);
 
-      harness.emitEvent("cron", {
-        action: "added",
-        jobId: "other",
-        job: eventJob({ id: "other", agentId: "writer" }),
-      });
+      publish(harness, "added", eventJob({ id: "other", agentId: "writer" }));
       await vi.advanceTimersByTimeAsync(0);
       expect(store.entries).toMatchObject([{ label: "incident" }]);
-      expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+      expect(calls(request)).toBe(2);
 
       inventory = cronPage();
-      harness.emitEvent("cron", {
-        action: "updated",
-        jobId: "incident",
-        job: eventJob({ agentId: "writer" }),
-      });
+      publish(harness, "updated", eventJob({ agentId: "writer" }));
       await vi.advanceTimersByTimeAsync(0);
       expect(store.entries).toEqual([]);
-      expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3);
+      expect(calls(request)).toBe(3);
     },
   );
 });
