@@ -1,11 +1,8 @@
 import { expect, it } from "vitest";
+import { createWorkboardCard } from "../../../extensions/workboard/browser/lib/workboard/test/index-helpers.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  controlUiBundledSettingsStorageKey,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
-import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installWorkboardPage } from "./workboard-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Compiled Workboard page loading",
@@ -30,36 +27,19 @@ suite.define(() => {
             },
           ];
           const cards = [
-            {
+            createWorkboardCard({
               id: "ops-ready",
               title: "Review release",
               status: "ready",
-              priority: "normal",
-              labels: [],
-              position: 1_000,
-              createdAt: 1,
               updatedAt: 2,
               agentId: "main",
               metadata: { automation: { boardId: "ops" } },
-            },
+            }),
           ];
-          await installMockGateway(page, {
-            ...workboardUi,
-            methodResponses: {
-              "workboard.boards.list": { boards },
-              "workboard.cards.list": { boards, cards, statuses: ["ready", "done"] },
-            },
+          await installWorkboardPage(page, suite.server.baseUrl, "ops", {
+            "workboard.boards.list": { boards },
+            "workboard.cards.list": { boards, cards, statuses: ["ready", "done"] },
           });
-          await page.addInitScript(
-            (key) =>
-              localStorage.setItem(
-                key,
-                JSON.stringify({
-                  railShortcuts: ["route:agents-home", "plugin:workboard/board-ops"],
-                }),
-              ),
-            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-          );
           const requested = new Set<string>();
           page.on("request", (request) => {
             if (request.url().includes("/__openclaw__/plugins/control-ui/workboard/")) {
@@ -98,8 +78,7 @@ suite.define(() => {
               await page.unroute(chunks);
               await page.reload();
             }
-            const title = page.locator(".workboard-page-title", { hasText: "Operations" });
-            await title.waitFor();
+            await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
             await page.getByRole("button", { name: "New board", exact: true }).waitFor();
             const board = page.locator(".workboard-board--page");
             await board.waitFor();

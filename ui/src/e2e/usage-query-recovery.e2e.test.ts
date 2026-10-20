@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -38,16 +39,7 @@ suite.define(() => {
               usage: totals,
             },
           ],
-          aggregates: {
-            messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-            tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-            byModel: [],
-            byProvider: [],
-            byAgent: [],
-            byChannel: [],
-            daily: [],
-            costDaily: [{ date, ...totals }],
-          },
+          aggregates: { ...buildAggregatesFromSessions([]), costDaily: [{ date, ...totals }] },
         });
         const rejectUsage = () =>
           gateway.rejectDeferred("sessions.usage", {

@@ -46,28 +46,26 @@ export async function installUsageOverviewGateway(
       return value;
     }
     const response = value as SessionsUsageResult;
-    const rows = response.sessions.map((session): SessionUsageEntry => {
-      const usage = session.usage;
+    const rows = response.sessions.map(({ usage, ...session }): SessionUsageEntry => {
+      const row = { ...session, agentId: session.agentId ?? "main" };
+      if (!usage) {
+        return { ...row, usage: null, computing: true };
+      }
       return {
-        ...session,
-        agentId: session.agentId ?? "main",
-        usage: usage
-          ? {
-              ...usage,
-              firstActivity:
-                usage.firstActivity ??
-                (usage.totalTokens || usage.messageCounts?.total
-                  ? (session.updatedAt ?? response.updatedAt)
-                  : undefined),
-            }
-          : null,
-        ...(!usage ? { computing: true } : {}),
+        ...row,
+        usage: {
+          ...usage,
+          firstActivity:
+            usage.firstActivity ??
+            (usage.totalTokens || usage.messageCounts?.total
+              ? (session.updatedAt ?? response.updatedAt)
+              : undefined),
+        },
       };
     });
-    const options = { ...params, limit: 50 };
     const projected = buildUsageOverview({
       rows,
-      options,
+      options: { ...params, limit: 50 },
       dayBucket:
         params.mode === "utc"
           ? { mode: "utc-offset", utcOffsetMinutes: 0 }

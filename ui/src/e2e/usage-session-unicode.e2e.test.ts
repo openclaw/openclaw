@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -19,7 +20,6 @@ const usageTotals = {
   inputCost: 0.008,
   outputCost: 0.002,
 };
-const messages = { total: 2, user: 1, assistant: 1, toolCalls: 0, toolResults: 0, errors: 0 };
 
 function currentDay(): string {
   const date = new Date();
@@ -32,50 +32,9 @@ function usageResponse(sessionKey?: string) {
     updatedAt: Date.now(),
     startDate: day,
     endDate: day,
-    sessions: sessionKey
-      ? [
-          {
-            key: sessionKey,
-            agentId: "main",
-            modelProvider: "openai",
-            model: "gpt-5.5",
-            updatedAt: Date.now(),
-            usage: {
-              ...usageTotals,
-              activityDates: [day],
-              dailyBreakdown: [
-                {
-                  ...usageTotals,
-                  date: day,
-                  tokens: usageTotals.totalTokens,
-                  cost: usageTotals.totalCost,
-                },
-              ],
-              messageCounts: messages,
-            },
-          },
-        ]
-      : [],
     totals: usageTotals,
-    aggregates: {
-      messages,
-      tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-      byModel: [],
-      byProvider: [],
-      byAgent: [{ agentId: "main", totals: usageTotals }],
-      byChannel: [],
-      costDaily: [{ date: day, ...usageTotals }],
-      daily: [
-        {
-          date: day,
-          tokens: usageTotals.totalTokens,
-          cost: usageTotals.totalCost,
-          messages: 2,
-          toolCalls: 0,
-          errors: 0,
-        },
-      ],
-    },
+    sessions: sessionKey ? [{ key: sessionKey, usage: usageTotals }] : [],
+    aggregates: { ...buildAggregatesFromSessions([]), costDaily: [{ date: day, ...usageTotals }] },
   };
 }
 

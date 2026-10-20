@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createWorkboardCard } from "../../../extensions/workboard/browser/lib/workboard/test/index-helpers.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -35,18 +36,18 @@ const boardSnapshot = {
   ],
 };
 
-const cards = ["ready", "running", "done"].map((status, index) => ({
-  id: `card-${status}`,
-  title: `${status} card`,
-  status,
-  priority: "normal",
-  labels: [],
-  position: (index + 1) * 1_000,
-  createdAt: 1,
-  updatedAt: 2,
-  agentId: "main",
-  metadata: { automation: { boardId: "platform" } },
-}));
+const statuses = ["ready", "running", "done"] as const;
+const cards = statuses.map((status, index) =>
+  createWorkboardCard({
+    id: `card-${status}`,
+    title: `${status} card`,
+    status,
+    position: (index + 1) * 1_000,
+    updatedAt: 2,
+    agentId: "main",
+    metadata: { automation: { boardId: "platform" } },
+  }),
+);
 
 async function showDashboard(page: Page): Promise<void> {
   const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
@@ -81,12 +82,12 @@ suite.define(() => {
               { match: { sessionKey }, response: { cards: [] } },
               {
                 match: { after: cursor },
-                response: { cards: cards.slice(2), statuses: ["ready", "running", "done"] },
+                response: { cards: cards.slice(2), statuses },
               },
               {
                 response: {
                   cards: cards.slice(0, 2),
-                  statuses: ["ready", "running", "done"],
+                  statuses,
                   nextCursor: cursor,
                 },
               },
@@ -101,40 +102,36 @@ suite.define(() => {
       await board.waitFor();
       const loadMore = page.getByRole("button", { name: "Load more cards", exact: true });
       await loadMore.waitFor();
-      const desktop = await board.evaluate((element) => ({
-        display: getComputedStyle(element).display,
-        flow: getComputedStyle(element).gridAutoFlow,
-        firstCardBottom: element.querySelector(".workboard-card__title")?.getBoundingClientRect()
-          .bottom,
-        widgetBottom: element.closest(".workboard-widget-board")!.getBoundingClientRect().bottom,
-        widths: [...element.querySelectorAll<HTMLElement>(".workboard-column")].map(
-          (column) => column.getBoundingClientRect().width,
-        ),
-      }));
-      expect(desktop.display).toBe("grid");
-      expect(desktop.flow).toBe("column");
-      expect(desktop.firstCardBottom).toBeGreaterThan(0);
-      expect(desktop.firstCardBottom).toBeLessThanOrEqual(desktop.widgetBottom);
-      expect(desktop.widths.every((width) => width >= 239 && width <= 241)).toBe(true);
-
-      await page.setViewportSize({ height: 900, width: 700 });
-      const mobile = await board.evaluate((element) => {
-        const [first, second] = [...element.querySelectorAll<HTMLElement>(".workboard-column")];
-        return {
-          display: getComputedStyle(element).display,
-          firstTop: first?.getBoundingClientRect().top,
-          firstCardBottom: element.querySelector(".workboard-card__title")?.getBoundingClientRect()
-            .bottom,
-          widgetBottom: element.closest(".workboard-widget-board")!.getBoundingClientRect().bottom,
-          secondLeft: second?.getBoundingClientRect().left,
-          secondTop: second?.getBoundingClientRect().top,
-        };
-      });
-      expect(mobile.display).toBe("grid");
-      expect(mobile.secondTop).toBe(mobile.firstTop);
-      expect(mobile.secondLeft).toBeGreaterThan(0);
-      expect(mobile.firstCardBottom).toBeGreaterThan(0);
-      expect(mobile.firstCardBottom).toBeLessThanOrEqual(mobile.widgetBottom);
+      for (const width of [1280, 700]) {
+        await page.setViewportSize({ height: 900, width });
+        const layout = await board.evaluate((element) => {
+          const columns = [...element.querySelectorAll(".workboard-column")].map((column) =>
+            column.getBoundingClientRect(),
+          );
+          const bottom = element
+            .querySelector(".workboard-card__title")!
+            .getBoundingClientRect().bottom;
+          const widgetBottom = element
+            .closest(".workboard-widget-board")!
+            .getBoundingClientRect().bottom;
+          const style = getComputedStyle(element);
+          return {
+            display: style.display,
+            flow: style.gridAutoFlow,
+            cardVisible: bottom > 0 && bottom <= widgetBottom,
+            widthsMatch: columns.every((column) => column.width >= 239 && column.width <= 241),
+            sameRow: columns[0]?.top === columns[1]?.top,
+            secondVisible: (columns[1]?.left ?? 0) > 0,
+          };
+        });
+        expect(layout).toMatchObject({
+          display: "grid",
+          cardVisible: true,
+          ...(width === 1280
+            ? { flow: "column", widthsMatch: true }
+            : { sameRow: true, secondVisible: true }),
+        });
+      }
       await loadMore.click();
       await expect.poll(() => board.locator(".workboard-card").count()).toBe(3);
       expect(await loadMore.count()).toBe(0);

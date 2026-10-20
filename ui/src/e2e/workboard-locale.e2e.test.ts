@@ -1,11 +1,7 @@
 import { expect, it } from "vitest";
-import {
-  controlUiBundledSettingsStorageKey,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
-import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installWorkboardPage } from "./workboard-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Workboard plugin locale catalog",
@@ -20,13 +16,8 @@ suite.define(() => {
         { viewport: { width: 1280, height: 1000 }, serviceWorkers: "block" },
         async ({ page }) => {
           const columns = [
-            {
-              id: "working",
-              label: "Working",
-              description: "Active work",
-              match: { run: ["active"] },
-            },
-            { id: "done", label: "Done", description: "Completed work", fallback: true },
+            { id: "working", label: "Working", match: { run: ["active"] } },
+            { id: "done", label: "Done", fallback: true },
           ];
           const board = {
             id: "sessions",
@@ -38,25 +29,16 @@ suite.define(() => {
             archived: 0,
             byStatus: {},
           };
-          const gateway = await installMockGateway(page, {
-            ...workboardUi,
-            methodResponses: {
+          const gateway = await installWorkboardPage(
+            page,
+            suite.server.baseUrl,
+            "sessions",
+            {
               "workboard.boards.list": { boards: [board] },
               "workboard.cards.list": { boards: [board], cards: [] },
               "workboard.sessionsBoard.read": { board, columns, sessions: [], people: [] },
             },
-          });
-          await page.addInitScript(
-            ({ key, locale: initialLocale }) => {
-              localStorage.setItem("openclaw.i18n.locale", initialLocale);
-              localStorage.setItem(
-                key,
-                JSON.stringify({
-                  railShortcuts: ["route:agents-home", "plugin:workboard/board-sessions"],
-                }),
-              );
-            },
-            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), locale },
+            locale,
           );
           await page.goto(`${suite.server.baseUrl}new`);
           await page
