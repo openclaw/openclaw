@@ -15,6 +15,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { ANIMATED_GIF_BYTES } from "../http-image.test-support.js";
 import * as thumbnails from "../managed-image-thumbnail-cache.js";
 import { artifactsHandlers } from "./artifacts.js";
+import { artifactSession, invokeArtifact } from "./artifacts.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
@@ -24,17 +25,7 @@ afterEach(() => vi.restoreAllMocks());
 it("returns bounded RPC image previews rather than inline originals when HTTP grants are unavailable", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:rpc-previews",
-      sessionId: "rpc-previews",
-    };
-    const entry = {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-      visibility: "shared" as const,
-      createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
-    };
+    const { scope, entry } = artifactSession("rpc-previews");
     await replaceSessionEntry(scope, entry);
     const source = createSolidPngBuffer(2400, 1200, { r: 24, g: 64, b: 128, a: 96 });
     const image = (title: string, mimeType: string, bytes: Buffer) => ({
@@ -60,28 +51,27 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
       selectedClient: GatewayClient = client,
       hasCurrentClientAuthority?: () => boolean,
     ) => {
-      const respond = vi.fn<RespondFn>((...args) => {
-        responses.push(args);
-      });
-      await artifactsHandlers[method]!({
-        params: { sessionKey: scope.sessionKey, ...params },
-        context,
-        client: selectedClient,
-        req: { type: "req", id: "rpc-previews", method },
-        isWebchatConnect: () => false,
-        hasCurrentClientAuthority,
-        respond,
-      });
+      const respond = await invokeArtifact(
+        method,
+        { sessionKey: scope.sessionKey, ...params },
+        {
+          context,
+          dispatch: artifactsHandlers[method]!,
+          client: selectedClient,
+          id: "rpc-previews",
+          hasCurrentClientAuthority,
+          respond: (...args) => {
+            responses.push(args);
+          },
+        },
+      );
       return respond.mock.calls[0]!;
     };
-    const denied = (response: Parameters<RespondFn>) => {
-      expect(response[0]).toBe(false);
-      expect(response[1]).toBeUndefined();
-    };
+    const denied = (response: Parameters<RespondFn>) =>
+      expect(response.slice(0, 2)).toEqual([false, undefined]);
     const listed = await invoke("artifacts.list", {});
     expect(listed[0]).toBe(true);
-    const listedPayload = listed[1] as ArtifactsListResult;
-    const artifacts = listedPayload.artifacts;
+    const { artifacts } = listed[1] as ArtifactsListResult;
     const artifactId = artifacts.find((artifact) => artifact.title === "photo.png")!.id;
     const download = async (params: Record<string, unknown>) => {
       const response = await invoke("artifacts.download", { artifactId, ...params });

@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { selectSessionArtifacts } from "../session-artifact-read.js";
@@ -6,9 +6,62 @@ import type { prepareSessionMutationFacts } from "../session-sharing-preparation
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import type { SessionTranscriptVisitor } from "../session-transcript-read.types.js";
 import { expectRecordFields } from "../test-helpers.assertions.js";
+import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 type ResponderCalls = Array<{ ok: boolean; payload?: unknown; error?: unknown }>;
 type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
+
+export async function invokeArtifact(
+  method: "artifacts.list" | "artifacts.get" | "artifacts.download",
+  params: Record<string, unknown>,
+  options: Pick<GatewayRequestHandlerOptions, "context" | "client"> &
+    Partial<
+      Pick<GatewayRequestHandlerOptions, "signal" | "hasCurrentClientAuthority" | "respond">
+    > & {
+      id?: string;
+      dispatch?: GatewayRequestHandler;
+    },
+) {
+  const { id = method, dispatch, respond: record, ...rest } = options;
+  const respond = vi.fn<RespondFn>(record);
+  const handle = dispatch ?? (await import("./artifacts.js")).artifactsHandlers[method]!;
+  await handle({
+    ...rest,
+    params,
+    respond,
+    isWebchatConnect: () => false,
+    req: { type: "req", id, method, params },
+  });
+  return respond;
+}
+
+export function artifactSession(sessionId: string, owner = "owner") {
+  return {
+    scope: { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}` },
+    entry: {
+      sessionId,
+      updatedAt: 1,
+      visibility: "shared" as const,
+      createdActor: { type: "human" as const, source: "profile" as const, id: owner },
+    },
+  };
+}
+
+export async function writeArtifactTranscript(
+  scope: { agentId: string; sessionKey: string; sessionId: string; storePath?: string },
+  content: unknown[],
+  id = "artifact",
+) {
+  const { replaceTranscriptEvents } =
+    await import("../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js");
+  const { waitForSessionTranscriptProjection } =
+    await import("../../config/sessions/session-accessor.js");
+  await replaceTranscriptEvents(scope, [
+    { type: "session", version: 3, id: scope.sessionId },
+    { type: "message", id, parentId: null, message: { role: "assistant", content } },
+  ]);
+  await waitForSessionTranscriptProjection(scope);
+}
 
 /** Transcript-format fixtures; access and lifetime suites retain the real facts owner. */
 export function artifactFixtureSessionFacts(
@@ -65,17 +118,17 @@ export function expectArtifactList(calls: ResponderCalls): ArtifactListPayload {
   return expectOkPayload(calls) as ArtifactListPayload;
 }
 
-export function expectFirstArtifact(calls: ResponderCalls): Record<string, unknown> | undefined {
-  const payload = expectArtifactList(calls);
-  return payload.artifacts?.[0];
-}
-
 export function expectErrorDetails(calls: ResponderCalls): Record<string, unknown> | undefined {
   expect(calls[0]?.ok).toBe(false);
   return calls[0] ? (calls[0].error as { details?: Record<string, unknown> }).details : undefined;
 }
 
-export function assistantFileMessage(params: {
+export function assistantFileMessage({
+  data = "aGVsbG8=",
+  title,
+  seq = 2,
+  runId,
+}: {
   data?: string;
   title: string;
   seq?: number;
@@ -83,18 +136,8 @@ export function assistantFileMessage(params: {
 }) {
   return {
     role: "assistant",
-    content: [
-      {
-        type: "file",
-        data: params.data ?? "aGVsbG8=",
-        mimeType: "text/plain",
-        title: params.title,
-      },
-    ],
-    __openclaw: {
-      seq: params.seq ?? 2,
-      ...(params.runId ? { runId: params.runId } : {}),
-    },
+    content: [{ type: "file", data, mimeType: "text/plain", title }],
+    __openclaw: { seq, ...(runId ? { runId } : {}) },
   };
 }
 
