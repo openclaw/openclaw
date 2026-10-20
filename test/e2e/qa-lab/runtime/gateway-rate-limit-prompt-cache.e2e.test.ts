@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
@@ -30,15 +30,6 @@ afterEach(async () => {
   gatewayOwner = undefined;
 });
 
-function describeItem(item: Record<string, unknown> | undefined): string {
-  if (!item) {
-    return "<absent>";
-  }
-  const kind = [item.role, item.type].filter((value) => typeof value === "string").join("/");
-  const digest = createHash("sha256").update(JSON.stringify(item)).digest("hex").slice(0, 16);
-  return `${kind || "?"} sha256:${digest}`;
-}
-
 // The turn-scoped runtime context rides after the newest prompt and is not replayed later.
 function isRuntimeContextCarrier(item: Record<string, unknown>): boolean {
   const content = item.content;
@@ -48,13 +39,6 @@ function isRuntimeContextCarrier(item: Record<string, unknown>): boolean {
     content.length === 1 &&
     typeof content[0]?.text === "string" &&
     isInternalRuntimeContextCarrierText(content[0].text)
-  );
-}
-
-// Prompt caches hit only when each request extends the bytes of the one before it.
-function firstPrefixBreak(previous: unknown[], current: unknown[]): number {
-  return previous.findIndex(
-    (item, index) => JSON.stringify(item) !== JSON.stringify(current[index]),
   );
 }
 
@@ -102,17 +86,13 @@ it(
       expect(body.previous_response_id).toBeUndefined();
       return body.input.filter((item) => !isRuntimeContextCarrier(item));
     });
-    const breaks = inputs.slice(1).flatMap((current, offset) => {
+    // Compare serialized items: prompt caching requires byte-stable prefixes, not object equality.
+    for (const [offset, current] of inputs.slice(1).entries()) {
       const previous = inputs[offset]!;
-      const index = firstPrefixBreak(previous, current);
-      return index < 0
-        ? []
-        : [
-            `request ${offset + 2} (cursor ${requests[offset + 1]!.cursor}) breaks request ` +
-              `${offset + 1} prefix at input[${index}]: was ${describeItem(previous[index])}, ` +
-              `now ${describeItem(current[index])}`,
-          ];
-    });
-    expect(breaks).toEqual([]);
+      expect(
+        current.slice(0, previous.length).map((item) => JSON.stringify(item)),
+        `request ${offset + 2} (cursor ${requests[offset + 1]!.cursor}) prefix`,
+      ).toEqual(previous.map((item) => JSON.stringify(item)));
+    }
   },
 );

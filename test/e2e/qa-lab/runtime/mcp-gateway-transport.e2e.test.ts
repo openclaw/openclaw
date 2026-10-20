@@ -1,4 +1,3 @@
-// QA Lab MCP gateway transport tests cover script-backed MCP client state.
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +8,14 @@ import {
   createMcpClientTempState,
   type McpClientTempState,
 } from "./mcp-client-temp-state.fixture.ts";
+
+function createHandle() {
+  return {
+    cleanup: vi.fn(),
+    client: { close: vi.fn(async () => undefined) },
+    transport: { close: vi.fn(async () => undefined) },
+  };
+}
 
 describe("MCP gateway transport fixture", () => {
   afterEach(() => {
@@ -39,21 +46,12 @@ describe("MCP gateway transport fixture", () => {
 
   it("reuses one MCP temp state across the pairing reconnect path", async () => {
     const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
-    const firstHandle = {
-      cleanup: vi.fn(),
-      client: { close: vi.fn(async () => undefined) },
-      transport: { close: vi.fn(async () => undefined) },
-    };
-    const secondHandle = {
-      cleanup: vi.fn(),
-      client: { close: vi.fn(async () => undefined) },
-      transport: { close: vi.fn(async () => undefined) },
-    };
-    const connectCalls: McpClientTempState[] = [];
-    const connect = vi.fn(async (state: McpClientTempState) => {
-      connectCalls.push(state);
-      return connectCalls.length === 1 ? firstHandle : secondHandle;
-    });
+    const firstHandle = createHandle();
+    const secondHandle = createHandle();
+    const connect = vi
+      .fn<(state: McpClientTempState) => Promise<ReturnType<typeof createHandle>>>()
+      .mockResolvedValueOnce(firstHandle)
+      .mockResolvedValueOnce(secondHandle);
 
     try {
       await expect(
@@ -65,7 +63,7 @@ describe("MCP gateway transport fixture", () => {
       ).resolves.toBe(secondHandle);
 
       expect(connect).toHaveBeenCalledTimes(2);
-      expect(connectCalls).toEqual([tempState, tempState]);
+      expect(connect.mock.calls).toEqual([[tempState], [tempState]]);
       expect(firstHandle.client.close).toHaveBeenCalledOnce();
       expect(firstHandle.transport.close).toHaveBeenCalledOnce();
       expect(firstHandle.cleanup).toHaveBeenCalledOnce();
@@ -77,11 +75,7 @@ describe("MCP gateway transport fixture", () => {
 
   it("cleans up the first MCP client when pairing approval fails", async () => {
     const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
-    const handle = {
-      cleanup: vi.fn(),
-      client: { close: vi.fn(async () => undefined) },
-      transport: { close: vi.fn(async () => undefined) },
-    };
+    const handle = createHandle();
     const failure = new Error("pairing approval failed");
 
     try {
