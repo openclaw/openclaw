@@ -126,7 +126,13 @@ it("records spawn failure only after its close notification", async () => {
 
 it("passes standalone CLI args and parent binding unchanged to the launcher child", async () => {
   vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
-  respawn({ entryPath: "/app/runtime/openclaw.mjs", args: ["doctor", "--fix"], env: {} });
+  completion = runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: "/app/runtime/openclaw.mjs",
+      args: ["doctor", "--fix"],
+      env: {},
+    }),
+  );
   expect(spawn).toHaveBeenCalledExactlyOnceWith(
     process.execPath,
     ["doctor", "--fix"],
