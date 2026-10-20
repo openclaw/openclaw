@@ -22,28 +22,12 @@ vi.mock("../run-termination.js", () => ({
   AGENT_RUN_RESTART_ABORT_ERROR_CODE: "OPENCLAW_RESTART_ABORT",
 }));
 
-function asyncDeliveryMessage(text: string, itemId: string): Record<string, unknown> {
-  return {
-    role: "assistant",
-    content: textContent(text),
-    stopReason: "stop",
-    phase: "final_answer",
-    openclawAsyncDelivery: { itemId },
-  };
-}
-
+type PolicyArgs = Parameters<typeof resolveMainSessionResumePolicy>;
 function resolvePolicy(params: {
   messages?: unknown[];
   fullAccess?: boolean;
-  beforeAgentReplyState?:
-    | "admitted"
-    | "pending"
-    | "continue"
-    | "handled-silent"
-    | "handled-reply"
-    | "handled-unrecoverable";
-  deliveryReceiptState?: "terminal-pending" | "delivered-terminal";
-  deliveryToolCallId?: string;
+  beforeAgentReplyState?: PolicyArgs[3];
+  deliveryReceiptState?: PolicyArgs[4];
 }) {
   return resolveMainSessionResumePolicy(
     params.messages ?? [makeUserMessage("finish the interrupted work")],
@@ -51,12 +35,12 @@ function resolvePolicy(params: {
     "source-turn",
     params.beforeAgentReplyState,
     params.deliveryReceiptState,
-    params.deliveryToolCallId,
+    undefined,
     params.fullAccess,
   );
 }
 
-describe("resolveMainSessionResumePolicy former terminal states", () => {
+describe("resolveMainSessionResumePolicy", () => {
   it.each([
     { deliveryReceiptState: "terminal-pending" as const },
     { beforeAgentReplyState: "pending" as const },
@@ -84,9 +68,6 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
       forceRestartSafeTools: true,
     });
   });
-});
-
-describe("resolveMainSessionResumePolicy progress tails", () => {
   it("retains replay restrictions when final-phase async delivery follows a side-effecting call", () => {
     expect(
       resolveMainSessionResumePolicy([
@@ -96,7 +77,13 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
           stopReason: "toolUse",
           content: [toolCall("call-bash", "bash", { command: "true" })],
         },
-        asyncDeliveryMessage("The background check finished.", "async-after-exec"),
+        {
+          role: "assistant",
+          content: textContent("The background check finished."),
+          stopReason: "stop",
+          phase: "final_answer",
+          openclawAsyncDelivery: { itemId: "async-after-exec" },
+        },
       ]),
     ).toEqual({ action: "resume", forceRestartSafeTools: true });
   });

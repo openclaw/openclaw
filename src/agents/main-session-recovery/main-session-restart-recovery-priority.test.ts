@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { admitAgentRestartRecovery } from "../../gateway/agent-turn/agent-run-recovery-admission.js";
 import { registerChatAbortController } from "../../gateway/chat-abort.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -45,9 +45,15 @@ const mockRecoveryRuntime = createRecoveryRuntimeFixture({
   getDispatchSettlement: () => dispatchSettlement.promise,
   sendRecoveryNotice: async () => ({ suppressed: false }),
 });
-const { makeSessionsDir, writeStore, writeTranscript } = createRestartRecoveryStoreFixture(
-  () => tmpDir,
-);
+const { makeMainSessionFixture, writeTranscript } = createRestartRecoveryStoreFixture(() => tmpDir);
+async function mainFixture(overrides: Parameters<typeof mainSessionEntry>[0] = {}) {
+  const fixture = await makeMainSessionFixture(overrides);
+  const cfg = { session: { store: fixture.storePath } };
+  await writeTranscript(fixture.sessionsDir, "main-session", [
+    makeUserMessage("finish the interrupted task"),
+  ]);
+  return { ...fixture, cfg };
+}
 beforeEach(async () => {
   callGateway.mockClear();
   dispatchSettlement = createDeferred();
@@ -69,15 +75,8 @@ describe("demand-triggered restart recovery", () => {
   it("admits visible input recovery without waiting for unrelated background work", async ({
     signal,
   }) => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const cfg = { session: { store: storePath } };
+    const { storePath, sessionKey, cfg, readEntry } = await mainFixture();
     setRuntimeConfigSnapshot(cfg);
-    const sessionKey = "agent:main:main";
-    await writeStore(sessionsDir, { [sessionKey]: mainSessionEntry() });
-    await writeTranscript(sessionsDir, "main-session", [
-      makeUserMessage("finish the interrupted task"),
-    ]);
     const backgroundStarted = createDeferred();
     const releaseBackground = createDeferred();
     const finishRecovery = createDeferred();
@@ -180,7 +179,7 @@ describe("demand-triggered restart recovery", () => {
       admitted = await withinTest(input, signal);
       expect(admitted.status).toBe("owned");
       expect(dispatches).toBe(1);
-      expect(loadSessionEntry({ storePath, sessionKey })?.abortedLastRun).toBe(false);
+      expect(readEntry()?.abortedLastRun).toBe(false);
       expect(getQueueSize("background")).toBe(1);
     } finally {
       finishRecovery.resolve();
@@ -197,21 +196,14 @@ describe("demand-triggered restart recovery", () => {
   });
 
   it("resumes an unmarked startup orphan before reserving its child completions", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const cfg = { session: { store: storePath } };
-    setRuntimeConfigSnapshot(cfg);
-    await writeStore(sessionsDir, {
-      [sessionKey]: mainSessionEntry({
-        status: undefined,
-        abortedLastRun: false,
-        mainRestartRecovery: undefined,
-        lifecycleRunId: "interrupted-turn",
-        restartRecoveryRuns: [{ runId: "interrupted-turn", lifecycleGeneration: "previous-boot" }],
-      }),
+    const { storePath, sessionKey, cfg, readEntry } = await mainFixture({
+      status: undefined,
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+      lifecycleRunId: "interrupted-turn",
+      restartRecoveryRuns: [{ runId: "interrupted-turn", lifecycleGeneration: "previous-boot" }],
     });
-    await writeTranscript(sessionsDir, "main-session", [makeUserMessage("finish my task")]);
+    setRuntimeConfigSnapshot(cfg);
     const children = Array.from({ length: 8 }, (_, index) =>
       createSubagentRunRecord({
         runId: `child-${index}`,
@@ -264,7 +256,7 @@ describe("demand-triggered restart recovery", () => {
       // Startup may discover the store only when child restoration prepares it.
       // Those children must not hold raw FIFO positions ahead of the interrupted turn.
       expect(inputs).toHaveLength(0);
-      expect(loadSessionEntry({ storePath, sessionKey })?.abortedLastRun).toBe(true);
+      expect(readEntry()?.abortedLastRun).toBe(true);
       await expect(
         retryRestartAbortedMainSessionRecovery({
           agentId: "main",
@@ -295,13 +287,7 @@ describe("demand-triggered restart recovery", () => {
   it.each([false, true])(
     "respects main capacity before recovery ownership (replaced=%s)",
     async (replaced) => {
-      const sessionsDir = await makeSessionsDir();
-      const storePath = path.join(sessionsDir, "sessions.json");
-      const sessionKey = "agent:main:main";
-      await writeStore(sessionsDir, { [sessionKey]: mainSessionEntry() });
-      await writeTranscript(sessionsDir, "main-session", [
-        makeUserMessage("finish interrupted work"),
-      ]);
+      const { storePath, sessionKey, readEntry } = await mainFixture();
       setCommandLaneConcurrency("main", 1);
       const entered = createDeferred();
       const release = createDeferred();
@@ -321,12 +307,10 @@ describe("demand-triggered restart recovery", () => {
       try {
         await waitForFast(() => expect(getQueueSize("main")).toBe(2));
         expect(callGateway).not.toHaveBeenCalled();
-        expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toMatchObject({
+        expect(readEntry()?.mainRestartRecovery).toMatchObject({
           chargedAttempts: 0,
         });
-        expect(
-          loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery?.reservation,
-        ).toBeUndefined();
+        expect(readEntry()?.mainRestartRecovery?.reservation).toBeUndefined();
         if (replaced) {
           await replaceSessionEntry(
             { storePath, sessionKey },
@@ -336,9 +320,7 @@ describe("demand-triggered restart recovery", () => {
         release.resolve();
         await expect(recovery).resolves.toMatchObject({ started: replaced ? 0 : 1 });
         expect(callGateway).toHaveBeenCalledTimes(replaced ? 0 : 1);
-        expect(loadSessionEntry({ storePath, sessionKey })?.sessionId).toBe(
-          replaced ? "replacement-session" : "main-session",
-        );
+        expect(readEntry()?.sessionId).toBe(replaced ? "replacement-session" : "main-session");
       } finally {
         release.resolve();
         dispatchSettlement.resolve();
