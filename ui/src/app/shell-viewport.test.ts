@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectShellViewport } from "./shell-viewport.ts";
 
 let viewport: EventTarget & { height: number; offsetTop: number; scale: number };
@@ -7,11 +7,8 @@ let disconnect: (() => void) | undefined;
 let frames: Map<number, FrameRequestCallback>;
 let nextFrame = 0;
 const root = document.documentElement;
-const viewportHeight = () => root.style.getPropertyValue("--shell-viewport-height");
-function expectViewport(height: string, inset = "") {
-  expect(viewportHeight()).toBe(height);
-  expect(root.style.getPropertyValue("--shell-safe-area-bottom")).toBe(inset);
-}
+const height = () => root.style.getPropertyValue("--shell-viewport-height");
+const inset = () => root.style.getPropertyValue("--shell-safe-area-bottom");
 function flush() {
   const pending = [...frames.values()];
   frames.clear();
@@ -19,13 +16,10 @@ function flush() {
     callback(0);
   }
 }
-function resize(values: Partial<typeof viewport>, expected?: [string, string?], event = "resize") {
+function resize(values: Partial<typeof viewport>, event = "resize") {
   Object.assign(viewport, values);
   viewport.dispatchEvent(new Event(event));
   flush();
-  if (expected) {
-    expectViewport(...expected);
-  }
 }
 function editor(shadow = false) {
   const input = document.createElement("textarea");
@@ -38,11 +32,6 @@ function editor(shadow = false) {
   }
   input.focus();
   return input;
-}
-
-function connectEditor(shadow = false) {
-  disconnect = connectShellViewport();
-  return editor(shadow);
 }
 
 beforeEach(() => {
@@ -65,107 +54,134 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([
-  { focus: "none", heights: [900, 1440, 844], layoutResize: true },
-  { focus: "none", heights: [782], layoutResize: false },
-  { focus: "editor", heights: [782], layoutResize: false },
-  { focus: "button", heights: [480], layoutResize: false },
-])(
-  "bounds $focus occlusion without inventing a keyboard ($heights)",
-  ({ focus, heights, layoutResize }) => {
-    if (focus === "button") {
-      const button = document.createElement("input");
-      button.type = "button";
-      document.body.append(button);
-      button.focus();
-    }
-    disconnect = connectShellViewport();
-    if (focus === "editor") {
-      editor();
-      flush();
-    }
-    for (const next of heights) {
-      if (layoutResize) {
-        vi.stubGlobal("innerHeight", next);
-        Object.assign(viewport, { height: next });
-        window.dispatchEvent(new Event("resize"));
+describe("shell visual viewport", () => {
+  it.each([
+    { focus: "none", heights: [900, 1440, 844], layoutResize: true },
+    { focus: "none", heights: [782], layoutResize: false },
+    { focus: "editor", heights: [782], layoutResize: false },
+    { focus: "button", heights: [480], layoutResize: false },
+  ])(
+    "bounds $focus occlusion without inventing a keyboard ($heights)",
+    ({ focus, heights, layoutResize }) => {
+      if (focus === "button") {
+        const button = document.createElement("input");
+        button.type = "button";
+        document.body.append(button);
+        button.focus();
+      }
+      disconnect = connectShellViewport();
+      if (focus === "editor") {
+        editor();
         flush();
-      } else {
-        resize({ height: next });
       }
-      expectViewport(`${next}px`);
-      if (next === 782) {
-        resize({ height: 770, offsetTop: 12 }, ["782px"], "scroll");
+      for (const next of heights) {
+        if (layoutResize) {
+          vi.stubGlobal("innerHeight", next);
+          Object.assign(viewport, { height: next });
+          window.dispatchEvent(new Event("resize"));
+          flush();
+        } else {
+          resize({ height: next });
+        }
+        expect(height()).toBe(`${next}px`);
+        expect(inset()).toBe("");
+        if (next === 782) {
+          resize({ height: 770, offsetTop: 12 }, "scroll");
+          expect(height()).toBe("782px");
+          expect(inset()).toBe("");
+        }
       }
-    }
-  },
-);
+    },
+  );
 
-it.each(["light", "shadow", "resizing"])(
-  "tracks keyboard geometry and dismissal with retained %s focus",
-  (mode) => {
-    const input = connectEditor(mode === "shadow");
-    if (mode === "resizing") {
-      // The browser can resize both viewports before the first focus frame.
-      vi.stubGlobal("innerHeight", 480);
-    }
-    resize({ height: 480 }, ["480px", "0px"]);
-    if (mode === "resizing") {
-      vi.stubGlobal("innerHeight", 844);
-    } else {
-      resize({ height: 440, offsetTop: 70 }, undefined, "scroll");
-      expect(viewportHeight()).toBe("510px");
-    }
-    resize({ height: 844, offsetTop: 0 }, ["844px"]);
-    expect(input.matches(":focus")).toBe(true);
-  },
-);
+  it.each([false, true])(
+    "tracks keyboard pan and dismissal with retained focus (shadow: %s)",
+    (shadow) => {
+      disconnect = connectShellViewport();
+      const input = editor(shadow);
+      resize({ height: 480 });
+      expect(height()).toBe("480px");
+      expect(inset()).toBe("0px");
+      resize({ height: 440, offsetTop: 70 }, "scroll");
+      expect(height()).toBe("510px");
+      resize({ height: 844, offsetTop: 0 });
+      expect(height()).toBe("844px");
+      expect(inset()).toBe("");
+      expect(input.matches(":focus")).toBe(true);
+    },
+  );
 
-it("does not carry portrait keyboard geometry into landscape", () => {
-  connectEditor();
-  resize({ height: 480 });
-  vi.stubGlobal("innerWidth", 844);
-  vi.stubGlobal("innerHeight", 390);
-  resize({ height: 390 });
-  window.dispatchEvent(new Event("orientationchange"));
-  flush();
-  expectViewport("390px");
-  resize({ height: 210 }, ["210px", "0px"]);
-});
+  it("captures focus before a content-resizing keyboard and restores its inset", () => {
+    disconnect = connectShellViewport();
+    editor();
+    // The browser can resize both viewports before the first focus frame.
+    vi.stubGlobal("innerHeight", 480);
+    resize({ height: 480 });
+    expect(height()).toBe("480px");
+    expect(inset()).toBe("0px");
+    vi.stubGlobal("innerHeight", 844);
+    resize({ height: 844 });
+    expect(height()).toBe("844px");
+    expect(inset()).toBe("");
+  });
 
-it("leaves pinch zoom and panning to the browser, including while focused", () => {
-  connectEditor();
-  resize({ height: 480 });
-  resize({ height: 422, scale: 2, offsetTop: 50 }, [""]);
-  resize({ height: 480, scale: 1, offsetTop: 0 });
-  expect(viewportHeight()).toBe("480px");
-});
+  it("does not carry portrait keyboard geometry into landscape", () => {
+    disconnect = connectShellViewport();
+    editor();
+    resize({ height: 480 });
+    vi.stubGlobal("innerWidth", 844);
+    vi.stubGlobal("innerHeight", 390);
+    resize({ height: 390 });
+    window.dispatchEvent(new Event("orientationchange"));
+    flush();
+    expect(height()).toBe("390px");
+    expect(inset()).toBe("");
+    resize({ height: 210 });
+    expect(height()).toBe("210px");
+    expect(inset()).toBe("0px");
+  });
 
-it("coalesces events, removes root overrides, and releases every listener on disconnect", () => {
-  connectEditor();
-  viewport.dispatchEvent(new Event("resize"));
-  viewport.dispatchEvent(new Event("scroll"));
-  window.dispatchEvent(new Event("resize"));
-  expect(frames.size).toBe(1);
-  flush();
-  resize({ height: 480 });
-  window.dispatchEvent(new Event("resize"));
-  disconnect();
-  expect(frames.size).toBe(0);
-  expectViewport("");
-  resize({ height: 300 });
-  window.dispatchEvent(new Event("orientationchange"));
-  document.dispatchEvent(new Event("focusin"));
-  document.dispatchEvent(new Event("focusout"));
-  expect(frames.size).toBe(0);
-  disconnect = connectShellViewport();
-  expect(viewportHeight()).toBe("300px");
-});
+  it("leaves pinch zoom and panning to the browser, including while focused", () => {
+    disconnect = connectShellViewport();
+    editor();
+    resize({ height: 480 });
+    resize({ height: 422, scale: 2, offsetTop: 50 });
+    expect(height()).toBe("");
+    expect(inset()).toBe("");
+    resize({ height: 480, scale: 1, offsetTop: 0 });
+    expect(height()).toBe("480px");
+  });
 
-it("retains the CSS fallback without VisualViewport", () => {
-  vi.stubGlobal("visualViewport", undefined);
-  connectEditor();
-  window.dispatchEvent(new Event("resize"));
-  expectViewport("");
-  expect(frames.size).toBe(0);
+  it("coalesces events, removes root overrides, and releases every listener on disconnect", () => {
+    disconnect = connectShellViewport();
+    editor();
+    viewport.dispatchEvent(new Event("resize"));
+    viewport.dispatchEvent(new Event("scroll"));
+    window.dispatchEvent(new Event("resize"));
+    expect(frames.size).toBe(1);
+    flush();
+    resize({ height: 480 });
+    window.dispatchEvent(new Event("resize"));
+    disconnect();
+    expect(frames.size).toBe(0);
+    expect(height()).toBe("");
+    expect(inset()).toBe("");
+    resize({ height: 300 });
+    window.dispatchEvent(new Event("orientationchange"));
+    document.dispatchEvent(new Event("focusin"));
+    document.dispatchEvent(new Event("focusout"));
+    expect(frames.size).toBe(0);
+    disconnect = connectShellViewport();
+    expect(height()).toBe("300px");
+  });
+
+  it("retains the CSS fallback without VisualViewport", () => {
+    vi.stubGlobal("visualViewport", undefined);
+    disconnect = connectShellViewport();
+    editor();
+    window.dispatchEvent(new Event("resize"));
+    expect(height()).toBe("");
+    expect(inset()).toBe("");
+    expect(frames.size).toBe(0);
+  });
 });

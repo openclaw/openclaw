@@ -14,10 +14,6 @@ export function configWithPrefs(prefs: Record<string, unknown>) {
   return { ui: { prefs } };
 }
 
-function mutationFailure(reason: "unavailable" | "conflict" | "rejected" | "error", error: string) {
-  return { ok: false as const, reason, error };
-}
-
 export function createServerPrefsWriter(
   request: RequestMock,
   gatewayUrl = "ws://gw",
@@ -34,24 +30,37 @@ export function createServerPrefsWriter(
       options?: RuntimeConfigExternalMutationOptions<T>,
     ) => {
       if (!writer.state.connected) {
-        return mutationFailure("unavailable", "offline");
+        return {
+          ok: false as const,
+          reason: "unavailable" as const,
+          error: "offline",
+        };
       }
       if (options?.canDispatch && !options.canDispatch()) {
-        return mutationFailure("unavailable", options.dispatchError ?? "dispatch blocked");
+        return {
+          ok: false as const,
+          reason: "unavailable" as const,
+          error: options.dispatchError ?? "dispatch blocked",
+        };
       }
       try {
-        return { ok: true as const, value: await task(client), refresh };
+        return {
+          ok: true as const,
+          value: await task(client),
+          refresh,
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return mutationFailure(
-          message.includes("config changed since last load")
-            ? "conflict"
+        return {
+          ok: false as const,
+          reason: message.includes("config changed since last load")
+            ? ("conflict" as const)
             : error instanceof GatewayRequestError &&
                 (error.gatewayCode === "INVALID_REQUEST" || error.gatewayCode === "FORBIDDEN")
-              ? "rejected"
-              : "error",
-          message,
-        );
+              ? ("rejected" as const)
+              : ("error" as const),
+          error: message,
+        };
       }
     },
   };
@@ -67,25 +76,35 @@ export function createProfilePrefsServer(
 ) {
   const profiles = structuredClone(initial);
   const connect = (profileId: string) => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      const entries = (profiles[profileId] ??= {});
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: structuredClone(entries) };
-      }
-      if (method !== "users.prefs.set") {
-        throw new Error("unexpected global mutation: " + method);
-      }
-      const update = params as UsersPrefsSetParams;
-      for (const [key, expected] of Object.entries(update.expectedEntries ?? {})) {
-        if (JSON.stringify(entries[key] ?? null) !== JSON.stringify(expected)) {
-          return { status: "conflict" };
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      async (method, params) => {
+        const entries = (profiles[profileId] ??= {});
+        if (method === "users.prefs.get") {
+          return { status: "ok", entries: structuredClone(entries) };
         }
-      }
-      Object.assign(entries, structuredClone(update.entries));
-      return { status: "ok" };
-    });
+        if (method !== "users.prefs.set") {
+          throw new Error("unexpected global mutation: " + method);
+        }
+        const update = params as UsersPrefsSetParams;
+        for (const [key, expected] of Object.entries(update.expectedEntries ?? {})) {
+          if (JSON.stringify(entries[key] ?? null) !== JSON.stringify(expected)) {
+            return { status: "conflict" };
+          }
+        }
+        Object.assign(entries, structuredClone(update.entries));
+        return { status: "ok" };
+      },
+    );
     const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-    return { writer, request, refresh: () => refreshServerPrefsProfile(writer, profileId, config) };
+    const refresh = () =>
+      refreshProfileAppearancePrefs({
+        client: writer.state.client!,
+        profileId,
+        configObject: config,
+        scope,
+        onApplied: vi.fn(),
+      });
+    return { writer, request, refresh };
   };
   return { profiles, connect };
 }
