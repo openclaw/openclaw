@@ -76,8 +76,6 @@ export type RunEmbeddedAgentParams = Pick<
   sessionTarget?: AgentRunSessionTarget;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
   promptCacheKey?: string;
-  /** The persistent caller consumes maintenance requests after successful reply settlement. */
-  postTurnMaintenance?: true;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
   /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */

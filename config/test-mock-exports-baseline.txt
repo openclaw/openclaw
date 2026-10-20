@@ -1470,6 +1470,7 @@
 ["src/agents/agent-command-recovery-owner.test.ts","./main-session-recovery/main-session-recovery-owner-release.js","c904074365896eaaea372a15eec27d1169dc6e7ac70b776270d91d7c305e1e49",1]
 ["src/agents/agent-command.compaction.test-support.ts","../acp/control-plane/manager.js","bb066226f9bf39669095f84fc1e49a82e7398ae9195e60def5b14fd3b1ac6f9d",1]
 ["src/agents/agent-command.compaction.test-support.ts","../auto-reply/reply/agent-runner-memory.js","5aa4fd4601c25683a389e7f88806844cd95b2f36e079125ade3fbecda80f80fc",1]
+["src/agents/agent-command.compaction.test-support.ts","../config/io.js","0a5392c5ecead68e1559228c05d738ddb43207c8b6f1140afb32cabd762961fc",1]
 ["src/agents/agent-command.compaction.test-support.ts","../skills/runtime/remote.js","51f1b12709a1dc44f5e9da1595bbc1fb900ee7a2963ff978d1de0beed8220694",1]
 ["src/agents/agent-command.compaction.test-support.ts","../skills/runtime/session-snapshot.js","839565d53c1ac88a946b23df8ec36fb4ca56d40d8495449a3d0c3f30c4b49e80",1]
 ["src/agents/agent-command.compaction.test-support.ts","./agent-runtime-config.js","b1c72450199b847c2bb274339333f9af06994308135bbc4c208ba625f7f50269",1]

@@ -130,68 +130,6 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
   </Accordion>
 </AccordionGroup>
 
-## Model-requested compaction
-
-The optional `session-compaction` plugin supplies `session_compact`. The model can
-request compaction at natural turning points, after substantial steps, or when
-changing direction—not only when context is full. Its optional `focus` names
-what the continuation should retain. Enable the plugin and allow its tool:
-
-```json5
-{
-  plugins: { entries: { "session-compaction": { enabled: true } } },
-  tools: { alsoAllow: ["session_compact"] },
-}
-```
-
-A tool result confirms the **request**, not completed compaction. At the next
-fully settled tool-batch/model-request boundary, the host releases the attempt,
-compacts under the existing run/controller owner, and continues from the accepted
-transcript. The next step sees the summary without waiting for a final reply.
-Completed tools are not replayed, and the pending user request and focus are
-preserved by the existing compaction path. Requests coalesce across retries in
-one turn, so a continuation cannot create a compaction loop.
-
-Pending tools, parked Code Mode work and approvals do not authorize a rewrite. If
-no safe mid-turn boundary occurs, the request can fall back to existing optional
-maintenance after successful reply settlement. That fallback and idle compaction
-retain memory checkpointing; mid-turn compaction uses the existing recovery path
-and memory hooks without starting a recursive memory-flush agent turn. Durable
-memory is not erased. A failed voluntary compaction keeps the original history
-and resumes recorded work once. Cancellation still stops the run. The tool does
-not end the turn or start another agent.
-
-The capability is absent from native/CLI runtimes, one-shot local commands,
-heartbeat and memory-flush turns, and context engines that own compaction.
-`compaction.enabled: false` disables it without changing operator `/compact`.
-
-## Before cache expiry
-
-Set `agents.defaults.compaction.cacheExpiry.enabled: true` to allow one idle
-compaction near the end of a qualified provider-cache window. It is disabled by
-default and also respects `compaction.enabled: false`. This is not a keep-warm
-heartbeat: maintenance never rearms itself, and a restart discards pending timers.
-A later successful foreground turn can arm a new timer.
-
-The timer requires positive cache-read or cache-write usage from the actual
-request, its start time, and a supported model, endpoint, and authentication mode.
-Generation time counts toward the window. It starts up to one minute early
-(10% of the window for shorter windows), skips already expired observations, and
-yields to foreground work. A changed session, model selection, credentials,
-configuration, or an intervening compaction invalidates pending work. Once started,
-maintenance uses the bounded compaction timeout rather than discarding a paid
-summary when the estimated cache window passes.
-
-Currently qualified routes are direct Anthropic API-key requests (the effective
-five-minute or one-hour marker TTL) and direct OpenAI API-key requests on GPT-5.6
-and newer (the documented 30-minute minimum). These are scheduling estimates, not
-exact expiry promises. Other routes are skipped rather than assigned a universal
-55-minute interval. See [provider cache contracts](/reference/prompt-caching#pre-expiry-compaction).
-
-Compaction still costs inference and can lose detail. It may use a different
-prompt or summarization model, so a timer does **not** guarantee cache hits or
-cost savings. A failed memory checkpoint attempt cancels that optional compaction.
-
 ## Manual compaction
 
 Type `/compact` in a chat to force compaction when its runtime supports manual

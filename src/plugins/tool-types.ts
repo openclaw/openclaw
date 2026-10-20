@@ -50,10 +50,6 @@ export type OpenClawPluginToolModelExecution = {
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 type OpenClawPluginToolContextBase = {
-  /** Current-turn request; the host compacts at a settled tool boundary, with post-reply fallback. */
-  sessionCompaction?: {
-    request: (request: { focus?: string }) => { status: "requested" | "already_requested" };
-  };
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
