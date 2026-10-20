@@ -43,6 +43,34 @@ function chain(messages: unknown[], searchActive = false) {
     { ...options, searchActive },
   );
 }
+function activityGroup(projection: ReturnType<typeof chain>, index = 0) {
+  const group = projection.transcriptItems[index];
+  if (group?.kind !== "group") {
+    throw new Error("expected activity group");
+  }
+  return group;
+}
+function markers(projection: ReturnType<typeof chain>, expanded: Map<string, boolean>) {
+  return projectTranscriptIndex(projection, expanded, { assistantName: "OpenClaw" }).positionIndex
+    .markers;
+}
+function drawExpandable(group: ReturnType<typeof activityGroup>, assistantName?: string) {
+  const expanded = new Map<string, boolean>();
+  const draw = () =>
+    view.render(group, {
+      showReasoning: false,
+      showToolCalls: false,
+      assistantName,
+      agentId: "main",
+      isToolMessageExpanded: (id) => expanded.get(id),
+      onToggleToolMessageExpanded: (id, previous) => {
+        expanded.set(id, !previous);
+        draw();
+      },
+    });
+  draw();
+  return { expanded, draw };
+}
 afterEach(() => {
   view.unmount();
   resetChatThreadState();
@@ -64,25 +92,8 @@ function automation(id: string, jobId = "daily", source = sessionKey) {
 
 describe("session activity", () => {
   it("collapses recorded automation inputs and reveals their exact run from the shared disclosure", () => {
-    const input = automation("execution");
-    const projection = chain([input]);
-    const group = projection.transcriptItems[0];
-    if (group?.kind !== "group") {
-      throw new Error("expected automation activity group");
-    }
-    const expanded = new Map<string, boolean>();
-    const draw = () =>
-      view.render(group, {
-        showReasoning: false,
-        showToolCalls: false,
-        agentId: "main",
-        isToolMessageExpanded: (id) => expanded.get(id),
-        onToggleToolMessageExpanded: (id, previous) => {
-          expanded.set(id, !previous);
-          draw();
-        },
-      });
-    draw();
+    const projection = chain([automation("execution")]);
+    const { expanded, draw } = drawExpandable(activityGroup(projection));
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
     expect(disclosure).not.toBeNull();
     expect(disclosure?.open).toBe(false);
@@ -94,10 +105,7 @@ describe("session activity", () => {
     expect(
       container.querySelector(".chat-avatar, .chat-group--forwarded, .chat-bubble"),
     ).toBeNull();
-    expect(
-      projectTranscriptIndex(projection, expanded, { assistantName: "OpenClaw" }).positionIndex
-        .markers,
-    ).toHaveLength(0);
+    expect(markers(projection, expanded)).toHaveLength(0);
     expect(latestTranscriptAnnouncement(projection.collapsedItems)?.text).toBe(
       "1 update from Daily report",
     );
@@ -109,10 +117,7 @@ describe("session activity", () => {
       "/automations?job=daily&run=execution",
     );
     expect(disclosure?.querySelector(".chat-message-disclosure__toggle")).toBeNull();
-    expect(
-      projectTranscriptIndex(projection, expanded, { assistantName: "OpenClaw" }).positionIndex
-        .markers,
-    ).toHaveLength(1);
+    expect(markers(projection, expanded)).toHaveLength(1);
   });
   it.each([
     { jobId: "other", runId: "execution" },
@@ -153,10 +158,7 @@ describe("session activity", () => {
       sourceSessionKey: sessionKey,
     },
   ])("does not disguise incomplete or unrelated system input as automation: %j", (provenance) => {
-    const group = chain([{ ...automation("input"), provenance }]).transcriptItems[0];
-    if (group?.kind !== "group") {
-      throw new Error("expected input group");
-    }
+    const group = activityGroup(chain([{ ...automation("input"), provenance }]));
     view.render(group, { showReasoning: false });
     expect(container.querySelector(".chat-session-activity")).toBeNull();
   });
@@ -165,10 +167,7 @@ describe("session activity", () => {
     const messages = [update("first"), update("second"), update("third")];
     const projection = chain(messages);
     expect(projection.transcriptItems).toHaveLength(1);
-    const group = projection.transcriptItems[0];
-    if (group?.kind !== "group") {
-      throw new Error("expected activity group");
-    }
+    const group = activityGroup(projection);
     expect(group.messages.map((entry) => entry.message)).toEqual(messages);
     expect(latestTranscriptAnnouncement(projection.collapsedItems)?.text).toBe(
       "3 updates from Visualize tool icons",
@@ -180,10 +179,7 @@ describe("session activity", () => {
     expect(index.positionIndex.markers).toHaveLength(0);
     expandReplyTargetWork(projection.transcriptItems, expansions, "second");
     expect(expansions.get("session-activity:" + group.key)).toBe(true);
-    expect(
-      projectTranscriptIndex(projection, expansions, { assistantName: "OpenClaw" }).positionIndex
-        .markers,
-    ).toHaveLength(1);
+    expect(markers(projection, expansions)).toHaveLength(1);
   });
 
   it.each([
@@ -209,30 +205,16 @@ describe("session activity", () => {
   );
 
   it("expands the full original messages in one disclosure and retains source navigation", () => {
-    const group = chain([update("first"), update("second")]).transcriptItems[0];
-    if (group?.kind !== "group") {
-      throw new Error("expected activity group");
-    }
-    const expanded = new Map<string, boolean>();
-    const draw = () =>
-      view.render(group, {
-        showReasoning: false,
-        showToolCalls: false,
-        assistantName: "OpenClaw",
-        agentId: "main",
-        isToolMessageExpanded: (id) => expanded.get(id),
-        onToggleToolMessageExpanded: (id, previous) => {
-          expanded.set(id, !previous);
-          draw();
-        },
-      });
-    draw();
+    const { draw } = drawExpandable(
+      activityGroup(chain([update("first"), update("second")])),
+      "OpenClaw",
+    );
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
     const summary = disclosure?.querySelector("summary");
     if (!disclosure || !summary) {
       throw new Error("expected disclosure");
     }
-    // Lit part markers are bookkeeping; the rendered summary must not change on toggle.
+    // Ignore renderer bookkeeping when checking the summary survives a toggle.
     const summaryMarkup = () => summary.innerHTML.replace(/<!--[^]*?-->/gu, "");
     const collapsedMarkup = summaryMarkup();
     expect(disclosure.open).toBe(false);
@@ -268,11 +250,7 @@ describe("session activity", () => {
     const message = update("retained");
     const onReply = vi.fn();
     const draw = (content: string) => {
-      const group = chain([{ ...message, content }]).transcriptItems[0];
-      if (group?.kind !== "group") {
-        throw new Error("expected activity group");
-      }
-      view.render(group, {
+      view.render(activityGroup(chain([{ ...message, content }])), {
         showReasoning: false,
         isToolMessageExpanded: () => true,
         onReply,
@@ -308,10 +286,7 @@ describe("session activity", () => {
     ];
     const projection = chain(messages);
     expect(projection.transcriptItems).toHaveLength(3);
-    const group = projection.transcriptItems[1];
-    if (group?.kind !== "group") {
-      throw new Error("expected reply activity group");
-    }
+    const group = activityGroup(projection, 1);
     const onOpenReply = vi.fn();
     const resolveReplyPreview = createReplyPreviewResolver(
       new Map([
@@ -346,10 +321,7 @@ describe("session activity", () => {
 
   it("shows matching text immediately in transcript search", () => {
     const projection = chain([update("search")], true);
-    const group = projection.transcriptItems[0];
-    if (group?.kind !== "group") {
-      throw new Error("expected search group");
-    }
+    const group = activityGroup(projection);
     view.render(group, {
       showReasoning: false,
       searchResult: true,

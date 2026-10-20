@@ -97,7 +97,9 @@ async function mount(
     await region.updateComplete;
   };
   await changed();
-  return { panel, region, shell, changed };
+  const find = (selector: string) => shell.querySelector<HTMLElement>(selector)!;
+  const page = (id: string) => find(`.tabstrip-tab[data-tab-value="hosted:${slot}:${id}"]`);
+  return { panel, region, shell, changed, find, page };
 }
 
 function labels(shell: HTMLElement) {
@@ -138,23 +140,19 @@ describe("chat sidebar hosted tabs", () => {
   });
 
   it("restores an expanded hosted panel only from its active page tab", async () => {
-    const { region, shell } = await mount();
+    const { region, page } = await mount();
     region.layout = { ...region.layout, expanded: true, expandedSide: true };
     await region.updateComplete;
-    shell
-      .querySelector<HTMLElement>('.tabstrip-tab[data-tab-value="hosted:browser:remote:page:1"]')!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    page(firstTab.id).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledExactlyOnceWith("browser");
-    shell
-      .querySelector<HTMLElement>('.tabstrip-tab[data-tab-value="hosted:browser:native:page:2"]')!
-      .click();
+    page(secondTab.id).click();
     expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledTimes(1);
   });
 
   it("drags passive header chrome while keeping changing tabs and controls interactive", async () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
-    const { panel, region, shell, changed } = await mount();
+    const { panel, region, shell, changed, find } = await mount();
     region.panelDefinitions = region.panelDefinitions.map((definition) =>
       Object.assign(definition, {
         available: definition.slot === "browser" || definition.slot === "terminal",
@@ -176,7 +174,7 @@ describe("chat sidebar hosted tabs", () => {
       panel.hostedTabs = pages;
       await changed();
       for (const selector of [".side-panel__header", ".side-panel__header-tabs"]) {
-        expect(press(shell.querySelector(selector)!).defaultPrevented).toBe(true);
+        expect(press(find(selector)).defaultPrevented).toBe(true);
         expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "window-drag" });
       }
       for (const target of shell.querySelectorAll(
@@ -185,7 +183,7 @@ describe("chat sidebar hosted tabs", () => {
         expect(press(target).defaultPrevented).toBe(false);
         expect(postMessage).not.toHaveBeenCalled();
       }
-      const menu = shell.querySelector('.side-panel-type-menu [role="menu"]')!;
+      const menu = find('.side-panel-type-menu [role="menu"]');
       expect(press(menu).defaultPrevented).toBe(false);
       expect(postMessage).not.toHaveBeenCalled();
       expect(press(panel).defaultPrevented).toBe(false);
@@ -194,46 +192,38 @@ describe("chat sidebar hosted tabs", () => {
   });
 
   it("activates the Browser panel before selecting a hosted id containing colons", async () => {
-    const { region, panel, shell } = await mount();
+    const { region, panel, page } = await mount();
     region.layout = activatePanel(region.layout, "workspace");
     await region.updateComplete;
-    shell
-      .querySelector<HTMLButtonElement>(
-        '.tabstrip-tab[data-tab-value="hosted:browser:native:page:2"]',
-      )!
-      .click();
+    page(secondTab.id).click();
     expect(region.callbacks!.activatePanel).toHaveBeenCalledExactlyOnceWith("browser");
     expect(panel.selectHostedTab).toHaveBeenCalledExactlyOnceWith("native:page:2");
     expect(region.callbacks!.activatePanel).toHaveBeenCalledBefore(panel.selectHostedTab);
     region.layout = activatePanel(region.layout, "browser");
     await region.updateComplete;
-    shell
-      .querySelector<HTMLButtonElement>(
-        '.tabstrip-tab[data-tab-value="hosted:browser:native:page:2"]',
-      )!
-      .click();
+    page(secondTab.id).click();
     expect(region.callbacks!.activatePanel).toHaveBeenCalledTimes(1);
     expect(panel.selectHostedTab).toHaveBeenCalledTimes(2);
   });
 
   it("closes pages through the owner and keeps the empty Browser slot open", async () => {
-    const { shell, region, panel, changed } = await mount();
-    shell.querySelector<HTMLButtonElement>('button[aria-label="Close tab: First page"]')!.click();
+    const { shell, region, panel, changed, find } = await mount();
+    find('button[aria-label="Close tab: First page"]').click();
     expect(panel.closeHostedTab).toHaveBeenCalledExactlyOnceWith("remote:page:1");
     expect(region.callbacks!.closeSlot).not.toHaveBeenCalled();
     panel.hostedTabs = [];
     await changed();
     expect(labels(shell)).toEqual(["Review", "Browser", "Files"]);
     expect(region.layout.open).toBe(true);
-    shell.querySelector<HTMLButtonElement>('button[aria-label="Close Browser"]')!.click();
+    find('button[aria-label="Close Browser"]').click();
     expect(region.callbacks!.closeSlot).toHaveBeenCalledExactlyOnceWith("browser");
   });
 
   it("closes the focused page on native Close and the panel only once no page remains", async () => {
-    const { shell, region, panel, changed } = await mount();
-    shell
-      .querySelector('[data-region-header="side"]')!
-      .dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+    const { region, panel, changed, find } = await mount();
+    find('[data-region-header="side"]').dispatchEvent(
+      new Event("pointerdown", { bubbles: true, composed: true }),
+    );
     const closePage = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
     window.dispatchEvent(closePage);
     expect(closePage.defaultPrevented).toBe(true);
@@ -252,7 +242,7 @@ describe("chat sidebar hosted tabs", () => {
   });
 
   it("presents non-browser hosted tabs with their title, status, badge and class", async () => {
-    const { shell } = await mount({
+    const { shell, page } = await mount({
       slot: "terminal",
       tabs: [
         {
@@ -269,7 +259,7 @@ describe("chat sidebar hosted tabs", () => {
       ],
     });
     expect(labels(shell)).toEqual(["Review", "zsh", "Files"]);
-    const tab = shell.querySelector('.tabstrip-tab[data-tab-value="hosted:terminal:shell:1"]')!;
+    const tab = page("shell:1");
     expect(tab.getAttribute("title")).toBe("main: /workspace");
     expect(tab.querySelector(".tabstrip-tab__status")?.textContent).toBe("Exited (0)");
     expect(tab.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");

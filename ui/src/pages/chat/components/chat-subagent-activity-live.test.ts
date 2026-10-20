@@ -71,6 +71,12 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
     disposeSidebarContextLifecycles();
   });
   flush();
+  const publish = (event: string, payload: unknown) => {
+    connection.publishEvent({ type: "event", event, payload });
+    flush();
+  };
+  const narrate = (text: string, runId = "child-run") =>
+    publish("session.narration", { sessionKey: child.key, runId, text });
   const digest: SessionObserverDigest = {
     sessionKey: child.key,
     agentId: "main",
@@ -83,24 +89,10 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
     health: "on-track",
   };
   const emit = async (patch: Partial<SessionObserverDigest> = {}) => {
-    connection.publishEvent({
-      type: "event",
-      event: "session.observer",
-      payload: { ...digest, ...patch },
-    });
-    flush();
+    publish("session.observer", { ...digest, ...patch });
   };
   expect(subscribe).toHaveBeenCalledWith(child.key, expect.objectContaining({ mode: "narration" }));
-  connection.publishEvent({
-    type: "event",
-    event: "session.narration",
-    payload: {
-      sessionKey: child.key,
-      runId: "child-run",
-      text: "Reading sources. **Checking the API response.**",
-    },
-  });
-  flush();
+  narrate("Reading sources. **Checking the API response.**");
   expect(element.textContent).toContain("Checking the API response.");
   await Promise.resolve();
   element.presented = false;
@@ -110,19 +102,9 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   element.presented = true;
   await element.updateComplete;
   expect(subscribe).toHaveBeenCalledTimes(2);
-  connection.publishEvent({
-    type: "event",
-    event: "session.narration",
-    payload: { sessionKey: child.key, runId: "old-run", text: "Stale narration" },
-  });
-  flush();
+  narrate("Stale narration", "old-run");
   expect(element.textContent).not.toContain("Stale narration");
-  connection.publishEvent({
-    type: "event",
-    event: "session.narration",
-    payload: { sessionKey: child.key, runId: "child-run", text: "" },
-  });
-  flush();
+  narrate("");
   await emit();
   expect(element.textContent).toContain(digest.headline);
   for (const patch of [

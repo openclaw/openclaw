@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
@@ -10,14 +10,7 @@ import "./chat-detail-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 
-async function mountDetailPanel(
-  host: "Review" | "Files",
-  content: ChatDetailPanelContent,
-): Promise<{
-  panel: ChatDetailPanel;
-  hideAndReselect: () => Promise<void>;
-  release: () => void;
-}> {
+async function mountDetailPanel(host: "Review" | "Files", content: ChatDetailPanelContent) {
   const container = createChatSidebarContainer();
   container.className = "side-panel__panel";
   container.style.cssText = "width:480px;height:320px;";
@@ -39,6 +32,7 @@ async function mountDetailPanel(
     container.append(renderDetail());
   }
   document.body.append(container);
+  onTestFinished(() => container.remove());
   await files?.updateComplete;
   const panel = container.querySelector<ChatDetailPanel>("openclaw-chat-detail-panel")!;
   await panel.updateComplete;
@@ -64,13 +58,37 @@ async function mountDetailPanel(
       await new Promise(requestAnimationFrame);
       expect(panel.checkVisibility()).toBe(true);
     },
-    release: () => container.remove(),
   };
+}
+
+async function checkScrolling(
+  scroller: HTMLElement,
+  lastLine: () => HTMLElement,
+  hideAndReselect: () => Promise<void>,
+  settleEnd: () => Promise<unknown> = () => new Promise(requestAnimationFrame),
+  settlePosition = false,
+) {
+  expect(scroller).not.toBeNull();
+  expect(scroller.clientHeight).toBeGreaterThan(0);
+  expect(scroller.clientHeight).toBeLessThan(scroller.scrollHeight);
+  scroller.scrollTop = scroller.scrollHeight;
+  await settleEnd();
+  expect(scroller.scrollTop).toBeGreaterThan(0);
+  expect(lastLine().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    scroller.getBoundingClientRect().bottom,
+  );
+  scroller.scrollTop = 180;
+  if (settlePosition) {
+    await new Promise(requestAnimationFrame);
+  }
+  const readingTop = scroller.scrollTop;
+  await hideAndReselect();
+  expect(scroller.scrollTop).toBe(readingTop);
 }
 
 describe.runIf(browserMode)("chat sidebar layout", () => {
   it.each(["Review", "Files"] as const)("keeps long markdown scrollable in %s", async (host) => {
-    const { panel, hideAndReselect, release } = await mountDetailPanel(host, {
+    const { panel, hideAndReselect } = await mountDetailPanel(host, {
       kind: "markdown",
       content: Array.from(
         { length: 40 },
@@ -78,31 +96,15 @@ describe.runIf(browserMode)("chat sidebar layout", () => {
       ).join("\n\n"),
     });
 
-    try {
-      const content = panel.querySelector<HTMLElement>(".sidebar-content");
-      expect(content).not.toBeNull();
-      expect(content!.clientHeight).toBeGreaterThan(0);
-      expect(content!.clientHeight).toBeLessThan(content!.scrollHeight);
-
-      content!.scrollTop = content!.scrollHeight;
-      await new Promise(requestAnimationFrame);
-      expect(content!.scrollTop).toBeGreaterThan(0);
-      const lastParagraph = panel.querySelector<HTMLElement>(".sidebar-markdown > p:last-child")!;
-      expect(lastParagraph.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-        content!.getBoundingClientRect().bottom,
-      );
-
-      content!.scrollTop = 180;
-      const readingTop = content!.scrollTop;
-      await hideAndReselect();
-      expect(content!.scrollTop).toBe(readingTop);
-    } finally {
-      release();
-    }
+    await checkScrolling(
+      panel.querySelector<HTMLElement>(".sidebar-content")!,
+      () => panel.querySelector<HTMLElement>(".sidebar-markdown > p:last-child")!,
+      hideAndReselect,
+    );
   });
 
   it.each(["Review", "Files"] as const)("keeps long files scrollable in %s", async (host) => {
-    const { panel, hideAndReselect, release } = await mountDetailPanel(host, {
+    const { panel, hideAndReselect } = await mountDetailPanel(host, {
       kind: "file",
       path: "src/long-example.ts",
       name: "long-example.ts",
@@ -113,32 +115,14 @@ describe.runIf(browserMode)("chat sidebar layout", () => {
       ).join("\n"),
     });
 
-    try {
-      await expect
-        .poll(() => panel.querySelector<HTMLElement>(".cm-scroller"), { timeout: 5_000 })
-        .not.toBeNull();
-      const scroller = panel.querySelector<HTMLElement>(".cm-scroller");
-      expect(scroller).not.toBeNull();
-      expect(scroller!.clientHeight).toBeGreaterThan(0);
-      expect(scroller!.clientHeight).toBeLessThan(scroller!.scrollHeight);
-
-      scroller!.scrollTop = scroller!.scrollHeight;
-      await expect
-        .poll(() => panel.querySelector(".cm-line:last-child")?.textContent)
-        .toBe("export const value200 = 200;");
-      expect(scroller!.scrollTop).toBeGreaterThan(0);
-      const lastLine = panel.querySelector<HTMLElement>(".cm-line:last-child")!;
-      expect(lastLine.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-        scroller!.getBoundingClientRect().bottom,
-      );
-
-      scroller!.scrollTop = 180;
-      await new Promise(requestAnimationFrame);
-      const readingTop = scroller!.scrollTop;
-      await hideAndReselect();
-      expect(scroller!.scrollTop).toBe(readingTop);
-    } finally {
-      release();
-    }
+    await expect.poll(() => panel.querySelector(".cm-scroller"), { timeout: 5_000 }).not.toBeNull();
+    const lastLine = () => panel.querySelector<HTMLElement>(".cm-line:last-child")!;
+    await checkScrolling(
+      panel.querySelector<HTMLElement>(".cm-scroller")!,
+      lastLine,
+      hideAndReselect,
+      () => expect.poll(() => lastLine()?.textContent).toBe("export const value200 = 200;"),
+      true,
+    );
   });
 });
