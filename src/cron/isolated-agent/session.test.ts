@@ -1,32 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
-import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
+import { expect, it, vi } from "vitest";
+import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
-import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
   resolveSessionFilePathCore: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
 }));
-vi.mock("../../config/sessions/reset-policy.js", () => ({
+vi.mock("../../config/sessions/reset-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/reset-policy.js")>()),
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
-  resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
-type MockSessionStoreEntry = Partial<SessionEntry> & {
-  deliveryContext?: DeliveryContext;
-  origin?: SessionOrigin;
-  channel?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
+type MockSessionStoreEntry = Partial<
+  SessionEntry & ReturnType<typeof projectSessionDeliveryFields>
+>;
 
 function resolveWithStoredEntry(params?: {
   sessionKey?: string;
@@ -39,18 +33,19 @@ function resolveWithStoredEntry(params?: {
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const sourceSessionKey = params?.sourceSessionKey;
-  const store: Record<string, SessionEntry> = params?.entry
-    ? {
-        [sourceSessionKey ?? sessionKey]: normalizeLegacySessionEntryDelivery(
-          params.entry as SessionEntry,
-        ),
-      }
-    : {};
+  const store: Record<string, SessionEntry> = {};
+  if (params?.entry) {
+    store[sourceSessionKey ?? sessionKey] = normalizeLegacySessionEntryDelivery({
+      sessionId: "old-session",
+      updatedAt: NOW_MS - 1_000,
+      ...params.entry,
+    });
+  }
   if (params?.targetEntry) {
     store[sessionKey] = params.targetEntry;
   }
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
-  const result = resolveCronSession({
+  return resolveCronSession({
     cfg: {},
     sessionKey,
     sourceSessionKey,
@@ -61,13 +56,6 @@ function resolveWithStoredEntry(params?: {
     store,
     lifecycleTimestamps: {},
   });
-  return {
-    ...result,
-    sessionEntry: {
-      ...result.sessionEntry,
-      ...projectSessionDeliveryFields(result.sessionEntry.delivery),
-    },
-  };
 }
 
 const delivery = {
@@ -93,258 +81,229 @@ const boundContext = {
   projectId: "project",
 } satisfies Partial<SessionEntry>;
 
-function expectNoDelivery(entry: ReturnType<typeof resolveWithStoredEntry>["sessionEntry"]) {
-  for (const field of [
-    "lastChannel",
-    "lastTo",
-    "lastAccountId",
-    "lastThreadId",
-    "deliveryContext",
-  ] as const) {
-    expect(entry[field]).toBeUndefined();
+// Spawned children and memory-audience leases bind to the parent's exact
+// revision, so a run that reuses an incarnation in place must not rotate it.
+it.each([
+  { name: "fresh in-place reuse", keeps: true },
+  { name: "exact-run reuse", exactRunSession: true, keeps: false },
+])("mints a lifecycle revision only for a new run generation ($name)", ({ keeps, ...params }) => {
+  const result = resolveWithStoredEntry({
+    sessionKey: "agent:main:dashboard:chat",
+    ...params,
+    entry: {
+      sessionId: "existing-session",
+      lifecycleRevision: "existing-revision",
+      systemSent: true,
+    },
+  });
+  expect(result.sessionEntry.lifecycleRevision).toBe(result.lifecycleRevision);
+  if (keeps) {
+    expect(result.lifecycleRevision).toBe("existing-revision");
+  } else {
+    expect(result.lifecycleRevision).not.toBe("existing-revision");
+    expect(result.lifecycleRevision).toEqual(expect.any(String));
   }
-}
+});
 
-describe("resolveCronSession", () => {
-  // Spawned children and memory-audience leases bind to the parent's exact
-  // revision, so a run that reuses an incarnation in place must not rotate it.
-  it.each([
-    { name: "fresh in-place reuse", keeps: true },
-    { name: "exact-run reuse", exactRunSession: true, keeps: false },
-  ])("mints a lifecycle revision only for a new run generation ($name)", ({ keeps, ...params }) => {
-    const result = resolveWithStoredEntry({
-      sessionKey: "agent:main:dashboard:chat",
-      ...params,
-      entry: {
-        sessionId: "existing-session",
-        updatedAt: NOW_MS - 1_000,
-        lifecycleRevision: "existing-revision",
-        systemSent: true,
-      },
-    });
-    expect(result.sessionEntry.lifecycleRevision).toBe(result.lifecycleRevision);
-    if (keeps) {
-      expect(result.lifecycleRevision).toBe("existing-revision");
-    } else {
-      expect(result.lifecycleRevision).not.toBe("existing-revision");
-      expect(result.lifecycleRevision).toEqual(expect.any(String));
-    }
-  });
-
-  it.each([
-    {
-      sessionKey: "agent:main:main",
-      forceNew: true,
-      heartbeat: false,
-      initializing: false,
-      error: "is archived. Restore it before starting new work.",
-    },
-    {
-      sessionKey: "agent:main:main:heartbeat",
-      forceNew: true,
-      heartbeat: true,
-      initializing: true,
-      error: "is still initializing. Retry after initialization completes.",
-    },
-    {
-      sessionKey: "agent:main:main:heartbeat",
-      forceNew: false,
-      heartbeat: true,
-      initializing: false,
-      error: "is archived. Restore it before starting new work.",
-    },
-  ])(
-    "blocks $sessionKey (forced=$forceNew, initializing=$initializing)",
-    ({ sessionKey, forceNew, heartbeat, initializing, error }) => {
-      expect(() =>
-        resolveWithStoredEntry({
-          sessionKey,
-          forceNew,
-          entry: {
-            sessionId: "blocked-session",
-            updatedAt: NOW_MS - 1_000,
-            archivedAt: NOW_MS,
-            ...(heartbeat ? { heartbeatIsolatedBaseSessionKey: "agent:main:main" } : {}),
-            ...(initializing ? { initializationPending: true as const } : {}),
-          },
-        }),
-      ).toThrow(`Session "${sessionKey}" ${error}`);
-    },
-  );
-
-  it("rolls an archived isolated heartbeat session into a fresh run", () => {
-    const result = resolveWithStoredEntry({
-      sessionKey: "agent:main:main:heartbeat",
-      forceNew: true,
-      entry: {
-        sessionId: "archived-heartbeat-session",
-        updatedAt: NOW_MS - 1_000,
-        archivedAt: NOW_MS,
-        heartbeatIsolatedBaseSessionKey: "agent:main:main",
-      },
-    });
-    expect(result.isNewSession).toBe(true);
-    expect(result.previousSessionId).toBe("archived-heartbeat-session");
-    expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session");
-    expect(result.sessionEntry.archivedAt).toBeUndefined();
-    expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
-  });
-
-  it.each([
-    { forceNew: false, existingTarget: false },
-    { forceNew: true, existingTarget: true },
-  ])(
-    "keeps usage with its target (forced=$forceNew, existing=$existingTarget)",
-    ({ forceNew, existingTarget }) => {
-      const sessionKey = "agent:main:cron:target";
-      const sourceSessionKey = "agent:main:chat";
-      const result = resolveWithStoredEntry({
+it.each([
+  { forceNew: true, heartbeat: false, initializing: false, rolls: false },
+  { forceNew: true, heartbeat: true, initializing: true, rolls: false },
+  { forceNew: false, heartbeat: true, initializing: false, rolls: false },
+  { forceNew: true, heartbeat: true, initializing: false, rolls: true },
+])(
+  "guards archived sessions: forced=$forceNew, heartbeat=$heartbeat, initializing=$initializing",
+  ({ forceNew, heartbeat, initializing, rolls }) => {
+    const sessionKey = `agent:main:main${heartbeat ? ":heartbeat" : ""}`;
+    const resolve = () =>
+      resolveWithStoredEntry({
         sessionKey,
-        sourceSessionKey,
         forceNew,
         entry: {
-          sessionId: "source-last",
-          lifecycleRevision: "source-revision",
-          updatedAt: NOW_MS,
-          usageFamilyKey: sourceSessionKey,
-          usageFamilySessionIds: ["source-first", "source-last"],
+          sessionId: "archived-heartbeat-session",
+          archivedAt: NOW_MS,
+          ...(heartbeat ? { heartbeatIsolatedBaseSessionKey: "agent:main:main" } : {}),
+          ...(initializing ? { initializationPending: true as const } : {}),
         },
-        targetEntry: existingTarget
-          ? {
-              sessionId: "target-last",
-              updatedAt: NOW_MS,
-              usageFamilySessionIds: ["target-first", "target-last"],
-            }
-          : undefined,
       });
-      expect(result.sessionEntry.usageFamilyKey).toBe(existingTarget ? sessionKey : undefined);
-      expect(result.sessionEntry.usageFamilySessionIds).toEqual(
-        existingTarget ? ["target-first", "target-last", result.sessionEntry.sessionId] : undefined,
-      );
-      expect(result.sessionEntry.createdActor).toBeUndefined();
-      expect(result.lifecycleRevision).not.toBe("source-revision");
-    },
-  );
+    if (!rolls) {
+      const error = initializing
+        ? "is still initializing. Retry after initialization completes."
+        : "is archived. Restore it before starting new work.";
+      expect(resolve).toThrow(`Session "${sessionKey}" ${error}`);
+    } else {
+      const result = resolve();
+      expect(result).toMatchObject({
+        isNewSession: true,
+        previousSessionId: "archived-heartbeat-session",
+      });
+      expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session");
+      expect(result.sessionEntry.archivedAt).toBeUndefined();
+      expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
+    }
+  },
+);
 
-  it("rolls forced runs to a new identity, preserving user preferences and clearing prior routing and workspace", () => {
-    const preferences = {
-      pinnedAt: NOW_MS - 500,
-      sidebarRoot: true,
-      modelOverride: "claude-sonnet-4-6",
-      providerOverride: "anthropic",
-      modelOverrideSource: "user" as const,
-      agentRuntimeOverride: "openclaw",
-      authProfileOverride: "work-profile",
-      authProfileOverrideSource: "user" as const,
-      authProfileOverrideCompactionCount: 3,
-    };
+it.each([
+  { forceNew: false, existingTarget: false },
+  { forceNew: true, existingTarget: true },
+])(
+  "keeps usage with its target (forced=$forceNew, existing=$existingTarget)",
+  ({ forceNew, existingTarget }) => {
+    const sessionKey = "agent:main:cron:target";
+    const sourceSessionKey = "agent:main:chat";
     const result = resolveWithStoredEntry({
-      forceNew: true,
+      sessionKey,
+      sourceSessionKey,
+      forceNew,
       entry: {
-        sessionId: "old-session",
-        lifecycleRevision: "old-revision",
-        updatedAt: NOW_MS - 1_000,
-        systemSent: true,
-        sessionFile: "/tmp/stale-session.jsonl",
-        agentHarnessId: "codex",
-        ...boundContext,
-        ...delivery,
-        lastAccountId: "acct-123",
-        ...preferences,
+        sessionId: "source-last",
+        lifecycleRevision: "source-revision",
+        updatedAt: NOW_MS,
+        usageFamilyKey: sourceSessionKey,
+        usageFamilySessionIds: ["source-first", "source-last"],
       },
+      targetEntry: existingTarget
+        ? {
+            sessionId: "target-last",
+            updatedAt: NOW_MS,
+            usageFamilySessionIds: ["target-first", "target-last"],
+          }
+        : undefined,
     });
+    expect(result.sessionEntry.usageFamilyKey).toBe(existingTarget ? sessionKey : undefined);
+    expect(result.sessionEntry.usageFamilySessionIds).toEqual(
+      existingTarget ? ["target-first", "target-last", result.sessionEntry.sessionId] : undefined,
+    );
+    expect(result.sessionEntry.createdActor).toBeUndefined();
+    expect(result.lifecycleRevision).not.toBe("source-revision");
+  },
+);
+
+it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceNew) => {
+  const preferences = {
+    pinnedAt: NOW_MS - 500,
+    sidebarRoot: true,
+    modelOverride: "claude-sonnet-4-6",
+    providerOverride: "anthropic",
+    modelOverrideSource: "user" as const,
+    agentRuntimeOverride: "openclaw",
+    authProfileOverride: "work-profile",
+    authProfileOverrideSource: "user" as const,
+    authProfileOverrideCompactionCount: 3,
+  };
+  const ambient = {
+    ...boundContext,
+    elevatedLevel: "full",
+    sendPolicy: "deny",
+    queueMode: "collect",
+  } as const;
+  const stalePreferences = { modelOverride: "gpt-4.1-mini", providerOverride: "openai" };
+  const result = resolveWithStoredEntry({
+    forceNew,
+    fresh: forceNew,
+    entry: {
+      lifecycleRevision: "old-revision",
+      updatedAt: NOW_MS - (forceNew ? 1_000 : 86_400_000),
+      systemSent: true,
+      sessionFile: forceNew ? "/tmp/stale-session.jsonl" : "/tmp/legacy-session.jsonl",
+      agentHarnessId: "codex",
+      ...boundContext,
+      ...delivery,
+      ...(forceNew
+        ? { lastAccountId: "acct-123", ...preferences }
+        : {
+            ...ambient,
+            ...stalePreferences,
+            claudeCliSessionId: "native-before-boundary",
+            compactionCount: 9,
+            channel: "discord",
+            origin: { provider: "discord", to: "old-channel" },
+          }),
+    },
+  });
+  expect(result).toMatchObject({
+    isNewSession: true,
+    systemSent: false,
+    previousSessionId: forceNew ? "old-session" : undefined,
+  });
+  expect(result.lifecycleRevision).not.toBe("old-revision");
+  expect(result.sessionEntry.agentHarnessId).toBeUndefined();
+  expect(result.sessionEntry.delivery).toBeUndefined();
+  expect(result.sessionEntry).not.toHaveProperty("channel");
+  expect(result.sessionEntry).not.toHaveProperty("origin");
+  if (forceNew) {
     expect(result.sessionEntry.sessionId).not.toBe("old-session");
-    expect(result.isNewSession).toBe(true);
-    expect(result.lifecycleRevision).not.toBe("old-revision");
-    expect(result.previousSessionId).toBe("old-session");
-    expect(result.systemSent).toBe(false);
     expect(result.sessionEntry).toMatchObject(preferences);
     expect(result.sessionEntry.sessionFile).toBeUndefined();
-    expect(result.sessionEntry.agentHarnessId).toBeUndefined();
-    expectNoDelivery(result.sessionEntry);
     for (const field of Object.keys(boundContext)) {
       expect(result.sessionEntry).not.toHaveProperty(field);
     }
-  });
-
-  it("sanitizes the configured default during forced rollover", () => {
-    const result = resolveWithStoredEntry({
-      forceNew: true,
-      entry: {
-        sessionId: "old-session",
-        updatedAt: NOW_MS - 1_000,
-        modelOverrideSource: "default",
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        modelOverrideFallbackOriginProvider: "openai",
-        modelOverrideFallbackOriginModel: "gpt-5.4",
-      },
-    });
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionEntry.modelOverrideSource).toBe("default");
-    expect(result.sessionEntry.modelOverride).toBeUndefined();
-  });
-
-  it("preserves legacy user auth during forced rollover without a compaction count", () => {
-    const result = resolveWithStoredEntry({
-      forceNew: true,
-      entry: {
-        sessionId: "old-session",
-        updatedAt: NOW_MS - 1_000,
-        authProfileOverride: "work-profile",
-      },
-    });
-    expect(result.isNewSession).toBe(true);
+  } else {
     expect(result.sessionEntry).toMatchObject({
-      authProfileOverride: "work-profile",
-      authProfileOverrideSource: "user",
-    });
-    expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
-  });
-
-  it("resets a stale persistent session in place, retaining workspace restrictions but clearing delivery and runtime handles", () => {
-    const ambient = {
-      ...boundContext,
-      elevatedLevel: "full" as const,
-      sendPolicy: "deny" as const,
-      queueMode: "collect" as const,
-    };
-    const result = resolveWithStoredEntry({
-      fresh: false,
-      entry: {
-        sessionId: "old-session",
-        lifecycleRevision: "old-revision",
-        updatedAt: NOW_MS - 86_400_000,
-        systemSent: true,
-        sessionFile: "/tmp/legacy-session.jsonl",
-        modelOverride: "gpt-4.1-mini",
-        providerOverride: "openai",
-        agentHarnessId: "codex",
-        claudeCliSessionId: "native-before-boundary",
-        compactionCount: 9,
-        ...ambient,
-        ...delivery,
-        channel: "discord",
-        origin: { provider: "discord", to: "old-channel" },
-      },
-    });
-    expect(result.sessionEntry.sessionId).toBe("old-session");
-    expect(result.isNewSession).toBe(true);
-    expect(result.lifecycleRevision).not.toBe("old-revision");
-    expect(result.previousSessionId).toBeUndefined();
-    expect(result.systemSent).toBe(false);
-    expect(result.sessionEntry).toMatchObject({
+      sessionId: "old-session",
       ...ambient,
-      modelOverride: "gpt-4.1-mini",
-      providerOverride: "openai",
+      ...stalePreferences,
       compactionCount: 0,
     });
-    expect(result.sessionEntry.agentHarnessId).toBeUndefined();
     expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
     expect(result.sessionEntry).not.toHaveProperty("sessionFile");
     expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
-    expectNoDelivery(result.sessionEntry);
-    expect(result.sessionEntry.channel).toBeUndefined();
-    expect(result.sessionEntry.origin).toBeUndefined();
+  }
+});
+
+it("keeps a provider-owned CLI session with the default reset policy", () => {
+  const startedAt = NOW_MS - 86_400_000;
+  const result = resolveWithStoredEntry({
+    sessionKey: "agent:main:cron:daily-job",
+    fresh: false,
+    entry: {
+      sessionId: "old-session-id",
+      updatedAt: startedAt,
+      sessionStartedAt: startedAt,
+      lastInteractionAt: startedAt,
+      modelProvider: "claude-cli",
+      cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
+    },
   });
+  expect(result).toMatchObject({
+    isNewSession: false,
+    sessionEntry: { sessionId: "old-session-id" },
+  });
+  expect(getCliSessionBinding(result.sessionEntry, "claude-cli")).toEqual({
+    sessionId: "cli-conversation-xyz",
+  });
+});
+
+it.each([
+  {
+    name: "configured model default",
+    entry: {
+      modelOverrideSource: "default",
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.4",
+    },
+    expected: { modelOverrideSource: "default" },
+    cleared: "modelOverride",
+  },
+  {
+    name: "legacy user auth",
+    entry: { authProfileOverride: "work-profile" },
+    expected: { authProfileOverride: "work-profile", authProfileOverrideSource: "user" },
+    cleared: "authProfileOverrideCompactionCount",
+  },
+] satisfies {
+  name: string;
+  entry: MockSessionStoreEntry;
+  expected: Partial<SessionEntry>;
+  cleared: keyof SessionEntry;
+}[])("preserves $name policy during forced rollover", ({ entry, expected, cleared }) => {
+  const result = resolveWithStoredEntry({
+    forceNew: true,
+    entry,
+  });
+  expect(result.isNewSession).toBe(true);
+  expect(result.sessionEntry).toMatchObject(expected);
+  expect(result.sessionEntry[cleared]).toBeUndefined();
 });

@@ -50,6 +50,8 @@ beforeEach(async () => {
   resetGatewayWorkAdmission();
   scheduler = createTestGatewayScheduler();
   state = await createOpenClawTestState({ label: "gateway-update-check" });
+  // Keep cold partial-mock loading outside the factory-readiness assertion window.
+  await import("../infra/update-startup.js");
   defaultUpdateCheck = {
     initialize: vi.fn(async () => initialized),
     start: vi.fn(),
@@ -80,8 +82,6 @@ afterEach(async () => {
 async function startUpdateCheck(overrides: Partial<UpdateCheckStartupParams> = {}, start = true) {
   const owner = createDeferredGatewayUpdateCheck({
     scheduler,
-    createUpdateCheck: async (...args) =>
-      (await import("../infra/update-startup.js")).createGatewayUpdateCheck(...args),
     getConfig: () => ({}),
     getPluginRegistry: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },

@@ -14,7 +14,6 @@ import { buildDeepInfraMediaUnderstandingProvider } from "./media-understanding-
 import { applyDeepInfraConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepInfraApiKeyCatalog } from "./provider-catalog.js";
-import { getDeepInfraSurfaceFallbackCatalog } from "./provider-models.js";
 import {
   DEEPINFRA_DEFAULT_MODEL_REF,
   buildStaticDeepInfraProvider,
@@ -78,26 +77,16 @@ export default defineSingleProviderPluginEntry({
   },
   register(api) {
     // Registration stays offline; image/video catalog hooks refresh after auth.
-    const catalog = getDeepInfraSurfaceFallbackCatalog();
-    api.registerImageGenerationProvider(
-      buildDeepInfraImageGenerationProvider({ imageGenModels: catalog.imageGen }),
-    );
+    api.registerImageGenerationProvider(buildDeepInfraImageGenerationProvider());
     api.registerModelCatalogProvider({
       provider: PROVIDER_ID,
       kinds: ["image_generation"],
       liveCatalog: listDeepInfraImageGenCatalog,
     });
-    api.registerMediaUnderstandingProvider(
-      buildDeepInfraMediaUnderstandingProvider({
-        vlmModels: catalog.vlm,
-        sttModels: catalog.stt,
-      }),
-    );
-    api.registerEmbeddingProvider(buildDeepInfraEmbeddingAdapter({ embedModels: catalog.embed }));
-    api.registerSpeechProvider(buildDeepInfraSpeechProvider({ ttsModels: catalog.tts }));
-    api.registerVideoGenerationProvider(
-      buildDeepInfraVideoGenerationProvider({ videoGenModels: catalog.videoGen }),
-    );
+    api.registerMediaUnderstandingProvider(buildDeepInfraMediaUnderstandingProvider());
+    api.registerEmbeddingProvider(buildDeepInfraEmbeddingAdapter());
+    api.registerSpeechProvider(buildDeepInfraSpeechProvider());
+    api.registerVideoGenerationProvider(buildDeepInfraVideoGenerationProvider());
     api.registerModelCatalogProvider({
       provider: PROVIDER_ID,
       kinds: ["video_generation"],

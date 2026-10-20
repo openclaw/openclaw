@@ -365,10 +365,17 @@ export async function createHarness(
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     assertPreparedIntentCurrent: vi.fn(),
-    prepareProjectIntent: vi.fn(async (_profileId, request) => ({
-      providerId: request?.inherited?.providerId ?? ready.providerId,
-      profileSnapshot: request?.inherited?.profileSnapshot ?? ready.profileSnapshot,
-    })),
+    prepareProjectIntent: vi.fn(async (_profileId, request) => {
+      const {
+        project: _project,
+        runtimePreparation: _runtimePreparation,
+        ...profileSnapshot
+      } = request?.inherited?.profileSnapshot ?? ready.profileSnapshot;
+      return {
+        providerId: request?.inherited?.providerId ?? ready.providerId,
+        profileSnapshot,
+      };
+    }),
     getPreparedCandidates: vi.fn(() => []),
     bindPreparedWorkspace: vi.fn(async (request) => ({
       assertCurrent: request.assertCurrent,

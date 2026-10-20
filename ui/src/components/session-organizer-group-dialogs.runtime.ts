@@ -1,9 +1,12 @@
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import type { SessionOrganizerDependencies } from "./session-organizer-types.ts";
+
+registerSessionOrganizationEnglish();
 
 async function loadDialog<T>(deps: SessionOrganizerDependencies, load: Promise<T>) {
   try {

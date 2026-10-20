@@ -29,6 +29,7 @@ it.each([
       onOpenImage={() => {}}
     />
   ));
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
     const group = container.querySelector(".chat-group.user");
     const avatar = group?.querySelector(
@@ -82,6 +83,7 @@ it("replaces startup progress with an actionable completion while retaining the 
       onOpenImage={() => {}}
     />
   ));
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(container.querySelector(".chat-working-indicator")).not.toBeNull(),
   );

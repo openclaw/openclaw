@@ -127,14 +127,8 @@ export class SqliteReclamationWorker {
     });
     try {
       this.unregisterState = registerOpenClawStateDatabaseAsyncResource({
-        close: async (closingIdentity) => {
-          if (
-            !closingIdentity ||
-            closingIdentity.key === this.stateContext.admission.identity.key
-          ) {
-            await this.close();
-          }
-        },
+        admission: this.stateContext.admission,
+        close: () => this.close(),
       });
     } catch (error) {
       this.unregisterAgent();

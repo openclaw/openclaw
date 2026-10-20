@@ -237,9 +237,8 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     const root = this.transcript.scrollElement;
-    // The transcript renderer owns the sentinel observed by this history owner.
-    const sentinel = root?.querySelector<HTMLElement>(".chat-history-sentinel") ?? null;
-    if (!root || !sentinel) {
+    const sentinel = this.historySentinel;
+    if (!root || !sentinel || !root.contains(sentinel)) {
       this.clearHistoryObserver();
       return;
     }

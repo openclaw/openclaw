@@ -230,7 +230,6 @@ describe("gateway probe endpoints", () => {
       channelManager,
       startedAt: Date.now(),
       getGatewayDraining: isGatewayDraining,
-      cacheTtlMs: 0,
     });
     try {
       await withProbeServer({ getReadiness, openAiChatCompletionsEnabled: true }, async (probe) => {
@@ -405,7 +404,9 @@ describe("gateway probe endpoints", () => {
     );
   });
 
-  it("reports startup lifecycle independently of hard channel failures", async () => {
+  it("reports startup lifecycle independently of hard channel failures", async ({
+    onTestFinished,
+  }) => {
     let startupPending = true;
     let gatewayDraining = false;
     const pending = createAgentDatabaseInspectionRefusal({
@@ -445,7 +446,6 @@ describe("gateway probe endpoints", () => {
     const getReadiness = createReadinessChecker({
       channelManager,
       ...startupDeps,
-      cacheTtlMs: 0,
     });
     await withProbeServer({ getReadiness, getStartup }, async (probe) => {
       await probe.json("/startupz", 503, startupDetails("starting", "plugin-convergence"));
@@ -476,6 +476,8 @@ describe("gateway probe endpoints", () => {
       account.connected = false;
       account.linked = false;
       account.terminalDisconnect = true;
+      const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
+      onTestFinished(() => now.mockRestore());
       await probe.json("/readyz", 503, readyState(["whatsapp"]));
 
       await probe.json("/startupz", 200, {

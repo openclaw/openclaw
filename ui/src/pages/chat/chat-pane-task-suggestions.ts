@@ -36,6 +36,7 @@ type TaskSuggestionOperation =
     };
 
 export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
+  private taskSuggestionFocus: { id: string; direction: "next" | "previous" } | null = null;
   readonly tasks: {
     suggestions: TaskSuggestion[];
     busyIds: Set<string>;
@@ -138,15 +139,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     this.tasks.activeId = next.id;
     this.tasks.swapDirection = direction;
     this.tasks.swapGeneration += 1;
-    void this.awaitDomCommit().then(() => {
-      // The suggestion renderer owns the active card and its navigation controls.
-      const activeCard = [...this.element.querySelectorAll<HTMLElement>(".task-suggestion")].find(
-        (card) => card.dataset.taskId === next.id,
-      );
-      activeCard
-        ?.querySelector<HTMLElement>(`[data-task-${direction === "next" ? "next" : "prev"}]`)
-        ?.focus();
-    });
+    this.taskSuggestionFocus = { id: next.id, direction };
   };
 
   protected async refreshTaskSuggestions(options?: { automatic?: boolean }): Promise<void> {
@@ -269,6 +262,19 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       taskSuggestionSwapDirection: this.tasks.swapDirection,
       taskSuggestionSwapGeneration: this.tasks.swapGeneration,
       onNavigateTaskSuggestion: this.navigateTaskSuggestion,
+      onTaskSuggestionNavigationMount: (
+        id: string,
+        direction: "next" | "previous",
+        button: HTMLButtonElement,
+      ) => {
+        if (
+          this.taskSuggestionFocus?.id === id &&
+          this.taskSuggestionFocus.direction === direction
+        ) {
+          this.taskSuggestionFocus = null;
+          button.focus();
+        }
+      },
       taskSuggestionBusyIds: this.tasks.busyIds,
       taskSuggestionAcceptance: (taskId: string) => {
         const operation = this.tasks.operations.get(taskId);

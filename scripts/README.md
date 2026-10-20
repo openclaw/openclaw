@@ -75,6 +75,13 @@ classifiers do not invoke a formatter.
 
 ## Script Families
 
+The database-worker ratchet always analyzes current sources, including personal
+credential writers. Its historical inventory reuses the build-artifact cache
+under `.artifacts`: the key includes the base Git tree, analyzer/config source,
+native compiler/API bytes, Node version, platform and checkout path. One base
+generation is retained per cache root; changed inputs or damaged outputs rebuild
+it. The complete semantic program is preserved on cache misses.
+
 - `check-*.mts` / `check-*.ts` / retained `check-*.mjs`: guardrails for architecture, docs, package
   contents, boundaries, workflows, and generated artifacts.
 - `run-*.mjs` / `run-*.mts`: stable wrappers and typed implementations for Node, Vitest,

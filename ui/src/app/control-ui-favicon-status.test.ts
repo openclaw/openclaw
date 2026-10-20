@@ -53,11 +53,12 @@ function setup(mountPane = true) {
     working: false,
     completion: null,
   };
-  Object.defineProperty(pane, "runActivity", { get: () => activity });
   if (mountPane) {
     shell.append(pane);
   }
-  const disconnect = connectControlUiFavicon(shell, context);
+  const disconnect = connectControlUiFavicon(shell, context, () =>
+    pane.isConnected && shell.contains(pane) ? [{ runActivity: activity }] : [],
+  );
   cleanups.push(() => {
     disconnect();
     overlays.dispose();

@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import nativeFs, { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
@@ -351,7 +351,19 @@ it("keeps watch=false passive state fixed while explicit refresh remains immedia
 
 it("rediscovers replaced workspaces and roots that disappear and return", async () => {
   await write("Original");
-  expect(await descriptions()).toEqual(["Original"]);
+  expect(await descriptions(request(), false)).toEqual(["Original"]);
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const watch = vi.spyOn(nativeFs, "watch");
+  // Register the Windows observation on an already prepared source, so this
+  // exercises its handle boundary without changing worker launch semantics.
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  try {
+    expect(await descriptions()).toEqual(["Original"]);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+  expect(watch).toHaveBeenCalledOnce();
+  expect(watch.mock.calls[0]![0]).toBe(workspace);
   await fs.rename(workspace, path.join(temporary.make("skills-retired-"), "workspace"));
   for (const description of ["Replacement", undefined, "Recreated"]) {
     await (description

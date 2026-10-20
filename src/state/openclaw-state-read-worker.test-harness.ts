@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
-import {
-  createRetainedOperation,
-  type RetainedOperation,
-} from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
@@ -15,9 +11,7 @@ import type {
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
 
-type ReadTask = RetainedOperation<OpenClawStateReadReply> & {
-  release(options?: { retire?: true }): RetainedOperation<void>;
-};
+type ReadTask = OwnedWorkerTask<OpenClawStateReadReply>;
 type RunTask = (
   input: WorkerTaskInput<OpenClawStateReadRequest>,
   options: OwnedWorkerTaskOptions<OpenClawStateReadRequest>,
@@ -77,7 +71,7 @@ beforeEach(() => {
   mock.rotate.mockReset().mockResolvedValue();
   mock.create.mockReset().mockImplementation(() =>
     createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
-      startTask: mock.runTask,
+      runTask: mock.runTask,
       close: mock.closePool,
       closeResources: mock.closeResources,
       rotate: mock.rotate,
@@ -94,23 +88,13 @@ export function source(name = "source.sqlite") {
 }
 
 export function queueTask(dispatchReady: Promise<void> = Promise.resolve()) {
-  const completion = createRetainedOperation<OpenClawStateReadReply>(() => {});
-  const result = {
-    promise: completion.operation.result,
-    resolve: completion.resolve,
-    reject: completion.reject,
-  };
+  const result = createDeferredCore<OpenClawStateReadReply>();
+  // Fixture cleanup may reject a queued task that the subject never submitted.
+  void result.promise.catch(() => undefined);
   const submitted = createDeferredCore<OwnedWorkerTaskOptions<OpenClawStateReadRequest>>();
   const captured = createDeferredCore<OpenClawStateReadRequest>();
   const close = vi.fn<OwnedWorkerTask<OpenClawStateReadReply>["close"]>().mockResolvedValue();
-  const handle: ReadTask = {
-    ...completion.operation,
-    release(options) {
-      const closed = createRetainedOperation<void>(() => {});
-      void close(options).then(closed.resolve, closed.reject);
-      return closed.operation;
-    },
-  };
+  const handle: ReadTask = { result: result.promise, close };
   let detach = () => {};
   mock.runTask.mockImplementationOnce((input, options) => {
     const signal = options.signal;

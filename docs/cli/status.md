@@ -8,6 +8,16 @@ title: "openclaw status"
 
 Diagnostics for channels + sessions.
 
+JSON includes `databaseEngines.families` (configured choices) and
+`databaseEngines.stores` (available physical/admitted evidence). The retained
+`databaseEngines.experimental` boolean means an experimental engine/search
+feature is selected. It is `false` for all currently supported family selections,
+including PostgreSQL and mixed engines. It does not certify the server major,
+TLS/SecretRef-provider deployment, native client or upgrade path; see the
+[PostgreSQL support matrix](/gateway/postgresql#support-matrix). An unavailable
+store projection remains unknown even when this flag is false. Run Doctor on the
+Gateway host for fresh per-store inspection and repair guidance.
+
 Task counts and audit totals use a read-only metadata summary. Retained task
 payloads and delivery history are not loaded for each status request, and
 overlapping requests share the pending summary read. Database work runs on the
@@ -265,6 +275,15 @@ If local session state requires Doctor, status prints any installation drift to 
 - `status --all` includes a **Telemetry exporters** diagnosis with the latest
   trusted per-signal exporter state and transport. Endpoint values, headers,
   certificates, payloads, and raw errors are not shown.
+- Missing log files are omitted from `status --all`. Unreadable logs show an
+  unavailable message with guidance to check the file path and permissions.
+
+## Plugin health
+
+Plugin-health collection warns when persisted quarantine records cannot be read
+and continues with the available health information. The inventory may be
+incomplete; run `openclaw doctor` to inspect state storage. The warning does not
+include stored records or raw database errors.
 
 ## Plugin reload
 

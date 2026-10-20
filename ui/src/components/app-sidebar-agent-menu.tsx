@@ -15,7 +15,12 @@ import {
   type SidebarAgentMenuSwitcherParams,
 } from "./sidebar-agent-menu-switcher.tsx";
 import { Icon } from "./solid/icon.tsx";
-import type { MenuEntry, MenuHandle, MenuItem } from "./solid/menu.tsx";
+import {
+  createMenuControls,
+  type MenuEntry,
+  type MenuHandle,
+  type MenuItem,
+} from "./solid/menu.tsx";
 
 // External rows of the footer identity menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
@@ -105,6 +110,7 @@ export function selectSidebarHelpLink(value: string): boolean {
 }
 
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Element {
+  const controls = createMenuControls();
   const pinButtons = new Map<string, HTMLButtonElement>();
   const position = params.position;
   const activeId = () => params.activeId;
@@ -132,6 +138,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       items: renderSidebarAgentMenuSwitcher(
         { ...params, allAgentsScope: params.rosterMode && params.agents.length > 1 },
         pinButtons,
+        controls,
       ),
     },
     ...(params.agents.length > 0
@@ -171,6 +178,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
   ];
   return (
     <SidebarDropdown
+      controls={controls}
       class="sidebar-customize-menu sidebar-agent-menu"
       position={position}
       anchor={params.anchor}

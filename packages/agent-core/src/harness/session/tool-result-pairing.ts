@@ -42,13 +42,6 @@ type ToolUsePairingFrame = {
   failed: boolean;
 };
 
-type ToolUsePairingClassification = {
-  frames: ToolUsePairingFrame[];
-  droppedDuplicateCount: number;
-  droppedOrphanCount: number;
-  droppedResults: Array<{ message: ToolResultMessage; index: number }>;
-};
-
 type ToolCallOccurrenceQueue<T> = {
   add: (id: string, occurrence: T) => void;
   claim: (id: string) => T | undefined;
@@ -210,15 +203,12 @@ export function normalizeLegacyToolResultId(
 export function classifyToolUseResultPairing(
   messages: readonly AgentMessage[],
   options?: { preserveUnframedToolResults?: boolean },
-): ToolUsePairingClassification {
+): ToolUsePairingFrame[] {
   const frameStartIndexes = messages.flatMap((message, index) =>
     message?.role === "assistant" && extractToolCallsFromAssistant(message).length > 0
       ? [index]
       : [],
   );
-  let droppedDuplicateCount = 0;
-  let droppedOrphanCount = 0;
-  const droppedResults: Array<{ message: ToolResultMessage; index: number }> = [];
   const preserveUnframed = options?.preserveUnframedToolResults === true;
   const frameRecords: Array<ToolUsePairingFrame & { unclaimedResults: ToolResultRecord[] }> =
     frameStartIndexes.map((startIndex, frameIndex) => {
@@ -273,23 +263,13 @@ export function classifyToolUseResultPairing(
           }
           continue;
         }
-        droppedDuplicateCount += 1;
         const replaceable = isSyntheticMissingToolResult(normalized)
           ? undefined
           : syntheticById.claim(id);
         if (replaceable) {
-          const discardedSource = replaceable.sourceResult;
-          if (discardedSource) {
-            droppedResults.push({
-              message: discardedSource,
-              index: replaceable.sourceResultIndex ?? index,
-            });
-          }
           replaceable.result = normalizeToolResultName(normalized, replaceable.name);
           replaceable.sourceResult = message;
           replaceable.sourceResultIndex = index;
-        } else {
-          droppedResults.push({ message, index });
         }
       }
       const stopReason = (assistant as { stopReason?: string }).stopReason;
@@ -327,25 +307,11 @@ export function classifyToolUseResultPairing(
           )
         : [];
       if (candidates.length !== 1) {
-        droppedOrphanCount += preserveUnframed ? 0 : 1;
-        if (!preserveUnframed) {
-          droppedResults.push({ message: record.sourceResult, index: record.index });
-        }
         continue;
       }
       const candidate = candidates[0];
       if (!candidate) {
         continue;
-      }
-      droppedDuplicateCount += candidate.result ? 1 : 0;
-      if (candidate.result && isSyntheticMissingToolResult(candidate.result)) {
-        const discardedSource = candidate.sourceResult;
-        if (discardedSource) {
-          droppedResults.push({
-            message: discardedSource,
-            index: candidate.sourceResultIndex ?? record.index,
-          });
-        }
       }
       candidate.result = normalizeToolResultName(record.result, candidate.name);
       candidate.sourceResult = record.sourceResult;
@@ -356,13 +322,13 @@ export function classifyToolUseResultPairing(
     }
   }
 
-  return { frames: frameRecords, droppedDuplicateCount, droppedOrphanCount, droppedResults };
+  return frameRecords;
 }
 
 /** Select actual completed occurrences, never unmatched calls or synthesized missing results. */
 export function collectCompletedToolCallBlocks(messages: readonly AgentMessage[]): Set<object> {
   const completed = new Set<object>();
-  for (const frame of classifyToolUseResultPairing(messages).frames) {
+  for (const frame of classifyToolUseResultPairing(messages)) {
     for (const occurrence of frame.occurrences) {
       if (occurrence.sourceResult && !isSyntheticMissingToolResult(occurrence.sourceResult)) {
         const block = frame.assistant.content[occurrence.contentIndex];
@@ -378,9 +344,9 @@ export function collectCompletedToolCallBlocks(messages: readonly AgentMessage[]
 /** Select reset-tail model context without changing persisted entry bytes or order. */
 export function selectResetKeptEntries(entries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
   const messages = entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-  const pairing = classifyToolUseResultPairing(messages);
+  const frames = classifyToolUseResultPairing(messages);
   const pairedResults = new Set(
-    pairing.frames.flatMap((frame) =>
+    frames.flatMap((frame) =>
       frame.occurrences.flatMap((occurrence) =>
         occurrence.sourceResult ? [occurrence.sourceResult] : [],
       ),

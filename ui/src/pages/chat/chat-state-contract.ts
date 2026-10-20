@@ -53,7 +53,6 @@ export type ChatState = StreamCausalBoundaryState & {
   chatHistoryCursor?: ChatHistoryCursor;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
-  chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
   /** Pane-owned explicit session queue override from the latest history response. */
   chatQueueModeOverride?: GatewaySessionRow["queueMode"];

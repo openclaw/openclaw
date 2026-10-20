@@ -1,7 +1,7 @@
 import type { Page, Locator } from "playwright";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,

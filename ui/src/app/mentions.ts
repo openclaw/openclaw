@@ -258,6 +258,7 @@ export function createMentionsCapability(
     owner.refreshRequested = true;
     void refreshAutomatically(owner);
   });
+  // Retire prior identity requests before hydrating the next connection's Inbox.
   const stopGateway = gateway.subscribe(synchronize);
   synchronize();
 

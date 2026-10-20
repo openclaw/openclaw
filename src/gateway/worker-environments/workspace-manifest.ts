@@ -9,7 +9,7 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { projectWorkspaceEntries } from "./workspace-path-exclusions.js";
+import { projectWorkspaceEntries, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 export type WorkerWorkspaceManifestEntry =
   | { path: string; type: "file"; mode: number; size: number; sha256: string }
@@ -20,6 +20,8 @@ export type WorkerWorkspaceManifest = {
   baseCommit: string | null;
   entries: WorkerWorkspaceManifestEntry[];
   directories?: string[];
+  /** Local guest build-cache policy and trusted inputs; never serialized into receipt bytes. */
+  buildCacheInputs?: string[];
 };
 
 export type WorkerWorkspaceReconciliationJournal = {
@@ -160,7 +162,10 @@ function parseRawEntry(entry: unknown): RawManifestEntry {
   throw new Error("Worker workspace manifest contains an unsupported entry type");
 }
 
-function validateAndProjectEntries(values: unknown[]): {
+function validateAndProjectEntries(
+  values: unknown[],
+  buildCacheInputs?: string[],
+): {
   entries: WorkerWorkspaceManifestEntry[];
   directories: string[];
 } {
@@ -185,8 +190,11 @@ function validateAndProjectEntries(values: unknown[]): {
     previous = entry.path;
   }
   const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
-  const eligible = projectWorkspaceEntries(rawEntries, (entryPath) =>
-    isStagedInputPath(entryPath, stagedInputs),
+  const retained = buildCacheInputPaths(buildCacheInputs);
+  const eligible = projectWorkspaceEntries(
+    rawEntries,
+    (entryPath) => retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
+    buildCacheInputs !== undefined,
   );
   return {
     entries: eligible.filter((entry) => entry.type !== "directory"),
@@ -206,8 +214,11 @@ export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManife
     ...manifest.entries,
   ].toSorted(compareManifestPaths);
   const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
-  const entries = projectWorkspaceEntries(rawEntries, (entryPath) =>
-    isStagedInputPath(entryPath, stagedInputs),
+  const retained = buildCacheInputPaths(manifest.buildCacheInputs);
+  const entries = projectWorkspaceEntries(
+    rawEntries,
+    (entryPath) => retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
+    manifest.buildCacheInputs !== undefined,
   );
   if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
     throw new Error("Worker workspace manifest has too many entries");
@@ -230,6 +241,7 @@ export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManife
 export function parseWorkerWorkspaceManifest(
   raw: string,
   expectedRef: string,
+  buildCacheInputs?: string[],
 ): WorkerWorkspaceManifest {
   if (Buffer.byteLength(raw) > MAX_WORKSPACE_MANIFEST_BYTES) {
     throw new Error("Worker workspace manifest exceeds the 64 MiB safety limit");
@@ -256,7 +268,8 @@ export function parseWorkerWorkspaceManifest(
   return {
     version: 1,
     baseCommit: manifest.baseCommit,
-    ...validateAndProjectEntries(manifest.entries),
+    ...validateAndProjectEntries(manifest.entries, buildCacheInputs),
+    ...(buildCacheInputs !== undefined ? { buildCacheInputs } : {}),
   };
 }
 

@@ -8,7 +8,10 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests as Snapshot } from "./control-ui-contract.js";
 import { parseControlUiSessionPullRequestsSubscribeParams as parse } from "./control-ui-session-pr-subscriptions.js";
-import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
+import {
+  createTestControlUiSessionPrSubscriptions,
+  createTestSessionPrReadSource,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import type { ControlUiSessionPullRequestsParams as LoadParams } from "./control-ui-session-prs.js";
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
@@ -185,6 +188,7 @@ describe("control UI session PR subscriptions", () => {
 
   it("retains caller aliases independently within each audience", async () => {
     const canonicalKey = "agent:main:shared";
+    const readSource = createTestSessionPrReadSource();
     const signals = new Map<string, AbortSignal | undefined>();
     const load = vi.fn<NonNullable<Options["load"]>>(async (_params, signal, read) => {
       read.assertCurrent();
@@ -196,7 +200,7 @@ describe("control UI session PR subscriptions", () => {
       prepareRead: async (connId) => async () => ({
         params: { sessionKey: canonicalKey, agentId: "main" },
         identity: connId === "private" ? "private" : "shared",
-        readSource: { agentId: "main", path: "unused" },
+        readSource,
         source: null,
       }),
     });

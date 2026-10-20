@@ -28,7 +28,6 @@ import {
 } from "../agents/mcp-tool-metadata.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import {
   NODE_MCP_TOOL_CALL_TIMEOUT_MS,
@@ -182,9 +181,16 @@ function buildNodeMcpToolDescriptors(
   return descriptors;
 }
 
-async function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
+async function disposeNodeHostMcpSession(
+  serverName: string,
+  session: NodeHostMcpSession,
+): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
-  await disposeMcpClient(session);
+  if ((await disposeMcpClient(session)) === "uncertain") {
+    console.warn(
+      `node host MCP server "${serverName}" cleanup could not be confirmed; check the server process`,
+    );
+  }
 }
 
 /** Starts process-lifetime MCP server state for the node host. */
@@ -370,7 +376,7 @@ export async function startNodeHostMcpManager(
         client.onclose = () => {
           if (createdSession.connected && invalidateCurrent(state, createdSession)) {
             enqueueWork(state, async () => {
-              await disposeNodeHostMcpSession(createdSession);
+              await disposeNodeHostMcpSession(state.serverName, createdSession);
               scheduleRetry(state);
             });
           }
@@ -396,7 +402,7 @@ export async function startNodeHostMcpManager(
         const lostOwnership = session !== undefined && state.current !== session;
         if (session && state.current === session) {
           invalidateCurrent(state, session);
-          await disposeNodeHostMcpSession(session);
+          await disposeNodeHostMcpSession(state.serverName, session);
         } else if (!session) {
           resolved?.detachStderr?.();
         }
@@ -441,7 +447,7 @@ export async function startNodeHostMcpManager(
         `node host MCP server "${state.serverName}" tool refresh failed: ${formatMcpError(error)}`,
       );
       invalidateCurrent(state, session);
-      await disposeNodeHostMcpSession(session);
+      await disposeNodeHostMcpSession(state.serverName, session);
       scheduleRetry(state);
     }
   };
@@ -536,7 +542,7 @@ export async function startNodeHostMcpManager(
         const sessionExpired = isMcpHttpSessionExpired(session, error);
         if (sessionExpired && invalidateCurrent(state, session)) {
           enqueueWork(state, async () => {
-            await disposeNodeHostMcpSession(session);
+            await disposeNodeHostMcpSession(state.serverName, session);
             scheduleRetry(state);
           });
         }
@@ -579,7 +585,7 @@ export async function startNodeHostMcpManager(
         state.current = undefined;
         state.listedTools = [];
         if (session) {
-          await disposeNodeHostMcpSession(session);
+          await disposeNodeHostMcpSession(state.serverName, session);
         }
         // Lifecycle work accepted before close may append catalog work. Drain it
         // first, then await the latest catalog tail before releasing ownership.
@@ -594,11 +600,10 @@ export async function startNodeHostMcpManager(
 function listEnabledNodeHostMcpServers(
   servers: Record<string, McpServerConfig> | undefined,
 ): ReadonlyArray<readonly [string, McpServerConfig]> {
-  return Object.entries(normalizeConfiguredMcpServers(servers))
+  return Object.entries(servers ?? {})
     .filter(
       ([serverName, config]) =>
         serverName.length > 0 && serverName === serverName.trim() && config.enabled !== false,
     )
-    .map(([serverName, config]) => [serverName, config as McpServerConfig] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
 }

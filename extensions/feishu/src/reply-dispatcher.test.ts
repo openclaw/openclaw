@@ -119,8 +119,8 @@ import {
 } from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyAccount } from "./reply-dispatcher.test-support.js";
 import type { FeishuStreamingSession } from "./streaming-card.js";
-import type { FeishuConfig } from "./types.js";
 type StreamingCloseResult = Awaited<ReturnType<FeishuStreamingSession["closeWithResult"]>>;
 const imageUrl = "https://example.com/image.png";
 
@@ -193,21 +193,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     });
   });
-
-  function createReplyAccount(
-    renderMode: "auto" | "card",
-    streamingMode: "off" | "partial",
-    domain: "feishu" | "lark",
-    overrides: Partial<FeishuConfig> = {},
-  ) {
-    return {
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain,
-      config: { renderMode, streaming: { mode: streamingMode }, ...overrides },
-    };
-  }
 
   function useNonStreamingAutoAccount() {
     resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off", "feishu"));

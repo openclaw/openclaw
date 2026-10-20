@@ -11,10 +11,10 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
-import { portalNeedsNewTab, portalNeedsRemoteIngress } from "./portal-url.ts";
 
 export type PortalsPresentation = {
   embedded: boolean;
@@ -31,6 +31,18 @@ export function createPortals(
   context: ApplicationContext,
   presentation: () => PortalsPresentation,
 ) {
+  let active = true;
+  let presentationPending = false;
+  const snapshotPresentation = (): PortalsPresentation => {
+    const current = presentation();
+    return {
+      embedded: current.embedded,
+      presented: current.presented,
+      requestedPortalId: current.requestedPortalId,
+      requestedEnvironmentId: current.requestedEnvironmentId,
+    };
+  };
+  let previousPresentation = snapshotPresentation();
   // Selection and pending facts are synchronous admission state; Solid only projects them.
   const state: {
     portals: PortalSummary[];
@@ -86,16 +98,8 @@ export function createPortals(
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   let client = context.gateway.snapshot.client;
   let presentationScope = gatewayPresentationScope(context.gateway);
-  const projection = projectSource(state, {
-    read: (value) => value,
-    subscribe: (_value, listener) => {
-      publish = listener;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(state, (value) => value);
+  publish = projection.publish;
   // Connection receipts retire portal requests, probes, and presentation acknowledgements before reconnect.
   const stopGateway = context.gateway.subscribe((value) => {
     const nextPresentationScope = gatewayPresentationScope(context.gateway);
@@ -125,6 +129,7 @@ export function createPortals(
     }
   });
   onCleanup(() => {
+    active = false;
     stopGateway();
     stopEvents();
     lifecycle.dispose();
@@ -318,12 +323,23 @@ export function createPortals(
       notify();
       return;
     }
-    if (portalNeedsRemoteIngress(url, context.gateway.connection.gatewayUrl)) {
+    const portalAddress = new URL(url);
+    // A remote Gateway's loopback endpoint points at the browser, not the Gateway.
+    if (
+      isLoopbackHostname(portalAddress.hostname) &&
+      !isLoopbackHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
+    ) {
       state.portalProbeState = { key, status: "ingress-required" };
       notify();
       return;
     }
-    if (portalNeedsNewTab(url, location.href)) {
+    const controlUiAddress = new URL(location.href);
+    // Without secure partitioned cookies, HTTP previews need the same scheme and host.
+    if (
+      portalAddress.protocol === "http:" &&
+      (controlUiAddress.protocol !== portalAddress.protocol ||
+        controlUiAddress.hostname !== portalAddress.hostname)
+    ) {
       state.portalProbeState = { key, status: "new-tab-required" };
       notify();
       return;
@@ -388,33 +404,46 @@ export function createPortals(
 
   return {
     state: projection.read,
-    presentation,
+    presentation: () => {
+      projection.revision();
+      return presentation();
+    },
     observePresentation(requestId: string, portalId?: string) {
       presentationRequest = { requestId, portalId };
       // Report this view's diagnosis without re-probing and discarding its live
       // iframe document. The explicit Retry action owns a fresh network check.
       reportPresentation();
     },
-    presentationChanged(previous: PortalsPresentation | undefined) {
-      if (!previous) {
+    presentationChanged() {
+      if (presentationPending) {
         return;
       }
-      const targetChanged =
-        previous.requestedPortalId !== presentation().requestedPortalId ||
-        previous.requestedEnvironmentId !== presentation().requestedEnvironmentId;
-      if (targetChanged) {
-        resetPendingEnvironment();
-        state.loading = false;
-        state.portalProbeState = null;
-        applyPortalSet(state.portals);
-        void loadPresentation();
-      } else if (presentation().presented && !previous.presented) {
-        void loadPresentation();
-      } else if (!presentation().presented) {
-        pollEnvironment(false);
-        environmentLoading = false;
-      }
-      notify();
+      presentationPending = true;
+      // Paired native target writes must load and report only the final presentation.
+      queueMicrotask(() => {
+        presentationPending = false;
+        if (!active) {
+          return;
+        }
+        const previous = previousPresentation;
+        const current = (previousPresentation = snapshotPresentation());
+        const targetChanged =
+          previous.requestedPortalId !== current.requestedPortalId ||
+          previous.requestedEnvironmentId !== current.requestedEnvironmentId;
+        if (targetChanged) {
+          resetPendingEnvironment();
+          state.loading = false;
+          state.portalProbeState = null;
+          applyPortalSet(state.portals);
+          void loadPresentation();
+        } else if (current.presented && !previous.presented) {
+          void loadPresentation();
+        } else if (!current.presented) {
+          pollEnvironment(false);
+          environmentLoading = false;
+        }
+        notify();
+      });
     },
     selectPortal(portal: PortalSummary) {
       if (portal.id === state.selectedPortalId) {

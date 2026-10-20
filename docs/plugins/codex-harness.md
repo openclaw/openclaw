@@ -15,6 +15,12 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+Managed inference proxy restarts do not replace an otherwise reusable native
+thread. Thread identity uses the proxy's upstream provider and routing policy, not
+its temporary loopback address. Upstream, authentication-profile, and creation-time
+policy changes still invalidate thread reuse; live requests continue through the
+current owned proxy.
+
 ## Shared output projection
 
 Codex uses the shared native harness projection owners for bounded tool output,
@@ -630,7 +636,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.162.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.162.1` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

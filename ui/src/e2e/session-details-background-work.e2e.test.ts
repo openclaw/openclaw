@@ -198,6 +198,7 @@ suite.define(() => {
             )
             .toEqual(["2 running · 3 done · 1 failed", "2 running · 1 done · 1 failed"]);
           // Live work leads, failures follow, and the rest waits behind Show more.
+          await subagents.locator(".chat-subagent-activity__status").first().waitFor();
           expect(
             await subagents.locator(".chat-subagent-activity__status").allTextContents(),
           ).toEqual(["Comparing light and dark Details", "Reading the process owner", "Failed"]);

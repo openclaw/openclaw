@@ -34,6 +34,7 @@ import {
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { preserveResetSessionPresentation } from "../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import {
@@ -383,7 +384,16 @@ async function performPreparedGatewaySessionReset({
     const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
       allowPendingWorkspace: true,
       allowRestartTombstoneReplacement:
-        entry !== undefined && entry.archivedAt === undefined && isRestartRecoveryTombstone(entry),
+        entry !== undefined &&
+        isRestartRecoveryTombstone(entry) &&
+        (entry.archivedAt === undefined ||
+          (entry.archiveReason === "restart-recovery" &&
+            canonicalKey ===
+              resolveCanonicalMainSessionKey({
+                agentId: resetTarget.target.agentId,
+                mainKey: resetTarget.cfg.session?.mainKey,
+                sessionScope: resetTarget.cfg.session?.scope,
+              }))),
     });
     if (archivedSessionError) {
       return errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);

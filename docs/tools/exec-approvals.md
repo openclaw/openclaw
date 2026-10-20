@@ -107,9 +107,9 @@ not that the command may have run.
 
 ## Settings and storage
 
-Approvals live in the shared SQLite state database on the execution host. When
-`OPENCLAW_STATE_DIR` is set, the database follows that state directory.
-Otherwise it uses the default OpenClaw state directory:
+Approval policy lives in the selected shared state database on the execution host.
+For SQLite, `OPENCLAW_STATE_DIR` selects the state directory; otherwise the default
+OpenClaw state directory is used:
 
 ```text
 $OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config
@@ -117,14 +117,46 @@ $OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config
 ~/.openclaw/state/openclaw.sqlite#exec_approvals_config
 ```
 
-The `#exec_approvals_config` suffix is a display locator for the singleton
-SQLite row, not part of the database filename. The row keeps the JSON document
-shown below as its authoritative value, so CLI and Gateway compare-and-swap
-hashes remain stable.
+The `#exec_approvals_config` suffix is a display locator for the singleton row,
+not part of the database filename. With PostgreSQL selected, that row lives in
+the selected PostgreSQL database. The local `state/openclaw.sqlite` is only the
+engine anchor and contains no approval policy. The row keeps the JSON document
+shown below as its authoritative value.
 
-The default approval socket follows the same root:
+The macOS app reads and edits this policy through bounded operations in the
+local OpenClaw CLI on both engines. The CLI routes to the running shared-state
+owner, or acquires exclusive offline custody when no owner is running. It never
+falls back to opening the shared database from Swift. Saving a policy requires
+the last observed hash; a stale save fails and must be reloaded. Gateway and
+headless execution enforce the same policy through the shared owner.
+
+The native final commit re-authorizes the command against the current effective
+policy inside the locked write transaction. Policy edits that keep the command
+allowed do not deny it; execution does not require an unchanged policy hash.
+
+An unavailable owner or PostgreSQL database denies native execution with an
+`Exec policy unavailable` diagnostic. Inspect `openclaw gateway status` and the
+selected database, or update the app and CLI if the required operation is
+missing. Stopping the Gateway permits offline policy operations only when the
+selected database remains reachable. A policy snapshot shown in the UI is for
+display; it cannot authorize execution.
+
+Socket paths and authentication tokens live separately in the local
+`client/credentials.sqlite` store under the resolved client state root. They never
+enter the shared policy row or its compare-and-swap hash. The default approval
+socket follows that local root:
 `$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
 `~/.openclaw/exec-approvals.sock` when the variable is unset.
+
+The native policy cutover does not change the shared schema or move policy data.
+Keep the app and local CLI compatible when updating or rolling back. An older
+app that is still admitted on SQLite reads the same shared policy row; it cannot
+read PostgreSQL policy. Existing refusal of retired shared credential access
+still requires updating the app and running the matching Doctor repair. A new
+app with an older CLI or Gateway that lacks the owner operation denies execution
+with a diagnostic. Rollback requires a compatible app, CLI, and policy format;
+restoring an older policy snapshot would rewind permissions and is not a
+rollback step.
 
 State directories are independent trust scopes. When `OPENCLAW_STATE_DIR`
 points somewhere else, OpenClaw never imports or archives approvals from the
@@ -143,15 +175,11 @@ policies remain preserved for operator recovery, and exec approvals stay
 blocked until the legacy file is resolved. After repair, verify with
 `openclaw approvals get` using the same state directory.
 
-Example schema:
+Example shared policy (socket credentials are held by the local client owner):
 
 ```json
 {
   "version": 1,
-  "socket": {
-    "path": "~/.openclaw/exec-approvals.sock",
-    "token": "base64url-token"
-  },
   "defaults": {
     "security": "deny",
     "ask": "on-miss",
@@ -676,8 +704,10 @@ shows last-used metadata per pattern so you can keep the list tidy.
 
 The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or headless
-node host). If a node does not advertise exec approvals yet, edit its
-local approvals document directly.
+node host). These requests continue to route through
+`exec.approvals.node.get/set` to the selected node. If a node does not advertise
+exec approvals yet, use the owner-backed `openclaw approvals` commands locally
+on that host.
 
 Some node hosts, including the Windows companion, own a different approval
 policy format. Control UI shows these host-native policies read-only. Use the
@@ -717,6 +747,14 @@ Return alone does not approve. **Escape** dismisses the panel, denying the reque
 when **Don't Allow** is available. Otherwise it closes without a decision.
 **Always Allow Here** appears only when the request's policy permits durable
 approval.
+
+Before native execution, the shared owner checks the current policy and commits
+the decision together with any allow-always grant and usage update. A policy
+revocation while the prompt is open, an agent-deletion fence, or a failed commit
+denies execution. After the commit returns, the app checks that the original
+socket request is still live and rechecks the bound executable and working
+directory before spawning. Cancelling or disconnecting the request cannot
+revive it through a late approval. No database transaction spans the IPC wait.
 
 For `host=node`, approval requests include a prepared `systemRunPlan`
 payload. The gateway uses that plan as the authoritative command/cwd/session

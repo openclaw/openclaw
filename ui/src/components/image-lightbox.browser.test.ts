@@ -123,6 +123,7 @@ describe("progressive image viewer geometry", () => {
         const next = document.createElement("openclaw-modal-dialog");
         const input = document.createElement("input");
         input.autofocus = true;
+        next.initialFocus = () => input;
         next.append(input);
         document.body.append(next);
         onTestFinished(() => next.remove());

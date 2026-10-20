@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
-import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -116,16 +115,13 @@ export async function assertGatewayOwnerLeaseStopped(
   };
   let prepared: PreparedSqliteReadOnlyLocation | undefined;
   let releaseSnapshot: (() => void) | undefined;
-  let read: RetainedOperation<OpenClawStateReadOutcome> | undefined;
-  let retirement: RetainedOperation<void> | undefined;
+  let read: Promise<OpenClawStateReadOutcome> | undefined;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> =>
     (closing ??= (async () => {
       // Read failure belongs to the caller; cleanup must still retire its native task.
-      await read?.result.catch(() => undefined);
-      retirement = transport.startClose();
-      await retirement.result;
-      retirement = undefined;
+      await read?.catch(() => undefined);
+      await transport.startClose();
       releaseSnapshot?.();
       releaseSnapshot = undefined;
       if (prepared) {
@@ -161,7 +157,7 @@ export async function assertGatewayOwnerLeaseStopped(
       },
       authority,
     );
-    outcome = await read.result;
+    outcome = await read;
     if ("error" in outcome) {
       errors.push(outcome.error);
     }

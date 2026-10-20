@@ -145,4 +145,41 @@ describe("statusSummaryRuntime configured model normalization", () => {
     expect(resolveManifestModelIdNormalizationPoliciesMock).not.toHaveBeenCalled();
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "explicit provider override",
+      entry: { providerOverride: "openai", modelOverride: "gpt-5.5", model: "opus-4.6" },
+      expected: { provider: "openai", model: "gpt-5.5" },
+    },
+    {
+      name: "qualified model override",
+      entry: { modelOverride: "openai/gpt-5.5", model: "opus-4.6" },
+      expected: { provider: "openai", model: "gpt-5.5" },
+    },
+    {
+      name: "providerless model override preserves its stored spelling",
+      entry: { modelOverride: "opus-4.6", modelProvider: "openai", model: "gpt-5.5" },
+      expected: { provider: "anthropic", model: "opus-4.6" },
+    },
+    {
+      name: "empty override falls back to the stored model",
+      entry: { providerOverride: "openai", modelOverride: "  ", model: "opus-4.6" },
+      expected: { provider: "anthropic", model: "opus-4.6" },
+    },
+  ])(
+    "resolves session selection before display normalization: $name",
+    async ({ entry, expected }) => {
+      const { statusSummaryRuntime } = await import("../status/summary.runtime.js");
+
+      expect(
+        statusSummaryRuntime.resolveSessionModelRef(
+          { provider: "anthropic", model: "claude-sonnet-4-6" },
+          entry,
+        ),
+      ).toEqual(expected);
+      expect(resolveManifestModelIdNormalizationPoliciesMock).not.toHaveBeenCalled();
+      expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+    },
+  );
 });

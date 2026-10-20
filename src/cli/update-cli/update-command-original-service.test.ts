@@ -104,6 +104,7 @@ vi.mock("../daemon-cli/restart-health.js", async (original) => ({
 vi.mock("./progress.js", async (original) => ({
   ...(await original<typeof import("./progress.js")>()),
   printResult: vi.fn(),
+  prepareResult: async () => () => {},
 }));
 
 let state: OpenClawTestState;

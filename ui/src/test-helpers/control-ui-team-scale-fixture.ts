@@ -67,9 +67,12 @@ type FixtureOptions = {
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
   sessionEventChurn?: boolean;
+  sessionEventDurationMs?: number;
+  sessionEventAncestorRefs?: boolean;
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
+  transcriptMessages?: number;
 };
 
 function widgetHtml(index: number) {
@@ -83,7 +86,9 @@ function widgetHtml(index: number) {
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const counts = {
     ...TEAM_SCALE_COUNTS,
-    transcriptMessages: options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages,
+    transcriptMessages:
+      options.transcriptMessages ??
+      (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages),
   };
   const now = options.now ?? Date.now();
   const baseUrl = options.baseUrl ?? "http://127.0.0.1:19626/";
@@ -591,7 +596,14 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     }
   }
   if (options.sessionEventChurn) {
-    liveEvents.splice(0, liveEvents.length, ...createTeamScaleSessionEvents(sessions, now));
+    liveEvents.splice(
+      0,
+      liveEvents.length,
+      ...createTeamScaleSessionEvents(sessions, now, {
+        durationMs: options.sessionEventDurationMs,
+        ancestorSessionKey: options.sessionEventAncestorRefs ? selectedSessionKey : undefined,
+      }),
+    );
   }
   return {
     scenario,

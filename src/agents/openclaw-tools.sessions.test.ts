@@ -754,16 +754,15 @@ describe("sessions tools", () => {
 
   it.each([
     {
-      name: "steers a child busy past the delivery deadline",
+      name: "steers a child after durable admission",
       steered: true,
-      busyPastDeadline: true,
     },
     {
       name: "starts the same child during compaction",
       rejection: "injection_unavailable" as const,
     },
   ])("sessions_send $name", async (testCase) => {
-    const { steered, busyPastDeadline, rejection } = testCase;
+    const { steered, rejection } = testCase;
     const requesterKey = "agent:main:main";
     const targetKey = "agent:main:subagent:steering-child";
     const sessionId = "own-child-active-session";
@@ -776,16 +775,6 @@ describe("sessions tools", () => {
       sessionId,
       requesterSessionKey: requesterKey,
     });
-    if (busyPastDeadline) {
-      queueMessage.mockImplementationOnce(async (_text, options) => {
-        // Admission succeeds, but this busy run cannot commit before the delivery deadline.
-        if (options?.waitForTranscriptCommit !== false) {
-          throw new Error(
-            "queued steering message was not committed to the transcript before timeout",
-          );
-        }
-      });
-    }
     const queue = vi.spyOn(controllerSteer, "steerSessionControllerOperation");
     const prepare = vi.spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup");
     try {
@@ -822,8 +811,8 @@ describe("sessions tools", () => {
           assertCurrent: expect.any(Function),
           steeringMode: "all",
           debounceMs: 0,
-          deliveryTimeoutMs: 30_000,
-          waitForTranscriptCommit: false,
+          deliveryTimeoutMs: undefined,
+          waitForTranscriptCommit: true,
           requesterToolAuthority: {
             requesterOrigin: caller.requesterOrigin,
             config: TEST_CONFIG,

@@ -3,6 +3,7 @@ import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   isSoleDatabaseFileDescriptor,
@@ -136,6 +137,8 @@ export type Admission = {
   descriptorOwner: number;
   generationId: string;
   generation: SharedArrayBuffer;
+  /** First-load diagnostic, shared with workers without rereading the seal. */
+  cleanCloseRefusal?: SqliteCleanCloseSealRefusal;
   /** Last complete host snapshot; relays preserve this value without advancing it. */
   hostRevision?: number;
   writeScopes: Map<string, ScopedWriteRevision>;
@@ -684,6 +687,10 @@ export class SqliteDatabaseAdmissionRegistry {
       } else if (record.generationId !== incoming.generationId) {
         // Only the host creates a generation; unrelated revocation cells cannot certify its facts.
         continue;
+      }
+      if (!record.cleanCloseRefusal && incoming.cleanCloseRefusal) {
+        record.cleanCloseRefusal = incoming.cleanCloseRefusal;
+        changed = true;
       }
       for (const [key, fact] of incoming.facts) {
         if (

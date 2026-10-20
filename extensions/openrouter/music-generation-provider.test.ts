@@ -76,19 +76,6 @@ function sseResponseLines(params: { audio: string; transcript?: string }): strin
   ];
 }
 
-function stalledSseResponse(line: string): Response {
-  const encoder = new TextEncoder();
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(line));
-      },
-      cancel() {},
-    }),
-    { status: 200, headers: { "content-type": "text/event-stream" } },
-  );
-}
-
 function postRequest(): Record<string, unknown> {
   const request = postJsonRequestMock.mock.calls[0]?.[0];
   if (!request || typeof request !== "object" || Array.isArray(request)) {
@@ -236,19 +223,14 @@ describe("openrouter music generation provider", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["completed", "provider error", "timeout"] as const)(
+  it.each(["completed", "provider error"] as const)(
     "releases a capture tee after %s without waiting for its sibling",
     async (outcome) => {
-      // Hold wall time so the deadline reaches the acquired stream's tee cleanup.
-      // Real timers still drive the 1ms stalled-stream timeout.
-      vi.setSystemTime(1_000);
       const cancel = vi.fn();
       const lines =
         outcome === "completed"
           ? sseResponseLines({ audio: Buffer.from("wav-bytes").toString("base64") })
-          : outcome === "provider error"
-            ? ['data: {"error":{"message":"provider disconnected"}}\n']
-            : [];
+          : ['data: {"error":{"message":"provider disconnected"}}\n'];
       const [consumer, capture] = new ReadableStream<Uint8Array>({
         start(controller) {
           for (const line of lines) {
@@ -264,7 +246,7 @@ describe("openrouter music generation provider", () => {
 
       const operation = generateMusic({
         prompt: "capture cleanup",
-        timeoutMs: outcome === "timeout" ? 1 : 1000,
+        timeoutMs: 1000,
       });
       const settledOperation = operation.catch(() => undefined);
       try {
@@ -275,9 +257,7 @@ describe("openrouter music generation provider", () => {
           });
         } else {
           await expect(operation).rejects.toThrow(
-            outcome === "timeout"
-              ? "OpenRouter music generation timed out after 1ms"
-              : "OpenRouter music generation failed: provider disconnected",
+            "OpenRouter music generation failed: provider disconnected",
           );
         }
         expect(release).toHaveBeenCalledOnce();
@@ -391,43 +371,18 @@ describe("openrouter music generation provider", () => {
     );
   });
 
-  it("times out stalled OpenRouter audio streams after headers", async () => {
-    // Freeze wall time so the timeout comes from reading the acquired response body.
-    vi.setSystemTime(1_000);
-    mockStream(stalledSseResponse(audioEvent({ transcript: "start" })));
+  it("caps oversized OpenRouter music stream timeouts", async () => {
+    mockStream(sseResponse(["data: [DONE]\n"]));
 
     await expect(
       generateMusic({
         model: "google/lyria-3-clip-preview",
-        prompt: "never finish",
-        timeoutMs: 1,
+        prompt: "huge timeout",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
       }),
-    ).rejects.toThrow("OpenRouter music generation timed out after 1ms");
-  });
+    ).rejects.toThrow("OpenRouter music generation response missing audio data");
 
-  it("caps oversized OpenRouter music stream timeouts", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      mockStream(sseResponse(["data: [DONE]\n"]));
-
-      await expect(
-        generateMusic({
-          model: "google/lyria-3-clip-preview",
-          prompt: "huge timeout",
-          timeoutMs: Number.MAX_SAFE_INTEGER,
-        }),
-      ).rejects.toThrow("OpenRouter music generation response missing audio data");
-
-      expect(postRequest().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-      const streamTimeoutMs = timeoutSpy.mock.calls.at(-1)?.[1];
-      expect(streamTimeoutMs).toBeGreaterThan(MAX_TIMER_TIMEOUT_MS - 1_000);
-      expect(streamTimeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
-    } finally {
-      timeoutSpy.mockRestore();
-      vi.useRealTimers();
-    }
+    expect(postRequest().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it.each(["\n", ""])(

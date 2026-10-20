@@ -535,7 +535,6 @@ async function createTrustedGatewayEnvLoader() {
     const loaded = loadGlobalRuntimeDotEnvFiles({
       ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
       overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      quiet: true,
       stateEnvPath,
       ...(path.resolve(stateEnvPath) === path.resolve(configEnvPath)
         ? {}

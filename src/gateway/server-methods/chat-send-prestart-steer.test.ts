@@ -18,6 +18,7 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getSessionControllerOperation,
@@ -423,6 +424,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       testState.agentConfig = undefined;
       now.mockRestore();
     }
+    assertNoRetainedSessionSharingReads();
   },
 );
 

@@ -492,7 +492,7 @@ export function toDynamicOllamaModel(params: {
   providerConfig: ModelProviderConfig;
   model: ModelDefinitionConfig;
 }): ProviderRuntimeModel {
-  const input = (params.model.input ?? ["text"]).filter(
+  const input = params.model.input.filter(
     (value): value is "text" | "image" => value === "text" || value === "image",
   );
   const api = params.providerConfig.api ?? "ollama";
@@ -500,24 +500,18 @@ export function toDynamicOllamaModel(params: {
   const contextWindow = params.model.contextWindow ?? cloudModel?.contextWindow ?? 8192;
   return {
     id: params.model.id,
-    name: params.model.name ?? params.model.id,
+    name: params.model.name,
     provider: params.provider,
     api,
     baseUrl: readProviderBaseUrl(params.providerConfig) ?? "",
-    reasoning: params.model.reasoning ?? false,
+    reasoning: params.model.reasoning,
     input: input.length > 0 ? input : ["text"],
-    cost: params.model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: params.model.cost,
     contextWindow,
     ...(params.model.contextTokens !== undefined
       ? { contextTokens: params.model.contextTokens }
       : {}),
-    maxTokens:
-      params.model.maxTokens ??
-      resolveOllamaOutputBudget({
-        modelId: params.model.id,
-        contextWindow,
-        remote: isHostedOllamaCloud(params.providerConfig.baseUrl),
-      }),
+    maxTokens: params.model.maxTokens,
     ...(params.model.parameterCount !== undefined
       ? { parameterCount: params.model.parameterCount }
       : {}),

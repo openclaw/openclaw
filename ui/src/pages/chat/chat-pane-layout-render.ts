@@ -1,6 +1,5 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
-import "./components/chat-details.tsx";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
@@ -12,7 +11,6 @@ import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
-import type { PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -22,7 +20,8 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
@@ -51,6 +50,30 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private readonly detailsElements: ChatDetailsElements = {};
+
+  private registerDetailsElement(name: keyof ChatDetailsElements, element: HTMLElement) {
+    this.detailsElements[name] = element;
+    return () => {
+      if (this.detailsElements[name] === element) {
+        delete this.detailsElements[name];
+      }
+    };
+  }
+
+  get composerReady(): boolean {
+    return getChatComposerState(this.presentationId).composerTextarea?.isConnected === true;
+  }
+
+  focusComposerInput(): boolean {
+    const composer = getChatComposerState(this.presentationId).composerTextarea;
+    if (!this.active || !composer?.isConnected || composer.disabled) {
+      return false;
+    }
+    composer.focus({ preventScroll: true });
+    return true;
+  }
+
   private toolIcons?: PluginToolIcons;
 
   mountToolIcons(readGateway: () => unknown): void {
@@ -151,6 +174,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const ownsSubagentsPanel = !catalog && !this.compact;
     const paneChatProps: ChatProps = {
       ...chatProps,
+      onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
+      onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
       error: conversationVisible ? chatProps.error : null,
       detailsEnabled: !catalog && !this.compact,
       detailsWorkspace: {
@@ -177,9 +202,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     };
-    const headerDetails: PaneDetailsProps | undefined = ownsSubagentsPanel
+    const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           chat: paneChatProps,
+          elements: this.detailsElements,
           mobile: this.mergedChrome && !this.onBackToSubagents,
           presentation: panePresentation,
           conversationVisible,
@@ -365,12 +391,15 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const region = renderSidebarRegion({
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;
+        const release = this.registerDetailsElement("pane", element);
         return () => {
+          release();
           if (this.sidebarRegionElement === element) {
             this.sidebarRegionElement = null;
           }
         };
       },
+      onHeaderElementRef: (element) => this.registerDetailsElement("header", element),
       onRegionViewRef: (element) => {
         this.sidebarRegionView = element;
         return () => {

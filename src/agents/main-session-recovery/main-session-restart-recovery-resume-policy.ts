@@ -26,8 +26,8 @@ export function requiresDelegatedRecoverySource(
   entry: SessionEntry,
   source: InputProvenance["kind"] | "completion" | "cron" | "harness_completion" | undefined,
 ): boolean {
-  // Cron owns interrupted occurrences and never replays a started occurrence.
-  // An earlier operator turn cannot authorize recovery outside that occurrence.
+  // Cron owns retry admission through a fresh occurrence and current job policy.
+  // An earlier operator turn cannot authorize a generic recovery dispatch.
   if (source === "cron") {
     return true;
   }

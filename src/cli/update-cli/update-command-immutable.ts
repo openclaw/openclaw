@@ -101,6 +101,7 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
     defaultRuntime.error(`Warning: ${warning}`);
   };
   let drainTimeoutMs: number | undefined;
+  let timeoutMs: number | undefined;
   try {
     drainTimeoutMs = parseUpdateTimeoutMs(opts.drainTimeout, "--drain-timeout");
     if (
@@ -115,11 +116,12 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
         "Immutable updates support official main or --sha only. Use openclaw update recover --root <installation-root> for retained activation recovery; channel switching and package overrides are unsupported.",
       );
     }
+    timeoutMs = parseUpdateTimeoutMs(opts.timeout);
     result = await prepareImmutableUpdate({
       root,
       sha: opts.sha,
       dryRun: opts.dryRun,
-      timeoutMs: parseUpdateTimeoutMs(opts.timeout),
+      timeoutMs,
       onWarning,
     });
   } catch (error) {
@@ -154,7 +156,7 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
       activation = await activateImmutableUpdate({
         root: installation.root,
         expectedPrepared,
-        timeoutMs: parseUpdateTimeoutMs(opts.timeout),
+        timeoutMs,
         drainTimeoutMs,
         onReceipt: collectReceipt(receipts, opts),
       });

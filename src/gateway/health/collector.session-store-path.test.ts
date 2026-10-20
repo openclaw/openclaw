@@ -58,8 +58,8 @@ const fixtureService = {
   runtime: undefined,
   runtimeShort: "not running",
 } satisfies Awaited<
-  ReturnType<typeof import("../../commands/status.daemon.js").getDaemonStatusSummary>
->;
+  ReturnType<typeof import("../../commands/status-runtime-shared.ts").resolveStatusServiceSummaries>
+>[0];
 
 async function summarizeStore(storePath: string, agentId: string) {
   const cfg: OpenClawConfig = {
@@ -521,7 +521,13 @@ describe("health session store paths", () => {
         const runtime = await import("../../commands/status-runtime-shared.ts");
         const { buildStatusCommandReportLines } =
           await import("../../commands/status.command-report.ts");
-        const { resolveStatusJsonOutput } = await import("../../commands/status-json-runtime.ts");
+        const fastScan = await import("../../commands/status.scan.fast-json.js");
+        const { runStatusJsonCommand } = await import("../../commands/status-json-command.ts");
+        const runtimeOutput = await import("../../runtime.js");
+        const updateStatus = await import("../../infra/update-run-status.js");
+        vi.spyOn(fastScan, "scanStatusJsonFast").mockResolvedValue(scan);
+        vi.spyOn(updateStatus, "readUpdateRunStatus").mockResolvedValue({});
+        const jsonWrite = vi.spyOn(runtimeOutput, "writeRuntimeJson");
         const entered = createDeferred();
         const release = createDeferred();
         const readBackup = backup.readBackupRunFreshness;
@@ -558,10 +564,9 @@ describe("health session store paths", () => {
                   pairingRecovery: null,
                 }),
               )
-            : resolveStatusJsonOutput({
-                scan,
+            : runStatusJsonCommand({
+                runtime: createTestRuntime(),
                 opts: { gatewayProbeDeadlineMs: 0 },
-                includeSecurityAudit: false,
               });
         try {
           await awaitGateBeforeSettlement(entered.promise, pending, "Status skipped backup read");
@@ -581,10 +586,10 @@ describe("health session store paths", () => {
             expect(output).not.toContain("agent:deleting:main");
             expect(output).toContain("1 stored");
           } else {
-            expect(result.sessions.count).toBe(1);
-            expect(result.sessions.byAgent.map(({ agentId }) => agentId)).toEqual(["survivor"]);
-            expect(result.agents.totalSessions).toBe(1);
-            expect(result.agents.agents.map(({ id }) => id)).toEqual(["survivor"]);
+            expect(expectDefined(jsonWrite.mock.lastCall, "status JSON output")[1]).toMatchObject({
+              sessions: { count: 1, byAgent: [{ agentId: "survivor" }] },
+              agents: { totalSessions: 1, agents: [{ id: "survivor" }] },
+            });
           }
         } finally {
           release.resolve();

@@ -105,6 +105,7 @@ async function failureOutcome(retire: boolean | "cleanup") {
       observation: { started() {}, completed() {} },
       request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
       bytes: 0,
+      result: rejected.promise,
       settleNative: (settlement) => events.push(`settled:${settlement.kind}`),
       resolve: () => rejected.reject(new Error("Failure reply unexpectedly resolved")),
       reject: (error) => {

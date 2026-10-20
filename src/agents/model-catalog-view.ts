@@ -10,6 +10,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteSource } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
@@ -87,13 +88,7 @@ export function createModelCatalogView(params: {
   keyOf?: ReturnType<typeof createModelCatalogIdentityKeyResolver>;
 }) {
   const keyOf = params.keyOf ?? createModelCatalogIdentityKeyResolver();
-  const variantsByKey = new Map<string, ModelCatalogEntry[]>();
-  for (const entry of params.routeVariants ?? params.catalog) {
-    const key = keyOf(entry);
-    const variants = variantsByKey.get(key) ?? [];
-    variants.push(entry);
-    variantsByKey.set(key, variants);
-  }
+  const variantsByKey = groupRecords(params.routeVariants ?? params.catalog, keyOf);
   // Identity lookups use the same captured policy as this view's physical index.
   const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">, key = keyOf(entry)) =>
     variantsByKey.get(key);

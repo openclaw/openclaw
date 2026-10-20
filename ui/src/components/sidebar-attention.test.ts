@@ -44,12 +44,6 @@ function cronResponse(id?: string, nextRunAtMs?: number) {
 
 const mentionItem = (id: string) => ({ ...inboxMention(id), sessionKey: "agent:writer:review" });
 
-type SidebarAttentionElement = HTMLElement & {
-  context: ApplicationContext;
-  dismissPanel: () => boolean;
-  onNavigate?: ApplicationContext["navigate"];
-};
-
 function authStatus(ts: number, status: "missing" | "ok" = "missing"): ModelAuthStatusResult {
   return { ts, providers: [{ provider: "openai", displayName: "OpenAI", status, profiles: [] }] };
 }
@@ -213,7 +207,7 @@ describe("sidebar attention refresh ownership", () => {
       ...sources,
       sidebarAttention: store,
     } as unknown as ApplicationContext);
-    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    const element = document.createElement("openclaw-sidebar-attention");
     provider.append(element);
     document.body.append(provider);
 

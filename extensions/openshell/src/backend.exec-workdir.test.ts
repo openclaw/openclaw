@@ -5,6 +5,7 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SandboxBackendHandle } from "openclaw/plugin-sdk/sandbox";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -517,6 +518,87 @@ it.each(["aliased host", "shared runtime", "independent workspaces"])(
     });
   },
 );
+
+it("reserves both workspace keys while waiting without blocking independent work", async () => {
+  const sharedHost = await createWorkspace("shared-host");
+  const laterHost = await createWorkspace("later-host");
+  const independentHost = await createWorkspace("independent-host");
+  const first = await createBackend("agent:reservation:first", sharedHost);
+  const second = await createBackend("agent:reservation:shared", sharedHost);
+  const third = await createBackend("agent:reservation:shared", laterHost);
+  const independent = await createBackend("agent:reservation:independent", independentHost);
+  const canonicalize = securityRuntime.canonicalPathFromExistingAncestor;
+  const admissions = new Map<string, ReturnType<typeof createDeferred<void>>>();
+  const pathSpy = vi
+    .spyOn(securityRuntime, "canonicalPathFromExistingAncestor")
+    .mockImplementation(async (...args) => {
+      const canonicalPath = await canonicalize(...args);
+      const admitted = admissions.get(args[0]);
+      if (admitted) {
+        // Resume the test after the real caller's path continuation reserves its keys.
+        queueMicrotask(() => admitted.resolve());
+      }
+      return canonicalPath;
+    });
+  const cleanups: Array<() => Promise<void>> = [];
+  let cleanupResults: PromiseSettledResult<void>[];
+  const start = (backend: SandboxBackendHandle) => {
+    const pending = prepare(backend);
+    // Cleanup observes preparation errors even if an earlier assertion fails first.
+    void pending.catch(() => {});
+    let finalization: Promise<void> | undefined;
+    const finish = () =>
+      (finalization ??= pending.then((exec) => finalize(backend, exec.finalizeToken)));
+    cleanups.push(finish);
+    return { pending, finish };
+  };
+  try {
+    const held = start(first);
+    const firstExec = await held.pending;
+    const secondAdmitted = createDeferred<void>();
+    admissions.set(sharedHost, secondAdmitted);
+    const waiting = start(second);
+    await Promise.race([secondAdmitted.promise, waiting.pending]);
+    const thirdAdmitted = createDeferred<void>();
+    admissions.set(laterHost, thirdAdmitted);
+    const later = start(third);
+    await Promise.race([thirdAdmitted.promise, later.pending]);
+    const unrelated = start(independent);
+    await unrelated.pending;
+    await setImmediate();
+    expect(cliCalls("get").map(([params]) => params.args[2])).toEqual([
+      first.runtimeId,
+      independent.runtimeId,
+    ]);
+    await unrelated.finish();
+    await held.finish();
+    await waiting.pending;
+    // Repeated completed-token cleanup must not release the successor's lease.
+    await finalize(first, firstExec.finalizeToken);
+    expect(cliCalls("get").map(([params]) => params.args[2])).toEqual([
+      first.runtimeId,
+      independent.runtimeId,
+      second.runtimeId,
+    ]);
+    await waiting.finish();
+    await later.pending;
+    expect(cliCalls("get").map(([params]) => params.args[2])).toEqual([
+      first.runtimeId,
+      independent.runtimeId,
+      second.runtimeId,
+      third.runtimeId,
+    ]);
+  } finally {
+    // Start every finalizer together: either historical admission order can otherwise deadlock.
+    cleanupResults = await Promise.allSettled(cleanups.map((finish) => finish()));
+    pathSpy.mockRestore();
+  }
+  for (const result of cleanupResults) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+});
 
 it.each(["exec preparation", "mirror publication", "SSH cleanup"])(
   "releases workspace ownership after failed %s",

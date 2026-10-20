@@ -240,13 +240,9 @@
   --oc-overlay-distance: 0px;
   width: min(620px, calc(100vw - 32px));
   max-height: min(420px, 58dvh);
-  overflow-y: auto;
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
-  color: var(--text);
 }
 
 .model-setup-provider-select__trigger {
@@ -329,8 +325,6 @@
 
 .model-setup-provider-select__menu .model-setup-provider-select__option {
   padding: 6px 8px;
-  border-radius: var(--menu-item-radius);
-  color: var(--text);
   font: inherit;
   font-size: 13px;
 }
@@ -340,7 +334,6 @@
 }
 
 .model-setup-provider-select__option > .oc-menu-item__label {
-  min-width: 0;
   width: 100%;
 }
 

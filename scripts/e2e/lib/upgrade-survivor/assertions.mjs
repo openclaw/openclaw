@@ -1147,7 +1147,7 @@ function assertSessionMetadataMigrated(stateDir, stage) {
   assert(group?.sessionId === LEGACY_SESSION_GROUP_ID, "channel legacy session row missing");
   if (getScenario() === "acpx-openclaw-tools-bridge") {
     assertStrict.deepEqual(
-      group.acp,
+      readSavedAcpMetadata(stateDir, group),
       LEGACY_ACP_META,
       "saved ACP session or model selection changed",
     );
@@ -1208,6 +1208,47 @@ function assertSessionMetadataMigrated(stateDir, stage) {
     main.skillsSnapshot?.resolvedSkills === undefined,
     "heavy resolvedSkills cache was persisted into migrated session metadata",
   );
+}
+
+function readSavedAcpMetadata(stateDir, group) {
+  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    return group.acp;
+  }
+  return readDatabase(dbPath, (db) => {
+    if (
+      !db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'acp_sessions'")
+        .get()
+    ) {
+      // Frozen releases predating shared ACP storage still own inline metadata.
+      return group.acp;
+    }
+    // Read-only external-fixture contract: this is the exact v1 identity for
+    // ["main", "agent:main:slack:channel:cupgrade"], not a runtime key encoder.
+    // Keep the observer independent of candidate imports and database admission.
+    const row = db
+      .prepare("SELECT * FROM acp_sessions WHERE session_key = ?")
+      .get("@acp:v1:WyJtYWluIiwiYWdlbnQ6bWFpbjpzbGFjazpjaGFubmVsOmN1cGdyYWRlIl0");
+    if (!row) {
+      return undefined;
+    }
+    assert(row.session_id === LEGACY_SESSION_GROUP_ID, "saved ACP session binding changed");
+    return {
+      backend: row.backend,
+      agent: row.agent,
+      runtimeSessionName: row.runtime_session_name,
+      ...(row.identity_json != null ? { identity: JSON.parse(row.identity_json) } : {}),
+      mode: row.mode,
+      ...(row.runtime_options_json != null
+        ? { runtimeOptions: JSON.parse(row.runtime_options_json) }
+        : {}),
+      ...(row.cwd != null ? { cwd: row.cwd } : {}),
+      state: row.state,
+      lastActivityAt: row.last_activity_at,
+      ...(row.last_error != null ? { lastError: row.last_error } : {}),
+    };
+  });
 }
 
 function readMigratedSessionStore(stateDir, targetStorePath) {
@@ -1413,6 +1454,7 @@ function assertNpmPluginInstall([
   observationRoot,
   baselineVersion,
   publishedCompanionTarball,
+  expectedRegistryVersion = expectedVersion,
 ]) {
   assert(
     pluginId && packageName && expectedVersion,
@@ -1450,7 +1492,7 @@ function assertNpmPluginInstall([
   const { manifest } = validatePrepublishPluginRegistryArtifact({
     artifactDir,
     expectedSourceSha: requireEnv("OPENCLAW_DOCKER_E2E_SELECTED_SHA"),
-    expectedCandidateVersion: expectedVersion,
+    expectedCandidateVersion: expectedRegistryVersion,
     expectedManifestSha256: requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"),
     requiredPackages: [packageName],
   });

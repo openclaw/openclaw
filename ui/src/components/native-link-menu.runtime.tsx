@@ -3,7 +3,7 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
-import { activateMenuShortcut } from "./menu-shortcuts.ts";
+import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
@@ -23,10 +23,14 @@ export type NativeLinkMenu = SolidBridgeElement<Props>;
 
 export const NativeLinkMenu = defineSolidBridge<Props>(
   "openclaw-native-link-menu",
-  (props, host) => {
+  (props) => {
     const id = createUniqueId();
     let menu: MenuHandle | undefined;
-    const shortcut = nativeListener("keydown", (event) => activateMenuShortcut(host, event), true);
+    const shortcut = nativeListener(
+      "keydown",
+      (event) => activateMenuShortcut(menu?.overlay.surface, event),
+      true,
+    );
     const actions = [
       ["inline", "s", "openInline", "panelRightOpen"],
       ["external", "b", "openExternal", "externalLink"],

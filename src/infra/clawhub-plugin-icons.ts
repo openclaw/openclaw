@@ -8,7 +8,7 @@ import {
 
 /** Branding needs one package read, not versions, README or security enrichment. */
 export async function fetchClawHubPluginIconUrls(
-  params: Pick<ClawHubRequestParams, "baseUrl" | "skipAuth" | "timeoutMs" | "fetchImpl"> & {
+  params: Pick<ClawHubRequestParams, "baseUrl" | "skipAuth" | "timeoutMs"> & {
     packageName: string;
   },
 ): Promise<string[]> {

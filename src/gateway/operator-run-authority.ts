@@ -221,14 +221,8 @@ export function captureChannelOperatorRunAuthority(input: {
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,
     assertCurrent: params.assertCurrent,
-    readCurrentRoleAssignment: () => {
-      params.assertCurrent();
-      return params.assignedRole;
-    },
-    readCurrentGithubLogin: () => {
-      params.assertCurrent();
-      return params.githubLogin ?? null;
-    },
+    readCurrentRoleAssignment: () => params.assignedRole,
+    readCurrentGithubLogin: () => params.githubLogin ?? null,
     get modelPolicy() {
       return modelPolicy.readCurrent();
     },
@@ -345,13 +339,13 @@ export async function captureGatewayOperatorRunAuthority(input: {
       ? params.sourceAuthority
       : client.internal?.operatorAccessAuthority;
   const sourceAuthorities = [sourceAuthority, ingressPrincipal, params.invocationAuthority];
-  const scopes = Object.freeze([...(client.connect.scopes ?? [])]);
+  const scopes = [...(client.connect.scopes ?? [])];
   const sourceOwners: OperatorSource["owners"] = [
     gatewayContext ?? params.context,
     resolveGatewayContext,
     getConfig,
     readGatewayDeviceSourceIdentity(params.hasCurrentClientAuthority) ??
-      (params.hasCurrentClientAuthority ? Object.freeze({}) : undefined),
+      (params.hasCurrentClientAuthority ? {} : undefined),
     sourceAuthority,
     ingressPrincipal,
     params.invocationAuthority,
@@ -566,14 +560,8 @@ export async function captureGatewayOperatorRunAuthority(input: {
       ...admission,
       recoverySnapshot,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
-      readCurrentRoleAssignment: () => {
-        assertCurrent();
-        return assertProfileCurrent().assignedRole;
-      },
-      readCurrentGithubLogin: () => {
-        assertCurrent();
-        return assertProfileCurrent().githubLogin ?? null;
-      },
+      readCurrentRoleAssignment: () => assertProfileCurrent().assignedRole,
+      readCurrentGithubLogin: () => assertProfileCurrent().githubLogin ?? null,
       source: source.token,
       signal: revocation.signal,
       retain: () => {

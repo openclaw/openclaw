@@ -168,9 +168,13 @@ for (const [suffix, name] of [
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
           await command.onExecutionStarted?.();
-          command.abortSignal!.addEventListener("abort", () => parentFinish.resolve(), {
-            once: true,
-          });
+          if (!replaceParent) {
+            command.abortSignal!.addEventListener("abort", () => parentFinish.resolve(), {
+              once: true,
+            });
+          }
+          // Keep the replaced parent unsettled through the durable cancellation
+          // assertion; final confirmation may retire a non-collecting child's row.
           parentStarted.resolve(command);
           await parentFinish.promise;
           command.abortSignal!.throwIfAborted();

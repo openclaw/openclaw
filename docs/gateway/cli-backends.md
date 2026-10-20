@@ -179,6 +179,9 @@ of holding the tool call until it finishes. When completion notifications are
 enabled, the result wakes the originating conversation; a busy conversation handles
 it after its current turn. The continuation retains the originating turn’s tool
 policy, including native and other MCP tools, subject to current session policy.
+Session bookkeeping updates that preserve identity and permissions do not interrupt
+completion wakes. If session storage is unavailable, the Gateway records the failed
+wake with retry guidance; use `process poll` to collect the command result.
 Restricted turns keep their original limits. If only waiting remains, the agent
 reports that the job is running and ends its turn instead of repeatedly polling. Exec policy, configured
 yield windows, command deadlines, and explicit notification settings still apply.
@@ -557,16 +560,26 @@ Gemini CLI output notes:
 - The default `stream-json` parser reads assistant `message` events, tool events, final `result` usage, and fatal Gemini error events.
 - Usage falls back to `stats` when `usage` is absent or empty. `stats.cached` normalizes into OpenClaw `cacheRead`, and if `stats.input` is missing, input tokens derive from `stats.input_tokens - stats.cached`.
 
-## Text transform overlays
+<a id="text-transform-overlays" />
 
-Plugins that need small prompt/message compatibility shims can declare bidirectional text transforms without replacing a provider or CLI backend:
+## Backend text transforms
+
+Declare bidirectional `textTransforms` on the CLI backend that owns the compatibility rewrite:
 
 ```typescript
-api.registerTextTransforms({
-  input: [{ from: /red basket/g, to: "blue basket" }],
-  output: [{ from: /blue basket/g, to: "red basket" }],
+api.registerCliBackend({
+  id: "my-cli",
+  config: { command: "my-cli" },
+  textTransforms: {
+    input: [{ from: /red basket/g, to: "blue basket" }],
+    output: [{ from: /blue basket/g, to: "red basket" }],
+  },
 });
 ```
+
+These transforms apply only to this backend. The removed global
+`api.registerTextTransforms(...)` overlay has no equivalent replacement.
+Provider plugins can declare their own `textTransforms` on `registerProvider`.
 
 `input` rewrites the system prompt and user prompt passed to the CLI. `output` rewrites streamed assistant text and parsed final text before OpenClaw handles its own control markers and channel delivery. For provider-backed model calls it also restores string values inside structured tool-call arguments after stream repair and before tool execution. Raw provider JSON fragments are left unchanged. Consumers should use the structured partial, end, or result payload.
 
@@ -645,6 +658,11 @@ permitted tools and supported native capabilities. When a run retains native `Ba
 the saved automation retains its Gateway host target, including with an explicit
 `toolsAllow: ["exec"]` cap. Current account, tool, sandbox, and approval restrictions
 still apply; capturing the target does not grant broader execution permission.
+Exec calls that request another host or a node fail with an error naming the
+Gateway pin before the command runs. Calls without an explicit target keep using
+the pin. To change a scheduled job's target, an operator can set an explicit tool
+list with `openclaw cron edit <id> --tools exec`; this replaces the job's tool list
+and clears the captured pin, while current exec policy still applies.
 
 Backends that retain their native shell can also receive a node-only `exec` tool,
 offered only when policy permits it and a connected

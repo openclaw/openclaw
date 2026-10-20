@@ -27,7 +27,6 @@ import {
   createPluginCache,
   getPluginCache,
   getPluginMetadataSnapshotCache,
-  retainPluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
@@ -68,12 +67,8 @@ export type {
 
 export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
-function throwReadonlyPluginMetadataMutation(): never {
-  throw new TypeError("Plugin metadata snapshots are immutable");
-}
-
 function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
-  // Frozen facts stay frozen; native callers bypassing their setters are unsupported.
+  // Freeze plain facts once; internal Map/Set consumers honor their readonly types.
   if (!value || typeof value !== "object" || Object.isFrozen(value)) {
     return value;
   }
@@ -81,29 +76,6 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
     return value;
   }
   seen.add(value);
-  if (value instanceof Map) {
-    for (const [key, entry] of value) {
-      freezeSnapshotValue(key, seen);
-      freezeSnapshotValue(entry, seen);
-    }
-    Object.defineProperties(value, {
-      clear: { value: throwReadonlyPluginMetadataMutation },
-      delete: { value: throwReadonlyPluginMetadataMutation },
-      set: { value: throwReadonlyPluginMetadataMutation },
-    });
-    return Object.freeze(value);
-  }
-  if (value instanceof Set) {
-    for (const entry of value) {
-      freezeSnapshotValue(entry, seen);
-    }
-    Object.defineProperties(value, {
-      add: { value: throwReadonlyPluginMetadataMutation },
-      clear: { value: throwReadonlyPluginMetadataMutation },
-      delete: { value: throwReadonlyPluginMetadataMutation },
-    });
-    return Object.freeze(value);
-  }
   for (const entry of Object.values(value)) {
     freezeSnapshotValue(entry, seen);
   }
@@ -628,24 +600,19 @@ export async function resolvePluginMetadataSnapshotAsync(
     return withPluginCache(createPluginCache(), () => resolvePluginMetadataSnapshotAsync(captured));
   }
   const cache = getPluginCache();
-  const release = retainPluginCache(cache);
-  try {
-    return await withPluginCache(cache, async () => {
-      const current = selectPluginMetadataSnapshot(captured, false);
-      if (current.kind === "current") {
-        return current.snapshot;
-      }
-      const activateDiscovery = await (captured.index === undefined &&
-      captured.installRecords === undefined &&
-      captured.preferPersisted !== false
-        ? preparePluginMetadataMachineStateAsync({ env: captured.env, stateDir: captured.stateDir })
-        : prepareBundledDiscoveryMode(captured.env));
-      activateDiscovery();
-      return resolvePluginMetadataSnapshot(captured);
-    });
-  } finally {
-    release();
-  }
+  return withPluginCache(cache, async () => {
+    const current = selectPluginMetadataSnapshot(captured, false);
+    if (current.kind === "current") {
+      return current.snapshot;
+    }
+    const activateDiscovery = await (captured.index === undefined &&
+    captured.installRecords === undefined &&
+    captured.preferPersisted !== false
+      ? preparePluginMetadataMachineStateAsync({ env: captured.env, stateDir: captured.stateDir })
+      : prepareBundledDiscoveryMode(captured.env));
+    activateDiscovery();
+    return resolvePluginMetadataSnapshot(captured);
+  });
 }
 
 /** Reuse prepared workspace facts without materializing an intermediate immutable graph. */

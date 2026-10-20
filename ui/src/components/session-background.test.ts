@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
+import { Dynamic } from "@solidjs/web";
+import { createComponent, createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -19,6 +20,10 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
+import {
+  createBackgroundLayoutRef,
+  SessionBackgroundLayoutScope,
+} from "./session-background-layout-context.tsx";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
 import { SessionBackgroundView } from "./session-background-view.tsx";
 import { SessionBackground, backgroundSourceForSurface } from "./session-background.tsx";
@@ -56,7 +61,6 @@ function fixture(resourceBasePath = "/control") {
     branding: resolveThemeBranding(undefined),
     mode: "dark",
     resolvedMode: "dark",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,
@@ -134,6 +138,10 @@ it("keeps the fade centered on the composer after resizing and releases its obse
   scroll.className = "new-session-page__scroll";
   scroll.scrollTop = 30;
   background.parentElement!.append(composer, scroll);
+  background.layoutTargets = [
+    { kind: "composer", element: composer },
+    { kind: "scroll", element: scroll },
+  ];
   vi.spyOn(background, "getBoundingClientRect").mockReturnValue(
     DOMRect.fromRect({ y: 20, height: 1000 }),
   );
@@ -153,7 +161,69 @@ it("keeps the fade centered on the composer after resizing and releases its obse
   await waitForSolid(() => expect(disconnect).toHaveBeenCalledOnce());
 });
 
+it("uses registered composers in DOM order and releases a removed draft target", async () => {
+  const source = fixture();
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  const [firstVisible, setFirstVisible] = createSignal(true);
+  function Composer(props: { top: number; registered: boolean }) {
+    const attach = createBackgroundLayoutRef("composer");
+    return createComponent(Dynamic, {
+      component: "div",
+      class: "agent-chat__input",
+      ref: (element: HTMLDivElement) => {
+        vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+          DOMRect.fromRect({ y: props.top, height: 100 }),
+        );
+        if (props.registered) {
+          attach(element);
+        }
+      },
+    });
+  }
+  const view = mountSolid(() =>
+    createComponent(SessionBackgroundLayoutScope, {
+      get children() {
+        return [
+          createComponent(Composer, { top: 800, registered: false }),
+          createComponent(SessionBackgroundView, {
+            context: source.context,
+            surface: "new-session",
+          }),
+          createComponent(SessionBackgroundLayoutScope, {
+            get children() {
+              return createComponent(Composer, { top: 50, registered: true });
+            },
+          }),
+          createComponent(Show, {
+            get when() {
+              return firstVisible();
+            },
+            get children() {
+              return () => createComponent(Composer, { top: 200, registered: true });
+            },
+          }),
+          createComponent(Composer, { top: 300, registered: true }),
+        ];
+      },
+    }),
+  );
+  const background = view.container.querySelector<HTMLElement>("openclaw-session-background")!;
+  await waitForSolid(() =>
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("250px"),
+  );
+  setFirstVisible(false);
+  await waitForSolid(() =>
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("350px"),
+  );
+  setFirstVisible(true);
+  await waitForSolid(() =>
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("250px"),
+  );
+  view.unmount();
+});
+
 it("tracks late and replaced theme owners without recreating the lazy background slot", async () => {
+  const warn = vi.spyOn(console, "warn");
   const source = fixture();
   source.settings.background = selectBackgroundSource({ kind: "none" });
   const [context, setContext] = createSignal<ApplicationContext | undefined>(undefined);
@@ -195,6 +265,7 @@ it("tracks late and replaced theme owners without recreating the lazy background
   flush();
   expect(slot.hidden).toBe(true);
   expect(view.container.querySelector("openclaw-session-background")).toBe(slot);
+  expect(warn.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
 });
 
 it("keeps absent preferences distinct from None and independent disabled surfaces", () => {
@@ -213,6 +284,7 @@ it("keeps absent preferences distinct from None and independent disabled surface
 it.each(["Solid provider"])(
   "inherits %s preferences and subscriptions until an explicit context overrides them",
   async (providerKind) => {
+    const warn = vi.spyOn(console, "warn");
     const inherited = fixture();
     let background: SessionBackground;
     if (providerKind === "Lit provider") {
@@ -250,6 +322,7 @@ it.each(["Solid provider"])(
     await background.updateComplete;
     expect(background.querySelector(".session-background__image")).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
   },
 );
 

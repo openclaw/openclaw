@@ -1,5 +1,14 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { prepareGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
+import {
+  buildGroupIntro,
+  buildSourceConversationContext,
+  defaultGroupActivation,
+  resolveGroupRequireMention,
+} from "../../auto-reply/reply/groups.js";
+import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
+import { prepareReplyConversation } from "../../auto-reply/reply/prompt-session-context.js";
+import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
@@ -11,26 +20,29 @@ import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/t
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { isInternalMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
+import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { createRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
-import { prepareCommandConversationContext } from "./conversation-context.js";
-import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
-import type { AgentCommandOpts } from "./types.js";
+import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -309,8 +321,112 @@ export async function prepareEmbeddedSessionState(params: {
     assertSignalCurrent();
   }
 
-  const runContext = resolveAgentRunContext(params.opts);
-  const opts = await prepareCommandConversationContext({ ...params, sessionEntry, runContext });
+  const { cfg, opts, sessionAgentId } = params;
+  const runContext: AgentRunContext = opts.runContext ? { ...opts.runContext } : {};
+  const normalizedChannel = resolveMessageChannel(
+    runContext.messageChannel ?? opts.messageChannel,
+    opts.replyChannel ?? opts.channel,
+  );
+  if (normalizedChannel) {
+    runContext.messageChannel = normalizedChannel;
+  }
+  const normalizedAccountId = normalizeOptionalAccountId(runContext.accountId ?? opts.accountId);
+  if (normalizedAccountId) {
+    runContext.accountId = normalizedAccountId;
+  }
+  for (const key of ["groupId", "groupChannel", "groupSpace"] as const) {
+    const value = (runContext[key] ?? opts[key])?.toString().trim();
+    if (value) {
+      runContext[key] = value;
+    }
+  }
+  if (runContext.currentThreadTs == null) {
+    const threadId = stringifyRouteThreadId(opts.threadId);
+    if (threadId) {
+      runContext.currentThreadTs = threadId;
+    }
+  }
+  // Outbound targets let channel adapters detect same-conversation auto-threading.
+  if (!runContext.currentChannelId && opts.to) {
+    const trimmedTo = opts.to.trim();
+    if (trimmedTo) {
+      runContext.currentChannelId = trimmedTo;
+    }
+  }
+  const deliveryFormat =
+    (opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only") &&
+    buildDeliveryFormatPrompt({
+      cfg,
+      channel: opts.replyChannel ?? runContext.messageChannel,
+      accountId: opts.replyAccountId ?? runContext.accountId,
+      agentId: sessionAgentId,
+      allowBootstrap: true,
+    });
+  let conversationPrompt: string | undefined;
+  // Reuse conversation guidance without borrowing the originating sender's authority.
+  if (
+    sessionEntry &&
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    isSyntheticSourceReplyTurn(opts)
+  ) {
+    const conversation = prepareReplyConversation({
+      sessionEntry,
+      ctx: {
+        InternalTurnSource: "event",
+        Provider: runContext.messageChannel,
+        Surface: runContext.messageChannel,
+        ChatType: sessionEntry.delivery?.kind === "internal" ? sessionEntry.chatType : undefined,
+        OriginatingChannel: runContext.messageChannel,
+        OriginatingTo: runContext.currentChannelId,
+        AccountId: runContext.accountId,
+        MessageThreadId: runContext.currentThreadTs,
+      },
+    });
+    const ctx = { ...conversation.fields, CommandAuthorized: false };
+    const shared = ctx.ChatType === "group" || ctx.ChatType === "channel";
+    const sourceContext = buildSourceConversationContext({
+      sessionCtx: ctx,
+      sourceReplyDeliveryMode: await resolveSessionStableReplyMode({
+        cfg,
+        ctx,
+        sessionEntry,
+        sessionAgentId,
+        sessionKey,
+      }),
+    });
+    if (sourceContext) {
+      // Metadata describes the conversation; delivery preflight owns formatting.
+      const metadata = buildInboundMetaSystemPrompt(ctx, cfg, { includeFormattingHints: false });
+      conversationPrompt = [
+        deliveryFormat ? `${metadata}\n${deliveryFormat}` : metadata,
+        sourceContext,
+        shared &&
+          buildGroupIntro({
+            activation: conversation.activation,
+            defaultActivation: defaultGroupActivation(
+              await resolveGroupRequireMention({ cfg, group: conversation.group }),
+            ),
+          }),
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    }
+  }
+  const preparedOpts =
+    conversationPrompt || deliveryFormat
+      ? {
+          ...opts,
+          extraSystemPrompt: [
+            conversationPrompt,
+            opts.extraSystemPrompt,
+            !conversationPrompt && deliveryFormat,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+          ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
+        }
+      : opts;
   prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });
   return {
     sessionEntry,
@@ -318,7 +434,7 @@ export async function prepareEmbeddedSessionState(params: {
     resolvedVerboseLevel,
     skillsSnapshot,
     runContext,
-    opts,
+    opts: preparedOpts,
   };
 }
 

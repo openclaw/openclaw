@@ -200,7 +200,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-98 plugins
+99 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -285,6 +285,8 @@ Each entry lists the package, distribution route, and description.
 - **[kilocode](/plugins/reference/kilocode)** (`@openclaw/kilocode-provider`) - npm or ClawHub: `@openclaw/kilocode-provider`. Adds Kilocode model provider support to OpenClaw.
 
 - **[kimi](/plugins/reference/kimi)** (`@openclaw/kimi-provider`) - npm or ClawHub: `@openclaw/kimi-provider`. Adds Kimi, Kimi Code, Kimi Coding model provider support to OpenClaw.
+
+- **[levanto](/plugins/reference/levanto)** (`@openclaw/levanto`) - npm or ClawHub: `@openclaw/levanto`. Native Yes/No, Choice, Scale, Sort, and Tags decisions with explicit abstention.
 
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm or ClawHub: `@openclaw/line`. OpenClaw LINE channel plugin for LINE Bot API chats.
 

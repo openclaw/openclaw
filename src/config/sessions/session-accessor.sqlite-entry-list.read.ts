@@ -230,24 +230,16 @@ export function listSqliteSessionEntriesFromDatabase(
           }
           options.captureCronRunSessionKey?.(keys.length === page.limit ? keys.at(-1)! : null);
           entries = readSelectedSessionEntriesInDatabase(database, keys);
-          if (!deferParticipants) {
-            entries = [
-              ...projectSqliteSessionParticipantsBatch(
-                database.db,
-                new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-              ),
-            ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
-          }
         } else {
           const snapshot = readSessionEntryCache(database, {
             cache: false,
             projection: "list",
-            deferParticipants,
+            deferParticipants: true,
           });
           entries = Array.from(iterateSessionEntriesForListing(snapshot));
         }
         let oldestUpdatedAt: number | null = null;
-        const selected = entries.filter(({ sessionKey, entry }) => {
+        let selected = entries.filter(({ sessionKey, entry }) => {
           if (
             !isCronRunSessionKey(sessionKey) ||
             (expired &&
@@ -260,6 +252,14 @@ export function listSqliteSessionEntriesFromDatabase(
           return !expired || updatedAt < expired.updatedBefore;
         });
         options.captureCronRunUpdatedAt?.(oldestUpdatedAt);
+        if (!deferParticipants) {
+          selected = [
+            ...projectSqliteSessionParticipantsBatch(
+              database.db,
+              new Map(selected.map(({ sessionKey, entry }) => [sessionKey, entry])),
+            ),
+          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+        }
         // Capture only deletion candidates' payloads, in the same snapshot as their metadata.
         const rows = selected.length
           ? executeSqliteQuerySync(

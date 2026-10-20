@@ -602,8 +602,6 @@ export class WorkerTaskPoolCore<Input, Output> {
     dispatchOwnedWorkerRequest(task, slot, message.value, exchange, {
       accept,
       reject,
-      closedError: () =>
-        new WorkerTaskError("worker task closed before host dispatch", "unavailable"),
     });
   }
 

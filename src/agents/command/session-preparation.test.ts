@@ -26,16 +26,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
-import { prepareCommandConversationContext } from "./conversation-context.js";
 import {
   prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
 } from "./session-preparation.js";
 
-// mock-isolation: session preparation projects run state without loading the embedded runner owner.
-vi.mock("../embedded-agent-runner/runs.js", () => ({
-  resolveSessionRunProgressState: () => undefined,
-}));
 vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: () => undefined,
   isSubagentRunQueued: () => false,
@@ -239,7 +234,7 @@ it.each([
         inputProvenance: {
           kind: "inter_session",
           sourceTool,
-          sourceChannel: "internal",
+          sourceChannel: sourceTool === "sessions_send" ? "webchat" : "internal",
           sourceSessionKey: "agent:main:subagent:child",
         },
       },
@@ -404,25 +399,40 @@ it.each([
 it.each(["agent:main:cron:nightly:run:123", "agent:main:subagent:123"])(
   "retains the isolated task's prompt for %s",
   async (sessionKey) => {
-    const opts = await prepareCommandConversationContext({
-      cfg: {},
-      opts: {
-        message: "Child finished.",
-        extraSystemPrompt: "Continue the isolated task.",
-        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-      },
-      runContext: { messageChannel: "webchat" },
-      sessionKey,
-      sessionAgentId: "main",
-      sessionEntry: {
+    const runId = `isolated-prompt:${sessionKey}`;
+    try {
+      const { opts } = await prepareEmbeddedSessionState({
+        cfg: {},
+        opts: {
+          message: "Child finished.",
+          extraSystemPrompt: "Continue the isolated task.",
+          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+          runContext: { messageChannel: "webchat" },
+        },
+        sessionKey,
+        sessionAgentId: "main",
         sessionId: "isolated-id",
-        updatedAt: 1,
-        chatType: "direct",
-        delivery: { kind: "internal" },
-      },
-    });
-    expect(opts.extraSystemPrompt).toBe("Continue the isolated task.");
-    expect(opts.silentReplyPromptMode).toBeUndefined();
+        storePath: "/unused/command.sqlite",
+        lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        runId,
+        executionWorkspaceDir: "/workspace",
+        watchSkills: false,
+        isNewSession: false,
+        isSubagentLaneTurn: sessionKey.includes(":subagent:"),
+        suppressVisibleSessionEffects: true,
+        sessionStateActor: { actorType: "agent" },
+        sessionEntry: {
+          sessionId: "isolated-id",
+          updatedAt: 1,
+          chatType: "direct",
+          delivery: { kind: "internal" },
+        },
+      });
+      expect(opts.extraSystemPrompt).toBe("Continue the isolated task.");
+      expect(opts.silentReplyPromptMode).toBeUndefined();
+    } finally {
+      clearAgentRunContext(runId);
+    }
   },
 );
 
@@ -517,6 +527,7 @@ it.each([
   { deliver: true, replyAccountId: "plain", markup: "markdown" },
   { deliver: false, replyAccountId: undefined, markup: undefined },
 ])("uses the delivering account's format once ($deliver, $replyAccountId)", async (testCase) => {
+  const runId = "delivery-format-context";
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -546,17 +557,27 @@ it.each([
       AccountId: "rich",
       ChatType: "direct",
     };
-    const prepared = await prepareCommandConversationContext({
+    const { opts: prepared } = await prepareEmbeddedSessionState({
       cfg: {},
       opts: {
         message: "Child finished.",
         deliver: testCase.deliver,
         replyAccountId: testCase.replyAccountId,
         inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        runContext: { messageChannel: "telegram", currentChannelId: "1222", accountId: "rich" },
       },
-      runContext: { messageChannel: "telegram", currentChannelId: "1222", accountId: "rich" },
       sessionKey: "agent:main:telegram:direct:1222",
       sessionAgentId: "main",
+      sessionId: "conversation-id",
+      storePath: "/unused/command.sqlite",
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      runId,
+      executionWorkspaceDir: "/workspace",
+      watchSkills: false,
+      isNewSession: false,
+      isSubagentLaneTurn: false,
+      suppressVisibleSessionEffects: true,
+      sessionStateActor: { actorType: "agent" },
       sessionEntry: {
         sessionId: "conversation-id",
         updatedAt: 1,
@@ -582,6 +603,7 @@ it.each([
       );
     }
   } finally {
+    clearAgentRunContext(runId);
     resetPluginRuntimeStateForTest();
   }
 });

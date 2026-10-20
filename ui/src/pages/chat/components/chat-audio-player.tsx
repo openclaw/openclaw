@@ -9,6 +9,7 @@ import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import {
@@ -86,10 +87,9 @@ function ChatAudioPlayerContent(
   let waveformAttempted = false;
   let waveformVisible = false;
   let active = true;
-  let sourceSyncQueued = false;
   function handleInputsChanged(key: keyof ChatAudioPlayerProps): void {
     if (key === "sizeBytes" || key === "serverDurationMs") {
-      queueSourceSync();
+      sourceController.queueSync(syncSource);
       return;
     }
     if (key !== "src" && key !== "sourceIdentity" && key !== "playback" && key !== "authToken") {
@@ -117,18 +117,7 @@ function ChatAudioPlayerContent(
         releaseChatAudioPlayback(mediaElement);
       }
     }
-    queueSourceSync();
-  }
-  function queueSourceSync(): void {
-    if (sourceSyncQueued) {
-      return;
-    }
-    sourceSyncQueued = true;
-    // Native callers assign related properties together; consume their complete source once.
-    queueMicrotask(() => {
-      sourceSyncQueued = false;
-      syncSource();
-    });
+    sourceController.queueSync(syncSource);
   }
   onSettled(() => {
     inputHandlers.set(host, handleInputsChanged);
@@ -489,6 +478,9 @@ function ChatAudioPlayerContent(
     );
   };
   const Player = () => {
+    const copyRef = attachmentContextCopyRef(() =>
+      props.voiceNote ? null : { name: props.label, href: downloadHref() },
+    );
     const viewport = createChatAttachmentViewportRef(() => {
       waveformVisible = true;
       void prepareWaveformAudio().catch(() => undefined);
@@ -514,7 +506,7 @@ function ChatAudioPlayerContent(
           "chat-assistant-attachment-card chat-assistant-attachment-card--audio",
           { "chat-assistant-attachment-card--voice-note": props.voiceNote },
         ]}
-        ref={viewport}
+        ref={[viewport, copyRef]}
         data-openable={!props.voiceNote && props.onExpand ? "" : undefined}
         onClick={(event) =>
           openAttachmentCardFromClick(event, props.voiceNote ? undefined : props.onExpand)

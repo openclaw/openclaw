@@ -15,11 +15,13 @@ import { formatTimeMs } from "../../../lib/format.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../../lib/gateway-page-binding.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
-import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../../lib/reactive/projection.ts";
 import {
   canCallDreamingMethod,
   copyDreamingArchivePath,
   createDreamingState,
+  createDreamingViewState,
+  DREAM_PHRASE_KEYS,
   loadDreamingResource,
   resolveConfiguredDreaming,
   runDreamDiaryAction,
@@ -27,11 +29,11 @@ import {
   type DreamDiaryActionMethod,
   type DreamingResourceKey,
   type DreamingState,
+  type DreamingViewState,
   type WikiPagePreview,
+  type WikiPreviewState,
 } from "./dreaming.ts";
 import type { DreamingToggleConfirmationProps } from "./toggle-confirmation.tsx";
-import type { DreamingViewState, WikiPreviewState } from "./view-types.ts";
-import { createDreamingViewState, DREAM_PHRASE_KEYS, type DreamingProps } from "./view.tsx";
 
 registerDreamingEnglish();
 
@@ -52,7 +54,15 @@ function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): stri
 
 export type AgentMemoryState = ReturnType<typeof createAgentMemory>;
 
-export function createAgentMemory(context: ApplicationContext) {
+export type AgentMemoryTarget = {
+  read(): string | null;
+  subscribe(notify: () => void): () => void;
+};
+
+export function createAgentMemory(
+  context: ApplicationContext,
+  getInitialAgentTarget: () => AgentMemoryTarget,
+) {
   const config = projectOwner(context.runtimeConfig, (source) => source.state);
   let active = false;
   let publish = () => {};
@@ -452,7 +462,7 @@ export function createAgentMemory(context: ApplicationContext) {
             message: t("dreaming.actions.confirmRepairDescription"),
             confirmLabel: t("dreaming.scene.repairCache"),
           }),
-      } satisfies Omit<DreamingProps, "viewState" | "onViewStateChange">,
+      },
       toggle: {
         open: pendingEnabled !== null,
         enabling: pendingEnabled === true,
@@ -507,20 +517,18 @@ export function createAgentMemory(context: ApplicationContext) {
       }
     }
   }
-  const projection = projectSource(context, {
-    read,
-    subscribe: (_source, listener) => {
-      publish = listener;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(context, read);
+  publish = projection.publish;
   onSettled(() => {
+    const agentTarget = getInitialAgentTarget();
+    const syncAgent = () => setAgentId(agentTarget.read() ?? "");
+    // Agent receipts invalidate prior requests and replace their resource state synchronously.
+    const stopAgent = agentTarget.subscribe(syncAgent);
+    syncAgent();
     active = true;
     gateway.connect();
     return () => {
+      stopAgent();
       active = false;
       publish = () => {};
       resetTransientState();
@@ -529,7 +537,6 @@ export function createAgentMemory(context: ApplicationContext) {
     };
   });
   return {
-    setAgentId,
     loadResources,
     setEnabled,
     view() {

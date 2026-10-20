@@ -6,6 +6,7 @@ import * as completionStore from "../agents/subagents/completion/subagent-comple
 import * as completion from "../agents/subagents/completion/subagent-completion-delivery.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "../agents/subagents/registry/subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "../agents/subagents/registry/subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -167,6 +168,7 @@ describe("registered correlated completion recovery custody", () => {
         const fallbackResume = vi.fn(() => {
           expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
         });
+        vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
         const completionRuntime = createSubagentRegistryCompletionRuntime({
           runs: subagentRuns,
           resumed: new Set([getSubagentRunRuntimeKey(child)]),
@@ -174,7 +176,6 @@ describe("registered correlated completion recovery custody", () => {
           completeSubagentRun: failedCompletion,
           scheduleSweep: vi.fn(),
           resumeRun: fallbackResume,
-          warn: vi.fn(),
         });
         let released = false;
         probe.command(stateWorker, async (command, executeOptions, scope) => {

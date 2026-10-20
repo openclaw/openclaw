@@ -22,7 +22,7 @@ import { resolveChatAgentId } from "./chat-state-route.ts";
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingState,
-} from "./components/chat-session-sharing.ts";
+} from "./components/chat-session-sharing.solid.tsx";
 
 const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
@@ -287,22 +287,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
   }
 
-  protected setSessionVisibility(
-    row: GatewaySessionRow,
-    visibility: SessionVisibility,
-  ): Promise<void> {
-    return this.mutateSessionSharing(row, { visibility });
-  }
-
-  protected setSessionMember(
-    row: GatewaySessionRow,
-    identityId: string,
-    member: boolean,
-  ): Promise<void> {
-    return this.mutateSessionSharing(row, { identityId, member });
-  }
-
-  private async mutateSessionSharing(
+  protected async mutateSessionSharing(
     row: GatewaySessionRow,
     change: { visibility: SessionVisibility } | { identityId: string; member: boolean },
   ): Promise<void> {

@@ -88,7 +88,7 @@ export function sessionViewerPresenceForGateway(
       signature,
       {
         onSuccess: () => {
-          if (!isActive()) {
+          if (!isActive() && sessionKeys.length === 0) {
             lifecycle.detach();
           }
         },
@@ -115,10 +115,8 @@ export function sessionViewerPresenceForGateway(
     retry.reset();
     if (isActive()) {
       lifecycle.attach();
-      lifecycle.schedule();
-    } else if (lifecycle.attached) {
-      lifecycle.sync();
     }
+    lifecycle.schedule();
   };
 
   const store: SessionViewerPresenceStore = { watch, unwatch: (owner) => watch(owner, []) };

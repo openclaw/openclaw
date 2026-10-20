@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createSnapshot } from "../../config/mutate.test-support.js";
 import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
+import { withSystemAgentOverviewSources } from "../../system-agent/overview.test-support.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createSystemAgentTool,
   resolveSystemAgentDirectiveTransition,
@@ -74,6 +77,59 @@ describe("openclaw tool", () => {
       expect.anything(),
       expect.objectContaining({ approved: false }),
     );
+
+    // `health` is discoverable in the schema and advertised as a free read.
+    const actionEnum = (
+      tool.parameters as {
+        properties: { action: { enum: string[] } };
+      }
+    ).properties.action.enum;
+    expect(actionEnum).toContain("health");
+    expect(tool.description).toMatch(/Read now:.*health/);
+  });
+
+  it("routes action:overview through the canonical overview executor", async () => {
+    const runtimeConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { model: { primary: "openai/gpt-5.2" }, systemAgent: { agentId: "main" } },
+        entries: { main: {} },
+      },
+      gateway: { port: 19001 },
+    };
+    const snapshot = {
+      ...createSnapshot({ sourceConfig: runtimeConfig, hash: "test-hash" }),
+      raw: "{}",
+    };
+    const realExecutor = await vi.importActual<typeof import("../../system-agent/operations.js")>(
+      "../../system-agent/operations.js",
+    );
+    mocks.executeSystemAgentOperation.mockImplementationOnce(
+      realExecutor.executeSystemAgentOperation as unknown as typeof mocks.executeSystemAgentOperation,
+    );
+    const tool = createSystemAgentTool({ surface: "cli" });
+    const result = await withEnvAsync(
+      {
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
+        OPENCLAW_GATEWAY_URL: undefined,
+        OPENCLAW_GATEWAY_PORT: undefined,
+        OPENCLAW_PROFILE: undefined,
+        OPENAI_API_KEY: undefined,
+        ANTHROPIC_API_KEY: undefined,
+      },
+      () =>
+        withSystemAgentOverviewSources(snapshot, async () => {
+          const out = await tool.execute("t-overview", { action: "overview" });
+          const text = toolText(out);
+          expect(text).toContain("OpenClaw online. Little claws, typed tools.");
+          expect(text).toContain("Config: valid");
+          expect(text).toContain("Default agent: main");
+          expect(text).toContain("Default model: openai/gpt-5.2");
+          expect(text).toContain("Gateway: not reachable");
+          return out;
+        }),
+    );
+    expect(toolText(result)).not.toContain("needs-approval");
   });
 
   it("preserves an allowed gateway credential reference as an exact proposal", async () => {

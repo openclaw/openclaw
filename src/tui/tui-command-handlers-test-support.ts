@@ -1,5 +1,4 @@
 import type { OverlayHandle } from "@earendil-works/pi-tui";
-import type { Result } from "@openclaw/normalization-core/result";
 import { expect, vi } from "vitest";
 import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -22,7 +21,7 @@ export type SetSessionMock = ReturnType<typeof vi.fn> &
   ((key: string, agentId?: string) => Promise<void>);
 export type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
 type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
-export type RefreshAgentsMock = ReturnType<typeof vi.fn> & (() => Promise<Result<void, string>>);
+export type RefreshAgentsMock = ReturnType<typeof vi.fn> & (() => Promise<boolean>);
 
 function createOverlayHandle(): OverlayHandle {
   return {
@@ -171,8 +170,7 @@ export function createTuiCommandHandlersHarness(params?: {
   const abortActive =
     params?.abortActive ?? (vi.fn().mockResolvedValue(undefined) as AbortActiveMock);
   const refreshAgents =
-    params?.refreshAgents ??
-    (vi.fn().mockResolvedValue({ ok: true, value: undefined }) as RefreshAgentsMock);
+    params?.refreshAgents ?? (vi.fn().mockResolvedValue(true) as RefreshAgentsMock);
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local

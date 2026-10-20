@@ -12,6 +12,10 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  bindHeartbeatReply,
+  bindHeartbeatSend,
+} from "../infra/heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce, startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "../infra/heartbeat-runner.test-harness.js";
 import { seedMainSessionStore } from "../infra/heartbeat-runner.test-utils.js";
@@ -142,11 +146,12 @@ async function runMainCronCase(
     });
   }
 
+  bindHeartbeatReply(getReplySpy);
+  bindHeartbeatSend("telegram", sendTelegram);
   const runHeartbeatOnceReal: typeof runHeartbeatOnce = async (opts) => {
     const outcome = await runHeartbeatOnce({
       ...opts,
       cfg,
-      deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
     });
     if (options.mixedExec && getReplySpy.mock.calls.length >= 2) {
       followUpCompleted.resolve(outcome);
@@ -281,7 +286,6 @@ async function runMainCronCase(
           reason: "interval",
           agentId: "main",
           scheduledEveryMs: 5 * 60_000,
-          deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
         }),
       ).resolves.toMatchObject({ status: "ran" });
     } else {
@@ -348,6 +352,8 @@ describe("main cron with the real heartbeat runner", () => {
     };
     const getReply = vi.fn().mockResolvedValue({ text: "unexpected heartbeat" });
     const sendTelegram = vi.fn();
+    bindHeartbeatReply(getReply);
+    bindHeartbeatSend("telegram", sendTelegram);
     const attempts: Awaited<ReturnType<typeof runHeartbeatOnce>>[] = [];
     const heartbeatRunner = startHeartbeatRunner({
       cfg,
@@ -355,7 +361,6 @@ describe("main cron with the real heartbeat runner", () => {
         const result = await runHeartbeatOnce({
           ...opts,
           cfg,
-          deps: { getReplyFromConfig: getReply, telegram: sendTelegram },
         });
         attempts.push(result);
         return result;

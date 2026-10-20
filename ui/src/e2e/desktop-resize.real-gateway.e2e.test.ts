@@ -5,7 +5,6 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
-import { createServer } from "vite";
 import { expect, it } from "vitest";
 import type {
   desktopProofTestReport,
@@ -15,7 +14,6 @@ import {
   readDesktopProofGatewayCloses,
   readDesktopProofNodeStreamCloses,
 } from "../../../scripts/lib/desktop-resize-proof.mts";
-import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { prepareSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
 import { SkillLibraryWireClient } from "../../../test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts";
 import {
@@ -31,6 +29,7 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createDesktopResizeGuest,
+  createDesktopResizeProxy,
   observeDesktopEndpointPackets,
   observeDesktopProofRfbLifecycle,
   readDesktopResizeFixture,
@@ -87,37 +86,9 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   // The suite owns the authenticated proxy; the scenario owns its real Gateway.
   startServer: async () => {
-    gatewayPort = await getFreePort();
-    const proxyPort = await getFreePort();
-    const proxy = await createServer({
-      configFile: false,
-      envFile: false,
-      appType: "custom",
-      logLevel: "error",
-      server: {
-        host: "127.0.0.1",
-        port: proxyPort,
-        strictPort: true,
-        proxy: {
-          "/": {
-            target: `http://127.0.0.1:${gatewayPort}`,
-            ws: true,
-            headers: {
-              "x-forwarded-for": "192.0.2.10",
-              "x-forwarded-proto": "http",
-              "x-forwarded-user": "resize-operator@example.test",
-            },
-          },
-        },
-      },
-    });
-    try {
-      await proxy.listen();
-      return { baseUrl: `http://127.0.0.1:${proxyPort}/`, close: () => proxy.close() };
-    } catch (error) {
-      await proxy.close();
-      throw error;
-    }
+    const proxy = await createDesktopResizeProxy();
+    gatewayPort = proxy.gatewayPort;
+    return proxy;
   },
 });
 

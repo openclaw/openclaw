@@ -2,6 +2,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
@@ -9,6 +10,8 @@ import type {
   HeaderMenuAction,
   HeaderMenuSessionAction,
 } from "./components/chat-header-session-menu.ts";
+
+registerSessionOrganizationEnglish();
 
 export class ChatPaneNativeSessionActions {
   private readonly memo = new ChatPaneHeaderMemo<HeaderMenuSessionAction[]>();

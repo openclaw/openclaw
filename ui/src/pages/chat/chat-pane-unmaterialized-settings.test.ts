@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
@@ -162,6 +163,9 @@ it.each(
         return props;
       };
       const props = draw();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
       const effort = container.querySelector<HTMLElement>("[data-chat-thinking-select]");
       const initialThinking = initialState === "placeholder" ? "low" : "";
       expect(effort?.dataset.chatThinkingValue).toBe(initialThinking);

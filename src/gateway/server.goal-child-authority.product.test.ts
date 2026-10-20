@@ -446,7 +446,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
         url: "wss://127.0.0.1:" + gateway.port,
         edgeAuthHeaders: headers(scenario, index),
         deviceIdentity: loadOrCreateDeviceIdentity({
-          path: state.statePath("test-devices", index + ".sqlite"),
+          path: state.statePath("test-devices", String(index), "client", "credentials.sqlite"),
         }),
         onEvent: receive(scenario.email),
       });

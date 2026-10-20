@@ -12,6 +12,7 @@ import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication as createApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
+import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
@@ -607,7 +608,7 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it("refreshes chat browser chrome on route and breakpoint changes", () => {
+  it("refreshes registered chat browser chrome on breakpoint changes", () => {
     const listeners = new Set<() => void>();
     let mobile = false;
     const removeEventListener = vi.fn((_: string, listener: () => void) => {
@@ -650,16 +651,16 @@ describe("bootstrapApplication", () => {
         document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
       ).toBe("#123456");
 
-      document.body.innerHTML = '<div class="shell--chat"></div>';
+      syncControlUiSystemChrome(false, true);
       mobile = true;
       publish();
       expectChrome("#abcdef");
 
-      document.body.replaceChildren();
+      syncControlUiSystemChrome(false, false);
       publish();
       expect(meta.content).toBe("#123456");
 
-      document.body.innerHTML = '<div class="shell--chat"></div>';
+      syncControlUiSystemChrome(false, true);
       publish();
       expect(meta.content).toBe("#abcdef");
 
@@ -668,6 +669,7 @@ describe("bootstrapApplication", () => {
       expect(meta.content).toBe("#123456");
     } finally {
       runtime.stop();
+      syncControlUiSystemChrome(false, false);
       bindControlUiDocumentHead({ themeColors: [], favicons: [] });
       document.body.replaceChildren();
       expect(removeEventListener).toHaveBeenCalled();

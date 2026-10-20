@@ -76,12 +76,12 @@ it.each(["agent", "state"] as const)(
     inputs[kind === "agent" ? "state" : "agent"] += "\nCREATE TABLE unrelated (id TEXT);";
     vi.resetModules();
     const unrelated = await import("./openclaw-database-seal-schema.js");
-    expect(unrelated.sqliteDatabaseSealSchemaFor(kind)).toBe(before);
-    expect(unrelated.sqliteDatabaseSealSchemaFor("other")).not.toBe(unknown);
+    expect(unrelated.sqliteDatabaseSealSchemaFor(kind)).toEqual(before);
+    expect(unrelated.sqliteDatabaseSealSchemaFor("other")).not.toEqual(unknown);
     inputs[kind] += "\nCREATE TABLE owned (id TEXT);";
     vi.resetModules();
     const changed = await import("./openclaw-database-seal-schema.js");
-    expect(changed.sqliteDatabaseSealSchemaFor(kind)).not.toBe(before);
+    expect(changed.sqliteDatabaseSealSchemaFor(kind)).not.toEqual(before);
   },
 );
 
@@ -92,7 +92,7 @@ it("reuses a clean seal across builds and app-version changes", async () => {
   const file = fs.statSync(pathname, { bigint: true });
   const proof = { verifiedAt: Date.now(), facts: "validated facts" };
   const first = await import("./openclaw-database-seal-schema.js");
-  const schemaIdentity = first.sqliteDatabaseSealSchemaFor("agent")!;
+  const schemaIdentity = first.sqliteDatabaseSealSchemaFor("agent")!.schemaIdentity;
   expect(writeSqliteCleanCloseSeal(pathname, schemaIdentity, file, proof)).toBe(true);
   expect(readSqliteCleanCloseSeal(pathname, file)).toEqual({ ...proof, schemaIdentity });
 
@@ -100,16 +100,16 @@ it("reuses a clean seal across builds and app-version changes", async () => {
   inputs.build = "second";
   vi.resetModules();
   const rebuilt = await import("./openclaw-database-seal-schema.js");
-  expect(rebuilt.sqliteDatabaseSealSchemaFor("agent")).toBe(schemaIdentity);
+  expect(rebuilt.sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity).toBe(schemaIdentity);
   expect(readSqliteCleanCloseSeal(pathname, file)?.schemaIdentity).toBe(
-    rebuilt.sqliteDatabaseSealSchemaFor("agent"),
+    rebuilt.sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity,
   );
 
   inputs.version = "2026.10.2";
   vi.resetModules();
   const upgraded = await import("./openclaw-database-seal-schema.js");
   expect(readSqliteCleanCloseSeal(pathname, file)?.schemaIdentity).toBe(
-    upgraded.sqliteDatabaseSealSchemaFor("agent"),
+    upgraded.sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity,
   );
 });
 
@@ -119,9 +119,9 @@ it.each(["agent", "state"] as const)(
     const { sqliteDatabaseSealSchemaFor } = await import("./openclaw-database-seal-schema.js");
     const before = sqliteDatabaseSealSchemaFor(kind);
     inputs[kind === "agent" ? "stateVersion" : "agentVersion"]++;
-    expect(sqliteDatabaseSealSchemaFor(kind)).toBe(before);
+    expect(sqliteDatabaseSealSchemaFor(kind)).toEqual(before);
     inputs[kind === "agent" ? "agentVersion" : "stateVersion"]++;
-    expect(sqliteDatabaseSealSchemaFor(kind)).not.toBe(before);
+    expect(sqliteDatabaseSealSchemaFor(kind)).not.toEqual(before);
   },
 );
 
@@ -129,7 +129,7 @@ it("invalidates proof for a different or unknown SQLite storage stack", async ()
   const { sqliteDatabaseSealSchemaFor } = await import("./openclaw-database-seal-schema.js");
   const before = sqliteDatabaseSealSchemaFor("agent");
   inputs.storageIdentity = "sqlite-3.54.0-source-build";
-  expect(sqliteDatabaseSealSchemaFor("agent")).not.toBe(before);
+  expect(sqliteDatabaseSealSchemaFor("agent")).not.toEqual(before);
   inputs.storageIdentity = undefined;
   expect(sqliteDatabaseSealSchemaFor("agent")).toBeUndefined();
 });

@@ -3,7 +3,6 @@
  * runtimes.
  */
 import fs from "node:fs";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -118,7 +117,7 @@ export function mergeConfiguredBundleMcpServers(
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
   },
 ): MergedBundleMcpConfig {
-  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const configuredMcp = params.cfg?.mcp?.servers ?? {};
   const serverOverrides = params.toolOverrides?.mcpServers;
   // Merge owner config first so a disabled override also tombstones its bundle default.
   const mcpServers = Object.fromEntries(

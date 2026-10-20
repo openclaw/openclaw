@@ -15,7 +15,7 @@ import {
   type ChatMetadataResponse,
 } from "./chat-metadata-cache.ts";
 import {
-  loadChatMetadata,
+  loadChatMetadataRefresh,
   peekChatMetadata,
   beginChatMetadataPublication,
   revalidateChatMetadata,
@@ -23,14 +23,18 @@ import {
 } from "./chat-metadata-store.ts";
 
 const agentScope = { agentId: "main" };
-type Scope = Parameters<typeof loadChatMetadata>[1];
+type Scope = Parameters<typeof loadChatMetadataRefresh>[1];
 const releases: (() => void)[] = [];
 const pendingReads: Promise<unknown>[] = [];
 let request: GatewayRequestMock;
+let catalogRequest: GatewayRequestMock;
 let client: GatewayBrowserClient;
 beforeEach(() => {
   request = vi.fn<GatewayRequestHandler>();
-  client = createTestGatewayClient(request);
+  catalogRequest = vi.fn<GatewayRequestHandler>().mockResolvedValue({ models: [] });
+  client = createTestGatewayClient((method, ...args) =>
+    method === "models.list" ? catalogRequest(method, ...args) : request(method, ...args),
+  );
 });
 
 function pendingMetadata() {
@@ -40,7 +44,7 @@ function pendingMetadata() {
 }
 
 function load(scope: Scope = agentScope) {
-  const result = loadChatMetadata(client, scope);
+  const result = loadChatMetadataRefresh(client, scope).completed;
   pendingReads.push(result);
   return result;
 }
@@ -121,7 +125,7 @@ describe("chat metadata store", () => {
     async (timing) => {
       const oldModel = { id: "old", name: "Old", provider: "example" };
       const newModel = { ...oldModel, id: "new", name: "New" };
-      request
+      catalogRequest
         .mockResolvedValueOnce({ models: [oldModel] })
         .mockResolvedValue({ models: [newModel] });
       const scope = { agentId: "main", sessionKey: "agent:main:released" };
@@ -136,7 +140,7 @@ describe("chat metadata store", () => {
         release();
       }
       expect(await loadModelCatalog(client, scope)).toEqual({ models: [newModel] });
-      expect(request).toHaveBeenCalledTimes(2);
+      expect(catalogRequest).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -182,11 +186,12 @@ describe("chat metadata store", () => {
       accountSelection: { kind: "automatic", label: "Automatic" },
     } satisfies ChatMetadataResponse;
     request.mockResolvedValue({ unchanged: true, revision: commands.revision });
+    mount(scope);
     beginChatMetadataPublication(client, scope).publish(legacy);
     expect(peek(scope)).toEqual(commands);
     invalidateChatMetadataStore(client);
     expect(peek(scope)).toBeUndefined();
-    expect(await load(scope)).toEqual(commands);
+    await load(scope);
     expect(request).toHaveBeenCalledWith("chat.metadata", {
       agentId: "main",
       includeModels: false,
@@ -196,7 +201,7 @@ describe("chat metadata store", () => {
     const changed = { ...metadata("new-command"), revision: "commands-2" };
     request.mockResolvedValue(changed);
     invalidateChatMetadataStore(client);
-    expect(await load(scope)).toEqual(changed);
+    await load(scope);
     expect(peek(scope)).toEqual(changed);
   });
 
@@ -209,7 +214,8 @@ describe("chat metadata store", () => {
     const first = mount(scope);
     const second = mount(scope);
     beginChatMetadataPublication(client, scope).publish(metadata("locked"));
-    await loadChatMetadata(client, { agentId: "main" });
+    mount(agentScope);
+    await load();
     expect(peekChatMetadata(client, { agentId: "main" })).toEqual(metadata("neutral"));
     expect(peek(scope)).toEqual(metadata("locked"));
     first();
@@ -224,13 +230,14 @@ describe("chat metadata store", () => {
   it("retries missing startup commands after a model-only publication", async () => {
     const scope = { agentId: "main", sessionKey: "agent:main:commands" };
     request.mockResolvedValue(metadata("recovered"));
+    mount(scope);
     beginChatMetadataPublication(client, scope).publish(metadata("previous"));
     expect(() =>
       beginChatMetadataPublication(client, scope).publish({ revision: "failed" }),
     ).toThrow("Chat commands are unavailable");
     expect(peek(scope)).toBeUndefined();
     invalidateChatMetadataStore(client, undefined, undefined, "refresh", false);
-    expect(await load(scope)).toEqual(metadata("recovered"));
+    await load(scope);
     expect(request).toHaveBeenCalledOnce();
     expect(peek(scope)).toEqual(metadata("recovered"));
   });
@@ -243,7 +250,7 @@ describe("chat metadata store", () => {
       request.mockReturnValueOnce(older.promise).mockResolvedValue(replacement);
       const scope = { agentId: "main", sessionKey: "agent:main:locked" };
       const updates: string[] = [];
-      const refreshes: Promise<ChatMetadataResult>[] = [];
+      const refreshes: Promise<void>[] = [];
       mount(scope, (update) => {
         updates.push(update.type);
         if (update.type === "invalidated") {
@@ -285,7 +292,7 @@ describe("chat metadata store", () => {
     const newer = pendingMetadata();
     request.mockReturnValueOnce(older.promise).mockReturnValue(newer.promise);
     let observed = false;
-    let following: Promise<ChatMetadataResult> | undefined;
+    let following: Promise<ChatMetadataResult | void> | undefined;
     let queued: Promise<ChatMetadataResult> | undefined;
     mount(agentScope, (update) => {
       if (update.type === "loading" && !observed) {
@@ -301,34 +308,39 @@ describe("chat metadata store", () => {
     });
     const first = read();
     expect(following).toBeDefined();
-    expect(read()).toBe(queued ?? following);
+    expect(read()).toBe(read === load ? following : (queued ?? following));
     if (mode !== "invalidated") {
       expect(following).toBe(first);
     }
     expect(request).toHaveBeenCalledOnce();
     const initial = metadata(mode === "shared" ? "current" : "obsolete");
     older.resolve(initial);
-    await expect(first).resolves.toEqual(initial);
+    if (read === revalidate) {
+      await expect(first).resolves.toEqual(initial);
+    } else {
+      await first;
+    }
     if (mode !== "shared") {
       expect(peek()).toBeUndefined();
       expect(request).toHaveBeenCalledTimes(2);
       newer.resolve(metadata("current"));
     }
-    await expect(queued ?? following).resolves.toEqual(metadata("current"));
+    if (queued || read === revalidate) {
+      await expect(queued ?? following).resolves.toEqual(metadata("current"));
+    } else {
+      await following;
+    }
     expect(peek()).toEqual(metadata("current"));
     expect(request).toHaveBeenCalledTimes(mode === "shared" ? 1 : 2);
   });
 
   it.each([
-    ...[load, revalidate].flatMap((read) =>
-      [new Error("metadata failed"), undefined].map((failure) => ({
-        read,
-        failure,
-        event: "error",
-      })),
-    ),
-    { read: revalidate, failure: undefined, event: "result" },
-  ])("starts a fresh request from a $event observer (%#)", async ({ read, failure, event }) => {
+    ...[new Error("metadata failed"), undefined].map((failure) => ({
+      failure,
+      event: "error",
+    })),
+    { failure: undefined, event: "result" },
+  ])("starts a fresh request from a $event observer (%#)", async ({ failure, event }) => {
     const next = pendingMetadata();
     const older = metadata("older");
     const current = metadata("current");
@@ -341,10 +353,10 @@ describe("chat metadata store", () => {
     let following: Promise<ChatMetadataResult> | undefined;
     mount(agentScope, (update) => {
       if (update.type === event && !following) {
-        following = read();
+        following = revalidate();
       }
     });
-    const first = read();
+    const first = revalidate();
     if (event === "error") {
       await expect(first).rejects.toBe(failure);
     } else {
@@ -363,7 +375,10 @@ describe("chat metadata store", () => {
     mount(mounted);
     await load(mounted);
     for (let index = 0; index < 70; index++) {
-      await loadChatMetadata(client, { agentId: "main", sessionKey: `agent:main:${index}` });
+      const inactive = { agentId: "main", sessionKey: `agent:main:${index}` };
+      const release = mount(inactive);
+      await load(inactive);
+      release();
     }
 
     expect(peekChatMetadata(client, mounted)).toEqual(metadata("cached"));
@@ -371,14 +386,17 @@ describe("chat metadata store", () => {
       peekChatMetadata(client, { agentId: "main", sessionKey: "agent:main:0" }),
     ).toBeUndefined();
     const recent = { agentId: "main", sessionKey: "agent:main:69" };
-    await loadChatMetadata(client, recent);
+    const release = mount(recent);
+    await load(recent);
+    release();
     expect(request).toHaveBeenCalledTimes(71);
   });
 
   it.each([false, true])(
-    "retires an older plain load while preserving the newest writer (startup=%s)",
+    "retires an older automatic refresh while preserving the newest writer (startup=%s)",
     async (startup) => {
       const scope = agentScope;
+      mount(scope);
       const older = pendingMetadata();
       const newer = pendingMetadata();
       request.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
@@ -389,7 +407,7 @@ describe("chat metadata store", () => {
       }
       expect.soft(request).toHaveBeenCalledOnce();
       older.resolve(metadata("old-model"));
-      await expect(olderLoad).resolves.toEqual(metadata("old-model"));
+      await olderLoad;
       expect(peek(scope)).toEqual(startup ? metadata("startup") : undefined);
       newer.resolve(metadata("new-model"));
       await expect(newerLoad).resolves.toEqual(metadata("new-model"));
@@ -406,7 +424,7 @@ describe("chat metadata store", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
       .mockResolvedValue(current);
-    const reads: Promise<ChatMetadataResult>[] = [];
+    const reads: Promise<void>[] = [];
     mount(scope, (update) => {
       if (update.type === "invalidated") {
         reads.push(load(scope));
@@ -477,7 +495,8 @@ describe("chat metadata store", () => {
         request.mockResolvedValue(fresh);
         await vi.advanceTimersByTimeAsync(1_000);
         expect(await queued).toEqual(fresh);
-        expect(await remounted).toEqual(fresh);
+        await remounted;
+        expect(peek(scope)).toEqual(fresh);
         expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
           [{ type: "result", result: fresh }],
         ]);

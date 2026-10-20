@@ -30,11 +30,15 @@ describe("chat transcript controller", () => {
   it("retains a projected reply target until its row commits and prevents automatic follow from taking over", async () => {
     const update = createDeferred<boolean>();
     const transcript = createChatTranscript(() => "projected-reply");
+    const messageElements = transcript.renderSession(
+      "agent:main:projected-reply",
+      (session) => session.messageElements,
+    );
     const tail: TestContentRow = {
       kind: "content",
       key: "tail",
       content: (
-        <div class="chat-bubble" data-entry-id="tail">
+        <div ref={messageElements.forKey("tail")} class="chat-bubble" data-entry-id="tail">
           Tail
         </div>
       ),
@@ -43,7 +47,11 @@ describe("chat transcript controller", () => {
       kind: "content",
       key: "original",
       content: (
-        <div class="chat-bubble" data-entry-id="original">
+        <div
+          ref={messageElements.forKey("optimistic-original")}
+          class="chat-bubble"
+          data-entry-id="original"
+        >
           Original
         </div>
       ),
@@ -86,11 +94,15 @@ describe("chat transcript controller", () => {
     async (interruption) => {
       const update = createDeferred<boolean>();
       const transcript = createChatTranscript(() => `message-reveal-${interruption}`);
+      const messageElements = transcript.renderSession(
+        `agent:main:reveal-${interruption}`,
+        (session) => session.messageElements,
+      );
       const rows: TestContentRow[] = ["first", "second"].map((id) => ({
         kind: "content",
         key: id,
         content: (
-          <div class="chat-bubble" data-entry-id={id}>
+          <div ref={messageElements.forKey(id)} class="chat-bubble" data-entry-id={id}>
             {id}
           </div>
         ),

@@ -5,6 +5,7 @@ import {
   activateSelfRemovingControl,
   waitForPatch,
 } from "../../e2e/session-management.test-support.ts";
+import { seedStorage } from "../../e2e/sidebar-assertions.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../../test-helpers/control-ui-session-fixtures.ts";
 
@@ -19,6 +20,7 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
       async ({ page }) => {
+        await seedStorage(page, { "openclaw:sidebar:sessions:show-preview": "true" });
         const main = sessionRow(selectedSessionKey, "Main", baseTime);
         const background = sessionRow(
           backgroundSessionKey,
@@ -31,6 +33,8 @@ suite.define(() => {
           },
         );
         const archived = sessionRow("agent:main:completed", "Completed work", baseTime - 2);
+        // Default rows show observer headlines only when session previews are on.
+        await seedStorage(page, { "openclaw:sidebar:sessions:show-preview": "true" });
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {

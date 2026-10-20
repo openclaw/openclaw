@@ -1,95 +1,89 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import {
-  historyLane,
-  maintenanceLane,
-  type SessionHistoryWorkerLane,
-} from "../config/sessions/session-transcript-worker-resources.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { runGatewayStartupObservers } from "./server-startup-observers.js";
+import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
 
 const mocks = vi.hoisted(() => ({
-  prewarm: vi.fn<(database: unknown, lane?: SessionHistoryWorkerLane) => Promise<void>>(),
-  activate: vi.fn(async () => {}),
-  refresh: vi.fn(async () => null),
+  prewarm: vi.fn(async () => {}),
+  delivery: vi.fn(async () => {}),
+  exec: vi.fn(async () => {}),
 }));
 
-// mock-isolation: Reader custody does not start the restored-run or update owners.
-vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
-  activateSubagentRegistry: mocks.activate,
+// mock-isolation: Hold recovery I/O at the owner boundary without allocating native readers.
+vi.mock("./server-history-prewarm.js", () => ({
+  prewarmGatewaySessionHistory: mocks.prewarm,
 }));
-vi.mock("./server-update-sentinel.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./server-update-sentinel.js")>()),
-  prepareLatestUpdateRestartSentinel: mocks.refresh,
+// mock-isolation: Hold delivery recovery without reading persisted channel deliveries.
+vi.mock("./session-send-recovery.js", () => ({
+  recoverSessionSendDeliveries: mocks.delivery,
 }));
-
-vi.mock("node:fs/promises", () => ({
-  default: { stat: async () => ({ isFile: () => true }) },
+// mock-isolation: Hold exec notification recovery without dispatching persisted notifications.
+vi.mock("../agents/bash-tools.exec-notify.js", () => ({
+  recoverExecExitNotifications: mocks.exec,
 }));
-
-// mock-isolation: Synthetic store discovery keeps startup readiness independent of SQLite admission.
-vi.mock("../config/sessions/session-sqlite-target.js", () => ({
-  prepareSqliteTargetFromSessionStorePath: async () => ({
-    agentId: "main",
-    path: "/synthetic/main/openclaw-agent.sqlite",
-  }),
+// mock-isolation: Agent deletion and watch-notice persistence are independent startup owners.
+vi.mock("./server-agent-deletion-recovery.js", () => ({
+  resumeAgentDeletions: vi.fn(async () => {}),
 }));
-
-// mock-isolation: Exercise startup custody without allocating native history readers.
-vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
-  isSessionHistoryWorkerCold: () => true,
-  prewarmSessionHistoryWorker: mocks.prewarm,
-}));
-
-// mock-isolation: Watch-notice persistence is independent of restored-run admission.
+// mock-isolation: Watch-notice persistence is independent of recovery activation ordering.
 vi.mock("../sessions/session-state-events.js", () => ({
   sweepSessionStateWatchNotices: vi.fn(async () => {}),
 }));
 
 beforeEach(() => {
-  mocks.prewarm.mockReset();
-  mocks.activate.mockClear();
-  mocks.refresh.mockClear();
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset().mockResolvedValue(undefined);
+  }
 });
 afterEach(() => resetGatewayWorkAdmission());
 
-it.each([
-  { reader: "history", lane: historyLane, outcome: "activate" },
-  { reader: "history", lane: historyLane, outcome: "close" },
-  { reader: "maintenance", lane: maintenanceLane, outcome: "activate" },
-  { reader: "maintenance", lane: maintenanceLane, outcome: "close" },
-])(
-  "joins $reader preparation before restored recovery can $outcome",
-  async ({ lane: blockedLane, outcome }) => {
-    const entered = createDeferred();
+it.for(["prewarm", "delivery", "exec"] as const)(
+  "activates healthy subagents while %s waits for another agent database",
+  async (blocked, { signal }) => {
     const prepared = createDeferred();
+    const activated = createDeferred();
     const refreshed = createDeferred();
-    mocks.refresh.mockImplementation(async () => {
-      refreshed.resolve();
-      return null;
-    });
-    mocks.prewarm.mockImplementation(async (_database, lane = historyLane) => {
-      if (lane === blockedLane) {
-        entered.resolve();
-        await prepared.promise;
+    const entered = createDeferred();
+    const context = createContext();
+    const resolveGatewayContext = () => context;
+    const sessionKey = "agent:main:startup-exec-recovery";
+    const sessionId = "startup-exec-recovery";
+    const storePath = "/synthetic/startup-exec-recovery";
+    let operation: ReturnType<typeof createReplyOperation> | undefined;
+    mocks[blocked].mockImplementation(async () => {
+      if (blocked === "exec") {
+        operation = createReplyOperation({
+          sessionKey,
+          sessionId,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope: storePath,
+            sessionKey,
+            incarnation: sessionId,
+          }),
+        });
       }
+      entered.resolve();
+      await prepared.promise;
+      operation?.complete();
     });
     const controller = new AbortController();
-    const activate = mocks.activate;
-    const refresh = mocks.refresh;
-    const registry = createEmptyPluginRegistry();
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    let settled = false;
     const observers = runGatewayStartupObservers({
-      registry,
-      resolveGatewayContext: () => undefined,
-      loadSubagentRegistryActivation: async () =>
-        (await import("../agents/subagents/registry/subagent-registry.js"))
-          .activateSubagentRegistry,
+      registry: createEmptyPluginRegistry(),
+      resolveGatewayContext,
+      loadSubagentRegistryActivation: () => async () => {
+        activated.resolve();
+      },
       createHookRunner: async (...args) =>
         (await import("../plugins/hooks.js")).createHookRunner(...args),
-      refreshLatestUpdateRestartSentinel: async () =>
-        (await import("./server-update-sentinel.js")).prepareLatestUpdateRestartSentinel({}),
+      refreshLatestUpdateRestartSentinel: async () => refreshed.resolve(),
       signal: controller.signal,
       port: 0,
       config: {},
@@ -98,32 +92,29 @@ it.each([
       isClosing: () => controller.signal.aborted,
       log,
       logHooks: log,
+    }).then(() => {
+      settled = true;
     });
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        observers,
-        "restored recovery settled before preparing its transcript reader",
-      );
-      await awaitGateBeforeSettlement(
-        refreshed.promise,
-        observers,
-        "startup observers settled before refreshing the restart sentinel",
-      );
-      expect(activate).not.toHaveBeenCalled();
-      expect(refresh).toHaveBeenCalledOnce();
-      if (outcome === "close") {
-        controller.abort();
+      await withinTest(Promise.all([activated.promise, refreshed.promise]), signal);
+      if (blocked !== "prewarm") {
+        await withinTest(entered.promise, signal);
+        expect(settled).toBe(false);
+      }
+      if (blocked === "exec") {
+        expect(operation).toBeDefined();
+        expect(captureGatewayScopeMatcher(resolveGatewayContext)(operation!)).toBe(true);
+        expect(captureGatewayScopeMatcher(() => context)(operation!)).toBe(false);
       }
       prepared.resolve();
       await observers;
-      expect(activate).toHaveBeenCalledTimes(outcome === "activate" ? 1 : 0);
-      if (outcome === "close" && blockedLane === historyLane) {
-        expect(mocks.prewarm).toHaveBeenCalledOnce();
-      }
+      expect(log.warn).not.toHaveBeenCalled();
     } finally {
+      controller.abort();
       prepared.resolve();
       await observers;
+      operation?.complete();
+      await operation?.ownerSettlement;
     }
   },
 );

@@ -20,6 +20,27 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type { OpenClawConfig, ModelApi, ModelDefinitionConfig, ModelProviderConfig };
+
+/** Seed a media default only when the operator has not selected one. */
+export function applyAgentDefaultMediaModel(
+  cfg: OpenClawConfig,
+  kind: "image" | "video",
+  primary: string,
+): OpenClawConfig {
+  if (cfg.agents?.defaults?.mediaModels?.[kind]) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        mediaModels: { ...cfg.agents?.defaults?.mediaModels, [kind]: { primary } },
+      },
+    },
+  };
+}
 export {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,

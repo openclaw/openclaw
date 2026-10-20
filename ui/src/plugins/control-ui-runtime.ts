@@ -264,6 +264,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.preloads.sync(context.config.current, context.resourceBasePath, (id, error) =>
         this.reportError(id, error),
       );
+    // Owner publications drive asset preloads and revoke obsolete plugin activations synchronously.
     this.stops.push(
       context.config.subscribe(preload),
       context.gateway.subscribe(() => this.syncConnection()),

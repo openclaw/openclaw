@@ -79,10 +79,7 @@ export type SessionCompanionAskDeps = {
       agentId?: string,
     ) => Promise<SessionObserverCompanionSnapshot>;
   };
-  resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   contextReader: SessionCompanionContextReader;
-  run?: (params: SessionCompanionRunParams) => Promise<string>;
-  now?: () => number;
 };
 
 type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {
@@ -335,9 +332,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
 }
 
 export function createSessionCompanionAskRuntime(params: SessionCompanionAskRuntimeParams) {
-  const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
-  const run = params.run ?? defaultRun;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
@@ -521,7 +516,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       assertSourceCurrent?.();
       request.assertInputCurrent?.();
       const cfg = params.getConfig();
-      const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
+      const utilityModelRef = resolveUtilityModelRefForAgent({ cfg, agentId });
       if (!utilityModelRef) {
         throw new SessionCompanionAskError(
           "utility-model-unavailable",
@@ -601,7 +596,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         const modelPolicy = request.operatorAuthority?.modelPolicy;
         if (modelPolicy && !resolveModelCandidateChain(candidateParams).some(modelPolicy.allows)) {
           // Preserve Side chat's permitted-model recovery when the entire utility chain is denied.
-          rawAnswer = await run(runParams);
+          rawAnswer = await defaultRun(runParams);
         } else {
           const result = await runWithModelFallback({
             ...candidateParams,
@@ -613,7 +608,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
               controller.signal.throwIfAborted();
               assertSourceCurrent?.();
               request.assertInputCurrent?.();
-              return run({
+              return defaultRun({
                 ...runParams,
                 modelRef:
                   options?.modelRoutingProvenance.stage === "fallback"
@@ -629,7 +624,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           rawAnswer = result.result;
         }
       } else {
-        rawAnswer = await run(runParams);
+        rawAnswer = await defaultRun(runParams);
       }
       const replySessionId = await currentSessionId(sessionKey, agentId);
       if (activeAsk.cancellation || params.isDisposed()) {

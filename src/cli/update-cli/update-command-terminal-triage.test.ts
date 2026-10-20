@@ -31,10 +31,10 @@ import {
 } from "./update-command-result.js";
 import {
   deferUpdateCommandTerminalResult as deferResult,
-  publishUpdateCommandTerminalResult as publishResult,
   resolveSettledUpdateCommandResult as settleResult,
   withUpdateCommandTerminalResult as withTerminal,
 } from "./update-command-terminal.js";
+import { publishUpdateCommandTerminalResultForTest as publishResult } from "./update-command-terminal.test-support.js";
 import { withUpdateFailureTriage as withTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind as withRecovery } from "./update-command-unwind.js";
 

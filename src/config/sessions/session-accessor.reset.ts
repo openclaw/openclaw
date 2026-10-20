@@ -91,7 +91,6 @@ type ReplySessionInitializationSelection = {
 function loadReplySessionInitializationEntriesForMaintenance(
   params: ReplySessionInitializationSelection,
 ): Record<string, SessionEntry> {
-  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       runSqliteReadSnapshotSync(database.db, () => {

@@ -51,7 +51,7 @@ import {
   retryDeferredSubagentCompletionSource,
 } from "./subagent-registry-gateway-owner.js";
 import * as lifecycleCleanup from "./subagent-registry-lifecycle-cleanup.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import {
   createSubagentStoreRunFixture,
@@ -617,6 +617,7 @@ it.each([false, true])(
         context.resolveGatewayContext = () => context;
         await bindSubagentRunGatewayOwners({
           runs: subagentRuns,
+          entries: [...getSubagentActivationRuns(subagentRuns)],
           resumedRuns: new Set(),
           getGatewayContextResolver: () => context.resolveGatewayContext,
           onRecovered: () => {},

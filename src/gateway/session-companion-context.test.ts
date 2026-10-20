@@ -1,6 +1,8 @@
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -13,11 +15,28 @@ import {
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
+import {
+  companionRuntimeConfig,
+  observeCompanionCleanup,
+  publishCompanionRuntime,
+} from "./session-companion-runtime.test-support.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
+const runLoop = vi.hoisted(() =>
+  vi.fn<
+    (typeof import("../agents/embedded-agent-runner/run-loop.js"))["runPreparedEmbeddedLoop"]
+  >(),
+);
+// mock-isolation: Retain native companion/session preparation; stop before provider I/O.
+vi.mock("../agents/embedded-agent-runner/run-loop.js", () => ({
+  runPreparedEmbeddedLoop: runLoop,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -127,17 +146,23 @@ it.each(
   "cancels $cancellation before prepared context resumes (warm=$warm)",
   async ({ warm, cancellation }) => {
     const scope = await seedScope(`companion-cancel-${cancellation}-${warm}`);
-    const run = vi.fn(async () => "Existing answer.");
+    const cfg = companionRuntimeConfig(
+      { agents: { entries: { main: {} } } },
+      path.join(scope.env.OPENCLAW_STATE_DIR!, "workspace"),
+    );
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(scope.env.OPENCLAW_STATE_DIR!, "openclaw.json"));
+    await publishCompanionRuntime(cfg, process.env.OPENCLAW_CONFIG_PATH);
+    const settleCleanup = observeCompanionCleanup();
+    runLoop.mockReset().mockResolvedValue({
+      meta: { durationMs: 1, finalAssistantVisibleText: "Existing answer." },
+    });
     const service = createSessionCompanion({
-      scheduler: createTestGatewayScheduler(),
-      getConfig: () => ({}),
+      scheduler: createTestGatewayScheduler(createGatewaySchedulerClock(123).clock),
+      getConfig: () => cfg,
       contextReader: defaultSessionCompanionContextReader,
       sessionObserver: {
         getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
       },
-      resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
-      run,
-      now: () => 123,
     });
     const request = {
       agentId: scope.agentId,
@@ -171,7 +196,7 @@ it.each(
               ? "The Side chat request was cancelled."
               : "Side chat could not answer right now.",
       });
-      expect(run).toHaveBeenCalledTimes(warm ? 1 : 0);
+      expect(runLoop).toHaveBeenCalledTimes(warm ? 1 : 0);
       expect(service.state(request)).toEqual({
         exchanges:
           warm && cancellation === "request-abort"
@@ -183,6 +208,10 @@ it.each(
       });
     } finally {
       service.dispose();
+      await settleCleanup();
+      vi.restoreAllMocks();
+      runLoop.mockReset();
+      await resetPreparedModelRuntimeSnapshotsForTest();
     }
   },
 );

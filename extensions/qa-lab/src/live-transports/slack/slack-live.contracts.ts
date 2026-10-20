@@ -229,17 +229,10 @@ export type SlackAuthIdentity = {
 };
 
 export type SlackObservedMessage = {
-  botId?: string;
   channelId: string;
-  matchedScenario?: boolean;
-  scenarioId?: string;
-  scenarioTitle?: string;
   text: string;
-  actionValues?: string[];
   blockText?: string[];
-  threadTs?: string;
   ts: string;
-  userId?: string;
 };
 
 export type SlackApprovalArtifact = {

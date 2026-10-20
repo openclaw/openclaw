@@ -209,7 +209,7 @@ describe("foreground node exec wait budgets", () => {
         expect(nodeTool.getExecutionTimeoutMs?.({ ...args, host: "gateway" })).toBe(expectedMs);
 
         const gatewayTool = pinExecToolTarget(tool, { host: "gateway" });
-        expect(gatewayTool.getExecutionTimeoutMs?.({ ...args, host: "node" })).toBeUndefined();
+        expect(gatewayTool.getExecutionTimeoutMs?.(args)).toBeUndefined();
       }
     },
   );

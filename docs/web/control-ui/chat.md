@@ -450,6 +450,7 @@ immediately. Catalog and account changes invalidate these copies; reconnecting
 loads current choices again. Reopening a picker after a reported cooldown expires
 checks readiness again. A catalog refresh keeps existing controls visible,
 and the Gateway still validates the model and account when starting a run.
+Native session activity reuses the same choices until its model or account binding changes.
 Repeated changes while a model lookup is pending are collected into one
 follow-up lookup for the latest choices.
 
@@ -961,6 +962,8 @@ Session context groups workspace information, pull requests, people, subagents,
 and attached automations; it reuses their existing actions rather than duplicating
 their data. Attached automations appear only when the connected account can read
 automations; accounts with session-only access do not request that inventory.
+Running and scheduled states update from automation events. If an inventory
+refresh is already running, later changes share one follow-up refresh.
 The former pull-request and task-progress bars are not repeated above
 the composer.
 

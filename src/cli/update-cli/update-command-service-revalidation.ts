@@ -17,6 +17,7 @@ import {
   gatewayServiceCommandOverlapsPhysicalInstallation,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
+import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
 import { isGatewayServiceStateLive } from "../../daemon/service-runtime.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
@@ -49,6 +50,7 @@ function matchesStoppedService(
   state: GatewayServiceState,
   inspection: ManagedGatewayUpdateVerdict,
   allowIncompleteInspection = false,
+  matchesRecordedDefinition = false,
 ): boolean {
   const verdict = before.serviceUpdateVerdict;
   const refreshDefinition = verdict?.kind === "owned" && verdict.refreshDefinition;
@@ -73,7 +75,8 @@ function matchesStoppedService(
       before.serviceManagerUid === undefined ||
       (allowIncompleteInspection && observedSystemdManagerUid(state) === undefined) ||
       before.serviceManagerUid === observedSystemdManagerUid(state)) &&
-    (refreshDefinition ||
+    (matchesRecordedDefinition ||
+      refreshDefinition ||
       ("fingerprint" in inspection && inspection.fingerprint === verdict.fingerprint)),
   );
 }
@@ -294,10 +297,24 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   allowInstallRootChange?: boolean;
   /** Restoration still rejects observed identity drift when a native probe fails. */
   allowIncompleteInspection?: boolean;
+  /** Exact native-writer result from this maintenance session, never a saved grant. */
+  expectedDefinitionFingerprint?: string;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const before = params.preManagedServiceStop;
   const verdict = before?.serviceUpdateVerdict;
   assertGatewayServiceManagementAllowedForUpdate(params.state.env);
+  if (
+    params.expectedDefinitionFingerprint !== undefined &&
+    (await fingerprintGatewayServiceDefinition(params.state.command)) !==
+      params.expectedDefinitionFingerprint
+  ) {
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service definition changed after its recorded repair; inspect it before restarting.",
+      undefined,
+      undefined,
+      "service-ownership-changed",
+    );
+  }
   const managerUid = observedSystemdManagerUid(params.state);
   if (
     params.allowIncompleteInspection &&
@@ -352,7 +369,13 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     (verdict.kind === "owned" || verdict.kind === "unresolved") &&
     !(params.allowIncompleteInspection && inspection.kind === "unavailable") &&
     (inspection.kind !== verdict.kind ||
-      !matchesStoppedService(before, params.state, inspection, params.allowIncompleteInspection))
+      !matchesStoppedService(
+        before,
+        params.state,
+        inspection,
+        params.allowIncompleteInspection,
+        params.expectedDefinitionFingerprint !== undefined,
+      ))
   ) {
     const unavailable = inspection.kind === "unavailable";
     throw new GatewayServiceUpdateOwnershipError(

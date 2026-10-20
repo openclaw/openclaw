@@ -7,6 +7,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
@@ -52,7 +53,6 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import { VERSION } from "../version.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";

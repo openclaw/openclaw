@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isDeepStrictEqual } from "node:util";
 import {
   sessionRowChangeSource,
   type SessionRowChange,
@@ -46,6 +47,40 @@ const unknownSharingAuthorities = resolveGlobalSet<string>(
   Symbol.for("openclaw.unknownSessionSharingAuthorities"),
   "close-and-restart",
 );
+
+/** ID selection cannot pass a worker commit whose identity facts are not yet published. */
+export function isSessionIdSelectionPublished(params: {
+  databaseIdentity: string;
+  sessionId: string;
+  sessionKey?: string;
+}): boolean {
+  const prefix = `${params.databaseIdentity}\0`;
+  for (const key of unknownSharingAuthorities) {
+    if (key.startsWith(prefix)) {
+      return false;
+    }
+  }
+  for (const [key, publications] of pendingSessionEntryPublications) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const sessionKey = key.slice(prefix.length);
+    for (const publication of publications) {
+      if (
+        !publication.settled &&
+        !publication.superseded.has(sessionKey) &&
+        !publication.generationUnchanged.has(sessionKey) &&
+        (sessionKey === params.sessionKey ||
+          !publication.entryPostimages?.has(sessionKey) ||
+          publication.entryPostimages.get(sessionKey)?.sessionId?.trim() ===
+            params.sessionId.trim())
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
 
 /** A fresh snapshot cannot settle a write whose outcome the authority owner lost. */
 export function markSessionSharingAuthorityUnknown(
@@ -253,26 +288,44 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   reads.add(read);
   preparedSharingReads.set(key, reads);
   let active = true;
-  const pending = (membership: boolean, staged = read.pending) =>
-    staged.size > 0 ||
-    [...(pendingSessionEntryPublications.get(key) ?? [])].some(
-      (publication) =>
-        !publication.settled &&
-        ((!publication.superseded.has(params.sessionKey) &&
-          (!membership || !publication.sharingUnchanged.has(params.sessionKey))) ||
-          (membership && publication.membershipInvalidated.has(params.sessionKey))),
-    );
-  // Generation readers compare only sessionId and lifecycleRevision, so a publication
-  // whose committed rows prove both unchanged cannot alter a synchronous generation read.
-  // prepareRead still joins every pending publication: owners order effects after it.
-  const generationPending = () =>
+  const pending = () =>
     read.pending.size > 0 ||
     [...(pendingSessionEntryPublications.get(key) ?? [])].some(
       (publication) =>
         !publication.settled &&
-        !publication.superseded.has(params.sessionKey) &&
-        !publication.generationUnchanged.has(params.sessionKey),
+        ((!publication.superseded.has(params.sessionKey) &&
+          !publication.sharingUnchanged.has(params.sessionKey)) ||
+          publication.membershipInvalidated.has(params.sessionKey)),
     );
+  // Unchanged identity and settings remain usable during unrelated metadata writes.
+  // prepareRead still joins publications; pending policy changes cannot donate old grants.
+  const generationPending = (settings = false) =>
+    read.pending.size > 0 ||
+    [...(pendingSessionEntryPublications.get(key) ?? [])].some((publication) => {
+      if (publication.settled) {
+        return false;
+      }
+      if (settings && publication.membershipInvalidated.has(params.sessionKey)) {
+        return true;
+      }
+      if (publication.superseded.has(params.sessionKey)) {
+        return false;
+      }
+      if (!publication.generationUnchanged.has(params.sessionKey)) {
+        return true;
+      }
+      if (!settings || publication.sharingUnchanged.has(params.sessionKey)) {
+        return false;
+      }
+      const entry = publication.entryPostimages?.get(params.sessionKey);
+      const current = read.generation?.current;
+      return (
+        !entry ||
+        !current ||
+        entry.permissionMode !== current.permissionMode ||
+        !isDeepStrictEqual(entry.toolOverrides, current.toolOverrides)
+      );
+    });
   const predicatePending = () =>
     (read.predicate?.pending.size ?? 0) > 0 ||
     [...(pendingSessionEntryPublications.get(key) ?? [])].some((publication) => {
@@ -330,9 +383,9 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       read.facts = { entry, membership: new Set() };
     },
     readGeneration: () => (active && !generationPending() ? read.generation?.current : undefined),
-    readGenerationSettings: () => (active && !pending(true) ? read.generation?.current : undefined),
-    readCurrent: () =>
-      pending(true) || unknownSharingAuthorities.has(key) ? undefined : read.facts,
+    readGenerationSettings: () =>
+      active && !generationPending(true) ? read.generation?.current : undefined,
+    readCurrent: () => (pending() || unknownSharingAuthorities.has(key) ? undefined : read.facts),
     release: () => {
       if (!active) {
         return;

@@ -123,19 +123,7 @@ type SidebarPresentationReaders = {
   ownerOptions(): readonly SessionOwnerOption[];
 };
 
-/** Attention, agent-declared status, and the queued explanation are messages
- * the operator must act on; they replace a held subtitle immediately. */
-function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
-  return Boolean(
-    sessionAttentionSubtitle(session.attention) ||
-    session.agentStatusNote ||
-    (session.hasActiveRun && session.status === "queued"),
-  );
-}
-
 export class SidebarSessionProjection {
-  constructor(private readonly now: () => number = () => Date.now()) {}
-
   // Record frame admission only; owner.updated can precede child DOM bindings.
   private publishedSessionPresentation = "";
   private admittedPresencePresentation = "";
@@ -668,12 +656,18 @@ export class SidebarSessionProjection {
       return;
     }
     const held = this.heldSubtitles.get(session.key);
-    const now = this.now();
+    const now = Date.now();
     const replacing = held !== undefined && held.value.subtitle !== value.subtitle;
+    // Attention, agent-declared status, and the queued explanation require
+    // action; they replace a held subtitle immediately.
     if (
       replacing &&
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
-      !isOperatorCriticalSubtitle(session)
+      !(
+        sessionAttentionSubtitle(session.attention) ||
+        session.agentStatusNote ||
+        (session.hasActiveRun && session.status === "queued")
+      )
     ) {
       this.subtitleDeadline = Math.min(
         this.subtitleDeadline,

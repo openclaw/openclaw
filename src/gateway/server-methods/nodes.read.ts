@@ -32,7 +32,7 @@ import { nodeInvokePolicy } from "./nodes-policy.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function safeNodeReadProjection(
   node: NodeListNode,
@@ -247,35 +247,29 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
   },
   "plugin.surface.refresh": handlePluginSurfaceRefresh,
   "node.pluginSurface.refresh": handlePluginSurfaceRefresh,
-  "node.pluginTools.update": async ({ params, respond, client, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateNodePluginToolsUpdateParams,
-        "node.pluginTools.update",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const nodeId = normalizeOptionalString(
-      client?.connect?.device?.id ?? client?.connect?.client?.id,
-    );
-    if (!nodeId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
-      return;
-    }
-    const updated = context.nodeRegistry.updateNodePluginTools(
-      nodeId,
-      client?.connId,
-      params.tools,
-    );
-    if (!updated) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
-      return;
-    }
-    respond(true, { nodeId, tools: updated.nodePluginTools }, undefined);
-  },
+  "node.pluginTools.update": defineValidatedGatewayHandler(
+    "node.pluginTools.update",
+    validateNodePluginToolsUpdateParams,
+    async ({ params, respond, client, context }) => {
+      const nodeId = normalizeOptionalString(
+        client?.connect?.device?.id ?? client?.connect?.client?.id,
+      );
+      if (!nodeId) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+        return;
+      }
+      const updated = context.nodeRegistry.updateNodePluginTools(
+        nodeId,
+        client?.connId,
+        params.tools,
+      );
+      if (!updated) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+        return;
+      }
+      respond(true, { nodeId, tools: updated.nodePluginTools }, undefined);
+    },
+  ),
   "node.skills.update": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateNodeSkillsUpdateParams, "node.skills.update", respond)) {
       return;

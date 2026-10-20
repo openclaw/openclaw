@@ -5,7 +5,7 @@ import type {
   ThemeWorkingIndicator,
 } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../../../app/theme-branding.ts";
-import "../../../components/elapsed-time.tsx";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
 import "../../../components/working-phrase.ts";
@@ -16,9 +16,9 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
+import { ChatRetryStatus } from "./chat-retry-status.tsx";
 import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
-import "./chat-retry-status.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
 type ReadingIndicator = Extract<ChatItem, { kind: "reading-indicator" }>;
@@ -135,7 +135,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
             when={!waitingApproval() && props.options.retryAt !== undefined}
             fallback={statusLabel()}
           >
-            <openclaw-chat-retry-status prop:retryAt={props.options.retryAt} />
+            <ChatRetryStatus retryAt={props.options.retryAt ?? null} />
           </Show>
         </span>
         <Show
@@ -152,10 +152,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
           <Show when={props.options.startupLabel || props.options.outputTokens != null}>
             <span aria-hidden="true">·</span>
           </Show>
-          <openclaw-elapsed-time
-            class="chat-working-indicator__elapsed"
-            prop:startMs={props.part.startedAt}
-          />
+          <ElapsedTime class="chat-working-indicator__elapsed" startMs={props.part.startedAt} />
         </Show>
         <Show when={props.options.outputTokens == null && working()}>
           <openclaw-working-phrase
@@ -225,7 +222,16 @@ export function ChatWorkingIndicator(props: WorkingProps) {
         </Show>
       }
     >
-      <ChatSubagentActivity {...props.options.subagentActivity!} />
+      <ChatSubagentActivity
+        {...props.options.subagentActivity!}
+        fallback={
+          <WorkingStatus
+            part={props.part}
+            options={{ ...props.options, subagentActivity: undefined }}
+            branding={branding.read()}
+          />
+        }
+      />
     </Show>
   );
 }

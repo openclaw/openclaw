@@ -9,12 +9,18 @@ import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   retainGatewayRootWorkAdmissionContinuation,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import {
+  issueProviderReviewAcknowledgment,
+  recordSessionProviderReview,
+  retireProviderReviewAcknowledgment,
+} from "../../sessions/provider-review.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import {
   retireSessionControllerInput,
@@ -22,19 +28,75 @@ import {
 } from "../../sessions/session-controller.mailbox.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+} from "../../state/agent-database-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
   retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import * as restartRecovery from "./chat-restart-recovery.js";
+import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
+import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
 import {
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
 } from "./chat-send-work-admission.js";
 import { registerRpcSourceForTest } from "./rpc-source-fixtures.test-support.js";
+
+it.each([
+  new AgentDatabaseAdmissionError(
+    createAgentDatabaseInspectionRefusal({
+      agentId: "main",
+      paths: ["/isolated/main.sqlite"],
+      reason: "Inspection pending.",
+      pending: true,
+    }),
+  ),
+  new AgentDatabaseAdmissionError(
+    createAgentDatabaseInspectionRefusal({
+      agentId: "main",
+      paths: ["/isolated/main.sqlite"],
+      reason: "Inspection refused.",
+      pending: false,
+    }),
+  ),
+  new SessionMutationAuthorizationChangedError({ code: "FORBIDDEN", message: "Access changed." }),
+  new Error("Unclassified admission failure"),
+  Object.assign(new Error("Validation failed"), { retryable: false }),
+  Object.assign(new Error("Not a canonical worker outcome"), { code: "outcome-unknown" }),
+])("keeps non-storage admission failures RPC-only: %s", (error) => {
+  const respond = vi.fn();
+  const terminal = vi.fn();
+  respondChatSendAdmissionError(error, respond, terminal);
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: error instanceof AgentDatabaseAdmissionError ? "UNAVAILABLE" : "INVALID_REQUEST",
+    }),
+  );
+  expect(terminal).not.toHaveBeenCalled();
+});
+
+it.each([
+  Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+  Object.assign(new Error("No space left on device"), { code: "ENOSPC" }),
+  Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
+  new SqliteWorkerError("Persistence outcome is unknown", "outcome-unknown"),
+  new AggregateError([new SqliteWorkerError("Persistence outcome is unknown", "outcome-unknown")]),
+])("publishes classified storage admission failures: %s", (error) => {
+  const respond = vi.fn();
+  const terminal = vi.fn();
+  respondChatSendAdmissionError(error, respond, terminal);
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, expect.anything());
+  expect(terminal).toHaveBeenCalledOnce();
+});
 
 describe("retained chat work admission", () => {
   afterEach(resetGatewayWorkAdmission);
@@ -200,26 +262,67 @@ describe("retained chat work admission", () => {
   );
 });
 
-it.each(["active", "queued"] as const)(
-  "keeps Goal admission scoped to its physical store with %s work",
-  (kind) =>
+it.each([
+  { kind: "active", review: false },
+  { kind: "queued", review: false },
+  { kind: "active", review: true },
+  { kind: "queued", review: true },
+] as const)(
+  "refuses exclusive admission without a terminal for $kind work (provider review=$review)",
+  ({ kind, review }) =>
     withOpenClawTestState({ label: "exclusive-store-scope" }, async () => {
       const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg, cfg);
       const sessionKey = "agent:main:exclusive-store-scope";
       const sessionId = "same-incarnation";
       replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
-      const { request, session } = await prepareChatAdmission({
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const prepared = await prepareChatAdmission({
         client: null,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        context,
         params: {
           sessionKey,
           message: "Complete the synthetic goal",
           idempotencyKey: "exclusive-store-goal",
-          intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
+          ...(!review && {
+            intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
+          }),
         },
       });
-      expect(request.goalOperation?.action).toBe("start");
+      const { request, session } = prepared;
+      const target = {
+        agentId: "main",
+        sessionKey,
+        sessionId,
+        storePath: session.storePath,
+        lifecycleRevision: session.entry?.lifecycleRevision,
+      };
+      const providerReview = review
+        ? await recordSessionProviderReview({
+            target,
+            refusal: {
+              runId: "failed-run",
+              provider: "openai",
+              model: "gpt-5.6-sol",
+              runtimeId: "openclaw",
+              api: "openai-chatgpt-responses",
+              review: {
+                explanation: "Review the operation.",
+                continuation: { message: "Continue" },
+              },
+            },
+            assertCurrent: () => {},
+          })
+        : undefined;
+      const acknowledgment = providerReview
+        ? await issueProviderReviewAcknowledgment({
+            target,
+            reviewId: providerReview.id,
+            nextRunId: session.clientRunId,
+            assertCurrent: () => {},
+          })
+        : undefined;
+      request.providerReviewAcknowledgment = acknowledgment;
       const operations: ReplyOperation[] = [];
       const inputs: SessionControllerInput[] = [];
       const occupy = (storePath: string) => {
@@ -250,10 +353,21 @@ it.each(["active", "queued"] as const)(
         occupy(`${session.storePath}.foreign`);
         expect(() => assertChatSendExclusiveAdmission(request, session)).not.toThrow();
         occupy(session.storePath);
-        expect(() => assertChatSendExclusiveAdmission(request, session)).toThrow(
-          "goal-session-busy",
+        const respond = vi.fn();
+        await expect(admitChatSend({ ...prepared, respond })).resolves.toEqual({ ok: false });
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: review ? "INVALID_REQUEST" : "UNAVAILABLE",
+            message: expect.stringContaining(review ? "active work" : "active or queued work"),
+          }),
         );
+        expect(context.broadcast).not.toHaveBeenCalled();
       } finally {
+        if (acknowledgment) {
+          retireProviderReviewAcknowledgment(acknowledgment);
+        }
         for (const input of inputs) {
           retireSessionControllerInput(input);
         }

@@ -191,7 +191,7 @@ describe("session workspace state", () => {
       agentId: "main",
     });
     const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-    expect(skeleton).toMatchObject({ variant: "files" });
+    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("files");
     expect(mount.textContent).not.toContain("Loading session workspace");
 
     list.resolve({
@@ -300,6 +300,36 @@ describe("session workspace state", () => {
     await vi.waitFor(() => expect(workspaceProps(state).list).not.toBeNull());
     expect(listFiles).toHaveBeenCalledTimes(2);
     expect(workspaceProps(state).error).toBeNull();
+  });
+
+  it("retries the current query once when its search timer is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const listFiles = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("temporary failure"))
+        .mockResolvedValue({ sessionKey: "agent:main:current", files: [] });
+      const state = createLoadingHost({ listFiles });
+      workspaceProps(state, { expanded: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(workspaceProps(state).error).toBe("temporary failure");
+
+      const props = workspaceProps(state);
+      props.onSearch("checklist");
+      props.onRetry();
+      await vi.advanceTimersByTimeAsync(160);
+
+      expect(listFiles).toHaveBeenCalledTimes(2);
+      expect(listFiles).toHaveBeenLastCalledWith("agent:main:current", {
+        agentId: "main",
+        path: "",
+        search: "checklist",
+      });
+      expect(workspaceProps(state).browserSearch).toBe("checklist");
+      expect(workspaceProps(state).error).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

@@ -56,6 +56,15 @@ then collect separate traced runs for the storyboard and attribution.
 `--large-snapshot` expands the transcript to 1,100 synthetic messages (about 3 MB),
 including tool results and replay metadata. Combine it with `--warm-reload` to
 exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted row count.
+`--transcript-messages 400` selects a specific positive message count instead.
+
+`--session-switch` clicks the first recent session after the other measured phases.
+It opens another 400-message transcript when paired with `--transcript-messages 400`,
+using the same synthetic history and native sidebar navigation. The phase ends once
+the target pane and inline preview are visible and pending wire work has been quiet
+for 750 ms. It records task/script/layout/style CPU and interval RPCs in `sessionSwitch`,
+plus a separate source-mapped `session-switch` profile with `--cpu-profile`.
+This measures a first switch to that session in the current document, not a warm return.
 
 The dashboard fixture includes reaction pickers, widget actions, context usage,
 and viewers. Use `--warm-reload` to measure its cached restore. Transaction labels

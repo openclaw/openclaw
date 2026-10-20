@@ -1,14 +1,20 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -23,6 +29,7 @@ import {
 } from "../sessions/session-controller.rpc-sources.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as agentContent from "./agent-turn/agent-content-phase.js";
 import * as chatRestartRecovery from "./server-methods/chat-restart-recovery.js";
 import * as chatAdmission from "./server-methods/chat-send-admission.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
@@ -93,7 +100,7 @@ async function seedInterruptedSession(
     sessionId: string;
     message: string;
     provenance?: InputProvenance;
-    patch?: Partial<SessionEntry>;
+    patch?: Partial<InternalSessionEntry>;
   },
 ) {
   const target = { storePath: fixture.storePath, sessionKey: params.sessionKey };
@@ -440,18 +447,43 @@ async function interruptWinsOverOwedResend(fixture: Fixture) {
   expect(resendTurns(owed)).toHaveLength(0);
 }
 
-async function interruptCancelsWaitingResend(fixture: Fixture) {
+async function interruptCancelsWaitingResend(fixture: Fixture, signal: AbortSignal) {
   const sessionKey = "agent:main:boundary-interrupt-waiting";
   const sessionId = "boundary-interrupt-waiting-session";
   const owed = "Waiting-interrupt case: owed interrupted task.";
   const user = "Waiting-interrupt case: newest message.";
   await seedInterruptedSession(fixture, { sessionKey, sessionId, message: owed });
   const releaseLane = holdRecoveryLane(sessionKey);
+  const preparing = createDeferred();
+  const releasePreparation = createDeferred();
+  const prepare = agentContent.prepareAgentContentPhase;
+  // Interrupt after source registration, before the later admission revalidator
+  // can publish cancellation on behalf of unfinished preparation.
+  const held = vi
+    .spyOn(agentContent, "prepareAgentContentPhase")
+    .mockImplementationOnce(async (params) => {
+      const content = await prepare(params);
+      preparing.resolve();
+      await releasePreparation.promise;
+      return content;
+    });
   const recovery = runStartupRecovery(fixture);
   let resendRunId: string;
   const runId = "boundary-interrupt-waiting-user";
   try {
-    ({ runId: resendRunId } = await waitForResendSource(fixture, sessionKey));
+    await withinTest(
+      awaitGateBeforeSettlement(
+        preparing.promise,
+        recovery,
+        "Restart resend ended before content preparation",
+      ),
+      signal,
+    );
+    resendRunId = expectDefined(
+      readEntry(fixture, sessionKey)?.restartRecoveryDeliveryRunId,
+      "prepared restart resend",
+    );
+    const source = expectDefined(getRpcSource(resendRunId), "registered restart resend");
     expect(resendTurns(owed)).toHaveLength(0);
     await expect(
       fixture.client.request("chat.send", {
@@ -463,7 +495,10 @@ async function interruptCancelsWaitingResend(fixture: Fixture) {
         idempotencyKey: runId,
       }),
     ).resolves.toMatchObject({ runId, interruptedActiveRun: true });
+    expect(source.input.abortSignal.aborted).toBe(true);
   } finally {
+    releasePreparation.resolve();
+    held.mockRestore();
     releaseLane();
   }
   // The dispatcher reports the stopped resend as settled, not as a failed attempt.
@@ -609,8 +644,69 @@ async function steerQueuesBehindRestartSafeResend(fixture: Fixture) {
   expect(resendTurns(owed)[0]).not.toContain(steer);
 }
 
+async function resetRestoresMainAfterRecoveryArchival(fixture: Fixture) {
+  const sessionKey = "agent:main:main";
+  const sessionId = "boundary-archived-main";
+  const owed = "Archived Main case: interrupted task retained in history.";
+  const fresh = "Archived Main case: fresh task after explicit reset.";
+  const target = { agentId: "main", storePath: fixture.storePath, sessionKey, sessionId };
+  await seedInterruptedSession(fixture, {
+    sessionKey,
+    sessionId,
+    message: owed,
+    patch: {
+      mainRestartRecovery: { cycleId: sessionId, revision: 1, chargedAttempts: 3 },
+    },
+  });
+  // Run the real startup owner from persisted restart state, then use the public recovery API.
+  await expect(runStartupRecovery(fixture)).resolves.toMatchObject({ started: 0, failed: 0 });
+  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery?.tombstone).toBeDefined();
+  const recovered = await fixture.client.request<SessionsRecoverResult>("sessions.recover", {
+    key: sessionKey,
+    mode: "new-session",
+  });
+  expect(recovered.key).not.toBe(sessionKey);
+  expect(recovered.continuation.status).toBe("started");
+  if (recovered.continuation.status === "started") {
+    await expect(
+      fixture.client.request("agent.wait", {
+        runId: recovered.continuation.runId,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ status: "ok" });
+  }
+  expect(readEntry(fixture, sessionKey)).toMatchObject({
+    sessionId,
+    archivedAt: expect.any(Number),
+    archiveReason: "restart-recovery",
+  });
+  const retained = await loadTranscriptEvents(target);
+  await expect(
+    fixture.client.request("sessions.reset", { key: sessionKey, expectedSessionId: sessionId }),
+  ).resolves.toMatchObject({ ok: true });
+  const reset = readEntry(fixture, sessionKey);
+  expect(reset?.sessionId).toBe(sessionId);
+  expect(reset?.archivedAt).toBeUndefined();
+  expect(reset?.mainRestartRecovery).toBeUndefined();
+  const afterReset = await loadTranscriptEvents(target);
+  expect(afterReset.slice(0, retained.length)).toEqual(retained);
+  expect(afterReset.slice(retained.length)).toContainEqual(
+    expect.objectContaining({ type: "reset", reason: "reset" }),
+  );
+  const runId = "boundary-archived-main-fresh";
+  await fixture.client.request("chat.send", {
+    sessionKey,
+    sessionId,
+    message: fresh,
+    deliver: false,
+    idempotencyKey: runId,
+  });
+  await waitForChatTurn(runId, fresh);
+  expect(promptTurns(fresh)[0]).not.toContain(owed);
+}
+
 // The test runtime resets plugin state after each test, so one test owns the Gateway.
-it("orders, joins, and cancels restart resends through the session mailbox", async () => {
+it("orders, joins, and cancels restart resends through the session mailbox", async ({ signal }) => {
   const token = "startup-recovery-boundary-token";
   const state = await createOpenClawTestState({
     label: "startup-recovery-boundary",
@@ -720,10 +816,11 @@ it("orders, joins, and cancels restart resends through the session mailbox", asy
     await sameIdRetryJoinsPreparedResend(fixture);
     await stopCancelsWaitingResend(fixture);
     await interruptWinsOverOwedResend(fixture);
-    await interruptCancelsWaitingResend(fixture);
+    await interruptCancelsWaitingResend(fixture, signal);
     await interruptEndsRunningResend(fixture);
     await interruptSurvivesInterruptedTurnCleanup(fixture);
     await steerQueuesBehindRestartSafeResend(fixture);
+    await resetRestoresMainAfterRecoveryArchival(fixture);
   } finally {
     for (const gate of holds.values()) {
       gate.resolve();

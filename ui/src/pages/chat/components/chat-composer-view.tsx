@@ -2,17 +2,20 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
+import { McpAppResources } from "../../../components/mcp-app-resources.tsx";
+import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import "../../../styles/chat/composer-surface.css";
-import "../../../components/mcp-app-catalog.tsx";
-import "../../../components/solid/mcp-app-context-strip.tsx";
-import "../../../components/mcp-app-resources.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import "../../../styles/chat/composer-context-strip.css";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
@@ -57,6 +60,7 @@ export function renderChatComposerView(
   const footerControl = createFooterControlRef();
   const ComposerTextarea = (view: ComposerTextareaProps) =>
     renderComposerTextarea(context, props, state, view);
+  const inputHandle = createChatAttachmentInputHandle();
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
@@ -66,7 +70,6 @@ export function renderChatComposerView(
     },
   );
 
-  const activeSession = createMemo(() => props.selectedSession);
   const resumeRecovery = createMemo(() => {
     const recovery = props.goalRecovery;
     return recovery?.action === "resume" &&
@@ -75,7 +78,6 @@ export function renderChatComposerView(
       ? recovery
       : undefined;
   });
-  const composerControls = createMemo(() => props.composerControls ?? undefined);
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
@@ -91,9 +93,7 @@ export function renderChatComposerView(
       props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode !==
       "environment",
   );
-  const slashMenuAnnouncementId = createMemo(() =>
-    paneDomId(props.paneId, "slash-active-announcement"),
-  );
+  const slashMenuAnnouncementId = () => paneDomId(props.paneId, "slash-active-announcement");
   // Owner refreshes replace the banner and callback values, not the focused action's DOM.
   const disabledBanner = (
     <Show when={props.disabledBanner?.presentation !== "hidden" ? props.disabledBanner : undefined}>
@@ -167,7 +167,7 @@ export function renderChatComposerView(
   const showComposerInput = createMemo(
     () => context().showComposer && props.disabledBanner?.kind !== "composer-replacement",
   );
-  const disabledReasonId = createMemo(() => paneDomId(props.paneId, "disabled-reason"));
+  const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
     showComposerInput() ? (
       <>
@@ -189,11 +189,11 @@ export function renderChatComposerView(
       </>
     ) : undefined,
   );
-  const composerError = createMemo(() => context().mentionError || context().interaction.error());
-  const predictionAnnouncement = createMemo(() => {
+  const composerError = () => context().mentionError || context().interaction.error();
+  const predictionAnnouncement = () => {
     const text = context().predictionText;
     return text ? t("chat.composer.predictionAvailable", { text }) : "";
-  });
+  };
   const primaryComposerStatus = createMemo(() =>
     props.disabledReason
       ? {
@@ -235,7 +235,10 @@ export function renderChatComposerView(
   });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
   return (
-    <div ref={footerControl} class="agent-chat__composer-shell">
+    <div
+      class="agent-chat__composer-shell"
+      ref={[footerControl, elementRef(props.onComposerShellRef)]}
+    >
       <div class="chat-footer__context">
         {props.footerContent}
         <div class="agent-chat__composer-notices">
@@ -325,7 +328,10 @@ export function renderChatComposerView(
             onPointerDown={(event: PointerEvent) =>
               focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
-            ref={context().state.composerInputRef ?? undefined}
+            ref={[
+              context().state.composerInputRef ?? undefined,
+              createBackgroundLayoutRef("composer"),
+            ]}
           >
             {context().menus.slashMenuVisible ? (
               <SlashMenu
@@ -348,15 +354,12 @@ export function renderChatComposerView(
             <div class="agent-chat__composer-lede">
               {props.sessionAdmitted === false ? undefined : (
                 <>
-                  <openclaw-mcp-app-catalog
+                  <McpAppCatalog
                     surface="thread"
-                    prop:sessionKey={props.sessionKey}
-                    prop:agentId={props.currentAgentId}
+                    sessionKey={props.sessionKey}
+                    agentId={props.currentAgentId}
                   />
-                  <openclaw-mcp-app-resources
-                    prop:sessionKey={props.sessionKey}
-                    prop:agentId={props.currentAgentId}
-                  />
+                  <McpAppResources sessionKey={props.sessionKey} agentId={props.currentAgentId} />
                 </>
               )}
               <GoalComposerMode composer={context().goalComposer} />
@@ -396,10 +399,7 @@ export function renderChatComposerView(
                 </div>
               ) : undefined}
               {props.sessionAdmitted === false ? undefined : (
-                <openclaw-mcp-app-context-strip
-                  prop:sessionKey={props.sessionKey}
-                  prop:agentId={props.currentAgentId}
-                />
+                <McpAppContextStrip sessionKey={props.sessionKey} agentId={props.currentAgentId} />
               )}
               <AttachmentPreview {...props} readRevision={context().attachmentReadRevision} />
               <AttachmentReadStatus
@@ -410,6 +410,7 @@ export function renderChatComposerView(
               <ComposerDictationStatus readDictation={() => context().dictation} />
               <ChatAttachmentInputs
                 {...props}
+                inputHandle={inputHandle}
                 disabled={!context().canCompose}
                 cameraActive={context().showComposer && props.cameraActive !== false}
               />
@@ -517,6 +518,7 @@ export function renderChatComposerView(
                 <ChatComposerPlusMenu
                   menu={{
                     attachments: props,
+                    inputHandle,
                     capabilityMenu: props.capabilityMenu,
                     disabled: !context().canCompose || props.suggestionComposer === true,
                     open: capabilityOpen(),
@@ -536,12 +538,12 @@ export function renderChatComposerView(
               <div class="agent-chat__composer-trail">
                 <div class="agent-chat__composer-meta agent-chat__composer-context">
                   <ContextNotice
-                    session={activeSession()}
+                    session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}
                   />
                 </div>
-                <Show when={composerControls()}>
+                <Show when={props.composerControls}>
                   {(controls) => {
                     const Controls = dynamic(() => controls().component);
                     return (

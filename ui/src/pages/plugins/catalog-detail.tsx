@@ -66,6 +66,7 @@ function CatalogDetailContent(props: {
   value: PluginDiscoveryDetailResult;
   state: PluginCatalogDetailProps;
 }) {
+  let installButton: HTMLButtonElement | undefined;
   const plugin = () => props.value.plugin;
   const detail = () => props.value.detail;
   const installing = () =>
@@ -100,9 +101,13 @@ function CatalogDetailContent(props: {
       titleAction={
         <>
           {plugin().local.action === "install" || installing() ? (
-            <ReasonedDisabledControl reason={props.state.installBlockedReason}>
+            <ReasonedDisabledControl
+              reason={props.state.installBlockedReason}
+              descriptionTarget={() => installButton ?? null}
+            >
               <PluginInstallAction
                 registerInstallAction={props.state.registerInstallAction}
+                onButtonRef={(element) => (installButton = element)}
                 buttonClass="btn oc-action plugin-catalog-detail__install"
                 primary
                 disabled={!props.state.canInstall}

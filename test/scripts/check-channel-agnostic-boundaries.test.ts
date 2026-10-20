@@ -88,6 +88,11 @@ describe("check-channel-agnostic-boundaries", () => {
 
   it.each([
     {
+      name: "namespace thread-binding import",
+      source: 'import * as bindings from "../discord/monitor/thread-bindings.js";',
+      reason: 'imports channel module "../discord/monitor/thread-bindings.js"',
+    },
+    {
       name: "commented dynamic import with attributes",
       source: 'await import /* gap */ ("../discord/private.js", { with: { type: "json" } });',
       reason: 'dynamically imports channel module "../discord/private.js"',

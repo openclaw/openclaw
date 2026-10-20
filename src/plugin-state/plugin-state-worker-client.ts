@@ -21,6 +21,7 @@ import {
   observationFromCachedPluginState,
   preparePluginStateEntriesCacheRead,
   preparePluginStateObservationCacheRead,
+  prepareRuntimeHealthClearCache,
   readPluginStateEntriesCache,
   readPluginStateObservationCache,
 } from "./plugin-state-observation-cache.js";
@@ -178,6 +179,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   let publication: ReturnType<typeof beginPluginStatePublication> | undefined;
   let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
   let installEntries: ReturnType<typeof preparePluginStateEntriesCacheRead> | undefined;
+  let healthClearCache: ReturnType<typeof prepareRuntimeHealthClearCache> | undefined;
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
@@ -213,11 +215,16 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       (typedCommand.type === "pluginState.observe" ||
         typedCommand.type === "pluginState.lookup" ||
         typedCommand.type === "pluginState.lookupMany" ||
-        typedCommand.type === "pluginState.entries")
+        typedCommand.type === "pluginState.entries" ||
+        typedCommand.type === "pluginState.clearRuntimeHealth")
     ) {
       const identity = context.admission.identity.key;
+      if (typedCommand.type === "pluginState.clearRuntimeHealth") {
+        healthClearCache = prepareRuntimeHealthClearCache(identity, typedCommand.input);
+      }
       const keys =
-        typedCommand.type === "pluginState.entries"
+        typedCommand.type === "pluginState.entries" ||
+        typedCommand.type === "pluginState.clearRuntimeHealth"
           ? []
           : typedCommand.type === "pluginState.lookupMany"
             ? typedCommand.input.keys
@@ -231,7 +238,8 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       );
       if (
         cached.every((entry) => entry !== undefined) &&
-        (typedCommand.type !== "pluginState.entries" || cachedEntries !== undefined)
+        (typedCommand.type !== "pluginState.entries" || cachedEntries !== undefined) &&
+        (typedCommand.type !== "pluginState.clearRuntimeHealth" || healthClearCache?.cleared)
       ) {
         const terminalFailure =
           openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(databasePath);
@@ -244,6 +252,10 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         assertAdmission?.();
         // Quarantine revokes these admitted facts; the worker owns refusal and recovery.
         if (hasSqliteDatabaseSchemaAdmissionForIdentity(context.admission.identity)) {
+          if (typedCommand.type === "pluginState.clearRuntimeHealth") {
+            // SAFETY: Only a successfully acknowledged clear has this void result.
+            return undefined as PluginStateWorkerRequests[Key]["output"];
+          }
           if (typedCommand.type === "pluginState.entries") {
             // SAFETY: Only the entries command reaches this namespace result branch.
             return cachedEntries as PluginStateWorkerRequests[Key]["output"];
@@ -349,6 +361,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
       }
+      healthClearCache?.complete();
       if (command.type === "pluginState.observe") {
         const observation =
           // SAFETY: The command discriminant fixes this worker result's private row envelope.

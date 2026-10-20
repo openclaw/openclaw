@@ -3,7 +3,7 @@ import {
   handleChatSelectionPointerUp,
   removeChatSelectionPopup,
   showChatAnnotationEditor,
-} from "./chat-selection-popup.ts";
+} from "./chat-selection-popup.tsx";
 
 // JSDOM ranges have no layout; give the popup a fixed anchor.
 beforeAll(() => {
@@ -118,6 +118,7 @@ describe("chat selection popup", () => {
     expect(onAskSideChatSpy).not.toHaveBeenCalled();
     expect(window.getSelection()?.isCollapsed).toBe(true);
     expect(popup()).toBeNull();
+    expect(thread.isConnected).toBe(true);
   });
 
   it("ignores selections outside chat bubbles and collapsed selections", () => {
@@ -208,7 +209,7 @@ describe("chat annotation editor", () => {
         input.dispatchEvent(
           release === "blur"
             ? new FocusEvent("blur")
-            : new KeyboardEvent("keyup", { key: "Enter" }),
+            : new KeyboardEvent("keyup", { key: "Enter", bubbles: true }),
         );
       }
       const enter = key(

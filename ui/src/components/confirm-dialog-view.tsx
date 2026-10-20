@@ -10,9 +10,11 @@ export function ConfirmDialogView(props: {
   const initialOptions = untrack(() => props.options);
   const title = () => initialOptions.title ?? t("common.confirm");
   let skipRequested = false;
+  let cancelButton!: HTMLButtonElement;
   const [acknowledged, setAcknowledged] = createSignal(!initialOptions.requiredAcknowledgement);
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => cancelButton}
       label={title()}
       description={initialOptions.message}
       onModal-cancel={() => props.finish(null)}
@@ -81,7 +83,15 @@ export function ConfirmDialogView(props: {
               {initialOptions.alternativeLabel}
             </button>
           ) : undefined}
-          <button type="button" class="btn" autofocus onClick={() => props.finish(null)}>
+          <button
+            ref={(element) => {
+              cancelButton = element;
+            }}
+            type="button"
+            class="btn"
+            autofocus
+            onClick={() => props.finish(null)}
+          >
             {initialOptions.cancelLabel ?? t("common.cancel")}
           </button>
         </openclaw-modal-actions>

@@ -215,6 +215,7 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
   | { type: "agentDeletionJournal.status"; agentId: string }
+  | { type: "agentDeletionJournal.retainedIds" }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "sessionGroups.snapshot" }
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }

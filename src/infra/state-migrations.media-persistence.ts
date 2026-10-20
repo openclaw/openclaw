@@ -449,10 +449,7 @@ function archiveSourceMatches(
   }
 }
 
-function migrateTranscriptArchive(
-  filePath: string,
-  options: { beforeReplace?: () => void } = {},
-): boolean {
+function migrateTranscriptArchive(filePath: string): boolean {
   const source = readRegularFileSync({ filePath });
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const content = decodeSessionArchiveBytes(source.buffer, compressed);
@@ -462,7 +459,6 @@ function migrateTranscriptArchive(
   }
   const codec = compressed ? "zstd" : "identity";
   const encoded = encodeArchiveContent(transformed.content, codec, filePath);
-  options.beforeReplace?.();
   replaceFileAtomicSync({
     filePath,
     content: encoded,
@@ -493,9 +489,6 @@ export async function migrateLegacyMediaPersistence(
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
     integrityCheck?: "quick" | "full";
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
-    hooks?: {
-      beforeArchiveReplace?: (archivePath: string) => void;
-    };
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<MigrationMessages> {
@@ -676,13 +669,7 @@ export async function migrateLegacyMediaPersistence(
             }
             try {
               maintenance.renew?.();
-              if (
-                migrateTranscriptArchive(archive, {
-                  beforeReplace: params.hooks?.beforeArchiveReplace
-                    ? () => params.hooks?.beforeArchiveReplace?.(archive)
-                    : undefined,
-                })
-              ) {
+              if (migrateTranscriptArchive(archive)) {
                 changes.push(`Migrated archived transcript media in ${archive}.`);
               }
             } catch (error) {

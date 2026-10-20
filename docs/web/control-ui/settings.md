@@ -411,6 +411,10 @@ and [Linux](/platforms/linux) desktop apps, the
 [Chrome extension](/tools/chrome-extension), the in-app Plugins hub with
 [ClawHub](https://clawhub.ai), and the Discord community and docs.
 
+If the app catalog needs a backing session while its agent is still starting,
+closing the catalog or changing its agent or conversation cancels that pending
+creation. Keeping the catalog open lets creation finish when the agent is ready.
+
 ## Settings
 
 Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.

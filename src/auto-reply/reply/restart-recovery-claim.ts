@@ -74,9 +74,7 @@ export function createReplyRestartRecoveryClaimController(
   let confirmedArmed = false;
   let sessionActor: SessionActor | undefined;
   let readTarget: SessionEntryTargetPatchScope | undefined;
-  const recordReadTarget = (target: SessionEntryTargetPatchScope) => {
-    readTarget ??= target;
-  };
+  const recordReadTarget = (target: SessionEntryTargetPatchScope) => (readTarget ??= target);
   const preparedTarget = () => {
     if (!readTarget) {
       throw new Error("Restart recovery claim has no admitted session target");
@@ -445,6 +443,7 @@ export function createReplyRestartRecoveryClaimController(
             sessionKey: params.sessionKey,
             sourceRunId: recoveryRunId,
             inputProvenance: params.inputProvenance,
+            requesterOrigin,
           })
         : undefined;
     if (
@@ -486,9 +485,6 @@ export function createReplyRestartRecoveryClaimController(
         })
       : {};
     const transfersControlUiClaim = canTransferAbortedControlUiClaim && !recoverableDeliveryContext;
-    const hasDeliveryClaim = Boolean(
-      recoverableDeliveryContext || transfersControlUiClaim || operatorSource,
-    );
     const claimSourceRunId =
       transfersControlUiClaim || operatorSource
         ? recoveryRunId
@@ -506,7 +502,10 @@ export function createReplyRestartRecoveryClaimController(
       restartRecoveryDeliveryToolCallId: undefined,
       restartRecoveryDeliveryContext: recoverableDeliveryContext,
       restartRecoveryDeliveryRequestFingerprint: undefined,
-      restartRecoveryDeliveryRunId: hasDeliveryClaim ? recoveryRunId : undefined,
+      restartRecoveryDeliveryRunId:
+        recoverableDeliveryContext || transfersControlUiClaim || operatorSource
+          ? recoveryRunId
+          : undefined,
       restartRecoveryOperatorSource: operatorSource,
       restartRecoveryRequesterSource: claimSourceRunId
         ? createRestartRecoveryRequesterSource({
@@ -530,7 +529,9 @@ export function createReplyRestartRecoveryClaimController(
         ? "channel"
         : transfersControlUiClaim
           ? "control-ui"
-          : operatorSource?.snapshot.sourceIngress,
+          : operatorSource && params.inputProvenance?.kind === "inter_session"
+            ? "internal"
+            : operatorSource?.snapshot.sourceIngress,
       restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
         ? undefined
         : params.sourceReplyDeliveryMode,

@@ -234,6 +234,32 @@ it("uses the most-specific path mapping when workspace lives under state", async
   await stage.cleanup();
 });
 
+it("isolates caller and snapshot edits from staged and promoted config", async () => {
+  const paths = migrationPaths();
+  const targetConfig = { agents: { defaults: { workspace: paths.workspaceDir } } };
+  const stage = await createSetupMigrationStage({ providerId: "claude", ...paths, targetConfig });
+  expect(targetConfig.agents.defaults.workspace).toBe(paths.workspaceDir);
+  targetConfig.agents.defaults.workspace = "caller edit";
+  const replacement = stage.getStagedConfig();
+  expect(replacement.agents?.defaults?.workspace).toBe(stage.staged.workspaceDir);
+  const model = { primary: "synthetic/model" };
+  replacement.agents!.defaults!.model = model;
+  stage.replaceStagedConfig(replacement);
+  model.primary = "caller edit";
+  const snapshot = stage.getStagedConfig();
+  expect(snapshot.agents?.defaults?.model).toEqual({ primary: "synthetic/model" });
+  snapshot.agents!.defaults!.workspace = "snapshot edit";
+  expect(stage.getStagedConfig().agents?.defaults?.workspace).toBe(stage.staged.workspaceDir);
+  await writeMemory(stage.staged.workspaceDir);
+  const promoted = await promote(stage);
+  expect(promoted.config.agents?.defaults).toEqual({
+    workspace: paths.workspaceDir,
+    model: { primary: "synthetic/model" },
+  });
+  await promoted.resume.complete();
+  await stage.cleanup();
+});
+
 it("journals pre-existing empty targets before promotion starts", async () => {
   const paths = migrationPaths();
   const { stateDir, workspaceDir, reportDir } = paths;

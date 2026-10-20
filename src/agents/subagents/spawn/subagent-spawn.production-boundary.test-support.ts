@@ -339,6 +339,31 @@ export function createBoundSpawnInvocation(
 
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
+
+export type NativePluginSpawnTestOptions = {
+  createBoundParent: (
+    authority?: AdmittedRunOperatorAuthority,
+    settings?: { guestProfileId?: string },
+  ) => Promise<BoundParent>;
+  createBoundGateway: (
+    bound: BoundParent,
+  ) => Promise<{ context: GatewayRequestContext; runtime: GatewayRuntime }>;
+  closeBoundGateway: (
+    bound: BoundParent,
+    runtime: GatewayRuntime,
+    childRunId?: string,
+  ) => Promise<unknown[]>;
+  waitForEmbeddedRun: (
+    bound: BoundParent,
+    runId: string,
+    started?: Promise<void>,
+    calls?: number,
+  ) => Promise<void>;
+  settleRootWork: (keepObserving?: boolean) => Promise<void>;
+  throwBoundFailures: (failures: unknown[]) => void;
+  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
+};
+
 // Two loaded exact-head CI runs reached this cold model boundary in 28–37 seconds.
 const COLD_MODEL_ENTRY_TIMEOUT_MS = 60_000;
 

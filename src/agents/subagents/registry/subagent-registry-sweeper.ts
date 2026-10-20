@@ -162,13 +162,13 @@ export function createSubagentRegistrySweeper(params: {
     scheduled = { timer, at: nextAt };
   }
 
-  async function runTick(recoveryOnly = false) {
+  async function runTick() {
     if (sweepInProgress) {
       rerunRequested = true;
       return;
     }
     try {
-      await runWithGatewayDetachedWorkAdmission(() => sweepOnce(recoveryOnly), "subagents:sweeper");
+      await runWithGatewayDetachedWorkAdmission(() => sweepOnce(), "subagents:sweeper");
     } catch (error) {
       if (isGatewayRestartDrainError(error)) {
         return params.warn("subagent run sweep skipped: gateway is draining for restart");
@@ -206,7 +206,7 @@ export function createSubagentRegistrySweeper(params: {
     );
   }
 
-  async function sweepOnce(recoveryOnly = false) {
+  async function sweepOnce() {
     if (sweepInProgress) {
       return;
     }
@@ -224,13 +224,6 @@ export function createSubagentRegistrySweeper(params: {
           readScope.gatewayResolver,
         );
       recovery.prune();
-      if (recoveryOnly) {
-        const restoredRuns = [...getSubagentActivationRuns(runs)];
-        for (const entry of restoredRuns) {
-          await recovery.recover(entry.runId, entry);
-        }
-        return;
-      }
       const collectorArchiveCandidates = new Map<
         string,
         { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
@@ -670,7 +663,16 @@ export function createSubagentRegistrySweeper(params: {
     schedule,
     sweepOnce: () => trackWork(sweepOnce),
     runTick: () => trackWork(runTick),
-    recoverInterruptedRuns: () => trackWork(() => runTick(true)),
+    recoverInterruptedRuns: (
+      entries: readonly SubagentRunRecord[] = [...getSubagentActivationRuns(runs)],
+    ) =>
+      trackWork(() =>
+        runWithGatewayDetachedWorkAdmission(async () => {
+          for (const entry of entries) {
+            await recovery.recover(entry.runId, entry);
+          }
+        }, "subagents:restart-recovery"),
+      ),
     async reset() {
       stop();
       lastWarnedSuspendedCount = undefined;

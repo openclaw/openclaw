@@ -351,6 +351,36 @@ it("keeps Dreams empty when no configured agent is available", async () => {
   expect(element.textContent).not.toContain("Dreaming frequency");
 });
 
+it("loads each Dreams target once when the existing agent key changes", async () => {
+  const { element, request, settingsAgentSelection } = createPage({
+    agents: [{ id: "main" }, { id: "support" }],
+    selectedAgentId: "main",
+    routeData: memoryTabRoute("dreams"),
+    methods: ["doctor.memory.status", "doctor.memory.dreamDiary"],
+    settingsRequest: async (method) =>
+      method === "doctor.memory.status" ? { dreaming: null } : { found: false, path: "DREAMS.md" },
+  });
+  const memoryCalls = () =>
+    request.mock.calls.filter(
+      ([method]) => method === "doctor.memory.status" || method === "doctor.memory.dreamDiary",
+    );
+  await waitForSolid(() => expect(memoryCalls()).toHaveLength(2));
+  const originalPanel = element.querySelector("openclaw-agent-memory-panel");
+  expect(originalPanel).not.toBeNull();
+
+  settingsAgentSelection.set("support");
+  await waitForSolid(() => expect(memoryCalls()).toHaveLength(4));
+  expect(element.querySelector("openclaw-agent-memory-panel")).not.toBe(originalPanel);
+  for (const agentId of ["main", "support"]) {
+    expect(memoryCalls()).toEqual(
+      expect.arrayContaining([
+        ["doctor.memory.status", { agentId }],
+        ["doctor.memory.dreamDiary", { agentId }],
+      ]),
+    );
+  }
+});
+
 it("handles Space directly so the browser cannot synthesize a second navigation", async () => {
   const navigate = vi.fn();
   const { element } = createPage({
@@ -468,53 +498,26 @@ it("publishes a completed catalog to the mounted Settings presentation", async (
   }
 });
 
-it("retires the presentation when a committed same-agent Memory route changes", async () => {
+it("retires callbacks and pending RPCs when Config admits a same-agent Memory route", async () => {
+  const reply = deferred<unknown>();
   const { element, settingsViews } = createPage({
     routeData: memoryRoute("/settings/memory?agent=main&filter=first"),
+    settingsRequest: () => reply.promise,
   });
   await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
   const first = settingsViews.at(-1)!;
+  const pending = first.context.request("settings.test");
   element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
-  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
+  // Raw route input is not admitted until Config's existing route effect applies it.
+  expect(first.context.signal.aborted).toBe(false);
+  flush();
   expect(first.context.signal.aborted).toBe(true);
+  expect(() => first.context.navigate("settings")).toThrow();
+  reply.resolve("obsolete");
+  await expect(pending).rejects.toThrow();
+  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
   expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
-});
-
-it.each([["main"], ["research", "main"]])(
-  "keeps newer sidebar intent when a pending Memory link mounts (%j)",
-  async (...choices: string[]) => {
-    const { element, settingsAgentSelection, settingsViews } = createPage(
-      {
-        agents: [{ id: "main" }, { id: "research" }],
-        routeData: memoryRoute("/settings/memory?agent=research"),
-      },
-      false,
-    );
-    for (const agentId of choices) {
-      settingsAgentSelection.set(agentId);
-    }
-    mountMemoryPage(element);
-    await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main"));
-    expect(settingsAgentSelection.state.selectedId).toBe("main");
-    expect(settingsViews.some((view) => view.snapshot.agentId === "research")).toBe(false);
-  },
-);
-
-it("honors a fresh explicit Memory navigation after the sidebar changed the same URL's agent", async () => {
-  const { element, settingsAgentSelection } = createPage({
-    agents: [{ id: "main" }, { id: "research" }],
-    routeData: memoryRoute("/settings/memory?agent=research"),
-  });
-  await waitForSolid(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
-  settingsAgentSelection.set("main");
-  element.routeData = {
-    ...memoryRoute("/settings/memory?agent=research"),
-    agentSelectionIntent: {
-      owner: settingsAgentSelection,
-      revision: settingsAgentSelection.intentRevision,
-    },
-  };
-  await waitForSolid(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
+  expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("filter=second");
 });
 
 it.each([

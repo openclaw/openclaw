@@ -1,9 +1,6 @@
-// Context-engine public types define the pluggable context-management lifecycle.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-
-// Result types
 
 export type AssembleResult = {
   /** Ordered messages to use as model context */

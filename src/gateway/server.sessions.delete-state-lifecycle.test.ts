@@ -9,9 +9,11 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { AgentHarnessSessionCleanupError } from "../agents/harness/errors.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -34,8 +36,12 @@ import * as repositoryWorkspaces from "../state/session-repository-workspaces.js
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
-import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
+import {
+  companionRuntimeConfig,
+  observeCompanionCleanup,
+  publishCompanionRuntime,
+} from "./session-companion-runtime.test-support.js";
 import { createSessionCompanion, type SessionCompanionService } from "./session-companion.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -44,6 +50,15 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+const runLoop = vi.hoisted(() =>
+  vi.fn<
+    (typeof import("../agents/embedded-agent-runner/run-loop.js"))["runPreparedEmbeddedLoop"]
+  >(),
+);
+// mock-isolation: Retain native companion/session preparation; stop before provider I/O.
+vi.mock("../agents/embedded-agent-runner/run-loop.js", () => ({
+  runPreparedEmbeddedLoop: runLoop,
+}));
 
 function afterSessionStateMaterialization(after: () => void | Promise<void>) {
   const materialize = sessionArchive.materializeSessionStateDeletePlans;
@@ -500,19 +515,36 @@ test.each(["archive-publication", "worker-queue"] as const)(
   },
 );
 
-async function createCompanion(runModel?: SessionCompanionAskDeps["run"]) {
+async function createCompanion(runModel?: () => Promise<string>) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const run = vi.fn(runModel ?? (async () => "Synthetic answer from the selected session."));
+  const originalConfig = getRuntimeConfig();
+  const cfg = companionRuntimeConfig(
+    originalConfig,
+    resolveAgentWorkspaceDir(originalConfig, "main"),
+  );
+  await publishCompanionRuntime(cfg, process.env.OPENCLAW_CONFIG_PATH);
+  const settleCleanup = observeCompanionCleanup();
+  cleanups.push(async () => {
+    await settleCleanup();
+    runLoop.mockReset();
+    await resetPreparedModelRuntimeSnapshotsForTest();
+  });
+  runLoop.mockReset().mockImplementation(async () => ({
+    meta: {
+      durationMs: 1,
+      finalAssistantVisibleText: await (
+        runModel ?? (async () => "Synthetic answer from the selected session.")
+      )(),
+    },
+  }));
   const service = createSessionCompanion({
     scheduler: createTestGatewayScheduler(),
     getConfig: getRuntimeConfig,
     contextReader: defaultSessionCompanionContextReader,
     sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
-    resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
-    run,
   });
   companions.add(service);
-  return { service, run };
+  return { service, run: runLoop };
 }
 
 async function ask(
@@ -608,7 +640,7 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
   );
   expect(run).toHaveBeenCalledOnce();
   await deleteSession(sessionKey);
-  expect(run.mock.calls[0]?.[0].signal.aborted).toBe(true);
+  expect(run.mock.calls[0]?.[1].runParams.abortSignal?.aborted).toBe(true);
   pending.resolve("Late answer from the deleted session.");
   await expect(failure).resolves.toMatchObject({ reason: "context-unavailable" });
   expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });

@@ -1,21 +1,12 @@
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  untrack,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { createScrollPosition, createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
-import { revealInScrollRegion } from "./scroll-state.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
@@ -242,12 +233,16 @@ export function PickerContent<Option extends PickerOption>(props: {
   }
 
   function scrollFade() {
+    if (!overlay.open) {
+      return;
+    }
     list.toggleAttribute("data-fade-start", list.scrollTop > 0);
     list.toggleAttribute(
       "data-fade-end",
       list.scrollTop + list.clientHeight < list.scrollHeight - 1,
     );
   }
+  const scrollRef = createScrollStateRef(scrollFade, { presented: opened, content: rows });
   function handleKeydown(event: KeyboardEvent) {
     if (event.isComposing || props.params.disabled) {
       return;
@@ -325,17 +320,19 @@ export function PickerContent<Option extends PickerOption>(props: {
   onCleanup(() => {
     clearTimeout(hoverTimer);
   });
-  createEffect(
-    () => [opened(), active(), query(), rows()] as const,
-    ([isOpen, highlighted]) => {
-      if (list) {
-        const node = optionElements.get(highlighted ?? "");
-        if (isOpen && node) {
-          revealInScrollRegion(list, node);
-        }
-        scrollFade();
-      }
-    },
+  createScrollPosition(
+    () => ({
+      reveal: opened()
+        ? {
+            identity: [opened(), active(), query(), rows()],
+            target: () =>
+              overlay.open
+                ? optionElements.get(menu.service.context.get("highlightedValue") ?? "")
+                : undefined,
+          }
+        : undefined,
+    }),
+    { region: () => list, revealTiming: "animation-frame" },
   );
   function onOpenChange(next: boolean) {
     if (next) {
@@ -537,10 +534,9 @@ export function PickerContent<Option extends PickerOption>(props: {
           />
         </Show>
         <div
-          ref={(element) => (list = element)}
+          ref={[(element) => (list = element), scrollRef]}
           class="picker-select__options"
           role={props.params.groupBy ? undefined : "listbox"}
-          onScroll={scrollFade}
           id={props.params.groupBy ? undefined : id}
           aria-label={props.params.groupBy ? undefined : props.params.label}
           data-picker-focus={!searching() ? "" : undefined}

@@ -692,9 +692,15 @@ function planTerminalCompletion(
     }
   }
   if (entry.collect) {
-    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig(), {
-      entry: prepared.collectorSession?.entry,
-    });
+    updateSwarmCollectorCompletion(
+      entry,
+      params.getRuntimeConfig(),
+      { entry: prepared.collectorSession?.entry },
+      // Mark only the sweeper's diagnostic settlement of a yield with no recorded outcome.
+      completeParams.settleYielded === true && currentEntry.execution.outcome === undefined
+        ? "yielded_without_result"
+        : undefined,
+    );
   } else {
     updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
   }

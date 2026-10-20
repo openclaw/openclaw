@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -7,7 +7,6 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -22,6 +21,10 @@ export type ModelAccountUsageElement = SolidBridgeElement<
   ModelAccountUsageProps,
   ModelAccountUsageMethods
 >;
+const usageActions = new WeakMap<
+  ModelAccountUsageElement,
+  { inputChanged(): void; refresh(): void }
+>();
 
 declare global {
   interface HTMLElementTagNameMap {
@@ -36,7 +39,7 @@ type UsageState =
 
 function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElement) {
   const [state, setState] = createSignal<UsageState>({ phase: "idle" });
-  let isCurrent = () => false;
+  let queued = false;
   const request = createPageRequest(() => {}, {
     task: (
       [client, agentId, profileId]: readonly [GatewayBrowserClient, string, string],
@@ -48,45 +51,52 @@ function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElem
         { signal, timeoutMs: 30_000 },
       ),
     onComplete: (summary) => {
-      if (isCurrent()) {
-        setState({ phase: "complete", summary });
-      }
+      setState({ phase: "complete", summary });
     },
     onError: (error) => {
-      if (isCurrent()) {
-        setState({ phase: "error", error });
-      }
+      setState({ phase: "error", error });
     },
   });
-  onCleanup(request.cancel);
 
-  async function load(scope: ModelAccountUsageProps): Promise<void> {
+  function refresh(): void {
+    queued = false;
+    const { client, agentId, profileId } = host;
     request.cancel();
-    if (!scope.client || !scope.agentId || !scope.profileId) {
+    if (!client || !agentId || !profileId) {
       setState({ phase: "idle" });
       return;
     }
-    isCurrent = () =>
-      props.client === scope.client &&
-      props.agentId === scope.agentId &&
-      props.profileId === scope.profileId;
     setState({ phase: "pending" });
-    await request.run([scope.client, scope.agentId, scope.profileId]);
+    void request.run([client, agentId, profileId]);
   }
 
-  const scope = () => ({
-    client: props.client,
-    agentId: props.agentId,
-    profileId: props.profileId,
+  onSettled(() => {
+    usageActions.set(host, {
+      refresh,
+      inputChanged() {
+        request.cancel();
+        if (!queued) {
+          queued = true;
+          // Native scope properties arrive separately during one render.
+          queueMicrotask(() => {
+            if (queued) {
+              refresh();
+            }
+          });
+        }
+      },
+    });
+    refresh();
+    return () => {
+      usageActions.delete(host);
+      queued = false;
+      request.cancel();
+    };
   });
-  const refresh = () => void load(scope());
-  // Fetch usage from the Gateway for the currently presented account.
-  createEffect(scope, (current) => void load(current));
-  onSettled(() => listen(host, "model-account-usage-refresh", refresh));
-  const summary = createMemo(() => {
+  const summary = () => {
     const current = state();
     return current.phase === "complete" ? current.summary : undefined;
-  });
+  };
   const error = createMemo(() => {
     const current = state();
     return current.phase === "error" ? formatUiError(current.error) : undefined;
@@ -140,15 +150,14 @@ defineSolidBridge<ModelAccountUsageProps, ModelAccountUsageMethods>(
   "openclaw-model-account-usage",
   (props, host) => AccountUsage(props, host),
   {
+    propertyChanged: (host) => usageActions.get(host)?.inputChanged(),
     properties: {
       client: { default: null, attribute: false },
       agentId: { default: "" },
       profileId: { default: "" },
     },
     methods: {
-      refreshUsage: (host) => {
-        host.dispatchEvent(new Event("model-account-usage-refresh"));
-      },
+      refreshUsage: (host) => usageActions.get(host)?.refresh(),
     },
   },
 );

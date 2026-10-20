@@ -10,8 +10,9 @@ import {
   Switch,
   onCleanup,
   type Accessor,
-  untrack,
   refresh,
+  untrack,
+  useContext,
 } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -26,7 +27,7 @@ import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
-import { ChatPermissionCard } from "./chat-divider.tsx";
+import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
@@ -40,7 +41,6 @@ import {
 } from "./chat-message-bubble-presentation.ts";
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import "./chat-clawhub-card.ts";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -51,17 +51,23 @@ import {
   releaseChatMediaResourceOwner,
 } from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
+import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
-  ChatToolApprovalReviews,
+  ToolApprovalReviews,
   ChatToolCard,
   ChatToolIcon,
   syncToolDisclosureOverflow,
   type ToolCardOptions,
 } from "./chat-tool-cards.solid.tsx";
-import { ChatToolContent, ChatToolRawOutput, ChatToolOutcome } from "./chat-tool-content.solid.tsx";
+import {
+  ExpandedToolCardContent,
+  RawOutputToggle,
+  ToolOutcome,
+} from "./chat-tool-content.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
+import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { ToolPreview } from "./widget-card.ts";
 
@@ -93,114 +99,115 @@ export function GroupedMessage(props: GroupedMessageProps) {
       props.onOpenSidebar,
     );
   });
-  let element: Element | undefined;
-  // Snapshot the initial arrival callback so the DOM ref binds before transcript commit.
-  let currentEntryRef = untrack(() => props.options.entryRef);
-  // Keep the entry-animation DOM owner bound as its callback changes.
-  createEffect(
-    () => props.options.entryRef,
-    (next) => {
-      if (currentEntryRef !== next) {
-        currentEntryRef?.(undefined);
-      }
-      currentEntryRef = next;
-      if (element) {
-        currentEntryRef?.(element);
-      }
-    },
-  );
+  const messageElements = useContext(TranscriptMessageElementsContext);
+  // The keyed message owns this DOM registration through acknowledgement and option refreshes.
+  const initialMessageKey = untrack(() => props.messageKey);
   // Expiring pairing QR attachments schedule a timer at their resource owner.
   createEffect(
     () => [props.messageKey, state().nextPairingQrExpiresAt] as const,
     ([key, expiresAt]) => schedulePairingQrExpiryRefresh(key, expiresAt, refreshMedia),
   );
-  onCleanup(() => {
-    currentEntryRef?.(undefined);
-    releaseChatMediaResourceOwner(refreshMedia);
-  });
-  const entryRef = (next: Element) => {
-    element = next;
-    currentEntryRef?.(next);
-  };
+  onCleanup(() => releaseChatMediaResourceOwner(refreshMedia));
   return (
     <Show
       when={state().workspaceConflict}
       fallback={
         <Show when={!state().empty}>
-          <div
-            class={state().bubbleClasses}
-            ref={entryRef}
-            data-message-id={props.messageKey}
-            data-file-session-key={props.options.fileLinkSessionKey}
-            data-entry-id={props.options.entryId || undefined}
-            data-message-text={state().actionText || undefined}
-            prop:messageActions={props.options.messageActions}
-          >
-            <Show when={props.options.replyLine}>
-              <ReplyLineView line={props.options.replyLine!} actions={props.options} inline />
-            </Show>
-            <Switch>
-              <Match when={state().voiceTranscript}>
-                <ChatBubbleActivity
-                  label={t("chat.messages.voiceTranscript")}
-                  open={props.options.searchResult}
+          {(_visible) => {
+            const entryRef = messageElements?.forKey(initialMessageKey);
+            onCleanup(() => entryRef?.(undefined));
+            return (
+              <>
+                <div
+                  class={state().bubbleClasses}
+                  ref={(element) => entryRef?.(element)}
+                  data-message-id={props.messageKey}
+                  data-file-session-key={props.options.fileLinkSessionKey}
+                  data-entry-id={props.options.entryId || undefined}
+                  data-message-text={state().actionText || undefined}
+                  prop:messageActions={props.options.messageActions}
                 >
-                  <BubbleContents
-                    state={state}
-                    messageKey={props.messageKey}
-                    options={props.options}
-                    onOpenSidebar={props.onOpenSidebar}
-                  />
-                </ChatBubbleActivity>
-              </Match>
-              <Match when={state().onlyToolCards}>
-                <InlineToolCards cards={state().toolCards} options={state().toolRenderOptions} />
-              </Match>
-              <Match when={state().isStandaloneToolMessage}>
-                <ToolMessage {...props} state={state} />
-              </Match>
-              <Match when={true}>
-                {/* Keep preparation out of this boundary so refreshes retain embedded media. */}
-                <BubbleContents
-                  state={state}
-                  messageKey={props.messageKey}
-                  options={props.options}
-                  onOpenSidebar={props.onOpenSidebar}
-                />
-              </Match>
-            </Switch>
-            <Show
-              when={
-                state().sourceRole === "assistant" && assistantMessageIsInterrupted(state().message)
-              }
-            >
-              <div
-                class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation"
-                role="status"
-              >
-                {t("chat.composer.runInterrupted")}
-              </div>
-            </Show>
-            <Show when={state().duplicateCount > 1 && (!state().markdown || state().jsonResult)}>
-              <div
-                class="chat-duplicate-count"
-                aria-label={t("chat.messages.duplicatesCollapsed", {
-                  count: String(state().duplicateCount),
-                })}
-              >
-                ×{state().duplicateCount}
-              </div>
-            </Show>
-          </div>
-          <MessageWorkContext message={state().message} />
+                  <Show when={props.options.replyLine}>
+                    <ReplyLineView line={props.options.replyLine!} actions={props.options} inline />
+                  </Show>
+                  <Switch>
+                    <Match when={state().voiceTranscript}>
+                      <ChatBubbleActivity
+                        label={t("chat.messages.voiceTranscript")}
+                        open={props.options.searchResult}
+                      >
+                        <BubbleContents
+                          state={state}
+                          messageKey={props.messageKey}
+                          options={props.options}
+                          onOpenSidebar={props.onOpenSidebar}
+                        />
+                      </ChatBubbleActivity>
+                    </Match>
+                    <Match when={state().onlyToolCards}>
+                      <InlineToolCards
+                        cards={state().toolCards}
+                        options={state().toolRenderOptions}
+                      />
+                    </Match>
+                    <Match when={state().isStandaloneToolMessage}>
+                      <ToolMessage {...props} state={state} />
+                    </Match>
+                    <Match when={true}>
+                      {/* Keep preparation out of this boundary so refreshes retain embedded media. */}
+                      <BubbleContents
+                        state={state}
+                        messageKey={props.messageKey}
+                        options={props.options}
+                        onOpenSidebar={props.onOpenSidebar}
+                      />
+                    </Match>
+                  </Switch>
+                  <Show
+                    when={
+                      state().sourceRole === "assistant" &&
+                      assistantMessageIsInterrupted(state().message)
+                    }
+                  >
+                    <div
+                      class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation"
+                      role="status"
+                    >
+                      {t("chat.composer.runInterrupted")}
+                    </div>
+                  </Show>
+                  <Show
+                    when={state().duplicateCount > 1 && (!state().markdown || state().jsonResult)}
+                  >
+                    <div
+                      class="chat-duplicate-count"
+                      aria-label={t("chat.messages.duplicatesCollapsed", {
+                        count: String(state().duplicateCount),
+                      })}
+                    >
+                      ×{state().duplicateCount}
+                    </div>
+                  </Show>
+                </div>
+                <MessageWorkContext message={state().message} />
+              </>
+            );
+          }}
         </Show>
       }
     >
-      <WorkspaceConflictTranscriptMessage
-        conflict={state().workspaceConflict!}
-        messageKey={props.messageKey}
-        entryId={props.options.entryId}
-      />
+      {(conflict) => {
+        const entryRef = messageElements?.forKey(initialMessageKey);
+        onCleanup(() => entryRef?.(undefined));
+        return (
+          <WorkspaceConflictTranscriptMessage
+            conflict={conflict()}
+            messageKey={props.messageKey}
+            entryId={props.options.entryId}
+            ref={entryRef}
+          />
+        );
+      }}
     </Show>
   );
 }
@@ -309,11 +316,12 @@ function AssistantViews(props: ContentProps) {
               />
               <Show when={block().rawText}>
                 <div class="chat-tool-card__widget-raw">
-                  <ChatToolRawOutput
-                    text={block().rawText!}
-                    toggleRef={(element) => (rawToggle = element)}
-                    style={{ display: "contents" }}
-                  />
+                  <openclaw-chat-tool-raw style={{ display: "contents" }}>
+                    <RawOutputToggle
+                      text={block().rawText!}
+                      toggleRef={(element) => (rawToggle = element)}
+                    />
+                  </openclaw-chat-tool-raw>
                 </div>
               </Show>
             </div>
@@ -392,13 +400,12 @@ function MessageText(props: ContentProps) {
 }
 
 function MessageAvatar(props: { render?: () => JSX.Element }) {
-  const render = createMemo(() => props.render);
-  const avatar = createMemo(() => {
-    const factory = render();
-    // The factory owns nested reactive bindings; only replacement remounts the avatar.
-    return factory ? untrack(factory) : undefined;
-  });
-  return <>{avatar()}</>;
+  // Replacing the factory retires its bindings; updates inside it stay with its owner.
+  return (
+    <Show when={props.render} keyed>
+      {(render) => render()}
+    </Show>
+  );
 }
 
 function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | undefined> }) {
@@ -451,12 +458,7 @@ function BubbleContents(props: ContentProps) {
     <>
       <Show when={props.state().sourceRole === "assistant"}>
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
-          {(card) => (
-            <openclaw-chat-clawhub-card
-              prop:recommendation={card()}
-              prop:agentId={props.options.agentId}
-            />
-          )}
+          {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}
         </For>
       </Show>
       <PairingQrNotices count={props.state().expiredPairingQrCount} />
@@ -513,25 +515,26 @@ function BubbleContents(props: ContentProps) {
             />
           }
         >
-          <ChatToolContent
-            card={props.state().singleToolCard!}
-            options={props.state().toolRenderOptions}
-            style={{ display: "contents" }}
-          />
+          <openclaw-chat-tool-content style={{ display: "contents" }}>
+            <ExpandedToolCardContent
+              card={props.state().singleToolCard!}
+              options={props.state().toolRenderOptions}
+            />
+          </openclaw-chat-tool-content>
         </Show>
       </Show>
       <Show when={props.state().isStandaloneToolMessage && props.state().failedToolCard}>
-        <ChatToolOutcome
-          outcome="failed"
-          exitCode={props.state().failedToolCard!.exitCode}
-          style={{ display: "contents" }}
-        />
+        <openclaw-chat-tool-outcome style={{ display: "contents" }}>
+          <ToolOutcome outcome="failed" exitCode={props.state().failedToolCard!.exitCode} />
+        </openclaw-chat-tool-outcome>
       </Show>
     </>
   );
 }
 
 function ToolMessageFallback(props: ContentProps) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   return (
     <div
       class={[
@@ -543,8 +546,8 @@ function ToolMessageFallback(props: ContentProps) {
         class="chat-inline-disclosure chat-tool-msg-summary"
         type="button"
         aria-expanded={props.state().toolMessageExpanded ? "true" : "false"}
-        onPointerEnter={syncToolDisclosureOverflow}
-        onFocus={syncToolDisclosureOverflow}
+        onPointerEnter={syncOverflow}
+        onFocus={syncOverflow}
         onClick={() =>
           props.options.onToggleToolMessageExpanded?.(
             props.state().toolMessageDisclosureId,
@@ -564,7 +567,10 @@ function ToolMessageFallback(props: ContentProps) {
             />
           </Show>
         </span>
-        <span class="chat-tool-disclosure__content">
+        <span
+          ref={(element) => (disclosureContent = element)}
+          class="chat-tool-disclosure__content"
+        >
           <span class="chat-tool-msg-summary__label">{props.state().toolMessageLabel}</span>
           <Show
             when={props.state().toolSummaryLabel}
@@ -590,7 +596,11 @@ function ToolMessageFallback(props: ContentProps) {
         </div>
       </Show>
       <For each={props.state().toolCards} keyed={(card) => card.callId ?? card}>
-        {(card) => <ChatToolApprovalReviews card={card()} style={{ display: "contents" }} />}
+        {(card) => (
+          <openclaw-chat-tool-reviews style={{ display: "contents" }}>
+            <ToolApprovalReviews card={card()} />
+          </openclaw-chat-tool-reviews>
+        )}
       </For>
     </div>
   );

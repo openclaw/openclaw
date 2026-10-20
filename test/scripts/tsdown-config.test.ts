@@ -25,6 +25,7 @@ import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worke
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import {
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -141,6 +142,11 @@ it("keeps catalog projections independent of discovery I/O", async () => {
 
 const workerBuildTargets = [
   ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
+  [
+    "client-credentials",
+    "worker/client-credential.worker",
+    "src/worker/worker-deploy-client-credentials.ts",
+  ],
   ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
   [
     "file-tool-planning",
@@ -198,9 +204,13 @@ import fs from "node:fs";
 import { createRequire, isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const [entry, observer, rootDir, mode, outcome, sealed] = process.argv.slice(1);
+const [entry, observer, rootDir, mode, outcome, sealed, bundledNativeAsset] = process.argv.slice(1);
+const sealedImports = new Set([
+  pathToFileURL(entry).href,
+  ...(bundledNativeAsset ? [bundledNativeAsset, pathToFileURL(bundledNativeAsset).href] : []),
+]);
 if (sealed) registerHooks({ resolve(specifier, context, next) {
-  if (!isBuiltin(specifier) && specifier !== pathToFileURL(entry).href)
+  if (!isBuiltin(specifier) && !sealedImports.has(specifier))
     throw new Error("sealed dependency escaped: " + specifier);
   return next(specifier, context);
 }});
@@ -229,7 +239,8 @@ if (outcome === "missing") {
   assert.equal(fs.readFileSync(path.join(rootDir, "proof.txt"), "utf8"), "native proof");
   assert.equal(fs.readFileSync(path.join(rootDir, "created.txt"), "utf8"), "create proof");
 }
-const loaded = Object.keys(createRequire(import.meta.url).cache).filter((file) => file.endsWith("fs-safe-native.node"));
+const loaded = Object.keys(createRequire(import.meta.url).cache).filter((file) =>
+  file.endsWith("fs-safe-native.node") || file === bundledNativeAsset);
 assert.equal(loaded.length, outcome === "native" ? 1 : 0);
 if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep));
 `;
@@ -777,6 +788,9 @@ describe("tsdown config", () => {
             (file) =>
               file === `${entry}.mjs` ||
               file === `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}` ||
+              Object.values(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS).some(
+                (asset) => file === `worker/${asset}`,
+              ) ||
               (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
           ),
         ).toBe(true);
@@ -1036,6 +1050,15 @@ console.log("relocated session card renders with bundled fonts");
           worker ? "output/worker/worker.mjs" : "output/plugin-sdk/memory-core-host-engine-fs.js",
         );
         const observer = worker ? entry : path.join(relocatedRoot, "output/observer.js");
+        const bundledNativeAsset =
+          worker && process.platform === "darwin"
+            ? path.join(
+                path.dirname(entry),
+                WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS[
+                  process.arch === "arm64" ? "darwin-arm64" : "darwin-x64"
+                ],
+              )
+            : "";
         const probe = async (
           name: string,
           mode: string,
@@ -1058,6 +1081,7 @@ console.log("relocated session card renders with bundled fonts");
                   mode,
                   outcome,
                   worker ? "sealed" : "",
+                  bundledNativeAsset,
                 ],
                 {
                   cwd: relocatedRoot,
@@ -1092,10 +1116,13 @@ console.log("relocated session card renders with bundled fonts");
           }
         };
         if (worker) {
+          // Darwin workers require their bundled addon; other hosts retain the fallback.
+          const mode = bundledNativeAsset ? "require" : "off";
+          const outcome = bundledNativeAsset ? "native" : "fallback";
           await join([
-            probe("default", "off", "fallback"),
+            probe("default", mode, outcome),
             ...["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"].map((key) =>
-              probe(key, "off", "fallback", { [key]: "require" }),
+              probe(key, mode, outcome, { [key]: "require" }),
             ),
           ]);
         } else {

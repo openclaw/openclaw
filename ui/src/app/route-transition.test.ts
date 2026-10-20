@@ -44,6 +44,7 @@ describe("navigateWithRouteTransition", () => {
 
     const transition = navigateWithRouteTransition({
       document: test.document,
+      getOutlet: () => test.outlet,
       router: test.router,
       from: "new-session",
       to: "chat",
@@ -73,6 +74,7 @@ describe("navigateWithRouteTransition", () => {
     await expect(
       navigateWithRouteTransition({
         document: test.document,
+        getOutlet: () => test.outlet,
         router: test.router,
         from: "new-session",
         to: "chat",
@@ -94,6 +96,7 @@ describe("navigateWithRouteTransition", () => {
 
     await navigateWithRouteTransition({
       document: test.document,
+      getOutlet: () => test.outlet,
       router: test.router,
       from,
       to,
@@ -110,6 +113,7 @@ describe("navigateWithRouteTransition", () => {
     const navigate = vi.fn(async () => undefined);
     const transition = navigateWithRouteTransition({
       document: test.document,
+      getOutlet: () => test.outlet,
       router: test.router,
       from: "new-session",
       to: "chat",
@@ -139,6 +143,7 @@ describe("navigateWithRouteTransition", () => {
     );
     const transition = navigateWithRouteTransition({
       document,
+      getOutlet: () => test.outlet,
       router: test.router,
       from: "new-session",
       to: "chat",

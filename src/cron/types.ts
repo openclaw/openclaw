@@ -171,6 +171,8 @@ export type CronRunOutcome = {
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
   executionStarted?: boolean;
+  /** Lifecycle-owned restart fact; transient input to cron settlement, not a public event. */
+  interruptedByRestart?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;

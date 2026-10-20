@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
+import {
+  ComponentType,
+  type APIContainerComponent,
+  type APIButtonComponentWithCustomId,
+} from "discord-api-types/v10";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,7 +12,7 @@ import { discordComponentRegistryState } from "../components-registry-state.js";
 import { resolveDiscordComponentEntryWithPersistence } from "../components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import { parseDiscordComponentCustomId } from "../components.js";
-import { Button, Container, Row, type MessagePayload } from "../internal/discord.js";
+import type { MessagePayload } from "../internal/discord.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import {
   deliverDiscordInteractionReply,
@@ -117,14 +122,19 @@ it.each([
     assert(message && typeof message !== "string");
     expect(message).not.toHaveProperty("content");
     expect(message.ephemeral).toBe(true);
-    const container = message.components?.[0];
-    assert(container instanceof Container);
+    const component = message.components?.[0];
+    assert(component && "serialize" in component);
+    const container = component.serialize() as APIContainerComponent;
+    expect(container.type).toBe(ComponentType.Container);
     const buttons = container.components
-      .flatMap((part) => (part instanceof Row ? part.components : []))
-      .filter((part): part is Button => part instanceof Button);
+      .flatMap((part) => (part.type === ComponentType.ActionRow ? part.components : []))
+      .filter(
+        (part): part is APIButtonComponentWithCustomId =>
+          part.type === ComponentType.Button && "custom_id" in part,
+      );
     expect(buttons.map((button) => button.label)).toEqual(["All models", "Keep restrictions"]);
     const ids = buttons.map((button) => {
-      const parsed = parseDiscordComponentCustomId(button.customId);
+      const parsed = parseDiscordComponentCustomId(button.custom_id);
       assert(parsed);
       return parsed.componentId;
     });

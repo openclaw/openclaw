@@ -69,6 +69,7 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
             sessionIdentity: view.composer.progressCardIdentity,
             cardLifetime: view.composer.progressCardLifetime,
             readingHistory: view.composer.readingHistory,
+            getTranscriptElement: view.composer.getTranscriptElement,
             onManipulate: view.composer.onProgressManipulate,
           }}
           refreshAction={

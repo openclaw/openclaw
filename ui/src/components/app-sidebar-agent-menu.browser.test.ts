@@ -27,7 +27,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
   it("shows the same mixed avatars in count-aware groups without a backing circle", async () => {
     await import("./app-sidebar.tsx");
     const { renderSidebarAgentMenuSwitcher } = await import("./sidebar-agent-menu-switcher.tsx");
-    const { Menu } = await import("./solid/menu.tsx");
+    const { createMenuControls, Menu } = await import("./solid/menu.tsx");
     const image =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR7sAAAAASUVORK5CYII=";
     const agents = Array.from({ length: 8 }, (_, index) => ({
@@ -54,24 +54,31 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     ] as const) {
       unmount?.();
       unmount = mountSolid(
-        () =>
-          Menu({
+        () => {
+          const controls = createMenuControls();
+          return Menu({
             id: `agent-menu-${count}`,
             label: "Agents",
             open: true,
-            items: renderSidebarAgentMenuSwitcher({
-              activeId: agents[0]!.id,
-              allAgentsScope: true,
-              openMode: "hover",
-              agents: agents.slice(0, count),
-              identities: new Map(),
-              pinnedAgentIds: ["agent-0"],
-              onTogglePinnedAgent: async () => {},
-              resolveAvatarUrl: (url) => url,
-              avatarErrorHandler: () => () => {},
-              agentUnreadCount: () => 0,
-            }),
-          }),
+            controls,
+            items: renderSidebarAgentMenuSwitcher(
+              {
+                activeId: agents[0]!.id,
+                allAgentsScope: true,
+                openMode: "hover",
+                agents: agents.slice(0, count),
+                identities: new Map(),
+                pinnedAgentIds: ["agent-0"],
+                onTogglePinnedAgent: async () => {},
+                resolveAvatarUrl: (url) => url,
+                avatarErrorHandler: () => () => {},
+                agentUnreadCount: () => 0,
+              },
+              undefined,
+              controls,
+            ),
+          });
+        },
         { container: root },
       ).unmount;
       flush();

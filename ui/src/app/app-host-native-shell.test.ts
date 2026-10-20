@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "../components/modal-dialog.ts";
 import "../components/sidebar-update-card.tsx";
 import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
-import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   createConnectedShellOwner as createShellOwner,
@@ -12,6 +11,7 @@ import {
 } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
+import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { COMMAND_PALETTE_ELEMENT, ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { handleNavDrawerKeydown } from "./navigation-surface.ts";
@@ -67,13 +67,11 @@ afterEach(() => {
 
 describe("OpenClaw native shell", () => {
   it("focuses the navigation drawer without a tooltip claiming Escape", async () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.stubGlobal("matchMedia", () => Object.assign(new EventTarget(), { matches: true }));
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
     const shell = createShellOwner();
-    const context = {
-      ...nativeSessionContext(vi.fn(), "research"),
-      navigation: createNavigationPreferencesFixture(),
-    };
-    Object.assign(shell, { runtime: { context } });
+    shell.runtime = runtime;
     const drawer = document.createElement("nav");
     drawer.className = "shell-nav";
     shell.navDrawerElement = drawer;
@@ -625,17 +623,15 @@ describe("OpenClaw native shell", () => {
     (window as TestWebKitWindow).webkit = {
       messageHandlers: { openclawNav: { postMessage } },
     };
-    const snapshot = { navCollapsed: false, navWidth: 280 };
-    const shell = createShellOwner() as unknown as ShellNavigationState;
-    shell.runtime = {
-      context: {
-        navigation: { snapshot },
-      } as unknown as ApplicationContext,
-    };
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
+    runtime.context.navigation.update({ navCollapsed: false, navWidth: 280 });
+    const shell = createShellOwner();
+    shell.runtime = runtime;
 
     shell.afterCommit();
     shell.afterCommit();
-    snapshot.navCollapsed = true;
+    runtime.context.navigation.update({ navCollapsed: true });
     shell.afterCommit();
 
     expect(postMessage.mock.calls).toEqual([

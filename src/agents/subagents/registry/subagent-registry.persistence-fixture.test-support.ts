@@ -42,6 +42,7 @@ export function createSubagentPersistenceRuntime(call: typeof callGateway): Gate
     dispatchAgent: (params, timeoutMs) => call({ method: "agent", params, timeoutMs }),
     waitForAgent: (params, timeoutMs) => call({ method: "agent.wait", params, timeoutMs }),
     sendRecoveryNotice: vi.fn(),
+    resumeChatInput: vi.fn(),
   };
 }
 

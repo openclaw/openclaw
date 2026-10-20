@@ -111,6 +111,41 @@ it("retires lost acknowledgments and retries the final clear before detaching", 
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it.each([false, true])(
+  "coalesces same-turn viewer redeclarations with acknowledged=%s",
+  async (acknowledged) => {
+    const harness = createPendingGatewayHarness();
+    const { store, owner } = harness;
+    store.watch(owner, ["agent:main:visible"]);
+    await flushSync();
+    if (acknowledged) {
+      harness.acknowledge(0);
+      await flushSync();
+    }
+
+    store.unwatch(owner);
+    store.watch(owner, ["agent:main:visible"]);
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledOnce();
+    expect(harness.retired).toEqual([]);
+
+    // A populated acknowledgment queued before the clear cannot detach it.
+    if (!acknowledged) {
+      harness.acknowledge(0);
+    }
+    store.unwatch(owner);
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    expectDeclaration(harness, []);
+    expect(harness.unsubscribe).not.toHaveBeenCalled();
+
+    harness.acknowledge(1);
+    await flushSync();
+    expect(harness.unsubscribe).toHaveBeenCalledOnce();
+    expect(harness.pending.hasPending).toBe(false);
+  },
+);
+
 it.each(["membership", "hello", "client", "unavailable"] as const)(
   "retires a pending declaration on %s without reviving stale retries",
   async (change) => {
@@ -153,6 +188,7 @@ it.each(["membership", "hello", "client", "unavailable"] as const)(
     expect(harness.request).toHaveBeenCalledTimes(change === "unavailable" ? 1 : 2);
     expect(harness.pending.hasPending).toBe(false);
     store.unwatch(owner);
+    await flushSync();
     if (change !== "unavailable") {
       harness.acknowledge(2);
     }

@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerScopedRequestRejectedError,
@@ -9,6 +10,59 @@ import * as sharedClient from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 
 describe("Codex physical request authority", () => {
+  it.each([false, true])(
+    "runs one fresh check after acquisition and guards the final write (revoked: %s)",
+    async (revoke) => {
+      let current = true;
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const freshCheck = vi.fn(async () => {
+        entered.resolve();
+        await resume.promise;
+      });
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line) as { id: number };
+          send({ id: request.id, result: { data: [] } });
+        },
+      });
+      const acquire = vi
+        .spyOn(sharedClient, "getLeasedSharedCodexAppServerClient")
+        .mockImplementation(async (options) => {
+          await options?.assertCurrentAsync?.();
+          expect(freshCheck).not.toHaveBeenCalled();
+          return harness.client;
+        });
+      const result = withCodexAppServerJsonClient(
+        {
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("credential revoked");
+            }
+          },
+          assertDispatchCurrentAsync: freshCheck,
+        },
+        (send) => send({ method: "thread/list", requestParams: {} }),
+      );
+      const settled = revoke
+        ? expect(result).rejects.toThrow("credential revoked")
+        : expect(result).resolves.toEqual({ data: [] });
+      try {
+        await entered.promise;
+        current = !revoke;
+        resume.resolve();
+        await settled;
+        expect(freshCheck).toHaveBeenCalledOnce();
+        expect(harness.writes).toHaveLength(revoke ? 0 : 1);
+      } finally {
+        resume.resolve();
+        await result.catch(() => {});
+        acquire.mockRestore();
+        await harness.client.closeAndWait();
+      }
+    },
+  );
+
   it.each(["current", "scope-revoked", "request-revoked"] as const)(
     "checks each caller authority once at the physical write: %s",
     async (outcome) => {
