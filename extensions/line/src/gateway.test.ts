@@ -3,9 +3,10 @@ import {
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { lineAccount } from "./channel-account.test-support.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { setLineRuntime } from "./runtime.js";
-import type { LineProbeResult, ResolvedLineAccount } from "./types.js";
+import type { LineProbeResult } from "./types.js";
 
 const { probeLineBotMock, monitorLineProviderMock } = vi.hoisted(() => ({
   probeLineBotMock: vi.fn(),
@@ -14,17 +15,6 @@ const { probeLineBotMock, monitorLineProviderMock } = vi.hoisted(() => ({
 
 vi.mock("./probe.runtime.js", () => ({ probeLineBot: probeLineBotMock }));
 vi.mock("./monitor.runtime.js", () => ({ monitorLineProvider: monitorLineProviderMock }));
-
-function lineAccount(config: ResolvedLineAccount["config"] = {}): ResolvedLineAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    channelAccessToken: "token",
-    channelSecret: "secret",
-    tokenSource: "config",
-    config,
-  };
-}
 
 async function startWithProbe(probe: LineProbeResult, account = lineAccount()) {
   probeLineBotMock.mockResolvedValue(probe);

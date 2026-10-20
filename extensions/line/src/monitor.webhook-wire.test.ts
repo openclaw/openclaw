@@ -1,9 +1,8 @@
 import crypto from "node:crypto";
-import { once } from "node:events";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorLineProvider } from "./monitor.js";
 
@@ -85,27 +84,10 @@ describe("monitorLineProvider webhook body limits over a real connection", () =>
       runtime: {} as RuntimeEnv,
     });
     const handler = requireRegisteredHandler();
-    const server = createServer((req, res) => {
-      void handler(req, res);
-    });
     try {
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected LINE webhook test server to have a TCP address");
-      }
-      await run(`http://127.0.0.1:${address.port}/line/webhook`);
+      await withServer(handler, (baseUrl) => run(`${baseUrl}/line/webhook`));
     } finally {
-      try {
-        if (server.listening) {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
-      } finally {
-        await monitor.stop();
-      }
+      await monitor.stop();
     }
   };
 
@@ -118,9 +100,11 @@ describe("monitorLineProvider webhook body limits over a real connection", () =>
       expect(overCap.length).toBeLessThan(64 * 1024);
       expect(Buffer.byteLength(overCap, "utf-8")).toBeGreaterThan(64 * 1024);
       const rejected = await postSigned(webhookUrl, overCap, 8 * 1024);
-      expect(rejected.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(rejected).toMatchObject({
+        statusLine: "HTTP/1.1 413 Payload Too Large",
+        closedByServer: true,
+      });
       expect(JSON.parse(rejected.body)).toEqual({ error: "Payload too large" });
-      expect(rejected.closedByServer).toBe(true);
 
       const accepted = await postSigned(webhookUrl, body(1_000), 1024);
       expect(accepted.statusLine).toBe("HTTP/1.1 200 OK");

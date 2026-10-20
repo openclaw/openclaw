@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { lineConfig } from "./channel-account.test-support.js";
 import type { LineConfig } from "./types.js";
 
 type LineHandleWebhook = ReturnType<typeof import("./bot.js").createLineBot>["handleWebhook"];
@@ -17,30 +17,22 @@ const { createLineBotMock, registerWebhookTargetWithPluginRouteMock } = vi.hoist
 
 vi.mock("./bot.js", () => ({ createLineBot: createLineBotMock }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
-    "openclaw/plugin-sdk/runtime-env",
-  );
-  return { ...actual, danger: (value: unknown) => String(value), logVerbose: vi.fn() };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  danger: (value: unknown) => String(value),
+  logVerbose: vi.fn(),
+}));
 
-vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-ingress")>(
-    "openclaw/plugin-sdk/webhook-ingress",
-  );
-  return {
-    ...actual,
-    normalizePluginHttpPath: (path: string | undefined, fallback: string) => path ?? fallback,
-    registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>()),
+  normalizePluginHttpPath: (path: string | undefined, fallback: string) => path ?? fallback,
+  registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
+}));
 
-vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-request-guards")>(
-    "openclaw/plugin-sdk/webhook-request-guards",
-  );
-  return { ...actual, runDetachedWebhookWork: vi.fn() };
-});
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-request-guards")>()),
+  runDetachedWebhookWork: vi.fn(),
+}));
 
 vi.mock("./auto-reply-delivery.js", () => ({ deliverLineAutoReply: vi.fn() }));
 
@@ -84,7 +76,7 @@ async function disableBlockStreamingFor(line: LineConfig, startupLine: LineConfi
   const monitor = await monitorLineProvider({
     channelAccessToken: "token",
     channelSecret: "secret", // pragma: allowlist secret
-    config: { channels: { line: startupLine } } as OpenClawConfig,
+    config: lineConfig(startupLine),
     runtime: {} as RuntimeEnv,
   });
   const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
@@ -111,21 +103,14 @@ async function disableBlockStreamingFor(line: LineConfig, startupLine: LineConfi
 }
 
 describe("the channel-scoped block streaming choice", () => {
-  it("lets a named account override the channel-wide choice", async () => {
+  it.each([
+    ["account overrides channel", true, { enabled: false }],
+    ["account coalescing inherits channel disable", false, { coalesce: { idleMs: 1000 } }],
+  ] as const)("disables block streaming when %s", async (_name, enabled, block) => {
     expect(
       await disableBlockStreamingFor({
-        streaming: { block: { enabled: true } },
-        accounts: { default: { streaming: { block: { enabled: false } } } },
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps a channel-wide disable when an account only tunes coalescing", async () => {
-    // A shallow account merge must not erase the channel's explicit disable.
-    expect(
-      await disableBlockStreamingFor({
-        streaming: { block: { enabled: false } },
-        accounts: { default: { streaming: { block: { coalesce: { idleMs: 1000 } } } } },
+        streaming: { block: { enabled } },
+        accounts: { default: { streaming: { block } } },
       }),
     ).toBe(true);
   });

@@ -15,8 +15,6 @@ afterAll(() => {
 
 import { buildLineMediaMessage } from "./outbound-media.js";
 
-const HTTPS_URL_ERROR = new Error("LINE outbound media URL must use HTTPS");
-const USER_TARGET = "line:user:Uabc";
 const PREVIEW_URL = "https://example.com/preview.jpg";
 const AUDIO_URL = "https://example.com/download?id=audio";
 const VIDEO_URL = "https://example.com/clip.mp4";
@@ -26,20 +24,19 @@ const INSECURE_PREVIEW_URL =
 function build(
   url: string,
   options: Parameters<typeof buildLineMediaMessage>[1] = {},
-  target = USER_TARGET,
+  target = "line:user:Uabc",
 ) {
   return buildLineMediaMessage(url, options, target);
 }
 
 beforeEach(() => {
-  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
-  ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset().mockResolvedValue({
     hostname: "example.com",
     addresses: ["93.184.216.34"],
   });
 });
 
-describe("buildLineMediaMessage URL boundary", () => {
+describe("buildLineMediaMessage", () => {
   it.each([
     {
       name: "malformed media URL",
@@ -49,7 +46,7 @@ describe("buildLineMediaMessage URL boundary", () => {
     {
       name: "insecure preview URL",
       run: () => build(VIDEO_URL, { mediaKind: "video", previewImageUrl: INSECURE_PREVIEW_URL }),
-      expected: HTTPS_URL_ERROR,
+      expected: new Error("LINE outbound media URL must use HTTPS"),
     },
   ])("does not expose credentials from a $name", async ({ run, expected }) => {
     await expect(run()).rejects.toThrow(expected);
@@ -72,9 +69,6 @@ describe("buildLineMediaMessage URL boundary", () => {
       policy: { allowPrivateNetwork: false },
     });
   });
-});
-
-describe("buildLineMediaMessage kind resolution", () => {
   it("infers audio from explicit duration metadata when mediaKind is omitted", async () => {
     await expect(build(AUDIO_URL, { durationMs: 30000 })).resolves.toEqual({
       type: "audio",
@@ -90,25 +84,20 @@ describe("buildLineMediaMessage kind resolution", () => {
     });
   });
 
-  it.each([
-    // These suffixes name formats LINE cannot carry in its native message types.
-    "https://example.com/image.webp",
-    "https://example.com/file.unknown",
-  ])("delivers unsupported %s as its URL", async (url) => {
-    await expect(build(url)).resolves.toEqual({
-      type: "text",
-      text: url,
-    });
-  });
+  it.each(["https://example.com/image.webp", "https://example.com/file.unknown", VIDEO_URL])(
+    "delivers unsupported or posterless %s as its URL",
+    async (url) => {
+      await expect(build(url)).resolves.toEqual({
+        type: "text",
+        text: url,
+      });
+    },
+  );
 
   it("names the missing preview image when tracking metadata declares video intent", async () => {
     await expect(
       build("https://example.com/download?id=video", { trackingId: "track-1" }),
     ).rejects.toThrow(/require previewImageUrl/i);
-  });
-
-  it("delivers an inferred video without a poster as its URL", async () => {
-    await expect(build(VIDEO_URL)).resolves.toEqual({ type: "text", text: VIDEO_URL });
   });
 
   it("gates trackingId on user targets", async () => {

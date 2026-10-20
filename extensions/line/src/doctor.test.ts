@@ -13,11 +13,15 @@ const shouldSkip = lineDoctor.shouldSkipDefaultEmptyGroupAllowlistWarning!;
 const extraWarnings = lineDoctor.collectEmptyAllowlistExtraWarnings!;
 
 describe("line doctor empty group allowlist", () => {
-  it("keeps the shared warning when nothing is configured under groups", () => {
-    const params = context({ groupPolicy: "allowlist" });
-
-    expect(shouldSkip(params)).toBe(false);
-    expect(extraWarnings(params)).toStrictEqual([]);
+  it.each([
+    { groupPolicy: "allowlist" },
+    { groupPolicy: "open", groups: { C222: { allowFrom: ["U1"] } } },
+  ])("leaves the shared warning alone for $groupPolicy without scoped coverage", (account) => {
+    const params = context(account);
+    expect({ skip: shouldSkip(params), warnings: extraWarnings(params) }).toStrictEqual({
+      skip: false,
+      warnings: [],
+    });
   });
 
   it("ignores a disabled group when reporting the ones still dropping messages", () => {

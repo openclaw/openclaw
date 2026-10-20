@@ -26,38 +26,36 @@ describe("probeLineBot", () => {
     await probing;
   }
 
-  it("stays healthy and cancels an optional quota body before the probe deadline", async () => {
-    vi.useFakeTimers();
-    const pending = createPendingLineResponse({ type: "none" });
-    const fetchMock = stubProbe(pending.response, webhookResponse(true));
-    const probing = probeLineBot("token", 300);
-    try {
-      await vi.advanceTimersByTimeAsync(200);
-      const result = await probing;
-      expect(result).toMatchObject({ ok: true, bot: identity });
-      expect(result.quota).toBeUndefined();
-      // Exhausting the quota slice must leave time for the webhook read.
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(pending.cancel).toHaveBeenCalledOnce();
-    } finally {
-      await finish(probing, pending);
-    }
-  });
-
-  it("cancels a stalled bot identity read and reports a timeout", async () => {
-    vi.useFakeTimers();
-    const pending = createPendingLineResponse(identity);
-    const fetchMock = stubLineApiFetch(pending.response);
-    const probing = probeLineBot("token", 300);
-    try {
-      await vi.advanceTimersByTimeAsync(301);
-      expect(await probing).toMatchObject({ ok: false, error: "timeout" });
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(pending.cancel).toHaveBeenCalledOnce();
-    } finally {
-      await finish(probing, pending);
-    }
-  });
+  it.each([
+    ["identity", 0, 301, { ok: false, error: "timeout" }],
+    ["quota", 1, 200, { ok: true, bot: identity }],
+    ["webhook", 2, 299, { ok: true, bot: identity }],
+  ] as const)(
+    "bounds a stalled %s body without spending another read's budget",
+    async (stage, index, advanceMs, expected) => {
+      vi.useFakeTimers();
+      const values = [identity, { type: "none" }, { endpoint: "https://x", active: true }];
+      const pending = createPendingLineResponse(values[index]);
+      const responses = values.map((value) => Response.json(value));
+      responses[index] = pending.response;
+      const fetchMock = stubLineApiFetch(...responses.slice(0, index === 0 ? 1 : 3));
+      const probing = probeLineBot("token", 300);
+      try {
+        await vi.advanceTimersByTimeAsync(advanceMs);
+        const result = await probing;
+        expect(result).toMatchObject(expected);
+        if (stage !== "identity") {
+          expect(result[stage]).toBeUndefined();
+        }
+        if (stage !== "webhook") {
+          expect(fetchMock).toHaveBeenCalledTimes(index === 0 ? 1 : 3);
+          expect(pending.cancel).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await finish(probing, pending);
+      }
+    },
+  );
 
   it("keeps a limited response without an amount unknown", async () => {
     const fetchMock = stubProbe(Response.json({ type: "limited" }), webhookResponse(true));
@@ -120,20 +118,5 @@ describe("probeLineBot", () => {
     const result = await probeLineBot("token", 5000);
     expect(result.ok).toBe(true);
     expect(result.webhook).toBeUndefined();
-  });
-
-  it("stays healthy when the webhook lookup never settles", async () => {
-    vi.useFakeTimers();
-    const pending = createPendingLineResponse({ endpoint: "https://x", active: true });
-    stubWebhook(pending.response);
-    const probing = probeLineBot("token", 300);
-    try {
-      await vi.advanceTimersByTimeAsync(299);
-      const result = await probing;
-      expect(result).toMatchObject({ ok: true, bot: identity });
-      expect(result.webhook).toBeUndefined();
-    } finally {
-      await finish(probing, pending);
-    }
   });
 });

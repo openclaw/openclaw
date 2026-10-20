@@ -1,12 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { lineConfig as config } from "./channel-account.test-support.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import type { LineConfig } from "./types.js";
-
-function config(line: LineConfig): OpenClawConfig {
-  return { channels: { line } } as OpenClawConfig;
-}
 
 describe("resolveLineGroupConfigEntry", () => {
   it("matches raw, prefixed, and wildcard group config entries", () => {
@@ -16,16 +12,15 @@ describe("resolveLineGroupConfigEntry", () => {
       "*": { requireMention: true },
     };
 
-    expect(resolveLineGroupConfigEntry(groups, { groupId: "g1" })).toEqual({
-      requireMention: false,
-    });
-    expect(resolveLineGroupConfigEntry(groups, { roomId: "r1" })).toEqual({
-      requireMention: true,
-      systemPrompt: "Room prompt",
-    });
-    expect(resolveLineGroupConfigEntry(groups, { groupId: "missing" })).toEqual({
-      requireMention: true,
-    });
+    expect([
+      resolveLineGroupConfigEntry(groups, { groupId: "g1" }),
+      resolveLineGroupConfigEntry(groups, { roomId: "r1" }),
+      resolveLineGroupConfigEntry(groups, { groupId: "missing" }),
+    ]).toEqual([
+      { requireMention: false },
+      { requireMention: true, systemPrompt: "Room prompt" },
+      { requireMention: true },
+    ]);
   });
 
   it("keeps the settings an operator only wrote on the wildcard", () => {
@@ -42,7 +37,6 @@ describe("resolveLineGroupConfigEntry", () => {
   });
 
   it("resolves mentions the same way the channel reports them", () => {
-    // Inbound and status must agree on the inherited mention gate.
     const groups: NonNullable<LineConfig["groups"]> = {
       "*": { requireMention: false },
       C1: { systemPrompt: "team bot" },
