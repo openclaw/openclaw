@@ -9,6 +9,48 @@ import { useWorkspaceMigrationTestFixture } from "./state-migrations.workspace-s
 
 describe("recreated legacy workspace state migration", () => {
   const { migrate, setup } = useWorkspaceMigrationTestFixture();
+  const original = "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n";
+  const recreated = "openclaw-workspace-attestation:v1\n2026-07-16T11:00:00.000Z\n";
+  const originalMtime = new Date("2026-07-15T11:01:00.000Z");
+
+  async function setupAttestation() {
+    const context = setup();
+    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
+    const attestationPath = path.join(
+      context.stateDir,
+      "workspace-attestations",
+      `${identity.workspaceKey}.attested`,
+    );
+    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
+    await fsp.writeFile(attestationPath, original, "utf8");
+    await fsp.utimes(attestationPath, originalMtime, originalMtime);
+    expect((await migrate(context)).warnings).toEqual([]);
+    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
+    const db = openOpenClawStateDatabase({ env: context.env }).db;
+    const read = (sql: string, key: string) => db.prepare(sql).get(key);
+    return {
+      context,
+      attestationPath,
+      claimPath: `${attestationPath}.doctor-importing`,
+      expectState(mtime: Date, content: string) {
+        expect(
+          read(
+            "SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?",
+            identity.workspaceKey,
+          ),
+        ).toEqual({ attested_at_ms: mtime.getTime() });
+        expect(
+          read(
+            "SELECT source_sha256, removed_source FROM migration_sources WHERE source_path = ?",
+            attestationPath,
+          ),
+        ).toEqual({
+          source_sha256: createHash("sha256").update(content).digest("hex"),
+          removed_source: 1,
+        });
+      },
+    };
+  }
 
   it("cleans a covered setup marker recreated after completed migration", async () => {
     const context = setup();
@@ -23,8 +65,8 @@ describe("recreated legacy workspace state migration", () => {
     );
     expect((await migrate(context)).warnings).toEqual([]);
 
-    const recreated = JSON.stringify({ version: 1, setupCompletedAt: completedAt });
-    await fsp.writeFile(setupPath, recreated, "utf8");
+    const recreatedSetup = JSON.stringify({ version: 1, setupCompletedAt: completedAt });
+    await fsp.writeFile(setupPath, recreatedSetup, "utf8");
 
     const result = await migrate(context);
 
@@ -48,7 +90,7 @@ describe("recreated legacy workspace state migration", () => {
       report_json: string;
     };
     expect(receipt).toMatchObject({
-      source_sha256: createHash("sha256").update(recreated).digest("hex"),
+      source_sha256: createHash("sha256").update(recreatedSetup).digest("hex"),
       removed_source: 1,
     });
     expect(JSON.parse(receipt.report_json)).toMatchObject({
@@ -61,29 +103,10 @@ describe("recreated legacy workspace state migration", () => {
     { claimed: false, state: "source" },
     { claimed: true, state: "interrupted claim" },
   ])("imports an attestation recreated as a sole $state", async ({ claimed }) => {
-    const context = setup();
-    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
-    const attestationPath = path.join(
-      context.stateDir,
-      "workspace-attestations",
-      `${identity.workspaceKey}.attested`,
-    );
-    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
-    await fsp.writeFile(
-      attestationPath,
-      "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-      "utf8",
-    );
-    const originalMtime = new Date("2026-07-15T11:01:00.000Z");
-    await fsp.utimes(attestationPath, originalMtime, originalMtime);
-    expect((await migrate(context)).warnings).toEqual([]);
-
-    const recreated = "openclaw-workspace-attestation:v1\n2026-07-16T11:00:00.000Z\n";
-    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
+    const { context, attestationPath, claimPath, expectState } = await setupAttestation();
     await fsp.writeFile(attestationPath, recreated, "utf8");
     const recreatedMtime = new Date("2026-07-16T11:01:00.000Z");
     await fsp.utimes(attestationPath, recreatedMtime, recreatedMtime);
-    const claimPath = `${attestationPath}.doctor-importing`;
     if (claimed) {
       await fsp.rename(attestationPath, claimPath);
     }
@@ -93,42 +116,11 @@ describe("recreated legacy workspace state migration", () => {
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(attestationPath)).toBe(false);
     expect(fs.existsSync(claimPath)).toBe(false);
-    const db = openOpenClawStateDatabase({ env: context.env }).db;
-    expect(
-      db
-        .prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
-        .get(identity.workspaceKey),
-    ).toEqual({ attested_at_ms: recreatedMtime.getTime() });
-    expect(
-      db
-        .prepare(
-          "SELECT source_sha256, removed_source FROM migration_sources WHERE source_path = ?",
-        )
-        .get(attestationPath),
-    ).toEqual({
-      source_sha256: createHash("sha256").update(recreated).digest("hex"),
-      removed_source: 1,
-    });
+    expectState(recreatedMtime, recreated);
   });
 
   it("retains colliding source and claim from a recreated generation", async () => {
-    const context = setup();
-    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
-    const attestationPath = path.join(
-      context.stateDir,
-      "workspace-attestations",
-      `${identity.workspaceKey}.attested`,
-    );
-    const original = "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n";
-    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
-    await fsp.writeFile(attestationPath, original, "utf8");
-    const originalMtime = new Date("2026-07-15T11:01:00.000Z");
-    await fsp.utimes(attestationPath, originalMtime, originalMtime);
-    expect((await migrate(context)).warnings).toEqual([]);
-
-    const recreated = "openclaw-workspace-attestation:v1\n2026-07-16T11:00:00.000Z\n";
-    const claimPath = `${attestationPath}.doctor-importing`;
-    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
+    const { context, attestationPath, claimPath, expectState } = await setupAttestation();
     await Promise.all([
       fsp.writeFile(attestationPath, recreated, "utf8"),
       fsp.writeFile(claimPath, recreated, "utf8"),
@@ -141,21 +133,6 @@ describe("recreated legacy workspace state migration", () => {
     ]);
     expect(fs.existsSync(attestationPath)).toBe(true);
     expect(fs.existsSync(claimPath)).toBe(true);
-    const db = openOpenClawStateDatabase({ env: context.env }).db;
-    expect(
-      db
-        .prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
-        .get(identity.workspaceKey),
-    ).toEqual({ attested_at_ms: originalMtime.getTime() });
-    expect(
-      db
-        .prepare(
-          "SELECT source_sha256, removed_source FROM migration_sources WHERE source_path = ?",
-        )
-        .get(attestationPath),
-    ).toEqual({
-      source_sha256: createHash("sha256").update(original).digest("hex"),
-      removed_source: 1,
-    });
+    expectState(originalMtime, original);
   });
 });

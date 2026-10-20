@@ -5,6 +5,24 @@ import { transformMediaArchiveContent } from "./state-migrations.media-persisten
 import { transformArchiveBytesIncrementally } from "./state-migrations.transcript-archive-stream.js";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+type TransformOptions = Parameters<typeof transformArchiveBytesIncrementally>[0];
+const unchanged = (line: string) => ({ changed: false, content: line });
+const encode = (bytes: Buffer, encoding: TransformOptions["encoding"]) =>
+  encoding === "zstd" ? zstdCompressSync(bytes) : bytes;
+const decode = (bytes: Buffer, encoding: TransformOptions["encoding"]) =>
+  encoding === "zstd" ? zstdDecompressSync(bytes) : bytes;
+const transform = (
+  bytes: Buffer,
+  owner: string,
+  options: Partial<Omit<TransformOptions, "bytes" | "owner">> = {},
+) =>
+  transformArchiveBytesIncrementally({
+    bytes,
+    owner,
+    encoding: "zstd",
+    transformLine: unchanged,
+    ...options,
+  });
 
 describe("incremental transcript archive transforms", () => {
   it("keeps an unchanged zstd JSONL archive byte-identical", async () => {
@@ -13,12 +31,7 @@ describe("incremental transcript archive transforms", () => {
     ).join("\n")}\n`;
     const source = zstdCompressSync(Buffer.from(content));
     const before = sha256(source);
-    const transformed = await transformArchiveBytesIncrementally({
-      bytes: source,
-      encoding: "zstd",
-      owner: "unchanged",
-      transformLine: (line) => ({ changed: false, content: line }),
-    });
+    const transformed = await transform(source, "unchanged");
     expect(transformed.changed).toBe(false);
     expect(transformed.bytes).toBe(source);
     expect(sha256(transformed.bytes)).toBe(before);
@@ -26,10 +39,7 @@ describe("incremental transcript archive transforms", () => {
 
   it("rewrites records incrementally while preserving order and trailing newline", async () => {
     const source = zstdCompressSync(Buffer.from('{"n":1}\n{"n":2}\n', "utf8"));
-    const transformed = await transformArchiveBytesIncrementally({
-      bytes: source,
-      encoding: "zstd",
-      owner: "changed",
+    const transformed = await transform(source, "changed", {
       transformLine: (line) => {
         const event = JSON.parse(line) as { n: number };
         return event.n === 2
@@ -53,10 +63,8 @@ describe("incremental transcript archive transforms", () => {
       const content = `${first}\n${last}`;
       const bytes = Buffer.from(content);
       const seen: string[] = [];
-      const transformed = await transformArchiveBytesIncrementally({
-        bytes: encoding === "zstd" ? zstdCompressSync(bytes) : bytes,
+      const transformed = await transform(encode(bytes, encoding), "utf8", {
         encoding,
-        owner: "utf8",
         transformLine: (line) => {
           seen.push((JSON.parse(line) as { text: string }).text);
           return { changed: false, content: line };
@@ -64,21 +72,12 @@ describe("incremental transcript archive transforms", () => {
       });
       expect(seen).toEqual([`${"x".repeat(chunkSize - prefix.length - 1)}🙂`, "終わり"]);
       expect(transformed.changed).toBe(false);
-      expect(
-        encoding === "zstd" ? zstdDecompressSync(transformed.bytes) : transformed.bytes,
-      ).toEqual(bytes);
+      expect(decode(transformed.bytes, encoding)).toEqual(bytes);
     },
   );
 
   it("propagates a damaged zstd stream", async () => {
-    await expect(
-      transformArchiveBytesIncrementally({
-        bytes: Buffer.from("not a zstd archive"),
-        encoding: "zstd",
-        owner: "damaged",
-        transformLine: (line) => ({ changed: false, content: line }),
-      }),
-    ).rejects.toThrow();
+    await expect(transform(Buffer.from("not a zstd archive"), "damaged")).rejects.toThrow();
   });
 
   it("applies the media persistence transform one JSONL record at a time", async () => {
@@ -93,10 +92,8 @@ describe("incremental transcript archive transforms", () => {
         },
       })}\n`,
     );
-    const transformed = await transformArchiveBytesIncrementally({
-      bytes: source,
+    const transformed = await transform(source, "media", {
       encoding: "identity",
-      owner: "media",
       transformLine: transformMediaArchiveContent,
     });
     expect(transformed.changed).toBe(true);
@@ -111,40 +108,22 @@ describe("incremental transcript archive transforms", () => {
     "removes a terminal NUL suffix from a %s archive without buffering decoded content",
     async (encoding) => {
       const content = Buffer.from('{"n":1}\n{"n":2}\0\0', "utf8");
-      const source = encoding === "zstd" ? zstdCompressSync(content) : content;
-      const transformed = await transformArchiveBytesIncrementally({
-        bytes: source,
-        encoding,
-        owner: "nul-tail",
-        transformLine: (line) => ({ changed: false, content: line }),
-      });
+      const transformed = await transform(encode(content, encoding), "nul-tail", { encoding });
       expect(transformed.changed).toBe(true);
-      const decoded =
-        encoding === "zstd" ? zstdDecompressSync(transformed.bytes) : transformed.bytes;
-      expect(decoded.toString("utf8")).toBe('{"n":1}\n{"n":2}');
+      expect(decode(transformed.bytes, encoding).toString("utf8")).toBe('{"n":1}\n{"n":2}');
     },
   );
 
   it("rejects an all-NUL archive consistently with the full-content transform", async () => {
-    await expect(
-      transformArchiveBytesIncrementally({
-        bytes: Buffer.alloc(32),
-        encoding: "identity",
-        owner: "all-nul",
-        transformLine: (line) => ({ changed: false, content: line }),
-      }),
-    ).rejects.toThrow("all-nul contains no JSONL records before its terminal NUL suffix");
+    await expect(transform(Buffer.alloc(32), "all-nul", { encoding: "identity" })).rejects.toThrow(
+      "all-nul contains no JSONL records before its terminal NUL suffix",
+    );
   });
 
   it("retains JSONL blank-record validation", async () => {
     const source = zstdCompressSync(Buffer.from('{"n":1}\n\n{"n":2}\n', "utf8"));
-    await expect(
-      transformArchiveBytesIncrementally({
-        bytes: source,
-        encoding: "zstd",
-        owner: "blank",
-        transformLine: (line) => ({ changed: false, content: line }),
-      }),
-    ).rejects.toThrow("blank contains a blank JSONL record at line 2");
+    await expect(transform(source, "blank")).rejects.toThrow(
+      "blank contains a blank JSONL record at line 2",
+    );
   });
 });

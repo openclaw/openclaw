@@ -68,7 +68,6 @@ async function fixture() {
   }
   registry.entries = [{ pluginId: "memory-core", channelIds: [], migration }];
   return {
-    root,
     stateDir,
     legacyPath,
     agentPath,
@@ -96,20 +95,18 @@ it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor"
     throw new Error("The skipped migration must not open SQLite");
   });
   const result = await runPluginDoctorStateMigrationPlans({
-    config: {
-      ...state.config,
-      database: { engine: "postgres" },
-    },
-    env: state.env,
-    detected: state.detected,
+    ...state,
+    config: { ...state.config, database: { engine: "postgres" } },
   });
-  expect(result.changes).toEqual([]);
-  expect(result.warnings).toEqual([]);
-  expect(result.notices).toEqual([
-    expect.stringContaining(
-      "legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port",
-    ),
-  ]);
+  expect(result).toMatchObject({
+    changes: [],
+    warnings: [],
+    notices: [
+      expect.stringContaining(
+        "legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port",
+      ),
+    ],
+  });
   expect(result.notices?.[0]).toContain("sidecar is retained unchanged");
   expect(result.notices?.[0]).toContain("may re-embed");
   expect(open).not.toHaveBeenCalled();
@@ -131,11 +128,7 @@ it("requires the real memory sidecar repair before porting the agent family", as
   const source = fs.readFileSync(state.legacyPath);
   await expect(preflight()).rejects.toThrow("memory-core-legacy-sidecar-index-to-agent-sqlite");
   expect(fs.readFileSync(state.legacyPath)).toEqual(source);
-  const repaired = await runPluginDoctorStateMigrationPlans({
-    config: state.config,
-    env: state.env,
-    detected: state.detected,
-  });
+  const repaired = await runPluginDoctorStateMigrationPlans(state);
   expect(repaired.warnings).toEqual([]);
   expect(repaired.changes).toContainEqual(
     expect.stringContaining("Migrated Memory Core legacy memory index"),

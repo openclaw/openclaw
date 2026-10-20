@@ -26,6 +26,11 @@ beforeEach(() => {
   storePath = path.join(root, "sessions.json");
 });
 const writeStore = (value: unknown) => fs.writeFile(storePath, JSON.stringify(value));
+function mainStore<T extends object>(entry: T) {
+  return { [MAIN_KEY]: { sessionId: "session-1", updatedAt: 1, ...entry } };
+}
+const saveStore = (store: Parameters<typeof saveLegacySessionStore>[1]) =>
+  saveLegacySessionStore(storePath, store, { skipMaintenance: true });
 function expectNormalized(store: Record<string, unknown>, channel: string) {
   expect(store.malformed).toBeUndefined();
   expect(store[MAIN_KEY]).toMatchObject({
@@ -56,16 +61,8 @@ it("stages prompt blobs after a recreated session directory", async () => {
       return await realMkdir(dir, options ?? undefined);
     });
   try {
-    await saveLegacySessionStore(
-      storePath,
-      {
-        [MAIN_KEY]: {
-          sessionId: "session-1",
-          updatedAt: 1,
-          skillsSnapshot: { prompt, skills: [{ name: "demo" }], version: 1 },
-        },
-      },
-      { skipMaintenance: true },
+    await saveStore(
+      mainStore({ skillsSnapshot: { prompt, skills: [{ name: "demo" }], version: 1 } }),
     );
   } finally {
     spy.mockRestore();
@@ -77,11 +74,11 @@ it("stages prompt blobs after a recreated session directory", async () => {
 it("normalizes file-era rows and drops malformed entries", async () => {
   await writeStore({
     malformed: null,
-    [MAIN_KEY]: {
+    ...mainStore({
       ...legacyEntry,
       lastChannel: "telegram",
       pluginExtensions: { " demo ": { " valid ": { ok: true }, invalid: undefined } },
-    },
+    }),
   });
   const store = loadLegacySessionStore(storePath);
   expectNormalized(store, "telegram");
@@ -89,26 +86,17 @@ it("normalizes file-era rows and drops malformed entries", async () => {
 });
 
 it("preserves retired room-only source bytes across inspection, loading, and refused writes", async () => {
-  const store = { [MAIN_KEY]: { sessionId: "session-room", updatedAt: 1, room: "#legacy" } };
+  const store = mainStore({ sessionId: "session-room", room: "#legacy" });
   const raw = `${JSON.stringify(store, null, 2)}\n`;
   await fs.writeFile(storePath, raw);
   expect(() => readLegacySessionStoreEntries({ storePath }, [])).toThrow(/2026\.9\.5/);
   expect(() => loadLegacySessionStore(storePath)).toThrow(/2026\.9\.5/);
-  await expect(saveLegacySessionStore(storePath, store, { skipMaintenance: true })).rejects.toThrow(
-    /2026\.9\.5/,
-  );
+  await expect(saveStore(store)).rejects.toThrow(/2026\.9\.5/);
   expect(await fs.readFile(storePath, "utf8")).toBe(raw);
 });
 
 it("imports provider-only fields still preserved by the July Doctor writer", async () => {
-  await writeStore({
-    [MAIN_KEY]: {
-      sessionId: "session-1",
-      updatedAt: 1,
-      provider: "slack",
-      lastProvider: "telegram",
-    },
-  });
+  await writeStore(mainStore({ provider: "slack", lastProvider: "telegram" }));
   const raw = await fs.readFile(storePath, "utf8");
   expectNormalized(loadLegacySessionStore(storePath), "telegram");
   expect(await fs.readFile(storePath, "utf8")).toBe(raw);
@@ -123,7 +111,7 @@ it("normalizes compatibility writes before persistence", async () => {
   };
   const store = {
     malformed: null,
-    [MAIN_KEY]: {
+    ...mainStore({
       ...legacyEntry,
       provider: "obsolete-provider",
       lastProvider: "obsolete-provider",
@@ -132,9 +120,9 @@ it("normalizes compatibility writes before persistence", async () => {
         ...skillsSnapshot,
         resolvedSkills: [{ name: "demo", description: "runtime-only catalog" }],
       },
-    },
+    }),
   } as unknown as Parameters<typeof saveLegacySessionStore>[1];
-  await saveLegacySessionStore(storePath, store, { skipMaintenance: true });
+  await saveStore(store);
   const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
     string,
     Record<string, unknown>

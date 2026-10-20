@@ -15,6 +15,7 @@ export function messageEvent(params: {
   role: "assistant" | "toolResult" | "user";
   timestamp: number;
 }): FixtureEvent {
+  const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   return {
     type: "message",
     id: params.id,
@@ -29,14 +30,7 @@ export function messageEvent(params: {
             api: "messages",
             provider: "anthropic",
             model: "sonnet-4.6",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: { ...zeroUsage, totalTokens: 0, cost: { ...zeroUsage, total: 0 } },
             stopReason: "stop",
           }
         : {}),
@@ -105,46 +99,34 @@ export function insertSession(
 
 export function readEventJson(databasePath: string, sessionId: string, seq: number): string {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const row = database
-      .prepare(
-        `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? AND seq = ?`,
-      )
-      .get(sessionId, seq);
-    if (!row) {
-      throw new Error(`Missing transcript fixture ${sessionId}:${seq}`);
-    }
-    return readSqliteTranscriptPayload(row);
-  } finally {
-    database.close();
+  using database = new DatabaseSync(databasePath, { readOnly: true });
+  const row = database
+    .prepare(
+      `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? AND seq = ?`,
+    )
+    .get(sessionId, seq);
+  if (!row) {
+    throw new Error(`Missing transcript fixture ${sessionId}:${seq}`);
   }
+  return readSqliteTranscriptPayload(row);
 }
 
 export function readGeneration(databasePath: string, sessionId: string): string {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const row = database
-      .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
-      .get(sessionId) as { generation: string };
-    return row.generation;
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(databasePath, { readOnly: true });
+  const row = database
+    .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
+    .get(sessionId) as { generation: string };
+  return row.generation;
 }
 
 export function readMigrationCursor(databasePath: string): unknown {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const row = database
-      .prepare(
-        "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
-      )
-      .get() as { app_version: string } | undefined;
-    return row ? JSON.parse(row.app_version) : undefined;
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(databasePath, { readOnly: true });
+  const row = database
+    .prepare(
+      "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
+    )
+    .get() as { app_version: string } | undefined;
+  return row ? JSON.parse(row.app_version) : undefined;
 }
