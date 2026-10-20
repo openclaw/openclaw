@@ -6,6 +6,7 @@ import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardPreview } from "./dashboard-preview.tsx";
 
+// mock-isolation: Exercise the lazy error boundary without registering the Board renderer or its providers.
 vi.mock("../../components/board/board-document.tsx", () => ({
   OpenClawBoardDocument() {
     throw new Error("Preview unavailable");
