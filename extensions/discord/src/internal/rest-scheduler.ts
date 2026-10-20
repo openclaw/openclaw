@@ -111,10 +111,6 @@ export class RestScheduler<TData> {
     this.rejectPending(new Error("Discord request queue cleared"));
   }
 
-  get queueSize(): number {
-    return this.queuedRequests;
-  }
-
   private getBucket(key: string): BucketState<TData> {
     const existing = this.buckets.get(key);
     if (existing) {

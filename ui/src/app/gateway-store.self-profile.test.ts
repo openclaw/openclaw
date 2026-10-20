@@ -1,10 +1,12 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
-import { createPendingSendMessage } from "../pages/chat/chat-send-queue-state.ts";
+import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
+import { installOutboxBrowserStorage } from "../pages/chat/outbox-browser.test-support.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -48,13 +50,17 @@ function publishPresence(user: AuthenticatedUser) {
 
 beforeEach(() => {
   stubGatewayStoreTestGlobals();
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   vi.useFakeTimers();
+  vi.stubGlobal("requestAnimationFrame", () => 1);
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
   ({ gateway, current } = createStore());
 });
 afterEach(() => {
   gateway.stop();
   vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 describe("Gateway self-profile ownership", () => {
@@ -148,16 +154,23 @@ describe("Gateway self-profile ownership", () => {
       });
       expect(current().request).not.toHaveBeenCalled();
       const read = gateway.loadSelfProfile();
-      const queued = () =>
-        createPendingSendMessage(
-          makeChatHost({
-            client: gateway.snapshot.client,
-            hello: gateway.snapshot.hello,
-            selfUser: gateway.snapshot.selfUser,
-          }),
-          "hello",
-        )?.item;
-      const pending = queued();
+      installOutboxBrowserStorage();
+      const client = createTestGatewayClient(async () => ({}));
+      Object.defineProperty(client, "instanceId", {
+        get: () => gateway.snapshot.client?.instanceId,
+      });
+      const queued = async () => {
+        const host = makeChatHost({
+          connected: false,
+          client,
+          hello: gateway.snapshot.hello,
+          selfUser: gateway.snapshot.selfUser,
+          chatMessage: "hello",
+        });
+        expect(await handleSendChat(host)).toBe(true);
+        return host.chatQueue.at(-1);
+      };
+      const pending = await queued();
       expect(pending?.sender).toMatchObject({
         id: profile.id,
         name: profile.displayName,
@@ -172,10 +185,10 @@ describe("Gateway self-profile ownership", () => {
         deferred.resolve({ profile });
         await read;
       }
-      expect(queued()?.sender?.id).toBe(profile.id);
+      expect((await queued())?.sender?.id).toBe(profile.id);
       expect(pending?.sender?.id).toBe(profile.id);
       gateway.connect();
-      expect(queued()?.sender).toBeUndefined();
+      expect((await queued())?.sender).toBeUndefined();
     },
   );
 

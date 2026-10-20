@@ -78,6 +78,8 @@ const repositoryScriptEntries = [
   "scripts/build-decision-transport-bench.mts!",
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
+  // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
+  "scripts/perf/chat-metadata-burst-measure.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.

@@ -53,6 +53,7 @@ import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel
 import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+type CachePruneInput = MemoryPublicationOperations["cache.prune"]["input"];
 const log = createSubsystemLogger("memory");
 type PublicationWorker = {
   store: Pick<
@@ -581,14 +582,13 @@ export class MemoryIndexDatabase {
     return this.read({ type: "source.state", input: query }, assertCurrent);
   }
 
-  async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
+  async pruneEmbeddingCache(input: CachePruneInput, assertCurrent: () => void): Promise<boolean> {
     assertCurrent();
     // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
-    return (
-      (await this.retryPublication(() =>
-        this.executePublication({ type: "cache.prune", input: { maxEntries } }, assertCurrent),
-      )) ?? false
+    const pruned = await this.retryPublication(() =>
+      this.executePublication({ type: "cache.prune", input }, assertCurrent),
     );
+    return pruned ?? false;
   }
 
   async mutateEmbeddingCache(

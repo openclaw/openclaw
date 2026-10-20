@@ -474,28 +474,31 @@ export function ensureMemoryIndexSchema(params: {
         ON ${embeddingCacheTable}(updated_at);
     `);
   }
-  // Worker admission owns BEGIN, foreign-key policy, and the guarded commit.
-  const migrateStrict = params.db.isTransaction
-    ? migrateSqliteSchemaToStrictInTransaction
-    : migrateSqliteSchemaToStrict;
-  const includeEmbeddingCache = params.cacheEnabled || tableExists(params.db, embeddingCacheTable);
-  migrateStrict(
-    params.db,
-    buildMemoryIndexStrictSchema({
-      embeddingCacheTable,
-      includeEmbeddingCache,
-    }),
-    {
-      databaseLabel: "memory index",
-      expectedSchema: memorySchemaSource(
-        buildMemoryIndexStrictSchema({
-          embeddingCacheTable: MEMORY_EMBEDDING_CACHE_TABLE,
-          includeEmbeddingCache,
-        }),
+  if (!params.fresh) {
+    // Worker admission owns BEGIN, foreign-key policy, and the guarded commit.
+    const migrateStrict = params.db.isTransaction
+      ? migrateSqliteSchemaToStrictInTransaction
+      : migrateSqliteSchemaToStrict;
+    const includeEmbeddingCache =
+      params.cacheEnabled || tableExists(params.db, embeddingCacheTable);
+    migrateStrict(
+      params.db,
+      buildMemoryIndexStrictSchema({
         embeddingCacheTable,
-      ),
-    },
-  );
+        includeEmbeddingCache,
+      }),
+      {
+        databaseLabel: "memory index",
+        expectedSchema: memorySchemaSource(
+          buildMemoryIndexStrictSchema({
+            embeddingCacheTable: MEMORY_EMBEDDING_CACHE_TABLE,
+            includeEmbeddingCache,
+          }),
+          embeddingCacheTable,
+        ),
+      },
+    );
+  }
 
   let ftsAvailable = false;
   let ftsError: string | undefined;

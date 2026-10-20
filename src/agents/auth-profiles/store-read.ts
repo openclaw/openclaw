@@ -31,8 +31,8 @@ import {
 } from "./runtime-snapshot-owner.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
-  type setRuntimeAuthProfileStoreSnapshot as SetRuntimeAuthProfileStoreSnapshot,
-  type updateRuntimeAuthProfileStoreSnapshot as UpdateRuntimeAuthProfileStoreSnapshot,
+  setRuntimeAuthProfileStoreSnapshot,
+  updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import {
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
@@ -76,8 +76,6 @@ type StoreReadHost = Pick<
   withPreparedExternalAuthProfiles: ReturnType<
     typeof createExternalAuthRuntime
   >["withPreparedExternalAuthProfiles"];
-  setRuntimeAuthProfileStoreSnapshot: typeof SetRuntimeAuthProfileStoreSnapshot;
-  updateRuntimeAuthProfileStoreSnapshot: typeof UpdateRuntimeAuthProfileStoreSnapshot;
 };
 
 function hasScopedExternalCliOverlay(options: ExternalCliOverlayOptions): boolean {
@@ -135,8 +133,6 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     withPreparedAuthProfileStoreReads,
     overlayExternalAuthProfiles,
     withPreparedExternalAuthProfiles,
-    setRuntimeAuthProfileStoreSnapshot,
-    updateRuntimeAuthProfileStoreSnapshot,
   } = host;
 
   function readAuthProfileStoreSynchronously(

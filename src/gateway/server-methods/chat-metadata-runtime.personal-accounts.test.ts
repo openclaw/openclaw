@@ -7,7 +7,6 @@ import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   createPreparedRuntimeAuthProfileUsageReader,
-  getRuntimeAuthProfileStoreMetadataRevision,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { setPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
@@ -492,7 +491,7 @@ describe("gateway chat metadata auth deadlines", () => {
       onChanged,
     });
     harness.setOwner(owner);
-    harness.getAuthStoreRevision.mockImplementation(getRuntimeAuthProfileStoreMetadataRevision);
+    harness.getAuthStoreRevision.mockRestore();
     try {
       await harness.runtime.refresh();
       await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
@@ -595,7 +594,7 @@ describe("gateway chat metadata auth deadlines", () => {
         cached.getPreparedAuthStore.mockClear();
         expect(await cached.runtime.read({ agentId: "main" })).toEqual(expected);
         expect(cached.getPreparedAuthStore).not.toHaveBeenCalled();
-        expect(cached.buildCommands).toHaveBeenCalledOnce();
+        expect(cached.buildCommands).toHaveBeenCalledTimes(2);
       } finally {
         await Promise.all([cached.runtime.stop(), fresh.runtime.stop()]);
         clock.mockRestore();

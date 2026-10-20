@@ -1,15 +1,12 @@
 import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import "../components/sidebar-attention.tsx";
-import "../components/sidebar-update-card.tsx";
-import type { SidebarUpdateCardProps } from "../components/sidebar-update-card.tsx";
-import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { navigationSurfaceIsHidden } from "./navigation-surface.ts";
 
 describe("OpenClaw shell update affordance", () => {
-  it("keeps floating attention mounted while stale-client refresh changes", () => {
+  it("keeps floating attention mounted while stale-client refresh changes", async () => {
     const [refreshRequired, setRefreshRequired] = createSignal(false);
     const [navCollapsed, setNavCollapsed] = createSignal(true);
     const onRefresh = vi.fn(async () => false);
@@ -33,11 +30,11 @@ describe("OpenClaw shell update affordance", () => {
     setRefreshRequired(true);
     flush();
     expect(view.container.querySelector("openclaw-sidebar-attention")).toBe(attention);
-    const card = view.container.querySelector<SolidBridgeElement<SidebarUpdateCardProps>>(
-      "openclaw-sidebar-update-card",
+    await vi.waitFor(() =>
+      expect(view.container.querySelector(".sidebar-update-card__action")).not.toBeNull(),
     );
-    expect(card?.refreshRequired).toBe(true);
-    void card?.onRefresh();
+    const card = view.container.querySelector("openclaw-sidebar-update-card");
+    card!.querySelector<HTMLButtonElement>(".sidebar-update-card__action")!.click();
     expect(onRefresh).toHaveBeenCalledOnce();
     setNavCollapsed(false);
     flush();
@@ -48,7 +45,7 @@ describe("OpenClaw shell update affordance", () => {
   it.each([
     { mobileNavLayout: true, onboarding: false },
     { mobileNavLayout: false, onboarding: true },
-  ])("keeps stale-client refresh without floating attention for %o", (surface) => {
+  ])("keeps stale-client refresh without floating attention for %o", async (surface) => {
     const [refreshRequired, setRefreshRequired] = createSignal(true);
     const view = mountSolid(() => (
       <FloatingUpdateCard
@@ -59,11 +56,10 @@ describe("OpenClaw shell update affordance", () => {
       />
     ));
     expect(view.container.querySelector("openclaw-sidebar-attention")).toBeNull();
-    expect(
-      view.container.querySelector<SolidBridgeElement<SidebarUpdateCardProps>>(
-        "openclaw-sidebar-update-card",
-      )?.refreshRequired,
-    ).toBe(true);
+    await vi.waitFor(() =>
+      expect(view.container.textContent).toContain("Refresh for full capabilities"),
+    );
+    expect(view.container.querySelector(".sidebar-update-card__action")).not.toBeNull();
     setRefreshRequired(false);
     flush();
     expect(view.container.querySelector("openclaw-sidebar-update-card")).toBeNull();

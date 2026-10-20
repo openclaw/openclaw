@@ -190,6 +190,7 @@ resolve_candidate_version() { candidate_version=2026.8.2; }
 configure_clawhub_fixture() { :; }
 configure_plugin_registry() { :; }
 prepare_restart_inference() { :; }
+prepare_restart_plugin_release_selectors() { :; }
 prepare_restart_fixture() {
   restart_fixture_package="$FIXTURE_ROOT/future.tgz"
   restart_fixture_version=2100.1.0

@@ -26,7 +26,6 @@ import {
 } from "./subagent-control-session.js";
 import type {
   KillScope,
-  KillPublicationPreparation,
   ResolvedSubagentController,
   SubagentAdminKillParams,
   SubagentAdminKillResult,
@@ -588,7 +587,7 @@ export async function killSubagentRunAdmin(
     prepareRead?: () => Promise<void> | undefined;
     beforeSessionKill?: () => boolean | Promise<boolean>;
     requiredSessionId?: string;
-    preparePublication?: KillPublicationPreparation<SubagentAdminKillResult>;
+    onSnapshot?: (result: SubagentAdminKillResult) => void;
   },
 ): Promise<SubagentAdminKillResult> {
   const publish = (result: SubagentAdminKillResult): SubagentAdminKillResult => {
@@ -718,7 +717,7 @@ export async function killSubagentRunAdmin(
         ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
       };
     },
-    control?.preparePublication,
+    control?.onSnapshot,
     publish,
   );
 }

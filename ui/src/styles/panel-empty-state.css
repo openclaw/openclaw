@@ -58,7 +58,7 @@ openclaw-panel-empty-state {
     line-height: 1.45;
   }
 
-  .empty-state__icon > [slot="action"] {
+  .empty-state > [slot="action"] {
     grid-area: 4 / 1;
     margin-top: 16px;
   }

@@ -1,5 +1,5 @@
 ---
-summary: "Set up and operate an experimental PostgreSQL-backed Gateway, including ports, backups, and recovery limits"
+summary: "Set up and operate a PostgreSQL-backed Gateway, with support boundaries, ports, backups, and recovery"
 read_when:
   - Setting up PostgreSQL for an OpenClaw Gateway
   - Migrating an existing installation between SQLite and PostgreSQL
@@ -11,15 +11,53 @@ doc-schema-version: 1
 # PostgreSQL operator guide
 
 Use this guide to provision PostgreSQL for one Gateway, move existing data, and
-operate the resulting installation. PostgreSQL is **experimental**. SQLite
-remains the default. See the [store support matrix](/reference/database-engines#configure-postgresql)
-for coverage; selecting PostgreSQL does not move every local file into the server.
+operate the resulting installation. PostgreSQL is a **supported alternative**
+for the five configurable store families on the qualified PostgreSQL 17 runtime.
+SQLite remains the default. Selecting PostgreSQL does not move every local file
+into the server. Review the [support matrix](#support-matrix) before deployment.
 
-<Warning>
-  PostgreSQL and mixed-engine operation remain experimental. Native credential
-  and execution-approval work is not fully cut over. Read
-  [Backup and restore](#backup-and-restore) before relying on it for recovery.
-</Warning>
+## Support matrix
+
+Supported means the named flow has PostgreSQL conformance or live acceptance
+proof. It does not promise identical search ranking or latency across engines.
+The conformance suite runs on PostgreSQL 17 with UTF8 and the search extensions
+below; macOS headless runs and Linux CI cover the runtime paths.
+
+| Family or surface                                 | Status                                  | Scope or remaining proof                                                                                                                                                                 |
+| ------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state`, including Matrix account/token roots     | Supported                               | Runtime, bidirectional port, matched backup/restore and schema migrations.                                                                                                               |
+| `agent`                                           | Supported                               | Runtime, transcripts, memory/search, bidirectional port and matched backup/restore.                                                                                                      |
+| `workboard`                                       | Supported                               | Runtime, bidirectional port and matched backup/restore.                                                                                                                                  |
+| `logbook`                                         | Supported                               | Runtime, bidirectional port and matched backup/restore; frame files stay local.                                                                                                          |
+| `team-reports`                                    | Supported                               | Runtime, bidirectional port and matched backup/restore; collection scratch stays session-local.                                                                                          |
+| CLI and interactive setup/onboard                 | Supported                               | Includes one-shot commands and Doctor; PostgreSQL `onboard --reset` deliberately refuses.                                                                                                |
+| Gateway turns and CLI parity                      | Supported                               | Real agent turns, tools, compaction, restart, child sessions and plugin operations.                                                                                                      |
+| Doctor                                            | Supported                               | Per-store configured/observed engines, schema, extensions, reachability and custody; unknown evidence stays unknown.                                                                     |
+| Update admission, forward migrations and recovery | Supported                               | Exact captures and state/agent rollback; independent writes can prevent automatic recovery.                                                                                              |
+| Latest published stable → current upgrade         | Experimental                            | Full package upgrade, service activation and rollback acceptance is not yet recorded. Qualify that path before relying on it.                                                            |
+| Port, backup, restore and disaster recovery       | Supported                               | All five families, retained roots and mixed engines; memory indexes require the documented rebuild step. No cluster/PITR orchestration.                                                  |
+| Mixed engines                                     | Supported                               | All four state/agent pairs and independently selected plugin families; one shared PostgreSQL connection configuration.                                                                   |
+| Independent Gateways on one server                | Supported                               | Separate databases recommended; distinct namespaces in one database also tested. One live Gateway per store.                                                                             |
+| Multiple active Gateways sharing a store          | Not supported                           | No shared-store failover or active-active ownership protocol. Use independent stores.                                                                                                    |
+| Memory/search and standing intents                | Supported                               | Real indexing, rebuild, filtering, bounds, forget/reset and missing-extension refusal; ranking is engine-local.                                                                          |
+| Plugins using SDK stores                          | Supported                               | SDK shared-state stores and registered family owners; arbitrary private plugin databases and LanceDB are outside this selection.                                                         |
+| Warm-path performance                             | Supported, measured                     | No equal-latency guarantee; see [performance evidence](#performance-evidence).                                                                                                           |
+| PostgreSQL 17, UTF8                               | Supported                               | Real server conformance and live flows.                                                                                                                                                  |
+| PostgreSQL 16 and other admitted majors           | Experimental                            | The admission floor is 16; full conformance has only been recorded on 17. Run the suite on the intended major.                                                                           |
+| DSN with env/file SecretRef                       | Supported                               | Host resolution, missing-secret refusal and CLI/Gateway use.                                                                                                                             |
+| Exec SecretRef                                    | Supported                               | CLI/Gateway host resolution, worker propagation, restart, and failed/empty provider refusal; [qualification](#tls-and-exec-connection-qualification).                                    |
+| TLS DSN                                           | Supported                               | `verify-full` with an absolute `sslrootcert` path; certificate/hostname verification and invalid-certificate/plaintext refusal; [qualification](#tls-and-exec-connection-qualification). |
+| `unaccent`, `pg_trgm`, `vector`                   | Supported requirements                  | Positive and missing-extension cases tested; administrators install extensions.                                                                                                          |
+| Headless Linux, including Linux under WSL2        | Supported                               | Linux PostgreSQL conformance and CLI/Gateway paths.                                                                                                                                      |
+| Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                 |
+| Headless native Windows                           | Experimental                            | No native Windows PostgreSQL acceptance run recorded. Test setup, turns, port, backup and update on Windows.                                                                             |
+| macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                     |
+| iOS/iPad app                                      | Not supported without real-device proof | Simulator evidence is insufficient; real-device authentication and approval flows remain unqualified.                                                                                    |
+
+Anchors, client credentials, daemon runtime pins, quarantine, managed-update and
+package-activation journals remain **local by design**, not missing PostgreSQL
+families. There are no other configurable families. Device caches, external
+read-only sources and file artifacts also remain outside engine selection.
 
 ## When to use PostgreSQL
 
@@ -42,10 +80,11 @@ remain local; this includes Logbook frame images and cold transcript blobs.
 Incognito storage remains memory-only. The `memory-lancedb` plugin uses its own
 LanceDB store and is not switched by `database.engine`.
 
-The prepared `client/credentials.sqlite` format is also fixed local, but current
-production credential consumers have not all moved to it. Do not infer that
-every device/native credential or execution-approval path is independent of
-shared state yet. See the [native credential contract](/reference/database-schemas/versioning#local-credential-store-preparation).
+Client credentials live in the fixed-local `client/credentials.sqlite` store.
+Exec approvals go through the shared-state owner and require PostgreSQL to be
+reachable when that family uses PostgreSQL; they fail closed if it is unavailable.
+These ownership changes are complete, but the macOS app claim remains pending
+signed-app proof. See the [native credential contract](/reference/database-schemas/versioning#local-client-credentials).
 
 When present, the local credential store is captured as a fixed-local resource,
 outside the engine families. User backups apply its credential sanitization;
@@ -62,7 +101,9 @@ close their cached connections on shutdown.
 
 ### Provision a database and runtime role
 
-Use PostgreSQL **16 or newer**, with **UTF8 server and client encoding**. Provision
+Use the qualified **PostgreSQL 17** runtime with **UTF8 server and client encoding**.
+Admission accepts 16 or newer, but other majors retain the experimental
+qualification noted above. Provision
 a separate database per Gateway. The runtime role must be able to connect,
 create schemas, and own the objects it creates. It does not need superuser,
 role-administration, or database-creation privileges.
@@ -130,7 +171,7 @@ the DSN itself in `openclaw.json`:
 }
 ```
 
-Env, file, and exec [SecretRefs](/gateway/secrets/secretref-contract) are supported.
+Env, file, and exec [SecretRefs](/gateway/secrets/secretref-contract) are qualified.
 A store-backed SecretRef cannot bootstrap the database that holds that secret.
 The host resolves the connection before passing it to workers. Restart after
 changing the connection, prefix, or engine map; these are fixed for the process.
@@ -166,8 +207,9 @@ stopped. These repairs leave database files untouched. A batch that also changes
 other settings requires the configured database connection as usual.
 
 TLS options are DSN query parameters handled by the PostgreSQL driver, not
-additional `database.postgres` config keys. For example, the **secret value**
-could have this shape (the password is a placeholder):
+additional `database.postgres` config keys.
+
+For example, the **secret value** could have this shape (the password is a placeholder):
 
 ```text
 postgresql://openclaw_runtime:<URL_ENCODED_PASSWORD>@db.example.com:5432/openclaw?sslmode=verify-full&sslrootcert=/etc/openclaw/postgres-ca.pem
@@ -180,6 +222,66 @@ when required by the server. Those files must be readable on the Gateway and
 maintenance host. URL-encode special characters in credentials and paths.
 `sslmode=disable` disables TLS; reserve it for a deliberately local connection.
 Keep DSNs out of shell history, diagnostic captures, and logs.
+
+### TLS and exec connection qualification
+
+For a private CA, install its certificate on every host that runs the Gateway or
+maintenance commands. Use an absolute `sslrootcert` path: the driver opens that
+file in the process making the connection. The server certificate must include
+the DSN hostname in its subject alternative names. To require encryption on the
+server, use a `pg_hba.conf` rule such as this, without a matching plaintext
+`host` rule:
+
+```text
+hostssl openclaw openclaw_runtime 127.0.0.1/32 scram-sha-256
+```
+
+Enable `ssl = on` and configure the server's certificate and private key in
+`postgresql.conf`. A client using `sslmode=disable` then receives a `pg_hba.conf`
+refusal with `no encryption`; it cannot silently use plaintext.
+
+A resolver that prints only the DSN needs `jsonOnly: false`:
+
+```json5
+{
+  secrets: {
+    providers: {
+      postgres: {
+        source: "exec",
+        command: "/usr/local/libexec/openclaw-postgres-dsn",
+        jsonOnly: false,
+      },
+    },
+  },
+  database: {
+    engine: "postgres",
+    postgres: {
+      connection: { source: "exec", provider: "postgres", id: "database-dsn" },
+    },
+  },
+}
+```
+
+The executable must satisfy the [exec provider trust rules](/gateway/secrets/secretref-contract#exec-provider).
+Alternatively, retain `jsonOnly: true` and return the documented protocol-v1
+response. Keep the DSN out of command arguments and provider configuration;
+retrieve it from the secret manager inside the executable.
+
+The PostgreSQL conformance suite exercises [CLI onboarding and Doctor](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/cli-oneshot.postgres.test.ts)
+with an exec connection and [Gateway bootstrap, workers, and restart](https://github.com/openclaw/openclaw/blob/main/src/gateway/server-database-engine.postgres.test.ts)
+with the same provider contract. Run it against a TLS-only PostgreSQL server to
+exercise those paths with certificate verification:
+
+```bash
+node scripts/test-database-conformance.mjs --engine postgres --connection "$OPENCLAW_DATABASE_DSN" -- \
+  src/infra/database-engine/cli-oneshot.postgres.test.ts \
+  src/gateway/server-database-engine.postgres.test.ts \
+  src/infra/database-engine/postgres-search-admission.postgres.test.ts
+```
+
+The [PostgreSQL 17 TLS acceptance matrix](https://github.com/openclaw/openclaw/pull/177928)
+records the live CLI and Gateway runs, certificate rejection cases, and
+secret-redaction checks behind these support claims.
 
 ## Set up a fresh installation
 
@@ -209,7 +311,7 @@ Agent data: default=postgres, override=inherit, effective=postgres (configured)
 
 The `(configured)` suffix matters: these lines describe selection, not a
 successful open of every store. Doctor also reports physical shared-state roots
-and namespaces, and warns that PostgreSQL is experimental. Verify Gateway
+and namespaces, including mismatches and actionable repair steps. Verify Gateway
 health and exercise the agent/plugin features you enabled. A failed PostgreSQL
 connection or schema admission never silently switches that store to SQLite.
 
@@ -235,7 +337,9 @@ on multiple Gateways or copy its anchors to make an HA/failover installation.
 Advisory writer locks protect transactions; they do not provide multi-Gateway
 ownership, routing, or failover.
 
-## Mixed engines (experimental)
+<a id="mixed-engines-experimental" />
+
+## Mixed engines
 
 `database.families` can override `state`, `agent`, `workboard`, `logbook`, and
 `team-reports`. Every override requires an `engine`. All PostgreSQL families
@@ -487,8 +591,12 @@ To recover these scopes:
 
 ## Updates and schema migrations
 
-Use `openclaw update` for supported update admission. Before stopping the previous
-Gateway or changing data, it checks the target's declared engine and PostgreSQL
+Use `openclaw update` for supported update admission. The full upgrade from the
+latest published stable package remains experimental until its package install,
+service activation and rollback acceptance is recorded. The proven migration
+and recovery contracts below do not establish that release-to-release result.
+
+Before stopping the previous Gateway or changing data, it checks the target's declared engine and PostgreSQL
 family support against selected families and retained physical stores. Explicit
 family overrides also require successful candidate admission of the complete
 selection; global PostgreSQL support alone is insufficient. A target without
@@ -531,7 +639,10 @@ not create an approximate-nearest-neighbor index.
 Scores and tokenization are engine-local. Expect different ordering from SQLite
 BM25, particularly for punctuation, compound words, and Unicode. Hybrid retrieval
 keeps the existing text/vector weighting, not cross-engine score equivalence.
-See [search modes and limits](/reference/database-engines#search-on-postgresql).
+Memory transcript visibility retains the same 200-candidate ACL postfilter as
+SQLite; it does not promise complete recall beyond that candidate window. The
+separate transcript search API applies its agent/session/role filters before its
+result cap. See [search modes and limits](/reference/database-engines#search-on-postgresql).
 
 Without pgvector, explicitly select keyword-only memory before opening its store:
 
@@ -547,6 +658,20 @@ Memory status then reports `provider: "none"` and `searchMode: "fts-only"`.
 Missing pgvector or an embedding-provider failure does not silently choose this
 mode. Missing `unaccent` or a required `pg_trgm` refuses admission rather than
 returning empty search results. Reopen the store after installing the extension.
+
+## Performance evidence
+
+The recorded PostgreSQL 17 warm-turn census at `f5de32afc6a5` used 16.67 worker
+requests, 68.67 round trips and 82.67 SQL statements per traced turn. Its 64-session
+run completed 320/320 turns at 5.04 turns/s, with p95 16.86 seconds. A later
+census at `d5aeceb2b89e` reduced traced work to 72.33 SQL statements and 59.33
+round trips; the matched SQLite workload used 52 statements. PostgreSQL's
+transaction and advisory-lock work accounts for part of that difference.
+
+These are workload and host measurements, not a latency SLA. A later apparent
+fourfold concurrency slowdown reproduced on an unchanged control under host
+load; the remaining roughly 5% difference was confounded by optional cost-summary
+work. Measure network latency, concurrency and server load for your deployment.
 
 ## Monitoring and troubleshooting
 

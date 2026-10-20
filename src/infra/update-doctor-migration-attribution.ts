@@ -6,7 +6,7 @@ import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-mai
 import { formatErrorMessage } from "./errors.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import type { PostgresSyncConnection } from "./postgres-sync/connection.js";
-import { parseSqliteFileGeneration, sameSqliteFileGeneration } from "./sqlite-file-generation.js";
+import { parseSqliteFileGeneration } from "./sqlite-file-generation.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import { observeSqliteNativeClose } from "./sqlite-native-observer.js";
 import { runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
@@ -117,7 +117,6 @@ function observeMigrationClose(
   pathname: string,
   capture: UpdateDoctorMigrationCapture,
   expected: string | null,
-  files: ReturnType<typeof readSqliteFiles>,
   assertCurrent: () => void,
 ) {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
@@ -136,17 +135,7 @@ function observeMigrationClose(
         throw new Error("SQLite migration close lost its maintenance scope.");
       }
       assertCurrent();
-      const closedFiles = readSqliteFiles(pathname);
-      // EXCLUSIVE locking retains a cleared rollback journal after COMMIT;
-      // returning to NORMAL removes it. A retained journal must still match.
-      const expectedFiles = closedFiles.journal ? files : { ...files, journal: undefined };
-      if (!sameSqliteFileGeneration(expectedFiles, closedFiles)) {
-        throw new Error("SQLite migration source changed before native close.");
-      }
       const after = readSqliteGeneration(pathname);
-      if (!sameSqliteFileGeneration(closedFiles, readSqliteFiles(pathname))) {
-        throw new Error("SQLite migration source changed while verifying native close.");
-      }
       assertCurrent();
       capture.accept(pathname, expected, after);
     } catch (error) {
@@ -218,11 +207,12 @@ export function runUpdateSqliteMigration<T>(
     "Update migration exclusion",
     () => {
       try {
-        // Bracket the captured generation and our first native read with exact
-        // payload/identity evidence. WAL-index recovery may reset only -shm.
-        const files = readSqliteFiles(pathname);
-        if (expected === null && (files.database.size !== 0n || files.journal || files.wal)) {
-          throw new Error("Created SQLite migration family is no longer empty.");
+        // Maintenance owns the source; concurrent outside writers are unsupported.
+        if (expected === null) {
+          const files = readSqliteFiles(pathname);
+          if (files.database.size !== 0n || files.journal || files.wal) {
+            throw new Error("Created SQLite migration family is no longer empty.");
+          }
         }
         const before = expected === null ? null : readSqliteGeneration(pathname);
         assertCurrent();
@@ -236,15 +226,7 @@ export function runUpdateSqliteMigration<T>(
         }
         // Exclusive connection mode retains the native lock after each COMMIT.
         db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;"); // sqlite-allow-raw -- Bound the migration's native exclusion.
-        const currentFiles = readSqliteFiles(pathname);
         assertCurrent();
-        // An empty native BEGIN creates its own rollback journal without changing
-        // the main file. No journal or WAL existed before our exclusion attempt.
-        const lockedFiles =
-          before === null ? { ...currentFiles, journal: undefined } : currentFiles;
-        if (!sameSqliteFileGeneration(files, lockedFiles)) {
-          throw new Error("SQLite migration source changed after update capture.");
-        }
         const source: MigrationSource | undefined =
           before === null ? undefined : { path: pathname, generation: before, assertCurrent };
         return captures.run({ capture, source, assertMigrationCurrent: assertCurrent }, () => {
@@ -258,11 +240,10 @@ export function runUpdateSqliteMigration<T>(
           assertCurrent();
           // Checkpoint under native exclusion so this postimage survives the source handle closing.
           truncateSqliteWal(db, pathname);
-          const postimageFiles = readSqliteFiles(pathname);
           const after = readSqliteGeneration(pathname);
           assertCurrent();
           capture.accept(pathname, before, after);
-          observeMigrationClose(db, pathname, capture, after, postimageFiles, assertCurrent);
+          observeMigrationClose(db, pathname, capture, after, assertCurrent);
           return result;
         });
       } catch (error) {

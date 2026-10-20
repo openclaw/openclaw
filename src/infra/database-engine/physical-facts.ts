@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection, PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
@@ -8,11 +7,7 @@ import {
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
 import type { StoreSchema } from "./contract.js";
-import {
-  assertPostgresCatalog,
-  readPostgresCatalog,
-  type PostgresCatalogFact,
-} from "./postgres-catalog.js";
+import { readPostgresCatalog, type PostgresCatalogFact } from "./postgres-catalog.js";
 import {
   admitPostgresCapabilities,
   readPostgresSchema,
@@ -94,15 +89,13 @@ export function getPostgresPhysicalFactsForPath(path: string) {
   return getOrLoadSqliteDatabaseAdmissionForPath(path, admissionKey, () => undefined);
 }
 
-/** The anchor carries PG admission facts without treating its native catalog as application data. */
+/** Retain PostgreSQL admission facts on its admitted connection. */
 export function admitPostgresPhysicalFacts(params: {
-  anchor: DatabaseSync;
   db: PostgresSqlConnection;
   namespace: string;
   storeId: string;
   store: string;
   version: number;
-  expected?: readonly PostgresCatalogFact[];
   schema?: StoreSchema;
   recordSchema?: boolean;
   preserveSchemaSeal?: boolean;
@@ -136,14 +129,6 @@ export function admitPostgresPhysicalFacts(params: {
       );
     }
     retainPostgresSchema(params.db, schema);
-  }
-  if (params.expected) {
-    assertPostgresCatalog(
-      catalog.filter(
-        (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
-      ),
-      params.expected,
-    );
   }
   const facts: PostgresPhysicalFacts = {
     engine: "postgres",

@@ -82,8 +82,6 @@ afterEach(async () => {
 async function startUpdateCheck(overrides: Partial<UpdateCheckStartupParams> = {}, start = true) {
   const owner = createDeferredGatewayUpdateCheck({
     scheduler,
-    createUpdateCheck: async (...args) =>
-      (await import("../infra/update-startup.js")).createGatewayUpdateCheck(...args),
     getConfig: () => ({}),
     getPluginRegistry: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },

@@ -130,9 +130,8 @@ export function createUpdateRunAdmissionReader(
   options: OpenClawStateDatabaseOptions,
   openStateSchemaReadAdmission: OpenClawStateSchemaReadAdmission,
 ): () => UpdateRunRecord[] {
-  const query = { ...input };
   const readWarm = createOpenClawStateCurrentWarmReader(
-    ({ db }) => readUpdateRuns(db, query),
+    ({ db }) => readUpdateRuns(db, input),
     options,
     openStateSchemaReadAdmission,
   );
@@ -145,15 +144,15 @@ export function createUpdateRunAdmissionReader(
     }
     const version = readCurrentOpenClawStateDatabaseContentVersion(options);
     if (version !== undefined && previous?.version === version) {
-      return structuredClone(previous.runs);
+      return previous.runs;
     }
     previous = undefined;
-    const runs = listUpdateRuns(query, options, openStateSchemaReadAdmission);
+    const runs = listUpdateRuns(input, options, openStateSchemaReadAdmission);
     if (
       version !== undefined &&
       version === readCurrentOpenClawStateDatabaseContentVersion(options)
     ) {
-      previous = { version, runs: structuredClone(runs) };
+      previous = { version, runs };
     }
     return runs;
   };

@@ -15,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import type { ModelProviderConfig } from "./config.js";
+import type { RuntimeConfig } from "./config.js";
 import {
   closeServer,
   collectRequest,
@@ -71,6 +71,8 @@ async function listen<T extends Server>(listener: T) {
     releaseListener: () => closeServer(listener),
   };
 }
+
+type ModelProviderConfig = NonNullable<RuntimeConfig["providerConfig"]>;
 
 const batch = {
   state: { evidence: "Synthetic outage" },

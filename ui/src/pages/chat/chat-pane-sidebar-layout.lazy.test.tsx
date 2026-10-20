@@ -148,9 +148,11 @@ describe("chat pane lazy sidebar failures", () => {
 
     const placeholders = [...container.querySelectorAll(".side-panel__panel")];
     expect(placeholders.map((panel) => panel.getAttribute("data-region"))).toEqual(["main"]);
-    expect(placeholders[0]?.querySelector("openclaw-panel-loading-skeleton")?.variant).toBe(
-      "board",
-    );
+    expect(
+      placeholders[0]
+        ?.querySelector("openclaw-panel-loading-skeleton")
+        ?.getAttribute("data-panel-skeleton"),
+    ).toBe("board");
     expect(container.querySelector(".sidebar-region__primary")?.getAttribute("data-region")).toBe(
       "side",
     );

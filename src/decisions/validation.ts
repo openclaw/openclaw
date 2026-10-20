@@ -78,7 +78,7 @@ function probability(value: unknown): value is number {
 function distribution(values: unknown[]): values is number[] {
   return values.every(probability) && values.some((value) => value > 0);
 }
-function exactKeys(left: object, right: object): boolean {
+export function exactKeys(left: object, right: object): boolean {
   const keys = Object.keys(left);
   return (
     keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key))

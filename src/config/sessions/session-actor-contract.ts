@@ -1,6 +1,7 @@
 import type { SessionActivitySummary } from "./activity-summary.js";
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
+import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import type {
   SessionActorAuthority,
@@ -255,6 +256,7 @@ export type SessionActorReceipt = {
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
   };
+  conversationPublication?: readonly ConversationPublication[];
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];

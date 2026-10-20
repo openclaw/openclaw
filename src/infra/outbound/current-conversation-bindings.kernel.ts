@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { registerNodeSqliteDisposeCallback } from "../kysely-sync-cache-state.js";
 import {
@@ -519,15 +520,7 @@ export function readCurrentConversationBindingListsInDatabase(
     targetSessionKeys,
     scope: normalizedScope,
   }).rows;
-  const bySession = new Map<string, CurrentConversationBindingRow[]>();
-  for (const row of rows) {
-    let group = bySession.get(row.target_session_key);
-    if (!group) {
-      group = [];
-      bySession.set(row.target_session_key, group);
-    }
-    group.push(row);
-  }
+  const bySession = groupRecords(rows, (row) => row.target_session_key);
   return targetSessionKeys.map((key) => {
     const records = (bySession.get(key) ?? [])
       .map(bindingRowToRecord)

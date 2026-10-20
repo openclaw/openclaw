@@ -34,36 +34,22 @@ export function sourceRows(database: EngineConnection, nativeBootstrap: boolean)
     identities:
       nativeBootstrap && !tableExists(database, "device_identities")
         ? []
-        : executeSqliteQuerySync(
-            database,
-            db.selectFrom("device_identities").selectAll().orderBy("identity_key"),
-          ).rows,
+        : executeSqliteQuerySync(database, db.selectFrom("device_identities").selectAll()).rows,
     tokens:
       nativeBootstrap && !tableExists(database, "device_auth_tokens")
         ? []
-        : executeSqliteQuerySync(
-            database,
-            db.selectFrom("device_auth_tokens").selectAll().orderBy("device_id").orderBy("role"),
-          ).rows,
+        : executeSqliteQuerySync(database, db.selectFrom("device_auth_tokens").selectAll()).rows,
     origins:
       nativeBootstrap && !tableExists(database, "gateway_origin_device_tokens")
         ? []
         : executeSqliteQuerySync(
             database,
-            db
-              .selectFrom("gateway_origin_device_tokens")
-              .selectAll()
-              .orderBy("gateway_scope")
-              .orderBy("device_id")
-              .orderBy("role"),
+            db.selectFrom("gateway_origin_device_tokens").selectAll(),
           ).rows,
     approvals:
       nativeBootstrap && !tableExists(database, "exec_approvals_config")
         ? []
-        : executeSqliteQuerySync(
-            database,
-            db.selectFrom("exec_approvals_config").selectAll().orderBy("config_key"),
-          ).rows,
+        : executeSqliteQuerySync(database, db.selectFrom("exec_approvals_config").selectAll()).rows,
   });
 }
 

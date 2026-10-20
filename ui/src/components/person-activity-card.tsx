@@ -23,6 +23,7 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { ElapsedTime } from "./elapsed-time.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import {
@@ -31,7 +32,6 @@ import {
   HovercardControlsContext,
 } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
-import "./elapsed-time.tsx";
 import "./viewer-facepile.ts";
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
@@ -90,10 +90,10 @@ function Elapsed(props: {
       title={localizedDate()}
       aria-label={props.display === "minute-compact" ? undefined : localizedDate()}
     >
-      <openclaw-elapsed-time
-        prop:startMs={props.timestamp}
-        prop:minimumUnit={props.display === "minute-compact" ? "minute" : "second"}
-        prop:singleUnit={props.display === "single-unit"}
+      <ElapsedTime
+        startMs={props.timestamp}
+        minimumUnit={props.display === "minute-compact" ? "minute" : "second"}
+        singleUnit={props.display === "single-unit"}
       />
     </time>
   );

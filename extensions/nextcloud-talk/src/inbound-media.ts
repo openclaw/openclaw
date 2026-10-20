@@ -7,12 +7,12 @@ import {
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { SaxesParser } from "saxes";
 import { fetchWithSsrFGuard, type OpenClawConfig, type PluginRuntime } from "../runtime-api.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 import { normalizeNextcloudTalkAllowEntry, resolveNextcloudTalkAllowlistMatch } from "./policy.js";
 import type { NextcloudTalkAccountConfig, NextcloudTalkInboundAttachment } from "./types.js";
+import { parseWebDavFileId } from "./webdav.js";
 
 const DEFAULT_NEXTCLOUD_TALK_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 const NEXTCLOUD_TALK_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
@@ -264,41 +264,6 @@ function resolveExactHistoryMedia(params: {
   };
 }
 
-function parseWebDavFileId(xml: string): string | undefined {
-  const parser = new SaxesParser({ xmlns: true });
-  const ids: string[] = [];
-  let readingFileId = false;
-  let fileIdText = "";
-  let invalid = false;
-  parser.on("opentag", (tag) => {
-    if (readingFileId) {
-      invalid = true;
-    }
-    if (tag.uri === "http://owncloud.org/ns" && tag.local === "fileid") {
-      readingFileId = true;
-      fileIdText = "";
-    }
-  });
-  parser.on("text", (value) => {
-    if (readingFileId) {
-      fileIdText += value;
-    }
-  });
-  parser.on("closetag", (tag) => {
-    if (tag.uri === "http://owncloud.org/ns" && tag.local === "fileid") {
-      ids.push(fileIdText.trim());
-      readingFileId = false;
-    }
-  });
-  try {
-    parser.write(xml).close();
-  } catch {
-    return undefined;
-  }
-  const id = ids[0];
-  return !invalid && ids.length === 1 && id && /^\d+$/u.test(id) ? id : undefined;
-}
-
 async function fetchNextcloudTalkWebDavFileId(params: {
   url: string;
   authorization: string;
@@ -433,12 +398,7 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
   if (!credentials) {
     return { ok: false, reason: "media_auth_unavailable" };
   }
-  let base: URL;
-  try {
-    base = new URL(params.baseUrl);
-  } catch {
-    return { ok: false, reason: "media_fetch_failed" };
-  }
+  const base = new URL(params.baseUrl);
   const authorization = buildBasicAuthorization(credentials.apiUser, credentials.apiPassword);
   const userUrl = buildSameOriginUrl(base, "/ocs/v1.php/cloud/user");
   userUrl.searchParams.set("format", "json");

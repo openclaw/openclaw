@@ -1,16 +1,17 @@
-import { expect, it, onTestFinished, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { expect, it, vi } from "vitest";
 import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  createApplicationGateway,
-  createApplicationContextProvider,
-} from "../test-helpers/application-context.ts";
+import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
+  McpAppResources,
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
 } from "./mcp-app-resources.tsx";
@@ -37,18 +38,15 @@ function mountResources(
       subscribe: () => () => {},
     }),
   };
+  const [sessionKey, updateSessionKey] = createSignal("agent:main:main");
   // SAFETY: This component only consumes the Gateway and agent selection capabilities.
-  const container = createApplicationContextProvider(context as ApplicationContext);
-  const picker = Object.assign(document.createElement("openclaw-mcp-app-resources"), {
-    sessionKey: "agent:main:main",
-    agentId: "main",
-  });
-  container.append(picker);
-  document.body.append(container);
-  onTestFinished(() => container.remove());
-  const setSessionKey = async (sessionKey: string) => {
-    picker.sessionKey = sessionKey;
-    await picker.updateComplete;
+  const { container } = mountSolid(
+    () => <McpAppResources sessionKey={sessionKey()} agentId="main" />,
+    { wrapper: createSolidApplicationContextProvider(context as ApplicationContext).wrapper },
+  );
+  const setSessionKey = (value: string) => {
+    updateSessionKey(value);
+    flush();
   };
   return { container, request, setSessionKey, publishEvent };
 }
@@ -156,7 +154,7 @@ it("keeps resource ownership through discovery reorder and ignores previous-sess
   }>();
   request.mockReturnValueOnce(pending.promise);
   container.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
-  await setSessionKey("agent:main:next");
+  setSessionKey("agent:main:next");
   flush();
   pending.resolve({
     resources: [{ type: "resource_link", uri: "file:///old.txt", name: "Old resource" }],
@@ -249,10 +247,10 @@ it("retires a pending search across an empty intermediate session and return", a
     query: "",
   });
 
-  await setSessionKey("agent:main:other");
+  setSessionKey("agent:main:other");
   await waitForSolid(() => expect(container.querySelector(".mcp-app-resources")).toBeNull());
   // The hidden picker has no presentation consumer during this committed identity.
-  await setSessionKey("agent:main:main");
+  setSessionKey("agent:main:main");
   await waitForSolid(() => expect(container.querySelector("form")).not.toBeNull());
   pending.resolve({
     resources: [{ type: "resource_link", uri: "file:///old.txt", name: "Retired result" }],

@@ -2,10 +2,15 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { MessageChannel } from "node:worker_threads";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -23,11 +28,12 @@ import {
   type AuthProfileAuthorizationEnrollment,
 } from "./authorization-enrollment.js";
 import { bootstrapSharedAuthStoreInWorker } from "./shared-store-bootstrap.worker.js";
-import { readAuthProfileRows } from "./sqlite-json.js";
-import { isMissingDatabasePath } from "./sqlite-read-pool.js";
+import { readAuthProfileRows, readAuthProfileRowsReadOnly } from "./sqlite-json.js";
+import { closeAuthProfileReadDatabase, isMissingDatabasePath } from "./sqlite-read-pool.js";
 import { sendAuthProfileUpdateValue } from "./store-update-transfer.js";
 import { updateAuthProfileStoreInDatabase } from "./store-update.worker.js";
 import type {
+  AuthProfileReadSource,
   AuthProfileUsageInput,
   AuthProfileUsageResult,
   AuthStoreUpdateInput,
@@ -40,6 +46,61 @@ import type {
 } from "./usage-reduction.js";
 import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
+
+function readAuthProfileSource(
+  source: AuthProfileReadSource,
+  options: { path: string; env: NodeJS.ProcessEnv },
+): AuthProfileRowRead {
+  const missing: AuthProfileRowRead = {
+    store: { status: "missing", reason: "database" },
+    state: { status: "missing", reason: "database" },
+    cacheable: false,
+  };
+  const unreadable: AuthProfileRowRead = {
+    store: { status: "unreadable" },
+    state: { status: "unreadable" },
+    cacheable: false,
+  };
+  if (source.kind === "agent") {
+    if (!source.identity) {
+      return unreadable;
+    }
+    if (!source.identity.startsWith("file:")) {
+      return missing;
+    }
+    if (!getDatabaseEngineInput("agent")) {
+      try {
+        return readAuthProfileRowsReadOnly(
+          source.databasePath,
+          openSqliteReadOnlyDatabase,
+          source.schema,
+          source.identity,
+        );
+      } finally {
+        // Agent deletion does not broadcast to the state actor's retained native handles.
+        closeAuthProfileReadDatabase(source.databasePath);
+      }
+    }
+  }
+  try {
+    if (source.kind === "agent") {
+      const result = withFreshOpenClawAgentDatabaseReadOnly(
+        ({ db }) => readAuthProfileRows(db, source.databasePath, "agent"),
+        { agentId: source.agentId, path: source.databasePath, env: options.env },
+        { snapshot: true },
+      );
+      return result.found ? result.value : missing;
+    }
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+        const read = () => readAuthProfileRows(db, source.databasePath, "shared-state");
+        return isPostgresSqlConnection(db) ? runSqliteReadSnapshotSync(db, read) : read();
+      }, options) ?? missing
+    );
+  } catch {
+    return isMissingDatabasePath(source.databasePath) ? missing : unreadable;
+  }
+}
 
 export const authProfileOperations = {
   "authProfiles.enrollAuthorization": (
@@ -155,37 +216,24 @@ export const authProfileOperations = {
     );
     return result;
   },
-  "authProfiles.read": (input: { artifactPreserving: boolean }, { stateOptions }) => {
-    const read = (): AuthProfileRowRead => {
-      const options = stateOptions();
-      const missing: AuthProfileRowRead = {
-        store: { status: "missing", reason: "database" },
-        state: { status: "missing", reason: "database" },
-        cacheable: false,
-      };
-      try {
-        return (
-          withExistingOpenClawStateDatabaseReadOnly(
-            ({ db }) => readAuthProfileRows(db, options.path, "shared-state"),
-            options,
-          ) ?? missing
-        );
-      } catch {
-        return isMissingDatabasePath(options.path)
-          ? missing
-          : {
-              store: { status: "unreadable" },
-              state: { status: "unreadable" },
-              cacheable: false,
-            };
-      }
-    };
+  "authProfiles.readSources": (
+    input: { artifactPreserving: boolean; sources: AuthProfileReadSource[] },
+    { stateOptions },
+  ) => {
+    const options = stateOptions();
+    const read = () =>
+      Object.fromEntries(
+        input.sources.map((source) => [
+          source.databasePath,
+          readAuthProfileSource(source, options),
+        ]),
+      );
     const rows = input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
     const { port1, port2 } = new MessageChannel();
     try {
       sendAuthProfileUpdateValue(port1, rows);
       requestSqliteWorkerOperationAdmission(
-        { stage: "prepare", facts: { kind: "auth-store-read", port: port2 } },
+        { stage: "prepare", facts: { kind: "auth-sources-read", port: port2 } },
         [port2],
       );
     } finally {

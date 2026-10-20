@@ -163,7 +163,7 @@ export { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-sto
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
-export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
+export { createComputerTool } from "../agents/tools/computer-tool.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
 export { createReadTool } from "../agents/sessions/tools/read.js";
 export { createEditTool } from "../agents/sessions/tools/edit.js";
@@ -669,7 +669,7 @@ for (const dependency of ["rastermill", "@silvia-odwyer/photon-node", "diff"]) {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { projectComputerActResult, createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
+const { createComputerTool, createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
 const input = fs.readFileSync(imagePath);
 try {
 const filePath = imagePath + ".txt";
@@ -691,25 +691,45 @@ for (const extension of [".txt", ".sqlite"]) {
   const read = await createReadTool(process.cwd()).execute("portable-read", { path: readPath });
   assert.ok(read.content.some(block => block.type === "text" && block.text.includes("portable file read")));
 }
-for (let index = 0; index < 3; index++) {
-  const projected = await projectComputerActResult({
-    action: "get_window_state",
-    target: { host: "node", nodeId: "synthetic-node", screenIndex: 0 },
-    referenceWidth: 1200,
-    result: {
-      ok: true,
-      details: { coordinateSpace: "image-pixels" },
-      observation: { kind: "window", base64: input.toString("base64"), format: "png", width: 1500, height: 934 },
+const inputs = [];
+const computer = createComputerTool({
+  transport: {
+    computerUse: {
+      contractVersion: 2,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+      actions: ["get_window_state", "left_click"],
+      targets: ["window"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
     },
+    resolveNode: async () => ({ nodeId: "synthetic-node" }),
+    invoke: async ({ commandParams }) => {
+      inputs.push(commandParams);
+      return {
+        ok: true,
+        details: { coordinateSpace: "image-pixels" },
+        observation: { kind: "window", observationId: "window-observation", base64: input.toString("base64"), format: "png", width: 1500, height: 934 },
+      };
+    },
+  },
+});
+for (let index = 0; index < 3; index++) {
+  const projected = await computer.execute("portable-observe-" + index, {
+    action: "get_window_state", windowRef: "window-1",
   });
-  const images = projected.result.content.filter(block => block.type === "image");
-  assert.equal(images.length, 1, JSON.stringify(projected.result.content));
-  const observation = JSON.parse(projected.result.content[0].text).observation;
+  const images = projected.content.filter(block => block.type === "image");
+  assert.equal(images.length, 1, JSON.stringify(projected.content));
+  const observation = JSON.parse(projected.content[0].text).observation;
   assert.equal(observation.width, 1200);
   assert.equal(observation.height, 747);
   assert.equal(observation.base64, "[image]");
-  assert.deepEqual(projected.imageCoordinates, { kind: "available", scaleX: 1.25, scaleY: 934 / 747 });
 }
+await computer.execute("portable-click", {
+  action: "left_click", windowRef: "window-1", observationId: "window-observation", coordinate: [400, 300],
+});
+assert.equal(inputs.at(-1).x, 500);
+assert.equal(inputs.at(-1).y, 300 * (934 / 747));
 assert.deepEqual(await createImageProcessor().transparency(input), { hasAlphaChannel: true, hasTransparentPixels: false });
 const bmp = Buffer.from("424d3e0000000000000036000000280000000200000001000000010018000000000008000000000000000000000000000000000000000000ff00ff000000", "hex");
 const png = await convertBmpToPngWithWorker(bmp);

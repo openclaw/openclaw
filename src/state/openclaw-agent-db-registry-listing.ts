@@ -460,6 +460,10 @@ class AgentDatabaseRegistryChangedError extends Error {
   }
 }
 
+export function isAgentDatabaseRegistryChangedError(error: unknown): boolean {
+  return error instanceof AgentDatabaseRegistryChangedError;
+}
+
 export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,
   artifactPreserving: false,

@@ -59,7 +59,7 @@ function mountPage(
 }
 
 function refreshPanel(page: ReturnType<typeof createAgentsPage>) {
-  if (page.read().activePanel === "cron") {
+  if (page.read().readData().agentsPanel === "cron") {
     page.read().cron.onRefresh();
   } else {
     page.read().overview.onModelCatalogOpen?.();
@@ -115,18 +115,18 @@ describe("AgentsPage gateway lifecycle", () => {
     });
     const client = createTestGatewayClient(request);
     const { page, currentGateway } = mountPage(client, "tools");
-    expect(page.read().tools.toolsEffectiveLoading).toBe(true);
+    expect(page.read().readData().toolsEffectiveLoading).toBe(true);
     emitGatewaySnapshot(currentGateway, snapshot(client, false));
     emitGatewaySnapshot(currentGateway, snapshot(client));
     await waitForFast(() =>
-      expect(page.read().tools.toolsEffectiveResult?.profile).toBe("current-connection"),
+      expect(page.read().readData().toolsEffectiveResult?.profile).toBe("current-connection"),
     );
     staleResult.resolve({ profile: "retired-connection" } as ToolsEffectiveResult);
     await staleResult.promise;
     await Promise.resolve();
-    expect(page.read().tools.toolsEffectiveResult?.profile).toBe("current-connection");
-    expect(page.read().tools.toolsEffectiveError).toBeNull();
-    expect(page.read().tools.toolsEffectiveLoading).toBe(false);
+    expect(page.read().readData().toolsEffectiveResult?.profile).toBe("current-connection");
+    expect(page.read().readData().toolsEffectiveError).toBeNull();
+    expect(page.read().readData().toolsEffectiveLoading).toBe(false);
   });
 
   it("does not stage a default-agent change after a same-client reconnect", async () => {
@@ -214,7 +214,7 @@ describe("AgentsPage gateway lifecycle", () => {
     page.read().agentSkills.onClear("main");
 
     await waitForFast(() =>
-      expect(page.read().agentSkills.error).toBe("Gateway rejected the patch."),
+      expect(page.read().readData().agentSkillsError).toBe("Gateway rejected the patch."),
     );
   });
 
@@ -256,7 +256,7 @@ describe("AgentsPage gateway lifecycle", () => {
       runtimeConfig: { ...context.runtimeConfig, state: {}, save: () => saved.promise },
     } as unknown as ApplicationContext);
     await waitForFast(() =>
-      expect(page.read().tools.toolsEffectiveResult?.profile).toBe("messaging"),
+      expect(page.read().readData().toolsEffectiveResult?.profile).toBe("messaging"),
     );
 
     page.read().onConfigSave();
@@ -266,7 +266,9 @@ describe("AgentsPage gateway lifecycle", () => {
     await roster.promise;
     await Promise.resolve();
 
-    await waitForFast(() => expect(page.read().tools.toolsEffectiveResult?.profile).toBe("full"));
+    await waitForFast(() =>
+      expect(page.read().readData().toolsEffectiveResult?.profile).toBe("full"),
+    );
     expect(effectiveReads).toBe(2);
   });
 
@@ -340,7 +342,7 @@ describe("AgentsPage gateway lifecycle", () => {
       await waitForFast(() => expect(page.read().overview.modelCatalog[0]?.id).toBe("old"));
       emitCatalogChanged(currentGateway);
       await waitForFast(() =>
-        expect(page.read().overview.modelCatalogStatus.error).toBe(
+        expect(page.read().readData().chatModelCatalogStatus.error).toBe(
           hasRows
             ? "Some models could not be refreshed. Open Models to try again."
             : "Models unavailable",
@@ -349,8 +351,10 @@ describe("AgentsPage gateway lifecycle", () => {
       expect(page.read().overview.modelCatalog).toEqual(models);
 
       page.read().overview.onModelCatalogOpen?.();
-      await waitForFast(() => expect(page.read().overview.modelCatalogStatus.stale).toBe(false));
-      expect(page.read().overview.modelCatalogStatus.error).toBeNull();
+      await waitForFast(() =>
+        expect(page.read().readData().chatModelCatalogStatus.stale).toBe(false),
+      );
+      expect(page.read().readData().chatModelCatalogStatus.error).toBeNull();
       expect(page.read().overview.modelCatalog).toEqual([]);
       expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toEqual(
         Array.from({ length: 3 }, () => ({
@@ -503,14 +507,14 @@ describe("AgentsPage gateway lifecycle", () => {
 
     refreshPanel(page);
     await waitForFast(() => {
-      expect(page.read().overview.modelCatalogStatus.error).toBe("model catalog unavailable");
+      expect(page.read().readData().chatModelCatalogStatus.error).toBe("model catalog unavailable");
     });
     expect(page.read().overview.modelCatalog).toEqual([]);
 
     refreshPanel(page);
     await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(models));
 
-    expect(page.read().overview.modelCatalogStatus.error).toBeNull();
+    expect(page.read().readData().chatModelCatalogStatus.error).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",
@@ -559,11 +563,11 @@ describe("AgentsPage gateway lifecycle", () => {
     refreshPanel(page);
 
     await waitForFast(() => {
-      expect(page.read().cron.jobs).toEqual([implicitDefaultJob]);
-      expect(page.read().cron.scopedTotal).toBe(1);
-      expect(page.read().cron.scopedNextWakeAtMs).toBe(scopedNextWakeAtMs);
+      expect(page.read().readData().cron.cronJobs).toEqual([implicitDefaultJob]);
+      expect(page.read().readData().cron.cronScopedTotal).toBe(1);
+      expect(page.read().readData().cron.cronScopedNextWakeAtMs).toBe(scopedNextWakeAtMs);
     });
-    expect(page.read().cron.status).toEqual({
+    expect(page.read().readData().cron.cronStatus).toEqual({
       enabled: true,
       jobs: 51,
       nextWakeAtMs: globalNextWakeAtMs,
@@ -601,20 +605,20 @@ describe("AgentsPage gateway lifecycle", () => {
     refreshPanel(page);
 
     await waitForFast(() => {
-      expect(page.read().cron.jobs).toHaveLength(50);
-      expect(page.read().cron.jobsTotal).toBe(51);
-      expect(page.read().cron.scopedTotal).toBe(51);
+      expect(page.read().readData().cron.cronJobs).toHaveLength(50);
+      expect(page.read().readData().cron.cronJobsTotal).toBe(51);
+      expect(page.read().readData().cron.cronScopedTotal).toBe(51);
     });
-    expect(page.read().cron.jobsHasMore).toBe(true);
+    expect(page.read().readData().cron.cronJobsHasMore).toBe(true);
 
     page.read().cron.onLoadMore();
-    await waitForFast(() => expect(page.read().cron.jobs).toHaveLength(51));
+    await waitForFast(() => expect(page.read().readData().cron.cronJobs).toHaveLength(51));
 
-    expect(page.read().cron.jobs).toHaveLength(51);
-    expect(page.read().cron.jobs.at(-1)).toEqual(lastJob);
-    expect(page.read().cron.jobsTotal).toBe(51);
-    expect(page.read().cron.scopedTotal).toBe(51);
-    expect(page.read().cron.jobsHasMore).toBe(false);
+    expect(page.read().readData().cron.cronJobs).toHaveLength(51);
+    expect(page.read().readData().cron.cronJobs.at(-1)).toEqual(lastJob);
+    expect(page.read().readData().cron.cronJobsTotal).toBe(51);
+    expect(page.read().readData().cron.cronScopedTotal).toBe(51);
+    expect(page.read().readData().cron.cronJobsHasMore).toBe(false);
     expect(request).toHaveBeenCalledWith(
       "cron.list",
       expect.objectContaining({ agentId: "main", limit: 50, offset: 50 }),
@@ -632,13 +636,13 @@ describe("AgentsPage gateway lifecycle", () => {
     const { page, context } = mountPage(client, "cron");
 
     refreshPanel(page);
-    await waitForFast(() => expect(page.read().cron.jobs[0]?.id).toBe("main-job"));
+    await waitForFast(() => expect(page.read().readData().cron.cronJobs[0]?.id).toBe("main-job"));
 
     context.settingsAgentSelection.set("other");
     refreshPanel(page);
-    expect(page.read().cron.jobs).toEqual([]);
+    expect(page.read().readData().cron.cronJobs).toEqual([]);
 
-    await waitForFast(() => expect(page.read().cron.jobs[0]?.id).toBe("other-job"));
+    await waitForFast(() => expect(page.read().readData().cron.cronJobs[0]?.id).toBe("other-job"));
     expect(request).toHaveBeenCalledWith(
       "cron.list",
       expect.objectContaining({ agentId: "other" }),
@@ -661,9 +665,9 @@ describe("AgentsPage gateway lifecycle", () => {
     const { page, currentGateway } = mountPage(client, "cron");
 
     refreshPanel(page);
-    await waitForFast(() => expect(page.read().cron.loading).toBe(true));
+    await waitForFast(() => expect(page.read().readData().cron.cronLoading).toBe(true));
     emitGatewaySnapshot(currentGateway, snapshot(client));
-    expect(page.read().cron.loading).toBe(true);
+    expect(page.read().readData().cron.cronLoading).toBe(true);
     expect(
       request.mock.calls.filter(
         ([method, params]) => method === "cron.list" && params?.limit === 50,
@@ -672,8 +676,8 @@ describe("AgentsPage gateway lifecycle", () => {
 
     pendingJobs.resolve(cronListResponse([job]));
     await waitForFast(() => {
-      expect(page.read().cron.jobs).toEqual([job]);
-      expect(page.read().cron.loading).toBe(false);
+      expect(page.read().readData().cron.cronJobs).toEqual([job]);
+      expect(page.read().readData().cron.cronLoading).toBe(false);
     });
   });
 
@@ -691,7 +695,7 @@ describe("AgentsPage gateway lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { page } = mountPage(client, "cron");
-    expect(page.read().cron.loading).toBe(true);
+    expect(page.read().readData().cron.cronLoading).toBe(true);
     page.read().cron.onRefresh();
     expect(
       request.mock.calls.filter(
@@ -700,10 +704,10 @@ describe("AgentsPage gateway lifecycle", () => {
     ).toHaveLength(1);
 
     pendingJobs.resolve(cronListResponse([job]));
-    await waitForFast(() => expect(page.read().cron.loading).toBe(false));
+    await waitForFast(() => expect(page.read().readData().cron.cronLoading).toBe(false));
 
-    expect(page.read().cron.loading).toBe(false);
-    expect(page.read().cron.jobs).toEqual([job]);
+    expect(page.read().readData().cron.cronLoading).toBe(false);
+    expect(page.read().readData().cron.cronJobs).toEqual([job]);
   });
 
   it("preserves matching initial route data, then resets it on provider replacement", () => {
@@ -715,7 +719,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const route = agentsRouteData(currentGateway, agentsList, "main", selection);
     const context = { ...pageContext(currentGateway, agents), settingsAgentSelection: selection };
     const page = createAgentsPage(context, route);
-    expect(page.read().agentsList).toBe(agentsList);
+    expect(page.read().readData().agentsList).toBe(agentsList);
     expect(page.read().selectedAgentId).toBe("main");
 
     page.dispose();
@@ -727,7 +731,7 @@ describe("AgentsPage gateway lifecycle", () => {
       },
       route,
     );
-    expect(replacement.read().agentsList).toBeNull();
+    expect(replacement.read().readData().agentsList).toBeNull();
     expect(replacement.read().selectedAgentId).toBeNull();
   });
 
@@ -743,7 +747,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const context = pageContext(currentGateway, agents);
     const page = createAgentsPage(context, agentsRouteData(preloadedGateway));
     await Promise.resolve();
-    expect(page.read().agentsList).toBeNull();
+    expect(page.read().readData().agentsList).toBeNull();
     expect(ensureList).toHaveBeenCalledOnce();
   });
 
@@ -759,19 +763,19 @@ describe("AgentsPage gateway lifecycle", () => {
     const { page, currentGateway } = mountPage(oldClient, "files", {
       agents: agentsCapability(ensureFiles),
     });
-    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(page.read().readData().agentFilesLoading).toBe(true);
     emitGatewaySnapshot(currentGateway, snapshot(nextClient));
     await waitForFast(() => expect(ensureFiles).toHaveBeenCalledTimes(2));
-    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(page.read().readData().agentFilesLoading).toBe(true);
 
     first.resolve(files("main", "old"));
     await first.promise;
     await Promise.resolve();
-    expect(page.read().agentFiles.agentFilesList).toBeNull();
-    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(page.read().readData().agentFilesList).toBeNull();
+    expect(page.read().readData().agentFilesLoading).toBe(true);
     second.resolve(files("main", "new"));
-    await waitForFast(() => expect(page.read().agentFiles.agentFilesList?.workspace).toBe("new"));
-    expect(page.read().agentFiles.agentFilesLoading).toBe(false);
+    await waitForFast(() => expect(page.read().readData().agentFilesList?.workspace).toBe("new"));
+    expect(page.read().readData().agentFilesLoading).toBe(false);
   });
 
   it("selects and loads AGENTS.md when the file list opens", async () => {
@@ -790,9 +794,9 @@ describe("AgentsPage gateway lifecycle", () => {
       agents: agentsCapability(async () => fileList),
     });
     await waitForFast(() =>
-      expect(page.read().agentFiles.agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions"),
+      expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions"),
     );
-    expect(page.read().agentFiles.agentFileActive).toBe("AGENTS.md");
+    expect(page.read().readData().agentFileActive).toBe("AGENTS.md");
     expect(request).toHaveBeenCalledWith("agents.files.get", {
       agentId: "main",
       name: "AGENTS.md",
@@ -815,7 +819,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const page = createAgentsPage(context);
     page.read().agentFiles.onSelectFile("cached.md");
     await waitForFast(() =>
-      expect(agentFileValues(page.read().agentFiles, "content")).toEqual({ "cached.md": "keep" }),
+      expect(agentFileValues(page.read().readData(), "content")).toEqual({ "cached.md": "keep" }),
     );
     page.setRouteData(
       agentsRouteData(
@@ -825,22 +829,22 @@ describe("AgentsPage gateway lifecycle", () => {
         context.settingsAgentSelection,
       ),
     );
-    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(page.read().readData().agentFilesLoading).toBe(true);
     emitGatewaySnapshot(currentGateway, snapshot(client, false));
-    expect(page.read().agentFiles.agentFilesLoading).toBe(false);
-    expect(agentFileValues(page.read().agentFiles, "content")).toEqual({ "cached.md": "keep" });
+    expect(page.read().readData().agentFilesLoading).toBe(false);
+    expect(agentFileValues(page.read().readData(), "content")).toEqual({ "cached.md": "keep" });
     emitGatewaySnapshot(currentGateway, snapshot(client));
     expect(ensureFiles).toHaveBeenCalledTimes(2);
-    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(page.read().readData().agentFilesLoading).toBe(true);
 
     first.resolve(files("main", "old"));
     await first.promise;
     await Promise.resolve();
-    expect(page.read().agentFiles.agentFilesList).toBeNull();
-    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(page.read().readData().agentFilesList).toBeNull();
+    expect(page.read().readData().agentFilesLoading).toBe(true);
     second.resolve(files("main", "new"));
-    await waitForFast(() => expect(page.read().agentFiles.agentFilesList?.workspace).toBe("new"));
-    expect(page.read().agentFiles.agentFilesLoading).toBe(false);
+    await waitForFast(() => expect(page.read().readData().agentFilesList?.workspace).toBe("new"));
+    expect(page.read().readData().agentFilesLoading).toBe(false);
   });
 
   it("rejects a file result from a replaced agents capability", async () => {
@@ -853,23 +857,23 @@ describe("AgentsPage gateway lifecycle", () => {
       agentsCapability(() => oldFiles.promise),
     );
     const page = createAgentsPage(context, agentsRouteData(currentGateway));
-    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(page.read().readData().agentFilesLoading).toBe(true);
     page.dispose();
     const replacement = createAgentsPage(
       { ...context, agents: agentsCapability(() => nextFiles.promise) },
       agentsRouteData(currentGateway),
     );
-    expect(replacement.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(replacement.read().readData().agentFilesLoading).toBe(true);
     oldFiles.resolve(files("main", "old"));
     await oldFiles.promise;
     await Promise.resolve();
-    expect(replacement.read().agentFiles.agentFilesList).toBeNull();
-    expect(replacement.read().agentFiles.agentFilesLoading).toBe(true);
+    expect(replacement.read().readData().agentFilesList).toBeNull();
+    expect(replacement.read().readData().agentFilesLoading).toBe(true);
     nextFiles.resolve(files("main", "new"));
     await waitForFast(() =>
-      expect(replacement.read().agentFiles.agentFilesList?.workspace).toBe("new"),
+      expect(replacement.read().readData().agentFilesList?.workspace).toBe("new"),
     );
-    expect(replacement.read().agentFiles.agentFilesLoading).toBe(false);
+    expect(replacement.read().readData().agentFilesLoading).toBe(false);
   });
 
   it("shows only replacement identities when the old capability settles", async () => {
