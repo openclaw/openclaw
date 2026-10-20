@@ -87,7 +87,7 @@ function buildComputerToolSchema(
           ...gatewayCallOptionSchemaProperties(),
           target: optionalStringEnum(["gateway", "node"] as const, {
             description:
-              "Computer host. Defaults to the Gateway desktop when configured, otherwise a paired node. Later calls retain the selected host.",
+              'Computer host. Omit target for automatic host selection: the Gateway desktop when configured, otherwise a paired node. Set target to "gateway" or "node" only when explicitly choosing that host. Later calls retain the selected host.',
           }),
           node: describedString(
             "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
