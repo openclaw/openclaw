@@ -1,19 +1,11 @@
-// Plugin NPM Publish tests cover publish wrapper argument safety.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const scriptPath = "scripts/plugin-npm-publish.sh";
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runPluginPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync("bash", [scriptPath, ...args], {
@@ -23,9 +15,8 @@ function runPluginPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-function makePackage(version: string): { packageDir: string; path: string; root: string } {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-plugin-publish-test-"));
-  tempDirs.push(root);
+function makePackage(version: string) {
+  const root = tempDirs.make("openclaw-plugin-publish-test-");
   const packageDir = join(root, "plugin");
   const binDir = join(root, "bin");
   mkdirSync(packageDir, { recursive: true });
@@ -56,15 +47,25 @@ describe("plugin npm publish wrapper", () => {
     expect(source.slice(identityIndex, publishIndex)).not.toContain("npm view");
   });
 
-  it("rejects missing mode before package checks", () => {
-    const result = runPluginPublishWrapper([]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe(
+  it.each([
+    [
+      [],
       "usage: bash scripts/plugin-npm-publish.sh [--repo-root <dir>] [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
-    );
-  });
+    ],
+    [["--dry-run", "--wat"], "unexpected plugin npm package-dir option: --wat"],
+    [
+      ["--dry-run", "extensions/telegram", "extra"],
+      "unexpected plugin npm publish argument: extra",
+    ],
+  ] satisfies [string[], string][])(
+    "rejects arguments %j before package checks",
+    (args, message) => {
+      const result = runPluginPublishWrapper(args);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(message);
+    },
+  );
 
   it("runs trusted tooling against an explicit repository root", () => {
     const fixture = makePackage("2026.8.1-beta.1");
@@ -76,22 +77,6 @@ describe("plugin npm publish wrapper", () => {
     expect(result.stdout).toContain(`Resolved repository root: ${fixture.root}`);
     expect(result.stdout).toContain(`Resolved package dir: ${fixture.packageDir}`);
     expect(result.stdout).toContain("Resolved package name: @openclaw/demo");
-  });
-
-  it("rejects option-like package dirs before package checks", () => {
-    const result = runPluginPublishWrapper(["--dry-run", "--wat"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("unexpected plugin npm package-dir option: --wat");
-  });
-
-  it("rejects extra arguments before package checks", () => {
-    const result = runPluginPublishWrapper(["--dry-run", "extensions/telegram", "extra"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("unexpected plugin npm publish argument: extra");
   });
 
   it("uses the extended-stable plan without latest or beta mirrors", () => {

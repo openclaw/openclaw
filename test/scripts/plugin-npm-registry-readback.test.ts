@@ -15,20 +15,15 @@ function readback(fault: string, deferVisibility = true, route = "npm-oidc") {
   const summary = join(root, "summary.md");
   const name = "@openclaw/demo";
   const version = "2026.9.2-beta.1";
+  const dist = {
+    integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+    shasum: createHash("sha1").update(bytes).digest("hex"),
+    tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
+  };
   const packument = {
     name,
     "dist-tags": { beta: version },
-    versions: {
-      [version]: {
-        name,
-        version,
-        dist: {
-          integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
-          shasum: createHash("sha1").update(bytes).digest("hex"),
-          tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
-        },
-      },
-    },
+    versions: { [version]: { name, version, dist } },
   };
   writeFileSync(tarball, bytes);
   writeFileSync(summary, "");
@@ -76,20 +71,15 @@ globalThis.fetch = async (url, init) => {
       preload,
       "scripts/plugin-npm-prepared-release.mjs",
       "registry",
-      "--package-name",
-      name,
-      "--version",
-      version,
-      "--publish-tag",
-      "beta",
-      "--route",
-      route,
-      "--tarball",
-      tarball,
-      "--allow-missing",
-      "false",
-      "--defer-visibility",
-      String(deferVisibility),
+      ...Object.entries({
+        "package-name": name,
+        version,
+        "publish-tag": "beta",
+        route,
+        tarball,
+        "allow-missing": "false",
+        "defer-visibility": String(deferVisibility),
+      }).flatMap(([key, value]) => [`--${key}`, value]),
     ],
     {
       encoding: "utf8",

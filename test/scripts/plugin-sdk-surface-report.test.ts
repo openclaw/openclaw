@@ -1,7 +1,6 @@
-// Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import {
   evaluatePluginSdkShippedSurface,
@@ -17,20 +16,24 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 const fixtures = createFixtureLifetime();
 afterEach(() => fixtures.cleanup());
 
-const pluginSdkSurfaceBudgetEnvPattern = /^OPENCLAW_PLUGIN_SDK_MAX_/u;
-
-function baseSurfaceReportEnv(): NodeJS.ProcessEnv {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !pluginSdkSurfaceBudgetEnvPattern.test(key)),
-  );
-}
-
 type SurfaceReport = Awaited<ReturnType<typeof collectPluginSdkSurfaceReport>>;
+let baseReport: SurfaceReport;
 let surfaceReport: SurfaceReport;
+const failures = (env: NodeJS.ProcessEnv = {}) =>
+  evaluatePluginSdkSurfaceReport(surfaceReport, readPluginSdkSurfaceBudgets(env));
 
 describe("plugin SDK surface report", () => {
   beforeAll(async () => {
-    surfaceReport = await collectPluginSdkSurfaceReport();
+    baseReport = await collectPluginSdkSurfaceReport();
+  });
+  beforeEach(() => {
+    surfaceReport = {
+      ...baseReport,
+      publicStats: {
+        ...baseReport.publicStats,
+        totals: { ...baseReport.publicStats.totals },
+      },
+    };
   });
 
   // Linux's strict owner distinguishes a zombie compiler leader from its still-live threads.
@@ -41,41 +44,31 @@ describe("plugin SDK surface report", () => {
         const directory = fixtures.createTempDir("plugin-sdk-surface-lifetime-");
         const stdout = path.join(directory, "stdout.log");
         const stderr = path.join(directory, "stderr.log");
-        const out = fs.openSync(stdout, "wx", 0o600);
-        try {
-          const err = fs.openSync(stderr, "wx", 0o600);
-          try {
-            const code = await runManagedCommand({
-              bin: "pnpm",
-              args: ["plugin-sdk:surface:check"],
-              cwd: process.cwd(),
-              env: baseSurfaceReportEnv(),
-              signal,
-              requireProcessTreeExit: true,
-              stdio: ["ignore", out, err],
-            });
-            expect(code, fs.readFileSync(stderr, "utf8")).toBe(0);
-            expect(fs.readFileSync(stdout, "utf8")).toContain("all SDK entrypoints:");
-          } finally {
-            fs.closeSync(err);
-          }
-        } finally {
-          fs.closeSync(out);
-        }
+        await using out = await fs.promises.open(stdout, "wx", 0o600);
+        await using err = await fs.promises.open(stderr, "wx", 0o600);
+        const code = await runManagedCommand({
+          bin: "pnpm",
+          args: ["plugin-sdk:surface:check"],
+          cwd: process.cwd(),
+          env: Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([key]) => !key.startsWith("OPENCLAW_PLUGIN_SDK_MAX_"),
+            ),
+          ),
+          signal,
+          requireProcessTreeExit: true,
+          stdio: ["ignore", out.fd, err.fd],
+        });
+        expect(code, fs.readFileSync(stderr, "utf8")).toBe(0);
+        expect(fs.readFileSync(stdout, "utf8")).toContain("all SDK entrypoints:");
       });
     },
   );
 
   it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
     expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
-    const report = {
-      ...surfaceReport,
-      deprecatedBarrelWithoutReexports: ["fixture-facade"],
-    };
-
-    expect(evaluatePluginSdkSurfaceReport(report, readPluginSdkSurfaceBudgets({}))).toContain(
-      "deprecated barrel entrypoints without reexports: fixture-facade",
-    );
+    surfaceReport.deprecatedBarrelWithoutReexports = ["fixture-facade"];
+    expect(failures()).toContain("deprecated barrel entrypoints without reexports: fixture-facade");
   });
 
   it("keeps approval store internals out of public approval helpers", () => {
@@ -95,26 +88,18 @@ describe("plugin SDK surface report", () => {
   });
 
   it("does not let a lowered export budget authorize a shipped name removal", () => {
-    const report = {
-      ...surfaceReport,
-      publicStats: {
-        ...surfaceReport.publicStats,
-        totals: {
-          ...surfaceReport.publicStats.totals,
-          exports: surfaceReport.publicStats.totals.exports - 1,
-        },
-      },
-    };
-    const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: String(report.publicStats.totals.exports),
-    });
+    surfaceReport.publicStats.totals.exports--;
     const inventory: PluginSdkShippedSurface = {
       schema: "openclaw.plugin-sdk-shipped-surface/v1",
       release: "v2026.9.8",
       commit: "f".repeat(40),
       entrypoints: { core: ["RemovedPublicType"] },
     };
-    expect(evaluatePluginSdkSurfaceReport(report, budgetConfig)).toEqual([]);
+    expect(
+      failures({
+        OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: String(surfaceReport.publicStats.totals.exports),
+      }),
+    ).toEqual([]);
     expect(
       evaluatePluginSdkShippedSurface(inventory, new Map([["core", []]]), [], "2026-10-02"),
     ).toEqual([{ subpath: "core", missingSubpath: false, names: ["RemovedPublicType"] }]);
@@ -122,30 +107,22 @@ describe("plugin SDK surface report", () => {
 
   it("rejects callable surface growth from the canonical source graph", () => {
     const callableExports = surfaceReport.publicStats.totals.callableExports;
-    const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(callableExports - 1),
-    });
-
-    expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
-      `public callable exports ${callableExports} > ${callableExports - 1}`,
-    );
+    expect(
+      failures({
+        OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(callableExports - 1),
+      }),
+    ).toContain(`public callable exports ${callableExports} > ${callableExports - 1}`);
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {
     const core = surfaceReport.publicStats.byEntrypoint.get("core")!;
-    const report = {
-      ...surfaceReport,
-      publicStats: {
-        ...surfaceReport.publicStats,
-        byEntrypoint: new Map([["core", { ...core, deprecatedExports: 3 }]]),
-      },
-    };
-    const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 1 }),
-    });
-
-    expect(evaluatePluginSdkSurfaceReport(report, budgetConfig)).toContain(
-      "public deprecated exports in core 3 > 1",
-    );
+    surfaceReport.publicStats.byEntrypoint = new Map([["core", { ...core, deprecatedExports: 3 }]]);
+    expect(
+      failures({
+        OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({
+          core: 1,
+        }),
+      }),
+    ).toContain("public deprecated exports in core 3 > 1");
   });
 });

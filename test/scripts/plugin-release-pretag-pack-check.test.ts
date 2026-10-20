@@ -1,4 +1,3 @@
-// Plugin release pretag pack check tests cover its script-local target and command routing.
 import { existsSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,15 +13,10 @@ const { runManagedCommandMock } = vi.hoisted(() => ({
   runManagedCommandMock: vi.fn(),
 }));
 
-vi.mock("../../scripts/lib/managed-child-process.mts", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../scripts/lib/managed-child-process.mts")
-  >("../../scripts/lib/managed-child-process.mts");
-  return {
-    ...actual,
-    runManagedCommand: runManagedCommandMock,
-  };
-});
+vi.mock(import("../../scripts/lib/managed-child-process.mts"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  runManagedCommand: runManagedCommandMock,
+}));
 
 const tempDirs: string[] = [];
 
@@ -64,54 +58,36 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
     });
   });
 
-  it("preserves nonzero command failure semantics", async () => {
-    const repoDir = createDualPublishPluginRepo();
-    runManagedCommandMock.mockResolvedValueOnce(7);
-
-    let thrown: unknown;
-    try {
-      await runPluginReleasePretagPackCheck(repoDir);
-    } catch (error) {
-      thrown = error;
-    }
-
-    expect(thrown).toMatchObject({ code: 7 });
-    expect((thrown as Error).message).toBe(
+  it.each([
+    [
+      7,
       "plugin runtime build for @openclaw/demo-plugin failed with exit code 7: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
-    );
-  });
-
-  it("identifies the stalled release stage without exposing child details", async () => {
-    const repoDir = createDualPublishPluginRepo();
-    runManagedCommandMock.mockResolvedValueOnce(0).mockRejectedValueOnce(
-      Object.assign(new Error("managed command ETIMEDOUT secret-marker"), {
-        code: "ETIMEDOUT",
-      }),
-    );
-
-    let thrown: unknown;
-    try {
-      await runPluginReleasePretagPackCheck(repoDir);
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toMatchObject({ code: "ETIMEDOUT" });
-    expect((thrown as Error).message).toBe(
+    ],
+    [
+      "ETIMEDOUT",
       "npm pack for @openclaw/demo-plugin timed out after 600000ms: bash scripts/plugin-npm-publish.sh --pack-dry-run extensions/demo-plugin",
-    );
-    expect((thrown as Error).message).not.toContain("secret-marker");
+    ],
+  ])("preserves %s failure semantics without child details", async (code, message) => {
+    if (typeof code === "number") {
+      runManagedCommandMock.mockResolvedValueOnce(code);
+    } else {
+      runManagedCommandMock
+        .mockResolvedValueOnce(0)
+        .mockRejectedValueOnce(
+          Object.assign(new Error("managed command ETIMEDOUT secret-marker"), { code }),
+        );
+    }
+    await expect(
+      runPluginReleasePretagPackCheck(createDualPublishPluginRepo()),
+    ).rejects.toMatchObject({ code, message });
   });
 
   it("preserves managed cancellation statuses at the CLI boundary", () => {
     expect(
-      pluginReleasePretagExitCode(Object.assign(new Error("interrupted"), { code: 130 })),
-    ).toBe(130);
-    expect(pluginReleasePretagExitCode(Object.assign(new Error("terminated"), { code: 143 }))).toBe(
-      143,
-    );
-    expect(
-      pluginReleasePretagExitCode(Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })),
-    ).toBe(1);
+      [130, 143, "ETIMEDOUT"].map((code) =>
+        pluginReleasePretagExitCode(Object.assign(new Error("interrupted"), { code })),
+      ),
+    ).toEqual([130, 143, 1]);
   });
 
   it.each(["live", "terminated"] as const)(

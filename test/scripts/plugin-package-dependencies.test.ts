@@ -1,4 +1,3 @@
-// Plugin package dependency tests cover bundled plugin runtime dependency helpers.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,13 +6,9 @@ import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "../../scripts/lib/plugin-package-dependencies.mts";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = new Set<string>();
-
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writePackageJson(root: string, pluginId: string, packageJson: unknown): void {
   const pluginDir = join(root, pluginId);
@@ -37,17 +32,9 @@ describe("scripts/lib/plugin-package-dependencies.mts", () => {
   it("collects only runtime dependency specs from package manifests", () => {
     expect([
       ...collectRuntimeDependencySpecs({
-        dependencies: {
-          empty: "",
-          objectValue: { version: "1.0.0" },
-          runtime: "^1.0.0",
-        },
-        devDependencies: {
-          devOnly: "^3.0.0",
-        },
-        optionalDependencies: {
-          optional: "~2.0.0",
-        },
+        dependencies: { empty: "", objectValue: { version: "1.0.0" }, runtime: "^1.0.0" },
+        devDependencies: { devOnly: "^3.0.0" },
+        optionalDependencies: { optional: "~2.0.0" },
       }),
     ]).toEqual([
       ["runtime", "^1.0.0"],
@@ -56,34 +43,16 @@ describe("scripts/lib/plugin-package-dependencies.mts", () => {
   });
 
   it("collects bundled plugin dependency owners and conflicts deterministically", () => {
-    const root = makeTempDir(tempDirs, "openclaw-plugin-dependencies-");
+    const root = tempDirs.make("openclaw-plugin-dependencies-");
     writePackageJson(root, "alpha", {
-      dependencies: {
-        shared: "^1.0.0",
-      },
-      optionalDependencies: {
-        optional: "^2.0.0",
-      },
+      dependencies: { shared: "^1.0.0" },
+      optionalDependencies: { optional: "^2.0.0" },
     });
-    writePackageJson(root, "beta", {
-      dependencies: {
-        shared: "^1.0.0",
-      },
-    });
-    writePackageJson(root, "gamma", {
-      dependencies: {
-        shared: "^1.1.0",
-      },
-    });
+    writePackageJson(root, "beta", { dependencies: { shared: "^1.0.0" } });
+    writePackageJson(root, "gamma", { dependencies: { shared: "^1.1.0" } });
     writePackageJson(root, "external", {
-      dependencies: {
-        shared: "^9.0.0",
-      },
-      openclaw: {
-        build: {
-          bundledDist: false,
-        },
-      },
+      dependencies: { shared: "^9.0.0" },
+      openclaw: { build: { bundledDist: false } },
     });
 
     expect([...collectBundledPluginPackageDependencySpecs(root)]).toEqual([
