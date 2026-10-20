@@ -20,7 +20,6 @@ import {
 } from "../infra/agent-run-registry.js";
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import * as agentJobs from "./agent-turn/agent-job.js";
 import { persistInternalSourceReply } from "./internal-source-reply-persistence.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
@@ -489,6 +488,7 @@ describe("gateway server chat lifecycle", () => {
         expect(payload).toMatchObject({ sessionKey: "main", stream: "assistant" });
       }
 
+      const agentJobs = await import("./agent-turn/agent-job.js");
       for (const cached of [false, true]) {
         const terminalRunId = `run-wait-terminal-${cached}`;
         const terminal = { phase: "end", startedAt: 200, endedAt: 210 };
