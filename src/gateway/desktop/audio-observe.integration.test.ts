@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import { duplexPair, PassThrough } from "node:stream";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { handleDesktopAudioUpgrade } from "./audio-bridge.js";
@@ -36,112 +36,105 @@ async function attach(path: string) {
   await once(socket, "open");
   return socket;
 }
-describe("audio tied to the actual RFB observer", () => {
-  it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
-    "does not bypass screen authorization: %s",
-    async (outcome) => {
-      if (outcome === "expired") {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
-      const [gatewayStream, serverStream] = duplexPair();
-      cleanups.push(() => {
-        gatewayStream.destroy();
-        serverStream.destroy();
-      });
-      const authenticated = createDeferred();
-      const started = createDeferred();
-      const stopped = createDeferred();
-      const pcm = new PassThrough();
-      const start = vi.fn(async () => {
-        started.resolve();
-        return {
-          stream: pcm,
-          stop: async () => {
-            pcm.destroy();
-            stopped.resolve();
-          },
-        };
-      });
-      registry = {
-        claimStream: () => gatewayStream,
-        attachObserver: () => (outcome === "stale-owner" ? undefined : { release() {} }),
-      };
-      const requester = { connId: "audio-authorization-test", isCurrent: () => true };
-      const grant = mintDesktopObserverToken({
-        sourceKey: "host",
-        ownerEpoch: 1,
-        control: true,
-        attachment: { kind: "stream", streamId: "synthetic-rfb" },
-        preauth: { auth: "vnc-password", credentials: { password: "synthetic" } },
-        audio: { start },
-        requester,
-      });
-      expect(grant.audio).toBeDefined();
-      const audio = await attach(grant.audio!.wsPath);
-      const audioClosed = once(audio, "close");
-      const expectAudioDenied = async () => {
-        await audioClosed;
-        expect(start).not.toHaveBeenCalled();
-      };
-      audio.send(JSON.stringify({ action: "start" }));
-      if (outcome === "released") {
-        expect(
-          await releaseDesktopObserverToken("/desktop/observe?token=" + grant.token, requester),
-        ).toBe(true);
-        await expectAudioDenied();
-        return;
-      }
-      if (outcome === "expired") {
-        vi.advanceTimersByTime(60_001);
-        await expectAudioDenied();
-        return;
-      }
-      let upstreamStage = 0;
-      serverStream.on("data", () => {
-        if (upstreamStage++ === 0) {
-          serverStream.write(Buffer.from([1, 2]));
-        } else if (upstreamStage === 2) {
-          serverStream.write(Buffer.alloc(16, 1));
-        } else {
-          authenticated.resolve();
-        }
-      });
-      const screen = new WebSocket(origin + "/desktop/observe?token=" + grant.token);
-      cleanups.push(() => screen.terminate());
-      let browserStage = 0;
-      screen.on("message", () => {
-        if (browserStage++ === 0) {
-          screen.send(version);
-        } else if (browserStage === 2) {
-          screen.send(Buffer.from([1]));
-        }
-      });
-      await once(screen, "open");
-      if (outcome === "stale-owner") {
-        await expectAudioDenied();
-        return;
-      }
-      serverStream.write(version);
-      await authenticated.promise;
-      expect(start).not.toHaveBeenCalled();
-      if (outcome === "rejected") {
-        serverStream.write(Buffer.from([0, 0, 0, 1, 0, 0, 0, 0]));
-        await expectAudioDenied();
-        return;
-      }
-      const startFrame = once(audio, "message");
-      serverStream.write(Buffer.alloc(4));
-      await started.promise;
-      expect(start).toHaveBeenCalledTimes(1);
-      expect((await startFrame)[0].toString()).toBe('{"state":"started"}');
-      const received = once(audio, "message");
-      const samples = Buffer.from([0, 1, 0, 2]);
-      pcm.write(samples);
-      expect(await received).toEqual([samples, true]);
-      screen.close();
+it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
+  "does not bypass screen authorization: %s",
+  async (outcome) => {
+    if (outcome === "expired") {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
+    const [gatewayStream, serverStream] = duplexPair();
+    cleanups.push(() => {
+      gatewayStream.destroy();
+      serverStream.destroy();
+    });
+    const authenticated = createDeferred();
+    const stopped = createDeferred();
+    const pcm = new PassThrough();
+    const start = vi.fn(async () => ({
+      stream: pcm,
+      stop: async () => {
+        pcm.destroy();
+        stopped.resolve();
+      },
+    }));
+    registry = {
+      claimStream: () => gatewayStream,
+      attachObserver: () => (outcome === "stale-owner" ? undefined : { release() {} }),
+    };
+    const requester = { connId: "audio-authorization-test", isCurrent: () => true };
+    const grant = mintDesktopObserverToken({
+      sourceKey: "host",
+      ownerEpoch: 1,
+      control: true,
+      attachment: { kind: "stream", streamId: "synthetic-rfb" },
+      preauth: { auth: "vnc-password", credentials: { password: "synthetic" } },
+      audio: { start },
+      requester,
+    });
+    expect(grant.audio).toBeDefined();
+    const audio = await attach(grant.audio!.wsPath);
+    const audioClosed = once(audio, "close");
+    const expectAudioDenied = async () => {
       await audioClosed;
-      await stopped.promise;
-      expect(pcm.destroyed).toBe(true);
-    },
-  );
-});
+      expect(start).not.toHaveBeenCalled();
+    };
+    audio.send(JSON.stringify({ action: "start" }));
+    if (outcome === "released") {
+      expect(
+        await releaseDesktopObserverToken("/desktop/observe?token=" + grant.token, requester),
+      ).toBe(true);
+      await expectAudioDenied();
+      return;
+    }
+    if (outcome === "expired") {
+      vi.advanceTimersByTime(60_001);
+      await expectAudioDenied();
+      return;
+    }
+    let upstreamStage = 0;
+    serverStream.on("data", () => {
+      if (upstreamStage++ === 0) {
+        serverStream.write(Buffer.from([1, 2]));
+      } else if (upstreamStage === 2) {
+        serverStream.write(Buffer.alloc(16, 1));
+      } else {
+        authenticated.resolve();
+      }
+    });
+    const screen = new WebSocket(origin + "/desktop/observe?token=" + grant.token);
+    cleanups.push(() => screen.terminate());
+    let browserStage = 0;
+    screen.on("message", () => {
+      if (browserStage++ === 0) {
+        screen.send(version);
+      } else if (browserStage === 2) {
+        screen.send(Buffer.from([1]));
+      }
+    });
+    await once(screen, "open");
+    if (outcome === "stale-owner") {
+      await expectAudioDenied();
+      return;
+    }
+    serverStream.write(version);
+    await authenticated.promise;
+    expect(start).not.toHaveBeenCalled();
+    if (outcome === "rejected") {
+      serverStream.write(Buffer.from([0, 0, 0, 1, 0, 0, 0, 0]));
+      await expectAudioDenied();
+      return;
+    }
+    const startFrame = once(audio, "message");
+    serverStream.write(Buffer.alloc(4));
+    expect((await startFrame)[0].toString()).toBe('{"state":"started"}');
+    expect(start).toHaveBeenCalledTimes(1);
+    const received = once(audio, "message");
+    const samples = Buffer.from([0, 1, 0, 2]);
+    pcm.write(samples);
+    expect(await received).toEqual([samples, true]);
+    screen.close();
+    await audioClosed;
+    await stopped.promise;
+    expect(pcm.destroyed).toBe(true);
+  },
+);

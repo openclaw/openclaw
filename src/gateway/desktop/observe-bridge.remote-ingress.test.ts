@@ -108,11 +108,10 @@ it.each(["observe", "audio"] as const)(
             },
           })
         : undefined;
-    const path =
+    const req = new IncomingMessage(new Socket());
+    req.url =
       audio?.descriptor.wsPath ??
       `/desktop/observe?token=${mintDesktopObserverToken({ ...observerDefaults, requester }).token}`;
-    const req = new IncomingMessage(new Socket());
-    req.url = path;
     markGatewayIngressTransport(req, { kind: "remote-forwarded", context: destination });
     const transport = new PassThrough();
     const chunks: Buffer[] = [];

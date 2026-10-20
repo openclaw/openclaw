@@ -9,6 +9,7 @@ import {
   createColdPluginFixture,
 } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { startComputerHostProcess } from "./computer-process.js";
+import { computerCapabilities } from "./computer.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -19,6 +20,11 @@ it.each(["sync", "async", "reject"] as const)(
     const pluginRoot = path.join(home, "plugin");
     fs.mkdirSync(pluginRoot);
     const pluginId = "fixture-computer";
+    const provider = {
+      id: pluginId,
+      label: "Synthetic computer",
+      generation: "fixture-generation",
+    };
     const fixture = createColdPluginFixture({
       rootDir: pluginRoot,
       pluginId,
@@ -54,13 +60,7 @@ module.exports = {
         }
         return require("node:fs/promises").readFile(${JSON.stringify(lifecycleFile)}).then(finish);
       },
-      capabilities: () => ({
-        contractVersion: 2,
-        provider: { id: ${JSON.stringify(pluginId)}, label: "Synthetic computer", generation: "fixture-generation" },
-        actions: ["screenshot", "left_click"],
-        targets: ["screen"], deliveryModes: ["foreground"], observations: ["image"],
-        features: { recording: false, agentCursor: false, multiDisplay: false },
-      }),
+      capabilities: () => (${JSON.stringify(computerCapabilities(provider))}),
       async openExecution({ executionId, sessionKey }) {
         record("open:" + executionId);
         return {
@@ -112,11 +112,7 @@ module.exports = {
     const executionId = "123e4567-e89b-42d3-a456-426614174000";
     const invocation = { sessionKey: "fixture-session", assertCurrent: () => {} };
     try {
-      expect((await child.ready).provider).toEqual({
-        id: pluginId,
-        label: "Synthetic computer",
-        generation: "fixture-generation",
-      });
+      expect((await child.ready).provider).toEqual(provider);
       await expect(
         child.invoke({
           ...invocation,

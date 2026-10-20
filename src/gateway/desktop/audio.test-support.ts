@@ -23,28 +23,24 @@ export function createAudioFixture(
     silentCapture?: boolean;
     captureFailure?: boolean;
     deferCapture?: boolean;
-    startupTimeoutMs?: number;
     beforeCaptureReturn?: () => void;
   } = {},
 ) {
   const inputs: Array<Extract<SpawnInput, { mode: "child" }>> = [];
   const runs: ManagedRun[] = [];
-  const serverSpawned = createDeferred();
-  const captureSpawned = createDeferred();
-  const captureAdmission = createDeferred();
-  const captureSettled = createDeferred();
-  const scopeCleaned = vi.fn();
-  const captureAdmitted = vi.fn();
-  const nativeGuard = vi.fn();
+  const events = {
+    serverSpawned: createDeferred(),
+    captureSpawned: createDeferred(),
+    captureAdmission: createDeferred(),
+    scopeCleaned: vi.fn(),
+    captureAdmitted: vi.fn(),
+  };
+  const inScope = (scope: string) => runs.filter((_, index) => inputs[index]?.scopeKey === scope);
   const supervisor: ProcessSupervisor = {
-    acquireScopeCleanup(scope) {
-      return async () => {
-        supervisor.cancelScope(scope);
-        await Promise.all(
-          runs.filter((_, index) => inputs[index]?.scopeKey === scope).map((run) => run.wait()),
-        );
-        scopeCleaned(scope);
-      };
+    acquireScopeCleanup: (scope) => async () => {
+      supervisor.cancelScope(scope);
+      await Promise.all(inScope(scope).map((run) => run.wait()));
+      events.scopeCleaned(scope);
     },
     async spawn(input) {
       if (input.mode !== "child") {
@@ -66,42 +62,29 @@ export function createAudioFixture(
       };
       runs.push(run);
       if (input.argv[0] === "pulseaudio") {
-        serverSpawned.resolve();
+        events.serverSpawned.resolve();
         if (!options.silentServer) {
           input.onStderr?.("I: main.c: Daemon startup complete.\n");
         }
       } else {
-        captureSpawned.resolve();
-        try {
-          if (options.deferCapture) {
-            await captureAdmission.promise;
-            nativeGuard(() => input.assertCurrent?.());
-            input.assertCurrent?.();
-          }
-          captureAdmitted();
-          if (options.captureFailure) {
-            throw new Error("parec spawn failed");
-          }
-          if (!options.silentCapture) {
-            input.onStdoutRaw?.(Buffer.from([0, 128, 255, 127]));
-          }
-          options.beforeCaptureReturn?.();
-        } finally {
-          captureSettled.resolve();
+        events.captureSpawned.resolve();
+        if (options.deferCapture) {
+          await events.captureAdmission.promise;
+          input.assertCurrent?.();
         }
+        events.captureAdmitted();
+        if (options.captureFailure) {
+          throw new Error("parec spawn failed");
+        }
+        if (!options.silentCapture) {
+          input.onStdoutRaw?.(Buffer.from([0, 128, 255, 127]));
+        }
+        options.beforeCaptureReturn?.();
       }
       return run;
     },
-    cancel(id) {
-      runs.find((run) => run.runId === id)?.cancel();
-    },
-    cancelScope(scope) {
-      for (const [index, run] of runs.entries()) {
-        if (inputs[index]?.scopeKey === scope) {
-          run.cancel();
-        }
-      }
-    },
+    cancel: (id) => runs.find((run) => run.runId === id)?.cancel(),
+    cancelScope: (scope) => inScope(scope).forEach((run) => run.cancel()),
   };
   const env = { PULSE_SERVER: "unix:/unrelated/native", ...managedLinuxAudioEnv(tempDir) };
   const owner = createManagedLinuxAudio({
@@ -111,21 +94,8 @@ export function createAudioFixture(
     assertCurrent() {},
     runtime: {
       detectBinary: async (binary) => binary !== options.missing,
-      startupTimeoutMs: options.startupTimeoutMs ?? 100,
+      startupTimeoutMs: 100,
     },
   });
-  return {
-    owner,
-    inputs,
-    runs,
-    env,
-    tempDir,
-    serverSpawned,
-    captureSpawned,
-    captureAdmission,
-    captureSettled,
-    scopeCleaned,
-    captureAdmitted,
-    nativeGuard,
-  };
+  return { owner, inputs, runs, env, tempDir, ...events };
 }
