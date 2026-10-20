@@ -183,9 +183,9 @@ it("keeps rename and reactions after hello until the canonical session list arri
   const h = await setup();
   const retained = h.sessions.presentation.result;
   assert(retained);
-  const canonical = sessionsResult(
-    retained.sessions.map((row) => ({ ...row, label: "Reconnected title" })),
-  );
+  const retainedRow = retained.sessions[0];
+  assert(retainedRow);
+  const canonical = sessionsResult([{ ...retainedRow, label: "Reconnected title" }]);
   const pendingList = createDeferred<typeof canonical>();
   onTestFinished(() => pendingList.resolve(canonical));
   const request = h.current().request.getMockImplementation();
