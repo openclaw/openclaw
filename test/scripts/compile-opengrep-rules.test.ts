@@ -35,7 +35,7 @@ describe("compile-opengrep-rules", () => {
     for (const dir of [rulesDir, outDir, binDir]) {
       mkdirSync(dir);
     }
-    writeFileSync(path.join(outDir, "precise.yml"), original);
+    writeOutput(original);
     source([rule("target", "new($VALUE)")]);
     const validator = path.join(binDir, "opengrep");
     writeFileSync(
@@ -48,6 +48,8 @@ describe("compile-opengrep-rules", () => {
   function source(rules: ReturnType<typeof rule>[], file = "source.yml") {
     writeFileSync(path.join(rulesDir, file), stringify({ rules }));
   }
+  const writeSource = (text: string) => writeFileSync(path.join(rulesDir, "source.yml"), text);
+  const writeOutput = (text: string) => writeFileSync(path.join(outDir, "precise.yml"), text);
   function compile(...args: string[]) {
     return spawnSync(
       process.execPath,
@@ -76,41 +78,25 @@ describe("compile-opengrep-rules", () => {
   });
 
   it.each([
-    "unknown",
-    "duplicate-source",
-    "duplicate-existing",
-    "bad-yaml",
-    "missing-metadata",
-    "invalid-pattern",
-    "empty",
-    "conflicting-flags",
-  ])("rejects %s without publishing any changes", (scenario) => {
-    let args = ["--update-existing"];
-    if (scenario === "unknown") {
-      source([rule("unknown")]);
-    } else if (scenario === "duplicate-source") {
-      source([rule("target")], "second.yml");
-    } else if (scenario === "duplicate-existing") {
-      writeFileSync(
-        path.join(outDir, "precise.yml"),
-        `${original}  - id: test-report.target\n    pattern: duplicate(...)\n`,
-      );
-    } else if (scenario === "bad-yaml") {
-      writeFileSync(path.join(rulesDir, "source.yml"), "rules: [");
-    } else if (scenario === "missing-metadata") {
-      writeFileSync(
-        path.join(rulesDir, "source.yml"),
-        stringify({ rules: [{ ...rule("target"), metadata: {} }] }),
-      );
-    } else if (scenario === "invalid-pattern") {
-      source([rule("target", "invalid-fixture-pattern")]);
-    } else if (scenario === "empty") {
-      writeFileSync(path.join(rulesDir, "source.yml"), "rules: []\n");
-    } else {
-      args = ["--update-existing", "--replace-precise"];
-    }
+    ["unknown", () => source([rule("unknown")])],
+    ["duplicate-source", () => source([rule("target")], "second.yml")],
+    [
+      "duplicate-existing",
+      () => writeOutput(`${original}  - id: test-report.target\n    pattern: duplicate(...)\n`),
+    ],
+    ["bad-yaml", () => writeSource("rules: [")],
+    [
+      "missing-metadata",
+      () => writeSource(stringify({ rules: [{ ...rule("target"), metadata: {} }] })),
+    ],
+    ["invalid-pattern", () => source([rule("target", "invalid-fixture-pattern")])],
+    ["empty", () => writeSource("rules: []\n")],
+    ["conflicting-flags", () => {}],
+  ] as const)("rejects %s without publishing any changes", (scenario, prepare) => {
+    prepare();
+    const args = scenario === "conflicting-flags" ? ["--replace-precise"] : [];
     const before = output();
-    expect(compile(...args).status).toBe(1);
+    expect(compile("--update-existing", ...args).status).toBe(1);
     expect(output()).toBe(before);
   });
 

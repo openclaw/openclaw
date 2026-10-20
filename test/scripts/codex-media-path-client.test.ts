@@ -61,67 +61,54 @@ async function readStdoutLine(child: ChildProcessWithoutNullStreams): Promise<st
   });
 }
 
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    child.once("close", () => resolve());
-    child.kill("SIGTERM");
-  });
-}
-
-describe("codex media path limits", () => {
-  it.each([
-    ["OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", "1e3"],
-    ["PORT", "65536"],
-  ])("rejects invalid write-config %s=%s", (key, value) => {
-    const root = tempRoots.make("openclaw-codex-media-path-");
-    const result = runWriteConfig(root, { [key]: value });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`invalid ${key}: ${value}`);
-  });
+it.each([
+  ["OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", "1e3"],
+  ["PORT", "65536"],
+])("rejects invalid write-config %s=%s", (key, value) => {
+  const root = tempRoots.make("openclaw-codex-media-path-");
+  const result = runWriteConfig(root, { [key]: value });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(`invalid ${key}: ${value}`);
 });
-
-describe("codex media path fake app-server", () => {
-  it("returns a structured error when request logging fails", async () => {
-    const requestLogDirectory = tempRoots.make("openclaw-codex-media-path-");
-    const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [fakeAppServerPath], {
-      env: {
-        ...process.env,
-        OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG: requestLogDirectory,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const stderr = createBoundedChildOutput();
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr.append(chunk);
-    });
-    // Reproduce independent pipe delivery: stdout can arrive before stderr.
-    child.stderr.pause();
-
-    try {
-      const responseLine = readStdoutLine(child);
-      child.stdin.write(jsonl({ id: "request-1", method: "initialize" }));
-      const response = JSON.parse(await responseLine);
-
-      expect(response).toMatchObject({
-        error: {
-          message: expect.stringContaining("fake Codex app-server request log write failed"),
-        },
-        id: "request-1",
-      });
-      // Closing stdin lets the fixture exit; close joins both output streams.
-      const closed = once(child, "close");
-      child.stdin.end();
-      child.stderr.resume();
-      await closed;
-      expect(stderr.text()).toContain("fake Codex app-server request log write failed");
-    } finally {
-      await stopChild(child);
-    }
+it("returns a structured error when request logging fails", async () => {
+  const requestLogDirectory = tempRoots.make("openclaw-codex-media-path-");
+  const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [fakeAppServerPath], {
+    env: {
+      ...process.env,
+      OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG: requestLogDirectory,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
   });
+  const stderr = createBoundedChildOutput();
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", stderr.append);
+  // Reproduce independent pipe delivery: stdout can arrive before stderr.
+  child.stderr.pause();
+
+  try {
+    const responseLine = readStdoutLine(child);
+    child.stdin.write(jsonl({ id: "request-1", method: "initialize" }));
+    const response = JSON.parse(await responseLine);
+
+    expect(response).toMatchObject({
+      error: {
+        message: expect.stringContaining("fake Codex app-server request log write failed"),
+      },
+      id: "request-1",
+    });
+    // Closing stdin lets the fixture exit; close joins both output streams.
+    const closed = once(child, "close");
+    child.stdin.end();
+    child.stderr.resume();
+    await closed;
+    expect(stderr.text()).toContain("fake Codex app-server request log write failed");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const closed = once(child, "close");
+      child.kill("SIGTERM");
+      await closed;
+    }
+  }
 });
 
 describe("codex media path JSONL tailer", () => {

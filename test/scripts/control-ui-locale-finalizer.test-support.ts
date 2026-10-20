@@ -89,8 +89,9 @@ export function createLocaleFinalizerHarness() {
     cleanup: temporary.cleanup,
     async prepare() {
       template = temporary.make("locale-finalizer-source-");
+      const target = (file: string) => path.join(template, file);
       const repo = process.cwd();
-      const files = new Set([
+      const sources = new Set([
         ...collectRuntimeImportClosure(
           repo,
           [
@@ -111,12 +112,12 @@ export function createLocaleFinalizerHarness() {
         ".github/actions/publish-generated-pr/policy.py",
         ".github/actions/git-owner/owner.py",
       ]);
-      for (const file of files) {
+      for (const file of sources) {
         if (file.startsWith("../") || path.isAbsolute(file)) {
           throw new Error("Source capsule escaped repository");
         }
-        fs.mkdirSync(path.dirname(path.join(template, file)), { recursive: true });
-        fs.copyFileSync(path.join(repo, file), path.join(template, file));
+        fs.mkdirSync(path.dirname(target(file)), { recursive: true });
+        fs.copyFileSync(path.join(repo, file), target(file));
       }
       for (const directory of [
         assets,
@@ -125,7 +126,7 @@ export function createLocaleFinalizerHarness() {
         "ui/src/lib",
         "ui/src/pages",
       ]) {
-        fs.mkdirSync(path.join(template, directory), { recursive: true });
+        fs.mkdirSync(target(directory), { recursive: true });
       }
       for (const file of fs.readdirSync(assets)) {
         if (
@@ -133,20 +134,16 @@ export function createLocaleFinalizerHarness() {
           file.endsWith(".meta.json") ||
           file.startsWith("glossary.")
         ) {
-          fs.copyFileSync(path.join(assets, file), path.join(template, assets, file));
+          fs.copyFileSync(path.join(assets, file), target(path.join(assets, file)));
         }
       }
-      fs.symlinkSync(
-        path.join(repo, "node_modules"),
-        path.join(template, "node_modules"),
-        "junction",
-      );
+      fs.symlinkSync(path.join(repo, "node_modules"), target("node_modules"), "junction");
       // Keep each publisher pathspec populated in this sparse checkout. This
       // non-UI plugin is not a generation input; plugin generation has its own proof.
       put(template, "extensions/fixture/openclaw.plugin.json", '{"id":"fixture"}\n');
       put(template, "extensions/fixture/i18n/.i18n/fixture.json", "{}\n");
       put(template, "extensions/fixture/i18n/locales/translated.json", "{}\n");
-      fs.appendFileSync(path.join(template, sourceFile), before);
+      fs.appendFileSync(target(sourceFile), before);
       put(template, ".gitignore", "node_modules/\n.artifacts/\n.isolated-state/\n");
       const seed = spawnSync(
         testNodeExecPath,
@@ -173,6 +170,8 @@ export function createLocaleFinalizerHarness() {
         headBranch: String(publisherStep.with?.["head-branch"]),
       });
       const root = fixture.worktree;
+      const at = (...parts: string[]) => path.join(root, ...parts);
+      const bin = (name: string) => path.join(fixture.fakeBin, name);
       // actions/checkout disables GC; detached maintenance would race the Git owner's lock scan.
       runGit(root, ["config", "gc.auto", "0"]);
       runGit(root, ["config", "maintenance.auto", "false"]);
@@ -241,10 +240,10 @@ export function createLocaleFinalizerHarness() {
         GITHUB_RUN_ATTEMPT: "1",
         PROOF_AUTOMERGE_ALLOWED: String(scenario.preflightAllowed ?? true),
       });
-      fs.symlinkSync(testNodeExecPath, path.join(fixture.fakeBin, "node"));
-      fs.renameSync(path.join(fixture.fakeBin, "gh"), path.join(fixture.fakeBin, "publisher-gh"));
-      baseEnv.PROOF_PUBLISHER_GH = path.join(fixture.fakeBin, "publisher-gh");
-      writeExecutable(path.join(fixture.fakeBin, "gh"), [
+      fs.symlinkSync(testNodeExecPath, bin("node"));
+      fs.renameSync(bin("gh"), bin("publisher-gh"));
+      baseEnv.PROOF_PUBLISHER_GH = bin("publisher-gh");
+      writeExecutable(bin("gh"), [
         "#!/bin/bash",
         "set -euo pipefail",
         'if [[ "$1:$2" == "api:graphql" ]]; then',
@@ -256,7 +255,7 @@ export function createLocaleFinalizerHarness() {
         "fi",
         'exec "$PROOF_PUBLISHER_GH" "$@"',
       ]);
-      writeExecutable(path.join(fixture.fakeBin, "timeout"), [
+      writeExecutable(bin("timeout"), [
         "#!/bin/bash",
         'while [[ "$#" -gt 0 ]]; do case "$1" in --signal=*|--kill-after=*) shift ;; [0-9]*s) shift; break ;; *) break ;; esac; done',
         'exec "$@"',
@@ -326,7 +325,7 @@ export function createLocaleFinalizerHarness() {
           return parseMemory(readback.stdout);
         },
         memory(locale: string) {
-          return parseMemory(read(path.join(root, memoryPath(locale))));
+          return parseMemory(read(at(memoryPath(locale))));
         },
       });
       if (!gate("resolve-base")) {
@@ -337,7 +336,7 @@ export function createLocaleFinalizerHarness() {
         mode: fs.constants.COPYFILE_FICLONE,
         verbatimSymlinks: true,
       });
-      const svFile = path.join(root, memoryPath("sv"));
+      const svFile = at(memoryPath("sv"));
       const canonicalSv = lines(read(svFile)).filter(
         (line) =>
           scenario.fullRefresh || !JSON.parse(line).segment_id.startsWith("localeWorkflowProof."),
@@ -388,9 +387,9 @@ export function createLocaleFinalizerHarness() {
       }
       states.refresh = { result: "success", outputs: {} };
       runGit(root, ["restore", "--worktree", "--", assets]);
-      const english = read(path.join(root, sourceFile));
+      const english = read(at(sourceFile));
       expect(english).toContain(before);
-      fs.writeFileSync(path.join(root, sourceFile), english.replace(before, after));
+      fs.writeFileSync(at(sourceFile), english.replace(before, after));
       if (scenario.change === "glossary") {
         put(root, assets + "/glossary.sv.json", '[{"source":"locale","target":"språk"}]\n');
       }
@@ -438,7 +437,7 @@ export function createLocaleFinalizerHarness() {
           const depthArgs =
             depth > 0
               ? ["--depth", String(depth)]
-              : fs.existsSync(path.join(root, ".git", "shallow"))
+              : fs.existsSync(at(".git", "shallow"))
                 ? ["--unshallow"]
                 : [];
           runGit(root, ["fetch", "--quiet", ...depthArgs, "origin", ref]);
@@ -455,7 +454,7 @@ export function createLocaleFinalizerHarness() {
         } else if (step.uses === "./.github/actions/setup-node-env") {
           sourceAtSetup = runGit(root, ["rev-parse", "HEAD"]);
           // The source capsule already binds the installed dependency tree.
-          expect(fs.existsSync(path.join(root, "node_modules"))).toBe(true);
+          expect(fs.existsSync(at("node_modules"))).toBe(true);
         } else if (step.uses === "./.github/actions/publish-generated-pr") {
           if (!scenario.publish) {
             break;
@@ -499,8 +498,8 @@ export function createLocaleFinalizerHarness() {
               ...mapValues(publicationEnv, (value) =>
                 String(evaluateWorkflowExpression(value, publicationContext)),
               ),
-              CI_GIT_OWNER: path.join(root, ".github/actions/git-owner/owner.py"),
-              PUBLISH_ACTION_PATH: path.join(root, ".github/actions/publish-generated-pr"),
+              CI_GIT_OWNER: at(".github/actions/git-owner/owner.py"),
+              PUBLISH_ACTION_PATH: at(".github/actions/publish-generated-pr"),
             },
           });
           trace.push({ step: step.name!, status: run.status ?? 1 });

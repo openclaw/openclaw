@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createFakeThreadStartResponse } from "../../scripts/e2e/lib/codex-app-server-fixture.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -26,38 +26,33 @@ function request(fixture: string, requests: unknown[]) {
     .map((line) => JSON.parse(line));
 }
 
-describe("createFakeThreadStartResponse", () => {
-  it.each([
-    { expected: null, params: {} },
-    { expected: "project-1", params: { projectId: "project-1" } },
-  ])("returns the protocol-required projectId as $expected", ({ expected, params }) => {
-    const response = createFakeThreadStartResponse({
-      params,
-      sessionId: "session-1",
-      threadId: "thread-1",
-      version: "0.149.1",
-    });
-
-    expect(response.thread.projectId).toBe(expected);
+it.each([
+  { expected: null, params: {} },
+  { expected: "project-1", params: { projectId: "project-1" } },
+])("returns the protocol-required projectId as $expected", ({ expected, params }) => {
+  const response = createFakeThreadStartResponse({
+    params,
+    sessionId: "session-1",
+    threadId: "thread-1",
+    version: "0.149.1",
   });
+
+  expect(response.thread.projectId).toBe(expected);
 });
-
-describe("fake Codex configuration preflight", () => {
-  it.each([
-    ["auth", "test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs"],
-    ["approval", "test/e2e/qa-lab/runtime/codex-native-approval-app-server.fixture.mjs"],
-    ["media", "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs"],
-  ])("%s exposes empty effective config and no managed requirements", (_name, fixture) => {
-    expect(
-      request(fixture, [
-        { id: 1, method: "config/read", params: { cwd: process.cwd(), includeLayers: true } },
-        { id: 2, method: "configRequirements/read" },
-      ]),
-    ).toEqual([
-      { id: 1, result: { config: {}, origins: {}, layers: [] } },
-      { id: 2, result: { requirements: null } },
-    ]);
-  });
+it.each([
+  ["auth", "test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs"],
+  ["approval", "test/e2e/qa-lab/runtime/codex-native-approval-app-server.fixture.mjs"],
+  ["media", "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs"],
+])("%s exposes empty effective config and no managed requirements", (_name, fixture) => {
+  expect(
+    request(fixture, [
+      { id: 1, method: "config/read", params: { cwd: process.cwd(), includeLayers: true } },
+      { id: 2, method: "configRequirements/read" },
+    ]),
+  ).toEqual([
+    { id: 1, result: { config: {}, origins: {}, layers: [] } },
+    { id: 2, result: { requirements: null } },
+  ]);
 });
 
 it("allocates distinct auth fixture threads across clients and preserves resumed identity", () => {

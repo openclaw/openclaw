@@ -2,18 +2,21 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import {
   createRecoveryMatrixFixture,
   RECOVERY_MATRIX_TASKS,
 } from "../../scripts/lib/code-mode-matrix-recovery-tasks.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { settlementRecoveryProgram } from "./code-mode-matrix-recovery.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const DRIVER = `
 import fs from "node:fs";
 import path from "node:path";
 const { default: register } = await import(process.argv[1]);
+const recover = ${settlementRecoveryProgram};
 const runs = [];
 for (const reverse of [false, true]) {
   const workspace = path.join(process.argv[2], reverse ? "reverse" : "forward");
@@ -23,33 +26,7 @@ for (const reverse of [false, true]) {
   register({ pluginConfig: { receiptsPath }, registerTool(tool) { tools.set(tool.name, tool); } });
   let callId = 0;
   const call = async (name, input = {}) => (await tools.get(name).execute(String(++callId), input)).details;
-  const batch = await call("matrix_settlement_batch");
-  const failures = [];
-  const operations = reverse ? batch.operations.toReversed() : batch.operations;
-  for (const operation of operations) {
-    if (operation.blocked) continue;
-    const input = { operationId: operation.operationId, totalCents: operation.lines.reduce((sum, line) => sum + line.amountCents, 0) };
-    try {
-      await call("matrix_settle_operation", input);
-    } catch (error) {
-      const { states } = await call("matrix_inspect_settlements");
-      const state = states.find(item => item.operationId === operation.operationId);
-      failures.push({ operationId: operation.operationId, message: error.message, effectCount: state.effectCount });
-      if (state.status === "unsettled") await call("matrix_settle_operation", input);
-    }
-  }
-  const { states } = await call("matrix_inspect_settlements");
-  const project = ({operationId, effectCount, totalCents}) => ({operationId, effectCount, totalCents});
-  const settled = states.filter(state => batch.operations.some(operation => operation.operationId === state.operationId) && state.status === "settled").map(project).sort((a,b) => a.operationId.localeCompare(b.operationId));
-  const report = {
-    batchId: batch.batchId,
-    sourceLineCount: batch.operations.reduce((sum, operation) => sum + operation.lines.length, 0),
-    settled,
-    blocked: states.filter(state => state.status === "blocked").map(state => state.operationId).sort(),
-    preserved: states.filter(state => batch.existing.some(existing => existing.operationId === state.operationId)).map(project).sort((a,b) => a.operationId.localeCompare(b.operationId)),
-    newEffectCount: settled.reduce((sum, state) => sum + state.effectCount, 0),
-    newTotalCents: settled.reduce((sum, state) => sum + state.totalCents, 0),
-  };
+  const { batch, failures, report } = await recover({ call, reverse });
   fs.writeFileSync(path.join(workspace, "settlement-report.json"), JSON.stringify(report));
   runs.push({ workspace, batch, failures, report, receipts: fs.readFileSync(receiptsPath, "utf8").trim().split("\\n").map(JSON.parse) });
 }
@@ -68,12 +45,7 @@ it("injects operation-bound failures in either order and rejects missing reconci
   const fixture = createRecoveryMatrixFixture(RECOVERY_MATRIX_TASKS[0], 2);
   const root = tempDirs.make("matrix-recovery-");
   const entry = path.join(root, "fixture.mjs");
-  const pluginSource = fixture.pluginSource;
-  if (!pluginSource) {
-    throw new Error("Recovery fixture must provide a plugin source");
-  }
-  fs.writeFileSync(entry, pluginSource);
-  // One child exercises the generated ESM plugin under both invocation orders.
+  fs.writeFileSync(entry, expectDefined(fixture.pluginSource, "recovery plugin source"));
   const processResult = spawnSync(
     process.execPath,
     ["--input-type=module", "--eval", DRIVER, pathToFileURL(entry).href, root],
@@ -89,10 +61,10 @@ it("injects operation-bound failures in either order and rejects missing reconci
       0, 0, 1, 1,
     ]);
     expect(new Set(run.failures.map((failure) => failure.message)).size).toBe(1);
-    expect(run.report).toMatchObject({ newEffectCount: 10 });
-    expect(run.report.settled).toHaveLength(10);
-    expect(run.report.blocked).toHaveLength(2);
-    expect(run.report.preserved).toHaveLength(3);
+    const { newEffectCount, settled, blocked, preserved } = run.report;
+    expect([newEffectCount, settled.length, blocked.length, preserved.length]).toEqual([
+      10, 10, 2, 3,
+    ]);
     const evaluation = {
       ...run,
       trace: { calls: [], outcomes: [], activities: [], assistantTurns: 1, models: [] },
