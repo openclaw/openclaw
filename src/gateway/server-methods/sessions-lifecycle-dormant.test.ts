@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as registry from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -19,15 +19,16 @@ const childKey = "agent:main:subagent:paused-lifecycle-child";
 const childId = "paused-lifecycle-child-session";
 const childRunId = "paused-lifecycle-child-run";
 const target = { agentId: "main", sessionKey: childKey };
+const parentTarget = { agentId: "main", sessionKey: parentKey };
+const runTarget = { runId: childRunId, sessionKey: childKey, sessionId: childId };
 
-async function seedPausedChild() {
+beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
   // Only requester delivery is unavailable; lifecycle, registry, and storage stay real.
   fixture.wake.mockResolvedValue(false);
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: parentKey,
+    ...parentTarget,
     defaultSessionId: "paused-child-requester-session",
   });
   const startedAt = await seedYieldedSession(fixture.stateDir, childKey, childId, childRunId);
@@ -45,17 +46,14 @@ async function seedPausedChild() {
   });
   expect(
     await registry.claimSubagentYield({
+      ...target,
       runId: childRunId,
-      sessionKey: childKey,
-      agentId: "main",
       waitForMessage: true,
       hasPendingWork: () => false,
     }),
   ).toEqual({ messageWaitRegistered: true });
   emitAgentEvent({
-    runId: childRunId,
-    sessionKey: childKey,
-    sessionId: childId,
+    ...runTarget,
     stream: "lifecycle",
     data: { phase: "end", startedAt, endedAt: Date.now(), yielded: true },
   });
@@ -64,7 +62,7 @@ async function seedPausedChild() {
     pauseReason: "sessions_yield",
     requesterSettleWake: { pauseNotice: { acknowledgment: "Paused awaiting continuation." } },
   });
-}
+});
 
 function deleteChild() {
   return deleteGatewaySession({
@@ -75,28 +73,20 @@ function deleteChild() {
 }
 
 it("deletes a paused child only after retiring its pending pause notice", async () => {
-  await seedPausedChild();
-  const parent = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
+  const parent = loadSessionEntry(parentTarget);
   expect(await deleteChild()).toMatchObject({ ok: true, result: { deleted: true } });
   expect(loadSessionEntry(target)).toBeUndefined();
-  expect(subagentRuns.get(childRunId)?.pauseReason).toBeUndefined();
-  expect(subagentRuns.get(childRunId)?.requesterSettleWake?.pauseNotice).toBeUndefined();
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(parent);
+  const run = subagentRuns.get(childRunId);
+  expect([run?.pauseReason, run?.requesterSettleWake?.pauseNotice]).toEqual([undefined, undefined]);
+  expect(loadSessionEntry(parentTarget)).toEqual(parent);
 });
 
 it("preserves the child's session when dormant obligation retirement fails", async () => {
-  await seedPausedChild();
   const failure = "controlled dormant obligation retirement failure";
-  const retire = vi
-    .spyOn(registry, "retireSubagentObligations")
-    .mockRejectedValueOnce(new Error(failure));
-  try {
-    expect(await deleteChild()).toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", message: expect.stringContaining(failure) },
-    });
-    expect(loadSessionEntry(target)).toMatchObject({ sessionId: childId });
-  } finally {
-    retire.mockRestore();
-  }
+  vi.spyOn(registry, "retireSubagentObligations").mockRejectedValueOnce(new Error(failure));
+  expect(await deleteChild()).toMatchObject({
+    ok: false,
+    error: { code: "UNAVAILABLE", message: expect.stringContaining(failure) },
+  });
+  expect(loadSessionEntry(target)).toMatchObject({ sessionId: childId });
 });

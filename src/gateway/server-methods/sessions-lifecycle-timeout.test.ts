@@ -44,7 +44,6 @@ it.each([
     const sessionId = "drain-timeout-session";
     const target = { agentId: "main", sessionKey };
     await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
-    const context = createDirectChatContext({ getRuntimeConfig });
     const aborted = createDeferred();
     const completion = createDeferred();
     const onAbort = () => {
@@ -52,28 +51,17 @@ it.each([
       aborted.resolve();
     };
     const handle = createEmbeddedRunHandle({ abort: onAbort });
-    const controllerTarget = captureSessionTarget({
-      storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-        agentId: target.agentId,
-      }),
-      ...target,
-      incarnation: sessionId,
-    });
     let execution: Promise<void> | undefined;
     if (backend === "embedded") {
-      registerTestEmbeddedRun(
-        sessionId,
-        handle,
-        sessionKey,
-        undefined,
-        "main",
-        undefined,
-        undefined,
-        {
-          target: controllerTarget,
-        },
-      );
+      registerTestEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
     } else {
+      const controllerTarget = captureSessionTarget({
+        storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+          agentId: "main",
+        }),
+        ...target,
+        incarnation: sessionId,
+      });
       const registration = registerChatAbortController({
         target: controllerTarget,
         runId: "stuck-backend",
@@ -86,15 +74,15 @@ it.each([
       if (!registration.registered) {
         throw new Error("Expected the unresponsive controller source to register");
       }
-      const claim = await claimSessionControllerTask(registration.entry.input, (selected) => {
+      const claim = await claimSessionControllerTask(registration.entry.input, (mailboxClaim) =>
         createReplyOperation({
           ...target,
           sessionId,
           resetTriggered: false,
           target: controllerTarget,
-          mailboxClaim: selected,
-        });
-      });
+          mailboxClaim,
+        }),
+      );
       execution = completion.promise.finally(() => {
         claim.operation?.complete();
         releaseSessionControllerClaim(claim);
@@ -115,7 +103,7 @@ it.each([
         },
       },
       client,
-      context,
+      context: createDirectChatContext({ getRuntimeConfig }),
       respond,
       isWebchatConnect: () => false,
       extraHandlers: { ...sessionDeleteHandlers, ...sessionMutationHandlers },
@@ -124,21 +112,18 @@ it.each([
       await awaitGateBeforeSettlement(aborted.promise, request, "backend was not cancelled");
       await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
       expect(respond).toHaveBeenCalledOnce();
-      expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringMatching(
-            method === "sessions.patch"
-              ? /did not finish stopping; retry the archive/
-              : /still active after the lifecycle drain/,
-          ),
-          retryable: true,
-        }),
-      ]);
-      expect(loadSessionEntry(target)).toMatchObject({ sessionId });
-      expect(loadSessionEntry(target)?.archivedAt).toBeUndefined();
+      const error = expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringMatching(
+          method === "sessions.patch"
+            ? /did not finish stopping; retry the archive/
+            : /still active after the lifecycle drain/,
+        ),
+        retryable: true,
+      });
+      expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([false, undefined, error]);
+      const entry = loadSessionEntry(target);
+      expect([entry?.sessionId, entry?.archivedAt]).toEqual([sessionId, undefined]);
     } finally {
       vi.useRealTimers();
       completion.resolve();

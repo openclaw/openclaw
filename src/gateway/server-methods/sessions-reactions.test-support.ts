@@ -52,10 +52,8 @@ export async function withReactionState(consume: () => Promise<void>) {
     try {
       await consume();
     } finally {
-      if (reactionProjection) {
-        (await reactionProjection).dispose();
-        reactionProjection = undefined;
-      }
+      (await reactionProjection)?.dispose();
+      reactionProjection = undefined;
     }
   });
 }
@@ -74,7 +72,7 @@ export async function call(
     }));
     bindSessionRowProjection(requestContext, () => projection);
   }
-  const responses: Parameters<RespondFn>[] = [];
+  const respond = vi.fn<RespondFn>();
   await sessionReactionHandlers[method]?.({
     req: { type: "req", id: "reaction-request", method, params },
     params,
@@ -82,42 +80,34 @@ export async function call(
     context: requestContext,
     hasCurrentClientAuthority,
     isWebchatConnect: () => true,
-    respond: (...response) => responses.push(response),
+    respond,
   });
-  expect(responses).toHaveLength(1);
-  return responses[0]!;
+  expect(respond).toHaveBeenCalledOnce();
+  return respond.mock.calls[0]!;
 }
 
 export function roleConfig(others: "none" | "view" | "suggest" | "write"): OpenClawConfig {
-  return {
-    gateway: {
-      roles: {
-        default: "test-role",
-        definitions: {
-          "test-role": {
-            sessions: { others },
-            agents: "*",
-            scopes: ["operator.read", "operator.write"],
-          },
-        },
-      },
-    },
+  const role = {
+    sessions: { others },
+    agents: "*" as const,
+    scopes: ["operator.read", "operator.write"],
   };
+  return { gateway: { roles: { default: "test-role", definitions: { "test-role": role } } } };
 }
 
 export function setReaction(
   messageId: string,
   params: Record<string, unknown> = {},
-  requestClient?: GatewayClient | null,
-  requestContext?: GatewayRequestContext,
-  hasCurrentClientAuthority?: () => boolean,
+  ...request: [
+    client?: GatewayClient | null,
+    context?: GatewayRequestContext,
+    authority?: () => boolean,
+  ]
 ) {
   return call(
     "session.reactions.set",
     { sessionKey, messageId, emoji: "👍", ...params },
-    requestClient,
-    requestContext,
-    hasCurrentClientAuthority,
+    ...request,
   );
 }
 
