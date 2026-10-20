@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { GatewayBrowserDeviceAuthLifecycle } from "./browser-device-auth.js";
+import {
+  GatewayBrowserDeviceAuthLifecycle,
+  type GatewayBrowserDeviceTokenRecord,
+} from "./browser-device-auth.js";
 
 const client = {
   id: "openclaw-browser-copilot" as const,
@@ -8,29 +11,35 @@ const client = {
   deviceFamily: "Extension",
   mode: "ui" as const,
 };
+const planOptions = {
+  client,
+  role: "operator",
+  defaultScopes: ["operator.read"],
+  nonce: "nonce",
+};
+const binding = { clientId: client.id, deviceId: "device", role: "operator" };
+
+function fixture(stored: GatewayBrowserDeviceTokenRecord | null = null) {
+  const sign = vi.fn(async () => "signature");
+  const store = vi.fn();
+  const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
+    loadIdentity: async () => ({ deviceId: "device", publicKey: "public", sign }),
+    tokenStore: { load: () => stored, store, clear: vi.fn() },
+    nowMs: () => 123,
+  });
+  return { lifecycle, sign, store };
+}
 
 describe("GatewayBrowserDeviceAuthLifecycle", () => {
   it("preserves stored scopes for the same token and uses hello scopes after rotation", async () => {
-    const sign = vi.fn(async () => "signature");
-    const store = vi.fn();
-    const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
-      loadIdentity: async () => ({ deviceId: "device", publicKey: "public", sign }),
-      tokenStore: {
-        load: () => ({
-          token: "test-token-placeholder",
-          scopes: ["operator.admin", "operator.write"],
-        }),
-        store,
-        clear: vi.fn(),
-      },
-      nowMs: () => 123,
+    const { lifecycle, sign, store } = fixture({
+      token: "test-token-placeholder",
+      scopes: ["operator.admin", "operator.write"],
     });
 
     const plan = await lifecycle.buildPlan({
-      client,
-      role: "operator",
+      ...planOptions,
       defaultScopes: ["operator.read", "operator.write"],
-      nonce: "nonce",
       challengeTs: 456,
     });
 
@@ -58,9 +67,7 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
       plan,
     );
     expect(store).toHaveBeenCalledWith({
-      clientId: "openclaw-browser-copilot",
-      deviceId: "device",
-      role: "operator",
+      ...binding,
       token: "test-token-placeholder",
       scopes: ["operator.admin", "operator.write"],
     });
@@ -71,81 +78,43 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
       plan,
     );
     expect(store).toHaveBeenCalledWith({
-      clientId: "openclaw-browser-copilot",
-      deviceId: "device",
-      role: "operator",
+      ...binding,
       token: "rotated-token",
       scopes: ["operator.read"],
     });
   });
 
   it("rejects the protocol's malformed-timestamp signal", async () => {
-    const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
-      loadIdentity: async () => ({
-        deviceId: "device",
-        publicKey: "public",
-        sign: async () => "signature",
-      }),
-      tokenStore: { load: () => null, store: vi.fn(), clear: vi.fn() },
-      nowMs: () => 123,
-    });
+    const { lifecycle } = fixture();
 
-    await expect(
-      lifecycle.buildPlan({
-        client,
-        role: "operator",
-        defaultScopes: ["operator.read"],
-        nonce: "nonce",
-        challengeTs: null,
-      }),
-    ).rejects.toThrow("gateway connect challenge timestamp invalid");
+    await expect(lifecycle.buildPlan({ ...planOptions, challengeTs: null })).rejects.toThrow(
+      "gateway connect challenge timestamp invalid",
+    );
   });
 
   it("keeps the local-clock fallback for callers that received no challenge", async () => {
-    const sign = vi.fn(async () => "signature");
-    const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
-      loadIdentity: async () => ({ deviceId: "device", publicKey: "public", sign }),
-      tokenStore: { load: () => null, store: vi.fn(), clear: vi.fn() },
-      nowMs: () => 123,
-    });
-
-    const plan = await lifecycle.buildPlan({
-      client,
-      role: "operator",
-      defaultScopes: ["operator.read"],
-      nonce: "nonce",
-    });
+    const { lifecycle } = fixture();
+    const plan = await lifecycle.buildPlan(planOptions);
 
     expect(plan.device?.signedAt).toBe(123);
   });
 
   it("uses only the preferred bootstrap credential and never persists it", async () => {
-    const sign = vi.fn(async () => "signature");
-    const store = vi.fn();
-    const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
-      loadIdentity: async () => ({
-        deviceId: "device",
-        publicKey: "public",
-        sign,
-      }),
-      tokenStore: { load: () => null, store, clear: vi.fn() },
-      nowMs: () => 123,
-    });
+    const { lifecycle, sign, store } = fixture();
     const plan = await lifecycle.buildPlan({
-      client,
-      role: "operator",
-      defaultScopes: ["operator.read"],
+      ...planOptions,
       bootstrapScopes: ["operator.read", "operator.write"],
       token: "test-shared-token",
       bootstrapToken: "test-bootstrap-token",
       password: "test-password",
       preferBootstrapToken: true,
-      nonce: "nonce",
     });
 
-    expect(plan.auth?.bootstrapToken).toBe("test-bootstrap-token");
-    expect(plan.auth?.token).toBeUndefined();
-    expect(plan.auth?.password).toBeUndefined();
+    expect(plan.auth).toMatchObject({
+      bootstrapToken: "test-bootstrap-token",
+      token: undefined,
+      password: undefined,
+    });
     expect(plan.selectedAuth.signatureToken).toBe("test-bootstrap-token");
     expect(sign).toHaveBeenCalledWith(
       "v3|device|openclaw-browser-copilot|ui|operator|operator.read,operator.write|123|test-bootstrap-token|nonce|chrome|extension",

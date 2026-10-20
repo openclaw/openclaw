@@ -2,7 +2,9 @@ import { assert, describe, expect, it } from "vitest";
 import {
   createSessionProjection,
   reduceSessionProjectionRunEvent,
+  type SessionProjectionGatewayRunEvent,
   type SessionProjectionScope,
+  type SessionProjectionState,
 } from "./session-projection.js";
 
 const scope: SessionProjectionScope = {
@@ -13,29 +15,30 @@ const scope: SessionProjectionScope = {
   activeLeafEntryId: "leaf-1",
 };
 
+function runEvent(projection: SessionProjectionState, event: SessionProjectionGatewayRunEvent) {
+  const transition = reduceSessionProjectionRunEvent(projection, { runId: "shared-run", ...event });
+  assert(transition);
+  return transition;
+}
+
 describe("session projection Gateway run events", () => {
   it("clears an existing diagnostic when the terminal owner suppresses its notice", () => {
-    const failed = reduceSessionProjectionRunEvent(createSessionProjection(scope), {
-      runId: "internal-run",
+    const failed = runEvent(createSessionProjection(scope), {
       state: "error",
       errorMessage: "No answer was returned",
     });
-    assert(failed);
-    const suppressed = reduceSessionProjectionRunEvent(failed.projection, {
-      runId: "internal-run",
+    const suppressed = runEvent(failed.projection, {
       state: "error",
       errorMessage: "No answer was returned",
       suppressErrorNotice: true,
     });
-    assert(suppressed);
     expect(suppressed.currentRun).toMatchObject({ status: "error", suppressErrorNotice: true });
     expect(suppressed.currentRun?.errorMessage).toBeUndefined();
     expect(
-      reduceSessionProjectionRunEvent(suppressed.projection, {
-        runId: "internal-run",
+      runEvent(suppressed.projection, {
         state: "error",
         errorMessage: "No answer was returned",
-      })?.currentRun?.errorMessage,
+      }).currentRun?.errorMessage,
     ).toBeUndefined();
   });
 
@@ -55,14 +58,7 @@ describe("session projection Gateway run events", () => {
       { deltaText: "", replace: true, text: "" },
       { deltaText: "done", text: "done" },
     ]) {
-      const transition = reduceSessionProjectionRunEvent(projection, {
-        ...event,
-        runId: "shared-run",
-        state: "delta",
-      });
-      if (!transition) {
-        throw new Error("Expected a chat run projection");
-      }
+      const transition = runEvent(projection, { ...event, state: "delta" });
       projection = transition.projection;
       expect(transition.currentRun?.message).toEqual({
         ...snapshot,
@@ -71,22 +67,17 @@ describe("session projection Gateway run events", () => {
     }
     expect(snapshot.content[0]).toEqual({ type: "text", text: "hello " });
     const final = { role: "assistant", content: "done!" };
-    expect(
-      reduceSessionProjectionRunEvent(projection, {
-        runId: "shared-run",
-        state: "final",
-        message: final,
-      })?.currentRun?.message,
-    ).toBe(final);
+    expect(runEvent(projection, { state: "final", message: final }).currentRun?.message).toBe(
+      final,
+    );
   });
 
   it("does not invent a baseline from an orphan append", () => {
     expect(
-      reduceSessionProjectionRunEvent(createSessionProjection(scope), {
-        runId: "shared-run",
+      runEvent(createSessionProjection(scope), {
         state: "delta",
         deltaText: "missing prefix",
-      })?.currentRun?.message,
+      }).currentRun?.message,
     ).toBeUndefined();
   });
 
@@ -103,23 +94,18 @@ describe("session projection Gateway run events", () => {
       { state: "error", seq: scenario.terminalSeq, message },
       { state: "error", seq: scenario.repeatedSeq, message },
     ]) {
-      const result = reduceSessionProjectionRunEvent(projection, {
+      const result = runEvent(projection, {
         ...event,
-        runId: "shared-run",
         errorMessage: "provider unavailable",
       });
-      if (!result) {
-        throw new Error("Expected a run projection");
-      }
       projection = result.projection;
     }
     const delta = {
-      runId: "shared-run",
       state: "delta",
       seq: scenario.deltaSeq,
       message: { role: "assistant", content: "resumed output" },
     };
-    const resumed = reduceSessionProjectionRunEvent(projection, delta);
+    const resumed = runEvent(projection, delta);
     expect(resumed?.currentRun?.status).toBe(scenario.resumes ? "streaming" : "error");
     if (!scenario.resumes) {
       expect(resumed?.projection).toBe(projection);

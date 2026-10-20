@@ -5,6 +5,20 @@ import { GatewayScopeUpgrade } from "./scope-upgrade.js";
 
 const binding = { clientId: "control-ui", deviceId: "device-1", role: "operator" };
 const scopes = ["operator.admin", "operator.read"];
+const registration = { requestId: "upgrade-1" };
+const approved = { ...registration, status: "approved", deviceToken: "rotated-token", scopes };
+type UpgradeDependencies = ConstructorParameters<typeof GatewayScopeUpgrade>[0];
+function upgrade(
+  request: UpgradeDependencies["request"],
+  store: UpgradeDependencies["tokenStore"]["store"] = vi.fn(),
+  reconnect: UpgradeDependencies["reconnect"] = vi.fn(),
+) {
+  return new GatewayScopeUpgrade({
+    request,
+    tokenStore: { load: vi.fn(), store, clear: vi.fn() },
+    reconnect,
+  });
+}
 
 describe("GatewayScopeUpgrade", () => {
   it.each(["approved", "rejected", "expired"] as const)(
@@ -13,11 +27,9 @@ describe("GatewayScopeUpgrade", () => {
       const order: string[] = [];
       const request = vi.fn(async (method: string) => {
         if (method === "device.scopes.requestUpgrade") {
-          return { requestId: "upgrade-1" };
+          return registration;
         }
-        return status === "approved"
-          ? { status, requestId: "upgrade-1", deviceToken: "rotated-token", scopes }
-          : { status, requestId: "upgrade-1" };
+        return status === "approved" ? approved : { status, ...registration };
       });
       const store = vi.fn(async () => {
         order.push("store");
@@ -26,16 +38,10 @@ describe("GatewayScopeUpgrade", () => {
         order.push("reconnect");
       });
       const onPending = vi.fn();
-      const client = new GatewayScopeUpgrade({
-        request,
-        tokenStore: { load: vi.fn(), store, clear: vi.fn() },
-        reconnect,
-      });
+      const client = upgrade(request, store, reconnect);
 
       await expect(client.requestScopeUpgrade({ binding, scopes, onPending })).resolves.toEqual(
-        status === "approved"
-          ? { status, requestId: "upgrade-1", scopes }
-          : { status, requestId: "upgrade-1" },
+        status === "approved" ? { status, ...registration, scopes } : { status, ...registration },
       );
       expect(onPending).toHaveBeenCalledWith("upgrade-1");
       if (status === "approved") {
@@ -58,12 +64,6 @@ describe("GatewayScopeUpgrade", () => {
       const requested = createDeferred();
       const response = createDeferred<unknown>();
       const persisted = createDeferred();
-      const approved = {
-        status: "approved",
-        requestId: "upgrade-1",
-        deviceToken: "rotated-token",
-        scopes,
-      };
       const request = vi.fn((method: string) => {
         if (
           boundary === "registration" ||
@@ -72,9 +72,7 @@ describe("GatewayScopeUpgrade", () => {
           requested.resolve();
           return response.promise;
         }
-        return Promise.resolve(
-          method === "device.scopes.requestUpgrade" ? { requestId: "upgrade-1" } : approved,
-        );
+        return Promise.resolve(method === "device.scopes.requestUpgrade" ? registration : approved);
       });
       const store = vi.fn(() => {
         if (boundary === "persistence") {
@@ -90,11 +88,7 @@ describe("GatewayScopeUpgrade", () => {
           requested.resolve();
         }
       });
-      const client = new GatewayScopeUpgrade({
-        request,
-        tokenStore: { load: vi.fn(), store, clear: vi.fn() },
-        reconnect,
-      });
+      const client = upgrade(request, store, reconnect);
       const result = client.requestScopeUpgrade({ binding, scopes, onPending });
       await requested.promise;
       response.resolve(approved);
@@ -118,7 +112,7 @@ describe("GatewayScopeUpgrade", () => {
     const request = vi.fn(
       async (method: string, _params?: unknown, options?: GatewayProtocolRequestOptions) => {
         if (method === "device.scopes.requestUpgrade") {
-          return { requestId: "upgrade-1" };
+          return registration;
         }
         return await new Promise((_resolve, reject) => {
           options?.signal?.addEventListener(
@@ -130,11 +124,7 @@ describe("GatewayScopeUpgrade", () => {
         });
       },
     );
-    const client = new GatewayScopeUpgrade({
-      request,
-      tokenStore: { load: vi.fn(), store: vi.fn(), clear: vi.fn() },
-      reconnect: vi.fn(),
-    });
+    const client = upgrade(request);
     const first = client.requestScopeUpgrade({ binding, scopes });
     const duplicate = client.requestScopeUpgrade({ binding, scopes });
     expect(duplicate).toBe(first);

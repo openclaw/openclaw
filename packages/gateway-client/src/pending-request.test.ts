@@ -2,6 +2,32 @@ import assert from "node:assert/strict";
 import type { RequestFrame } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayPendingRequests } from "./pending-request.js";
+import type { GatewayProtocolRequestOptions } from "./protocol-request.js";
+
+function fixture(nowMs = () => Date.now(), onSend?: (frame: RequestFrame) => void) {
+  let sequence = 0;
+  const requests = new GatewayPendingRequests({ createRequestId: () => `${sequence++}`, nowMs });
+  const frames: string[] = [];
+  const sender = {
+    send: (raw: string) => {
+      frames.push(raw);
+      onSend?.(JSON.parse(raw) as RequestFrame);
+    },
+  };
+  const frame = (index = 0) => {
+    const raw = frames[index];
+    assert(raw);
+    return JSON.parse(raw) as RequestFrame;
+  };
+  const write = (params: unknown, options: GatewayProtocolRequestOptions) =>
+    requests.request(sender, "chat.send", params, options).catch((error: unknown) => error);
+  return { requests, frames, frame, write };
+}
+
+function expectSettled(requests: GatewayPendingRequests) {
+  expect(requests.hasPending).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+}
 
 function refuse(
   requests: GatewayPendingRequests,
@@ -30,38 +56,14 @@ describe("GatewayPendingRequests", () => {
   it.each([false, true])(
     "releases a ready agent after a recovery probe reaches startup refusal, newer pause=%s",
     async (newerPause) => {
-      let sequence = 0;
-      const requests = new GatewayPendingRequests({
-        createRequestId: () => `${sequence++}`,
-        nowMs: () => Date.now(),
-      });
-      const frames: string[] = [];
-      const sender = { send: (raw: string) => frames.push(raw) };
+      const { requests, frames, frame, write } = fixture();
       const controller = new AbortController();
-      const slow = requests
-        .request(
-          sender,
-          "chat.send",
-          { agentId: "slow" },
-          {
-            timeoutMs: 10_000,
-            signal: controller.signal,
-          },
-        )
-        .catch((error: unknown) => error);
-      const ready = requests.request(
-        sender,
-        "chat.send",
-        { agentId: "ready" },
-        {
-          timeoutMs: 10_000,
-        },
-      );
+      const slow = write({ agentId: "slow" }, { timeoutMs: 10_000, signal: controller.signal });
+      const ready = write({ agentId: "ready" }, { timeoutMs: 10_000 });
       const slowRaw = frames[0];
       const readyRaw = frames[1];
-      assert(slowRaw && readyRaw);
-      const slowFrame = JSON.parse(slowRaw) as RequestFrame;
-      const readyFrame = JSON.parse(readyRaw) as RequestFrame;
+      const slowFrame = frame();
+      const readyFrame = frame(1);
       refuse(requests, slowFrame, "startup-sidecars", 100);
       refuse(requests, readyFrame, "startup-sidecars", 200);
       await vi.advanceTimersByTimeAsync(100);
@@ -88,30 +90,20 @@ describe("GatewayPendingRequests", () => {
       await expect(slow).resolves.toBeInstanceOf(Error);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(frames).toHaveLength(5);
-      expect(requests.hasPending).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
+      expectSettled(requests);
     },
   );
 
   it.each(["announced", "gateway-suspending", "gateway-restarting"])(
     "resumes a startup-refused write after %s without changing its frame",
     async (pause) => {
-      const requests = new GatewayPendingRequests({
-        createRequestId: () => "write",
-        nowMs: () => Date.now(),
-      });
-      const frames: string[] = [];
-      const result = requests
-        .request(
-          { send: (raw) => frames.push(raw) },
-          "chat.send",
-          { idempotencyKey: "original", message: "synthetic" },
-          { timeoutMs: 1_000, retainSentResultOnAbort: true },
-        )
-        .catch((error: unknown) => error);
+      const { requests, frames, frame: readFrame, write } = fixture();
+      const result = write(
+        { idempotencyKey: "original", message: "synthetic" },
+        { timeoutMs: 1_000, retainSentResultOnAbort: true },
+      );
       const raw = frames[0];
-      assert(raw);
-      const frame = JSON.parse(raw) as RequestFrame;
+      const frame = readFrame();
       refuse(requests, frame, "startup-sidecars");
       if (pause === "announced") {
         requests.setSuspensionPhase("draining");
@@ -133,8 +125,7 @@ describe("GatewayPendingRequests", () => {
         payload: { runId: "original" },
       });
       await expect(result).resolves.toEqual({ runId: "original" });
-      expect(requests.hasPending).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
+      expectSettled(requests);
     },
   );
 
@@ -142,29 +133,24 @@ describe("GatewayPendingRequests", () => {
     "reports delivery uncertainty at the original deadline: %s",
     async (phase) => {
       let clockOffset = 0;
-      const requests = new GatewayPendingRequests({
-        createRequestId: () => "write",
-        nowMs: () => Date.now() + clockOffset,
-      });
-      const frames: RequestFrame[] = [];
-      const result = requests
-        .request(
-          {
-            send: (raw) => {
-              const frame = JSON.parse(raw) as RequestFrame;
-              frames.push(frame);
-              if (phase === "synchronous refusal") {
-                refuse(requests, frame, "startup-sidecars", 2_000);
-              }
-            },
-          },
-          "chat.send",
-          { idempotencyKey: "original" },
-          { timeoutMs: 1_000, retainSentResultOnAbort: true },
-        )
-        .catch((error: unknown) => error);
-      const frame = frames[0];
-      assert(frame);
+      const {
+        requests,
+        frames,
+        frame: readFrame,
+        write,
+      } = fixture(
+        () => Date.now() + clockOffset,
+        (frame) => {
+          if (phase === "synchronous refusal") {
+            refuse(requests, frame, "startup-sidecars", 2_000);
+          }
+        },
+      );
+      const result = write(
+        { idempotencyKey: "original" },
+        { timeoutMs: 1_000, retainSentResultOnAbort: true },
+      );
+      const frame = readFrame();
       if (phase !== "synchronous refusal") {
         refuse(requests, frame, "startup-sidecars", phase === "waiting" ? 2_000 : 250);
       }
@@ -178,8 +164,7 @@ describe("GatewayPendingRequests", () => {
         requestSent: phase === "redispatched",
       });
       expect(frames).toHaveLength(phase === "redispatched" ? 2 : 1);
-      expect(requests.hasPending).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
+      expectSettled(requests);
     },
   );
 
@@ -219,9 +204,7 @@ describe("GatewayPendingRequests", () => {
       { send: () => {} },
       "session.observe",
       {},
-      {
-        timeoutMs: null,
-      },
+      { timeoutMs: null },
     );
     void retired.catch(() => undefined);
 

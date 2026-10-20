@@ -84,10 +84,9 @@ describe("shared terminal transcript recovery", () => {
   );
 
   it.each([
-    {
-      name: "text block types and separators",
-      terminal: result,
-      messages: [
+    [
+      "text block types and separators",
+      [
         assistant([
           { type: "text", text: "First" },
           { type: "text", text: "  " },
@@ -97,63 +96,52 @@ describe("shared terminal transcript recovery", () => {
           { type: "text", text: "\n" },
         ]),
       ],
-      outputText: "First\n  \nSecond\nThird\n\n",
-      reads: 1,
-    },
-    {
-      name: "commentary excluded from the final occurrence",
-      terminal: result,
-      messages: [
+      "First\n  \nSecond\nThird\n\n",
+      result,
+      1,
+    ],
+    [
+      "commentary excluded from the final occurrence",
+      [
         assistant("Thinking aloud", {
           openclawStreamFallback: { source: "segment", itemId: "commentary" },
         }),
         assistant("Answer"),
       ],
-      outputText: "Answer",
-      reads: 1,
-    },
-    {
-      name: "run metadata without a receipt",
-      terminal: { status: "ok" },
-      messages: [
+      "Answer",
+      result,
+      1,
+    ],
+    [
+      "run metadata without a receipt",
+      [
         assistant("expected", { __openclaw: { runId: "run" } }),
         assistant("unrelated", { __openclaw: { runId: "other" } }),
       ],
-      outputText: "expected",
-      reads: 1,
-    },
-    {
-      name: "silent outcome",
-      terminal: { terminalReply: { disposition: "silent" } },
-      messages: [],
-      outputText: "",
-      reads: 0,
-    },
-  ])("preserves $name", async ({ terminal, messages, outputText, reads }) => {
+      "expected",
+      { status: "ok" },
+      1,
+    ],
+    ["silent outcome", [], "", { terminalReply: { disposition: "silent" } }, 0],
+  ] as const)("preserves %s", async (_name, messages, outputText, terminal, reads) => {
     const request = vi.fn<RecoveryRequest>(async () => ({ sessionId: "session", messages }));
     await expect(recover(request, terminal)).resolves.toEqual({ outputText });
     expect(request).toHaveBeenCalledTimes(reads);
   });
 
   it.each([
-    { reason: "session-changed", sessionId: "replacement", messages: [], hasMore: false, reads: 1 },
-    {
-      reason: "reply-not-found",
-      sessionId: "session",
-      messages: [assistant("unrelated", { __openclaw: { runId: "other" } })],
-      hasMore: false,
-      reads: 1,
-    },
-    {
-      reason: "history-limit-reached",
-      sessionId: "session",
-      messages: [assistant("tail")],
-      hasMore: true,
-      reads: 10,
-    },
-  ])(
-    "reports $reason without promoting partial or unrelated text",
-    async ({ reason, sessionId, messages, hasMore, reads }) => {
+    ["session-changed", "replacement", [], false, 1],
+    [
+      "reply-not-found",
+      "session",
+      [assistant("unrelated", { __openclaw: { runId: "other" } })],
+      false,
+      1,
+    ],
+    ["history-limit-reached", "session", [assistant("tail")], true, 10],
+  ] as const)(
+    "reports %s without promoting partial or unrelated text",
+    async (reason, sessionId, messages, hasMore, reads) => {
       const request = vi.fn<RecoveryRequest>(async (_method, params) => ({
         sessionId,
         messages,

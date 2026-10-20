@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createSessionProjection, reduceSessionProjection } from "./session-projection.js";
+import {
+  createSessionProjection,
+  reduceSessionProjection,
+  type SessionProjectionRunStatus,
+  type SessionProjectionState,
+} from "./session-projection.js";
 
 const runId = "run-current";
 const text = "The saved partial reply should appear once.";
@@ -12,30 +17,24 @@ const saved = (id: string, seq: number, metadata = {}) => ({
   ...partial({ id, seq, runId, mirrorOrigin: "codex-app-server", idempotencyKey: id, ...metadata }),
   stopReason: "error",
 });
+const terminal = (
+  state: SessionProjectionState,
+  message: unknown,
+  status: Exclude<SessionProjectionRunStatus, "streaming"> = "completed",
+) => reduceSessionProjection(state, { type: "runTerminal", runId, status, message });
+const persist = (state: SessionProjectionState, message: unknown, envelopeRunId?: string) =>
+  reduceSessionProjection(state, { type: "messagePersisted", message, runId: envelopeRunId });
+const snapshot = (state: SessionProjectionState, messages: unknown[]) =>
+  reduceSessionProjection(state, { type: "snapshotLoaded", messages });
 
 describe("saved terminal assistant identity", () => {
   it("recovers an empty terminal only with its matching saved occurrence", () => {
     const empty = { ...partial({ runId, idempotencyKey: "selected" }), content: [] };
-    let state = reduceSessionProjection(createSessionProjection(), {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: empty,
-    });
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: saved("other", 2),
-    });
+    let state = terminal(createSessionProjection(), empty);
+    state = terminal(state, saved("other", 2));
     expect(state.runs[runId]?.message).toBe(empty);
     const durable = saved("selected", 3);
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: durable,
-    });
+    state = terminal(state, durable);
     expect(state.runs[runId]?.message).toBe(durable);
   });
   it.each([
@@ -45,7 +44,7 @@ describe("saved terminal assistant identity", () => {
     "reconciles $status with $stopReason by receipt in either order and across cursor/full replay",
     ({ status, stopReason }) => {
       for (const persistedFirst of [false, true]) {
-        const terminal = partial({ runId, idempotencyKey: "saved-final" });
+        const live = partial({ runId, idempotencyKey: "saved-final" });
         // Persistence hooks may transform content and add media after streaming.
         const durable = {
           ...saved("saved-final", 2),
@@ -57,28 +56,16 @@ describe("saved terminal assistant identity", () => {
         };
         let state = createSessionProjection();
         if (persistedFirst) {
-          state = reduceSessionProjection(state, { type: "messagePersisted", message: durable });
+          state = persist(state, durable);
         }
-        state = reduceSessionProjection(state, {
-          type: "runTerminal",
-          runId,
-          status,
-          message: terminal,
-        });
-        state = reduceSessionProjection(state, {
-          type: "messagePersisted",
-          message: terminal,
-          runId,
-        });
+        state = terminal(state, live, status);
+        state = persist(state, live, runId);
         if (!persistedFirst) {
-          state = reduceSessionProjection(state, { type: "messagePersisted", message: durable });
+          state = persist(state, durable);
         }
         expect(state.messages).toEqual([durable]);
-        state = reduceSessionProjection(state, {
-          type: "snapshotLoaded",
-          messages: [structuredClone(durable)],
-        });
-        state = reduceSessionProjection(state, { type: "messagePersisted", message: durable });
+        state = snapshot(state, [structuredClone(durable)]);
+        state = persist(state, durable);
         expect(state.messages).toEqual([durable]);
       }
     },
@@ -104,15 +91,9 @@ describe("saved terminal assistant identity", () => {
     });
     const history = [first, tool, last, commentary, collision, imported];
     let state = createSessionProjection({}, history);
-    state = reduceSessionProjection(state, {
-      type: "messagePersisted",
-      message: partial({ runId, idempotencyKey: "first" }),
-    });
+    state = persist(state, partial({ runId, idempotencyKey: "first" }));
     expect(state.messages).toEqual(history);
-    state = reduceSessionProjection(state, {
-      type: "messagePersisted",
-      message: partial({ runId, idempotencyKey: "new-occurrence" }),
-    });
+    state = persist(state, partial({ runId, idempotencyKey: "new-occurrence" }));
     expect(state.messages).toHaveLength(history.length + 1);
   });
 
@@ -133,17 +114,14 @@ describe("saved terminal assistant identity", () => {
     const failedA = saved("failed-A", 6);
     const failedB = saved("failed-B", 7);
     for (const message of [priorRun, beforeFence, failedA, failedB]) {
-      state = reduceSessionProjection(state, { type: "messagePersisted", message });
+      state = persist(state, message);
       expect(state.messages).toContainEqual(fallback);
     }
-    state = reduceSessionProjection(state, {
-      type: "snapshotLoaded",
-      messages: [beforeFence, priorRun, failedA, failedB],
-    });
+    state = snapshot(state, [beforeFence, priorRun, failedA, failedB]);
     expect(state.messages).toContainEqual(fallback);
-    const terminal = saved("selected-terminal", 8, { runTerminal: true });
-    state = reduceSessionProjection(state, { type: "messagePersisted", message: terminal });
+    const savedTerminal = saved("selected-terminal", 8, { runTerminal: true });
+    state = persist(state, savedTerminal);
     expect(state.messages).not.toContainEqual(fallback);
-    expect(state.messages).toEqual([beforeFence, priorRun, failedA, failedB, terminal]);
+    expect(state.messages).toEqual([beforeFence, priorRun, failedA, failedB, savedTerminal]);
   });
 });
