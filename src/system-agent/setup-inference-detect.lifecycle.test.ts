@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as onboardInference from "../commands/onboard-inference.js";
@@ -18,8 +17,8 @@ afterEach(async () => {
 
 it.each([false, true])(
   "retires repeated provider discovery after callback settlement (failed: %s)",
-  async (failed) => {
-    await withOpenClawTestState({ label: "setup-discovery-lifetime" }, async (state) => {
+  (failed) =>
+    withOpenClawTestState({ label: "setup-discovery-lifetime" }, async (state) => {
       const id = "discovery-lifetime-fixture";
       const pluginDir = state.statePath("extensions", id);
       const nativeEvent = `${id}-${path.basename(state.root)}`;
@@ -27,16 +26,13 @@ it.each([false, true])(
       const releaseEvent = `${nativeEvent}-release`;
       const nativeBefore = process.listenerCount(nativeEvent);
       const modelRef = `${id}/local-model`;
-      const writeJson = (name: string, value: unknown) =>
-        fs.writeFile(path.join(pluginDir, name), JSON.stringify(value));
-      await fs.mkdir(pluginDir, { recursive: true });
-      await writeJson("package.json", {
+      await state.writeJson(`extensions/${id}/package.json`, {
         name: id,
         version: "1.0.0",
         type: "module",
         openclaw: { extensions: ["./index.ts"] },
       });
-      await writeJson("openclaw.plugin.json", {
+      await state.writeJson(`extensions/${id}/openclaw.plugin.json`, {
         id,
         providers: [id],
         configSchema: { type: "object", properties: {} },
@@ -50,8 +46,8 @@ it.each([false, true])(
           },
         ],
       });
-      await fs.writeFile(
-        path.join(pluginDir, "index.ts"),
+      await state.writeText(
+        `extensions/${id}/index.ts`,
         `
         export default { id: ${JSON.stringify(id)}, register(api) {
           const listener = () => {};
@@ -94,9 +90,7 @@ it.each([false, true])(
           const phases: string[] = [];
           const observe = (phase: string) => {
             phases.push(phase);
-            if (phase === "detect") {
-              started.resolve();
-            }
+            started.resolve();
           };
           process.on(observationEvent, observe);
           const work = detectSetupInference("main");
@@ -109,19 +103,13 @@ it.each([false, true])(
               lease.assertOwned(),
             );
             process.emit(releaseEvent);
-            const result = await work;
-            expect(result.candidates).toEqual(
-              failed
-                ? []
-                : [
-                    expect.objectContaining({
-                      kind: `provider-auto:${id}`,
-                      modelRef,
-                      detail: "fixture available",
-                      credentials: true,
-                    }),
-                  ],
-            );
+            const candidate = expect.objectContaining({
+              kind: `provider-auto:${id}`,
+              modelRef,
+              detail: "fixture available",
+              credentials: true,
+            });
+            expect((await work).candidates).toEqual(failed ? [] : [candidate]);
             expect(phases).toEqual(["detect", "dispose"]);
             expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
             expect(process.listenerCount(releaseEvent)).toBe(0);
@@ -145,6 +133,5 @@ it.each([false, true])(
         process.removeAllListeners(releaseEvent);
         process.removeAllListeners(observationEvent);
       }
-    });
-  },
+    }),
 );
