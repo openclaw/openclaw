@@ -5,7 +5,7 @@ import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CONFIG_DIR } from "../utils.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 
 const DNS_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const MAX_DNS_NAME_LENGTH = 253;
@@ -217,10 +217,7 @@ export async function writeWideAreaGatewayZone(
     try {
       return fs.readFileSync(zonePath, "utf-8");
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? null;
     }
   })();
 

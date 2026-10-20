@@ -525,19 +525,38 @@ describe("operation-owned watchdog through controller admission", () => {
     await operation.ownerSettlement;
     createSuccessor().complete();
   });
-  it("publishes running maintenance wait and resumes the same semantic owner", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
-    operation.markWaitingForDeferredMaintenance();
-    vi.setSystemTime(abortMs * 2);
-    await operation.watchdog.tick();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(operation.phase).toBe("waiting_for_deferred_maintenance");
-    operation.markDeferredMaintenanceWaitEnded();
-    expect(operation.phase).toBe("running");
-    expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
-    operation.complete();
-  });
+  it.each([
+    [
+      "queued",
+      "markWaitingForDeferredMaintenance",
+      "markDeferredMaintenanceWaitEnded",
+      "waiting_for_deferred_maintenance",
+    ],
+    [
+      "running",
+      "markWaitingForDeferredMaintenance",
+      "markDeferredMaintenanceWaitEnded",
+      "waiting_for_deferred_maintenance",
+    ],
+    ["queued", "markWaitingForGlobalLane", "markGlobalLaneWaitEnded", "waiting_for_global_lane"],
+    ["running", "markWaitingForGlobalLane", "markGlobalLaneWaitEnded", "waiting_for_global_lane"],
+  ] as const)(
+    "publishes %s %s and resumes the same semantic owner",
+    async (phase, wait, ready, waiting) => {
+      const operation = begin();
+      operation.setPhase(phase);
+      const cancel = attach(operation);
+      operation[wait]();
+      vi.setSystemTime(abortMs * 2);
+      await operation.watchdog.tick();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(operation.phase).toBe(waiting);
+      operation[ready]();
+      expect(operation.phase).toBe(phase);
+      expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
+      operation.complete();
+    },
+  );
 
   it.each(["backend-throw", "cleanup-throw", "attempt-close"] as const)(
     "keeps an unfenced terminal writer after requesting every captured cleanup for %s",
