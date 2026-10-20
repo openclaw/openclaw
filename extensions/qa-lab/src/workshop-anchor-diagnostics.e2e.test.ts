@@ -4,11 +4,8 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { json } from "node:stream/consumers";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
-import {
-  runQaGatewayFixture,
-  stopQaGatewayFixture,
-} from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { attachQaMockResponsesWebSocketServer } from "./providers/mock-openai/mock-openai-responses-websocket.js";
 import { MockResponseStream } from "./providers/mock-openai/mock-openai-stream.js";
