@@ -40,30 +40,28 @@ describe("withExecutionPhaseDiagnostics", () => {
     resetDiagnosticEventsForTest();
   });
 
-  test("publishes run.execution_phase and forwards to the wrapped callback", async () => {
-    const seen = vi.fn();
-    const params = makeParams({ onExecutionPhase: seen });
-
-    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
-    await waitForDiagnosticEventsDrained();
-    expect(seen.mock.calls).toEqual([
-      [{ phase: "model_call_started", firstModelCallStarted: true }],
-    ]);
-    expect(events).toMatchObject([
-      {
+  test.each([true, false])(
+    "forwards phases with process diagnostics enabled=%s",
+    async (enabled) => {
+      setDiagnosticsEnabledForProcess(enabled);
+      const seen = vi.fn();
+      const phase = { phase: "model_call_started", firstModelCallStarted: true } as const;
+      makeParams({ onExecutionPhase: seen }).onExecutionPhase(phase);
+      await waitForDiagnosticEventsDrained();
+      expect(seen.mock.calls).toEqual([[phase]]);
+      const event = {
         type: "run.execution_phase",
         runId: "run-1",
         sessionId: "sid-1",
         sessionKey: "agent:main:mattermost:channel:town-square",
-        phase: "model_call_started",
-        firstModelCallStarted: true,
-      },
-    ]);
-  });
+        ...phase,
+      };
+      expect(events).toMatchObject(enabled ? [event] : []);
+    },
+  );
 
   test("delivers phases through the async lane, ordered after earlier model events", async () => {
     types.push("model.call.started");
-    const params = makeParams();
 
     emitDiagnosticEvent({
       type: "model.call.started",
@@ -72,7 +70,7 @@ describe("withExecutionPhaseDiagnostics", () => {
       provider: "anthropic",
       model: "claude",
     });
-    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
+    makeParams().onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
     // Nothing is delivered synchronously: both event kinds ride the async lane.
     expect(events).toEqual([]);
     await waitForDiagnosticEventsDrained();
@@ -99,17 +97,5 @@ describe("withExecutionPhaseDiagnostics", () => {
       { phase: "context_assembled", sessionId: "sid-before" },
       { phase: "model_call_started", sessionId: "sid-after" },
     ]);
-  });
-
-  test("stays silent when process diagnostics are disabled", async () => {
-    setDiagnosticsEnabledForProcess(false);
-    const seen = vi.fn();
-    const params = makeParams({ onExecutionPhase: seen });
-
-    params.onExecutionPhase({ phase: "auth" });
-    await waitForDiagnosticEventsDrained();
-
-    expect(events).toEqual([]);
-    expect(seen.mock.calls).toEqual([[{ phase: "auth" }]]);
   });
 });

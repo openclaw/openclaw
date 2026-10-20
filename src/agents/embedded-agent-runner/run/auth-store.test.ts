@@ -8,11 +8,9 @@ const apiKeyInfo = {
 };
 
 const runtimeAuthState = {
-  generation: 1,
   sourceApiKey: "source-token",
   apiKey: "runtime-token",
   authMode: "oauth",
-  profileId: "test:profile",
 };
 
 describe("resolveAttemptDispatchApiKey", () => {

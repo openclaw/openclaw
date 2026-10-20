@@ -27,15 +27,12 @@ function withPresence(
     };
     replaceSessionEntrySync(sessionTarget, { sessionId: sessionTarget.sessionId, updatedAt: 1 });
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    await run(sessionTarget, database, async (expected) => {
-      expect(
-        await resolveExistingAttemptTranscriptState({
-          ...sessionTarget,
-          sessionTarget,
-          sessionFile: sessionTarget.sessionKey,
-        }),
-      ).toEqual({ hasBootstrapTranscriptState: expected });
-    });
+    const input = { ...sessionTarget, sessionTarget, sessionFile: sessionTarget.sessionKey };
+    await run(sessionTarget, database, (expected) =>
+      expect(resolveExistingAttemptTranscriptState(input)).resolves.toEqual({
+        hasBootstrapTranscriptState: expected,
+      }),
+    );
   });
 }
 
@@ -72,49 +69,28 @@ it("keeps one presence snapshot while another connection classifies a message", 
       { type: "message", id: "user", message: { role: "user", content: "present throughout" } },
     ]);
     const writer = new DatabaseSync(database.path);
-    writer
-      .prepare("UPDATE transcript_event_identities SET event_type = NULL WHERE session_id = ?")
-      .run(sessionTarget.sessionId);
+    const classification = writer.prepare(
+      "UPDATE transcript_event_identities SET event_type = ? WHERE session_id = ?",
+    );
+    classification.run(null, sessionTarget.sessionId);
     const native = requireNativeSqliteDatabase(database.db);
     const prepare = native.prepare.bind(native);
     let classified = false;
-    const spy = vi.spyOn(native, "prepare").mockImplementation((query) => {
+    vi.spyOn(native, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
-      if (
-        !query.includes('"transcript_event_identities"') ||
-        query.includes('"transcript_events"')
-      ) {
+      const indexed = query.includes('"transcript_event_identities"');
+      if (!indexed || query.includes('"transcript_events"')) {
         return statement;
       }
-      const classify = () => {
-        // Commit classification after the index probe, with the physical message still present.
-        writer
-          .prepare(
-            "UPDATE transcript_event_identities SET event_type = 'message' WHERE session_id = ?",
-          )
-          .run(sessionTarget.sessionId);
+      const get = statement.get.bind(statement);
+      vi.spyOn(statement, "get").mockImplementation((...params) => {
+        const row = get(...params);
+        // Classify between the indexed probe and raw fallback, without removing the message.
+        classification.run("message", sessionTarget.sessionId);
         classified = true;
-      };
-      return new Proxy(statement, {
-        get(target, property) {
-          if (property === "get") {
-            return (...params: Parameters<typeof target.get>) => {
-              const row = target.get(...params);
-              classify();
-              return row;
-            };
-          }
-          if (property === "iterate") {
-            return (...params: Parameters<typeof target.iterate>) => {
-              const rows = [...target.iterate(...params)];
-              classify();
-              return rows.values();
-            };
-          }
-          const value = Reflect.get(target, property, target) as unknown;
-          return typeof value === "function" ? value.bind(target) : value;
-        },
+        return row;
       });
+      return statement;
     });
     try {
       // Inject the concurrent classification into the query that the history worker executes.
@@ -122,7 +98,7 @@ it("keeps one presence snapshot while another connection classifies a message", 
       await expectPresence(true);
       expect(classified).toBe(true);
     } finally {
-      spy.mockRestore();
+      vi.restoreAllMocks();
       writer.close();
     }
   });
@@ -142,14 +118,8 @@ it.each([
   async (_name, raw, expected, identityId?: string) => {
     await withPresence(async (sessionTarget, database, expectPresence) => {
       // Imported or malformed raw rows can lack the optional identity projection.
-      createTranscriptEventInserter(
-        database.db,
-        sessionTarget.sessionId,
-      )({
-        seq: 0,
-        eventJson: raw,
-        createdAt: 1,
-      });
+      const insert = createTranscriptEventInserter(database.db, sessionTarget.sessionId);
+      insert({ seq: 0, eventJson: raw, createdAt: 1 });
       if (identityId) {
         database.db
           .prepare(

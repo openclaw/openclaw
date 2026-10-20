@@ -60,15 +60,14 @@ describe("compaction-timeout helpers", () => {
   );
 
   it("keeps tool-result tails continuable after compaction timeout", () => {
-    const toolResult = castAgentMessage(makeTextToolResult("call-1", "lookup", "result", false, 1));
     const pre = [
       castAgentMessage({ role: "user", content: "pre-user" }),
       castAgentMessage({ role: "assistant", content: "tool call" }),
-      toolResult,
+      makeTextToolResult("call-1", "lookup", "result", false, 1),
       castAgentMessage({ role: "assistant", content: "pre-assistant" }),
-    ] as const;
+    ];
     expectSelectedSnapshot(
-      [...pre],
+      pre,
       [castAgentMessage({ role: "user", content: "current-user" })],
       "pre-compaction",
       pre.slice(0, 3),

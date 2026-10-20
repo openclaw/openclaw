@@ -71,14 +71,17 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     }
   });
 
-  it("propagates immediate waitForCompactionRetry failures", async () => {
+  it.each([
+    ["waitForCompactionRetry", new Error("compaction wait failed")],
+    ["abortable", Object.assign(new Error("aborted"), { name: "AbortError" })],
+  ] as const)("propagates %s failures and clears the timer", async (callback, error) => {
     await expect(
       waitForRetry({
-        waitForCompactionRetry: async () => {
-          throw new Error("compaction wait failed");
+        [callback]: async () => {
+          throw error;
         },
       }),
-    ).rejects.toThrow("compaction wait failed");
+    ).rejects.toThrow(error.message);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -90,19 +93,6 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     wait.reject(new Error("cancelled after timeout"));
     await Promise.resolve();
     expect(settled.timedOut).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("propagates abort errors from abortable and clears timer", async () => {
-    const abortError = new Error("aborted");
-    abortError.name = "AbortError";
-    await expect(
-      waitForRetry({
-        abortable: async () => {
-          throw abortError;
-        },
-      }),
-    ).rejects.toThrow("aborted");
     expect(vi.getTimerCount()).toBe(0);
   });
 });
