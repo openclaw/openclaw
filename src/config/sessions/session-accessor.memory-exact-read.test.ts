@@ -37,35 +37,27 @@ it("serves exact entry wrappers and projections from the selected memory owner a
     lifetime,
   );
   const storage = actor.storage!;
-  expect(
-    (
-      await storage.mutate(
-        {
-          type: "session.entry.create",
-          input: {
-            entry: {
-              sessionId: "exact-id",
-              updatedAt: 1,
-              label: "first",
-              skillsSnapshot: { prompt: "large private snapshot", skills: [] },
-            },
-          },
-        },
-        authority,
-      )
-    ).kind,
-  ).toBe("committed");
-  expect(
-    (
-      await sibling.storage!.mutate(
-        {
-          type: "session.entry.create",
-          input: { entry: { sessionId: "sibling-id", updatedAt: 2 } },
-        },
-        authority,
-      )
-    ).kind,
-  ).toBe("committed");
+  const mutate = async <Kind extends "session.entry.create" | "session.entry.patch">(
+    target: typeof storage,
+    command: Parameters<typeof storage.mutate<Kind>>[0],
+  ) => {
+    expect(await target.mutate<Kind>(command, authority)).toMatchObject({ kind: "committed" });
+  };
+  await mutate(storage, {
+    type: "session.entry.create",
+    input: {
+      entry: {
+        sessionId: "exact-id",
+        updatedAt: 1,
+        label: "first",
+        skillsSnapshot: { prompt: "large private snapshot", skills: [] },
+      },
+    },
+  });
+  await mutate(sibling.storage!, {
+    type: "session.entry.create",
+    input: { entry: { sessionId: "sibling-id", updatedAt: 2 } },
+  });
   const scope = { agentId: "main", storePath: options.path, sessionKey, env };
   await runWithSessionActorStorage({ ...options, actor, authority }, async () => {
     let source: CapturedSessionEntryReadSource | undefined;
@@ -95,38 +87,29 @@ it("serves exact entry wrappers and projections from the selected memory owner a
         storePath: options.path,
         sessionId: "sibling-id",
       }),
-    ).toMatchObject({ sessionKey: siblingKey, entry: { sessionId: "sibling-id" } });
+    ).toMatchObject({
+      sessionKey: siblingKey,
+      entry: { sessionId: "sibling-id" },
+    });
     expect(loadExactSessionEntryFromStoreReadOnly(scope)).toMatchObject({
       sessionKey,
       entry: { label: "first" },
     });
+    const candidates = { readSource: source!, readOnly: true as const, expectedSource: source };
     expect(
-      loadExactSessionEntryCandidates({
-        readSource: source!,
-        readOnly: true,
-        sessionKeys: [siblingKey, sessionKey],
-        expectedSource: source,
-      }),
+      loadExactSessionEntryCandidates({ ...candidates, sessionKeys: [siblingKey, sessionKey] }),
     ).toMatchObject([{ sessionKey: siblingKey }, { sessionKey }]);
     expect(() =>
       loadExactSessionEntryCandidates({
-        readSource: source!,
-        readOnly: true,
+        ...candidates,
         sessionKeys: [sessionKey],
         expectedSource: { ...source!, databaseIdentity: "replaced" },
       }),
     ).toThrow("changed before read");
-    expect(
-      (
-        await storage.mutate(
-          {
-            type: "session.entry.patch",
-            input: { operation: { kind: "fields", patch: { label: "updated" } } },
-          },
-          authority,
-        )
-      ).kind,
-    ).toBe("committed");
+    await mutate(storage, {
+      type: "session.entry.patch",
+      input: { operation: { kind: "fields", patch: { label: "updated" } } },
+    });
     expect(loadSessionEntryReadOnlyInScope({ ...scope, databaseAgentId: "main" })).toMatchObject({
       label: "updated",
     });

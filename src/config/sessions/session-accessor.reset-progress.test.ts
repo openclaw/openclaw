@@ -22,20 +22,15 @@ import {
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
-it.each(
-  (["single", "batched"] as const).flatMap((writer) =>
-    (writer === "single" ? (["clear"] as const) : (["clear", "preserve-tail"] as const)).flatMap(
-      (context) =>
-        (context === "clear" ? [false, true] : [false]).map((rollback) => ({
-          writer,
-          context,
-          rollback,
-        })),
-    ),
-  ),
-)(
-  "$writer $context reset owns the card lifetime (rollback=$rollback)",
-  async ({ writer, context, rollback }) => {
+it.each([
+  ["single", "clear", false],
+  ["single", "clear", true],
+  ["batched", "clear", false],
+  ["batched", "clear", true],
+  ["batched", "preserve-tail", false],
+] as const)(
+  "%s %s reset owns the card lifetime (rollback=%s)",
+  async (writer, context, rollback) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:reset-progress";
       const sessionId = "same-reset-session";
@@ -123,13 +118,11 @@ it.each(
         unsubscribe();
       }
       // A fresh read-only connection proves this is durable state, not client/cache invalidation.
-      const reader = new DatabaseSync(database.path, { readOnly: true });
-      try {
+      {
+        using reader = new DatabaseSync(database.path, { readOnly: true });
         expect(readSessionProgressCard(reader, sessionKey)).toEqual(
           context === "clear" && !rollback ? null : before,
         );
-      } finally {
-        reader.close();
       }
       expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
       expect((await readBoardHtml(boards, { sessionKey }, "retained-widget"))?.html).toBe(
