@@ -78,7 +78,7 @@ describe("configured meeting node host", () => {
       if (args[0] === "list" && args[2] === "sources") {
         return {
           status: 0,
-          stdout: sourceLoaded ? "43\topenclaw_meeting_audio\tPipeWire" : "",
+          stdout: sourceLoaded ? "43\topenclaw_meeting_audio_in\tPipeWire" : "",
           stderr: "",
         };
       }
@@ -125,7 +125,7 @@ describe("configured meeting node host", () => {
         return { status: 0, stdout: "42\topenclaw_meeting_audio\tPipeWire", stderr: "" };
       }
       if (args[0] === "list" && args[2] === "sources") {
-        return { status: 0, stdout: "43\topenclaw_meeting_audio\tPipeWire", stderr: "" };
+        return { status: 0, stdout: "43\topenclaw_meeting_audio_in\tPipeWire", stderr: "" };
       }
       return { status: 0, stdout: "", stderr: "" };
     });

@@ -19,7 +19,12 @@ export type MeetingAudioCommandResult = {
 
 const PIPEWIRE_SINK_NAME = "openclaw_meeting_audio";
 const PIPEWIRE_MONITOR_NAME = `${PIPEWIRE_SINK_NAME}.monitor`;
-const PIPEWIRE_SOURCE_NAME = PIPEWIRE_SINK_NAME;
+// PulseAudio keeps ONE name registry shared by sinks and sources: a remap source that
+// asks for the sink's name is silently created as `<name>.2` (verified: null sink
+// `zz_ns_test` + remap source `source_name=zz_ns_test` -> source `zz_ns_test.2`), and
+// the readiness check below then demands a name that can never exist. PipeWire's pulse
+// server tolerates the collision, so this only ever broke Linux + PulseAudio.
+const PIPEWIRE_SOURCE_NAME = `${PIPEWIRE_SINK_NAME}_in`;
 const PIPEWIRE_MEETING_AUDIO_DEVICE_LABEL = "OpenClaw Meeting Audio";
 const BLACKHOLE_MEETING_AUDIO_DEVICE_LABEL = "BlackHole 2ch";
 
