@@ -108,7 +108,11 @@ async function withReportWorker<T>(
     publish: (
       result: Pick<
         TranscriptReportCommit,
-        "projectionNeedsReconcile" | "cliHistoryChanged" | "sessionEntryChanged" | "entry"
+        | "projectionNeedsReconcile"
+        | "cliHistoryChanged"
+        | "sessionEntryChanged"
+        | "entry"
+        | "fullEntry"
       >,
     ) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
@@ -277,6 +281,7 @@ async function withReportWorker<T>(
                           databaseIdentity,
                           sessionKey: resolved.sessionKey,
                           entry: publication.entry,
+                          fullEntry: publication.fullEntry,
                         });
                       }
                       if (publication.projectionNeedsReconcile) {

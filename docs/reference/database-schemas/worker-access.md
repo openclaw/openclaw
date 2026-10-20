@@ -106,6 +106,11 @@ reader instead of capturing and rechecking every candidate file independently.
 Committed writes still invalidate retained entries; config routing, native-open
 replacement detection, and live disclosure authority remain with their owners.
 
+Session file reads retain workspace authority independently of evictable display
+rows. Committed writers carry their existing full postimages to predicates that
+select snapshots, so title and transcript updates preserve a read while workspace
+or library changes revoke it. Missing required snapshot facts refuse the read.
+
 Project listings reuse a frozen durable session store while the resident session
 projection's metadata revision is unchanged. Session and topology publications
 retire that snapshot. Private memory sessions keep request-scoped snapshots, and
