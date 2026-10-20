@@ -19,39 +19,31 @@ export function registerEmbeddingCapabilityCliTests({
   const create = (...args: string[]) =>
     runCapability("embedding", "create", "--text", "hello", ...args);
 
-  it("creates embeddings with explicit provider selection", async () => {
-    await create("--text", "world", "--model", "openai/text-embedding-3-large", "--json");
-    expect(providerCall()).toMatchObject({
-      provider: "openai",
-      model: "text-embedding-3-large",
-      fallback: "none",
-    });
-    expect(jsonOutput()).toMatchObject({
-      capability: "embedding.create",
-      provider: "openai",
-      model: "text-embedding-3-small",
-      outputs: [
-        { text: "hello", embedding: [0.1, 0.2] },
-        { text: "world", embedding: [0.1, 0.2] },
-      ],
-    });
-    expect(embedBatch).toHaveBeenCalledWith(["hello", "world"], { inputType: "document" });
-    expect(closeProvider).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a slash-containing model id under a matching provider prefix", async () => {
-    await create(
-      "--provider",
-      "deepinfra",
-      "--model",
-      "deepinfra/Qwen/Qwen3-Embedding-8B",
-      "--json",
-    );
-    expect(providerCall()).toMatchObject({
-      provider: "deepinfra",
-      model: "Qwen/Qwen3-Embedding-8B",
-    });
-  });
+  it.each([
+    { provider: "openai", model: "text-embedding-3-large", explicit: false },
+    { provider: "deepinfra", model: "Qwen/Qwen3-Embedding-8B", explicit: true },
+  ])(
+    "creates embeddings with $provider selection and preserves the model id",
+    async ({ provider, model, explicit }) => {
+      await create(
+        "--text",
+        "world",
+        "--model",
+        `${provider}/${model}`,
+        ...(explicit ? ["--provider", provider] : []),
+        "--json",
+      );
+      expect(providerCall()).toMatchObject({ provider, model, fallback: "none" });
+      expect(jsonOutput()).toMatchObject({
+        capability: "embedding.create",
+        provider: "openai",
+        model: "text-embedding-3-small",
+        outputs: ["hello", "world"].map((text) => ({ text, embedding: [0.1, 0.2] })),
+      });
+      expect(embedBatch).toHaveBeenCalledWith(["hello", "world"], { inputType: "document" });
+      expect(closeProvider).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     ["deepinfra", "Qwen/Qwen3-Embedding-8B", "Qwen"],
@@ -78,23 +70,19 @@ export function registerEmbeddingCapabilityCliTests({
 
     await create("--text", "world", "--text", "");
 
-    expect(log).toHaveBeenCalledWith(
-      [
-        "embedding.create via local",
-        "provider: openai",
-        "model: text-embedding-3-small",
-        "outputs: 3",
-        "hello",
-        "dimensions: 2",
-        "embedding: [0.1, -0.2]",
-        "world",
-        "dimensions: 1536",
-        "embedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]",
-        "",
-        "dimensions: 0",
-        "embedding: []",
-      ].join("\n"),
-    );
+    expect(log).toHaveBeenCalledWith(`embedding.create via local
+provider: openai
+model: text-embedding-3-small
+outputs: 3
+hello
+dimensions: 2
+embedding: [0.1, -0.2]
+world
+dimensions: 1536
+embedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]
+
+dimensions: 0
+embedding: []`);
   });
 
   it.each(["sync", "async"])(

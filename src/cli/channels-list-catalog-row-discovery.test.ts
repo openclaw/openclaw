@@ -7,6 +7,7 @@ import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import {
+  createColdPluginConfig,
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -69,19 +70,15 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channels-list-c
 // Configured official external channels with missing owners exercise row repair hints.
 const OWNERLESS_CHANNEL_IDS = ["feishu", "googlechat", "matrix", "twitch"] as const;
 
-function officialExternalCatalogEntry(channelId: string): ChannelPluginCatalogEntry {
-  return {
-    id: channelId,
-    meta: { label: channelId },
-    install: { npmSpec: `@openclaw/${channelId}` },
-  } as ChannelPluginCatalogEntry;
-}
-
-async function runChannelsListJson(channelIds: readonly string[]): Promise<{
-  rebuilds: number;
-  chat: unknown;
-}> {
-  testState.catalogEntries = channelIds.map(officialExternalCatalogEntry);
+async function runChannelsListJson(channelIds: readonly string[]) {
+  testState.catalogEntries = channelIds.map(
+    (id) =>
+      ({
+        id,
+        meta: { label: id },
+        install: { npmSpec: `@openclaw/${id}` },
+      }) as ChannelPluginCatalogEntry,
+  );
   testState.config = {
     channels: Object.fromEntries(channelIds.map((channelId) => [channelId, { enabled: true }])),
   } as OpenClawConfig;
@@ -125,23 +122,15 @@ throw new Error("JSON inventory must not execute setup");`,
       manifest: {
         channelConfigs: {
           "cold-channel": {
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: { token: { type: "string" } },
-            },
+            schema: { type: "object" },
             label: "Cold Channel",
-            description: "Prepared cold channel metadata",
           },
         },
       },
     });
     testState.config = {
       channels: { "cold-channel": channel },
-      plugins: {
-        load: { paths: [pluginRoot] },
-        entries: { "cold-channel-plugin": { enabled: true } },
-      },
+      ...createColdPluginConfig(pluginRoot, fixture.pluginId),
     };
     for (const flags of [["--json"], ["--all", "--json"]]) {
       await expect(tryRouteCli(["node", "openclaw", "channels", "list", ...flags])).resolves.toBe(
