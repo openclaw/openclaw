@@ -41,7 +41,8 @@ function watch(element: HTMLElement, publish: Publish) {
   return observation;
 }
 
-function geometry(element: HTMLElement, reads: string[], name: string) {
+function scroller(reads: string[] = [], name = "read") {
+  const element = container.appendChild(document.createElement("div"));
   Object.defineProperties(element, {
     scrollHeight: {
       configurable: true,
@@ -52,15 +53,16 @@ function geometry(element: HTMLElement, reads: string[], name: string) {
     },
     clientHeight: { configurable: true, value: 100 },
   });
+  return element;
 }
+
+const atStart = { scrollable: true, atStart: true, atEnd: false };
 
 describe("scroll state observation", () => {
   it("batches every scroller read before publishing", () => {
-    const elements = [document.createElement("div"), document.createElement("div")];
-    container.append(...elements);
     const order: string[] = [];
+    const elements = [scroller(order, "read-0"), scroller(order, "read-1")];
     const publishers = elements.map((element, index) => {
-      geometry(element, order, `read-${index}`);
       const publish = vi.fn<Publish>(() => {
         order.push(`publish-${index}`);
       });
@@ -71,11 +73,7 @@ describe("scroll state observation", () => {
     vi.advanceTimersToNextFrame();
     expect(order).toEqual(["read-0", "read-1", "publish-0", "publish-1"]);
     for (const publish of publishers) {
-      expect(publish).toHaveBeenCalledExactlyOnceWith({
-        scrollable: true,
-        atStart: true,
-        atEnd: false,
-      });
+      expect(publish).toHaveBeenCalledExactlyOnceWith(atStart);
     }
     order.length = 0;
     elements[0]!.dispatchEvent(new Event("scroll"));
@@ -86,9 +84,7 @@ describe("scroll state observation", () => {
   });
 
   it("updates scroll boundaries after resize and stops observing after disconnect", () => {
-    const element = document.createElement("div");
-    container.append(element);
-    geometry(element, [], "read");
+    const element = scroller();
     const publish = vi.fn();
     const observation = watch(element, publish);
     vi.advanceTimersToNextFrame();
@@ -102,7 +98,7 @@ describe("scroll state observation", () => {
         contentRect: new DOMRectReadOnly(),
       },
     ]);
-    expect(publish).toHaveBeenLastCalledWith({ scrollable: true, atStart: true, atEnd: false });
+    expect(publish).toHaveBeenLastCalledWith(atStart);
     vi.advanceTimersToNextFrame();
     expect(publish).toHaveBeenLastCalledWith({ scrollable: true, atStart: false, atEnd: true });
     observation.disconnect();
@@ -113,10 +109,8 @@ describe("scroll state observation", () => {
   });
 
   it("shares geometry reads between observers of the same scroller", () => {
-    const element = document.createElement("div");
-    container.append(element);
     const reads: string[] = [];
-    geometry(element, reads, "read");
+    const element = scroller(reads);
     const publishers = [vi.fn(), vi.fn()];
     const observers = publishers.map((publish) => watch(element, publish));
     for (const observation of observers) {
@@ -126,11 +120,7 @@ describe("scroll state observation", () => {
     vi.advanceTimersToNextFrame();
     expect(reads).toEqual(["read"]);
     for (const publish of publishers) {
-      expect(publish).toHaveBeenCalledExactlyOnceWith({
-        scrollable: true,
-        atStart: true,
-        atEnd: false,
-      });
+      expect(publish).toHaveBeenCalledExactlyOnceWith(atStart);
     }
   });
 });

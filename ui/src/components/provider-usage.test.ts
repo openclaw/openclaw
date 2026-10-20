@@ -22,6 +22,12 @@ function dailyUsage(
   };
 }
 
+function renderUsage(snapshot: Parameters<typeof renderProviderUsageDetails>[0]) {
+  const container = document.createElement("div");
+  mountSolid(() => renderProviderUsageDetails(snapshot), { container });
+  return container;
+}
+
 describe("renderProviderUsageDetails", () => {
   it.each([
     { unit: " usd ", amount: "$12.50", zero: "$0.00" },
@@ -30,47 +36,32 @@ describe("renderProviderUsageDetails", () => {
   ])(
     "renders provider-reported cost history and attribution for $unit",
     ({ unit, amount, zero }) => {
-      const container = document.createElement("div");
       const today = new Date().toISOString().slice(0, 10);
-
-      mountSolid(
-        () =>
-          renderProviderUsageDetails({
-            windows: [],
-            costHistory: {
-              unit,
-              periodDays: 30,
-              daily: [
-                dailyUsage(today, 12.5, {
-                  requests: 42,
-                  inputTokens: 1_000,
-                  cacheReadTokens: 400,
-                  outputTokens: 250,
-                  totalTokens: 1_250,
-                }),
-                dailyUsage("2026-01-01", 0, {
-                  requests: 1,
-                  inputTokens: 50,
-                  outputTokens: 10,
-                  totalTokens: 60,
-                }),
-              ],
-              models: [
-                {
-                  name: "gpt-5.5",
-                  requests: 42,
-                  inputTokens: 1_000,
-                  cacheReadTokens: 400,
-                  cacheWriteTokens: 0,
-                  outputTokens: 250,
-                  totalTokens: 1_250,
-                },
-              ],
-              categories: [{ name: "Responses", amount: 12.5 }],
-            },
-          }),
-        { container },
-      );
+      const usage = {
+        requests: 42,
+        inputTokens: 1_000,
+        cacheReadTokens: 400,
+        outputTokens: 250,
+        totalTokens: 1_250,
+      };
+      const container = renderUsage({
+        windows: [],
+        costHistory: {
+          unit,
+          periodDays: 30,
+          daily: [
+            dailyUsage(today, 12.5, usage),
+            dailyUsage("2026-01-01", 0, {
+              requests: 1,
+              inputTokens: 50,
+              outputTokens: 10,
+              totalTokens: 60,
+            }),
+          ],
+          models: [{ name: "gpt-5.5", cacheWriteTokens: 0, ...usage }],
+          categories: [{ name: "Responses", amount: 12.5 }],
+        },
+      });
 
       expect(container.textContent).toContain(amount);
       expect(container.textContent).toContain("43 requests");
@@ -96,7 +87,6 @@ describe("renderProviderUsageDetails", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-09-07T12:00:00Z"));
-      const container = document.createElement("div");
       const today = new Date().toISOString().slice(0, 10);
       const provider = {
         provider: "openai",
@@ -118,7 +108,7 @@ describe("renderProviderUsageDetails", () => {
         },
       };
       const before = structuredClone(provider);
-      mountSolid(() => renderProviderUsageDetails(provider), { container });
+      const container = renderUsage(provider);
 
       expect(
         Array.from(container.querySelectorAll<HTMLElement>(".provider-cost-chart span"), (bar) => [

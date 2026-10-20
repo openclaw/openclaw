@@ -1,31 +1,34 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 
+function fixture(overrides: Partial<Parameters<typeof SensitiveInput>[0]> = {}) {
+  const props = {
+    id: "secret",
+    value: "secret",
+    revealed: false,
+    onInput: vi.fn(),
+    onToggle: vi.fn(),
+    ...overrides,
+  };
+  const { container } = mountSolid(() => createComponent(SensitiveInput, props));
+  return {
+    ...props,
+    input: container.querySelector<HTMLInputElement>("[data-sensitive-value]")!,
+    mask: container.querySelector<HTMLElement>(".oc-sensitive-mask[data-sensitive-mask]")!,
+    maskText: container.querySelector<HTMLElement>("[data-sensitive-mask-text]")!,
+    toggle: container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle")!,
+  };
+}
+
 describe("renderSensitiveInput", () => {
-  afterEach(cleanupSolid);
-
   it("conceals the value and keeps the Carapace mask in sync", () => {
-    const onInput = vi.fn();
-    const { container } = mountSolid(() =>
-      createComponent(SensitiveInput, {
-        id: "secret",
-        value: "secret",
-        revealed: false,
-        onInput,
-        onToggle: vi.fn(),
-      }),
-    );
-
-    const input = container.querySelector<HTMLInputElement>("[data-sensitive-value]");
-    const mask = container.querySelector<HTMLElement>("[data-sensitive-mask]");
-    const maskText = container.querySelector<HTMLElement>("[data-sensitive-mask-text]");
-    const toggle = container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
+    const { input, mask, maskText, toggle, onInput } = fixture();
     expect(input?.type).toBe("password");
     expect(mask?.hidden).toBe(false);
     expect(maskText?.textContent).toBe("******");
@@ -33,39 +36,21 @@ describe("renderSensitiveInput", () => {
     expect(toggle?.getAttribute("aria-label")).toBe(t("configForm.revealValue"));
     expect(toggle?.getAttribute("aria-pressed")).toBe("false");
 
-    if (input) {
-      input.value = "longer-key";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.scrollLeft = 12;
-      input.dispatchEvent(new Event("scroll"));
-    }
+    input.value = "longer-key";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.scrollLeft = 12;
+    input.dispatchEvent(new Event("scroll"));
     expect(onInput).toHaveBeenCalledWith("longer-key");
     expect(maskText?.textContent).toBe("**********");
     expect(maskText?.style.transform).toBe("translateX(-12px)");
 
-    if (input) {
-      input.value = "👨‍👩‍👧‍👦x";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }
+    input.value = "👨‍👩‍👧‍👦x";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(maskText?.textContent).toBe("**");
   });
 
   it("reveals the value and presents the hide action", () => {
-    const onToggle = vi.fn();
-    const { container } = mountSolid(() =>
-      createComponent(SensitiveInput, {
-        id: "secret",
-        value: "secret",
-        revealed: true,
-        disabled: false,
-        onInput: vi.fn(),
-        onToggle,
-      }),
-    );
-
-    const input = container.querySelector<HTMLInputElement>("[data-sensitive-value]");
-    const mask = container.querySelector<HTMLElement>(".oc-sensitive-mask");
-    const toggle = container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
+    const { input, mask, toggle, onToggle } = fixture({ revealed: true, disabled: false });
     expect(input?.type).toBe("text");
     expect(input?.value).toBe("secret");
     expect(mask?.hidden).toBe(true);
