@@ -80,15 +80,13 @@ it.skipIf(process.platform === "win32").each([
     expect(fs.statSync(manifest, { bigint: true }).nlink).toBe(before.nlink + 1n);
 
     const reported = vi.fn();
+    const result =
+      action === "public repair"
+        ? await settlePendingPackageActivation(f.packageRoot, reported)
+        : await runPackageActivationRecovery(f.anchor, action, f.operationId);
+    expect(result).toMatchObject(action === "public repair" ? { detail } : { phase: "complete" });
     if (action === "public repair") {
-      await expect(settlePendingPackageActivation(f.packageRoot, reported)).resolves.toMatchObject({
-        detail,
-      });
       expect(reported).toHaveBeenCalledWith(expect.objectContaining({ detail }));
-    } else {
-      await expect(
-        runPackageActivationRecovery(f.anchor, action, f.operationId),
-      ).resolves.toMatchObject({ phase: "complete" });
     }
     expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     expect(
