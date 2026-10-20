@@ -485,9 +485,7 @@ async function resolveSystemAgentGreetingText(
   try {
     return await flight;
   } finally {
-    if (flights.get(factsHash) === flight) {
-      flights.delete(factsHash);
-    }
+    flights.delete(factsHash);
   }
 }
 
