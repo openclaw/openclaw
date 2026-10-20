@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type {
-  CronOwnerProjection,
-  LegacyCronRepairState,
+  CronOwnerProjection as Projection,
+  LegacyCronRepairState as State,
 } from "../commands/doctor/cron/legacy-repair.js";
 import {
   isCronOwnerWriteRefusalError,
@@ -12,21 +12,15 @@ import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.
 const state = (
   rawJobs: Array<Record<string, unknown>>,
   invalidConfigRows: Array<Record<string, unknown>> = [],
-  projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection> = new Map(),
-) =>
-  ({
-    rawJobs,
-    invalidConfigRows,
-    projectedOwnersByJobId,
-    ownerRows: [],
-  }) as unknown as LegacyCronRepairState;
+  projectedOwnersByJobId: ReadonlyMap<string, Projection> = new Map(),
+) => ({ rawJobs, invalidConfigRows, projectedOwnersByJobId, ownerRows: [] }) as unknown as State;
 const deps = (
   activeGateway?: {
     pid: number;
     port: number;
     cronOwnerProjection?: "dynamic-default-v1";
   },
-  cronState: LegacyCronRepairState | null = null,
+  cronState: State | null = null,
 ) => ({
   readActiveGatewayLockIdentity: vi.fn(async () =>
     activeGateway ? { ...activeGateway, createdAt: new Date(0).toISOString() } : undefined,
@@ -60,8 +54,7 @@ it("allows an ownership-safe live Gateway with a projected dynamic row and reche
 });
 
 it("refuses an unproven live Gateway without suggesting doctor", async () => {
-  const injected = deps({ pid: process.pid + 1, port: 18_789 });
-  const refusal = prepare(injected);
+  const refusal = prepare(deps({ pid: process.pid + 1, port: 18_789 }));
   await expect(refusal).rejects.toThrow("live external Gateway");
   await expect(refusal).rejects.not.toThrow("doctor --fix");
 });
@@ -88,10 +81,11 @@ it("keeps include-owned binding writes fail closed", () => {
 });
 
 it("refuses a retained historical owner even when the runtime projects a new default", async () => {
+  const owned = { id: "owned", agentId: "research" };
   const injected = deps(
     undefined,
     state(
-      [{ id: "ownerless" }, { id: "owned", agentId: "research" }],
+      [{ id: "ownerless" }, owned],
       [],
       new Map([
         ["ownerless", { kind: "runtime-default" as const, agentId: "research" }],
@@ -104,10 +98,7 @@ it("refuses a retained historical owner even when the runtime projects a new def
   await expect(refusal).rejects.toThrow("openclaw doctor --fix");
 
   injected.loadLegacyCronRepairState.mockResolvedValue(
-    state([
-      { id: "ownerless", agentId: "ops" },
-      { id: "owned", agentId: "research" },
-    ]),
+    state([{ id: "ownerless", agentId: "ops" }, owned]),
   );
   const permitted = await prepare(injected, "ops");
   await permitted.recheck();
@@ -118,10 +109,9 @@ it("keeps ambiguous and unreadable ownership as typed refusals", async () => {
   await expect(prepare(ambiguous)).rejects.toSatisfy(isCronOwnerWriteRefusalError);
 
   const corrupt = deps();
-  corrupt.loadLegacyCronRepairState.mockRejectedValueOnce(
-    new Error("database disk image is malformed"),
-  );
+  const error = new Error("database disk image is malformed");
+  corrupt.loadLegacyCronRepairState.mockRejectedValueOnce(error);
   const unreadable = prepare(corrupt, "ops", "/tmp/corrupt-cron.json");
   await expect(unreadable).rejects.toSatisfy(isCronOwnerWriteRefusalError);
-  await expect(unreadable).rejects.toThrow("database disk image is malformed");
+  await expect(unreadable).rejects.toThrow(error.message);
 });

@@ -7,9 +7,7 @@ import { createConfigIO, resetConfigRuntimeState, writeConfigFile } from "./io.j
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 function makeUnreadableConfigFs(configPath: string): typeof fsNode {
-  const eacces = Object.assign(new Error(`EACCES: permission denied, open '${configPath}'`), {
-    code: "EACCES",
-  });
+  const eacces = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
   const guard = <F extends (...args: never[]) => unknown>(read: F, async = false): F =>
     new Proxy(read, {
       apply(fn, self, args) {
@@ -67,12 +65,10 @@ it("refuses an unreadable config even when size-drop writes are allowed", async 
     logger: { error: () => {}, warn: () => {} },
   });
 
-  const snapshot = await io.readConfigFileSnapshot();
-  expect(snapshot.readError).toEqual({ code: "EACCES" });
+  expect((await io.readConfigFileSnapshot()).readError).toEqual({ code: "EACCES" });
 
-  await expect(io.writeConfigFile(skeletal, { allowConfigSizeDrop: true })).rejects.toMatchObject(
-    rejection,
-  );
+  const write = io.writeConfigFile(skeletal, { allowConfigSizeDrop: true });
+  await expect(write).rejects.toMatchObject(rejection);
   expectPreserved(f);
 });
 
@@ -86,11 +82,8 @@ it.skipIf(process.platform === "win32")(
     );
     try {
       fsNode.chmodSync(f.configPath, 0o000);
-      await withEnvAsync(
-        { OPENCLAW_CONFIG_PATH: f.configPath, OPENCLAW_TEST_FAST: "1" },
-        async () => {
-          await expect(writeConfigFile(skeletal)).rejects.toMatchObject(rejection);
-        },
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: f.configPath, OPENCLAW_TEST_FAST: "1" }, () =>
+        expect(writeConfigFile(skeletal)).rejects.toMatchObject(rejection),
       );
     } finally {
       resetConfigRuntimeState();

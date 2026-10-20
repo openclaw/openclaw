@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
+import { makeRegistry } from "./plugin-auto-enable.test-helpers.js";
 
 const object = (properties: Record<string, unknown>) => ({ type: "object", properties });
 
@@ -32,23 +32,21 @@ it("does not widen channels without a catalog secret contract", () => {
 });
 
 it("widens the installed Tencent manifest schema selected for channel validation", () => {
-  const registry = {
-    plugins: [
-      {
-        id: "openclaw-qqbot",
-        origin: "global",
-        channels: ["qqbot"],
-        channelConfigs: {
-          qqbot: {
-            schema: {
-              ...object({ clientSecret: { type: "string" } }),
-              additionalProperties: true,
-            },
+  const registry = makeRegistry([
+    {
+      id: "openclaw-qqbot",
+      origin: "global",
+      channels: ["qqbot"],
+      channelConfigs: {
+        qqbot: {
+          schema: {
+            ...object({ clientSecret: { type: "string" } }),
+            additionalProperties: true,
           },
         },
       },
-    ],
-  } as unknown as PluginManifestRegistry;
+    },
+  ]);
 
   const [metadata] = collectChannelSchemaMetadataWithOwnership(registry);
   expect(metadata?.configSchema).toHaveProperty("properties.clientSecret.anyOf.length", 2);

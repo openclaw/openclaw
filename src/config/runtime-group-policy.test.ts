@@ -1,25 +1,24 @@
 import { expect, it, vi } from "vitest";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveAllowlistProviderRuntimeGroupPolicy as allowlistPolicy,
   resolveDefaultGroupPolicy,
-  resolveOpenProviderRuntimeGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy as openPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./runtime-group-policy.js";
 
-it("ignores the open global default when provider config is missing", () => {
-  expect(
-    resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: false,
-      defaultGroupPolicy: "open",
-    }),
-  ).toEqual({ groupPolicy: "allowlist", providerMissingFallbackApplied: true });
-});
-
-it("uses allowlist fallback when provider config exists", () => {
-  expect(resolveAllowlistProviderRuntimeGroupPolicy({ providerConfigPresent: true })).toEqual({
+it.each([
+  [
+    "missing provider despite open default",
+    openPolicy,
+    { providerConfigPresent: false, defaultGroupPolicy: "open" },
+    true,
+  ],
+  ["configured provider", allowlistPolicy, { providerConfigPresent: true }, false],
+] as const)("uses allowlist for %s", (_name, resolve, config, providerMissingFallbackApplied) => {
+  expect(resolve(config)).toEqual({
     groupPolicy: "allowlist",
-    providerMissingFallbackApplied: false,
+    providerMissingFallbackApplied,
   });
 });
 

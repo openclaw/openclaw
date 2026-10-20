@@ -11,6 +11,11 @@ import {
 
 export const original = '{"channel":"stable"}\n';
 export const content = '{"channel":"beta"}\n';
+type Fixture = ReturnType<typeof createWriteEffectsFixture>;
+type WriteOptions = Pick<
+  Parameters<typeof prepareConfigFileWrite>[0],
+  "destinationHardlinks" | "durable"
+>;
 
 export function createWriteEffectsFixture(dir: string) {
   const target = path.join(dir, "channel.json");
@@ -62,17 +67,11 @@ export function createWriteEffectsFixture(dir: string) {
 }
 
 export async function prepareWriteEffects(
-  f: ReturnType<typeof createWriteEffectsFixture>,
+  f: Fixture,
   io: typeof fs = fs,
   options: Parameters<typeof createConfigFileWriteGuard>[3] = f.options,
   assertCurrent = f.assertCurrent,
-  writeOptions: Pick<
-    Parameters<typeof prepareConfigFileWrite>[0],
-    "destinationHardlinks" | "durable"
-  > = {
-    destinationHardlinks: "reject",
-    durable: true,
-  },
+  writeOptions: WriteOptions = { destinationHardlinks: "reject", durable: true },
 ) {
   const guarded = createConfigFileWriteGuard(f.target, io, assertCurrent, options);
   const prepared = await prepareConfigFileWrite({
@@ -88,10 +87,7 @@ export async function prepareWriteEffects(
   return { guarded, prepared };
 }
 
-export async function prepareClosedWrite(
-  f: ReturnType<typeof createWriteEffectsFixture>,
-  publish = true,
-) {
+export async function prepareClosedWrite(f: Fixture, publish = true) {
   const { prepared, guarded } = await prepareWriteEffects(f);
   await using pending = prepared;
   if (publish) {
