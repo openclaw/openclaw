@@ -19,6 +19,11 @@ const repoRoot = fs.realpathSync(fileURLToPath(new URL("../..", import.meta.url)
 const writerUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.packageDistInventory);
 const writerPath = fileURLToPath(writerUrl);
 const writerRoot = path.resolve(path.dirname(writerPath), "..");
+const read = (root: string, file: string) => fs.readFileSync(path.join(root, file), "utf8");
+const distFiles = (root: string) => fs.readdirSync(path.join(root, "dist")).toSorted();
+const inventory = PACKAGE_DIST_INVENTORY_RELATIVE_PATH;
+const contentInventory = PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH;
+const pending = PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH;
 
 function withPackageFixture(run: (packageRoot: string) => void) {
   withTempDirSync({ prefix: "openclaw-path-alias-inventory-" }, (packageRoot) => {
@@ -62,20 +67,10 @@ describe("write-package-dist-inventory direct entry", () => {
 
       runNode(packageRoot, [scriptPath]);
 
-      expect(
-        JSON.parse(
-          fs.readFileSync(path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH), "utf8"),
-        ),
-      ).toEqual(["dist/entry.js", PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH]);
-      expect(
-        fs.readFileSync(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
-      ).toBe("pending\n");
-      expect(fs.readdirSync(path.join(packageRoot, "dist")).toSorted()).toEqual(
-        [
-          "entry.js",
-          path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
-          path.basename(PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH),
-        ].toSorted(),
+      expect(JSON.parse(read(packageRoot, inventory))).toEqual(["dist/entry.js", contentInventory]);
+      expect(read(packageRoot, pending)).toBe("pending\n");
+      expect(distFiles(packageRoot)).toEqual(
+        ["entry.js", path.basename(inventory), path.basename(contentInventory)].toSorted(),
       );
     });
   });
@@ -87,14 +82,11 @@ describe("write-package-dist-inventory direct entry", () => {
     withPackageFixture((packageRoot) => {
       const expected: Record<string, string> = { "entry.js": "export {};\n" };
       if (seeded) {
-        expected[path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)] = '["dist/previous.js"]\n';
+        expected[path.basename(inventory)] = '["dist/previous.js"]\n';
         for (const [name, content] of Object.entries(expected)) {
           fs.writeFileSync(path.join(packageRoot, "dist", name), content);
         }
-        fs.writeFileSync(
-          path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-          "existing marker\n",
-        );
+        fs.writeFileSync(path.join(packageRoot, pending), "existing marker\n");
       }
       const importSource = `await import(${JSON.stringify(pathToFileURL(writerPath).href)});\n`;
       const importerPath = path.join(packageRoot, path.basename(writerPath));
@@ -105,12 +97,10 @@ describe("write-package-dist-inventory direct entry", () => {
       );
 
       const actual = Object.fromEntries(
-        fs
-          .readdirSync(path.join(packageRoot, "dist"))
-          .map((name) => [name, fs.readFileSync(path.join(packageRoot, "dist", name), "utf8")]),
+        distFiles(packageRoot).map((name) => [name, read(packageRoot, `dist/${name}`)]),
       );
       expect(actual).toEqual(expected);
-      const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+      const markerPath = path.join(packageRoot, pending);
       if (seeded) {
         expect(fs.readFileSync(markerPath, "utf8")).toBe("existing marker\n");
       } else {
