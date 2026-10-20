@@ -9,22 +9,17 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
   migrateState: vi.fn(),
 }));
-// mock-isolation: keep the startup directory probe away from operator paths and Nix policy.
+// mock-isolation: isolate startup from operator paths, config, tools, terminal and databases.
 vi.mock("../config/paths.js", () => ({
   resolveIsNixMode: () => false,
   resolveStateDir: () => "/synthetic/openclaw-state",
 }));
-// mock-isolation: read synthetic config without initializing the state-backed config runtime.
 vi.mock("../config/io.runtime.js", () => ({ readSourceConfigBestEffort: mocks.config }));
-// mock-isolation: inspect synthetic CLI status without invoking the operator Tailscale executable.
 vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: mocks.command }));
-// mock-isolation: capture prerequisite output without rendering to the operator terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
-// mock-isolation: avoid discovering installation ownership from the operator checkout.
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(async () => "/synthetic/openclaw"),
 }));
-// mock-isolation: capture migration admission without opening operator databases.
 vi.mock("../infra/state-migrations.doctor.js", () => ({
   prepareLegacyStateDatabaseSchema: mocks.migrateState,
 }));
@@ -48,10 +43,6 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.unstubAllEnvs());
-
-async function startDoctor() {
-  return await prepareDoctorHealthFlow(createNonExitingRuntime(), {}, vi.fn());
-}
 
 describe("Doctor startup dependencies", () => {
   it.each(["quick", "full"] as const)(
@@ -101,7 +92,7 @@ describe("Doctor startup dependencies", () => {
       code: 0,
       stdout: JSON.stringify({ BackendState: "UnknownFutureState" }),
     });
-    await startDoctor();
+    await prepareDoctorHealthFlow(createNonExitingRuntime(), {}, vi.fn());
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("did not report a running backend"),
       "Gateway startup prerequisite",

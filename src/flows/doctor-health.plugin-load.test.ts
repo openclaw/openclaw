@@ -8,7 +8,8 @@ import * as pluginSourceFiles from "../plugins/plugin-source-file.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
-const { mocks } = await import("./doctor-health.test-support.js");
+const { mocks, createDoctorRuntime, stubDoctorEnv } =
+  await import("./doctor-health.test-support.js");
 
 vi.mock("../plugins/plugin-source-file.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-source-file.js")>()),
@@ -19,25 +20,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([
-  { failure: "ENOSPC", update: "standalone" },
-  { failure: "ENOSPC", update: "in-progress" },
-])(
-  "reports a plugin $failure during $update Doctor with its corresponding outcome",
-  async ({ failure, update }) => {
+it.each(["standalone", "in-progress"])(
+  "reports plugin ENOSPC during %s Doctor with its corresponding outcome",
+  async (update) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update === "in-progress" ? "1" : undefined);
-      vi.stubEnv(
-        "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE",
-        update === "standalone" ? undefined : "1",
-      );
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
       const resultPath = state.path("doctor-result.json");
-      vi.stubEnv(
-        "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
-        update === "standalone" ? undefined : resultPath,
-      );
+      stubDoctorEnv({
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_UPDATE_IN_PROGRESS: update === "in-progress" ? "1" : undefined,
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE:
+          update === "standalone" ? undefined : "1",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH:
+          update === "standalone" ? undefined : resultPath,
+      });
       mocks.packageRoot.mockReturnValue(undefined);
       mocks.outro.mockClear();
       mocks.writeUpdatePostInstallDoctorResult.mockClear();
@@ -45,12 +41,7 @@ it.each([
       const root = state.path("plugin");
       fs.mkdirSync(root);
       const source = path.join(root, "index.cjs");
-      fs.writeFileSync(
-        source,
-        failure === "SyntaxError"
-          ? 'throw new SyntaxError("fixture syntax failed");'
-          : `module.exports = { id: "${id}", register() {} };`,
-      );
+      fs.writeFileSync(source, `module.exports = { id: "${id}", register() {} };`);
       fs.writeFileSync(
         path.join(root, "openclaw.plugin.json"),
         JSON.stringify({ id, configSchema: { type: "object", properties: {} } }),
@@ -60,41 +51,36 @@ it.each([
       };
       mocks.config.mockReturnValue(cfg);
       let failedWrite = false;
-      if (failure === "ENOSPC") {
-        // Copy-owner tests cover fs-safe translation; Doctor consumes this capture boundary.
-        const copy = pluginSourceFiles.copyPluginSourceFile;
-        vi.spyOn(pluginSourceFiles, "copyPluginSourceFile").mockImplementation((...args) => {
-          if (args[0] === source) {
-            failedWrite = true;
-            throw Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" });
-          }
-          return copy(...args);
-        });
-      }
+      // Copy-owner tests cover fs-safe translation; Doctor consumes this capture boundary.
+      const copy = pluginSourceFiles.copyPluginSourceFile;
+      vi.spyOn(pluginSourceFiles, "copyPluginSourceFile").mockImplementation((...args) => {
+        if (args[0] === source) {
+          failedWrite = true;
+          throw Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" });
+        }
+        return copy(...args);
+      });
       mocks.runContributions.mockImplementation(async () => {
         for (let attempt = 0; attempt < 2; attempt++) {
           const registry = loadPluginRegistryHandle({ config: cfg, cache: false });
           try {
-            expect(registry.plugins.find((plugin) => plugin.id === id)).toMatchObject({
+            const plugin = registry.plugins.find((entry) => entry.id === id);
+            expect(plugin).toMatchObject({
               status: "error",
               failurePhase: "load",
-              error: expect.stringContaining(
-                failure === "ENOSPC" ? "fixture capture write failed" : "fixture syntax failed",
-              ),
+              error: expect.stringContaining("fixture capture write failed"),
             });
-            if (failure === "ENOSPC") {
-              expect(registry.plugins.find((plugin) => plugin.id === id)?.error).toContain(
-                "free space on the filesystem used by the plugin load and rerun Doctor",
-              );
-            }
+            expect(plugin?.error).toContain(
+              "free space on the filesystem used by the plugin load and rerun Doctor",
+            );
           } finally {
             await disposePluginRegistryInstances(registry);
           }
         }
       });
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createDoctorRuntime();
       await doctorCommand(runtime, { nonInteractive: true });
-      expect(failedWrite).toBe(failure === "ENOSPC");
+      expect(failedWrite).toBe(true);
       if (update === "standalone") {
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
       } else {
@@ -111,9 +97,9 @@ it.each([
         expect.stringContaining("[error] core/doctor/workspace-status"),
       );
       const output = runtime.error.mock.calls.flat().join("\n");
-      expect(output).toContain(id);
-      expect(output).toContain(failure);
-      expect(output).toContain(source);
+      for (const detail of [id, "ENOSPC", source]) {
+        expect(output).toContain(detail);
+      }
       expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
       // A later invocation must not inherit released inspection failures.
       mocks.runContributions.mockResolvedValue(undefined);
