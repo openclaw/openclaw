@@ -42,7 +42,10 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../config/sessions/session-entry-current-runtime.js", () => ({
+vi.mock("../../../config/sessions/session-entry-current-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../config/sessions/session-entry-current-runtime.js")
+  >()),
   captureSessionEntryCurrentRead: (scope: { sessionKey: string }) => ({
     source: {
       agentId: "main",
