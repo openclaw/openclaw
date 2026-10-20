@@ -40,6 +40,12 @@ const maintenance = new StateDatabaseOfflineMaintenanceError(
   "Synthetic offline maintenance",
 );
 
+function failRelease(failure: unknown) {
+  return releaseOpenClawStateLeaseBestEffort(params, async () => {
+    throw failure;
+  });
+}
+
 it.each([pending, maintenance, new AggregateError([pending, maintenance])])(
   "releases the original lease after temporary maintenance contention (%s)",
   async (failure) => {
@@ -57,11 +63,7 @@ it.each([pending, maintenance, new AggregateError([pending, maintenance])])(
 );
 
 it("retains the maintenance error when release exhausts its existing two-second budget", async () => {
-  await expect(
-    releaseOpenClawStateLeaseBestEffort(params, async () => {
-      throw maintenance;
-    }),
-  ).rejects.toBe(maintenance);
+  await expect(failRelease(maintenance)).rejects.toBe(maintenance);
   expect(clock.elapsed).toBe(2_000);
 });
 
@@ -69,11 +71,7 @@ it.each([
   new StateDatabaseMaintenanceScopeError(databasePath),
   new AggregateError([maintenance, new Error("Synthetic cleanup failure")]),
 ])("does not retry an unclassified release failure (%s)", async (failure) => {
-  await expect(
-    releaseOpenClawStateLeaseBestEffort(params, async () => {
-      throw failure;
-    }),
-  ).rejects.toBe(failure);
+  await expect(failRelease(failure)).rejects.toBe(failure);
   expect(clock.elapsed).toBe(0);
 });
 
@@ -94,10 +92,6 @@ it("does not retry an ownership verification refusal from the persisted-owner gu
     failure = error;
   }
   expect(failure).toMatchObject({ name: "StateDatabaseAccessError" });
-  await expect(
-    releaseOpenClawStateLeaseBestEffort(params, async () => {
-      throw failure;
-    }),
-  ).rejects.toBe(failure);
+  await expect(failRelease(failure)).rejects.toBe(failure);
   expect(clock.elapsed).toBe(0);
 });

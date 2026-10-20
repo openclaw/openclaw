@@ -60,20 +60,6 @@ afterEach(() => {
   }
 });
 
-function runLease(run: (lease: OpenClawStateLeaseContext) => Promise<never>, signal?: AbortSignal) {
-  return withOpenClawStateLease(
-    {
-      scope: "core:test",
-      key: "nested-uncertainty",
-      database: { scope: "shared", options: { path: "/synthetic-state/lease.sqlite" } },
-      leaseMs: 30_000,
-      waitMs: 0,
-      signal,
-    },
-    run,
-  );
-}
-
 function loseLease(lease: OpenClawStateLeaseContext): unknown {
   fixture.loseRenewal = true;
   // Drive the real native owner's renewal callback against the fake store.
@@ -84,22 +70,52 @@ function loseLease(lease: OpenClawStateLeaseContext): unknown {
   return lease.signal.reason;
 }
 
+async function failUnderAuthority(
+  failure: unknown,
+  authority: "none" | "loss" | "abort" | "loss and abort" = "none",
+) {
+  const caller = new AbortController();
+  const abortCause = new Error("Caller canceled the outer operation");
+  let loss: unknown;
+  const error: unknown = await withOpenClawStateLease(
+    {
+      scope: "core:test",
+      key: "nested-uncertainty",
+      database: { scope: "shared", options: { path: "/synthetic-state/lease.sqlite" } },
+      leaseMs: 30_000,
+      waitMs: 0,
+      signal: authority === "none" ? undefined : caller.signal,
+    },
+    async (lease) => {
+      if (authority === "loss" || authority === "loss and abort") {
+        loss = loseLease(lease);
+      }
+      if (authority === "abort" || authority === "loss and abort") {
+        caller.abort(abortCause);
+        expect(caller.signal.aborted).toBe(true);
+      }
+      throw failure;
+    },
+  ).then(
+    () => {
+      throw new Error("Lease operation unexpectedly succeeded");
+    },
+    (reason: unknown) => reason,
+  );
+  expect(fixture.release).toHaveBeenCalledOnce();
+  return { error, loss, abortCause };
+}
+
 it("preserves a direct unknown failure by identity without outer authority loss", async () => {
   const failure = new SqliteWorkerError("Nested write outcome is unknown", "outcome-unknown");
-  await expect(
-    runLease(async () => {
-      throw failure;
-    }),
-  ).rejects.toBe(failure);
-  expect(fixture.release).toHaveBeenCalledOnce();
+  expect((await failUnderAuthority(failure)).error).toBe(failure);
 });
 
 it("normalizes a structured unknown marker without losing its cause", async () => {
   const failure = { code: "outcome-unknown", message: "Nested write outcome is unknown" };
-  const operation = runLease(vi.fn<() => Promise<never>>().mockRejectedValue(failure));
-  await expect(operation).rejects.toBeInstanceOf(SqliteWorkerError);
-  await expect(operation).rejects.toMatchObject({ code: "outcome-unknown", cause: failure });
-  expect(fixture.release).toHaveBeenCalledOnce();
+  const { error } = await failUnderAuthority(failure);
+  expect(error).toBeInstanceOf(SqliteWorkerError);
+  expect(error).toMatchObject({ code: "outcome-unknown", cause: failure });
 });
 
 it.each([
@@ -117,25 +133,9 @@ it.each([
         : shape === "cause"
           ? new Error("Nested operation failed", { cause: unknown })
           : new AggregateError([sibling, unknown], "Nested failures");
-    const caller = new AbortController();
-    const abortCause = new Error("Caller canceled the outer operation");
-    let loss: unknown;
-    const operation = runLease(async (lease) => {
-      if (authority !== "abort") {
-        loss = loseLease(lease);
-      }
-      if (authority !== "loss") {
-        caller.abort(abortCause);
-        expect(caller.signal.aborted).toBe(true);
-      }
-      throw failure;
-    }, caller.signal);
-    const [outcome] = await Promise.allSettled([operation]);
-    if (outcome.status !== "rejected") {
-      throw new Error("Nested uncertainty unexpectedly succeeded");
-    }
-    expect(outcome.reason).toMatchObject({ code: "outcome-unknown" });
-    const causes = collectNestedErrorCandidates(outcome.reason);
+    const { error, loss, abortCause } = await failUnderAuthority(failure, authority);
+    expect(error).toMatchObject({ code: "outcome-unknown" });
+    const causes = collectNestedErrorCandidates(error);
     expect(causes).toContain(unknown);
     expect(causes).toContain(failure);
     if (shape === "aggregate") {
@@ -150,8 +150,6 @@ it.each([
       // Existing authority precedence selects lease loss when both signals have fired.
       expect(causes).toContain(loss);
     }
-    // Constructed nested uncertainty does not create an unknown settlement on this owner.
-    expect(fixture.release).toHaveBeenCalledOnce();
   },
 );
 
@@ -159,31 +157,16 @@ it.each(["none", "loss", "abort"] as const)(
   "keeps known failure mapping and release unchanged with %s authority",
   async (authority) => {
     const failure = new Error("Known operation failure");
-    const abortCause = new Error("Caller canceled the known failure");
-    const caller = new AbortController();
-    let loss: unknown;
-    const operation = runLease(async (lease) => {
-      if (authority === "loss") {
-        loss = loseLease(lease);
-      } else if (authority === "abort") {
-        caller.abort(abortCause);
-      }
-      throw failure;
-    }, caller.signal);
-    const [outcome] = await Promise.allSettled([operation]);
-    if (outcome.status !== "rejected") {
-      throw new Error("Known failure unexpectedly succeeded");
-    }
+    const { error, loss, abortCause } = await failUnderAuthority(failure, authority);
     if (authority === "none") {
-      expect(outcome.reason).toBe(failure);
+      expect(error).toBe(failure);
     } else if (authority === "loss") {
-      expect(outcome.reason).toBe(loss);
+      expect(error).toBe(loss);
     } else {
-      expect(outcome.reason).toMatchObject({
+      expect(error).toMatchObject({
         code: "OPENCLAW_STATE_LEASE_ABORTED",
         cause: abortCause,
       });
     }
-    expect(fixture.release).toHaveBeenCalledOnce();
   },
 );

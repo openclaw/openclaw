@@ -11,6 +11,14 @@ import {
 } from "./openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
+function expectReleased(database: ReturnType<typeof openOpenClawStateDatabase>, key: string) {
+  expect(
+    database.db
+      .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+      .all("core:test", key),
+  ).toEqual([]);
+}
+
 describe("worker state lease lifecycle", () => {
   it("refuses a worker-leased effect after expiry before the host expiry callback runs", async () => {
     await withOpenClawTestState({ label: "async-lease-effect-expiry" }, async (state) => {
@@ -81,11 +89,7 @@ describe("worker state lease lifecycle", () => {
         expect(await outcome).toBeInstanceOf(Error);
         await closing;
         const database = openOpenClawStateDatabase({ env: state.env });
-        expect(
-          database.db
-            .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
-            .all("core:test", "close"),
-        ).toEqual([]);
+        expectReleased(database, "close");
       } finally {
         finish.resolve();
         await outcome;
@@ -104,16 +108,16 @@ describe("worker state lease lifecycle", () => {
         const { DatabaseSync, StatementSync } = requireNodeSqlite();
         openOpenClawStateDatabase({ env: state.env });
         await closeOpenClawStateDatabaseAsync();
-        const parentCalls = {
-          prepare: vi.spyOn(DatabaseSync.prototype, "prepare"),
-          exec: vi.spyOn(DatabaseSync.prototype, "exec"),
-          close: vi.spyOn(DatabaseSync.prototype, "close"),
-          get: vi.spyOn(StatementSync.prototype, "get"),
-          all: vi.spyOn(StatementSync.prototype, "all"),
-          run: vi.spyOn(StatementSync.prototype, "run"),
-          iterate: vi.spyOn(StatementSync.prototype, "iterate"),
-          wait: vi.spyOn(Atomics, "wait"),
-        };
+        const parentCalls = [
+          vi.spyOn(DatabaseSync.prototype, "prepare"),
+          vi.spyOn(DatabaseSync.prototype, "exec"),
+          vi.spyOn(DatabaseSync.prototype, "close"),
+          vi.spyOn(StatementSync.prototype, "get"),
+          vi.spyOn(StatementSync.prototype, "all"),
+          vi.spyOn(StatementSync.prototype, "run"),
+          vi.spyOn(StatementSync.prototype, "iterate"),
+          vi.spyOn(Atomics, "wait"),
+        ];
         let retired: OpenClawStateAsyncLeaseContext | undefined;
         try {
           const context = captureOpenClawStateWorkerContext({ env: state.env });
@@ -143,26 +147,18 @@ describe("worker state lease lifecycle", () => {
           expect(blocked).not.toHaveBeenCalled();
           await expect(retired?.assertOwned()).rejects.toThrow();
           await closeOpenClawStateDatabaseAsync();
-          expect(
-            Object.fromEntries(
-              Object.entries(parentCalls).map(([name, spy]) => [name, spy.mock.calls.length]),
-            ),
-          ).toEqual({ prepare: 0, exec: 0, close: 0, get: 0, all: 0, run: 0, iterate: 0, wait: 0 });
+          expect(parentCalls.map((spy) => spy.mock.calls.length)).toEqual(Array(8).fill(0));
         } finally {
           try {
             await closeOpenClawStateDatabaseAsync();
           } finally {
-            for (const spy of Object.values(parentCalls)) {
+            for (const spy of parentCalls) {
               spy.mockRestore();
             }
           }
         }
         const database = openOpenClawStateDatabase({ env: state.env });
-        expect(
-          database.db
-            .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
-            .all("core:test", "async-lifecycle"),
-        ).toEqual([]);
+        expectReleased(database, "async-lifecycle");
       });
     },
   );
