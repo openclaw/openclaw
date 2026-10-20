@@ -849,9 +849,13 @@ and insufficient retained coverage use the canonical reader. No extra receipt,
 freshness query, permission grant, or stored format is introduced.
 
 Model-prompt capture selects the current user message, applies its immutable
-projection, and commits through one worker command. It preserves metadata written
-since the recorder's admission and returns the stored projection for identical
-captures. Arbitrary transcript rewrite callbacks retain host preparation because
+projection, and joins the runtime-context carrier's actor append when present.
+Listeners finalize the prompt before preparation; one transaction commits both
+the user projection and carrier, and its receipt updates the actor and manager
+views together. A crash before commit leaves neither change; after commit, replay
+sees both. Routes without a durable actor carrier still capture at transform time.
+Capture preserves metadata written since the recorder's admission and returns the
+stored projection for identical captures. Arbitrary transcript rewrite callbacks retain host preparation because
 their work is not serializable; the closed model-prompt projection needs no host
 prepare round trip.
 

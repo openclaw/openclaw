@@ -3,6 +3,7 @@ import {
   prepareTranscriptMessageAppendForWorker,
   type PreparedTranscriptMessageAppend,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import type { SessionActorAppend } from "../../config/sessions/session-actor-contract.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -74,6 +75,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     retryMutationConflicts = true,
     assertNavigation?: () => void,
     initialModel?: ModelChangeEntry,
+    modelPromptProjection?: SessionActorAppend["modelPromptProjection"],
   ): Promise<PersistWorkerRecordResult> {
     this.assertTranscriptWriteActive();
     const target = this.persistenceTarget;
@@ -248,6 +250,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           toolResult: entry.type === "message" && entry.message.role === "toolResult",
           append: {
             kind: "metadata",
+            ...(modelPromptProjection ? { modelPromptProjection } : {}),
             input: {
               scope: captured,
               event: wireEvent,
@@ -371,7 +374,10 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
             preferredSessionId: captured.sessionId,
           });
         }
-        return projected;
+        return {
+          ...projected,
+          modelPromptProjection: outcome.committed.modelPromptProjection?.result,
+        };
       } catch (cause) {
         const failure =
           outcome.failure ??
