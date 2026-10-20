@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
@@ -13,6 +13,7 @@ export function registerSubagentCollectorPublicationCases(params: {
   mockRestoredRows(runs: Map<string, SubagentRunRecord>): void;
 }) {
   const { createRun } = params;
+  const parent = { sessionKey: "global", agentId: "ops", reason: "swarm", scope: "runtime" };
   it("invalidates the strict collector parent after each committed lifecycle transition", async () => {
     const run: SubagentRunRecord = {
       ...createRun("cross-agent"),
@@ -27,36 +28,25 @@ export function registerSubagentCollectorPublicationCases(params: {
     params.mockRestoredRows(new Map());
     await restoreSubagentRunsFromDisk({ runs: new Map() });
     const observed: Array<{ event: SessionLifecycleEvent; stored?: SubagentRunRecord }> = [];
-    const unsubscribe = onSessionLifecycleEvent((event) => {
-      observed.push({ event, stored: getSubagentRunsSnapshotForRead(new Map()).get(run.runId) });
-    });
-    try {
-      persistRegistryFixture(runs, [run.runId]);
-      run.execution = { status: "running", startedAt: 2 };
-      persistRegistryFixture(runs, [run.runId]);
-      run.execution = { status: "terminal", endedAt: 3, outcome: { status: "ok" } };
-      run.collectorCompletion = { status: "done", structured: { private: "child result" } };
-      persistRegistryFixture(runs, [run.runId]);
-      run.task = "unrelated bookkeeping";
-      persistRegistryFixture(runs, [run.runId]);
-      runs.delete(run.runId);
-      persistRegistryFixture(runs, [run.runId]);
-      expect(observed.map(({ event }) => event)).toEqual(
-        Array.from({ length: 4 }, () => ({
-          sessionKey: "global",
-          agentId: "ops",
-          reason: "swarm",
-          scope: "runtime",
-        })),
-      );
-      expect(
-        observed.map(
-          ({ stored }) => stored?.collectorCompletion?.status ?? stored?.execution.status,
-        ),
-      ).toEqual(["queued", "running", "done", undefined]);
-    } finally {
-      unsubscribe();
-    }
+    onTestFinished(
+      onSessionLifecycleEvent((event) => {
+        observed.push({ event, stored: getSubagentRunsSnapshotForRead(new Map()).get(run.runId) });
+      }),
+    );
+    persistRegistryFixture(runs, [run.runId]);
+    run.execution = { status: "running", startedAt: 2 };
+    persistRegistryFixture(runs, [run.runId]);
+    run.execution = { status: "terminal", endedAt: 3, outcome: { status: "ok" } };
+    run.collectorCompletion = { status: "done", structured: { private: "child result" } };
+    persistRegistryFixture(runs, [run.runId]);
+    run.task = "unrelated bookkeeping";
+    persistRegistryFixture(runs, [run.runId]);
+    runs.delete(run.runId);
+    persistRegistryFixture(runs, [run.runId]);
+    expect(observed.map(({ event }) => event)).toEqual(Array.from({ length: 4 }, () => parent));
+    expect(
+      observed.map(({ stored }) => stored?.collectorCompletion?.status ?? stored?.execution.status),
+    ).toEqual(["queued", "running", "done", undefined]);
   });
 
   it("invalidates archived cold-restored groups once per exact parent", async () => {
@@ -72,24 +62,15 @@ export function registerSubagentCollectorPublicationCases(params: {
     params.mockRestoredRows(new Map(rows.map((row) => [row.runId, row])));
     const runs = new Map<string, SubagentRunRecord>();
     const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      await restoreSubagentRunsFromDisk({ runs });
-      expect(received).not.toHaveBeenCalled();
-      runs.clear();
-      persistRegistryFixture(
-        runs,
-        rows.map((row) => row.runId),
-      );
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "global",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
-    } finally {
-      unsubscribe();
-    }
+    onTestFinished(onSessionLifecycleEvent(received));
+    await restoreSubagentRunsFromDisk({ runs });
+    expect(received).not.toHaveBeenCalled();
+    runs.clear();
+    persistRegistryFixture(
+      runs,
+      rows.map((row) => row.runId),
+    );
+    expect(received).toHaveBeenCalledExactlyOnceWith(parent);
   });
 
   it("does not infer collector parent ownership from requester or group strings", () => {
@@ -107,15 +88,11 @@ export function registerSubagentCollectorPublicationCases(params: {
       },
     ];
     const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      persistRegistryFixture(
-        new Map(rows.map((row) => [row.runId, row])),
-        rows.map((row) => row.runId),
-      );
-      expect(received).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
-    }
+    onTestFinished(onSessionLifecycleEvent(received));
+    persistRegistryFixture(
+      new Map(rows.map((row) => [row.runId, row])),
+      rows.map((row) => row.runId),
+    );
+    expect(received).not.toHaveBeenCalled();
   });
 }

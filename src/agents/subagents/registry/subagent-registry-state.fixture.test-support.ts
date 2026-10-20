@@ -15,12 +15,15 @@ import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 export function createSubagentStoreRunFixture(
   overrides: Partial<SubagentRunRecord> = {},
 ): SubagentRunRecord {
-  return {
-    runId: "run-one",
+  const identity = {
     childSessionKey: "agent:main:subagent:one",
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "check sqlite persistence",
+  };
+  return {
+    runId: "run-one",
+    ...identity,
     cleanup: "keep",
     createdAt: 100,
     expectsCompletionMessage: true,
@@ -43,11 +46,8 @@ export function createSubagentStoreRunFixture(
       attemptCount: 2,
       lastError: "retry later",
       payload: {
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        childSessionKey: "agent:main:subagent:one",
+        ...identity,
         childRunId: "run-one",
-        task: "check sqlite persistence",
         startedAt: 110,
         endedAt: 250,
         outcome: { status: "ok" },
@@ -70,14 +70,12 @@ export function loadSubagentRegistryFromSqlite(
       .orderBy("created_at", "asc")
       .orderBy("run_id", "asc"),
   ).rows;
-  const runs = new Map<string, SubagentRunRecord>();
-  for (const row of rows) {
-    const entry = rowToSubagentRunRecord(row);
-    if (entry) {
-      runs.set(entry.runId, entry);
-    }
-  }
-  return runs;
+  return new Map(
+    rows.flatMap((row) => {
+      const entry = rowToSubagentRunRecord(row);
+      return entry ? [[entry.runId, entry] as const] : [];
+    }),
+  );
 }
 
 function writeSubagentRunValues(
@@ -110,11 +108,8 @@ function writeSubagentRunValues(
 /** Seed an out-of-band snapshot without publishing resident facts. */
 export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
   const values = [...runs.values()].map(bindSubagentRunRecord);
-  writeSubagentRunValues(
-    values,
-    undefined,
-    values.map((row) => row.run_id),
-  );
+  const retained = values.map((row) => row.run_id);
+  writeSubagentRunValues(values, undefined, retained);
 }
 
 /** Seed named foreign writes, deleting IDs absent from the supplied fixture. */
