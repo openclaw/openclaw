@@ -584,22 +584,15 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
   log.info(`msteams provider started on Gateway route ${configuredPath}`);
   publishMSTeamsReady(opts.statusSink);
 
-  let shutdownTask: Promise<void> | undefined;
-  const shutdown = () => {
-    shutdownTask ??= (async () => {
-      await webhook.close();
-      for (const unregister of unregisterRoutes.splice(0)) {
-        unregister();
-      }
-      await ingress.stop();
-      publishMSTeamsStopped(opts.statusSink);
-    })();
-    return shutdownTask;
-  };
   try {
-    await waitUntilAbort(opts.abortSignal, shutdown);
+    await waitUntilAbort(opts.abortSignal);
   } finally {
-    await shutdown();
+    await webhook.close();
+    for (const unregister of unregisterRoutes) {
+      unregister();
+    }
+    await ingress.stop();
+    publishMSTeamsStopped(opts.statusSink);
   }
 }
 

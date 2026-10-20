@@ -258,7 +258,6 @@ export async function preflightDiscordMessage(
         Boolean(injectedBoundThreadBinding) &&
         isDiscordThreadChannelMessage({
           isGuildMessage,
-          message,
           channelInfo,
         }),
     )
@@ -380,7 +379,6 @@ export async function preflightDiscordMessage(
     configuredBinding,
     boundSessionKey,
     effectiveRoute,
-    boundAgentId,
     baseSessionKey,
   } = routeState;
   const isBoundThreadSession = Boolean(threadBinding && threadChannel);
@@ -855,12 +853,10 @@ export async function preflightDiscordMessage(
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     preparedMedia,
-    wasMentioned,
     conversationAvatar,
     route: effectiveRoute,
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,
-    boundAgentId,
     guildInfo,
     guildSlug,
     threadChannel,

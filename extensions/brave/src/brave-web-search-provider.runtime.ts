@@ -1,4 +1,5 @@
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
@@ -233,6 +234,7 @@ export async function executeBraveSearch(
     const requestedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
     const cacheKey = buildSearchCacheKey([
       "brave",
+      sha256Hex(apiKey),
       braveMode,
       braveBaseUrl,
       query,

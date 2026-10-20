@@ -698,14 +698,9 @@ function createRawOllamaStreamFn(
           };
 
           const resolveVisibleContent = (final: boolean): string | undefined => {
-            const resolution = visibleContentSanitizer.resolveStreamText({
-              text: accumulatedRawContent,
-              final,
-            });
-            if (resolution.kind === "pending") {
-              return undefined;
-            }
-            return resolution.text;
+            return visibleContentSanitizer
+              ? visibleContentSanitizer({ text: accumulatedRawContent, final })
+              : accumulatedRawContent;
           };
 
           for await (const chunk of parseNdjsonStream(reader)) {
@@ -742,7 +737,7 @@ function createRawOllamaStreamFn(
               accumulatedRawContent += rawDelta;
               flushVisibleText(
                 resolveVisibleContent(false),
-                visibleContentSanitizer.preservesStreamText ? rawDelta : undefined,
+                visibleContentSanitizer ? undefined : rawDelta,
               );
             }
             if (chunk.message?.tool_calls?.length) {

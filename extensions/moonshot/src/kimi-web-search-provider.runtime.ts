@@ -1,3 +1,4 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   createProviderHttpError,
   normalizeBaseUrl,
@@ -98,7 +99,7 @@ export async function executeKimiWebSearchProviderTool(
   const { query, count: requestedCount } = readWebSearchQueryAndCount(args, searchConfig);
   const count = resolveSearchCount(requestedCount, DEFAULT_SEARCH_COUNT);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
-  const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, count]);
+  const cacheKey = buildSearchCacheKey(["kimi", sha256Hex(apiKey), query, baseUrl, count]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {

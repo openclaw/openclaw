@@ -32,7 +32,6 @@ export type SignalInboundEntry = {
   media?: ChannelInboundMediaInput[];
   commandAuthorized: boolean;
   canDetectMention?: boolean;
-  requireMention?: boolean;
   wasMentioned?: boolean;
   replyToBody?: string;
   replyToSender?: string;

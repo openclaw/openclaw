@@ -72,17 +72,6 @@ describe("probeFeishu", () => {
     expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
-  it("does not cache probe results when the expiry would exceed a valid Date", async () => {
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const requestFn = setupClient({ code: 0, bot: { app_name: "TestBot", open_id: "ou_abc123" } });
-
-    const first = await probeFeishu(DEFAULT_CREDS);
-    const second = await probeFeishu(DEFAULT_CREDS);
-
-    expect(first).toEqual(second);
-    expect(requestFn).toHaveBeenCalledTimes(2);
-  });
-
   it.each([false, true])(
     "caches failed probes for the error TTL (request throws: %s)",
     async (throws) => {

@@ -588,43 +588,34 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
     pendingResponses: new Map<http.ServerResponse, Promise<void>>(),
   });
   let unregisterRoute: (() => void) | undefined;
-  let cleanupStarted = false;
-  let pendingDrain: Promise<void> | undefined;
-  const cleanup = () => {
-    if (cleanupStarted) {
-      return pendingDrain;
-    }
-    cleanupStarted = true;
+  const cleanup = async () => {
     stopped.abort();
-    pendingDrain = (async () => {
-      const pendingResponses = registration.target.pendingResponses;
-      if (pendingResponses.size > 0) {
-        const drain = await raceWithTimeoutAndAbort(Promise.all(pendingResponses.values()), {
-          timeoutMs: FEISHU_WEBHOOK_CLOSE_TIMEOUT_MS,
-        });
-        if (drain.status === "timeout") {
-          for (const response of pendingResponses.keys()) {
-            response.destroy();
-          }
+    const pendingResponses = registration.target.pendingResponses;
+    if (pendingResponses.size > 0) {
+      const drain = await raceWithTimeoutAndAbort(Promise.all(pendingResponses.values()), {
+        timeoutMs: FEISHU_WEBHOOK_CLOSE_TIMEOUT_MS,
+      });
+      if (drain.status === "timeout") {
+        for (const response of pendingResponses.keys()) {
+          response.destroy();
         }
       }
-      // Registered successors retain identity; startup overlapping this drain is best effort.
-      if (
-        ![...webhookTargets.values()].some((targets) =>
-          targets.some(
-            (target) =>
-              target !== registration.target &&
-              target.accountId === accountId &&
-              !target.abortSignal?.aborted,
-          ),
-        )
-      ) {
-        clearFeishuBotIdentityState(accountId);
-      }
-      registration.unregister();
-      unregisterRoute?.();
-    })();
-    return pendingDrain;
+    }
+    // Registered successors retain identity; startup overlapping this drain is best effort.
+    if (
+      ![...webhookTargets.values()].some((targets) =>
+        targets.some(
+          (target) =>
+            target !== registration.target &&
+            target.accountId === accountId &&
+            !target.abortSignal?.aborted,
+        ),
+      )
+    ) {
+      clearFeishuBotIdentityState(accountId);
+    }
+    registration.unregister();
+    unregisterRoute?.();
   };
   if (abortSignal.aborted) {
     await cleanup();
@@ -654,7 +645,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
         : `feishu[${accountId}]: webhook registered on Gateway port ${params.gatewayPort ?? 18789} at ${rawPath}; point the Feishu callback URL or reverse-proxy upstream to this Gateway route. ${legacyListener ? `The legacy listener on ${legacyListener.host}:${legacyListener.port} forwards here; remove the legacyWebhook pin after verifying delivery through the Gateway, or use legacyWebhook:false to override an inherited endpoint.` : "No legacy listener is configured."}`,
     );
     // Stopping targets retain only signature recognition until their responses finish.
-    await waitUntilAbort(abortSignal, cleanup);
+    await waitUntilAbort(abortSignal);
   } finally {
     await cleanup();
   }
