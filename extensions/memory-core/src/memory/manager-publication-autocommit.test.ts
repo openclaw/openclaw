@@ -1,23 +1,19 @@
-import path from "node:path";
-import {
-  encodeMemoryEmbedding,
-  ensureMemoryIndexSchema,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   openNodeSqliteDatabase,
   readSqliteDatabaseScopedWriteTokenForPath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import {
+  createPublication,
+  publicationReplacement,
+  publicationState as state,
+} from "./manager-publication-fixture.test-support.js";
 import {
   MEMORY_EMBEDDING_CACHE_WRITE_SCOPE,
   MEMORY_INDEX_WRITE_SCOPE,
 } from "./manager-publication-task.js";
-import { memoryPublicationInline } from "./manager-publication-transfer.js";
-import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const meta = {
   provider: "test",
@@ -26,52 +22,15 @@ const meta = {
   chunkTokens: 400,
   chunkOverlap: 80,
 };
-
-function createPublication({ cacheEnabled = false, ftsEnabled = false } = {}) {
-  const filename = path.join(tempDirs.make("memory-publication-"), "index.sqlite");
-  const db = openNodeSqliteDatabase(filename);
-  const admission = { denied: false };
-  const backend = bindSqliteWorkerBackend(
-    { kind: "agent" },
-    {
-      databasePath: filename,
-      database: db,
-      admit(stage) {
-        if (stage === "commit" && admission.denied) {
-          throw new Error("publication authority revoked");
-        }
-      },
-    },
-  );
-  try {
-    ensureMemoryIndexSchema({ db, cacheEnabled, ftsEnabled });
-  } catch (error) {
-    backend.close();
-    db.close();
-    throw error;
-  }
-  return {
-    filename,
-    db,
-    backend,
-    admission,
-    expectResult(command: Parameters<typeof backend.execute>[0], expected: object = { ok: true }) {
-      expect(backend.execute(command)).toMatchObject(expected);
-    },
-    [Symbol.dispose]() {
-      backend.close();
-      db.close();
-    },
-  };
-}
+const upgradedFacts = { meta: { ...meta, providerKey: "canonical" } };
+const upgrade = {
+  type: "index.upgradeProviderKey",
+  input: { meta, providerKey: "canonical" },
+} as const;
 
 it("atomically promotes an exact legacy identity while preserving canonical cache rows", () => {
   using fixture = createPublication({ cacheEnabled: true });
   const { filename, db, expectResult, admission } = fixture;
-  const command = {
-    type: "index.upgradeProviderKey",
-    input: { meta, providerKey: "canonical" },
-  } as const;
   const rows = () => db.prepare("SELECT rowid, * FROM memory_embedding_cache ORDER BY rowid").all();
   expectResult({ type: "index.writeMetadata", input: meta });
   const insert = db.prepare(`INSERT INTO memory_embedding_cache
@@ -91,15 +50,15 @@ it("atomically promotes an exact legacy identity while preserving canonical cach
   const before = rows();
   expectResult(
     {
-      ...command,
-      input: { ...command.input, meta: { ...meta, chunkTokens: 200 } },
+      ...upgrade,
+      input: { ...upgrade.input, meta: { ...meta, chunkTokens: 200 } },
     },
     { ok: true, value: false, facts: { meta } },
   );
   expect(rows()).toEqual(before);
 
   admission.denied = true;
-  expectResult(command, {
+  expectResult(upgrade, {
     ok: false,
     entered: true,
     committed: false,
@@ -111,21 +70,12 @@ it("atomically promotes an exact legacy identity while preserving canonical cach
   admission.denied = false;
   const scopes = [MEMORY_INDEX_WRITE_SCOPE, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE];
   const tokens = scopes.map((scope) => readSqliteDatabaseScopedWriteTokenForPath(filename, scope));
-  const upgraded = { ...meta, providerKey: "canonical" };
-  expectResult(command, {
-    ok: true,
-    value: true,
-    facts: { meta: upgraded },
-  });
+  expectResult(upgrade, { ok: true, value: true, facts: upgradedFacts });
   for (const [index, scope] of scopes.entries()) {
     expect(readSqliteDatabaseScopedWriteTokenForPath(filename, scope)).not.toBe(tokens[index]);
   }
   expect(rows()).toEqual([{ ...before[0], provider_key: "canonical" }, ...before.slice(2)]);
-  expectResult(command, {
-    ok: true,
-    value: false,
-    facts: { meta: upgraded },
-  });
+  expectResult(upgrade, { ok: true, value: false, facts: upgradedFacts });
 });
 
 it("promotes legacy metadata when no embedding cache table exists", () => {
@@ -135,17 +85,7 @@ it("promotes legacy metadata when no embedding cache table exists", () => {
     db.prepare("SELECT name FROM sqlite_master WHERE name = 'memory_embedding_cache'").get(),
   ).toBeUndefined();
   expectResult({ type: "index.writeMetadata", input: meta });
-  expectResult(
-    {
-      type: "index.upgradeProviderKey",
-      input: { meta, providerKey: "canonical" },
-    },
-    {
-      ok: true,
-      value: true,
-      facts: { meta: { ...meta, providerKey: "canonical" } },
-    },
-  );
+  expectResult(upgrade, { ok: true, value: true, facts: upgradedFacts });
 });
 
 it("publishes settled tokens and facts for metadata writes and atomic source refreshes", () => {
@@ -198,33 +138,10 @@ it("publishes one revision per source batch and rolls back both rows and revisio
     using fixture = createPublication({ ftsEnabled: true });
     ({ filename } = fixture);
     const { db, backend, expectResult, admission } = fixture;
-    const state = {
-      vector: { enabled: false, available: false },
-      fts: { enabled: true, available: true },
-      hasVectorTable: false,
-    };
-    const source = (name: string, text: string) =>
-      memoryPublicationInline({
-        source: "memory",
-        entry: { path: `memory/${name}.md`, hash: text, mtimeMs: 1, size: text.length },
-        model: "fts-only",
-        now: 1,
-        vectorReady: false,
-        embeddings: [[], []],
-        chunks: [1, 2].map((line) => ({
-          startLine: line,
-          endLine: line,
-          hash: `${text}-${line}`,
-          text: `${text} ${line}`,
-          importance: null,
-          triggers: null,
-          projectKey: null,
-        })),
-      })!;
     const replace = (text: string) =>
       backend.execute({
         type: "source.replace.group",
-        input: { sources: [source("first", text), source("second", text)], state },
+        input: publicationReplacement(text),
       });
     const rows = () =>
       db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line").all();
