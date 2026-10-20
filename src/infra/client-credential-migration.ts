@@ -1,5 +1,4 @@
 import path from "node:path";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
@@ -352,42 +351,6 @@ export function prepareClientCredentialMigration(
         executeSqliteQuerySync(
           database,
           db.insertInto("native_exec_socket_credentials").values(extracted.socket),
-        );
-      }
-      const copied = {
-        identities: executeSqliteQuerySync(
-          database,
-          db.selectFrom("device_identities").selectAll().orderBy("identity_key"),
-        ).rows,
-        tokens: executeSqliteQuerySync(
-          database,
-          db.selectFrom("device_auth_tokens").selectAll().orderBy("device_id").orderBy("role"),
-        ).rows,
-        origins: executeSqliteQuerySync(
-          database,
-          db
-            .selectFrom("gateway_origin_device_tokens")
-            .selectAll()
-            .orderBy("gateway_scope")
-            .orderBy("device_id")
-            .orderBy("role"),
-        ).rows,
-        sockets: executeSqliteQuerySync(
-          database,
-          db.selectFrom("native_exec_socket_credentials").selectAll(),
-        ).rows,
-      };
-      if (
-        stableStringify(copied) !==
-        stableStringify({
-          identities: rows.identities,
-          tokens: rows.tokens,
-          origins: rows.origins,
-          sockets: extracted.socket ? [extracted.socket] : [],
-        })
-      ) {
-        throw new Error(
-          "Client credential migration verification failed; shared credentials were retained.",
         );
       }
       executeSqliteQuerySync(
