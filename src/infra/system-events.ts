@@ -358,7 +358,7 @@ export function claimSystemEventTurn(
         throw new Error("Session event occurrence was cancelled before admission");
       }
       owner.started = true;
-      consumeSelectedSystemEventEntries(key, events, { adopted: true });
+      adoptSelectedSystemEventEntries(key, events);
     },
     // A member can already be gone; settle every surviving claim without touching replacements.
     cancel: () => consumeSelectedSystemEventEntries(key, currentEvents()).length > 0,
@@ -454,7 +454,25 @@ function resetQueueState(key: string, entry: SessionQueue) {
 export function consumeSelectedSystemEventEntries(
   sessionKey: string,
   consumedEntries: readonly SystemEvent[],
-  options?: { deferredEventIds?: readonly string[]; adopted?: boolean },
+  options?: { deferredEventIds?: readonly string[] },
+): SystemEvent[] {
+  return consumeSelectedSystemEventEntriesCore(sessionKey, consumedEntries, options, false);
+}
+
+/** Core session admission acknowledges adoption; the SDK only exposes queue consumption. */
+export function adoptSelectedSystemEventEntries(
+  sessionKey: string,
+  consumedEntries: readonly SystemEvent[],
+  options?: { deferredEventIds?: readonly string[] },
+): SystemEvent[] {
+  return consumeSelectedSystemEventEntriesCore(sessionKey, consumedEntries, options, true);
+}
+
+function consumeSelectedSystemEventEntriesCore(
+  sessionKey: string,
+  consumedEntries: readonly SystemEvent[],
+  options: { deferredEventIds?: readonly string[] } | undefined,
+  adopted: boolean,
 ): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
   const entry = getSessionQueue(key);
@@ -473,7 +491,7 @@ export function consumeSelectedSystemEventEntries(
     }
     const event = entry.queue[index];
     if (event) {
-      if (options?.adopted) {
+      if (adopted) {
         settleSystemEventReceipt(event, true);
       }
       if (!event.id || !deferredIds.has(event.id)) {
