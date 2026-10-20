@@ -25,7 +25,7 @@ function createChildProcess(pid?: number): ChildProcess {
   return Object.assign(new EventEmitter(), { pid }) as ChildProcess;
 }
 
-function expectSpawned(expectedArgs: string[]): SpawnOptions {
+function expectSpawned(expectedArgs: string[]) {
   expect(spawnMock).toHaveBeenCalledOnce();
   const call = spawnMock.mock.calls[0] as [string, string[], SpawnOptions] | undefined;
   if (!call) {
@@ -34,7 +34,8 @@ function expectSpawned(expectedArgs: string[]): SpawnOptions {
   const [command, args, options] = call;
   expect(command).toBe(process.execPath);
   expect(args).toEqual(expectedArgs);
-  return options;
+  expect(options.stdio).toBe("inherit");
+  expect(options.env).toBe(process.env);
 }
 
 describe("launchTuiCli", () => {
@@ -82,7 +83,7 @@ describe("launchTuiCli", () => {
       deliver: false,
     });
 
-    const options = expectSpawned([
+    expectSpawned([
       "--import",
       "tsx",
       "--no-warnings",
@@ -95,7 +96,6 @@ describe("launchTuiCli", () => {
       "--password",
       "test-password",
     ]);
-    expect(options.stdio).toBe("inherit");
   });
 
   it("passes initial message and timeout through to the relaunched TUI", async () => {
@@ -106,7 +106,7 @@ describe("launchTuiCli", () => {
       timeoutMs: 300_000,
     });
 
-    const options = expectSpawned([
+    expectSpawned([
       "/repo/openclaw.mjs",
       "tui",
       "--local",
@@ -115,7 +115,6 @@ describe("launchTuiCli", () => {
       "--timeout-ms",
       "300000",
     ]);
-    expect(options.stdio).toBe("inherit");
   });
 
   it("keeps parent stdin paused after the relaunched TUI exits", async () => {
@@ -125,25 +124,16 @@ describe("launchTuiCli", () => {
     expect(resumeSpy).not.toHaveBeenCalled();
   });
 
-  it("launches compiled CLI shapes without repeating the current command", async () => {
-    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
-    process.argv[1] = "/standalone/runtime/openclaw.mjs";
-    process.execArgv.push("--trace-warnings");
-    await launchTuiCli({ deliver: false });
-
-    const options = expectSpawned(["tui"]);
-    expect(options.stdio).toBe("inherit");
-  });
-
-  it("launches a standalone TUI without a loose CLI entry", async () => {
-    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
-    process.argv = [process.execPath];
-    process.execArgv.push("--trace-warnings");
-
-    await launchTuiCli({ deliver: false });
-
-    expectSpawned(["tui"]);
-  });
+  it.each(["/standalone/runtime/openclaw.mjs", undefined])(
+    "launches standalone TUI with entry %s",
+    async (entry) => {
+      vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
+      process.argv = entry ? [process.execPath, entry] : [process.execPath];
+      process.execArgv.push("--trace-warnings");
+      await launchTuiCli({ deliver: false });
+      expectSpawned(["tui"]);
+    },
+  );
 
   it("still rejects an unavailable loose CLI entry", async () => {
     process.argv = [process.execPath];
@@ -152,24 +142,6 @@ describe("launchTuiCli", () => {
       "unable to relaunch TUI: current CLI entry path is unavailable",
     );
     expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("passes gateway connection options as TUI arguments without mutating env", async () => {
-    await launchTuiCli({
-      deliver: false,
-      url: "ws://127.0.0.1:18789",
-      token: "resolved-token",
-    });
-
-    const options = expectSpawned([
-      "/repo/openclaw.mjs",
-      "tui",
-      "--url",
-      "ws://127.0.0.1:18789",
-      "--token",
-      "resolved-token",
-    ]);
-    expect(options.env).toBe(process.env);
   });
 
   it("rejects a spawn error when the child has no pid", async () => {

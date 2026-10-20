@@ -45,7 +45,6 @@ it("returns to the editor as soon as a model is selected, before the update fini
     const patches = (await readFixtureLog(fixture.logPath)).filter(
       (entry) => entry.method === "patchSession",
     );
-    console.log("[picker-selection-frame] " + JSON.stringify({ rows, patches }));
     expect(patches).toHaveLength(1);
     expect(rows.some((row) => row.trimStart().startsWith("search:"))).toBe(false);
 
@@ -98,11 +97,8 @@ it.each(
       const prompt = command === "/sessions" ? "Filter:" : "search:";
       await waitForRows((rows) => rows.some((row) => row.trimStart().startsWith(prompt)));
       await fixture.run.write("missing", { delay: false });
-      const filtered = await waitForRows((rows) =>
+      await waitForRows((rows) =>
         rows.some((row) => row.includes(prompt) && row.includes("missing")),
-      );
-      console.log(
-        "[picker-frame] " + JSON.stringify({ command, name, phase: "filtered", rows: filtered }),
       );
       await fixture.run.write(key, { delay: false });
       if (key === "\x1b") {
@@ -118,10 +114,6 @@ it.each(
         await fixture.run.write("Picker", { delay: false });
         const cleared = await waitForRows((rows) =>
           rows.some((row) => row.includes(prompt) && row.includes("Picker")),
-        );
-        console.log(
-          "[picker-frame] " +
-            JSON.stringify({ command, name, phase: "clear-first", rows: cleared }),
         );
         expect(cleared.some((row) => row.trim() === "Filter: > Picker")).toBe(true);
         expect(cleared.some((row) => row.includes("No match"))).toBe(false);
@@ -142,7 +134,6 @@ it.each(
             (row.includes(prompt) && row.includes(message)),
         ),
       );
-      console.log("[picker-frame] " + JSON.stringify({ command, name, phase: "chat", rows }));
       expect(rows.some((row) => row.includes("PTY_RESPONSE: " + message))).toBe(true);
       expect(rows.some((row) => row.trimStart().startsWith(prompt))).toBe(false);
       expect(

@@ -10,6 +10,15 @@ import type { PtyRun } from "./tui-pty-test-support.js";
 
 const SUBMISSION_SETTLE_MS = 150;
 const SESSION_ROLLOVER_BUSY_MESSAGE = "abort the current run before /new";
+const observedRun = {
+  runId: "run-history",
+  sessionKey: "agent:main:history",
+  timeoutMs: 1_000,
+};
+function chatEvent(state: string, fields = {}) {
+  const { runId, sessionKey } = observedRun;
+  return { event: "chat", payload: { runId, sessionKey, state, ...fields } };
+}
 
 describe("local TUI PTY fixture support", () => {
   it("registers idempotent cleanup before fallible fixture setup", async () => {
@@ -46,59 +55,21 @@ describe("local TUI PTY fixture support", () => {
 
   it("waits for the matching successful terminal event before history observation", async () => {
     const observer = createChatTerminalObserver();
-    const terminal = observer.waitForFinal({
-      runId: "run-history",
-      sessionKey: "agent:main:history",
-      timeoutMs: 1_000,
-    });
-
-    observer.onEvent({
-      event: "chat",
-      payload: {
-        runId: "run-history",
-        sessionKey: "agent:main:history",
-        state: "delta",
-      },
-    });
-    observer.onEvent({
-      event: "chat",
-      payload: {
-        runId: "run-other",
-        sessionKey: "agent:main:history",
-        state: "final",
-      },
-    });
-    observer.onEvent({
-      event: "chat",
-      payload: {
-        runId: "run-history",
-        sessionKey: "agent:main:history",
-        state: "final",
-      },
-    });
+    const terminal = observer.waitForFinal(observedRun);
+    observer.onEvent(chatEvent("delta"));
+    observer.onEvent(chatEvent("final", { runId: "run-other" }));
+    observer.onEvent(chatEvent("final"));
 
     await expect(terminal).resolves.toMatchObject({ state: "final" });
   });
 
   it("fails promptly when the observed chat run terminates with an error", async () => {
     const observer = createChatTerminalObserver();
-    observer.onEvent({
-      event: "chat",
-      payload: {
-        errorMessage: "provider failed",
-        runId: "run-history",
-        sessionKey: "agent:main:history",
-        state: "error",
-      },
-    });
+    observer.onEvent(chatEvent("error", { errorMessage: "provider failed" }));
 
-    await expect(
-      observer.waitForFinal({
-        runId: "run-history",
-        sessionKey: "agent:main:history",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow("chat run run-history ended as error: provider failed");
+    await expect(observer.waitForFinal(observedRun)).rejects.toThrow(
+      "chat run run-history ended as error: provider failed",
+    );
   });
 
   it("owns late fixture startup without swallowing cleanup failures", async () => {

@@ -41,7 +41,7 @@ it(
         OUTPUT_TIMEOUT_MS,
       );
       await fixture.run.write("  ordinary input  \r", { delay: false });
-      const rows = await waitForSynchronizedFrameRows(
+      await waitForSynchronizedFrameRows(
         fixture.run,
         (frame) => frame.some((row) => row.includes("PTY_RESPONSE: ordinary input")),
         OUTPUT_TIMEOUT_MS,
@@ -57,7 +57,6 @@ it(
           payload: expect.objectContaining({ message: "ordinary input" }),
         }),
       ]);
-      console.info("[behavior-evidence] tui-multiline-exit", JSON.stringify({ rows, sends }));
       await fixture.run.write("/exit\r", { delay: false });
       expect((await fixture.run.waitForExit()).exitCode).toBe(0);
     } finally {
@@ -161,15 +160,6 @@ describe.each([
         if (nativePaste) {
           await run.waitForOutput("line-10");
         }
-        console.info(
-          "[behavior-evidence] tui-reset-transition",
-          JSON.stringify({
-            terminal: "real PTY",
-            overlappingInputPreserved: true,
-            resetCompleted: true,
-            preservedInputDelivered: true,
-          }),
-        );
       } finally {
         await run.forceKill();
         await run.dispose();
