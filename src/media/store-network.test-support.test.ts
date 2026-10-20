@@ -12,21 +12,21 @@ type RemoteMediaOptions = Parameters<SaveRemoteMedia>[0];
 
 afterAll(disposeStoreRemoteFixtures);
 
-function captureSave() {
+function captureSave(overrides: Partial<RemoteMediaOptions> = {}) {
   const result = { id: "fixture.bin", path: "/fixture/fixture.bin", size: 7 };
   const save = vi.fn<SaveRemoteMedia>(async () => result);
-  return { save, wrapped: wrapStoreSaveRemoteMedia(save), result };
+  const options: RemoteMediaOptions = { url: "http://127.0.0.1:43123/fixture.bin", ...overrides };
+  return { save, wrapped: wrapStoreSaveRemoteMedia(save), result, options };
 }
 
 describe("store remote fixture routing", () => {
   it("routes only the exact active URL and preserves outside and unmatched option identities", async () => {
-    const { save, wrapped, result } = captureSave();
-    const options: RemoteMediaOptions = {
+    const { save, wrapped, result, options } = captureSave({
       url: "http://127.0.0.1:43123/fixture.bin?case=one",
       subdir: "fixture",
       maxBytes: 32,
       requestInit: { headers: { Accept: "application/octet-stream" } },
-    };
+    });
     expect(await wrapped(options)).toBe(result);
     expect(save.mock.calls[0]?.[0]).toBe(options);
     const matched = vi.fn();
@@ -55,8 +55,7 @@ describe("store remote fixture routing", () => {
   });
 
   it("retires routing for a delayed descendant after the owning operation settles", async () => {
-    const { save, wrapped } = captureSave();
-    const options = { url: "http://127.0.0.1:43123/fixture.bin" };
+    const { save, wrapped, options } = captureSave();
     const gate = createDeferred();
     let late: ReturnType<SaveRemoteMedia> | undefined;
     await withStoreRemoteFixture({ url: options.url }, async () => {
@@ -71,14 +70,10 @@ describe("store remote fixture routing", () => {
   it.each(["lookup", "policy"] as const)(
     "rejects a matching call with pre-existing %s options before delegation",
     async (kind) => {
-      const { save, wrapped } = captureSave();
+      const { save, wrapped, options } = captureSave(
+        kind === "lookup" ? { lookupFn: async () => [] } : { ssrfPolicy: { allowedOrigins: [] } },
+      );
       const matched = vi.fn();
-      const options: RemoteMediaOptions = {
-        url: "http://127.0.0.1:43123/fixture.bin",
-        ...(kind === "lookup"
-          ? { lookupFn: async () => [] }
-          : { ssrfPolicy: { allowedOrigins: [] } }),
-      };
       await withStoreRemoteFixture({ url: options.url, onMatch: matched }, async () => {
         expect(() => wrapped(options)).toThrow(
           "Store fixture unexpectedly received an existing routing policy",
@@ -90,8 +85,7 @@ describe("store remote fixture routing", () => {
   );
 
   it("does not route a callback whose async owner was created outside the fixture scope", async () => {
-    const { save, wrapped } = captureSave();
-    const options = { url: "http://127.0.0.1:43123/fixture.bin" };
+    const { save, wrapped, options } = captureSave();
     const externalOwner = new AsyncResource("outside-store-fixture");
     try {
       await withStoreRemoteFixture({ url: options.url }, async () => {
@@ -104,8 +98,7 @@ describe("store remote fixture routing", () => {
   });
 
   it("preserves a failed operation and leaves later default requests unmodified", async () => {
-    const { save, wrapped } = captureSave();
-    const options = { url: "http://127.0.0.1:43123/fixture.bin" };
+    const { save, wrapped, options } = captureSave();
     const failure = new Error("fixture operation failed");
     await expect(
       withStoreRemoteFixture({ url: options.url }, async () => {
