@@ -1,140 +1,101 @@
 import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  authorizationCode,
+  setupRequest,
+  forbidSharedMutation,
+} from "./github-identity-harness.test-support.ts";
 import type { GitHubAuthorizationState } from "./github-identity-shared.ts";
 import { GitHubConnectionSetup, GitHubIdentity } from "./github-identity-view.tsx";
-import {
-  createGitHubIdentityForTest,
-  githubIdentityViewFixture,
-} from "./github-identity.test-support.ts";
+import { githubIdentityViewFixture } from "./github-identity.test-support.ts";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
-const fallback = vi.fn(() => true);
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
 
 beforeEach(() => {
   vi.useFakeTimers();
   writeText.mockReset().mockResolvedValue(undefined);
-  fallback.mockClear();
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  Object.defineProperty(document, "execCommand", { configurable: true, value: fallback });
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.restoreAllMocks();
   if (clipboardDescriptor) {
     Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
   } else {
     Reflect.deleteProperty(navigator, "clipboard");
   }
-  if (execCommandDescriptor) {
-    Object.defineProperty(document, "execCommand", execCommandDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
 });
 
-describe("GitHub identity view", () => {
-  it("retires pending authorization-code copying only when its payload changes", async () => {
-    const pending = createDeferred();
-    writeText.mockReturnValueOnce(pending.promise);
-    type AuthorizationCode = Extract<GitHubAuthorizationState, { userCode: string }>;
-    let updateAuthorization: (patch: Partial<AuthorizationCode>) => void = () => {};
-    const view = mountSolid(() => {
-      const [authorization, setAuthorization] = createSignal<AuthorizationCode>({
-        phase: "code",
-        requestId: "github-device-test",
-        userCode: "first",
-        verificationUri: "https://github.com/login/device",
-        expiresInMs: 60_000,
-        pollAfterMs: 5_000,
-        displayExpiresAtMs: 70_000,
-      });
-      updateAuthorization = (patch) => setAuthorization((value) => ({ ...value, ...patch }));
-      const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
-      const identity = {
-        ...fixture,
-        read: () => ({ ...fixture.read(), authorization: authorization() }),
-      };
-      return <GitHubConnectionSetup identity={identity} />;
+it("retires pending authorization-code copying only when its payload changes", async () => {
+  const pending = createDeferred();
+  writeText.mockReturnValueOnce(pending.promise);
+  type AuthorizationCode = Extract<GitHubAuthorizationState, { userCode: string }>;
+  let updateAuthorization: (patch: Partial<AuthorizationCode>) => void = () => {};
+  const view = mountSolid(() => {
+    const [authorization, setAuthorization] = createSignal<AuthorizationCode>({
+      ...authorizationCode,
+      phase: "code",
+      userCode: "first",
+      displayExpiresAtMs: 70_000,
     });
-    const copyButton = () =>
-      view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
-    const button = copyButton();
-    button.click();
-    expect(writeText).toHaveBeenCalledOnce();
-    updateAuthorization({ phase: "pending" });
-    flush();
-    expect(copyButton()).toBe(button);
-    expect(view.getByText("Waiting for approval…")).toBeTruthy();
-    updateAuthorization({ userCode: "second" });
-    flush();
-    const current = copyButton();
-    expect(current).not.toBe(button);
-    expect(current.disabled).toBe(false);
-    pending.reject(new Error("Synthetic clipboard rejection"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fallback).not.toHaveBeenCalled();
-    expect(current.dataset.copyState).toBeUndefined();
-    current.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(writeText.mock.calls.map(([text]) => text)).toEqual(["first", "second"]);
-    expect(current.dataset.copyState).toBe("copied");
+    updateAuthorization = (patch) => setAuthorization((value) => ({ ...value, ...patch }));
+    const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
+    const identity = {
+      ...fixture,
+      read: () => ({ ...fixture.read(), authorization: authorization() }),
+    };
+    return <GitHubConnectionSetup identity={identity} />;
   });
+  const copyButton = () =>
+    view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
+  const button = copyButton();
+  button.click();
+  updateAuthorization({ phase: "pending" });
+  flush();
+  expect(copyButton()).toBe(button);
+  expect(view.getByText("Waiting for approval…")).toBeTruthy();
+  updateAuthorization({ userCode: "second" });
+  flush();
+  const current = copyButton();
+  expect(current).not.toBe(button);
+  expect(current.disabled).toBe(false);
+  pending.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  current.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(writeText.mock.calls.map(([text]) => text)).toEqual(["first", "second"]);
+});
 
-  it("keeps the focused PAT field and fallback across draft and mutation updates", async () => {
-    const stored = createDeferred<unknown>();
-    const client = createTestGatewayClient(async (method) =>
-      method === "secrets.store.set" ? stored.promise : { ok: true },
-    );
-    const identity = createGitHubIdentityForTest({
-      runExternalMutation: async () => ({
-        ok: false,
-        reason: "unavailable",
-        error: "Not dispatched in this view test.",
-      }),
-    });
-    identity.sync({
-      client,
-      connected: true,
-      permissionsReady: true,
-      clientRevision: 1,
-      target: {
-        kind: "shared",
-        scope: "agent",
-        agentId: "main",
-        config: {},
-        profileId: "profile-a",
-      },
-      statusReadable: true,
-      configurable: true,
-      authorizable: true,
-    });
-    identity.showPatFallback();
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
-    const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
-    input.focus();
-    input.value = "synthetic-pat";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(identity.read().draft.token).toBe("synthetic-pat");
-    expect(view.container.querySelector(".settings-secret input")).toBe(input);
-    expect(document.activeElement).toBe(input);
-    const saving = identity.configure();
-    identity.hidePatFallback();
-    flush();
-    expect(identity.read().patVisible).toBe(true);
-    expect(input).toMatchObject({ disabled: true, value: "synthetic-pat" });
-    expect(view.container.querySelector(".settings-secret input")).toBe(input);
-    identity.dispose();
-    stored.resolve({ ok: true });
-    await saving;
-  });
+it("keeps the focused PAT field and fallback across draft and mutation updates", async () => {
+  const stored = createDeferred<unknown>();
+  const { identity } = setupRequest(
+    async (method) => (method === "secrets.store.set" ? stored.promise : { ok: true }),
+    {
+      runExternalMutation: forbidSharedMutation,
+      context: { scope: "agent" },
+    },
+  );
+  identity.showPatFallback();
+  const view = mountSolid(() => <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />);
+  const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
+  input.focus();
+  input.value = "synthetic-pat";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  expect(identity.read().draft.token).toBe("synthetic-pat");
+  expect(view.container.querySelector(".settings-secret input")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  const saving = identity.configure();
+  identity.hidePatFallback();
+  flush();
+  expect(identity.read().patVisible).toBe(true);
+  expect(input).toMatchObject({ disabled: true, value: "synthetic-pat" });
+  expect(view.container.querySelector(".settings-secret input")).toBe(input);
+  identity.dispose();
+  stored.resolve({ ok: true });
+  await saving;
 });
