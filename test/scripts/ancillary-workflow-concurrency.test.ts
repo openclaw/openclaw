@@ -608,6 +608,15 @@ describe("Auto response admission", () => {
     },
   );
 
+  it("admits a draft-to-ready transition without cancelling earlier label work", async () => {
+    const ready = await admission(workflow, event(100, "ready_for_review"));
+    expect(ready).toMatchObject({
+      group: "Auto response-123",
+      cancel: false,
+      eligibility: { jobs: { "auto-response": true } },
+    });
+  });
+
   it.each(["title", "body", "base"])(
     "admits edited %s inputs without losing relevant label events to unrelated edits",
     async (field) => {

@@ -214,7 +214,7 @@ const maintainerAuthorLabel = "maintainer";
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
 const candidateLabelValues = Object.values(candidateLabels);
-const structuralContextLabelValues = [NEEDS_PR_CONTEXT_LABEL, skillCloseLabel];
+const inferredLabelValues = [...candidateLabelValues, skillCloseLabel];
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
@@ -745,17 +745,18 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     },
     files,
   );
-  const preserveSkillCloseLabel =
-    context.payload.action === "labeled" &&
-    context.payload.label?.name === skillCloseLabel &&
-    !isAutomationActor(context);
-  const staleContextLabels = structuralContextLabelValues.filter(
+  // A human-applied label is an explicit action, even if it was not inferred.
+  const manuallyAppliedLabel =
+    context.payload.action === "labeled" && !isAutomationActor(context)
+      ? context.payload.label?.name
+      : undefined;
+  const staleLabels = inferredLabelValues.filter(
     (label) =>
-      (!preserveSkillCloseLabel || label !== skillCloseLabel) &&
+      label !== manuallyAppliedLabel &&
       labelSet.has(label) &&
       !candidateLabelsToApply.includes(label),
   );
-  await removeLabels(github, context, pullRequest.number, staleContextLabels, labelSet);
+  await removeLabels(github, context, pullRequest.number, staleLabels, labelSet);
   await addMissingLabels(
     github,
     context,
@@ -969,7 +970,18 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     }
   }
 
-  const hasTriggerLabel = labelSet.has(triggerLabel);
+  const isReadyForReview = pullRequest && context.payload.action === "ready_for_review";
+  // App-token label writes emit new webhooks. Reconciliation follow-ups must
+  // stay passive, including before an existing trigger-response is consumed.
+  const isLabelRefreshEvent =
+    pullRequest &&
+    isAutomationActor(context) &&
+    ((["labeled", "unlabeled"].includes(context.payload.action) &&
+      inferredLabelValues.includes(context.payload.label?.name)) ||
+      (context.payload.action === "unlabeled" &&
+        context.payload.label?.name === activePrLimitLabel));
+  const classificationOnly = isReadyForReview || isLabelRefreshEvent;
+  const hasTriggerLabel = labelSet.has(triggerLabel) && !classificationOnly;
   if (hasTriggerLabel) {
     labelSet.delete(triggerLabel);
     try {
@@ -987,12 +999,17 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   }
 
   const isLabelEvent = context.payload.action === "labeled";
-  const eventLabel = context.payload.label?.name ?? "";
   const isPrCandidateEvent =
     pullRequest &&
-    ["opened", "edited", "synchronize", "reopened", "labeled", "unlabeled"].includes(
-      context.payload.action,
-    );
+    [
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+      "labeled",
+      "unlabeled",
+    ].includes(context.payload.action);
   if (!hasTriggerLabel && !isLabelEvent && !isPrCandidateEvent) {
     return;
   }
@@ -1043,10 +1060,8 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
 
     await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
 
-    if (isLabelEvent && eventLabel === skillCloseLabel && isAutomationActor(context)) {
-      core.info(
-        `Skipping duplicate PR auto-response for automation-applied ${skillCloseLabel} on #${pullRequest.number}.`,
-      );
+    // Ready transitions and their label-refresh follow-ups only classify.
+    if (classificationOnly) {
       return;
     }
 
