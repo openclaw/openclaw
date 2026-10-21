@@ -124,6 +124,21 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
+  it("models named Solid lazy consumers without retaining a deleted loader", () => {
+    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsSidebar",
+});`;
+    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
+    );
+    read.mockReturnValue("const SettingsSidebar = null;");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "ShellSettingsSidebar",
+    );
+  });
+
   it("models only Vite runner members consumed by the build", () => {
     const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
   path.join(here, "src/app-route-paths.ts"), options);

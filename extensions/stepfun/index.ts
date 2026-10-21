@@ -79,18 +79,16 @@ function inferRegionFromProfileId(profileId: string | undefined): StepFunRegion 
   return undefined;
 }
 
-async function resolveStepFunCatalog(
-  ctx: ProviderCatalogContext,
-  params: { providerId: string; surface: StepFunSurface },
-) {
-  const profileAuth = ctx.resolveProviderAuth(params.providerId);
-  const auth = profileAuth.apiKey ? profileAuth : ctx.resolveProviderApiKey(params.providerId);
+async function resolveStepFunCatalog(ctx: ProviderCatalogContext, surface: StepFunSurface) {
+  const provider = STEPFUN_SURFACES[surface];
+  const profileAuth = ctx.resolveProviderAuth(provider.providerId);
+  const auth = profileAuth.apiKey ? profileAuth : ctx.resolveProviderApiKey(provider.providerId);
   const apiKey = auth.apiKey;
   if (!apiKey) {
     return null;
   }
 
-  const explicitBaseUrl = trimExplicitBaseUrl(ctx, params.providerId);
+  const explicitBaseUrl = trimExplicitBaseUrl(ctx, provider.providerId);
   const region =
     inferRegionFromBaseUrl(explicitBaseUrl) ??
     inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PROVIDER_ID)) ??
@@ -98,12 +96,11 @@ async function resolveStepFunCatalog(
     inferRegionFromProfileId(auth.profileId);
   // Keep discovery working for legacy/manual auth profiles that resolved a
   // key but do not encode region in the profile id.
-  const provider = STEPFUN_SURFACES[params.surface];
   const baseUrl = explicitBaseUrl ?? provider.baseUrls[region ?? "intl"];
   const providerConfig = provider.buildProvider(baseUrl);
   return await buildOpenAICompatibleLiveProviderCatalog({
     discoveryMode: "strict",
-    providerId: params.providerId,
+    providerId: provider.providerId,
     providerConfig,
     apiKey,
     discoveryApiKey: auth.discoveryApiKey,
@@ -157,8 +154,7 @@ export default definePluginEntry({
         auth: (["cn", "intl"] as const).map((region) => createStepFunApiKeyMethod(surface, region)),
         catalog: {
           order: "paired",
-          run: async (ctx) =>
-            resolveStepFunCatalog(ctx, { providerId: provider.providerId, surface }),
+          run: async (ctx) => resolveStepFunCatalog(ctx, surface),
         },
         staticCatalog: {
           order: "paired",

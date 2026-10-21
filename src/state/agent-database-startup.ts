@@ -19,6 +19,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import {
   AgentDatabaseAdmissionError,
   assertAgentDatabaseAdmitted,
@@ -546,10 +547,10 @@ class AgentDatabaseStartupAdmission {
                     await activation.publishAgent(input);
                     break;
                   } catch (error) {
-                    if (
-                      !(error instanceof AgentDatabaseStartupSupersededError) ||
-                      attempt >= STARTUP_PUBLICATION_ATTEMPTS
-                    ) {
+                    const retryable =
+                      error instanceof AgentDatabaseStartupSupersededError ||
+                      error instanceof AgentDatabaseSchemaAdmissionChangedError;
+                    if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
                       throw error;
                     }
                     log.warn("agent database startup preparation was superseded; retrying", {

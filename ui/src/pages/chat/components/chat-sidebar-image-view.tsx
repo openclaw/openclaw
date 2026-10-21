@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createUniqueId, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, onSettled, Show } from "solid-js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
@@ -6,6 +6,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { readBlobAsDataUrl } from "../../../lib/blob-data-url.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { isAbsolutePath } from "../../new-session/path.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
@@ -29,11 +30,10 @@ export function SidebarImage(props: {
   const id = createUniqueId();
   const [feedback, setFeedback] = createSignal<"copied" | "failed" | null>(null);
   const [imageError, setImageError] = createSignal(false);
-  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  const feedbackTimer = createTimeout(() => setFeedback(null));
   let disposed = false;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
-    clearTimeout(feedbackTimer);
   });
   // Pinning a preview can re-derive its presentation object without changing
   // the file or pixels. Async feedback follows that identity, not the wrapper.
@@ -76,8 +76,7 @@ export function SidebarImage(props: {
       return;
     }
     setFeedback(copied ? "copied" : "failed");
-    clearTimeout(feedbackTimer);
-    feedbackTimer = setTimeout(() => setFeedback(null), copied ? 1500 : 2400);
+    feedbackTimer.schedule(copied ? 1500 : 2400);
   };
   const expand = async () => {
     if (!props.onOpenImage) {

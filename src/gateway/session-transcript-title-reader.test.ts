@@ -345,7 +345,7 @@ describe("session transcript title hydration", () => {
       vi
         .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
         .mock.calls.map(([, options]) => options),
-    ).toEqual([{ maxMessages: 20, offset: 0 }]);
+    ).toEqual([{ maxMessages: 20, offset: 0, readOnly: true }]);
   });
 });
 

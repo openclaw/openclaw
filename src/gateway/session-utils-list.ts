@@ -437,7 +437,7 @@ export function prepareProjectedSessionList(params: {
         projection.physicalPaths,
       )
     : undefined;
-  const presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
+  const { presentation } = prepareSessionRowPublication(projection, now)(client, projectRun);
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
     now,

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createComponent, lazy, Loading } from "solid-js";
+import { lazy, Loading } from "solid-js";
 import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
 
 const Activity = lazy(() => import("./chat-subagent-activity-live.tsx"), {
@@ -7,12 +7,9 @@ const Activity = lazy(() => import("./chat-subagent-activity-live.tsx"), {
 });
 
 export function ChatSubagentActivity(props: SubagentActivityProps & { fallback?: JSX.Element }) {
-  return createComponent(Loading, {
-    get fallback() {
-      return props.fallback;
-    },
-    get children() {
-      return createComponent(Activity, props);
-    },
-  });
+  return (
+    <Loading fallback={props.fallback}>
+      <Activity {...props} />
+    </Loading>
+  );
 }

@@ -331,7 +331,7 @@ function CatalogSection(params: {
               <button
                 type="button"
                 class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
-                onClick={params.onViewAll}
+                onClick={() => params.onViewAll?.()}
               >
                 {t("pluginsPage.viewAllInstalledPlugins")}
               </button>
@@ -471,7 +471,7 @@ function RawResults(props: PluginCatalogResultsProps): JSX.Element {
                 type="button"
                 class="btn btn--sm oc-action oc-action-secondary"
                 disabled={props.loadingMore}
-                onClick={props.onLoadMore}
+                onClick={() => props.onLoadMore()}
               >
                 {t(props.loadingMore ? "pluginsPage.loadingMore" : "pluginsPage.loadMore")}
               </button>

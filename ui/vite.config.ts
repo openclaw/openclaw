@@ -671,6 +671,8 @@ export default function controlUiViteConfig(
   options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
 ): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
+  const polling = process.env.CHOKIDAR_USEPOLLING?.toLowerCase();
+  const usePolling = Boolean(polling && polling !== "false" && polling !== "0");
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
@@ -762,6 +764,8 @@ export default function controlUiViteConfig(
       host: devGateway ? "127.0.0.1" : true,
       port: 5173,
       strictPort: true,
+      // Chokidar selects FSEvents before reading its environment override on macOS.
+      ...(usePolling ? { watch: { usePolling: true } } : {}),
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [

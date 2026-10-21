@@ -63,7 +63,6 @@ type PixVerseEnvelope<T> = {
 
 type PixVerseUploadImageResponse = {
   img_id?: unknown;
-  img_url?: unknown;
 };
 
 type PixVerseVideoCreateResponse = {
@@ -71,7 +70,6 @@ type PixVerseVideoCreateResponse = {
 };
 
 type PixVerseVideoResultResponse = {
-  id?: unknown;
   status?: unknown;
   url?: unknown;
   outputWidth?: unknown;

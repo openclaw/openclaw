@@ -80,7 +80,7 @@ export function AgentsHomeView(props: AgentsHomeProps) {
                 title={t("clawsCatalog.search")}
                 aria-haspopup="dialog"
                 disabled={!props.connected}
-                onClick={props.onOpenCatalog}
+                onClick={() => props.onOpenCatalog()}
               >
                 <Icon name="search" />
               </button>

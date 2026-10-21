@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as binaryDetection from "../../infra/detect-binary.js";
 import type * as Supervisor from "../../process/supervisor/types.js";
 import { runExit } from "./computer.test-support.js";
 import { createManagedLinuxAudio, managedLinuxAudioEnv } from "./managed-linux-audio.js";
@@ -82,15 +83,14 @@ export function createAudioFixture(
     cancelScope: (scope) => inScope(scope).forEach((run) => run.cancel()),
   };
   const env = { PULSE_SERVER: "unix:/unrelated/native", ...managedLinuxAudioEnv(tempDir) };
+  vi.spyOn(binaryDetection, "detectBinary").mockImplementation(
+    async (binary) => binary !== options.missing,
+  );
   const owner = createManagedLinuxAudio({
     supervisor,
     tempDir,
     env,
     assertCurrent() {},
-    runtime: {
-      detectBinary: async (binary) => binary !== options.missing,
-      startupTimeoutMs: 100,
-    },
   });
   return { owner, inputs, runs, env, tempDir, ...events };
 }
