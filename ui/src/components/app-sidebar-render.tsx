@@ -450,11 +450,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
                         return session();
                       },
                       attribution: "owned",
-                      icon: (
-                        <span class="nav-item__icon" aria-hidden="true">
-                          <Icon name="home" />
-                        </span>
-                      ),
+                      icon: <Icon name="home" />,
                     }).leadingIndicator
                   }
                   <SessionRowBadges

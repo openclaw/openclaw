@@ -6,7 +6,6 @@ import {
 } from "../../../sessions/session-controller.lifecycle.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import type { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -118,7 +117,6 @@ export function registerAdmissionDrainControlTests({
         }
       } finally {
         admission.release();
-        swarmSchedulerTesting.reset();
         vi.useRealTimers();
         await pendingKill;
       }
