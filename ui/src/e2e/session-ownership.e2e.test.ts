@@ -212,15 +212,19 @@ suite.define(() => {
       ["unread", { unread: true }],
       ["running", { hasActiveRun: true, status: "running", activeRunIds: ["run-1"] }],
     ];
-    const rows = states.map(([id, state], index) => ({
-      key: `agent:main:${id}`,
-      kind: "direct",
-      label: `Inline ${id} session`,
-      createdActor: patrick,
-      owner: { actor: patrick },
-      updatedAt: 10 - index,
-      ...state,
-    }));
+    const rows = states.map(([id, state], index) =>
+      Object.assign(
+        {
+          key: `agent:main:${id}`,
+          kind: "direct",
+          label: `Inline ${id} session`,
+          createdActor: patrick,
+          owner: { actor: patrick },
+          updatedAt: 10 - index,
+        },
+        state,
+      ),
+    );
     rows.push({
       key: "agent:main:mira",
       kind: "direct",
