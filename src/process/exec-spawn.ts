@@ -39,12 +39,12 @@ export async function waitForCommandProcessGroupExit(
   pid: number,
   isOriginalProcess: () => boolean,
 ): Promise<"exited" | "replaced" | "alive"> {
-  const deadline = Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
+  const deadline = performance.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
   while (isChildProcessTreeAlive({ pid })) {
     if (!isOriginalProcess()) {
       return "replaced";
     }
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (remaining <= 0) {
       return isChildProcessTreeAlive({ pid }) ? "alive" : "exited";
     }
@@ -87,7 +87,7 @@ const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
 
 export function resolveCommandProcessSignal(signal?: AbortSignal): AbortSignal | undefined {
   const inherited = commandProcessScope.getStore()?.signal;
-  return inherited ? AbortSignal.any(signal ? [inherited, signal] : [inherited]) : signal;
+  return inherited && signal ? AbortSignal.any([inherited, signal]) : (inherited ?? signal);
 }
 
 /** Cleanup helpers must outlive cancellation of the commands they are settling. */

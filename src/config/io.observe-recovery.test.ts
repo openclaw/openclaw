@@ -694,25 +694,148 @@ describe("config observe recovery", () => {
     }
   });
 
-  it("restores the exact backup bytes approved by preparation", async () => {
+  it("refuses an ordinary recovery whose backup changes during preparation", async () => {
     const { deps, configPath } = makeDeps(home);
     await seedConfigBackup(configPath, recoverableTelegramConfig);
     const backupPath = `${configPath}.bak`;
-    const approvedRaw = await fsp.readFile(backupPath, "utf-8");
     const replacementRaw = `${JSON.stringify({ gateway: { mode: "remote" } }, null, 2)}\n`;
     const clobbered = await writeClobberedUpdateChannel(configPath);
     const input = { deps, configPath, ...clobbered, prepareBackup: approveRecoveryCandidate };
 
-    await maybeRecoverSuspiciousConfigRead({
-      ...input,
-      prepareBackup: (candidate) => {
-        fs.writeFileSync(backupPath, replacementRaw, "utf-8");
-        return { ok: true, candidate };
-      },
-    });
+    await expect(
+      maybeRecoverSuspiciousConfigRead({
+        ...input,
+        prepareBackup: (candidate) => {
+          fs.writeFileSync(backupPath, replacementRaw, "utf-8");
+          return { ok: true, candidate };
+        },
+      }),
+    ).rejects.toThrow("config recovery source changed since preparation");
 
     await expect(fsp.readFile(backupPath, "utf-8")).resolves.toBe(replacementRaw);
-    await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(approvedRaw);
+    await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+    expect(await listClobberFiles(configPath)).toEqual([]);
+  });
+
+  it.each(["config", "backup"] as const)(
+    "does not overwrite an ordinary recovery source changed during archival: %s",
+    async (source) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+      const changedPath = source === "config" ? configPath : `${configPath}.bak`;
+      const replacementRaw = '{"gateway":{"mode":"remote"}}';
+      const racingDeps = {
+        ...deps,
+        fs: {
+          ...deps.fs,
+          promises: {
+            ...deps.fs.promises,
+            writeFile: async (...args: Parameters<typeof fsp.writeFile>) => {
+              await fsp.writeFile(...args);
+              if (typeof args[0] === "string" && args[0].includes(".clobbered.")) {
+                await fsp.writeFile(changedPath, replacementRaw);
+              }
+            },
+          },
+        },
+      };
+      const result = await maybeRecoverSuspiciousConfigRead({
+        deps: racingDeps,
+        configPath,
+        ...clobbered,
+        prepareBackup: approveRecoveryCandidate,
+      });
+      expect(result).toEqual(clobbered);
+      expect(await fsp.readFile(configPath, "utf8")).toBe(
+        source === "config" ? replacementRaw : clobbered.raw,
+      );
+      expect(await fsp.readFile(changedPath, "utf8")).toBe(replacementRaw);
+      const archived = await listClobberFiles(configPath);
+      expect(archived).toHaveLength(1);
+      expect(await fsp.readFile(path.join(path.dirname(configPath), archived[0]!), "utf8")).toBe(
+        clobbered.raw,
+      );
+      expectWarnContaining(warn, "config recovery source changed since preparation");
+    },
+  );
+
+  it.each(["config", "last-good"] as const)(
+    "refuses last-good source changes during archival: %s",
+    async (source) => {
+      const { deps, configPath } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, recoverableCoreConfig);
+      expect(await promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot })).toBe(true);
+      const brokenRaw = "{ gateway: { mode: 123 } }";
+      await fsp.writeFile(configPath, brokenRaw);
+      const changedPath =
+        source === "config" ? configPath : resolveLastKnownGoodConfigPath(configPath);
+      const replacementRaw = '{"gateway":{"mode":"remote"}}';
+      const racingDeps = {
+        ...deps,
+        fs: {
+          ...deps.fs,
+          promises: {
+            ...deps.fs.promises,
+            writeFile: async (...args: Parameters<typeof fsp.writeFile>) => {
+              await fsp.writeFile(...args);
+              if (typeof args[0] === "string" && args[0].includes(".clobbered.")) {
+                await fsp.writeFile(changedPath, replacementRaw);
+              }
+            },
+          },
+        },
+      };
+      await expect(
+        recoverConfigFromLastKnownGoodCore({
+          deps: racingDeps,
+          snapshot: invalidSnapshot(snapshot, brokenRaw),
+          reason: "test-invalid-config",
+          prepareCandidate: approveRecoveryCandidate,
+        }),
+      ).rejects.toThrow("config recovery source changed since preparation");
+      expect(await fsp.readFile(configPath, "utf8")).toBe(
+        source === "config" ? replacementRaw : brokenRaw,
+      );
+      expect(await fsp.readFile(changedPath, "utf8")).toBe(replacementRaw);
+      const archived = await listClobberFiles(configPath);
+      expect(archived).toHaveLength(1);
+      expect(await fsp.readFile(path.join(path.dirname(configPath), archived[0]!), "utf8")).toBe(
+        brokenRaw,
+      );
+    },
+  );
+
+  it("does not promote an older snapshot over the last-good copy after its source changes", async () => {
+    const { deps, configPath } = makeDeps(home);
+    const original = await makeSnapshot(configPath, recoverableCoreConfig);
+    expect(await promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: original })).toBe(true);
+    const selected = await makeSnapshot(configPath, { gateway: { mode: "remote" } });
+    const replacementRaw = '{"gateway":{"mode":"local","port":18721}}';
+    const racingDeps = {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        promises: {
+          ...deps.fs.promises,
+          stat: (async (...args: Parameters<typeof fsp.stat>) => {
+            const stat = await fsp.stat(...args);
+            if (args[0] === configPath) {
+              await fsp.writeFile(configPath, replacementRaw);
+            }
+            return stat;
+          }) as typeof fsp.stat,
+        },
+      },
+    };
+    await expect(
+      promoteConfigSnapshotToLastKnownGoodCore({ deps: racingDeps, snapshot: selected }),
+    ).rejects.toThrow("config recovery source changed since preparation");
+    expect(await fsp.readFile(configPath, "utf8")).toBe(replacementRaw);
+    expect(await fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf8")).toBe(
+      original.raw,
+    );
+    expect(await listClobberFiles(configPath)).toEqual([]);
   });
 
   it.each([

@@ -8,7 +8,7 @@ import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
   projectMessageMedia,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import "../../../test-helpers/load-styles.ts";
@@ -72,7 +72,7 @@ function unmountImages(container: HTMLElement) {
 
 afterEach(() => {
   for (const subscriber of subscribers.splice(0)) {
-    releaseChatMediaResourceSubscriber(subscriber);
+    releaseChatMediaResourceOwner(subscriber);
   }
   cleanupSolid();
   views.clear();
@@ -201,7 +201,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     }));
     const onOpenImage = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
     const draw = () =>
-      drawImages(container, { images, options: { onRequestUpdate: draw, onOpenImage } });
+      drawImages(container, { images, options: { mediaOwner: draw, onOpenImage } });
     subscribers.push(draw);
     draw();
     await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
@@ -320,7 +320,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const draw = () =>
         drawImages(container, {
           images,
-          options: { sessionKey: "image-proof", agentId: "main", onRequestUpdate: draw },
+          options: { sessionKey: "image-proof", agentId: "main", mediaOwner: draw },
           nextMessage: true,
         });
       subscribers.push(draw);
@@ -538,7 +538,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const draw = () =>
         drawImages(container, {
           images,
-          options: { sessionKey: "unavailable-geometry", agentId: "main", onRequestUpdate: draw },
+          options: { sessionKey: "unavailable-geometry", agentId: "main", mediaOwner: draw },
           role,
           withDocument,
           nextMessage: true,

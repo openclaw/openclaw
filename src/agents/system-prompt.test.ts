@@ -141,6 +141,52 @@ describe("buildAgentSystemPrompt", () => {
       ["## Documentation", "Docs: /tmp/openclaw/docs", "Source: /tmp/openclaw"],
     ],
     [
+      "points can't-do claims at session capabilities and the docs index",
+      { toolNames: ["read", "session_status", "web_fetch"] },
+      [
+        "Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; check `session_status` with `capabilities=true`, then the docs index https://docs.openclaw.ai/llms.txt before saying OpenClaw can't.",
+      ],
+    ],
+    [
+      "uses local docs instead of the remote index without a web tool",
+      {
+        docsPath: "/workspace/docs",
+        toolNames: ["read", "session_status"],
+        sandboxInfo: { enabled: true },
+      },
+      [
+        "check `session_status` with `capabilities=true`, then the local docs before saying OpenClaw can't.",
+      ],
+      ["llms.txt"],
+    ],
+    [
+      "never names an unavailable capability route in can't-do guidance",
+      { toolNames: ["read"], sandboxInfo: { enabled: true } },
+      [
+        "Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; say what you could not check.",
+      ],
+      ["capabilities=true", "llms.txt"],
+    ],
+    [
+      "acknowledges unavailable docs retrieval in a sandbox without web tools",
+      { toolNames: ["read"], sandboxInfo: { enabled: true } },
+      [
+        "Docs: https://docs.openclaw.ai",
+        "docs could not be checked; mark recalled behavior as unverified",
+      ],
+      ["docs mirror first when web exists", "inspect GitHub source"],
+    ],
+    [
+      "keeps mirror guidance when a sandbox can discover a web tool",
+      {
+        toolNames: ["read"],
+        capabilityToolNames: ["web_fetch"],
+        sandboxInfo: { enabled: true },
+      },
+      ["Docs: https://docs.openclaw.ai", "docs mirror first when web exists"],
+      ["mark recalled behavior as unverified"],
+    ],
+    [
       "uses limited bootstrap wording for constrained user-facing runs",
       { bootstrapMode: "limited" },
       ["## Bootstrap Pending", "cannot safely finish full BOOTSTRAP.md"],
@@ -371,11 +417,11 @@ describe("buildAgentSystemPrompt", () => {
       ["## Directory Roles", "User can toggle with /elevated on|off|ask|full."],
     ],
   ])("%s", expectPromptCase);
-  it("offers routine promotion only when the automations tool is available", () => {
+  it("conditions routine promotion on the available automation actions", () => {
     const withAutomations = renderPrompt({ toolNames: ["automations"] });
     const withoutAutomations = renderPrompt({ toolNames: ["read"] });
 
-    expect(withAutomations).toContain("asked a 3rd time");
+    expect(withAutomations).toContain("currently exposes list, add, run, and remove:");
     expect(withoutAutomations).not.toContain("asked a 3rd time");
   });
 
@@ -491,10 +537,9 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("filters invalid paths and renders typed project context in canonical order", () => {
+  it("filters blank paths and renders typed project context in canonical order", () => {
     const prompt = renderPrompt({
       contextFiles: [
-        { path: undefined as unknown as string, content: "Missing path" },
         { path: "   ", content: "Blank path" },
         { path: "MEMORY.md", content: "Durable facts" },
         { path: "dir\\SOUL.md", content: "Windows persona" },
@@ -507,7 +552,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("SOUL.md: persona/tone.");
     expect(prompt).toContain("MEMORY.md: durable");
     expect(prompt).toContain("Durable facts");
-    expect(prompt).not.toContain("Missing path");
     expect(prompt).not.toContain("Blank path");
     expect(prompt.indexOf("## AGENTS.md")).toBeLessThan(prompt.indexOf("## ./SOUL.md"));
     expect(prompt.indexOf("## ./SOUL.md")).toBeLessThan(prompt.indexOf("## MEMORY.md"));
@@ -566,6 +610,58 @@ describe("buildAgentSystemPrompt", () => {
     expect(withSend).toContain("follow up via `sessions_send`");
     expect(withoutSend).not.toContain("follow up via `sessions_send`");
     expect(minimal).not.toContain("## Delegation");
+  });
+
+  it("requires in-turn child collection for isolated automation without sessions_yield", () => {
+    for (const overrides of [
+      {},
+      { subagentDelegationMode: "prefer" as const },
+      { promptMode: "minimal" as const },
+      { codeModeActive: true, toolNames: ["code_execution"] },
+    ]) {
+      const prompt = renderPrompt({
+        toolNames: ["sessions_spawn", "agents_wait"],
+        capabilityToolNames: ["sessions_spawn", "agents_wait"],
+        runtimeInfo: { sessionKey: "agent:main:cron:nightly-job:run:run-1" },
+        ...overrides,
+      });
+
+      expect(prompt).toContain("child completion will not resume this turn");
+      expect(prompt).toMatch(/collect=true.*agents_wait.*in this turn/);
+      expect(prompt).toContain("Fire-and-forget is valid when child output is the deliverable");
+      expect(prompt).not.toContain("wait for runtime completion events");
+      expect(prompt).not.toContain("Announced completion is push-based");
+      expect(prompt).not.toContain("Announcing spawns notify when the run ends");
+      const coordinationSection = prompt.split(
+        overrides.subagentDelegationMode === "prefer" ? "## Delegation" : "## Messaging",
+      )[1];
+      if (overrides.promptMode !== "minimal") {
+        expect(coordinationSection).toContain("child completion will not resume this turn");
+      }
+    }
+    const withoutCollection = renderPrompt({
+      toolNames: ["sessions_spawn"],
+      runtimeInfo: { sessionKey: "agent:main:cron:nightly-job" },
+    });
+    expect(withoutCollection).toContain("complete that work directly in this turn");
+    expect(withoutCollection).not.toContain("`agents_wait`");
+    expect(withoutCollection).not.toContain("wait for runtime completion events");
+  });
+
+  it("preserves completion-event guidance for interactive sessions without sessions_yield", () => {
+    for (const subagentDelegationMode of ["suggest", "prefer"] as const) {
+      const prompt = renderPrompt({
+        toolNames: ["sessions_spawn", "agents_wait"],
+        runtimeInfo: { sessionKey: "agent:main:main" },
+        subagentDelegationMode,
+      });
+
+      expect(prompt).toContain("wait for runtime completion events; never busy-poll.");
+      expect(prompt).not.toContain("child completion will not resume this turn");
+      expect(prompt.includes("Announced completion is push-based")).toBe(
+        subagentDelegationMode === "prefer",
+      );
+    }
   });
 
   it("adds collapsible-details guidance only for supported full prompts", () => {

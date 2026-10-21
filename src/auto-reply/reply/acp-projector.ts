@@ -40,19 +40,6 @@ type BufferedToolDelivery = {
   meta?: AcpDispatchDeliveryMeta;
 };
 
-function shouldInsertSeparator(params: {
-  separator: " " | "\n\n";
-  previousTail: string | undefined;
-  nextText: string;
-}): boolean {
-  if (!params.previousTail || /^\s/.test(params.nextText)) {
-    return false;
-  }
-  return params.separator === " "
-    ? !/\s$/.test(params.previousTail)
-    : !params.previousTail.endsWith("\n");
-}
-
 function shouldFlushLiveBufferOnBoundary(text: string): boolean {
   return (
     text.length >= ACP_LIVE_HARD_FLUSH_CHARS ||
@@ -176,9 +163,6 @@ export function createAcpReplyProjector(params: {
     clearLiveIdleTimer();
     liveIdleTimer = setTimeout(() => {
       flushLiveBuffer(true);
-      if (bufferedText) {
-        scheduleLiveIdleFlush();
-      }
     }, liveIdleFlushMs);
   };
 
@@ -311,11 +295,11 @@ export function createAcpReplyProjector(params: {
       }
       if (
         pendingHiddenBoundary &&
-        shouldInsertSeparator({
-          separator: hiddenBoundarySeparator,
-          previousTail: lastVisibleOutputTail,
-          nextText: text,
-        })
+        lastVisibleOutputTail &&
+        !/^\s/.test(text) &&
+        (hiddenBoundarySeparator === " "
+          ? !/\s$/.test(lastVisibleOutputTail)
+          : !lastVisibleOutputTail.endsWith("\n"))
       ) {
         text = `${hiddenBoundarySeparator}${text}`;
       }
@@ -355,7 +339,7 @@ export function createAcpReplyProjector(params: {
       }
       if (event.tag === "usage_update" && settings.repeatSuppression) {
         const usageTuple =
-          typeof event.used === "number" && typeof event.size === "number"
+          event.used !== undefined && event.size !== undefined
             ? `${event.used}/${event.size}`
             : event.text.trim();
         if (usageTuple === lastUsageTuple) {

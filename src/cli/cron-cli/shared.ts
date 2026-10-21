@@ -27,7 +27,7 @@ import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/pa
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
-import { formatLookupMiss } from "../error-format.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   ExpectedCliError,
   formatCliOperatorError,
@@ -344,7 +344,7 @@ export function createCronAmbiguousNameError(jobs: readonly CronJob[]): CronCliE
         name: job.name,
         // Event command text is unnecessary for choosing a job and can contain credentials.
         schedule:
-          job.schedule.kind === "on-exit" || job.schedule.kind === "stream"
+          job.schedule?.kind === "on-exit" || job.schedule?.kind === "stream"
             ? job.schedule.kind
             : formatSchedule(job.schedule, job.trigger !== undefined),
         enabled: job.enabled,
@@ -366,12 +366,7 @@ function formatCronJobMatches(matches: readonly CronCliJobMatch[]): string {
 }
 
 export const formatCronLookupMiss = (jobId: string) =>
-  formatLookupMiss({
-    noun: "Automation",
-    value: sanitizeTerminalText(jobId),
-    listCommand: "openclaw cron list",
-    valueLabel: "automation id",
-  });
+  `Automation not found: ${sanitizeTerminalText(jobId)}. Run \`${formatCliCommand("openclaw cron list")}\` to see recent automation ids.`;
 
 // A blank id usually comes from an empty shell variable; reject it here instead of
 // letting the Gateway answer with a raw params-schema error.
@@ -605,6 +600,27 @@ export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeli
   );
 }
 
+function formatCronPolicies(job: CronJob): string {
+  const active = job.activeHours;
+  const skipEmpty = job.payload?.kind === "agentTurn" ? job.payload.skipIfScratchEmpty : undefined;
+  const includeReasoning =
+    job.payload?.kind === "agentTurn" ? job.payload.includeReasoning : undefined;
+  return sanitizeTerminalText(
+    [
+      active
+        ? `active hours=${active.start}-${active.end} @ ${active.timezone ?? "user"}`
+        : undefined,
+      job.idleOnly !== undefined ? `idle only=${job.idleOnly}` : undefined,
+      job.delivery?.target ? `delivery target=${job.delivery.target}` : undefined,
+      job.delivery?.directPolicy ? `direct policy=${job.delivery.directPolicy}` : undefined,
+      skipEmpty !== undefined ? `skip if scratch empty=${skipEmpty}` : undefined,
+      includeReasoning !== undefined ? `include reasoning=${includeReasoning}` : undefined,
+    ]
+      .filter((value) => value !== undefined)
+      .join("; "),
+  );
+}
+
 export function printCronList(
   jobs: Array<CronJob & { effectiveAgentId?: string | null }>,
   runtime: RuntimeEnv = defaultRuntime,
@@ -650,6 +666,10 @@ export function printCronList(
     }).join(" ");
 
     lines.push(line.trimEnd());
+    const policies = formatCronPolicies(job);
+    if (policies) {
+      lines.push(`  policies: ${policies}`);
+    }
   }
 
   runtime.log(lines.join("\n"));
@@ -661,6 +681,8 @@ export function printCronShow(
   opts?: { deliveryPreview?: CronDeliveryPreview },
 ) {
   const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
+  const state = job.state ?? {};
+  const model = job.payload?.kind === "agentTurn" ? job.payload.model : undefined;
   const showValue = (value: unknown) => sanitizeTerminalText(stringifyCell(value));
   runtime.log(`id: ${showValue(job.id)}`);
   runtime.log(`declaration: ${showValue(job.declarationKey)}`);
@@ -670,27 +692,26 @@ export function printCronShow(
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
   runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
+  runtime.log(`policies: ${formatCronPolicies(job) || "-"}`);
   if (job.schedule?.kind === "stream") {
-    runtime.log(`stream status: ${showValue(job.state.streamStatus)}`);
-    runtime.log(`stream error: ${showValue(job.state.streamError)}`);
+    runtime.log(`stream status: ${showValue(state.streamStatus)}`);
+    runtime.log(`stream error: ${showValue(state.streamError)}`);
   }
   runtime.log(
-    `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
+    `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${state.triggerEvalCount ?? 0}; last eval=${formatRelative(state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );
   runtime.log(`session: ${showValue(job.sessionTarget)}`);
   runtime.log(`agent: ${showValue(job.agentId)}`);
-  runtime.log(
-    `model: ${showValue(job.payload.kind === "agentTurn" ? job.payload.model : undefined)}`,
-  );
+  runtime.log(`model: ${showValue(model)}`);
   runtime.log(`delivery: ${showValue(preview.label)} (${showValue(preview.detail)})`);
-  runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
-  runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
+  runtime.log(`next: ${formatRelative(state.nextRunAtMs, Date.now())}`);
+  runtime.log(`last: ${formatRelative(state.lastRunAtMs, Date.now())}`);
   runtime.log(`status: ${showValue(formatCronStatusForDisplay(job).label)}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.
-  runtime.log(`last error: ${showValue(job.state.lastError)}`);
-  runtime.log(`last delivery: ${showValue(job.state.lastDeliveryStatus)}`);
-  runtime.log(`last delivery suppression: ${showValue(job.state.deliverySuppressionReason)}`);
-  runtime.log(`last delivery error: ${showValue(job.state.lastDeliveryError)}`);
-  runtime.log(`diagnostic: ${showValue(job.state.lastDiagnosticSummary)}`);
+  runtime.log(`last error: ${showValue(state.lastError)}`);
+  runtime.log(`last delivery: ${showValue(state.lastDeliveryStatus)}`);
+  runtime.log(`last delivery suppression: ${showValue(state.deliverySuppressionReason)}`);
+  runtime.log(`last delivery error: ${showValue(state.lastDeliveryError)}`);
+  runtime.log(`diagnostic: ${showValue(state.lastDiagnosticSummary)}`);
 }

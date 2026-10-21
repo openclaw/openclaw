@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 
-FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+FROM node:24-trixie-slim@sha256:7f486cabe892bff8fef04c0f7da8dba84a560be3e4e2740b7a86afc57ebec315
 
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
@@ -19,6 +19,7 @@ COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
+COPY cli-parent-lifetime.mjs ./
 COPY node-runtime-env.mjs ./
 COPY node-compile-cache.mjs ./
 COPY cli-invocation.mjs cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./

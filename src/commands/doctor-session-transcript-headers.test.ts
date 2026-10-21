@@ -390,41 +390,36 @@ describe("doctor SQLite session transcript header repair", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it.each([true])(
-    "uses the logical agent workspace without a spawned cwd (shared store: %s)",
-    async (shared) => {
-      if (shared) {
-        const storePath = state.path("shared.sqlite");
-        transcriptDatabaseOptions = { agentId: "alpha", env: state.env, path: storePath };
-        openOpenClawAgentDatabase(transcriptDatabaseOptions);
-        cfg = {
-          agents: { entries: { beta: { workspace: state.workspaceDir } } },
-          session: { store: storePath },
-        };
-        scope = { ...scope, agentId: "beta", sessionKey: `agent:beta:${SESSION_ID}`, storePath };
-      }
-      await seedTranscript(
-        [
-          {
-            type: "message",
-            id: "user-1",
-            parentId: null,
-            timestamp: "2026-07-15T21:23:03.698Z",
-            message: { role: "user", content: "hello" },
-          },
-        ],
-        {},
-      );
+  it("uses the logical agent workspace in a shared store without a spawned cwd", async () => {
+    const storePath = state.path("shared.sqlite");
+    transcriptDatabaseOptions = { agentId: "alpha", env: state.env, path: storePath };
+    openOpenClawAgentDatabase(transcriptDatabaseOptions);
+    cfg = {
+      agents: { entries: { beta: { workspace: state.workspaceDir } } },
+      session: { store: storePath },
+    };
+    scope = { ...scope, agentId: "beta", sessionKey: `agent:beta:${SESSION_ID}`, storePath };
+    await seedTranscript(
+      [
+        {
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-07-15T21:23:03.698Z",
+          message: { role: "user", content: "hello" },
+        },
+      ],
+      {},
+    );
 
-      await expect(
-        noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
-      ).resolves.toEqual({ found: 1, repaired: 1 });
+    await expect(
+      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
+    ).resolves.toEqual({ found: 1, repaired: 1 });
 
-      const database = openOpenClawAgentDatabase(transcriptDatabaseOptions);
-      const header = JSON.parse(readTranscriptStorageRows(database, SESSION_ID)[0]!.eventJson);
-      expect(header).toMatchObject({ type: "session", cwd: state.workspaceDir });
-    },
-  );
+    const database = openOpenClawAgentDatabase(transcriptDatabaseOptions);
+    const header = JSON.parse(readTranscriptStorageRows(database, SESSION_ID)[0]!.eventJson);
+    expect(header).toMatchObject({ type: "session", cwd: state.workspaceDir });
+  });
 
   it("does not borrow the spawned cwd from a newer session on the same key", async () => {
     await seedTranscript([

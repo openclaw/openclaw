@@ -118,13 +118,15 @@ export function resolveUtilityModelRefForAgent(params: {
   const provider =
     params.primaryProvider?.trim() ||
     resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId }).provider;
-  return resolveAutomaticUtilityModelRef({
-    cfg: params.cfg,
-    primaryProvider: provider,
-    primaryModelRef:
-      params.primaryModelRef?.trim() || resolveNativeModelPrimary(params.cfg, params.agentId),
-    metadataSnapshot: params.metadataSnapshot,
-  });
+  return (
+    resolveAutomaticUtilityModelRef({
+      cfg: params.cfg,
+      primaryProvider: provider,
+      primaryModelRef:
+        params.primaryModelRef?.trim() || resolveNativeModelPrimary(params.cfg, params.agentId),
+      metadataSnapshot: params.metadataSnapshot,
+    }) ?? setting.fallbacks.find((ref) => ref.trim())?.trim()
+  );
 }
 
 /** Candidate runtime for an automatic utility model; preparation checks auth availability. */

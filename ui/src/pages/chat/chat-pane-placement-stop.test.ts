@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
@@ -27,6 +28,7 @@ import {
   offlineDeviceSession,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { ChatMachine } from "./components/chat-machine.tsx";
 import { ChatPanePlacement } from "./components/chat-pane-placement.tsx";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
@@ -89,6 +91,14 @@ function startupSession(placement: GatewaySessionRow["placement"]): GatewaySessi
     updatedAt: 1,
     placement,
   };
+}
+
+function startReclaim(pane: ReturnType<typeof createTestChatPane>["pane"], row: GatewaySessionRow) {
+  const state = pane.state!;
+  state.sessionKey = row.key;
+  state.currentSessionId = row.sessionId ?? null;
+  state.sessionsResult = { ...createSessionsListResult(), sessions: [row] };
+  return pane.changeHeaderPlacement(row, "reclaim");
 }
 
 describe("chat pane startup worker copy", () => {
@@ -176,7 +186,7 @@ describe("chat pane worker stop", () => {
             session,
             placementStartupStatus: startup,
             onPlacementReclaim: () => {
-              reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
+              reclaim = dialogs.track(startReclaim(pane, session));
             },
           }),
         { container },
@@ -199,9 +209,11 @@ describe("chat pane worker stop", () => {
       stop?.click();
       const actions = await waitForConfirmDialogActions();
       expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-        copy.confirmMessage,
+        "This will save workspace changes and stop this session’s worker",
       );
-      expect(actions.querySelector(".btn.danger")?.textContent?.trim()).toBe(copy.confirmLabel);
+      expect(actions.querySelector(".btn.danger [aria-hidden=false]")?.textContent?.trim()).toBe(
+        "Stop worker",
+      );
       answerConfirmDialog(actions, "confirm");
       await reclaim;
       expect(request).toHaveBeenCalledExactlyOnceWith(
@@ -310,15 +322,18 @@ describe("chat pane worker stop", () => {
       ["operator.read", "operator.write"],
     );
 
-    await pane.changeHeaderPlacement({ ...offlineDeviceSession(), hasActiveRun: false }, "reclaim");
+    await startReclaim(pane, { ...offlineDeviceSession(), hasActiveRun: false });
 
     expect(request).not.toHaveBeenCalled();
     expect(document.body.querySelector("dialog[open]")).toBeNull();
   });
 
-  it.each([{ runner: "device", startupPhase: "failed" }] as const)(
-    "reclaims an active $runner placement with conflicting $startupPhase intent after the operator confirms",
-    async ({ runner, startupPhase }) => {
+  it.each([
+    { runner: "device", startupPhase: "failed", refreshThrows: false },
+    { runner: "device", startupPhase: "failed", refreshThrows: true },
+  ] as const)(
+    "reclaims an active $runner placement with conflicting $startupPhase intent after confirmation (refresh throws=$refreshThrows)",
+    async ({ runner, startupPhase, refreshThrows }) => {
       vi.stubGlobal(
         "confirm",
         vi.fn(() => {
@@ -326,7 +341,12 @@ describe("chat pane worker stop", () => {
         }),
       );
       const request = dialogs.mockRequest(async () => ({ ok: true }));
-      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
+      const reconcileMutation = vi.fn(async () => {
+        if (refreshThrows) {
+          throw new Error("refresh failed after stop");
+        }
+        return { status: "refreshed" as const };
+      });
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
         sessions: createSessionCapabilityFixture({ reconcileMutation }),
@@ -346,7 +366,7 @@ describe("chat pane worker stop", () => {
         targetKind: runner === "device" ? "profile" : "device",
       });
 
-      const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
+      const reclaim = dialogs.track(startReclaim(pane, session));
       const actions = await waitForConfirmDialogActions();
       const actionText = actions.textContent;
       const confirmation = document.body.querySelector("openclaw-modal-dialog")?.textContent;
@@ -355,8 +375,9 @@ describe("chat pane worker stop", () => {
       answerConfirmDialog(actions, "confirm");
       await reclaim;
 
-      expect(actionText).toContain(runner === "device" ? "Stop device worker" : "Stop worker");
-      expect(confirmation).toContain(`Stop the ${runner} worker for "${session.key}"?`);
+      expect(actionText).toContain("Stop worker");
+      expect(confirmation).toContain("Stop worker?");
+      expect(confirmation).toContain("Send a new message to continue.");
       expect(pausesBeforeConfirmation).toBe(0);
       expect(request).toHaveBeenCalledWith(
         "sessions.reclaim",
@@ -373,6 +394,8 @@ describe("chat pane worker stop", () => {
       );
       expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
       expect(reconcileMutation).toHaveBeenCalledWith("main");
+      expect(request).toHaveBeenCalledOnce();
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );
 
@@ -403,7 +426,7 @@ describe("chat pane worker stop", () => {
       targetKind: "device",
     });
 
-    const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
+    const reclaim = dialogs.track(startReclaim(pane, session));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "cancel");
     await reclaim;
@@ -439,7 +462,7 @@ describe("chat pane worker stop", () => {
       targetKind: "device",
     });
 
-    const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
+    const reclaim = dialogs.track(startReclaim(pane, session));
     const actions = await waitForConfirmDialogActions();
     pane.connectionGeneration += 1;
     answerConfirmDialog(actions, "confirm");
@@ -451,13 +474,19 @@ describe("chat pane worker stop", () => {
     expect(state.chatError).toBeNull();
   });
 
-  it("publishes a reclaim failure for the current presentation", async () => {
+  it("retries a failed reclaim from the same dialog", async () => {
+    let calls = 0;
     const request = dialogs.mockRequest(async () => {
-      throw new Error("reclaim failed");
+      if (calls++ === 0) {
+        throw new Error("reclaim failed");
+      }
+      return { ok: true };
     });
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
+      sessions: createSessionCapabilityFixture({
+        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
+      }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
       ["sessions.reclaim"],
@@ -465,13 +494,19 @@ describe("chat pane worker stop", () => {
     );
     const session = activePlacementSession();
 
-    const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
+    const reclaim = dialogs.track(startReclaim(pane, session));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "confirm");
-    await reclaim;
-
+    await vi.waitFor(() => expect(state.lastError).toBe("reclaim failed"));
+    expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    expect(actions.querySelector<HTMLButtonElement>(".btn.danger")?.disabled).toBe(false);
+    expect(request).toHaveBeenCalledOnce();
     expect(state.lastError).toBe("reclaim failed");
     expect(state.chatError).toBe(state.lastError);
+    answerConfirmDialog(actions, "confirm");
+    await reclaim;
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
   it("does not publish a reclaim failure after leaving and returning", async () => {
@@ -488,7 +523,7 @@ describe("chat pane worker stop", () => {
     const session = activePlacementSession();
 
     try {
-      const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
+      const reclaim = dialogs.track(startReclaim(pane, session));
       const actions = await waitForConfirmDialogActions();
       answerConfirmDialog(actions, "confirm");
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
@@ -528,22 +563,38 @@ describe("chat pane worker stop", () => {
     } satisfies GatewaySessionRow;
 
     try {
-      const pendingReclaim = dialogs.track(pane.changeHeaderPlacement(sessionA, "reclaim"));
+      const pendingReclaim = dialogs.track(startReclaim(pane, sessionA));
       const actions = await waitForConfirmDialogActions();
       answerConfirmDialog(actions, "confirm");
-      await vi.waitFor(() => expect(pane.headerPlacementReclaimingKey).toBe(sessionA.key));
+      await vi.waitFor(() =>
+        expect(pane.headerPresentation.placementReclaimingKey).toBe(sessionA.key),
+      );
+
+      const modal = document.querySelector("openclaw-modal-dialog")!;
+      const pendingCancel = new CustomEvent("modal-cancel", { cancelable: true });
+      modal.dispatchEvent(pendingCancel);
+      expect(pendingCancel.defaultPrevented).toBe(true);
+      expect(actions.querySelector<HTMLButtonElement>(".btn[autofocus]")?.disabled).toBe(true);
+      expect(actions.querySelector<HTMLButtonElement>(".btn.danger")?.disabled).toBe(true);
+      expect(
+        document.querySelector<HTMLButtonElement>(".session-worker-stop__close")?.disabled,
+      ).toBe(true);
+      answerConfirmDialog(actions, "confirm");
+      await pane.changeHeaderPlacement(sessionA, "reclaim");
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(document.querySelector("openclaw-modal-dialog")).toBe(modal);
 
       state.sessionKey = sessionB.key;
       const placementA = resolveChatPanePlacement({
         gatewaySnapshot: pane.context.gateway.snapshot,
         movingKey: null,
-        reclaimingKey: pane.headerPlacementReclaimingKey,
+        reclaimingKey: pane.headerPresentation.placementReclaimingKey,
         row: sessionA,
       });
       const placementB = resolveChatPanePlacement({
         gatewaySnapshot: pane.context.gateway.snapshot,
         movingKey: null,
-        reclaimingKey: pane.headerPlacementReclaimingKey,
+        reclaimingKey: pane.headerPresentation.placementReclaimingKey,
         row: sessionB,
       });
       expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
@@ -552,9 +603,51 @@ describe("chat pane worker stop", () => {
       response.resolve({ ok: true });
       await pendingReclaim;
 
-      expect(pane.headerPlacementReclaimingKey).toBeNull();
+      expect(pane.headerPresentation.placementReclaimingKey).toBeNull();
     } finally {
       response.resolve({ ok: true });
     }
   });
+});
+
+describe("Machine and Stop owner contracts", () => {
+  it.each([false, true])(
+    "projects available machine facts and native actions with offline=%s",
+    (offline) => {
+      const session = offline ? offlineDeviceSession() : activePlacementSession();
+      const onMove = vi.fn();
+      const view = mountSolid(() =>
+        createComponent(ChatMachine, {
+          session,
+          machineName: "Build device",
+          onPlacementMove: onMove,
+          onPlacementReclaim: vi.fn(),
+        }),
+      );
+      onTestFinished(view.unmount);
+      flush();
+      const body = view.container;
+      expect(body.querySelector(".chat-machine__identity strong")?.textContent).toBe(
+        "Build device",
+      );
+      const labels = [...body.querySelectorAll("dt")].map((node) => node.textContent);
+      expect(labels[0]).toBe("ID");
+      expect(labels).not.toContain("Machine");
+      expect(labels).not.toContain("Profile");
+      expect(body.textContent).not.toContain("undefined");
+      expect(body.querySelectorAll("dl")).toHaveLength(offline ? 2 : 1);
+      const recovery = body.querySelector(".chat-machine__recovery");
+      expect(Boolean(recovery)).toBe(offline);
+      if (recovery) {
+        expect(
+          recovery.compareDocumentPosition(body.querySelector("dl")!) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        recovery.querySelector<HTMLButtonElement>("button")!.click();
+      } else {
+        body.querySelector<HTMLButtonElement>(".chat-machine__action")!.click();
+      }
+      expect(onMove).toHaveBeenCalledOnce();
+    },
+  );
 });

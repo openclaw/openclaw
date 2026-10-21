@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
@@ -10,10 +9,12 @@ import {
 } from "./kysely-sync.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
+  readUsageCostPartitionKey,
   usageCostPartitionKey,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 type CacheDatabase = Pick<DB, "cache_entries">;
 
@@ -24,38 +25,53 @@ function assertUsagePartitionWorker(): void {
 }
 
 export function deleteSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
-  params: {
+  db: EngineConnection,
+  params: readonly {
     rollupId: string;
     removedDates?: string[];
     replacePartitions?: boolean;
-  },
+  }[],
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  if (params.replacePartitions) {
+  for (const replacements of chunkItems(
+    params.filter((row) => row.replacePartitions),
+    100,
+  )) {
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom("cache_entries")
-        .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-        .where("key", ">=", `${params.rollupId}\0`)
-        .where("key", "<", `${params.rollupId}\u0001`),
+      kysely.deleteFrom("cache_entries").where((eb) =>
+        eb.or(
+          replacements.map((row) =>
+            // Keep scope in each arm so SQLite seeks each composite-key range.
+            eb.and([
+              eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
+              eb("key", ">=", usageCostPartitionKey(row.rollupId, "")),
+              eb("key", "<=", usageCostPartitionKey(row.rollupId, "\uffff")),
+            ]),
+          ),
+        ),
+      ),
     );
   }
-  for (const date of params.removedDates ?? []) {
+  const removedKeys = params.flatMap((row) =>
+    row.replacePartitions
+      ? []
+      : (row.removedDates ?? []).map((date) => usageCostPartitionKey(row.rollupId, date)),
+  );
+  for (const keys of chunkItems(removedKeys, 100)) {
     executeSqliteQuerySync(
       db,
       kysely
         .deleteFrom("cache_entries")
         .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-        .where("key", "=", usageCostPartitionKey(params.rollupId, date)),
+        .where("key", "in", keys),
     );
   }
 }
 
 export function readSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths: readonly string[],
   startMs = Number.NEGATIVE_INFINITY,
   endMs = Number.POSITIVE_INFINITY,
@@ -77,7 +93,7 @@ export function readSessionCostUsagePartitionsInDatabase(
         (budget
           ? eb
               .case()
-              .when(eb.fn<number>("length", [eb.cast("value_json", "blob")]), "<=", 64 * 1024)
+              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
               .then(eb.ref("value_json"))
               .else(null)
               .end()
@@ -96,7 +112,7 @@ export function readSessionCostUsagePartitionsInDatabase(
               .end()
           : eb.ref("blob")
         ).as("blob"),
-        eb.fn<number>("length", [eb.cast("value_json", "blob")]).as("header_bytes"),
+        eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
         eb.fn<number>("length", ["blob"]).as("body_bytes"),
       ])
       .where((eb) =>
@@ -113,8 +129,7 @@ export function readSessionCostUsagePartitionsInDatabase(
       .orderBy("key", "asc");
     for (const row of iterateSqliteQuerySync(db, query)) {
       throwIfCancelled?.();
-      const separator = row.key.lastIndexOf("\0");
-      const filePath = row.key.slice(0, separator);
+      const { sessionFile: filePath, date } = readUsageCostPartitionKey(row.key);
       if (invalidPaths.has(filePath)) {
         continue;
       }
@@ -138,7 +153,7 @@ export function readSessionCostUsagePartitionsInDatabase(
       }
       const partitions = byPath.get(filePath) ?? [];
       partitions.push({
-        date: row.key.slice(separator + 1),
+        date,
         valueJson: row.value_json,
         blob: row.blob,
       });
@@ -149,11 +164,10 @@ export function readSessionCostUsagePartitionsInDatabase(
 }
 
 export function readSessionCostUsageRollupWithPartitionsInDatabase(
-  db: DatabaseSync,
-  snapshot: { key: string; updatedAt: number; valueJson: string },
+  db: EngineConnection,
+  key: string,
 ): { blob: Uint8Array | null; partitions: UsageCostPartition[] } | undefined {
   assertUsagePartitionWorker();
-  // Refresh yields before this read; a replacement's partitions cannot join the old checkpoint.
   const rows = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<CacheDatabase>(db)
@@ -161,16 +175,11 @@ export function readSessionCostUsageRollupWithPartitionsInDatabase(
       .select(["scope", "key", "value_json", "blob"])
       .where((eb) =>
         eb.or([
-          eb.and([
-            eb("scope", "=", USAGE_COST_ROLLUP_SCOPE),
-            eb("key", "=", snapshot.key),
-            eb("updated_at", "=", snapshot.updatedAt),
-            eb("value_json", "=", snapshot.valueJson),
-          ]),
+          eb.and([eb("scope", "=", USAGE_COST_ROLLUP_SCOPE), eb("key", "=", key)]),
           eb.and([
             eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
-            eb("key", ">=", `${snapshot.key}\0`),
-            eb("key", "<", `${snapshot.key}\u0001`),
+            eb("key", ">=", usageCostPartitionKey(key, "")),
+            eb("key", "<=", usageCostPartitionKey(key, "\uffff")),
           ]),
         ]),
       )
@@ -186,7 +195,7 @@ export function readSessionCostUsageRollupWithPartitionsInDatabase(
       row.scope === USAGE_COST_PARTITION_SCOPE && row.value_json !== null && row.blob !== null
         ? [
             {
-              date: row.key.slice(snapshot.key.length + 1),
+              date: readUsageCostPartitionKey(row.key).date,
               valueJson: row.value_json,
               blob: row.blob,
             },
@@ -197,7 +206,7 @@ export function readSessionCostUsageRollupWithPartitionsInDatabase(
 }
 
 export function pruneSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   existing: readonly { key: string; valueJson: string | Uint8Array; updatedAt: number }[],
 ): void {
   assertUsagePartitionWorker();
@@ -224,8 +233,8 @@ export function pruneSessionCostUsagePartitionsInDatabase(
         kysely
           .deleteFrom("cache_entries")
           .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-          .where("key", ">=", `${row.key}\0`)
-          .where("key", "<", `${row.key}\u0001`),
+          .where("key", ">=", usageCostPartitionKey(row.key, ""))
+          .where("key", "<=", usageCostPartitionKey(row.key, "\uffff")),
       );
     }
   }

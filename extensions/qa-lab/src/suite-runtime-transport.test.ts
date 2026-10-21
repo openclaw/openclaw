@@ -1,4 +1,3 @@
-// Qa Lab tests cover suite runtime transport plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
@@ -9,79 +8,72 @@ import {
   waitForOutboundMessage,
 } from "./suite-runtime-transport.js";
 
+function createMessages(state = createQaBusState()) {
+  return {
+    state,
+    cursor: () =>
+      state.getSnapshot().messages.filter((message) => message.direction === "outbound").length,
+    outbound: (text: string, extra: Partial<Parameters<typeof state.addOutboundMessage>[0]> = {}) =>
+      state.addOutboundMessage({
+        to: "dm:qa-operator",
+        senderId: "openclaw",
+        senderName: "OpenClaw QA",
+        text,
+        ...extra,
+      }),
+    inbound: (text: string) =>
+      state.addInboundMessage({
+        conversation: { id: "qa-operator", kind: "direct" },
+        senderId: "alice",
+        senderName: "Alice",
+        text,
+      }),
+  };
+}
+
 describe("qa suite transport helpers", () => {
-  it("fails success-only waitForOutboundMessage calls when internal coordination text leaks", async () => {
-    const state = createQaBusState();
+  it.each([
+    [
+      "internal coordination text",
+      "QA_LEAK_OK",
+      "checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
+      "checking thread context",
+    ],
+    [
+      "failed status with equals syntax",
+      "QA-RESTART-OK",
+      "status=FAILED\nerror=Could not parse services",
+      "Could not parse services",
+    ],
+  ])("fails success-only waits on %s", async (_name, marker, text, error) => {
+    const { state, outbound } = createMessages();
     const pending = waitForOutboundMessage(
       state,
-      (candidate) => candidate.text.includes("QA_LEAK_OK"),
+      (candidate) => candidate.text.includes(marker),
       5_000,
     );
-
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-
-    await expect(pending).rejects.toThrow("checking thread context");
-  });
-
-  it("fails success-only waits when a model reports a failed status with equals syntax", async () => {
-    const state = createQaBusState();
-    const pending = waitForOutboundMessage(
-      state,
-      (candidate) => candidate.text.includes("QA-RESTART-OK"),
-      5_000,
-    );
-
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "status=FAILED\nerror=Could not parse services",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-
-    await expect(pending).rejects.toThrow("Could not parse services");
+    outbound(text);
+    await expect(pending).rejects.toThrow(error);
   });
 
   it("checks no-outbound waits from the supplied outbound cursor", async () => {
-    const state = createQaBusState();
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "previous scenario reply",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-    const sinceIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
+    const { state, outbound, cursor } = createMessages();
+    outbound("previous scenario reply");
+    const sinceIndex = cursor();
 
     await expect(waitForNoOutbound(state, 1, { sinceIndex })).resolves.toBeUndefined();
 
-    state.addOutboundMessage({
-      to: "channel:qa-room",
-      text: "current scenario reply",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
+    outbound("current scenario reply", { to: "channel:qa-room" });
     await expect(waitForNoOutbound(state, 1, { sinceIndex })).rejects.toThrow(
       "expected no outbound messages, saw 1: channel:qa-room:openclaw:current scenario reply",
     );
   });
 
   it("waits for a live final instead of accepting a deleted matching preview", async () => {
-    const state = createQaBusState();
-    const preview = state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "QA-VISIBLE-FINAL-OK",
-    });
+    const { state, outbound } = createMessages();
+    const preview = outbound("QA-VISIBLE-FINAL-OK");
     state.deleteMessage({ messageId: preview.id });
-    const final = state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "QA-VISIBLE-FINAL-OK",
-    });
+    const final = outbound("QA-VISIBLE-FINAL-OK");
 
     await expect(
       waitForOutboundMessage(state, (message) => message.text.includes("QA-VISIBLE-FINAL-OK"), 50),
@@ -89,23 +81,13 @@ describe("qa suite transport helpers", () => {
   });
 
   it("filters foreign account replies and failures from account-scoped waits", async () => {
-    const state = createQaBusState();
-    state.addOutboundMessage({
+    const { state, outbound } = createMessages();
+    outbound("QA-ACCOUNT-OK", { accountId: "other" });
+    outbound("⚠️ agent failed before reply: foreign account failure", {
       accountId: "other",
-      to: "dm:qa-operator",
-      text: "QA-ACCOUNT-OK",
-    });
-    state.addOutboundMessage({
-      accountId: "other",
-      to: "dm:qa-operator",
       isError: true,
-      text: "⚠️ agent failed before reply: foreign account failure",
     });
-    const expected = state.addOutboundMessage({
-      accountId: "default",
-      to: "dm:qa-operator",
-      text: "QA-ACCOUNT-OK",
-    });
+    const expected = outbound("QA-ACCOUNT-OK", { accountId: "default" });
 
     await expect(
       waitForOutboundMessage(state, (message) => message.text.includes("QA-ACCOUNT-OK"), 50, {
@@ -115,25 +97,10 @@ describe("qa suite transport helpers", () => {
   });
 
   it("fails raw scenario waitForCondition calls even when mixed traffic already exists", async () => {
-    const state = createQaBusState();
-    state.addInboundMessage({
-      conversation: { id: "qa-operator", kind: "direct" },
-      senderId: "alice",
-      senderName: "Alice",
-      text: "hello",
-    });
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "working on it",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-    state.addInboundMessage({
-      conversation: { id: "qa-operator", kind: "direct" },
-      senderId: "alice",
-      senderName: "Alice",
-      text: "ok do it",
-    });
+    const { state, inbound, outbound } = createMessages();
+    inbound("hello");
+    outbound("working on it");
+    inbound("ok do it");
 
     const waitForCondition = createQaChannelTransport(state).waitForCondition;
     const pending = waitForCondition(
@@ -151,37 +118,16 @@ describe("qa suite transport helpers", () => {
       10,
     );
 
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      isError: true,
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
+    outbound('⚠️ No API key found for provider "openai".', { isError: true });
 
     await expect(pending).rejects.toThrow('No API key found for provider "openai".');
   });
 
   it("reads transport transcripts with generic helper names", () => {
-    const state = createQaBusState();
-    state.addInboundMessage({
-      conversation: { id: "qa-operator", kind: "direct" },
-      senderId: "alice",
-      senderName: "Alice",
-      text: "hello",
-    });
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "working on it",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "done",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
+    const { state, inbound, outbound } = createMessages();
+    inbound("hello");
+    outbound("working on it");
+    outbound("done");
 
     const messages = readTransportTranscript(state, {
       conversationId: "qa-operator",
@@ -200,20 +146,10 @@ describe("qa suite transport helpers", () => {
   });
 
   it("applies account filtering after the global outbound cursor", async () => {
-    const state = createQaBusState();
-    state.addOutboundMessage({
-      accountId: "other",
-      to: "dm:qa-operator",
-      text: "previous account reply",
-    });
-    const sinceIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
-    const expected = state.addOutboundMessage({
-      accountId: "default",
-      to: "dm:qa-operator",
-      text: "done",
-    });
+    const { state, outbound, cursor } = createMessages();
+    outbound("previous account reply", { accountId: "other" });
+    const sinceIndex = cursor();
+    const expected = outbound("done", { accountId: "default" });
 
     await expect(
       waitForOutboundMessage(state, (candidate) => candidate.text === "done", 50, {

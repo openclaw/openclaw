@@ -22,9 +22,11 @@ import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/mo
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelCatalogModel } from "../packages/model-catalog-core/src/model-catalog-types.js";
+import { ModelInferenceCapabilitiesSchema } from "../packages/model-catalog-core/src/model-inference-capabilities.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogBundleV2,
+  RemoteModelCatalogBundleV3,
   RemoteModelCatalogPricing,
   RemoteModelCatalogPricingV2,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
@@ -116,6 +118,7 @@ export function parsePublishModelCatalogArgs(args: string[]) {
   let pricing = false;
   let out: string | undefined;
   let outV2: string | undefined;
+  let outV3: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--dry-run") {
@@ -136,12 +139,23 @@ export function parsePublishModelCatalogArgs(args: string[]) {
       index += 1;
       continue;
     }
+    if (arg === "--out-v3") {
+      outV3 = requireOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
     throw new Error(`unknown argument: ${arg}`);
   }
   if (!dryRun && !out) {
     throw new Error("provide --out <file> or --dry-run");
   }
-  return { dryRun, pricing, ...(out ? { out } : {}), ...(outV2 ? { outV2 } : {}) };
+  return {
+    dryRun,
+    pricing,
+    ...(out ? { out } : {}),
+    ...(outV2 ? { outV2 } : {}),
+    ...(outV3 ? { outV3 } : {}),
+  };
 }
 
 export function readModelCatalogManifests(
@@ -165,13 +179,14 @@ export function readModelCatalogManifests(
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
-async function loadClientBundleValidator(version: 1 | 2 = 1) {
+async function loadClientBundleValidator(version: 1 | 2 | 3 = 1) {
   const modulePath = path.join(
     defaultRootDir,
     "packages/model-catalog-core/src/remote-catalog-bundle.ts",
   );
   const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
-  const name = version === 1 ? "parseRemoteModelCatalogBundle" : "parseRemoteModelCatalogBundleV2";
+  const name =
+    version === 1 ? "parseRemoteModelCatalogBundle" : `parseRemoteModelCatalogBundleV${version}`;
   const parse = module[name];
   const sanitize = module.sanitizeRemoteModelCatalogBundle;
   if (typeof parse !== "function" || typeof sanitize !== "function") {
@@ -198,8 +213,9 @@ export async function assembleModelCatalogBundle(options: {
         throw new Error(`provider ${providerId} is declared by more than one plugin manifest`);
       }
       if (isRecord(provider)) {
+        // Credential ownership belongs to the installed manifest, never a downloaded catalog.
         // Manifests shipped since 2026.9.7 may still carry the retired authoring field.
-        const { recommendedModels: _retired, ...v1Provider } = provider;
+        const { authScope: _authScope, recommendedModels: _retired, ...v1Provider } = provider;
         providers[providerId] = v1Provider;
       } else {
         providers[providerId] = provider;
@@ -220,8 +236,30 @@ export async function assembleModelCatalogBundle(options: {
     sourceCommit: options.sourceCommit,
     providers,
   };
-  const validateBundle = options.validateBundle ?? (await loadClientBundleValidator());
+  const validateBundle: BundleValidator =
+    options.validateBundle ?? (await loadClientBundleValidator());
   const validated = validateBundle(bundle);
+  // The assembly is canonical source data, not a legacy wire projection. Preserve
+  // validated task declarations until v1/v2 and v3 are projected separately.
+  for (const [id, provider] of Object.entries(validated.providers)) {
+    const source = providers[id];
+    if (!isRecord(source) || !Array.isArray(source.models)) {
+      continue;
+    }
+    const declarations = new Map(
+      source.models.flatMap((model) =>
+        isRecord(model) && typeof model.id === "string" && model.inference !== undefined
+          ? [[model.id.trim(), ModelInferenceCapabilitiesSchema.parse(model.inference)] as const]
+          : [],
+      ),
+    );
+    for (const model of provider.models) {
+      const inference = declarations.get(model.id);
+      if (inference) {
+        model.inference = inference;
+      }
+    }
+  }
   assertModelCatalogCompleteness(validated);
   return validated;
 }
@@ -655,7 +693,7 @@ const PROVIDER_MODEL_INVENTORIES: Readonly<
   novita: { url: "https://api.novita.ai/openai/v1/models", caseInsensitive: true },
   nvidia: { url: "https://integrate.api.nvidia.com/v1/models" },
   opencode: { url: "https://opencode.ai/zen/v1/models" },
-  "opencode-go": { url: "https://opencode.ai/zen/go/v1/models" },
+  "opencode-go": { url: "https://opencode.ai/inference/go/v1/models" },
   venice: { url: "https://api.venice.ai/api/v1/models" },
 };
 
@@ -1136,11 +1174,16 @@ export async function enrichModelCatalogPricing(options: {
   return { modelsEnriched: enriched, pricingEntries: hosted.size };
 }
 
-// Both hosted formats serve released clients whose input enum predates video.
+// Released chat-only formats cannot admit native tasks or video-only inputs.
 function projectReleasedModelInputs(bundle: PublishedModelCatalogBundle): void {
   for (const [id, provider] of Object.entries(bundle.providers)) {
     const omitted = new Set<string>();
     provider.models = provider.models.filter((model) => {
+      if (model.inference?.chat === false) {
+        omitted.add(model.id);
+        return false;
+      }
+      delete model.inference;
       const input = model.input?.filter(
         (value) => value === "text" || value === "image" || value === "document",
       );
@@ -1277,31 +1320,49 @@ export function projectRecommendedModels(
  * A provider's featured models lead its recommendations as listed, so the global family
  * rule never hides a provider pick; the global projection follows without repeats.
  */
-export async function assembleModelCatalogBundleV2(
+async function assembleVersionedModelCatalogBundle(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
   recommendedModels: readonly string[] = [],
   featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
-): Promise<RemoteModelCatalogBundleV2> {
+  version: 2 | 3 = 2,
+): Promise<RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3> {
   const providers: RemoteModelCatalogBundleV2["providers"] = {};
-  const models: RemoteModelCatalogBundleV2["models"] = [];
+  const models: RemoteModelCatalogBundleV3["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
-    const featured = featuredModels[providerId]?.ids ?? [];
+    const chatModels = provider.models.filter((model) => model.inference?.chat !== false);
+    const featured = (featuredModels[providerId]?.ids ?? []).filter((id) =>
+      chatModels.some((model) => model.id === id),
+    );
     const recommended = [
       ...featured,
-      ...projectRecommendedModels(recommendedModels, provider.models).filter(
+      ...projectRecommendedModels(recommendedModels, chatModels).filter(
         (id) => !featured.includes(id),
       ),
     ];
     providers[providerId] = {
       api: provider.api,
-      defaultModel: provider.defaultModel,
-      defaultUtilityModel: provider.defaultUtilityModel,
+      defaultModel:
+        provider.models.find((model) => model.id === provider.defaultModel)?.inference?.chat ===
+        false
+          ? undefined
+          : provider.defaultModel,
+      defaultUtilityModel:
+        provider.models.find((model) => model.id === provider.defaultUtilityModel)?.inference
+          ?.chat === false
+          ? undefined
+          : provider.defaultUtilityModel,
       ...(recommended.length > 0 ? { recommendedModels: recommended } : {}),
     };
     for (const model of provider.models) {
+      if (version === 2 && model.inference?.chat === false) {
+        continue;
+      }
       const { cost, ...metadata } = model;
+      if (version === 2) {
+        delete metadata.inference;
+      }
       delete metadata.baseUrl;
       delete metadata.headers;
       delete metadata.upstreamModel;
@@ -1322,12 +1383,12 @@ export async function assembleModelCatalogBundleV2(
       models.push({ ...metadata, provider: providerId, pricing });
     }
   }
-  const validateBundle = await loadClientBundleValidator(2);
-  // schemaVersion gates v2; never copy v1's older client floor onto this wire contract.
+  const validateBundle = await loadClientBundleValidator(version);
+  // schemaVersion gates admission; never copy v1's older client floor onto newer wires.
   const upstreamPricing = serializeStandalonePricing(standalonePricing?.upstream);
   const providerPricing = serializeStandalonePricing(standalonePricing?.provider);
   return validateBundle({
-    schemaVersion: 2,
+    schemaVersion: version,
     generatedAt: bundle.generatedAt,
     sourceCommit: bundle.sourceCommit,
     providers,
@@ -1337,7 +1398,27 @@ export async function assembleModelCatalogBundleV2(
   });
 }
 
-export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2): string {
+export async function assembleModelCatalogBundleV2(
+  bundle: PublishedModelCatalogBundle,
+  pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
+  standalonePricing?: StandalonePricing,
+  recommendedModels: readonly string[] = [],
+  featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
+): Promise<RemoteModelCatalogBundleV2> {
+  // SAFETY: the requested wire version selects its corresponding client validator.
+  return (await assembleVersionedModelCatalogBundle(
+    bundle,
+    pricingSelections,
+    standalonePricing,
+    recommendedModels,
+    featuredModels,
+    2,
+  )) as RemoteModelCatalogBundleV2;
+}
+
+export function serializeModelCatalogBundleV2(
+  bundle: RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
+): string {
   const models = bundle.models
     .toSorted(
       (left, right) =>
@@ -1383,12 +1464,11 @@ export async function runPublishModelCatalog(
 ) {
   const rootDir = options.rootDir ?? defaultRootDir;
   const args = parsePublishModelCatalogArgs(options.args ?? process.argv.slice(2));
-  if (
-    args.out &&
-    args.outV2 &&
-    path.resolve(rootDir, args.out) === path.resolve(rootDir, args.outV2)
-  ) {
-    throw new Error("--out and --out-v2 must name different files");
+  const outputPaths = [args.out, args.outV2, args.outV3]
+    .filter((file): file is string => Boolean(file))
+    .map((file) => path.resolve(rootDir, file));
+  if (new Set(outputPaths).size !== outputPaths.length) {
+    throw new Error("--out, --out-v2 and --out-v3 must name different files");
   }
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
@@ -1407,10 +1487,8 @@ export async function runPublishModelCatalog(
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
   const retirementResult = await retireUnservedModels({ bundle, loadSource });
-  projectReleasedModelInputs(bundle);
-  const featuredResult = args.outV2
-    ? await resolveProviderFeaturedModels({ bundle, loadSource })
-    : {};
+  const featuredResult =
+    args.outV2 || args.outV3 ? await resolveProviderFeaturedModels({ bundle, loadSource }) : {};
   const standalonePricing: StandalonePricing = { upstream: new Map(), provider: new Map() };
   const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({
@@ -1421,6 +1499,17 @@ export async function runPublishModelCatalog(
         standalonePricing,
       })
     : { modelsEnriched: 0, pricingEntries: 0 };
+  const bundleV3 = args.outV3
+    ? await assembleVersionedModelCatalogBundle(
+        bundle,
+        pricingSelections,
+        standalonePricing,
+        recommendedModels,
+        featuredResult,
+        3,
+      )
+    : undefined;
+  projectReleasedModelInputs(bundle);
   // Validate after all enrichment so metadata-only and dry-run output obey the
   // same client contract as priced catalogs.
   const validateBundle = await loadClientBundleValidator();
@@ -1440,6 +1529,8 @@ export async function runPublishModelCatalog(
   const bundleBytes = Buffer.byteLength(serialized);
   const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;
   const bundleV2Bytes = serializedV2 ? Buffer.byteLength(serializedV2) : 0;
+  const serializedV3 = bundleV3 ? serializeModelCatalogBundleV2(bundleV3) : undefined;
+  const bundleV3Bytes = serializedV3 ? Buffer.byteLength(serializedV3) : 0;
   if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
     process.stderr.write(
       `[${SCRIPT_LABEL}] warning: bundle size ${bundleBytes} bytes exceeds ${BUNDLE_SIZE_WARNING_BYTES} bytes\n`,
@@ -1453,6 +1544,11 @@ export async function runPublishModelCatalog(
   if (bundleV2Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
     throw new Error(
       `catalog v2 bundle ${bundleV2Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
+    );
+  }
+  if (bundleV3Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+    throw new Error(
+      `catalog v3 bundle ${bundleV3Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
     );
   }
   const hydrationSummary = Object.entries(hydrationResult)
@@ -1485,20 +1581,32 @@ export async function runPublishModelCatalog(
     throw new Error("output path is required outside dry-run mode");
   }
   const outputFile = path.resolve(rootDir, args.out);
-  if (args.outV2 && serializedV2) {
-    await publishModelCatalogPair(
-      [
-        { file: outputFile, content: serialized },
-        { file: path.resolve(rootDir, args.outV2), content: serializedV2 },
-      ],
-      (message) => process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
-    );
-    process.stdout.write(
-      `[${SCRIPT_LABEL}] published schemaVersion=2 models=${summary.models} recommendedProviders=${Object.values(bundleV2?.providers ?? {}).filter((provider) => provider.recommendedModels).length} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
+  const outputs = [
+    { file: outputFile, content: serialized },
+    ...(args.outV2 && serializedV2
+      ? [{ file: path.resolve(rootDir, args.outV2), content: serializedV2 }]
+      : []),
+    ...(args.outV3 && serializedV3
+      ? [{ file: path.resolve(rootDir, args.outV3), content: serializedV3 }]
+      : []),
+  ];
+  if (outputs.length > 1) {
+    await publishModelCatalogPair(outputs, (message) =>
+      process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
     );
   } else {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, serialized);
+  }
+  for (const [version, published, bytes, out] of [
+    [2, bundleV2, bundleV2Bytes, args.outV2],
+    [3, bundleV3, bundleV3Bytes, args.outV3],
+  ] as const) {
+    if (published) {
+      process.stdout.write(
+        `[${SCRIPT_LABEL}] published schemaVersion=${version} models=${published.models.length} recommendedProviders=${Object.values(published.providers).filter((provider) => provider.recommendedModels).length} bundleBytes=${bytes} out=${out}\n`,
+      );
+    }
   }
   process.stdout.write(
     `[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,

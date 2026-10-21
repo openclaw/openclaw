@@ -3,15 +3,14 @@ import {
   createLazyRuntimeModule,
   createLazyRuntimeSurface,
 } from "openclaw/plugin-sdk/lazy-runtime";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import {
   createMoonshotThinkingWrapper,
-  DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
   resolveMoonshotThinkingType,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -205,12 +204,7 @@ export function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): numb
 function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
   return (
     resolveOllamaConfiguredNumCtx(model) ??
-    Math.max(
-      1,
-      Math.floor(
-        model.contextTokens ?? model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-      ),
-    )
+    Math.max(1, Math.floor(model.contextTokens ?? model.contextWindow ?? model.maxTokens))
   );
 }
 

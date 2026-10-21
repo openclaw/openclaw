@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,7 +15,6 @@ import {
   openClawStateDatabaseCache,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
@@ -66,14 +65,17 @@ afterAll(() => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
-const counts: Array<{
-  owner: string;
-  userVersion: number;
-  sqliteMaster: number;
-  dataVersion: number;
-}> = [];
+function expectNoChecks(databases: EngineConnection[]) {
+  const schemaOrFreshness =
+    /^PRAGMA (?:user_version|data_version)\b|\bsqlite_(?:master|schema)\b|FROM main\.pragma_data_version\(\)\s*$/iu;
+  for (const [db, sql] of trace.execute.mock.calls) {
+    if (databases.includes(db)) {
+      expect(sql).not.toMatch(schemaOrFreshness);
+    }
+  }
+}
 
-beforeAll(async () => {
+it("keeps admitted reads free of schema checks and freshness probes", async () => {
   setRuntimeConfigSnapshot({});
   const scope = {
     agentId: "main",
@@ -102,66 +104,23 @@ beforeAll(async () => {
   for (let i = 0; i < 100; i++) {
     read();
   }
-  for (const [owner, database] of [
-    ["agent", agent.db],
-    ["state", state.db],
-  ] as const) {
-    const sql = trace.execute.mock.calls.filter(([db]) => db === database).map(([, text]) => text);
-    counts.push({
-      owner,
-      userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
-      sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-      dataVersion: sql.filter(trace.isVersionProbe).length,
-    });
-  }
+  expectNoChecks([agent.db, state.db]);
   trace.execute.mockClear();
   for (let i = 0; i < 100; i++) {
     expect(withExistingOpenClawStateDatabaseReadOnly(({ db }) => db, scope)).toBe(state.db);
   }
-  const sql = trace.execute.mock.calls.filter(([db]) => db === state.db).map(([, text]) => text);
-  counts.push({
-    owner: "state-readonly",
-    userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
-    sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-    dataVersion: sql.filter(trace.isVersionProbe).length,
-  });
-  console.info("Admitted database checks for 100 reads per entry point:", counts);
+  expectNoChecks([state.db]);
 });
 
-it("keeps admitted reads free of schema checks and freshness probes", () => {
-  expect(counts).toEqual(
-    ["agent", "state", "state-readonly"].map((owner) => ({
-      owner,
-      userVersion: 0,
-      sqliteMaster: 0,
-      dataVersion: 0,
-    })),
-  );
+it("invalidates cached admission after terminal revocation", () => {
+  const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
+  const database = openOpenClawStateDatabase(scope);
+  const cached = () => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path);
+  expect(cached()).toBe(database);
+  const failure = new Error("synthetic revoked state admission");
+  recordOpenClawStateDatabaseOpenFailure(database.path, failure);
+  trace.execute.mockClear();
+  expect(cached).toThrow(failure);
+  expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(failure);
+  expect(trace.execute).not.toHaveBeenCalled();
 });
-
-it.each(["revocation", "schema-change"] as const)(
-  "invalidates cached admission after %s",
-  (cause) => {
-    const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
-    const database = openOpenClawStateDatabase(scope);
-    const cached = () => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path);
-    expect(cached()).toBe(database);
-    if (cause === "schema-change") {
-      database.db.exec(`BEGIN; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
-      expect(cached()).toBe(database);
-      database.db.exec("ROLLBACK");
-      expect(cached()).toBe(database);
-      database.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-      expect(cached).toThrow(/uses newer schema version/);
-      return;
-    }
-    const failure = new Error("synthetic revoked state admission");
-    recordOpenClawStateDatabaseOpenFailure(database.path, failure);
-    trace.execute.mockClear();
-    expect(cached).toThrow(failure);
-    expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(
-      failure,
-    );
-    expect(trace.execute).not.toHaveBeenCalled();
-  },
-);

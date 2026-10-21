@@ -1,14 +1,13 @@
 import { For, Show } from "solid-js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context-types.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
-import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerAvatarGatewayReset } from "../../lib/identity-avatar-context.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -20,7 +19,7 @@ import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 
-type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey" | "unreadCount"> & {
+type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey"> & {
   target: { href: string; options: ApplicationNavigationOptions };
 };
 
@@ -42,10 +41,6 @@ export function AgentsHomeView(props: AgentsHomeProps) {
   const title = () => {
     locale.revision();
     return titleForRoute("agents-home");
-  };
-  const subtitle = () => {
-    locale.revision();
-    return subtitleForRoute("agents-home");
   };
   const avatarContext = projectSource(undefined, {
     read: () => undefined,
@@ -69,47 +64,47 @@ export function AgentsHomeView(props: AgentsHomeProps) {
   );
   return (
     <>
-      <div class="agents-home__header">
-        <SettingsPageHeader
-          title={title()}
-          subtitle={subtitle()}
-          actions={
-            <>
-              {props.showExplore ? (
-                <button
-                  type="button"
-                  class="btn btn--icon"
-                  data-claws-open-catalog
-                  aria-label={t("clawsCatalog.search")}
-                  title={t("clawsCatalog.search")}
-                  aria-haspopup="dialog"
-                  disabled={!props.connected}
-                  onClick={props.onOpenCatalog}
-                >
-                  <Icon name="search" />
-                </button>
-              ) : undefined}
-              {manage()}
-              <ReasonedDisabledControl
-                reason={!props.canCreate ? t("custodian.accessRequired") : undefined}
+      <HubPageHeader
+        active="agents-home"
+        wide
+        docsUrl="https://docs.openclaw.ai/concepts/multi-agent"
+        class="agents-home__header"
+        actions={
+          <>
+            {props.showExplore ? (
+              <button
+                type="button"
+                class="btn btn--icon"
+                data-claws-open-catalog
+                aria-label={t("clawsCatalog.search")}
+                title={t("clawsCatalog.search")}
+                aria-haspopup="dialog"
+                disabled={!props.connected}
+                onClick={() => props.onOpenCatalog()}
               >
-                <button
-                  class="btn primary"
-                  disabled={!props.canCreate}
-                  title={!props.canCreate ? t("custodian.accessRequired") : undefined}
-                  onClick={() => {
-                    if (props.canCreate) {
-                      props.context.navigate("custodian", { search: "?intent=new-agent" });
-                    }
-                  }}
-                >
-                  {t("agentsHome.create")}
-                </button>
-              </ReasonedDisabledControl>
-            </>
-          }
-        />
-      </div>
+                <Icon name="search" />
+              </button>
+            ) : undefined}
+            {manage()}
+            <ReasonedDisabledControl
+              reason={!props.canCreate ? t("custodian.accessRequired") : undefined}
+            >
+              <button
+                class="btn primary"
+                disabled={!props.canCreate}
+                title={!props.canCreate ? t("custodian.accessRequired") : undefined}
+                onClick={() => {
+                  if (props.canCreate) {
+                    props.context.navigate("custodian", { search: "?intent=new-agent" });
+                  }
+                }}
+              >
+                {t("agentsHome.create")}
+              </button>
+            </ReasonedDisabledControl>
+          </>
+        }
+      />
       <section class="agents-home" aria-label={title()}>
         <Show when={!props.connected}>
           <div class="callout warn" role="status">
@@ -141,7 +136,7 @@ export function AgentsHomeView(props: AgentsHomeProps) {
           <For each={props.cards} keyed={(card) => card.id}>
             {(card) => (
               <a
-                class="agents-home__card"
+                class="agents-home__card oc-card"
                 data-agent-id={card().id}
                 href={card().target.href}
                 onClick={(event) => navigate(event, "chat", card().target.options)}
@@ -156,30 +151,13 @@ export function AgentsHomeView(props: AgentsHomeProps) {
                       <p>{card().role}</p>
                     </Show>
                   </div>
-                </div>
-                <Show when={card().model}>
-                  <span class="agents-home__model" title={card().model}>
-                    {card().model}
+                  <span class="btn btn--sm agents-home__open oc-action oc-action-secondary">
+                    {t("agentsHome.openChat")}
                   </span>
-                </Show>
-                <div class="agents-home__activity">
-                  <Show
-                    when={card().activeNow}
-                    fallback={
-                      card().lastActiveAt
-                        ? t("agentsHome.lastActive", {
-                            time: formatRelativeTimestamp(card().lastActiveAt),
-                          })
-                        : t("agentsHome.neverActive")
-                    }
-                  >
-                    <span class="agents-home__working">{t("agentsHome.working")}</span>
-                  </Show>
                 </div>
                 <p class="agents-home__preview" title={card().preview ?? ""}>
                   {card().preview || t("agentsHome.noMessage")}
                 </p>
-                <span class="btn primary agents-home__open">{t("agentsHome.openChat")}</span>
               </a>
             )}
           </For>

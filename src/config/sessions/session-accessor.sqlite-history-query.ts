@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionTranscriptDisplayDeltaResult,
@@ -7,6 +8,7 @@ import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-p
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   resolveHistoryAnchorPageRange,
@@ -35,9 +37,11 @@ import {
   resolveHistoryMessageSequence,
   resolveVisibleHistoryProjection,
   resolveVisibleHistoryRange,
-  type VisibleHistoryBoundary,
-  type VisibleHistoryProjection,
 } from "./session-accessor.sqlite-history-projection.js";
+import type {
+  VisibleHistoryBoundary,
+  VisibleHistoryProjection,
+} from "./session-accessor.sqlite-history-projection.types.js";
 import {
   getActiveTranscriptKysely,
   readSnapshotEventRows,
@@ -67,13 +71,14 @@ const recentHistoryWindows = new Map<
     page: SessionTranscriptMessageEventPage;
   }
 >();
+channel("openclaw.memory.critical").subscribe(() => recentHistoryWindows.clear());
 const historyWindowOwners = new WeakSet<CurrentTranscriptProjection["database"]["db"]>();
 
 function retainHistoryWindowOwner(database: CurrentTranscriptProjection["database"]["db"]): void {
   if (historyWindowOwners.has(database)) {
     return;
   }
-  registerNodeSqliteDisposeCallback(database, () => {
+  registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
     // Closed handles must release cached pages and their connection-owned facts.
     for (const [key, cached] of recentHistoryWindows) {
       if (cached.database === database) {
@@ -223,7 +228,7 @@ function resolveHistoryEventSequence(
   row: { event_seq: number; message_position: number | null },
 ): number | undefined {
   if (row.message_position === null) {
-    const boundary = history.boundaries.find((candidate) => candidate.eventSeq === row.event_seq);
+    const boundary = history.boundariesBySeq.get(row.event_seq);
     return boundary === undefined ? undefined : boundary.displayPosition + 1;
   }
   return resolveHistoryMessageSequence(
@@ -239,7 +244,7 @@ function resolveHistoryEventById(
   history: VisibleHistoryProjection,
   maxBytes?: number,
 ): HistoryEventById | undefined {
-  const boundary = history.boundaries.find((candidate) => candidate.eventId === eventId);
+  const boundary = history.boundariesById.get(eventId);
   if (boundary) {
     if (maxBytes !== undefined && boundary.serializedBytes > maxBytes) {
       return undefined;
@@ -307,8 +312,9 @@ export function readTranscriptDisplayDeltaFromProjection(
         : resolveHistoryMessageSequence(visible, history, row.message_position),
     ]),
   );
-  for (const boundary of history.boundaries) {
-    if (boundary.eventSeq >= firstSeq && boundary.eventSeq <= lastSeq) {
+  for (const event of result.events) {
+    const boundary = history.boundariesBySeq.get(event.seq);
+    if (boundary) {
       sequences.set(boundary.eventSeq, boundary.displayPosition + 1);
     }
   }
@@ -393,6 +399,7 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
   if (
     !projection.generation ||
     hasUncommittedSqliteWrites(projection.database.db) ||
+    isPostgresSqlConnection(projection.database.db) ||
     projection.database.db.location() === null ||
     options.expectedReadWindow ||
     resolveSessionTranscriptReadFence(projection.resolved)
@@ -407,6 +414,7 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
   const revision = JSON.stringify([
     projection.generation,
     projection.state.indexedSeq,
+    projection.version.updatedAt,
     options.maxMessages,
     options.maxLines,
     options.maxBytes,

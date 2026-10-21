@@ -1,7 +1,6 @@
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildComfyMusicGenerationProvider } from "./music-generation-provider.js";
-import { buildComfyConfig, fetchGuardJson } from "./test-helpers.js";
+import { buildComfyConfig, fetchGuardJson, registerComfyProviders } from "./test-helpers.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -12,6 +11,20 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+const comfyProviders = registerComfyProviders();
+const request = {
+  provider: "comfy",
+  model: "workflow",
+  prompt: "gentle ambient synth loop",
+  cfg: buildComfyConfig({
+    music: {
+      workflow: { "6": { inputs: { text: "" } }, "9": { inputs: {} } },
+      promptNodeId: "6",
+      outputNodeId: "9",
+    },
+  }),
+};
+
 describe("comfy music-generation provider", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -19,11 +32,9 @@ describe("comfy music-generation provider", () => {
   });
 
   it("registers the workflow model", () => {
-    const provider = buildComfyMusicGenerationProvider();
-
-    expect(provider.defaultModel).toBe("workflow");
-    expect(provider.models).toEqual(["workflow"]);
-    expectExplicitMusicGenerationCapabilities(provider);
+    expect(comfyProviders.music.defaultModel).toBe("workflow");
+    expect(comfyProviders.music.models).toEqual(["workflow"]);
+    expectExplicitMusicGenerationCapabilities(comfyProviders.music);
   });
 
   it("runs a music workflow and returns audio outputs", async () => {
@@ -32,11 +43,7 @@ describe("comfy music-generation provider", () => {
       .mockResolvedValueOnce(
         fetchGuardJson({
           "music-job-1": {
-            outputs: {
-              "9": {
-                audio: [{ filename: "song.mp3", subfolder: "", type: "output" }],
-              },
-            },
+            outputs: { "9": { audio: [{ filename: "song.mp3", subfolder: "", type: "output" }] } },
           },
         }),
       )
@@ -48,22 +55,7 @@ describe("comfy music-generation provider", () => {
         release: vi.fn(async () => {}),
       });
 
-    const provider = buildComfyMusicGenerationProvider();
-    const result = await provider.generateMusic({
-      provider: "comfy",
-      model: "workflow",
-      prompt: "gentle ambient synth loop",
-      cfg: buildComfyConfig({
-        music: {
-          workflow: {
-            "6": { inputs: { text: "" } },
-            "9": { inputs: {} },
-          },
-          promptNodeId: "6",
-          outputNodeId: "9",
-        },
-      }),
-    });
+    const result = await comfyProviders.music.generateMusic(request);
 
     expect(result).toEqual({
       model: "workflow",
@@ -74,51 +66,18 @@ describe("comfy music-generation provider", () => {
           fileName: "song.mp3",
         },
       ],
-      metadata: {
-        promptId: "music-job-1",
-        outputNodeIds: ["9"],
-        inputImageCount: 0,
-      },
+      metadata: { promptId: "music-job-1", outputNodeIds: ["9"], inputImageCount: 0 },
     });
   });
 
   it("honors req.timeoutMs for the music workflow poll deadline", async () => {
-    // Submit succeeds, but the workflow never produces outputs: every history
-    // poll returns an empty object. The request-level timeoutMs must bound the
-    // wait — before the fix, music ignored req.timeoutMs and always waited the
-    // 5-minute default.
-    fetchWithSsrFGuardMock.mockImplementation(async (params: { url?: string }) => {
-      const url = params.url ?? "";
-      const body = url.includes("/prompt")
-        ? JSON.stringify({ prompt_id: "music-job-slow" })
-        : JSON.stringify({});
-      return {
-        response: new Response(body, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      };
-    });
+    // Regression: music ignored timeoutMs and waited the five-minute default.
+    fetchWithSsrFGuardMock.mockImplementation(async (params: { url?: string }) =>
+      fetchGuardJson(params.url?.includes("/prompt") ? { prompt_id: "music-job-slow" } : {}),
+    );
 
-    const provider = buildComfyMusicGenerationProvider();
     await expect(
-      provider.generateMusic({
-        provider: "comfy",
-        model: "workflow",
-        prompt: "gentle ambient synth loop",
-        timeoutMs: 1000,
-        cfg: buildComfyConfig({
-          music: {
-            workflow: {
-              "6": { inputs: { text: "" } },
-              "9": { inputs: {} },
-            },
-            promptNodeId: "6",
-            outputNodeId: "9",
-          },
-        }),
-      }),
+      comfyProviders.music.generateMusic({ ...request, timeoutMs: 1000 }),
     ).rejects.toThrow("Comfy workflow did not finish within 1s");
   });
 });

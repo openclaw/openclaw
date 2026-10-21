@@ -21,6 +21,8 @@ import {
   resolveDefaultPluginExtensionsDir,
   resolvePluginInstallDir,
 } from "../plugins/install-paths.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { resolveUserPath } from "../utils.js";
@@ -78,15 +80,20 @@ function configuredPathSelectsPlugin(
   return source === root || source === path.dirname(root) || isPathInside(root, source);
 }
 
-export function sourceHostPluginConflict(
+export async function sourceHostPluginConflict(
   pkg: ClawPackage,
   pluginId: string,
   options: Pick<ClawPluginProbeDeps, "env" | "config">,
-): string | undefined {
+): Promise<string | undefined> {
   const env = options.env ?? process.env;
-  const selectedPlugin = loadInstalledPluginIndex({ config: options.config, env }).plugins.find(
-    (plugin) => plugin.pluginId === pluginId,
-  );
+  const activate = await preparePluginMetadataMachineStateAsync({ env });
+  const installRecords = await loadInstalledPluginIndexInstallRecords({ env });
+  activate();
+  const selectedPlugin = loadInstalledPluginIndex({
+    config: options.config,
+    env,
+    installRecords,
+  }).plugins.find((plugin) => plugin.pluginId === pluginId);
   if (
     selectedPlugin?.origin !== "bundled" ||
     !isBundledPluginInsideDevSourceRoot({ rootDir: selectedPlugin.rootDir, env })
@@ -246,7 +253,7 @@ export async function preflightClawPluginPackage(
     capabilityGrants: probe.capabilityGrants,
     capabilityGrantsByPluginId: probe.capabilityGrantsByPluginId,
   };
-  const sourceHostConflict = sourceHostPluginConflict(pkg, probe.pluginId, options);
+  const sourceHostConflict = await sourceHostPluginConflict(pkg, probe.pluginId, options);
   if (sourceHostConflict) {
     return {
       ok: false,

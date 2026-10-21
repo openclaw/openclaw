@@ -11,7 +11,7 @@ import {
   SessionMenu,
   type SessionMenuAction,
   type SessionMenuWork,
-} from "../../components/session-menu.ts";
+} from "../../components/session-menu-solid.tsx";
 import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";

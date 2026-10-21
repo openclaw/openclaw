@@ -56,7 +56,7 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
@@ -80,7 +80,6 @@ import {
 import { formatSignalMediaText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
-import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
 import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
@@ -295,10 +294,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ReplyThreading: replyThreading,
       },
     });
-
-    if (shouldLogVerbose()) {
-      logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length}`);
-    }
 
     const statusReactionTimestamp = resolveSignalStatusReactionTimestamp(entry);
     const statusReactionsConfig = cfg.messages?.statusReactions;
@@ -656,13 +651,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...(last.messageId ? { messageId: last.messageId } : {}),
       inboundEventKind: "user_request",
     };
-    return await Promise.all(
-      entries.flatMap((entry) =>
-        entry.resolveChannelIngress
-          ? [entry.resolveChannelIngress(contextBinding)]
-          : (entry.channelIngress ?? []).map(async (ingress) => ingress),
-      ),
-    );
+    return await Promise.all(entries.map((entry) => entry.resolveChannelIngress(contextBinding)));
   }
 
   const flushDebouncedSignalInboundEntries = (
@@ -747,11 +736,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return false;
     }
     if (params.reaction.isRemove) {
-      return true; // Ignore reaction removals
+      return true;
     }
     const emojiLabel = normalizeOptionalString(params.reaction.emoji) ?? "emoji";
     const senderName = params.envelope.sourceName ?? params.senderDisplay;
-    logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
     const groupName = params.reaction.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
@@ -781,23 +769,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(
         `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
       );
-      return true;
-    }
-    if (
-      conversationKey &&
-      (await maybeResolveSignalQuestionReaction({
-        cfg: params.cfg,
-        accountId: deps.accountId,
-        conversationKey,
-        messageId,
-        reactionKey: emojiLabel,
-        isRemove: Boolean(params.reaction.isRemove),
-        actorId: formatSignalSenderId(params.sender),
-        targetAuthor: params.reaction.targetAuthor,
-        targetAuthorUuid: params.reaction.targetAuthorUuid,
-        logDebug: logVerbose,
-      }))
-    ) {
       return true;
     }
     const targets = resolveSignalReactionTargets(params.reaction);
@@ -1247,7 +1218,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       media: mediaFacts,
       commandAuthorized,
       canDetectMention,
-      requireMention,
       wasMentioned: effectiveWasMentioned,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,

@@ -1,47 +1,52 @@
 import { setImmediate } from "node:timers/promises";
-import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, expect, it, vi } from "vitest";
+import { evaluate } from "./client.js";
 import { MAX_JSON_BYTES } from "./schema.js";
-import { requestEvaluation } from "./transport.js";
+import { mockResponse } from "./transport.test-support.js";
 
 const request = {
   apiKey: "synthetic-key",
   timeoutMs: 1000,
   body: { model: "jev-test", state: null, questions: { q: { type: "noul" as const } } },
 };
-function mockFetch(implementation: typeof globalThis.fetch) {
-  const fetch = vi.fn(implementation);
-  vi.stubGlobal("fetch", fetch);
-  return fetch;
-}
+const response = {
+  model: "jev-test",
+  answers: { q: { type: "noul", noul: 0.37 } },
+  usage: { input_tokens: 1, output_tokens: 1 },
+};
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 it("never follows redirects to a credential sink", async () => {
-  const fetch = mockFetch(
-    async () =>
-      new Response(null, {
-        status: 302,
-        headers: { location: "https://other.example/credential-sink" },
-      }),
-  );
-  await expect(requestEvaluation(request)).rejects.toMatchObject({ reason: "transport" });
+  const fetch = mockResponse(null, {
+    status: 302,
+    headers: { location: "https://other.example/credential-sink" },
+  });
+  await expect(evaluate(request.body, request)).rejects.toMatchObject({ reason: "transport" });
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
 });
-it("bounds the serialized request including its model field", async () => {
-  const fetch = mockFetch(async () => new Response());
+it("bounds the serialized local request after adding instructions", async () => {
+  const fetch = mockResponse(undefined);
+  const emptyBody = { ...request.body, state: "" };
   await expect(
-    requestEvaluation({ ...request, body: { ...request.body, state: "x".repeat(MAX_JSON_BYTES) } }),
+    evaluate(
+      {
+        ...emptyBody,
+        state: "x".repeat(MAX_JSON_BYTES - Buffer.byteLength(JSON.stringify(emptyBody))),
+      },
+      { ...request, baseUrl: "http://127.0.0.1:8009" },
+    ),
   ).rejects.toThrow("request exceeds");
   expect(fetch).not.toHaveBeenCalled();
 });
 it("keeps the deadline active after response headers", async () => {
   const cancelled = vi.fn();
-  mockFetch(async () => new Response(new ReadableStream({ pull() {}, cancel: cancelled })));
-  await expect(requestEvaluation({ ...request, timeoutMs: 25 })).rejects.toThrow(
+  mockResponse(new ReadableStream({ pull() {}, cancel: cancelled }));
+  await expect(evaluate(request.body, { ...request, timeoutMs: 25 })).rejects.toThrow(
     "TypeSafe evaluation timed out.",
   );
   expect(cancelled).toHaveBeenCalledOnce();
@@ -57,60 +62,46 @@ it("rejects cancellation concurrent with body EOF", async () => {
     },
     { highWaterMark: 0 },
   );
-  mockFetch(async () => new Response(body));
-  await expect(requestEvaluation({ ...request, signal: controller.signal })).rejects.toThrow(
+  mockResponse(body);
+  await expect(evaluate(request.body, request, controller.signal)).rejects.toThrow(
     "TypeSafe evaluation cancelled.",
   );
 });
 it("preserves bounded multi-chunk JSON responses", async () => {
   const body = new ReadableStream<Uint8Array>({
     start(stream) {
-      stream.enqueue(new TextEncoder().encode('{"value":'));
-      stream.enqueue(new TextEncoder().encode("0.37}"));
+      stream.enqueue(
+        new TextEncoder().encode('{"model":"jev-test","answers":{"q":{"type":"noul","noul":'),
+      );
+      stream.enqueue(
+        new TextEncoder().encode('0.37}},"usage":{"input_tokens":1,"output_tokens":1}}'),
+      );
       stream.close();
     },
   });
-  mockFetch(async () => new Response(body));
-  await expect(requestEvaluation(request)).resolves.toEqual({ value: 0.37 });
+  mockResponse(body);
+  await expect(evaluate(request.body, request)).resolves.toEqual({ evaluation: response });
 });
-it.each<{ status: number; reason: string; headers: HeadersInit; retryAfterMs?: number }>([
-  { status: 400, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
-  { status: 401, reason: "authentication", headers: {}, retryAfterMs: undefined },
-  { status: 413, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
-  { status: 422, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
-  {
-    status: 429,
-    reason: "rate-limited",
-    headers: { "retry-after-ms": "250", "retry-after": "10" },
-    retryAfterMs: 250,
-  },
-  {
-    status: 429,
-    reason: "rate-limited",
-    headers: { "retry-after-ms": "invalid", "retry-after": "10" },
-    retryAfterMs: 10000,
-  },
-  {
-    status: 429,
-    reason: "rate-limited",
-    headers: { "retry-after": "invalid" },
-    retryAfterMs: undefined,
-  },
+it.each<[number, string, HeadersInit, number?]>([
+  [400, "unsupported-input", {}],
+  [401, "authentication", {}],
+  [413, "unsupported-input", {}],
+  [422, "unsupported-input", {}],
+  [429, "rate-limited", { "retry-after-ms": "250", "retry-after": "10" }, 250],
+  [429, "rate-limited", { "retry-after-ms": "invalid", "retry-after": "10" }, 10000],
+  [429, "rate-limited", { "retry-after": "invalid" }],
 ])(
-  "classifies HTTP $status without consuming private bodies or retrying",
-  async ({ status, reason, headers, retryAfterMs }) => {
+  "classifies HTTP %s without consuming private bodies or retrying",
+  async (status, reason, headers, retryAfterMs) => {
     const pull = vi.fn(() => {
       throw new Error("synthetic credential and submitted state");
     });
     const cancel = vi.fn();
-    const fetch = mockFetch(
-      async () =>
-        new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
-          status,
-          headers: new Headers(headers),
-        }),
-    );
-    const error = await requestEvaluation(request).catch((caught: unknown) => caught);
+    const fetch = mockResponse(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+      status,
+      headers: new Headers(headers),
+    });
+    const error = await evaluate(request.body, request).catch((caught: unknown) => caught);
     expect(error).toMatchObject({ name: "EvaluationError", reason, retryAfterMs });
     if (reason === "unsupported-input") {
       expect(error).toHaveProperty("message", "TypeSafe rejected the supplied input.");
@@ -131,15 +122,9 @@ it.each([
 ])(
   "joins capture cancellation and release concurrently for $trigger/$status",
   async ({ status, trigger, reason }) => {
-    let finishCancellation!: () => void;
-    const cancellationGate = new Promise<void>((resolve) => {
-      finishCancellation = resolve;
-    });
-    let finishRelease!: () => void;
-    const releaseGate = new Promise<void>((resolve) => {
-      finishRelease = resolve;
-    });
-    const nativeCancel = vi.fn(() => cancellationGate);
+    const cancellationGate = Promise.withResolvers<void>();
+    const releaseGate = Promise.withResolvers<void>();
+    const nativeCancel = vi.fn(() => cancellationGate.promise);
     const stream = new ReadableStream<Uint8Array>(
       {
         start(controller) {
@@ -154,10 +139,10 @@ it.each([
     const [consumer, capture] = stream.tee();
     const release = vi.fn(async () => {
       await capture.cancel();
-      await releaseGate;
+      await releaseGate.promise;
     });
     const controller = new AbortController();
-    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementationOnce(async () => {
+    vi.spyOn(providerHttp, "fetchWithProviderHttpGuard").mockImplementationOnce(async () => {
       if (trigger === "abort-at-headers") {
         controller.abort("synthetic-private-abort");
       }
@@ -169,16 +154,11 @@ it.each([
       };
     });
     let settled = false;
-    const outcome = requestEvaluation({ ...request, signal: controller.signal }).then(
-      (value) => {
+    const outcome = evaluate(request.body, request, controller.signal)
+      .catch((error: unknown) => error)
+      .finally(() => {
         settled = true;
-        return value;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
+      });
     try {
       await setImmediate();
       if (trigger === "abort") {
@@ -188,10 +168,10 @@ it.each([
       expect(release).toHaveBeenCalledOnce();
       expect(nativeCancel).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
-      finishCancellation();
+      cancellationGate.resolve();
       await setImmediate();
       expect(settled).toBe(false);
-      finishRelease();
+      releaseGate.resolve();
       expect(await outcome).toMatchObject({ name: "EvaluationError", reason });
       if (trigger === "overflow") {
         expect(await outcome).toHaveProperty("message", "TypeSafe response exceeds its limit.");
@@ -202,8 +182,8 @@ it.each([
     } finally {
       // Also release the fixture after an assertion fails against the old sequential implementation.
       const cancellation = Promise.allSettled([consumer.cancel(), capture.cancel()]);
-      finishCancellation();
-      finishRelease();
+      cancellationGate.resolve();
+      releaseGate.resolve();
       await cancellation;
       await outcome;
     }
@@ -211,8 +191,8 @@ it.each([
 );
 
 it("binds standard provider credentials to the provider's own API origin", async () => {
-  const fetch = mockFetch(async () => new Response("{}"));
-  await requestEvaluation({
+  const fetch = mockResponse(JSON.stringify(response));
+  await evaluate(request.body, {
     ...request,
     baseUrl: "https://unrelated.example",
     providerConfig: { baseUrl: "https://decision.example.com/v1", models: [] },

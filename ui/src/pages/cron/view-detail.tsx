@@ -1,5 +1,4 @@
 import { createMemo } from "solid-js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJob } from "../../api/types.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -23,7 +22,7 @@ export function DetailView(
   );
   const hasDetailTabs = () => props.mode === "job" && Boolean(selectedJob());
   const showHistory = () => props.mode === "job" && props.detailTab === "history";
-  const conditionActivity = createMemo(() => {
+  const conditionActivity = () => {
     const job = selectedJob();
     return job?.trigger
       ? {
@@ -32,7 +31,7 @@ export function DetailView(
           lastFiredAtMs: job.state?.lastTriggerFireAtMs,
         }
       : undefined;
-  });
+  };
   return (
     <section class="cron-page cron-page--detail" data-panel-mode={props.mode}>
       <SettingsPage wide>
@@ -83,12 +82,11 @@ function DetailHeader(
       : t("cron.detail.newTitle");
   const description = () =>
     props.mode === "job" ? props.selectedJob?.description?.trim() : undefined;
-  const systemOwned = () => isSystemMonitorDeclaration(props.selectedJob?.declarationKey);
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunAtMs = () => props.selectedJob?.state?.nextRunAtMs;
   const nextRunSuffix = () =>
-    typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs())
+    nextRunAtMs() !== undefined
       ? ` · ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs())}`
       : "";
   const subtitle = () =>
@@ -106,7 +104,7 @@ function DetailHeader(
           </div>
         ) : undefined}
         <div class="cron-detail-meta">
-          {props.mode === "job" && props.selectedJob && props.canManage && !systemOwned() ? (
+          {props.mode === "job" && props.selectedJob && props.canManage ? (
             <EnabledSwitch {...props} job={props.selectedJob} />
           ) : undefined}
           <span class="cron-detail-sub">{subtitle()}</span>
@@ -120,7 +118,7 @@ function DetailHeader(
               type="button"
               class="btn btn--sm"
               data-test-id="cron-run-now"
-              disabled={props.busy}
+              disabled={props.busy || !props.connected}
               onClick={() => {
                 const job = props.selectedJob;
                 if (job) {

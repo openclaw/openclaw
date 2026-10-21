@@ -18,8 +18,9 @@ import {
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../account-selection.js";
 import {
+  MATRIX_CONFIG_STRING_FIELDS,
   resolveMatrixAccountStringValues,
-  type MatrixResolvedStringField,
+  type MatrixResolvedStringField as MatrixConfigStringField,
 } from "../../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 import type { CoreConfig } from "../../types.js";
@@ -65,15 +66,6 @@ function credentialsMatchBackfillAuthLineage(params: {
 
 type MatrixLoginResponse = { access_token?: string; user_id?: string; device_id?: string };
 
-const MATRIX_CONFIG_STRING_FIELDS = [
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceId",
-  "deviceName",
-] as const satisfies readonly MatrixResolvedStringField[];
-type MatrixConfigStringField = (typeof MATRIX_CONFIG_STRING_FIELDS)[number];
 const MATRIX_AUTH_SECRET_FIELDS = ["accessToken", "password"] as const;
 type MatrixAuthSecretField = (typeof MATRIX_AUTH_SECRET_FIELDS)[number];
 type MatrixConfiguredAuthInput = { value: unknown; path: string };
@@ -494,9 +486,6 @@ export async function resolveMatrixAuth(params?: {
         env,
         accountId,
       );
-    } else if (hasMatchingCachedToken) {
-      const { touchMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
-      await touchMatrixCredentials(env, accountId);
     }
     return buildResolvedMatrixAuth(resolved, {
       accountId,
@@ -509,8 +498,6 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (cachedCredentials) {
-    const { touchMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
-    await touchMatrixCredentials(env, accountId);
     return buildResolvedMatrixAuth(resolved, {
       accountId,
       homeserver: cachedCredentials.homeserver,

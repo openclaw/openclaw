@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
@@ -116,7 +115,7 @@ function ListTabs(props: CronProps) {
           }
           props.onListTabChange("tasks");
           if (value !== props.jobsEnabledFilter) {
-            void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
+            props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
           }
         },
       }}
@@ -145,7 +144,7 @@ function Toolbar(
               aria-label={t("cron.list.searchPlaceholder")}
               placeholder={t("cron.list.searchPlaceholder")}
               onInput={(e) =>
-                void props.onJobsFiltersChange({
+                props.onJobsFiltersChange({
                   cronJobsQuery: e.currentTarget.value,
                 })
               }
@@ -254,9 +253,8 @@ function JobRow(
 ) {
   const displayName = () => props.job.displayName ?? props.job.name;
   const description = () => props.job.description?.trim();
-  const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const nextRunAtMs = () => props.job.state?.nextRunAtMs;
-  const hasNextRun = () => typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs());
+  const hasNextRun = () => nextRunAtMs() !== undefined;
   return (
     <div
       class={["cron-table__row", { "cron-table__row--paused": !props.job.enabled }]}
@@ -270,7 +268,7 @@ function JobRow(
             <span class="cron-table__name-text">{displayName()}</span>
             {props.job.trigger ? <TriggerIndicator /> : undefined}
           </span>
-          {systemOwned() ? undefined : <AgentRowChip agentId={props.job.agentId} />}
+          <AgentRowChip agentId={props.job.agentId} />
           {description() || !props.job.enabled ? (
             <span class="cron-table__name-meta">
               {description() ? (
@@ -323,12 +321,12 @@ function JobRow(
             data-test-id={`cron-row-run-${props.job.id}`}
             title={t("cron.actions.runNowJob", { name: displayName() })}
             aria-label={t("cron.actions.runNowJob", { name: displayName() })}
-            disabled={props.busy}
+            disabled={props.busy || !props.connected}
             onClick={() => props.onRun(props.job, "force")}
           >
             <Icon name="play" />
           </button>
-          {systemOwned() ? undefined : <EnabledSwitch {...props} job={props.job} compact />}
+          <EnabledSwitch {...props} job={props.job} compact />
           <JobMenu {...props} job={props.job} />
         </span>
       ) : undefined}
@@ -337,7 +335,7 @@ function JobRow(
 }
 function JobCell(props: { class: string; label: string; value: JSX.Element }) {
   return (
-    <span class={`cron-table__cell ${props.class}`}>
+    <span class={["cron-table__cell", props.class]}>
       <span class="cron-table__cell-label">{props.label}</span>
       <span class="cron-table__cell-value">{props.value}</span>
     </span>

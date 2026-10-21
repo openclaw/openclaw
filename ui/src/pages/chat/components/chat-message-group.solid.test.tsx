@@ -1,20 +1,28 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ControlUiHost,
   ControlUiReplacement,
 } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { MessageGroup, type NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { renderActivityGroup } from "./chat-message-group.test-support.ts";
+import { buildLocalUserMessage } from "../user-message-content.ts";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
+import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import {
+  ActivityGroup,
+  MessageGroup,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-view.tsx";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
 it.each([false, true])(
@@ -52,8 +60,10 @@ it.each([false, true])(
     expect(
       [...(metadata?.querySelectorAll(".msg-meta__tokens") ?? [])].map((node) => node.textContent),
     ).toEqual(unavailable ? ["Token usage and cost unavailable"] : ["↑150", "↓70"]);
-    expect(metadata?.querySelector(".msg-meta__cost") === null).toBe(unavailable);
-    expect(metadata?.querySelector(".msg-meta__ctx") === null).toBe(unavailable);
+    expect([
+      metadata?.querySelector(".msg-meta__cost") === null,
+      metadata?.querySelector(".msg-meta__ctx") === null,
+    ]).toEqual([unavailable, unavailable]);
   },
 );
 
@@ -103,6 +113,24 @@ it.each([
   expect(onReply.mock.calls.map(([target]) => target.messageId)).toEqual(
     answered ? ["answer"] : [],
   );
+});
+
+it("does not give provider speech unframed answer actions", () => {
+  const speech = {
+    role: "assistant",
+    content: "It exited with code zero.",
+    stopReason: "stop",
+    timestamp: 1000,
+    __openclaw: { id: "spoken", voiceTranscript: "provider-owned" },
+  };
+  const group = createMessageGroup(speech, "assistant");
+  const prepared = prepareGroupMessage(group, group.messages[0]!, {
+    showReasoning: false,
+    onReply: vi.fn(),
+  });
+  expect(prepared.ownsActions).toBe(false);
+  expect(prepared.actions?.replyTarget).toBeUndefined();
+  expect(prepared.source.displayMarkdown).toBe(speech.content);
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
@@ -209,7 +237,9 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
     showToolCalls: true,
     isToolMessageExpanded: () => true,
   });
-  const view = mountSolid(() => <LitContent value={renderActivityGroup([group], options())} />);
+  const view = mountSolid(() => (
+    <ActivityGroup groups={[group]} options={options()} presentation="standalone" />
+  ));
   await waitForSolid(() => {
     expect(
       view.container.querySelectorAll(".chat-tools-inline .chat-tool-msg-collapse"),
@@ -248,12 +278,16 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const plugins: ControlUiPluginCapability = {
     errors: [],
     hasPlugins: true,
+    revision: 0,
     registryStatus: "complete",
     canReload: false,
     isLoading: () => false,
     reload: async () => undefined,
     refresh: async () => undefined,
     registrations: () => [],
+    loadSettingsView: async () => {
+      throw new Error("This chat fixture does not load Settings presentations.");
+    },
     selectReplacement: vi.fn(),
     selectedReplacement: (surface) =>
       surface === "tool-result" && selected
@@ -291,9 +325,9 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const [active, setActive] = createSignal(true);
   const view = mountSolid(
     () => (
-      <SolidContentPresentation value={active}>
+      <ContentPresentation value={active}>
         <MessageGroup group={group()} options={options()} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     ),
     { wrapper: provider.wrapper },
   );
@@ -420,4 +454,131 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   } finally {
     view.unmount();
   }
+});
+
+describe("owned message controls", () => {
+  beforeEach(() => localStorage.removeItem("openclaw:skip-rewind-confirm"));
+  afterEach(() => dismissConfirmedActionPopovers(document.body));
+
+  it("keeps an open work-context disclosure when the same message key receives fresh metadata", () => {
+    const message = (title: string) =>
+      buildLocalUserMessage({
+        text: "Explain this selection",
+        createdAt: 1000,
+        workContext: { title, page: "chat" },
+      });
+    const [source, setSource] = createSignal(message("Before"));
+    const view = mountSolid(() => (
+      <GroupedMessage
+        preparation={prepareChatMessageRender(source())}
+        messageKey="same-message"
+        options={{ isStreaming: false, showReasoning: false }}
+      />
+    ));
+    const disclosure = view.container.querySelector<HTMLDetailsElement>(
+      ".chat-context-attachment",
+    )!;
+    expect(disclosure).not.toBeNull();
+    disclosure.open = true;
+    setSource(message("After"));
+    flush();
+    expect(view.container.querySelector(".chat-context-attachment")).toBe(disclosure);
+    expect(disclosure.open).toBe(true);
+    expect(disclosure.textContent).toContain("After");
+  });
+
+  it("retains grouped rewind and timestamp controls with current callbacks and metadata", () => {
+    const previous = vi.fn();
+    const current = vi.fn();
+    const prompt = createMessageGroup({ role: "user", content: "Prompt", timestamp: 1000 }, "user");
+    const answerAt = (timestamp: number, input: number, output: number) => ({
+      role: "assistant",
+      content: "Answer",
+      timestamp,
+      usage: { input, output },
+    });
+    const answer = createMessageGroup(answerAt(1001, 100, 10), "assistant");
+    const [options, setOptions] = createSignal({ onRewind: previous, contextWindow: 4000 });
+    const [assistant, setAssistant] = createSignal(answer);
+    const view = mountSolid(() => (
+      <>
+        <MessageGroup group={prompt} options={{ showReasoning: false, ...options() }} />
+        <MessageGroup
+          group={assistant()}
+          options={{ showReasoning: false, contextWindow: options().contextWindow }}
+        />
+      </>
+    ));
+    const trigger = view.getByRole("button", { name: "Rewind" });
+    trigger.click();
+    const confirmation = document.querySelector<HTMLElement>(".chat-confirm-popover")!;
+    expect(confirmation).not.toBeNull();
+    setOptions({ onRewind: current, contextWindow: 8000 });
+    flush();
+    expect(view.getByRole("button", { name: "Rewind" })).toBe(trigger);
+    expect(document.querySelector(".chat-confirm-popover")).toBe(confirmation);
+    confirmation.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes")!.click();
+    expect(previous).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledOnce();
+
+    const timestamp = view.container.querySelector<HTMLButtonElement>(
+      ".chat-group.assistant .msg-meta__summary",
+    )!;
+    expect(timestamp).not.toBeNull();
+    timestamp.focus();
+    setAssistant({
+      ...answer,
+      timestamp: 2001,
+      messages: [{ ...answer.messages[0]!, message: answerAt(2001, 200, 20) }],
+    });
+    flush();
+    expect(view.container.querySelector(".chat-group.assistant .msg-meta__summary")).toBe(
+      timestamp,
+    );
+    expect(document.activeElement).toBe(timestamp);
+  });
+});
+
+it("leaves timestamp attributes untouched when only message usage changes", () => {
+  const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(301_000);
+  const answer = createMessageGroup(
+    { role: "assistant", content: "Answer", timestamp: 1000, usage: { input: 100, output: 10 } },
+    "assistant",
+  );
+  const [group, setGroup] = createSignal(answer);
+  const view = mountSolid(() => (
+    <MessageGroup group={group()} options={{ showReasoning: false, contextWindow: 4000 }} />
+  ));
+  const time = view.container.querySelector<HTMLTimeElement>(".chat-group-timestamp")!;
+  const summary = view.container.querySelector<HTMLButtonElement>(".msg-meta__summary")!;
+  expect(time.textContent).toBe("5m ago");
+  const observer = new MutationObserver(() => {});
+  observer.observe(time, { attributes: true });
+  observer.observe(summary, { attributes: true });
+  calendarFormat.mockClear();
+  clock.mockReturnValue(361_000);
+  setGroup({
+    ...answer,
+    messages: [
+      {
+        ...answer.messages[0]!,
+        message: {
+          role: "assistant",
+          content: "Answer",
+          timestamp: 1000,
+          usage: { input: 200, output: 20 },
+        },
+      },
+    ],
+  });
+  flush();
+  expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑200");
+  expect(time.dateTime).toBe("1970-01-01T00:00:01.000Z");
+  expect(time.textContent).toBe("6m ago");
+  expect(observer.takeRecords()).toEqual([]);
+  observer.disconnect();
+  clock.mockRestore();
+  expect(calendarFormat).not.toHaveBeenCalled();
+  calendarFormat.mockRestore();
 });

@@ -52,6 +52,16 @@ async function history(params: Record<string, unknown>) {
   const result = await toolsFor().history.execute("recall", params);
   return result.details as { messages: unknown[] };
 }
+function messageIds(result: { messages: unknown[] }) {
+  return result.messages.map(readChatHistoryMessageId);
+}
+function append(
+  eventId: string,
+  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
+  target = scope,
+) {
+  return appendTranscriptMessage(target, { eventId, message });
+}
 
 describe("embedded session history anchors", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -76,13 +86,10 @@ describe("embedded session history anchors", () => {
     setRuntimeConfigSnapshot(config);
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
     for (const [index, id] of ["old", "middle", "newest"].entries()) {
-      await appendTranscriptMessage(scope, {
-        eventId: id,
-        message: {
-          role: index === 0 ? "user" : "assistant",
-          content: `${id === "old" ? "quasar question" : id} ${"x".repeat(700)}`,
-          timestamp: 1_700_000_000_000 + index,
-        },
+      await append(id, {
+        role: index === 0 ? "user" : "assistant",
+        content: `${id === "old" ? "quasar question" : id} ${"x".repeat(700)}`,
+        timestamp: 1_700_000_000_000 + index,
       });
     }
     projection = await createSessionRowProjection({ cfg: config });
@@ -194,10 +201,7 @@ describe("embedded session history anchors", () => {
   );
 
   it("reopens a search hit after a reset of the same physical session", async () => {
-    await appendTranscriptMessage(scope, {
-      eventId: "old-tool",
-      message: { role: "toolResult", content: "synthetic scan result" },
-    });
+    await append("old-tool", { role: "toolResult", content: "synthetic scan result" });
     await appendTranscriptEvent(scope, {
       type: "reset",
       id: "reset",
@@ -205,35 +209,27 @@ describe("embedded session history anchors", () => {
       timestamp: "2026-09-07T16:00:00.000Z",
       reason: "new",
     });
-    await appendTranscriptMessage(scope, {
-      eventId: "fresh",
-      message: { role: "user", content: "fresh after reset", timestamp: 1_700_000_000_400 },
+    await append("fresh", {
+      role: "user",
+      content: "fresh after reset",
+      timestamp: 1_700_000_000_400,
     });
 
     const current = await history({ sessionKey: scope.sessionKey, limit: 10 });
-    expect(current.messages.map(readChatHistoryMessageId)).toEqual(["reset", "fresh"]);
+    expect(messageIds(current)).toEqual(["reset", "fresh"]);
     const search = await toolsFor().search.execute("find", { query: "quasar" });
     expect((search.details as { results: Array<{ messageId?: string }> }).results).toEqual([
       expect.objectContaining(selector),
     ]);
-    const recalled = await history({
-      ...selector,
-      includeTools: true,
-      limit: 10,
-    });
-    expect(recalled.messages.map(readChatHistoryMessageId)).toEqual([
-      "old",
-      "middle",
-      "newest",
-      "old-tool",
-      "reset",
-    ]);
-    expect(recalled.messages.map(readChatHistoryMessageId)).not.toContain("fresh");
+    const recalled = await history({ ...selector, includeTools: true, limit: 10 });
+    expect(messageIds(recalled)).toEqual(["old", "middle", "newest", "old-tool", "reset"]);
+    expect(messageIds(recalled)).not.toContain("fresh");
   });
 
   it.each(["missing", "wrong-key", "wrong-agent"])(
     "rejects a %s physical session binding instead of returning the tail",
     async (binding) => {
+      const readPage = vi.spyOn(historyPages, "readChatHistoryPage");
       if (binding !== "missing") {
         const other = {
           agentId: binding === "wrong-agent" ? "main" : "work",
@@ -241,32 +237,36 @@ describe("embedded session history anchors", () => {
           sessionId: binding,
         };
         replaceSessionEntrySync(other, { sessionId: binding, updatedAt: Date.now() });
-        await appendTranscriptMessage(other, {
-          eventId: "old",
-          message: { role: "user", content: "other session" },
-        });
+        await append("old", { role: "user", content: "other session" }, other);
       }
       await expect(history({ ...selector, sessionId: binding, limit: 1 })).rejects.toThrow(
         "sessionId does not belong to sessionKey",
       );
+      expect(readPage).not.toHaveBeenCalled();
     },
   );
 
   it("reopens an archived physical session without the replacement's start boundary", async () => {
     const archived = { ...scope, sessionId: "archived-session" };
-    await appendTranscriptMessage(archived, {
-      eventId: "announcement",
-      message: {
+    await append(
+      "announcement",
+      {
         role: "user",
         provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
         content: "archived announcement",
         timestamp: 1_600_000_000_000,
       },
-    });
-    await appendTranscriptMessage(archived, {
-      eventId: "archived-answer",
-      message: { role: "assistant", content: "archived answer", timestamp: 1_600_000_000_001 },
-    });
+      archived,
+    );
+    await append(
+      "archived-answer",
+      {
+        role: "assistant",
+        content: "archived answer",
+        timestamp: 1_600_000_000_001,
+      },
+      archived,
+    );
     replaceSessionEntrySync(scope, {
       sessionId: scope.sessionId,
       updatedAt: Date.now(),
@@ -278,7 +278,7 @@ describe("embedded session history anchors", () => {
       messageId: "archived-answer",
       limit: 1,
     });
-    expect(result.messages.map(readChatHistoryMessageId)).toEqual(["archived-answer"]);
+    expect(messageIds(result)).toEqual(["archived-answer"]);
   });
 
   it("preserves the anchor when the embedded transport byte cap drops neighbors", async () => {
@@ -287,7 +287,7 @@ describe("embedded session history anchors", () => {
       method: "chat.history",
       params: { ...selector, limit: 3 },
     });
-    expect(result.messages.map(readChatHistoryMessageId)).toEqual(["old"]);
+    expect(messageIds(result)).toEqual(["old"]);
     expect(Buffer.byteLength(JSON.stringify(result.messages))).toBeLessThanOrEqual(1_200);
   });
 

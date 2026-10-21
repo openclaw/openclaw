@@ -11,7 +11,12 @@ export const PENDING_FINAL_DELIVERY_CLEAR_PATCH = {
 } as const satisfies Partial<SessionEntry>;
 
 export function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
-  const stripped = stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars });
+  // The pending reply may belong to an ordinary turn interrupted by this heartbeat.
+  const stripped = stripHeartbeatToken(text, {
+    mode: "heartbeat",
+    maxAckChars: ackMaxChars,
+    allowTruncated: false,
+  });
   return {
     shouldClear: stripped.shouldSkip,
     replayText: stripped.didStrip && stripped.text ? stripped.text : text,

@@ -592,7 +592,10 @@ pnpm android:release:validate -- \
 The harness builds the Play Debug phone app, Debug Wear app, and their
 instrumentation APKs once, then uses fresh
 API 36 phone and API 34 round Wear emulators. It owns their temporary state,
-processes, and cleanup.
+processes, and cleanup. Both emulators boot with a 16 KiB VSOCK packet limit to
+avoid large contiguous kernel allocations that can disconnect ADB during
+transfers. The harness verifies each guest's limit before installing its app and
+records it in the qualification proof.
 
 The **Android Release E2E** workflow runs this command directly, during eligible
 full manual CI at the workflow's exact source SHA, and before a manual Android

@@ -7,11 +7,14 @@ import {
   type CodexCatalogDecodeResult,
   type CodexClientRequestAttempt,
 } from "./client-catalog-response.js";
-import type { CodexCatalogDecodeRoute } from "./client-message-frames.js";
+import type { CodexCatalogDecodeRoute } from "./client-catalog-route.js";
 import { isJsonObject } from "./protocol.js";
+import { CodexCatalogResponseTooLargeError } from "./rpc-error.js";
 
 const INLINE_CATALOG_MAX_BYTES = 64 * 1024;
 const CATALOG_MAX_BYTES = 8 * 1024 * 1024;
+// Bounded headroom for irreducible previews; larger singletons retain the overflow cooldown.
+const CATALOG_SINGLETON_MAX_BYTES = 64 * 1024 * 1024;
 const CATALOG_WORKER_IDLE_MS = 60_000;
 const runInCatalogWorkerContext = AsyncLocalStorage.snapshot();
 
@@ -50,12 +53,15 @@ export class CodexCatalogWorker {
     if (this.closed) {
       return undefined;
     }
-    if (line.byteLength > CATALOG_MAX_BYTES) {
-      const error = new Error(
-        "Codex catalog response exceeds 8 MiB; reduce oversized thread previews and retry.",
-      );
+    const oversizedSingleton =
+      line.byteLength > CATALOG_MAX_BYTES &&
+      route !== "unresolved" &&
+      route.kind === "list" &&
+      attempts.get(route.id)?.catalogProjection?.singleThread === true;
+    if (line.byteLength > (oversizedSingleton ? CATALOG_SINGLETON_MAX_BYTES : CATALOG_MAX_BYTES)) {
+      const error = new CodexCatalogResponseTooLargeError();
       return route === "unresolved"
-        ? { failures: [{ value: "<oversized catalog response>", error, fragmentCount: 1 }] }
+        ? { failures: [{ byteCount: line.byteLength, fragmentCount: 1 }] }
         : { failures: [], projectionError: { id: route.id, error } };
     }
     if (route !== "unresolved" && line.byteLength <= INLINE_CATALOG_MAX_BYTES) {
@@ -66,11 +72,6 @@ export class CodexCatalogWorker {
         // Keep malformed-payload diagnostics off the main thread.
       }
       if (parsed !== undefined) {
-        // Cache callbacks observe closure and cancellation before asynchronous delivery.
-        await Promise.resolve();
-        if (this.closed) {
-          return undefined;
-        }
         const attempt = attempts.get(route.id);
         const projection = attempt?.catalogProjection;
         return projectCodexCatalogMessage(
@@ -97,7 +98,7 @@ export class CodexCatalogWorker {
         workerUrl: resolveRuntimeWorkerUrl(codexCatalogPageWorkerEntrypoint),
         workerClass: "singleton",
         maxPendingTasks: 1,
-        maxPendingBytes: CATALOG_MAX_BYTES,
+        maxPendingBytes: CATALOG_SINGLETON_MAX_BYTES,
         idleTimeoutMs: 0,
         restartOnError: false,
       });
@@ -111,7 +112,7 @@ export class CodexCatalogWorker {
         ? new Uint8Array(line.buffer)
         : Uint8Array.from(line);
     const decoded = await this.pool.run(
-      { bytes, route, remainingRows },
+      { bytes, route, remainingRows, oversizedSingleton },
       {
         inputBytes: bytes.byteLength,
         transferList: (input) => [input.bytes.buffer],
@@ -121,6 +122,13 @@ export class CodexCatalogWorker {
       return undefined;
     }
     this.armIdleRetirement();
+    if (oversizedSingleton && !decoded.message) {
+      // Restore the local error type after worker serialization so the existing cooldown applies.
+      return {
+        failures: decoded.failures,
+        projectionError: { id: route.id, error: new CodexCatalogResponseTooLargeError() },
+      };
+    }
     return decoded;
   }
 

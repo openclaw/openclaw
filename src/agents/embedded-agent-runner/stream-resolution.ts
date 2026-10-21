@@ -4,6 +4,7 @@ import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
+import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
@@ -48,7 +49,7 @@ function isDefaultOpenClawStreamFnForModel(
   if (!streamFn || streamFn === llmRuntime.streamSimple) {
     return true;
   }
-  const api = typeof model.api === "string" ? model.api.trim() : "";
+  const api = model.api.trim();
   if (!api) {
     return false;
   }
@@ -265,7 +266,13 @@ function wrapEmbeddedAgentStreamFn(
   };
   return (m, context, options) => {
     params.assertCurrent?.();
-    return transport(m, transformContext(context), mergeRunSignal(options));
+    const mergedOptions = mergeRunSignal(options);
+    return admitProviderRateLimitStream(
+      m,
+      mergedOptions,
+      (admittedOptions) => transport(m, transformContext(context), admittedOptions),
+      params.assertCurrent,
+    );
   };
 }
 

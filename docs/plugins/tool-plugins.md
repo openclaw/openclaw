@@ -615,14 +615,15 @@ clawhub package publish ./stock-quotes --dry-run
 clawhub package publish ./stock-quotes
 ```
 
-Install with an explicit ClawHub locator:
+Install from ClawHub:
 
 ```bash
-openclaw plugins install clawhub:your-org/stock-quotes
+openclaw plugins install your-org/stock-quotes
 ```
 
-Bare npm package specs install from npm, but ClawHub is the preferred
-discovery and distribution surface for OpenClaw plugins. See [ClawHub publishing](/clawhub/publishing) for owner scope and
+ClawHub is the default source for package specs and the preferred
+discovery and distribution surface for OpenClaw plugins. Use `npm:<package>`
+for an npm install. See [ClawHub publishing](/clawhub/publishing) for owner scope and
 release review.
 
 ## Troubleshooting

@@ -1,8 +1,8 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import {
   createTranscriptionSession,
+  createTranscriptionSocketHarness,
   emitCommitted,
   emitCompleted,
   emitDelta,
@@ -54,43 +54,8 @@ function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload) => JSON.parse(payload) as SentRealtimeEvent);
 }
 
-const sessions = new Set<{ close(): void }>();
-
-async function waitForFakeSocket(
-  session: { close(): void },
-  index = 0,
-): Promise<FakeWebSocketInstance> {
-  sessions.add(session);
-  await vi.dynamicImportSettled();
-  const existing = FakeWebSocket.instances[index];
-  if (existing) {
-    return existing;
-  }
-  const created = createDeferred<FakeWebSocketInstance>();
-  FakeWebSocket.onCreated = (socket) => {
-    if (FakeWebSocket.instances[index] === socket) {
-      created.resolve(socket);
-    }
-  };
-  try {
-    return await vi.waitFor(() => created.promise);
-  } finally {
-    FakeWebSocket.onCreated = undefined;
-  }
-}
-
-async function connectFakeSession(
-  session: { connect(): Promise<void>; close(): void },
-  socketIndex = 0,
-): Promise<FakeWebSocketInstance> {
-  const connecting = session.connect();
-  const socket = await waitForFakeSocket(session, socketIndex);
-  socket.readyState = FakeWebSocket.OPEN;
-  socket.emit("open");
-  emitJson(socket, { type: "session.updated" });
-  await connecting;
-  return socket;
-}
+const socketHarness = createTranscriptionSocketHarness(FakeWebSocket);
+const { waitForFakeSocket, connectFakeSession } = socketHarness;
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
   const call = mock.mock.calls[index];
@@ -111,14 +76,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   });
 
   afterEach(() => {
-    // Close session ownership before its fake peers so cleanup cannot start a reconnect.
-    for (const session of sessions) {
-      session.close();
-    }
-    for (const socket of FakeWebSocket.instances) {
-      socket.close();
-    }
-    sessions.clear();
+    socketHarness.close();
     vi.unstubAllEnvs();
   });
 

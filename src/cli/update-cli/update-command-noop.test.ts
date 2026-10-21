@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
 const boundary = vi.hoisted(() => ({
@@ -39,19 +41,19 @@ vi.mock("./update-command-post-update.js", () => ({ finishUpdate: boundary.finis
 
 const { finishAlreadyCurrentUpdate } = await import("./update-command-noop.js");
 
-beforeEach(() => {
-  vi.resetAllMocks();
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-});
+beforeEach(() => vi.resetAllMocks());
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { managedServiceRoot: undefined, foreground: false },
-  { managedServiceRoot: "/serving/install", foreground: false },
-  { managedServiceRoot: "/serving/install", foreground: true },
-])(
-  "refreshes already-current policy only for native admission (root=$managedServiceRoot, foreground=$foreground)",
-  async ({ managedServiceRoot, foreground }) => {
+  { platform: "linux", managedServiceRoot: undefined, foreground: false },
+  { platform: "linux", managedServiceRoot: "/serving/install", foreground: false },
+  { platform: "linux", managedServiceRoot: "/serving/install", foreground: true },
+  { platform: "darwin", managedServiceRoot: undefined, foreground: false },
+  { platform: "win32", managedServiceRoot: undefined, foreground: false },
+] as const)(
+  "refreshes already-current policy only for native Linux admission (platform=$platform, root=$managedServiceRoot, foreground=$foreground)",
+  async ({ platform, managedServiceRoot, foreground }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     const root = "/target/install";
     const serviceRoot = managedServiceRoot ?? root;
     const before: PreManagedServiceStop = {
@@ -75,45 +77,38 @@ it.each([
     boundary.maintenance.mockResolvedValue(before);
     const refuseUpdate = vi.fn();
     await finishAlreadyCurrentUpdate({
-      root,
       managedServiceRoot,
       managedServiceRootRedirect: null,
-      opts: { yes: true, json: true },
-      result: {
-        status: "skipped",
-        mode: "npm",
+      ...finishParams({
         root,
-        reason: "already-current",
-        before: { version: "2026.9.5" },
-        after: { version: "2026.9.5" },
-        steps: [],
-        durationMs: 0,
-      },
-      requestedChannel: null,
-      storedChannel: "stable",
-      channel: "stable",
-      shouldRestart: true,
-      updateStepTimeoutMs: 30_000,
+        configSnapshot: createTestConfigSnapshot({}),
+        result: updateResult({
+          status: "skipped",
+          root,
+          reason: "already-current",
+          before: { version: "2026.9.5" },
+          after: { version: "2026.9.5" },
+          durationMs: 0,
+        }),
+        opts: { yes: true, json: true },
+        startedAt: 0,
+      }),
       invocationCwd: root,
-      startedAt: 0,
-      controlPlaneUpdateSentinelMeta: null,
       stop: vi.fn(),
       refuseUpdate,
     });
 
     expect(refuseUpdate).not.toHaveBeenCalled();
-    expect(boundary.maintenance).toHaveBeenCalledTimes(foreground ? 0 : 1);
-    for (const [index, phase] of (foreground ? [] : ["refresh"]).entries()) {
-      expect(boundary.maintenance).toHaveBeenNthCalledWith(
-        index + 1,
+    const refresh = platform === "linux" && !foreground;
+    expect(boundary.maintenance).toHaveBeenCalledTimes(refresh ? 1 : 0);
+    if (refresh) {
+      expect(boundary.maintenance).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          phase,
+          phase: "refresh",
           root: serviceRoot,
           expectedService: before,
+          handoffRoot: managedServiceRoot ? root : undefined,
         }),
-      );
-      expect(boundary.maintenance.mock.calls[index]?.[0].handoffRoot).toBe(
-        managedServiceRoot ? root : undefined,
       );
     }
     expect(boundary.finish).toHaveBeenCalledWith(

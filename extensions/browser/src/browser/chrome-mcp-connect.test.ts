@@ -21,12 +21,16 @@ describe("Chrome MCP subprocess startup diagnostics", () => {
   let homeDir: string;
   let options: NormalizedChromeMcpProfileOptions;
   let ownsDescendant = false;
-  let expectsSubprocess = true;
+
+  const assertGone = (pid: number) =>
+    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+  const rejectOperation = async () => {
+    throw new Error("failed startup must not admit an operation");
+  };
 
   beforeEach(async () => {
     warn.mockClear();
     ownsDescendant = false;
-    expectsSubprocess = true;
     state = await createOpenClawTestState({ prefix: "chrome-mcp-startup-" });
     await state.writeConfig({ logging: { redactSensitive: "off" } });
     // Worker env overlays do not change native os.homedir(); the runner isolates both homes.
@@ -99,23 +103,18 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     if (process.platform !== "win32") {
       expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
     }
-    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+    assertGone(pid);
     expect(getChromeMcpPid(profileName)).toBeNull();
   }
 
   afterEach(async () => {
     try {
       await closeChromeMcpSession(profileName);
-      if (expectsSubprocess) {
-        await expectSubprocessClosed();
-      }
     } finally {
       if (ownsDescendant) {
         const pid = Number(await fs.readFile(state.statePath("descendant-pid"), "utf8"));
         await fs.writeFile(state.statePath("descendant-stop"), "stop");
-        await vi.waitFor(() =>
-          expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" })),
-        );
+        await vi.waitFor(() => assertGone(pid));
       }
       await state.cleanup();
     }
@@ -144,20 +143,22 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         options.browserUrl =
           "wss://fixture-user:fixture-password@browser.example/chrome?token=fixture-token";
       }
-      const attempt = withChromeMcpLease(profileName, options, { ephemeral }, async () => {
-        throw new Error("failed startup must not admit an operation");
-      });
+      const attempt = withChromeMcpLease(profileName, options, { ephemeral }, rejectOperation);
       await expect(attempt).rejects.toThrow("fixture attach failed");
       await expect(attempt).rejects.toThrow("~/profiles/fixture-profile");
       await expect(attempt).rejects.toThrow("~/chrome/Profile 1");
+      await expect(attempt).rejects.toThrow("Chrome MCP existing-session attach failed");
+      await expect(attempt).rejects.toThrow(
+        ephemeral
+          ? "the configured Chromium user data dir (~/chrome/Profile 1)"
+          : /the configured Chrome endpoint \(wss:\/\/browser\.example\/chrome\?token=/,
+      );
       await expect(attempt).rejects.not.toThrow(/fixture-user|fixture-password|fixture-token/);
       await expect(attempt).rejects.not.toThrow(homeDir);
       if (ownsDescendant) {
         const descendantPid = Number(await fs.readFile(state.statePath("descendant-pid"), "utf8"));
         expect(descendantPid).toBeGreaterThan(0);
-        expect(() => process.kill(descendantPid, 0)).toThrow(
-          expect.objectContaining({ code: "ESRCH" }),
-        );
+        assertGone(descendantPid);
       }
       await expectSubprocessClosed();
 
@@ -178,12 +179,8 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   );
 
   it("reports an unspawnable command without waiting for an unused stderr pipe", async () => {
-    expectsSubprocess = false;
     options.command = state.statePath("missing-mcp-command");
-    const attempt = withChromeMcpLease(profileName, options, { ephemeral: true }, async () => {
-      throw new Error("failed startup must not admit an operation");
-    });
-
+    const attempt = withChromeMcpLease(profileName, options, { ephemeral: true }, rejectOperation);
     await expect(attempt).rejects.toThrow("ENOENT");
     expect(warn).not.toHaveBeenCalled();
     expect(getChromeMcpPid(profileName)).toBeNull();

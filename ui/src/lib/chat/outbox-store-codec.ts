@@ -4,6 +4,7 @@ import { readNonBlankString as normalizeOptionalString } from "@openclaw/normali
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
 import { readChatWorkContext } from "../../../../src/chat/work-context.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import type {
@@ -18,6 +19,8 @@ import { readHumanMentions } from "./human-mentions.ts";
 import { isChatReplyTarget } from "./reply-target.ts";
 import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
+
+registerChatComposerEnglish();
 
 registerChatMessageMetadataEnglish();
 
@@ -335,7 +338,7 @@ export function normalizeStoredSession(entry: unknown): StoredComposerSession | 
     ...(draft ? { draft } : {}),
     ...(draftMentions ? { draftMentions } : {}),
     ...(goalMode ? { goalMode } : {}),
-    ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
+    ...(replyTarget ? { replyTarget } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
     updatedAt,

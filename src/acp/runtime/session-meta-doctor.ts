@@ -58,7 +58,6 @@ type DoctorAcpScope = { config: OpenClawConfig; env: NodeJS.ProcessEnv; pluginId
 export type AcpSessionKeyRepairReport = {
   found: number;
   repaired: number;
-  scannedRows: number;
   warnings: string[];
   backups?: string[];
 };
@@ -74,11 +73,11 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
   apply: boolean;
   authority?: DoctorSqliteMaintenanceAuthority;
   targets?: readonly ExistingAgentDatabaseTarget[];
+  integrityCheck?: "quick" | "full";
 }): Promise<AcpSessionKeyRepairReport> {
   const result: AcpSessionKeyRepairReport = {
     found: 0,
     repaired: 0,
-    scannedRows: 0,
     warnings: [],
   };
   if (params.apply && !params.authority) {
@@ -92,7 +91,10 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
     params.authority?.assertCurrent();
     assertExistingDatabaseIdentity(sourcePath, sourceIdentity.key, sourceIdentity.birthtime);
   };
-  const database = await openExistingOpenClawStateDatabaseReadOnly({ env: params.env });
+  const database = await openExistingOpenClawStateDatabaseReadOnly({
+    env: params.env,
+    integrityCheck: params.integrityCheck ?? "quick",
+  });
   let rows: AcpSessionRow[] = [];
   if (database) {
     try {
@@ -101,7 +103,6 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
     } finally {
       database.walMaintenance.close();
     }
-    result.scannedRows = rows.length;
     const candidateAgentIds = [
       ...new Set([...listAgentIds(params.cfg), ...targets.map((target) => target.agentId)]),
     ];

@@ -168,8 +168,8 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
         title: "notes.md",
         mimeType: "text/markdown",
         sourceIdentity: "attachment:notes",
-        resolveSource: (requestUpdate) => {
-          requestSourceUpdate = requestUpdate;
+        resolveSource: (onSourceChange) => {
+          requestSourceUpdate = onSourceChange;
           return { status: "ready", src: source };
         },
       };

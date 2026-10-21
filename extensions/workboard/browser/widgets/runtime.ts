@@ -182,6 +182,26 @@ export class WorkboardWidgetModel {
   get cards() {
     return getWorkboardState(this.runtime.owner).cards.filter(isActiveWorkboardCard);
   }
+  get hasMore() {
+    return Boolean(getWorkboardState(this.runtime.owner).nextCursor);
+  }
+  get loadedCardCount() {
+    return getWorkboardState(this.runtime.owner).cards.length;
+  }
+  get loading() {
+    return this.runtime.loading;
+  }
+  async loadMore(): Promise<boolean> {
+    if (this.isActive() && this.connected) {
+      return loadWorkboard({
+        host: this.runtime.owner,
+        client: this.host,
+        more: true,
+        requestUpdate: () => this.runtime.notify(),
+      });
+    }
+    return false;
+  }
   get statuses() {
     return getWorkboardState(this.runtime.owner).statuses;
   }

@@ -73,7 +73,9 @@ change chart totals. Selecting sessions narrows the charts while retaining the
 comparison table. JSON export loads the full matching report.
 
 The overview uses a rebuildable usage projection maintained after committed
-transcript changes. Background refresh waits for 30 seconds without new usage
+transcript changes. A refresh that overlaps agent database creation joins that
+database's preparation before writing its projection. An empty store stays absent
+until a transcript needs a rollup. Background refresh waits for 30 seconds without new usage
 or an active agent turn. After five minutes of pending work, it can start in the
 next idle gap without another quiet period. Explicit cost and overview reads
 flush and await pending updates, so a completed turn does not need to wait for
@@ -428,7 +430,8 @@ provider-neutral for CLI, app, and Control UI consumers.
   profile). Combines the account credits endpoint with the key quota endpoint,
   so account balance/spend, key budget, and daily/weekly/monthly usage appear
   when the credential can access them. Either endpoint can enrich the snapshot
-  independently.
+  independently. Transport failures include their underlying cause in the usage
+  error shown by `openclaw status --usage --json`.
 - **Venice**: API key via env/config/auth store (`VENICE_API_KEY`). Shows USD and
   DIEM balances plus DIEM epoch allocation usage when reported.
 - **Xiaomi MiMo**: two separate usage surfaces. Pay-as-you-go uses an API key

@@ -11,6 +11,31 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
+The built-in index supports SQLite and PostgreSQL agent databases. The PostgreSQL
+engine remains experimental. Search uses engine-local text ranking, so scores and ordering
+can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
+trigram tokenizer, and `vector` for semantic search. Explicit
+`memory.search.provider: "none"` enables keyword-only search without `vector`;
+memory status reports this as `fts-only`. See
+[PostgreSQL memory search](/concepts/memory#postgresql-memory-search) for lifecycle
+behavior and [Database engines](/reference/database-engines#search-on-postgresql)
+for extension setup.
+
+On PostgreSQL, both body keywords and filename/path lookup use the admitted
+index. Source and selected-agent scope restrict candidates before the result
+limit; semantic retrieval also filters the embedding model. Text uses native
+full-text ranking; semantic retrieval uses exact
+cosine distance over a derived float32 vector projection. Hybrid search keeps
+the same vector/text weights, but PostgreSQL text scores are not SQLite BM25
+scores. A phrase with nearby terms can rank above scattered terms without
+promising identical ordering across engines.
+
+PostgreSQL memory queries accept at most 4,096 UTF-16 code units and 128 terms, return
+at most 200 hits, and bound each snippet to 700 characters. Larger queries return
+an actionable error before search. Memory transcript recall retains its existing
+200-candidate window followed by session visibility checks; it does not promise
+complete recall beyond that window or SQL-level session permission filtering.
+
 The result-count argument is `maxResults` (an integer of at least 1). The tool
 also accepts `max_results` and `limit` as aliases. If several are supplied,
 `maxResults` takes precedence over `max_results`, which takes precedence over
@@ -42,7 +67,7 @@ explicitly:
 {
   memory: {
     search: {
-      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "lmstudio", "github-copilot", "openai-compatible"
+      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "omlx", "lmstudio", "github-copilot", "openai-compatible"
     },
   },
 }
@@ -50,7 +75,11 @@ explicitly:
 
 `provider` can also reference a custom `models.providers.<id>` entry (for
 example `ollama-5080`), as long as that entry sets `api` to `"ollama"` or
-another provider id with a memory embedding adapter.
+another provider id with a memory embedding adapter. Entries using
+`api: "openai-completions"`, `api: "openai-responses"`, or a `baseUrl` without an
+explicit API use the generic OpenAI-compatible bridge. For ClawRouter, see
+[Text embeddings for memory](/providers/clawrouter#text-embeddings-for-memory)
+for the `/v1` base URL, explicit router credential binding, and qualified model id.
 
 For local embeddings with no API key, install and configure the official
 llama.cpp provider, then set `provider: "local"`:
@@ -83,19 +112,20 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 
 ## Supported providers
 
-| Provider          | ID                  | Needs API key | Notes                             |
-| ----------------- | ------------------- | ------------- | --------------------------------- |
-| Bedrock           | `bedrock`           | No            | Uses the AWS credential chain     |
-| DeepInfra         | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`       |
-| Gemini            | `gemini`            | Yes           | Supports image/audio indexing     |
-| GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
-| Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
-| LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
-| Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
-| Ollama            | `ollama`            | No            | Local/self-hosted server          |
-| OpenAI            | `openai`            | Depends       | API key or eligible Codex OAuth   |
-| OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
-| Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
+| Provider                | ID                  | Needs API key | Notes                                   |
+| ----------------------- | ------------------- | ------------- | --------------------------------------- |
+| Bedrock                 | `bedrock`           | No            | Uses the AWS credential chain           |
+| DeepInfra               | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`             |
+| Gemini                  | `gemini`            | Yes           | Supports image/audio indexing           |
+| GitHub Copilot          | `github-copilot`    | No            | Uses your Copilot subscription          |
+| Local                   | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB         |
+| LM Studio               | `lmstudio`          | No            | Local/self-hosted server                |
+| Mistral                 | `mistral`           | Yes           | Default model `mistral-embed`           |
+| Ollama                  | `ollama`            | No            | Local/self-hosted server                |
+| [oMLX](/providers/omlx) | `omlx`              | No            | Apple Silicon; explicit embedding model |
+| OpenAI                  | `openai`            | Depends       | API key or eligible Codex OAuth         |
+| OpenAI-compatible       | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint       |
+| Voyage                  | `voyage`            | Yes           | Default model `voyage-4-large`          |
 
 To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
@@ -108,7 +138,7 @@ flowchart LR
     Q["Query"] --> E["Embedding"]
     Q --> T["Tokenize"]
     E --> VS["Vector search"]
-    T --> BM["BM25 search"]
+    T --> BM["Text search"]
     VS --> M["Weighted merge"]
     BM --> M
     M --> D["Recency and importance"]
@@ -118,12 +148,13 @@ flowchart LR
 
 - **Vector search** matches similar meaning ("gateway host" matches "the
   machine running OpenClaw").
-- **BM25 keyword search** matches exact terms (IDs, error strings, config
+- **Keyword search** matches exact terms (IDs, error strings, config
   keys). It accepts NFC and NFD Unicode spellings without rewriting notes or
   rebuilding existing indexes, including notes that mix those forms across words.
   Search first requires every query term. Only when neither body nor filename
   search finds a match does it retry body search once with any query term and
-  language-specific keyword expansion, ranked by BM25. This recovers answers
+  language-specific keyword expansion. SQLite ranks by BM25; PostgreSQL uses its
+  native full-text rank or trigram similarity. This recovers answers
   without broadening a keyword query that already has matches.
 - **Filename search** indexes paths separately from note bodies. Exact full
   paths, basenames, and filename stems rank ahead of partial path matches,

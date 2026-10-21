@@ -170,7 +170,7 @@ async function tryTerminateExecutionViaCdp(opts: {
       id?: string;
       webSocketDebuggerUrl?: string;
     }>
-  >(listUrl, 2000, undefined, cdpControlPolicy).catch(() => null);
+  >(listUrl, 2000, undefined, cdpControlPolicy);
   if (!pages || pages.length === 0 || !opts.isCurrent()) {
     return;
   }
@@ -195,27 +195,23 @@ async function tryTerminateExecutionViaCdp(opts: {
     wsUrl,
     async (send) => {
       let sessionId: string | undefined;
-      try {
-        if (needsAttach) {
-          const attached = (await send("Target.attachToTarget", {
-            targetId: opts.targetId,
-            flatten: true,
-          })) as { sessionId?: unknown };
-          sessionId = normalizeOptionalString(attached?.sessionId);
-        }
-        if (opts.isCurrent()) {
-          await send("Runtime.terminateExecution", undefined, sessionId);
-        }
-        if (sessionId) {
-          // Best-effort cleanup; not required for termination to take effect.
-          void send("Target.detachFromTarget", { sessionId }).catch(() => {});
-        }
-      } catch {
-        // Best-effort; ignore
+      if (needsAttach) {
+        const attached = (await send("Target.attachToTarget", {
+          targetId: opts.targetId,
+          flatten: true,
+        })) as { sessionId?: unknown };
+        sessionId = normalizeOptionalString(attached?.sessionId);
+      }
+      if (opts.isCurrent()) {
+        await send("Runtime.terminateExecution", undefined, sessionId);
+      }
+      if (sessionId) {
+        // Best-effort cleanup; not required for termination to take effect.
+        void send("Target.detachFromTarget", { sessionId }).catch(() => {});
       }
     },
     { handshakeTimeoutMs: 2000, commandTimeoutMs: 1500, lookup: wsPin?.lookup },
-  ).catch(() => {});
+  );
 }
 
 // Closing Playwright's shared Connection would prevent later reconnects. Retire
@@ -279,179 +275,6 @@ async function withPlaywrightSafeReadReconnect<T>(
   }
 }
 
-async function readPagesViaPlaywright(
-  opts: {
-    cdpUrl: string;
-    engine?: BrowserEngineId;
-    ssrfPolicy?: SsrFPolicy;
-    requireCompleteTargetList?: boolean;
-  },
-  signal: AbortSignal,
-): Promise<Array<{ targetId: string; title: string; url: string; type: "page" }>> {
-  return await withPlaywrightSafeReadReconnect(
-    { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal, engine: opts.engine },
-    async (browser) => {
-      signal.throwIfAborted();
-      const contexts = opts.requireCompleteTargetList ? browser.contexts() : [];
-      let publication = createDeferred<void>();
-      const wake = () => publication.resolve();
-      const observedPages = new Set<Page>();
-      let nativeTargetsChanged = false;
-      const onPageClosed = () => {
-        nativeTargetsChanged = true;
-        wake();
-      };
-      const observePage = (page: Page) => {
-        if (!observedPages.has(page)) {
-          observedPages.add(page);
-          page.on("close", onPageClosed);
-        }
-      };
-      const onPage = (page: Page) => {
-        observePage(page);
-        wake();
-      };
-      let disconnected = false;
-      const onDisconnected = () => {
-        disconnected = true;
-        wake();
-      };
-      // CDP discovery can finish before Playwright initializes and publishes each Page.
-      // Subscribe before discovery so publication during either read cannot be lost.
-      for (const context of contexts) {
-        context.on("page", onPage);
-        for (const page of context.pages()) {
-          observePage(page);
-        }
-      }
-      browser.on("disconnected", onDisconnected);
-      signal.addEventListener("abort", wake, { once: true });
-      try {
-        const readNativeTargetIds = async () => {
-          const session = browser.newBrowserCDPSession();
-          let detaching: Promise<void> | undefined;
-          const detach = () => {
-            detaching ??= session.then((owned) => owned.detach()).catch(() => {});
-          };
-          const read = racePromiseWithAbortSignal(
-            session.then((owned) => {
-              signal.throwIfAborted();
-              return owned.send("Target.getTargets");
-            }),
-            signal,
-            ({ reason }) => reason,
-          );
-          signal.addEventListener("abort", detach, { once: true });
-          if (signal.aborted) {
-            detach();
-          }
-          try {
-            const result = await read;
-            signal.throwIfAborted();
-            if (!Array.isArray(result.targetInfos)) {
-              throw new Error("Browser target enumeration was unavailable.");
-            }
-            return new Set(
-              result.targetInfos
-                .filter(
-                  (info) =>
-                    isSelectableCdpBrowserTarget(info) &&
-                    !isBlockedTarget(opts.cdpUrl, info.targetId),
-                )
-                .map((info) => info.targetId),
-            );
-          } finally {
-            signal.removeEventListener("abort", detach);
-            detach();
-          }
-        };
-        let nativeTargetIds = opts.requireCompleteTargetList
-          ? await readNativeTargetIds()
-          : undefined;
-        for (;;) {
-          publication = createDeferred<void>();
-          signal.throwIfAborted();
-          if (disconnected) {
-            throw new Error("Browser disconnected during page enumeration.");
-          }
-          const pages = await getAllPages(browser);
-          const candidatePages = pages.filter((page) => !isBlockedPageRef(opts.cdpUrl, page));
-          const pageResults = await Promise.all(
-            candidatePages.map(async (page) => {
-              let targetInfo: Awaited<ReturnType<typeof pageTargetInfo>>;
-              try {
-                targetInfo = await pageTargetInfo(page);
-              } catch (err) {
-                if (isRecoverablePlaywrightDisconnectError(err)) {
-                  if (page.isClosed() && browser.isConnected()) {
-                    return { status: "closed" as const };
-                  }
-                  throw err;
-                }
-                targetInfo = null;
-              }
-              if (!targetInfo) {
-                return { status: "unresolved" as const };
-              }
-              if (isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
-                return { status: "blocked" as const };
-              }
-              return {
-                status: "available" as const,
-                page: {
-                  targetId: targetInfo.targetId,
-                  title: targetInfo.title,
-                  url: page.url(),
-                  type: "page" as const,
-                },
-              };
-            }),
-          );
-          signal.throwIfAborted();
-          if (disconnected) {
-            throw new Error("Browser disconnected during page enumeration.");
-          }
-          if (
-            nativeTargetIds &&
-            (nativeTargetsChanged || pageResults.some((result) => result.status === "closed"))
-          ) {
-            nativeTargetsChanged = false;
-            nativeTargetIds = await readNativeTargetIds();
-          }
-          const remainingTargetIds = nativeTargetIds ? new Set(nativeTargetIds) : undefined;
-          // Keep page order and native snapshot identities. A quarantined Page reference
-          // cannot identify a missing native target without exposing its metadata.
-          const resolvedPages = pageResults.flatMap((result) =>
-            result.status === "available" &&
-            (!remainingTargetIds || remainingTargetIds.delete(result.page.targetId))
-              ? [result.page]
-              : [],
-          );
-          if (
-            (opts.requireCompleteTargetList || resolvedPages.length === 0) &&
-            pageResults.some((result) => result.status === "unresolved")
-          ) {
-            throw new Error("Playwright page target identities are temporarily unavailable.");
-          }
-          if (!remainingTargetIds?.size) {
-            return resolvedPages;
-          }
-          await publication.promise;
-        }
-      } finally {
-        for (const context of contexts) {
-          context.off("page", onPage);
-        }
-        for (const page of observedPages) {
-          page.off("close", onPageClosed);
-        }
-        browser.off("disconnected", onDisconnected);
-        signal.removeEventListener("abort", wake);
-      }
-    },
-  );
-}
-
 /** List pages through the persistent Playwright connection. */
 export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
@@ -485,9 +308,171 @@ export async function listPagesViaPlaywright(opts: {
     }, timeoutMs);
     timer.unref?.();
   }
+  const signal = controller.signal;
   try {
     return await racePromiseWithAbortSignal(
-      readPagesViaPlaywright(opts, controller.signal),
+      withPlaywrightSafeReadReconnect(
+        { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal, engine: opts.engine },
+        async (browser) => {
+          signal.throwIfAborted();
+          const contexts = opts.requireCompleteTargetList ? browser.contexts() : [];
+          let publication = createDeferred<void>();
+          const wake = () => publication.resolve();
+          const observedPages = new Set<Page>();
+          let nativeTargetsChanged = false;
+          const onPageClosed = () => {
+            nativeTargetsChanged = true;
+            wake();
+          };
+          const observePage = (page: Page) => {
+            if (!observedPages.has(page)) {
+              observedPages.add(page);
+              page.on("close", onPageClosed);
+            }
+          };
+          const onPage = (page: Page) => {
+            observePage(page);
+            wake();
+          };
+          let disconnected = false;
+          const onDisconnected = () => {
+            disconnected = true;
+            wake();
+          };
+          // CDP discovery can finish before Playwright initializes and publishes each Page.
+          // Subscribe before discovery so publication during either read cannot be lost.
+          for (const context of contexts) {
+            context.on("page", onPage);
+            for (const page of context.pages()) {
+              observePage(page);
+            }
+          }
+          browser.on("disconnected", onDisconnected);
+          signal.addEventListener("abort", wake, { once: true });
+          try {
+            const readNativeTargetIds = async () => {
+              const session = browser.newBrowserCDPSession();
+              let detaching: Promise<void> | undefined;
+              const detach = () => {
+                detaching ??= session.then((owned) => owned.detach()).catch(() => {});
+              };
+              const read = racePromiseWithAbortSignal(
+                session.then((owned) => {
+                  signal.throwIfAborted();
+                  return owned.send("Target.getTargets");
+                }),
+                signal,
+                ({ reason }) => reason,
+              );
+              signal.addEventListener("abort", detach, { once: true });
+              if (signal.aborted) {
+                detach();
+              }
+              try {
+                const result = await read;
+                signal.throwIfAborted();
+                if (!Array.isArray(result.targetInfos)) {
+                  throw new Error("Browser target enumeration was unavailable.");
+                }
+                return new Set(
+                  result.targetInfos
+                    .filter(
+                      (info) =>
+                        isSelectableCdpBrowserTarget(info) &&
+                        !isBlockedTarget(opts.cdpUrl, info.targetId),
+                    )
+                    .map((info) => info.targetId),
+                );
+              } finally {
+                signal.removeEventListener("abort", detach);
+                detach();
+              }
+            };
+            let nativeTargetIds = opts.requireCompleteTargetList
+              ? await readNativeTargetIds()
+              : undefined;
+            for (;;) {
+              publication = createDeferred<void>();
+              signal.throwIfAborted();
+              if (disconnected) {
+                throw new Error("Browser disconnected during page enumeration.");
+              }
+              const pages = await getAllPages(browser);
+              const candidatePages = pages.filter((page) => !isBlockedPageRef(opts.cdpUrl, page));
+              const pageResults = await Promise.all(
+                candidatePages.map(async (page) => {
+                  let targetInfo: Awaited<ReturnType<typeof pageTargetInfo>>;
+                  try {
+                    targetInfo = await pageTargetInfo(page);
+                  } catch (err) {
+                    if (isRecoverablePlaywrightDisconnectError(err)) {
+                      if (page.isClosed() && browser.isConnected()) {
+                        return { status: "closed" as const };
+                      }
+                      throw err;
+                    }
+                    targetInfo = null;
+                  }
+                  if (!targetInfo) {
+                    return { status: "unresolved" as const };
+                  }
+                  if (isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
+                    return { status: "blocked" as const };
+                  }
+                  return {
+                    status: "available" as const,
+                    page: {
+                      targetId: targetInfo.targetId,
+                      title: targetInfo.title,
+                      url: page.url(),
+                      type: "page" as const,
+                    },
+                  };
+                }),
+              );
+              signal.throwIfAborted();
+              if (disconnected) {
+                throw new Error("Browser disconnected during page enumeration.");
+              }
+              if (
+                nativeTargetIds &&
+                (nativeTargetsChanged || pageResults.some((result) => result.status === "closed"))
+              ) {
+                nativeTargetsChanged = false;
+                nativeTargetIds = await readNativeTargetIds();
+              }
+              const remainingTargetIds = nativeTargetIds ? new Set(nativeTargetIds) : undefined;
+              // Keep page order and native snapshot identities. A quarantined Page reference
+              // cannot identify a missing native target without exposing its metadata.
+              const resolvedPages = pageResults.flatMap((result) =>
+                result.status === "available" &&
+                (!remainingTargetIds || remainingTargetIds.delete(result.page.targetId))
+                  ? [result.page]
+                  : [],
+              );
+              if (
+                (opts.requireCompleteTargetList || resolvedPages.length === 0) &&
+                pageResults.some((result) => result.status === "unresolved")
+              ) {
+                throw new Error("Playwright page target identities are temporarily unavailable.");
+              }
+              if (!remainingTargetIds?.size) {
+                return resolvedPages;
+              }
+              await publication.promise;
+            }
+          } finally {
+            for (const context of contexts) {
+              context.off("page", onPage);
+            }
+            for (const page of observedPages) {
+              page.off("close", onPageClosed);
+            }
+            browser.off("disconnected", onDisconnected);
+            signal.removeEventListener("abort", wake);
+          }
+        },
+      ),
       controller.signal,
       ({ reason }) => reason,
     );

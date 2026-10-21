@@ -5,7 +5,6 @@ import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.j
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -86,16 +85,20 @@ const STARTUP_CHECKPOINT_SCHEMA = `
     ON state_leases(expires_at, scope, lease_key)
     WHERE expires_at IS NOT NULL;
   CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-    ON state_leases(owner, updated_at DESC);
+    ON state_leases(owner);
 `;
 const checkpointAdmission = createStateSchemaAdmission("state.startup-checkpoint", (value) =>
   value === true ? true : undefined,
 );
 
-export function isUninitializedNativeStartupDatabase(db: DatabaseSync): boolean {
+export function isUninitializedNativeStartupDatabase(
+  db: DatabaseSync,
+  physicalUserVersion?: number,
+): boolean {
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (
-    (getStateSchemaVersionAdmission(db)?.userVersion ??
+    (physicalUserVersion ??
+      getStateSchemaVersionAdmission(db)?.userVersion ??
       schema?.userVersion ??
       readSqliteUserVersion(db)) !== 0
   ) {
@@ -217,12 +220,14 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
       quarantineOrphanedSqliteSidecars(pathname);
       ensureOpenClawStatePermissions(pathname, env, { createDirectory: true });
     }
-    const db = openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(pathname) : pathname);
+    const db = openNodeSqliteDatabase(
+      existing ? resolveExistingSqliteFileUri(pathname) : pathname,
+      { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+    );
     let ownershipAdmitted = false;
     let result: { value: T } | undefined;
     let seal: ReturnType<typeof prepareSqliteDatabaseCleanClose> | undefined;
     try {
-      setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       if (getStateRuntimeSchemaAdmission(db) || checkpointAdmission.get(db)) {
         admitSqliteSchema(db);
       }
@@ -240,8 +245,8 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
           return { value: callback(db) };
         }
         assertStateDatabaseIntegrityOnce(db, pathname);
-        assertSupportedStateSchemaVersion(db, pathname);
-        const initialize = isUninitializedNativeStartupDatabase(db);
+        const userVersion = assertSupportedStateSchemaVersion(db, pathname);
+        const initialize = isUninitializedNativeStartupDatabase(db, userVersion);
         const needsSchema = initialize || !hasStartupMigrationCheckpointSchema(db);
         if (needsSchema && !schemaOwned) {
           return undefined;
@@ -343,6 +348,11 @@ export function initializeNativeOpenClawStateConnection(
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
+    const initialization = prepareStateDatabaseInitialization(
+      pathname,
+      env,
+      options.initializationAgentPaths,
+    );
     const db = openNodeSqliteDatabase(pathname);
     try {
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
@@ -351,7 +361,7 @@ export function initializeNativeOpenClawStateConnection(
         return;
       }
       assertStateDatabaseIntegrityOnce(db, pathname);
-      initializeCanonicalSchema(db, pathname, env, { kind: "existing" });
+      initializeCanonicalSchema(db, pathname, env, initialization);
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();

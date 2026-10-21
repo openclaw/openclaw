@@ -10,13 +10,22 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  bindSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import * as sessionRows from "../session-row-projection-record.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
-import { controlUiHandlers, createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -32,6 +41,105 @@ async function createPreviewContext(cfg: OpenClawConfig = {}, getRuntimeConfig =
 }
 
 describe("controlUi.sessionPreview", () => {
+  it.for(["active", "archived"])(
+    "returns a renamed %s preview without waiting for native runtime ownership",
+    async (state, { signal }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg = { agents: { entries: { main: {} } } };
+        setRuntimeConfigSnapshot(cfg);
+        const scope = { agentId: "main", sessionKey: "agent:main:preview-owner" };
+        const entry = {
+          sessionId: "preview-owner",
+          updatedAt: 1,
+          label: "Original preview",
+          visibility: "shared" as const,
+          agentHarnessId: "preview-owner",
+          modelSelectionLocked: true,
+          ...(state === "archived" ? { archivedAt: 1 } : {}),
+        };
+        replaceSessionEntrySync(scope, entry);
+        const previousRegistry = captureActivePluginRegistrySnapshot();
+        const registry = createEmptyPluginRegistry();
+        const entered = createDeferred();
+        const release = createDeferred();
+        let holdOwnership = false;
+        registry.agentHarnesses.push({
+          pluginId: "preview-owner",
+          source: "test",
+          harness: {
+            id: "preview-owner",
+            label: "Preview ownership fixture",
+            supports: () => ({ supported: true }),
+            async resolveSessionRuntimeOwnershipAsync({ assertCurrent }) {
+              if (holdOwnership) {
+                entered.resolve();
+                await release.promise;
+              }
+              assertCurrent();
+              return undefined;
+            },
+            async runAttempt() {
+              throw new Error("Previewing a session must not run a model");
+            },
+          },
+        });
+        setActivePluginRegistry(registry);
+        const abort = () => release.resolve();
+        signal.addEventListener("abort", abort, { once: true });
+        let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+        let pending: Promise<void> | undefined;
+        try {
+          projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+          await projection.ensureMaterialized();
+          const context = bindSessionRowProjection(
+            { getRuntimeConfig: () => cfg },
+            () => projection,
+          );
+          const respond = vi.fn<RespondFn>();
+          const first = await projection.withSelectionPreparation(async () => {
+            holdOwnership = true;
+            replaceSessionEntrySync(scope, { ...entry, label: "Renamed preview", updatedAt: 2 });
+            const started = performance.now();
+            pending = Promise.resolve(
+              controlUiHandlers["controlUi.sessionPreview"]!(
+                requestOptions({ sessionKey: scope.sessionKey }, respond, { context }),
+              ),
+            );
+            const winner = await Promise.race([
+              pending.then(() => "response" as const),
+              entered.promise.then(() => "native ownership" as const),
+            ]);
+            console.info("session-preview-readiness", {
+              state,
+              first: winner,
+              elapsedMs: performance.now() - started,
+            });
+            release.resolve();
+            await pending;
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              expect.objectContaining({
+                status: "ok",
+                title: "Renamed preview",
+                updatedAt: 2,
+                archived: state === "archived",
+              }),
+              undefined,
+            );
+            return winner;
+          });
+          expect(first).toBe("response");
+        } finally {
+          release.resolve();
+          await Promise.allSettled(pending ? [pending] : []);
+          projection?.dispose();
+          restoreActivePluginRegistrySnapshot(previousRegistry);
+          signal.removeEventListener("abort", abort);
+        }
+      });
+    },
+  );
+
   it("replies in the same authorization frame before queued visibility revocation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
@@ -109,7 +217,7 @@ describe("controlUi.sessionPreview", () => {
         .mockReturnValueOnce(prepared.promise);
       const respond = vi.fn<RespondFn>();
       const pending = expectDefined(
-        createControlUiHandlers()["controlUi.sessionPreview"],
+        controlUiHandlers["controlUi.sessionPreview"],
         "session preview handler",
       )(
         requestOptions({ sessionKey }, respond, {
@@ -154,7 +262,7 @@ describe("controlUi.sessionPreview", () => {
         });
       }
       const handler = expectDefined(
-        createControlUiHandlers()["controlUi.sessionPreview"],
+        controlUiHandlers["controlUi.sessionPreview"],
         "session preview handler",
       );
       const publications = new Map([
@@ -173,6 +281,9 @@ describe("controlUi.sessionPreview", () => {
         });
       onTestFinished(() => publication.mockRestore());
       const context = await createPreviewContext(cfg);
+      for (const agentId of publications.keys()) {
+        requireSessionRowProjection(context).describe({ key: "global", agentId });
+      }
       await Promise.all([...publications.values()].map((completion) => completion.promise));
       const statements = observeHostDataSql();
       onTestFinished(() => statements.restore());
@@ -246,6 +357,10 @@ describe("controlUi.sessionPreview", () => {
         });
       onTestFinished(() => publication.mockRestore());
       const context = await createPreviewContext();
+      requireSessionRowProjection(context).describe({
+        key: scope.sessionKey,
+        agentId: scope.agentId,
+      });
       await published.promise;
       const respond = vi.fn<RespondFn>();
       await expectDefined(

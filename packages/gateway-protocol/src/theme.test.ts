@@ -1,8 +1,8 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
-  createThemeDefinitionFixture,
-  createThemePaletteFixture,
+  createThemeDefinitionFixture as themeFixture,
+  createThemePaletteFixture as paletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
 import { ThemesImportParamsSchema } from "./schema/themes.js";
 import {
@@ -16,54 +16,44 @@ import {
 } from "./theme.js";
 
 function createDarkTheme(palette: Partial<ThemePalette>) {
-  return createThemeDefinitionFixture({ dark: createThemePaletteFixture(palette) });
+  return themeFixture({ dark: paletteFixture(palette) });
+}
+
+function normalizeTheme(fields: Record<string, unknown>) {
+  return normalizeThemeDefinition({ ...themeFixture(), ...fields });
+}
+
+function acceptsImport(definition: unknown) {
+  return Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition });
 }
 
 describe("portable theme definition", () => {
-  it.each(["none"] as const)(
-    "accepts the %s mascot, authored critters and hat, and normalizes custom working phrases",
-    (mascot) => {
-      expect(
-        normalizeThemeDefinition(
-          createThemeDefinitionFixture({
-            mascot,
-            workingPhrases: [" Building ", "x".repeat(24)],
-            critters: ["fedora", "penguin"],
-            avatarHat: "fedora",
-          }),
-        ),
-      ).toMatchObject({
-        mascot,
-        workingPhrases: ["Building", "x".repeat(24)],
-        critters: ["fedora", "penguin"],
-        avatarHat: "fedora",
-      });
-    },
-  );
+  it("accepts authored mascot, critters and hat, and normalizes custom working phrases", () => {
+    const fields = { mascot: "none", critters: ["fedora", "penguin"], avatarHat: "fedora" };
+    expect(
+      normalizeTheme({ ...fields, workingPhrases: [" Building ", "x".repeat(24)] }),
+    ).toMatchObject({
+      ...fields,
+      workingPhrases: ["Building", "x".repeat(24)],
+    });
+  });
 
-  it.each(["none"] as const)(
-    "accepts independent branding with the %s working indicator",
-    (workingIndicator) => {
-      const fields = {
-        brandName: "Mission Control",
-        brandIcon: "mark",
-        workingIndicator,
-        lobsterdex: false,
-        communityLinks: false,
-      };
-      const definition = createThemeDefinitionFixture(fields);
-      expect(
-        normalizeThemeDefinition({ ...definition, brandName: " Mission Control " }),
-      ).toMatchObject(fields);
-      expect(Value.Check(ThemesImportParamsSchema, { id: "mission", definition })).toBe(true);
-      expect(
-        normalizeThemeDefinition({ ...definition, brandName: "a".repeat(80) }).brandName,
-      ).toHaveLength(80);
-    },
-  );
+  it("accepts independent branding with no working indicator", () => {
+    const fields = {
+      brandName: "Mission Control",
+      brandIcon: "mark",
+      workingIndicator: "none",
+      lobsterdex: false,
+      communityLinks: false,
+    } as const;
+    const definition = themeFixture(fields);
+    expect(normalizeTheme({ ...fields, brandName: " Mission Control " })).toMatchObject(fields);
+    expect(acceptsImport(definition)).toBe(true);
+    expect(normalizeTheme({ ...fields, brandName: "a".repeat(80) }).brandName).toHaveLength(80);
+  });
 
   it("restricts custom brand icons to the manifest's icon IDs", () => {
-    const definition = createThemeDefinitionFixture({ brandIcon: "rocket" });
+    const definition = themeFixture({ brandIcon: "rocket" });
     expect(() => normalizeThemeDefinition(definition)).toThrow("theme.brandIcon");
     expect(() =>
       normalizeThemeDefinition(definition, { hatIds: ["rocket"], critterIds: ["rocket"] }),
@@ -73,7 +63,7 @@ describe("portable theme definition", () => {
   });
 
   it.each([null])("keeps undeclared avatar hat %j out of personal definitions", (avatarHat) => {
-    const definition = { ...createThemeDefinitionFixture(), avatarHat };
+    const definition = { ...themeFixture(), avatarHat };
     expect(() => normalizeThemeDefinition(definition)).toThrow(
       "theme.avatarHat must be one of fedora, crown, santa, party, pumpkin",
     );
@@ -83,7 +73,7 @@ describe("portable theme definition", () => {
   });
 
   it("accepts plugin artwork only from declared IDs of the corresponding kind", () => {
-    const definition = createThemeDefinitionFixture({ avatarHat: "beret", critters: ["ferris"] });
+    const definition = themeFixture({ avatarHat: "beret", critters: ["ferris"] });
     expect(() => normalizeThemeDefinition(definition)).toThrow(
       "theme.critters[0] must be one of penguin, fedora",
     );
@@ -93,18 +83,14 @@ describe("portable theme definition", () => {
     expect(
       normalizeThemeDefinition(definition, { hatIds: ["beret"], critterIds: ["ferris"] }),
     ).toMatchObject({ avatarHat: "beret", critters: ["ferris"] });
-    expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(true);
+    expect(acceptsImport(definition)).toBe(true);
     expect(parseThemeDefinition(definition)).toBeNull();
   });
 
-  it.each(["<svg>"])("rejects nonportable artwork ID %j at the wire boundary", (id) => {
+  it("rejects nonportable artwork IDs at the wire boundary", () => {
+    const id = "<svg>";
     for (const branding of [{ brandIcon: id }, { avatarHat: id }, { critters: [id] }]) {
-      expect(
-        Value.Check(ThemesImportParamsSchema, {
-          id: "hat-theme",
-          definition: createThemeDefinitionFixture(branding),
-        }),
-      ).toBe(false);
+      expect(acceptsImport(themeFixture(branding))).toBe(false);
     }
   });
 
@@ -114,16 +100,14 @@ describe("portable theme definition", () => {
     [{ lobsterdex: "false" }, "theme.lobsterdex"],
     [{ mascot: "robot" }, "theme.mascot must be one of claw, none"],
     [
-      { workingPhrases: Array.from({ length: 25 }, (_, index) => `Working ${index}`) },
+      { workingPhrases: Array.from({ length: 25 }, (_, i) => `Working ${i}`) },
       "at most 24 entries",
     ],
     [{ workingPhrases: ["Building", " Building "] }, "duplicate entries after trimming"],
     [{ critters: Array.from({ length: 9 }, () => "penguin") }, "at most 8 entries"],
     [{ critters: ["penguin", "penguin"] }, "duplicate entries"],
   ])("rejects invalid branding %j", (fields, message) => {
-    expect(() =>
-      normalizeThemeDefinition({ ...createThemeDefinitionFixture(), ...fields }),
-    ).toThrow(message);
+    expect(() => normalizeTheme(fields)).toThrow(message);
   });
 
   it.each([
@@ -136,30 +120,25 @@ describe("portable theme definition", () => {
     expect(parseThemeDefinition(createDarkTheme(palette))).toBeNull();
   });
 
-  it.each(["JetBrains Mono, monospace"])("preserves font family names: %s", (font) => {
+  it("preserves font family names", () => {
+    const font = "JetBrains Mono, monospace";
     expect(
       normalizeThemeDefinition(createDarkTheme({ "font-sans": font })).dark?.["font-sans"],
     ).toBe(font);
   });
 
   it("rejects missing modes, incomplete palettes, unknown properties, and oversized stored values", () => {
-    const { background: _background, ...incomplete } = createThemePaletteFixture();
+    const { background: _background, ...incomplete } = paletteFixture();
     expect(() => normalizeThemeDefinition({ name: "Empty", description: "No colors" })).toThrow(
       "at least one",
     );
-    expect(() =>
-      normalizeThemeDefinition({ ...createThemeDefinitionFixture(), dark: incomplete }),
-    ).toThrow("background");
-    expect(() =>
-      normalizeThemeDefinition({ ...createThemeDefinitionFixture(), css: "body {}" }),
-    ).toThrow("unsupported field");
+    expect(() => normalizeTheme({ dark: incomplete })).toThrow("background");
+    expect(() => normalizeTheme({ css: "body {}" })).toThrow("unsupported field");
     const longColor = `rgb(0.${"1".repeat(85)} 0 0)`;
-    const palette = createThemePaletteFixture(
+    const palette = paletteFixture(
       Object.fromEntries(THEME_COLOR_KEYS.map((key) => [key, longColor])),
     );
-    expect(() =>
-      normalizeThemeDefinition(createThemeDefinitionFixture({ light: palette, dark: palette })),
-    ).toThrow("4096 bytes");
+    expect(() => normalizeTheme({ light: palette, dark: palette })).toThrow("4096 bytes");
   });
 
   it.each([
@@ -186,25 +165,18 @@ it("resolves omitted branding to the claw without critters or a hat and retains 
   };
   expect(resolveThemeBranding(undefined)).toEqual(defaults);
   expect(resolveThemeBranding({})).toEqual(defaults);
-  expect(resolveThemeBranding({ workingPhrases: [] })).toEqual({
-    ...defaults,
-    workingPhrases: [],
-  });
-  expect(
-    resolveThemeBranding({
-      mascot: "none",
-      workingPhrases: ["Building"],
-      critters: ["penguin", "fedora"],
-      avatarHat: "fedora",
-    }),
-  ).toEqual({
-    ...defaults,
+  expect(resolveThemeBranding({ workingPhrases: [] })).toEqual({ ...defaults, workingPhrases: [] });
+  const authored = {
     mascot: "none",
-    brandIcon: "mark",
-    workingIndicator: "dots",
     workingPhrases: ["Building"],
     critters: ["penguin", "fedora"],
     avatarHat: "fedora",
+  } as const;
+  expect(resolveThemeBranding(authored)).toEqual({
+    ...defaults,
+    ...authored,
+    brandIcon: "mark",
+    workingIndicator: "dots",
   });
 });
 

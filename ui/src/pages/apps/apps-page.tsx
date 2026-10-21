@@ -1,20 +1,19 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
-import { titleForRoute } from "../../app-navigation.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { isNativeWebChromeHost } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../components/mcp-app-catalog.tsx";
 import type { McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createMcpAppCatalog } from "../../lib/mcp-app-catalog.ts";
 import { mcpAppRouteFromSearch, resolveMcpAppRouteServer } from "../../lib/mcp-app-route.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { useMcpAppCatalog } from "../../lib/reactive/mcp-app-catalog.ts";
 import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { Apps } from "./view.tsx";
 
@@ -29,7 +28,7 @@ export function AppsPage(props: AppsPageProps) {
   const selection = projectAgentSelection(context.agentSelection);
   const appSearch = createMemo(() => props.appSearch ?? "");
   const appRoute = createMemo(() => mcpAppRouteFromSearch(appSearch()));
-  const catalog = useMcpAppCatalog(
+  const catalog = createMcpAppCatalog(
     context,
     () => ({
       sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",
@@ -41,6 +40,7 @@ export function AppsPage(props: AppsPageProps) {
     ownedWrite: true,
   });
   const [retry, setRetry] = createSignal(0);
+  // Load the lazy chat custom element for this route; retire import-error feedback on replacement.
   createEffect(
     () => [appRoute(), retry()] as const,
     ([route]) => {
@@ -134,13 +134,7 @@ export function AppsPage(props: AppsPageProps) {
       : null;
   return (
     <openclaw-apps-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <div class="page-title">{titleForRoute("apps")}</div>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+      <HubPageHeader active="apps" wide docsUrl="https://docs.openclaw.ai/platforms" />
       <Show
         when={appRoute()}
         fallback={

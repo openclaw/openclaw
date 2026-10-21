@@ -38,7 +38,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS: readonly NamedCommandDescriptor[] = [
   command("backup", "Create, verify, and restore backup archives and SQLite snapshots", true),
   command(
     "database",
-    "Inspect database compatibility, manage ownership, and port workboard stores",
+    "Inspect database compatibility, manage ownership, and port database stores",
     true,
     {
       parentDefaultHelp: true,
@@ -83,16 +83,4 @@ export function getCoreCliCommandDescriptors(): ReadonlyArray<NamedCommandDescri
 
 export function getCoreCliCommandNamesCore(): string[] {
   return getCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
-}
-
-export function getCoreCliCommandsWithSubcommands(): string[] {
-  return getCoreCliCommandDescriptors()
-    .filter((descriptor) => descriptor.hasSubcommands)
-    .map((descriptor) => descriptor.name);
-}
-
-export function getCoreCliParentDefaultHelpCommands(): string[] {
-  return getCoreCliCommandDescriptors()
-    .filter((descriptor) => descriptor.parentDefaultHelp)
-    .map((descriptor) => descriptor.name);
 }

@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  loadSessionEntry,
   patchSessionEntryCore,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
@@ -12,7 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
 import { hasExplicitSessionName } from "../gateway/session-title-state.js";
-import { sqliteMessageEventWithSeq } from "../gateway/session-transcript-entry-message.js";
 import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
@@ -43,7 +41,7 @@ function readLegacySessionTitle(
       return undefined;
     }
     for (const event of head.events) {
-      const message = asOptionalRecord(sqliteMessageEventWithSeq(event));
+      const message = asOptionalRecord(asOptionalRecord(event.event)?.message);
       const projected = projectSessionDisplayMessage(message);
       if (projected?.role === "user" && !hasInterSessionUserProvenance(message)) {
         const displayName = deriveGoalSessionTitle(projected.text);
@@ -97,7 +95,7 @@ export async function repairLegacySessionTitles(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () => {
-        const keys: string[] = [];
+        const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, sessionKey, recoveredFromProjections }) => {
@@ -107,26 +105,22 @@ export async function repairLegacySessionTitles(params: {
               !isIncognitoSessionKey(sessionKey) &&
               !hasExplicitSessionName(entry)
             ) {
-              keys.push(sessionKey);
+              sessions.push({ sessionKey, sessionId: entry.sessionId });
             }
           },
         );
-        return keys;
+        return sessions;
       },
     });
     if (!scan.ok) {
       continue;
     }
-    for (const sessionKey of scan.value) {
+    for (const { sessionKey, sessionId } of scan.value) {
       if (params.apply) {
         assertRepairAuthority();
       }
       try {
-        const entry = loadSessionEntry({ ...scope, sessionKey });
-        if (!entry || entry.incognito || hasExplicitSessionName(entry)) {
-          continue;
-        }
-        const session = { ...scope, sessionKey, sessionId: entry.sessionId, sessionEntry: entry };
+        const session = { ...scope, sessionKey, sessionId };
         const title = readLegacySessionTitle(session);
         if (!title) {
           continue;
@@ -136,18 +130,14 @@ export async function repairLegacySessionTitles(params: {
           continue;
         }
         // Offline Doctor owns these stores; concurrent title changes are best effort.
-        await patchSessionEntryCore(
-          session,
-          () => ({ displayName: Buffer.from(title, "utf16le").toString("utf16le") }),
-          {
-            preserveActivity: true,
-            skipMaintenance: true,
-            assertCommitAllowed: assertRepairAuthority,
-            onCommitted: () => {
-              report.repaired++;
-            },
+        await patchSessionEntryCore(session, () => ({ displayName: title }), {
+          preserveActivity: true,
+          skipMaintenance: true,
+          assertCommitAllowed: assertRepairAuthority,
+          onCommitted: () => {
+            report.repaired++;
           },
-        );
+        });
         assertRepairAuthority();
       } catch (error) {
         if (params.apply) {

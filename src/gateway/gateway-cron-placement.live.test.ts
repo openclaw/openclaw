@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it } from "vitest";
+import { storeLiveApiKeyProfile } from "../../test/helpers/live-api-key-profile.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
@@ -37,19 +38,23 @@ function assistantTexts(messages: unknown[]): string[] {
     .filter((text): text is string => typeof text === "string" && text.length > 0);
 }
 
-async function finishedCronRun(client: GatewayClient, jobId: string) {
-  const queued = await client.request<{ ok: boolean; enqueued: boolean; runId: string }>(
-    "cron.run",
-    { id: jobId, mode: "force" },
-  );
-  expect(queued).toMatchObject({ ok: true, enqueued: true });
+async function finishedCronRun(client: GatewayClient, jobId: string, queuedRunId?: string) {
+  let runId = queuedRunId;
+  if (!runId) {
+    const queued = await client.request<{ ok: boolean; enqueued: boolean; runId: string }>(
+      "cron.run",
+      { id: jobId, mode: "force" },
+    );
+    expect(queued).toMatchObject({ ok: true, enqueued: true });
+    runId = queued.runId;
+  }
   const deadline = Date.now() + RUN_TIMEOUT_MS;
   do {
     const history = await client.request<{ entries: CronRunLogEntry[] }>("cron.runs", {
       id: jobId,
-      runId: queued.runId,
+      runId,
     });
-    const completed = history.entries.find((entry) => entry.runId === queued.runId);
+    const completed = history.entries.find((entry) => entry.runId === runId);
     if (completed) {
       expect(completed).toMatchObject({
         status: "ok",
@@ -77,7 +82,6 @@ describeLive("cron placement identity through production Gateway routing", () =>
           ...Object.fromEntries(
             listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
           ),
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           OPENAI_BASE_URL: undefined,
           OPENAI_API_BASE: undefined,
           OPENCLAW_AGENT_RUNTIME: undefined,
@@ -121,13 +125,11 @@ describeLive("cron placement identity through production Gateway routing", () =>
             },
             cron: { enabled: true },
             tools: { allow: [] },
-            secrets: { providers: { default: { source: "env" } } },
             models: {
               mode: "merge",
               providers: {
                 openai: {
                   api: "openai-responses",
-                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
                   baseUrl: "https://api.openai.com/v1",
                   models: [],
                 },
@@ -136,6 +138,11 @@ describeLive("cron placement identity through production Gateway routing", () =>
           };
           await instance.state.writeConfig(config);
           await instance.startGateway();
+          const profileId = await storeLiveApiKeyProfile(instance, {
+            provider: "openai",
+            apiKey: process.env.OPENAI_API_KEY,
+            agentId: "probe",
+          });
           const connected = await connectGatewayClient({
             url: instance.url,
             token: instance.gatewayToken,
@@ -144,7 +151,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write"],
             deviceIdentity: loadOrCreateDeviceIdentity({
-              path: instance.state.path("placement-client.sqlite"),
+              path: instance.state.path("placement-client", "client", "credentials.sqlite"),
             }),
             onEvent: (event) => {
               const payload = event.payload;
@@ -181,7 +188,12 @@ describeLive("cron placement identity through production Gateway routing", () =>
             sessionTarget: "current",
             sessionKey: SOURCE_KEY,
             wakeMode: "next-heartbeat",
-            payload: { kind: "agentTurn", message: "Reply exactly SCHEDULED_OK.", toolsAllow: [] },
+            payload: {
+              kind: "agentTurn",
+              message: "Reply exactly SCHEDULED_OK.",
+              model: `${MODEL_KEY}@${profileId}`,
+              toolsAllow: [],
+            },
             delivery: { mode: "none" },
           });
           expect(job).toMatchObject({ sessionTarget: "current", sessionKey: SOURCE_KEY });
@@ -299,7 +311,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
 
           // The same real Gateway now pauses a registered reply hook before its final HTTP effect.
           let hookTarget = second;
-          for (const marker of ["HOOK_ALLOWED", "HOOK_ROTATED"]) {
+          for (const marker of ["HOOK_ALLOWED", "HOOK_QUEUED"]) {
             const accepted = await connected.request<{ runId: string; status: string }>("agent", {
               agentId: "probe",
               sessionKey: rootKey,
@@ -323,27 +335,38 @@ describeLive("cron placement identity through production Gateway routing", () =>
             ]);
             expect(gate.effects).toBe(0);
             const oldRun = hookTarget;
-            const before = await historyFor(oldRun);
-            if (marker === "HOOK_ROTATED") {
-              hookTarget = await finishedCronRun(connected, job.id);
-              expect(hookTarget.sessionId).not.toBe(oldRun.sessionId);
+            let queuedRunId: string | undefined;
+            try {
+              if (marker === "HOOK_QUEUED") {
+                const queued = await connected.request<{
+                  ok: boolean;
+                  enqueued: boolean;
+                  runId: string;
+                }>("cron.run", { id: job.id, mode: "force" });
+                expect(queued).toMatchObject({ ok: true, enqueued: true });
+                queuedRunId = queued.runId;
+                // Force bypasses the schedule, not the active root's FIFO admission.
+                expect((await describeRoot()).session.sessionId).toBe(oldRun.sessionId);
+                expect(
+                  await connected.request("cron.runs", { id: job.id, runId: queuedRunId }),
+                ).toMatchObject({ entries: [] });
+              }
+            } finally {
+              gate.response?.end("continue");
             }
-            const replacementBefore = await historyFor(hookTarget);
-            gate.response?.end("continue");
             await connected.request("cronHookProof.settled", { marker });
             const outcome = await completion;
-            if (marker === "HOOK_ALLOWED") {
-              expect(outcome).toMatchObject({
-                status: "ok",
-                terminalReply: { disposition: "visible", text: "HOOK_ALLOWED_REPLY" },
-              });
-              expect(gate.effects).toBe(1);
-            } else {
-              expect(outcome).toMatchObject({ status: "error" });
-              expect(outcome.error).toContain("original session generation no longer accepts");
-              expect(gate.effects).toBe(0);
-              expect(await historyFor(oldRun)).toEqual(before);
-              expect(await historyFor(hookTarget)).toEqual(replacementBefore);
+            expect(outcome).toMatchObject({
+              status: "ok",
+              terminalReply: { disposition: "visible", text: `${marker}_REPLY` },
+            });
+            expect(gate.effects).toBe(1);
+            const completedHistory = await historyFor(oldRun);
+            if (queuedRunId) {
+              hookTarget = await finishedCronRun(connected, job.id, queuedRunId);
+              expect(hookTarget.sessionId).not.toBe(oldRun.sessionId);
+              expect((await describeRoot()).session.sessionId).toBe(hookTarget.sessionId);
+              expect(await historyFor(oldRun)).toEqual(completedHistory);
             }
             expect(
               await connected.request("agent.wait", { runId: accepted.runId, timeoutMs: 0 }),
@@ -356,14 +379,9 @@ describeLive("cron placement identity through production Gateway routing", () =>
             expect(counts.calls[marker]).toEqual({
               hooks: 1,
               providers: 0,
-              ...(marker === "HOOK_ROTATED"
-                ? {
-                    error: expect.stringContaining("original session generation no longer accepts"),
-                  }
-                : {}),
             });
             logLiveProgress(
-              `hook revocation: ${marker}; hooks=1; provider dispatches=0; outbound effects=${gate.effects}; settlement=${outcome.status}; repeated wait unchanged`,
+              `hook settlement: ${marker}; hooks=1; provider dispatches=0; outbound effects=${gate.effects}; settlement=${outcome.status}; repeated wait unchanged`,
             );
           }
         },

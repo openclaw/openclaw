@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { ErrorShapeSchema } from "./frames.js";
+import { ErrorShapeSchema } from "./error-shape.js";
 import { NonEmptyString } from "./primitives.js";
 
 /** Resumes a restart-tombstoned session or follows the legacy replacement flow. */

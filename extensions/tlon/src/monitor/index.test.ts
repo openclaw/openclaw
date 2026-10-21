@@ -264,7 +264,7 @@ it.each([
     authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
     settingsManagerMock.load.mockResolvedValueOnce(settings);
 
-    await withMonitor(async () => {
+    await withMonitor(async (runtime) => {
       const chatSubscription = getSubscription("chat", "/v3");
       sseClientMock.poke.mockClear();
       ingressMock.receive
@@ -272,8 +272,12 @@ it.each([
         .mockResolvedValueOnce({ kind: "ignored" });
 
       const inviteEvent = [{ ship }];
-      sseClientMock.poke.mockRejectedValueOnce(new Error("DM invite write failed"));
-      await expect(chatSubscription.event(inviteEvent)).rejects.toThrow("DM invite write failed");
+      const failure = new Error("DM invite write failed");
+      sseClientMock.poke.mockRejectedValueOnce(failure);
+      await expect(chatSubscription.event(inviteEvent)).rejects.toBe(failure);
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        "[tlon] Error handling chat firehose event: DM invite write failed",
+      );
       await chatSubscription.event(inviteEvent);
 
       expect(sseClientMock.poke).toHaveBeenCalledTimes(2);
@@ -787,11 +791,6 @@ describe("monitorTlonProvider shutdown", () => {
         res.write(": connected\n\n");
         return;
       }
-      if (req.method === "DELETE" && pathname.startsWith("/~/channel/")) {
-        res.writeHead(204);
-        res.end();
-        return;
-      }
       res.writeHead(404);
       res.end();
     });
@@ -840,7 +839,8 @@ describe("monitorTlonProvider shutdown", () => {
     expect(requests).toContain("POST /~/login");
     expect(requests.some((request) => request.startsWith("GET /~/scry/"))).toBe(true);
     expect(requests.some((request) => request.startsWith("GET /~/channel/"))).toBe(true);
-    expect(requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(true);
+    expect(requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(false);
+    expect(subscriptions).toContainEqual([{ action: "delete" }]);
     expect(subscriptions.flat()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: "subscribe", app: "channels" }),

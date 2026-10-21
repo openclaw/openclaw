@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -36,6 +37,11 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  finishParams,
+  processResult,
+  updateResult,
+} from "./update-command-maintenance-fixtures.test-support.js";
 import { registerCurrentF3Controls } from "./update-command-original-service-current.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -104,6 +110,7 @@ vi.mock("../daemon-cli/restart-health.js", async (original) => ({
 vi.mock("./progress.js", async (original) => ({
   ...(await original<typeof import("./progress.js")>()),
   printResult: vi.fn(),
+  prepareResult: async () => () => {},
 }));
 
 let state: OpenClawTestState;
@@ -114,6 +121,75 @@ let serviceNodeRunner: string;
 let before: PreManagedServiceStop;
 let stopped = false;
 const schemas = { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION };
+const updateRun = (env: NodeJS.ProcessEnv) => ({
+  runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+  env,
+});
+
+function writePackage(root: string, version: string) {
+  return fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version,
+      type: "module",
+      openclaw: { schemaVersions: schemas },
+    }),
+  );
+}
+
+function executePackageUpdate(
+  opts: UpdateCommandOptions,
+  shouldRestart: boolean,
+  packageUpdateNodeRunner?: string,
+) {
+  const fence = opts.run!.executorFence!;
+  return executeMutableUpdate({
+    executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
+    root: rootB,
+    packageUpdateNodeRunner,
+    installKind: "package",
+    updateInstallKind: "package",
+    switchToGit: false,
+    timeoutMs: 30000,
+    updateStepTimeoutMs: 30000,
+    startedAt: Date.now(),
+    progress: {},
+    stop: () => {},
+    channel: "stable",
+    tag: "2026.9.5",
+    opts,
+    shouldRestart,
+    packageInstallSpec: "openclaw@2026.9.5",
+    packageTargetVersion: "2026.9.5",
+    managedServiceRootRedirect: null,
+    managedServiceRoot: rootA,
+    recoveryState: { triageTarget: { env: state.env } },
+    prepareMutableUpdate: async () => fence.assertCurrent(),
+  });
+}
+
+function rollbackOriginal(
+  opts: UpdateCommandOptions,
+  original: Awaited<ReturnType<typeof observeOriginalManagedServiceRuntime>>,
+  allowGatewayRestart: boolean,
+) {
+  return readConfigFileSnapshot({ observe: false }).then((configSnapshot) =>
+    rollbackFailedUpdate({
+      definitionRecovery: {},
+      result: updateResult({ status: "error", root: rootB, durationMs: 0 }),
+      previousRoot: rootB,
+      previousSchemaVersions: schemas,
+      originalManagedServiceRuntime: original,
+      configSnapshot,
+      opts,
+      preManagedServiceStop: before,
+      allowGatewayRestart,
+      timeoutMs: 30000,
+    }),
+  );
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
@@ -148,15 +224,7 @@ beforeEach(async () => {
     [rootB, "2026.9.4"],
   ]) {
     await fs.mkdir(path.join(root!, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(root!, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version,
-        type: "module",
-        openclaw: { schemaVersions: schemas },
-      }),
-    );
+    await writePackage(root!, version!);
     await fs.writeFile(path.join(root!, "dist", "index.js"), "export {};\n");
     await fs.writeFile(
       path.join(root!, "dist", "build-info.json"),
@@ -233,12 +301,12 @@ beforeEach(async () => {
     options.assertCurrent?.();
     await options.beforeMutation?.();
   });
-  mocks.stop.mockImplementation(async ({ phase, shouldRestart, updateRun }) => {
+  mocks.stop.mockImplementation(async ({ phase, shouldRestart, updateRun: run }) => {
     if (phase !== "inspect" && shouldRestart) {
       if (mocks.windows && !before.windowsTaskAutoStartRecovery) {
         before.windowsTaskAutoStartRecovery = createWindowsTaskAutoStartRecovery({
           serviceEnv: state.env,
-          assertCurrent: () => updateRun.executorFence.assertCurrent(),
+          assertCurrent: () => run.executorFence.assertCurrent(),
         });
         await before.windowsTaskAutoStartRecovery.suspended;
         before.windowsTaskAutoStartRecovery.beginMutation();
@@ -248,29 +316,24 @@ beforeEach(async () => {
     }
     return { ...before, stopped, running: !stopped };
   });
-  mocks.inspect.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
+  const healthyRuntime = async ({
+    expectedVersion,
+    expectedBuildId,
+  }: {
+    expectedVersion?: string;
+    expectedBuildId?: string;
+  }) => ({
     healthy: true,
-    runtime: { status: "running" },
+    runtime: { status: "running", pid: 4242 },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
-  }));
-  mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
-    healthy: true,
-    runtime: { status: "running" },
-    gatewayVersion: expectedVersion,
-    gatewayBuildId: expectedBuildId,
-  }));
-  mocks.restart.mockImplementation(async (params, action, preserve) => {
-    params.assertCurrent();
-    expect(action).toBe("restart");
-    expect(preserve).toBe(true);
-    expect(params.result.root).toBe(rootA);
-    expect(params.nodeRunner).toBe(serviceNodeRunner);
-    if (mocks.windows) {
-      expect(mocks.resume).toHaveBeenCalledTimes(1);
-    }
-    mocks.running = true;
-    return "accepted";
+  });
+  mocks.inspect.mockImplementation(healthyRuntime);
+  mocks.health.mockImplementation(healthyRuntime);
+  mocks.restart.mockImplementation(() => {
+    throw new Error(
+      "Split-root recovery must use the native restart; override for transport tests.",
+    );
   });
   // Seed through the sync storage owner; this fixture does not exercise session writer startup.
   replaceSessionEntrySync(
@@ -338,10 +401,7 @@ it.for([
       mocks.health.mockImplementation(observeOriginal);
       mocks.inspect.mockImplementation(observeOriginal);
     }
-    const run = {
-      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
-      env: state.env,
-    };
+    const run = updateRun(state.env);
     const opts: UpdateCommandOptions = { json: true, run };
     if (scenario === "agent-support-older") {
       const packagePath = path.join(rootA, "package.json");
@@ -356,15 +416,7 @@ it.for([
     const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
     mocks.package.mockImplementation(async (params) => {
       await params.beforeActivate();
-      await fs.writeFile(
-        path.join(rootB, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          version: scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5",
-          type: "module",
-          openclaw: { schemaVersions: schemas },
-        }),
-      );
+      await writePackage(rootB, scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5");
       candidatePackageBytes = await fs.readFile(path.join(rootB, "package.json"));
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:after", env: state.env },
@@ -397,9 +449,8 @@ it.for([
         ).run(rootB);
         db.close();
       }
-      return {
+      return updateResult({
         status: "error",
-        mode: "npm",
         root: rootB,
         reason: "named-plugin-failure",
         before: { version: "2026.9.4", buildId: "build-B" },
@@ -412,15 +463,13 @@ it.for([
           reason: sameBuild ? "runtime-verification-failed" : "deps-install-failed",
           packageRollbackVerified: false,
         },
-        steps: [],
-        durationMs: 1,
-      };
+      });
     });
     if (scenario === "readiness-failed" || scenario === "windows-autostart-health-failed") {
       mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
         // Keep the admission observation healthy; fail only the post-stop recovery.
         healthy: !stopped,
-        runtime: { status: stopped ? "stopped" : "running" },
+        runtime: { status: stopped ? "stopped" : "running", pid: stopped ? undefined : 4242 },
         gatewayVersion: expectedVersion,
         gatewayBuildId: expectedBuildId,
         staleGatewayPids: [],
@@ -438,32 +487,12 @@ it.for([
       const fence = await executor.enter(rootB, { serviceRoot: rootA });
       const admitted = { ...run, executorFence: fence };
       opts.run = admitted;
-      execution = await executeMutableUpdate({
-        executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
-        root: rootB,
-        // Package transport is modeled; A must not use this separately selected B runner.
-        packageUpdateNodeRunner: state.path("selected-B-node"),
-        installKind: "package",
-        updateInstallKind: "package",
-        switchToGit: false,
-        timeoutMs: 30000,
-        updateStepTimeoutMs: 30000,
-        startedAt: Date.now(),
-        progress: {},
-        stop: () => {},
-        channel: "stable",
-        tag: "2026.9.5",
+      // A must not use the separately selected B runner.
+      execution = await executePackageUpdate(
         opts,
-        shouldRestart: scenario !== "no-restart",
-        packageInstallSpec: "openclaw@2026.9.5",
-        packageTargetVersion: "2026.9.5",
-        managedServiceRootRedirect: null,
-        managedServiceRoot: rootA,
-        recoveryState: { triageTarget: { env: state.env } },
-        prepareMutableUpdate: async () => {
-          fence.assertCurrent();
-        },
-      });
+        scenario !== "no-restart",
+        state.path("selected-B-node"),
+      );
       if (scenario === "authority-lost") {
         fence.assertCurrent();
         return;
@@ -474,27 +503,18 @@ it.for([
         version: "2026.9.4",
         buildId: "build-B",
       });
-      if (!execution) {
-        throw new Error("missing execution");
-      }
-      final = await finishUpdate({
-        ...execution,
-        root: rootB,
-        packageUpdateNodeRunner: state.path("selected-B-node"),
-        installKindChanged: false,
-        configSnapshot,
-        requestedChannel: null,
-        storedChannel: "stable",
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: scenario !== "no-restart",
-        opts,
-        ownedManagedUpdateEnv: state.env,
-        controlPlaneUpdateSentinelMeta: null,
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 30000,
-      }).catch((error: unknown) => error);
+      assert(execution, "missing execution");
+      final = await finishUpdate(
+        finishParams({
+          ...execution,
+          root: rootB,
+          packageUpdateNodeRunner: state.path("selected-B-node"),
+          configSnapshot,
+          shouldRestart: scenario !== "no-restart",
+          opts,
+          ownedManagedUpdateEnv: state.env,
+        }),
+      ).catch((error: unknown) => error);
       if (scenario === "schema-newer") {
         expect(final).toMatchObject({
           name: "UpdateCommandPendingRecoveryFailure",
@@ -626,10 +646,7 @@ it("refuses B ledger admission independently from compatible service A state", a
     parentEnv.OPENCLAW_CONFIG_PATH,
     JSON.stringify({ plugins: { enabled: false } }),
   );
-  const run: NonNullable<UpdateCommandOptions["run"]> = {
-    runId: createUpdateRun({ trigger: "cli" }, { env: parentEnv }).runId,
-    env: parentEnv,
-  };
+  const run: NonNullable<UpdateCommandOptions["run"]> = updateRun(parentEnv);
   await withUpdateCommandExecutor(run.runId, async (executor) => {
     run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
     const opts: UpdateCommandOptions = { json: true, run };
@@ -640,18 +657,7 @@ it("refuses B ledger admission independently from compatible service A state", a
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     db.close();
     const parentBytes = await fs.readFile(resolveOpenClawStateSqlitePath(parentEnv));
-    const compensation = rollbackFailedUpdate({
-      definitionRecovery: {},
-      result: { status: "error", mode: "npm", root: rootB, steps: [], durationMs: 0 },
-      previousRoot: rootB,
-      previousSchemaVersions: schemas,
-      originalManagedServiceRuntime: original,
-      configSnapshot: await readConfigFileSnapshot({ observe: false }),
-      opts,
-      preManagedServiceStop: before,
-      allowGatewayRestart: false,
-      timeoutMs: 30000,
-    });
+    const compensation = rollbackOriginal(opts, original, false);
     // Main's existing admission checks A and B before selecting compensation.
     await expect(compensation).resolves.toMatchObject({
       rolledBack: false,
@@ -674,15 +680,11 @@ it.each([
   "reload-pending",
   "no-restart",
 ] as const)("pre-stop qualification keeps retained A recoverable: %s", async (scenario) => {
-  const run = {
-    runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
-    env: state.env,
-  };
+  const run = updateRun(state.env);
   const opts: UpdateCommandOptions = { json: true, run };
   const packageBefore = await fs.readFile(path.join(rootB, "package.json"));
   const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
   let activated = false;
-  const failure = new Error("write EPIPE: delegated Doctor exited before input");
   if (scenario === "missing-node") {
     before.serviceNodeRunner = undefined;
   }
@@ -710,26 +712,11 @@ it.each([
     expect(params.honorPackageRoot).toBe(true);
     await params.beforeActivate();
     activated = true;
-    return {
+    return updateResult({
       status: "error",
-      mode: "npm",
       root: rootB,
       reason: "doctor-failed",
-      before: { version: "2026.9.4", buildId: "build-B" },
-      after: { version: "2026.9.5", buildId: "candidate-B" },
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      steps: [
-        {
-          name: "doctor",
-          command: "doctor",
-          cwd: rootB,
-          durationMs: 1,
-          exitCode: 97,
-          stderrTail: failure.message,
-        },
-      ],
-      durationMs: 1,
-    };
+    });
   });
   await withUpdateCommandExecutor(run.runId, async (executor) => {
     const fence = await executor.enter(rootB, { serviceRoot: rootA });
@@ -739,41 +726,16 @@ it.each([
         observeOriginalManagedServiceRuntime({ root: rootB, opts }, before),
       ).rejects.toMatchObject({ reason: "original-service-unverified" });
     }
-    const execution = await executeMutableUpdate({
-      executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
-      root: rootB,
-      installKind: "package",
-      updateInstallKind: "package",
-      switchToGit: false,
-      timeoutMs: 30000,
-      updateStepTimeoutMs: 30000,
-      startedAt: Date.now(),
-      progress: {},
-      stop: () => {},
-      channel: "stable",
-      tag: "2026.9.5",
-      opts,
-      shouldRestart: scenario !== "no-restart",
-      packageInstallSpec: "openclaw@2026.9.5",
-      packageTargetVersion: "2026.9.5",
-      managedServiceRootRedirect: null,
-      managedServiceRoot: rootA,
-      recoveryState: { triageTarget: { env: state.env } },
-      prepareMutableUpdate: async () => {
-        fence.assertCurrent();
-      },
-    });
+    const execution = await executePackageUpdate(opts, scenario !== "no-restart");
     expect(execution, execution?.failure?.detail).not.toBeNull();
-    if (scenario === "no-restart") {
-      expect(activated, execution?.failure?.detail).toBe(true);
-      expect(stopped).toBe(false);
-    } else {
-      expect(activated).toBe(false);
-      expect(stopped).toBe(false);
-      expect(execution!.result.status).toBe("error");
-      expect(execution!.result.reason, execution!.failure?.detail).toBe(
-        scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
-      );
+    expect(activated, execution?.failure?.detail).toBe(scenario === "no-restart");
+    expect(stopped).toBe(false);
+    if (scenario !== "no-restart") {
+      expect(execution!.result, execution!.failure?.detail).toMatchObject({
+        status: "error",
+        reason:
+          scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
+      });
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(mocks.running).toBe(true);
     }
@@ -795,40 +757,33 @@ registerCurrentF3Controls(() => ({
 it.each([false, true])(
   "handles restored receipt fingerprints with actual mutation=%s",
   async (mutated) => {
-    const run: NonNullable<UpdateCommandOptions["run"]> = {
-      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
-      env: state.env,
-    };
+    const run: NonNullable<UpdateCommandOptions["run"]> = updateRun(state.env);
     await withUpdateCommandExecutor(run.runId, async (executor) => {
       run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
       const opts: UpdateCommandOptions = { json: true, run };
       const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
-      if (!original) {
-        throw new Error("original service fixture was not observed");
-      }
+      assert(original, "original service fixture was not observed");
       const { runUpdatedInstallGatewayCommand } = await vi.importActual<
         typeof import("./update-command-service-command.js")
       >("./update-command-service-command.js");
-      const command = vi.spyOn(commandProcess, "runCommandWithTimeout").mockResolvedValue({
-        stdout: JSON.stringify({
-          action: "install",
-          ok: false,
-          error: mutated ? "activation failed after compensation" : "pre-write refused",
-          rebind: {
-            ...(mutated ? { mutated: true } : {}),
-            before: original.definition.fingerprint,
-            after: original.definition.fingerprint,
-            runtimePinBefore: original.definition.runtimePin?.revision,
-            runtimePinAfter: original.definition.runtimePin?.revision,
-          },
+      const command = vi.spyOn(commandProcess, "runCommandWithTimeout").mockResolvedValue(
+        processResult({
+          stdout: JSON.stringify({
+            action: "install",
+            ok: false,
+            error: mutated ? "activation failed after compensation" : "pre-write refused",
+            rebind: {
+              ...(mutated ? { mutated: true } : {}),
+              before: original.definition.fingerprint,
+              after: original.definition.fingerprint,
+              runtimePinBefore: original.definition.runtimePin?.revision,
+              runtimePinAfter: original.definition.runtimePin?.revision,
+            },
+          }),
+          code: 1,
+          cleanup: "normal",
         }),
-        stderr: "",
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
-        cleanup: "normal",
-      });
+      );
       if (mutated) {
         mocks.running = false;
         mocks.nativeInstall.mockImplementation(async (args) => {
@@ -857,18 +812,7 @@ it.each([false, true])(
       expect(original.definition.reboundRuntimePin).toBe(
         mutated ? original.definition.runtimePin?.revision : undefined,
       );
-      await rollbackFailedUpdate({
-        definitionRecovery: {},
-        result: { status: "error", mode: "npm", root: rootB, steps: [], durationMs: 0 },
-        previousRoot: rootB,
-        previousSchemaVersions: schemas,
-        originalManagedServiceRuntime: original,
-        configSnapshot: await readConfigFileSnapshot({ observe: false }),
-        opts,
-        preManagedServiceStop: before,
-        allowGatewayRestart: mutated,
-        timeoutMs: 30000,
-      });
+      await rollbackOriginal(opts, original, mutated);
       expect(mocks.nativeInstall).not.toHaveBeenCalled();
       expect(mocks.nativeRestart).toHaveBeenCalledTimes(mutated ? 1 : 0);
       expect(mocks.running).toBe(true);

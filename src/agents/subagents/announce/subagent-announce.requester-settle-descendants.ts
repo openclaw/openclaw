@@ -56,13 +56,24 @@ export function createRequesterDescendantReader(params: {
       params.requesterStorePath,
       params.rootRunIds,
     );
-    return {
-      unsettled: index.hasDescendantRunAwaitingSettle(
-        params.requesterSessionKey,
-        params.settledEntry.runId,
-        params.settledBefore,
-      ),
-      active: index.countActiveDescendantRuns(params.requesterSessionKey),
-    };
+    const unsettled = index.hasDescendantRunAwaitingSettle(
+      params.requesterSessionKey,
+      params.settledEntry.runId,
+      params.settledBefore,
+    );
+    const active = index.countActiveDescendantRuns(params.requesterSessionKey);
+    // Terminal delivery gets one bounded grace period, derived from durable end
+    // times so neither sweeps nor a Gateway restart recharge the wait.
+    const deliveryWaitUntil =
+      unsettled && active === 0
+        ? index
+            .listDescendantRunsForRequester(params.requesterSessionKey)
+            .reduce(
+              (latest, run) => Math.max(latest, run.execution.endedAt ?? 0),
+              params.settledEntry.execution.endedAt ?? 0,
+            ) +
+          5 * 60_000
+        : undefined;
+    return { unsettled, active, ...(deliveryWaitUntil !== undefined ? { deliveryWaitUntil } : {}) };
   };
 }

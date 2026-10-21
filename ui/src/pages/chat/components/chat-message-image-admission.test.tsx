@@ -1,21 +1,30 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
-  releaseChatMediaResourceSubscriber,
+  imageResponse,
+  managedSource,
+  stubObjectUrls,
+  ticketResponse,
+} from "./chat-message-media.test-helpers.ts";
+import {
+  releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
 let container: HTMLDivElement;
-let onRequestUpdate: () => void;
+let onMediaChange: () => void;
+let disconnectMedia: Set<() => void>;
 let view:
   | {
       update: (props: MessageImagesProps) => void;
@@ -24,11 +33,14 @@ let view:
     }
   | undefined;
 const intersections: (() => void)[] = [];
+const imageElement = () => container.querySelector("img");
+const imageButton = () => container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
 
 beforeEach(() => {
   vi.useFakeTimers();
   container = document.body.appendChild(document.createElement("div"));
-  onRequestUpdate = vi.fn();
+  onMediaChange = vi.fn();
+  disconnectMedia = new Set();
   vi.stubGlobal(
     "IntersectionObserver",
     class implements IntersectionObserver {
@@ -49,19 +61,12 @@ beforeEach(() => {
       }
     },
   );
-  const NativeUrl = URL;
-  vi.stubGlobal(
-    "URL",
-    class extends NativeUrl {
-      static override createObjectURL = () => `blob:${crypto.randomUUID()}`;
-      static override revokeObjectURL = vi.fn();
-    },
-  );
+  stubObjectUrls();
 });
 
 afterEach(() => {
   unmount();
-  releaseChatMediaResourceSubscriber(onRequestUpdate);
+  releaseChatMediaResourceOwner(onMediaChange);
   container.remove();
   intersections.length = 0;
   vi.clearAllTimers();
@@ -70,39 +75,37 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const imageResponse = () => new Response("png", { headers: { "Content-Type": "image/png" } });
-const ticketResponse = () =>
-  Response.json({
-    available: true,
-    mediaTicket: "image-ticket",
-    mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-  });
-
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
-  const props = { images, options: { onRequestUpdate, ...options } };
+  const props = { images, options: { mediaOwner: onMediaChange, ...options } };
   if (view) {
     view.update(props);
     return view;
   }
+  view = mountImages(props, container);
+  return view;
+}
+
+function mountImages(props: MessageImagesProps, target: HTMLElement) {
   const [current, setCurrent] = createSignal<MessageImagesProps>(props);
   const [presented, setPresented] = createSignal(true);
   const mounted = mountSolid(
     () => (
-      <SolidContentPresentation value={presented}>
-        <MessageImages {...current()} />
-      </SolidContentPresentation>
+      <ContentPresentation value={presented}>
+        <TranscriptMediaDisconnect value={disconnectMedia}>
+          <MessageImages {...current()} />
+        </TranscriptMediaDisconnect>
+      </ContentPresentation>
     ),
-    { container },
+    { container: target },
   );
-  view = {
-    update(next) {
+  return {
+    update(next: MessageImagesProps) {
       setCurrent(next);
       flush();
     },
     setPresented,
     unmount: mounted.unmount,
   };
-  return view;
 }
 
 function unmount() {
@@ -113,11 +116,39 @@ function unmount() {
 async function loadAdmittedImage() {
   intersections[0]!();
   await vi.advanceTimersByTimeAsync(0);
-  const loaded = container.querySelector("img")!;
+  const loaded = imageElement()!;
   Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
   loaded.dispatchEvent(new Event("load"));
   return loaded;
 }
+
+it.each(["render", "click"] as const)(
+  "does not replay an automatic image retry already claimed by %s",
+  async (trigger) => {
+    const images = [{ url: managedSource() }];
+    const fetch = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    onMediaChange = () => draw([...images]);
+    draw(images);
+    intersections[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    if (trigger === "render") {
+      // Claim the elapsed retry before its queued timer runs.
+      vi.setSystemTime(Date.now() + 5_000);
+      onMediaChange();
+    } else {
+      const retry = container.querySelector<HTMLButtonElement>("button");
+      expect(retry?.textContent).toContain("Retry");
+      retry?.click();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
 
 it("replaces failed native images with unavailable cards and offers local retry", async () => {
   vi.stubGlobal(
@@ -183,25 +214,35 @@ it("replaces failed native images with unavailable cards and offers local retry"
   );
 });
 
-it.each(["assistant", "managed", "omitted"] as const)(
+it.each(["assistant", "managed", "omitted", "standalone", "aliases"] as const)(
   "defers offscreen %s image reads and shares acquisition after admission",
   async (kind) => {
-    const source =
-      kind === "assistant"
-        ? `/tmp/${crypto.randomUUID()}.png`
-        : `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const source = kind === "assistant" ? `/tmp/${crypto.randomUUID()}.png` : managedSource();
     const image: ImageBlock =
       kind === "omitted"
         ? { artifactId: crypto.randomUUID() }
         : { url: source, artifactId: crypto.randomUUID() };
-    const fetch = vi.fn(async () =>
-      kind === "assistant" ? Response.json({ available: true }) : imageResponse(),
-    );
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      if (kind !== "assistant") {
+        const headers = new Headers(init?.headers);
+        expect(headers.has("Authorization")).toBe(false);
+        expect(headers.has("x-openclaw-requester-session-key")).toBe(false);
+      }
+      return kind === "assistant" ? Response.json({ available: true }) : imageResponse();
+    });
     vi.stubGlobal("fetch", fetch);
     const resolveArtifactDownload = vi.fn(async () => ({
-      url: kind === "omitted" ? "data:image/png;base64,cG5n" : source,
+      url: kind === "omitted" || kind === "aliases" ? "data:image/png;base64,cG5n" : source,
     }));
-    draw([image, image], { sessionKey: "agent:main:main", resolveArtifactDownload });
+    const alias: ImageBlock =
+      kind === "aliases" ? { ...image, url: `${source}?mediaTicket=historical` } : image;
+    const options = {
+      sessionKey: "agent:main:main",
+      authToken: "must-not-be-forwarded",
+      resolveArtifactDownload,
+      mediaOwner: kind === "standalone" ? undefined : onMediaChange,
+    };
+    draw([image, alias], options);
 
     expect(fetch).not.toHaveBeenCalled();
     expect(resolveArtifactDownload).not.toHaveBeenCalled();
@@ -214,8 +255,68 @@ it.each(["assistant", "managed", "omitted"] as const)(
     expect(fetch).toHaveBeenCalledOnce();
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(kind === "assistant" ? 0 : 1);
     expect(container.querySelectorAll("img")).toHaveLength(2);
+    draw([alias, image], options);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(kind === "assistant" ? 0 : 1);
+    const urls = [...container.querySelectorAll("img")].map((element) => element.src);
+    expect(new Set(urls).size).toBe(1);
   },
 );
+
+it("retries signed artifact downloads without forwarding gateway or requester credentials", async () => {
+  const source = managedSource();
+  const ticketedUrl = `${source}?mediaTicket=signed`;
+  const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
+  const fetch = vi
+    .fn<typeof globalThis.fetch>()
+    .mockResolvedValueOnce(new Response(null, { status: 503 }))
+    .mockResolvedValueOnce(imageResponse());
+  vi.stubGlobal("fetch", fetch);
+  draw([{ url: source, artifactId: crypto.randomUUID() }], {
+    sessionKey: "agent:main:main",
+    authToken: "must-not-be-forwarded",
+    resolveArtifactDownload,
+  });
+  intersections[0]!();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  for (const [requestUrl, init] of fetch.mock.calls) {
+    expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`);
+    const headers = new Headers(init?.headers);
+    expect(headers.has("Authorization")).toBe(false);
+    expect(headers.has("x-openclaw-requester-session-key")).toBe(false);
+  }
+  expect(imageElement()?.getAttribute("src")).toMatch(/^blob:/u);
+});
+
+it("keeps the artifact's source session in its shared image identity", async () => {
+  const artifactId = crypto.randomUUID();
+  const resolveArtifactDownload = vi.fn<NonNullable<ImageRenderOptions["resolveArtifactDownload"]>>(
+    async () => ({
+      url: "data:image/png;base64,cG5n",
+      blob: new Blob(["png"], { type: "image/png" }),
+    }),
+  );
+  draw(
+    ["agent:main:first", "agent:main:second"].map((sessionKey) => ({
+      artifactId,
+      url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/fixture/full`,
+    })),
+    { sessionKey: "agent:main:main", resolveArtifactDownload },
+  );
+  intersections[0]!();
+  intersections[1]!();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(resolveArtifactDownload.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+    "agent:main:first",
+    "agent:main:second",
+  ]);
+  expect(new Set([...container.querySelectorAll("img")].map((image) => image.src)).size).toBe(2);
+});
 
 it("keeps an artifact-only viewer rendition alive when its inline tile rerenders and reopens", async () => {
   vi.stubGlobal("innerWidth", 390);
@@ -233,9 +334,9 @@ it("keeps an artifact-only viewer rendition alive when its inline tile rerenders
   draw([image], options);
   intersections[0]!();
   await vi.advanceTimersByTimeAsync(0);
-  const inline = container.querySelector("img")!;
+  const inline = imageElement()!;
   const preview = inline.getAttribute("src");
-  container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  imageButton().click();
   const opened = onOpenImage.mock.calls[0]![0];
   expect(opened.src).toBe(preview);
   const pending = opened.loadDisplayImage!();
@@ -249,10 +350,10 @@ it("keeps an artifact-only viewer rendition alive when its inline tile rerenders
   draw([{ ...image }], { ...options });
   // Reopening reacquires the inline rendition with the same pane subscriber
   // while the earlier viewer request is still pending.
-  container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  imageButton().click();
   await vi.advanceTimersByTimeAsync(0);
   expect(signal.aborted).toBe(false);
-  expect(container.querySelector("img")).toBe(inline);
+  expect(imageElement()).toBe(inline);
   expect(inline.getAttribute("src")).toBe(preview);
   expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
 
@@ -271,13 +372,13 @@ it("keeps an artifact-only viewer rendition alive when its inline tile rerenders
 });
 
 it.each([
-  { width: 390, height: 400, dpr: 1, inline: 480, display: 480 },
-  { width: 390, height: 844, dpr: 1, inline: 480, display: 960 },
-  { width: 390, height: 844, dpr: 2, inline: 960, display: 1920 },
-  { width: 1440, height: 900, dpr: 1, inline: 480, display: 1920 },
+  [390, 400, 1, 480, 480],
+  [390, 844, 1, 480, 960],
+  [390, 844, 2, 960, 1920],
+  [1440, 900, 1, 480, 1920],
 ])(
-  "uses bounded artifact renditions at $width × $height / DPR $dpr and reads originals only on download",
-  async ({ width, height, dpr, inline, display }) => {
+  "uses bounded artifact renditions at %s × %s / DPR %s and reads originals only on download",
+  async (width, height, dpr, inline, display) => {
     vi.stubGlobal("innerWidth", width);
     vi.stubGlobal("innerHeight", height);
     vi.stubGlobal("devicePixelRatio", dpr);
@@ -292,13 +393,13 @@ it.each([
     draw([{ artifactId }], { sessionKey: "main", resolveArtifactDownload, onOpenImage });
     intersections[0]!();
     await vi.advanceTimersByTimeAsync(0);
-    const preview = container.querySelector("img")?.getAttribute("src");
+    const preview = imageElement()?.getAttribute("src");
     expect(preview).toBeTruthy();
     expect(resolveArtifactDownload).toHaveBeenCalledExactlyOnceWith(
       { sessionKey: "main", artifactId, variant: "thumbnail", previewWidth: inline },
       expect.any(AbortSignal),
     );
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+    imageButton().click();
     const opened = onOpenImage.mock.calls[0]![0];
     expect(opened.src).toBe(preview);
     const rendition = await opened.loadDisplayImage!();
@@ -325,9 +426,7 @@ it.each(["assistant remount", "managed remount", "assistant reconnect"] as const
   "restores a loaded image without another viewport admission: %s",
   async (mode) => {
     const managed = mode === "managed remount";
-    const source = managed
-      ? `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`
-      : `/tmp/${crypto.randomUUID()}.png`;
+    const source = managed ? managedSource() : `/tmp/${crypto.randomUUID()}.png`;
     const fetch = vi.fn(async () => (managed ? imageResponse() : ticketResponse()));
     vi.stubGlobal("fetch", fetch);
     const images = [{ url: source, fileName: "Screenshot.png" }];
@@ -346,9 +445,9 @@ it.each(["assistant remount", "managed remount", "assistant reconnect"] as const
       draw(images);
     }
     expect(container.querySelector(".chat-image-skeleton")).toBeNull();
-    expect(container.querySelector("img")?.getAttribute("src")).toBe(src);
+    expect(imageElement()?.getAttribute("src")).toBe(src);
     if (!managed) {
-      expect(container.querySelector("img")).toBe(loaded);
+      expect(imageElement()).toBe(loaded);
     }
     expect(fetch).toHaveBeenCalledOnce();
   },
@@ -381,8 +480,12 @@ it.each([
   unmount();
   await Promise.resolve();
   expect(loaded.parentNode).toBeNull();
-  expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
-  expect(removeListener).toHaveBeenCalledWith("error", expect.any(Function));
+  expect(removeListener.mock.calls.map(([type, listener]) => [type, listener])).toEqual(
+    expect.arrayContaining([
+      ["load", expect.any(Function)],
+      ["error", expect.any(Function)],
+    ]),
+  );
   if (change === "expiry") {
     await vi.advanceTimersByTimeAsync(300_001);
   } else if (change === "connectionEpoch") {
@@ -391,11 +494,11 @@ it.each([
     options[change] = "after";
   }
   draw(images, options);
-  expect(container.querySelector("img")).toBeNull();
+  expect(imageElement()).toBeNull();
   expect(fetch).toHaveBeenCalledOnce();
   intersections.at(-1)!();
   await vi.advanceTimersByTimeAsync(0);
-  expect(container.querySelector("img")).not.toBe(loaded);
+  expect(imageElement()).not.toBe(loaded);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
@@ -405,7 +508,7 @@ it("admits on focus without replacing the pending control or opening an empty pr
   vi.stubGlobal("fetch", fetch);
   const onOpenImage = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
   draw([{ url: `/tmp/${crypto.randomUUID()}.png` }], { onOpenImage });
-  const button = container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
+  const button = imageButton();
   expect(button.disabled).toBe(false);
   expect(button.getAttribute("aria-disabled")).toBe("true");
   expect(fetch).not.toHaveBeenCalled();
@@ -427,7 +530,7 @@ it("admits on focus without replacing the pending control or opening an empty pr
 });
 
 it("lets explicit gallery navigation load an offscreen neighbor", async () => {
-  const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+  const source = managedSource();
   const fetch = vi.fn(async () => imageResponse());
   vi.stubGlobal("fetch", fetch);
   let opened: ImageLightboxItem | undefined;
@@ -436,7 +539,7 @@ it("lets explicit gallery navigation load an offscreen neighbor", async () => {
       opened = item;
     },
   });
-  container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  imageButton().click();
   expect(fetch).not.toHaveBeenCalled();
 
   const neighbor = await opened!.gallery!.items[1]!(true);
@@ -446,41 +549,9 @@ it("lets explicit gallery navigation load an offscreen neighbor", async () => {
   neighbor?.release?.();
 });
 
-it("preserves an immediate inline submission and its settled canonical handoff", async () => {
-  const artifactId = crypto.randomUUID();
-  const inline: ImageBlock = { url: "data:image/png;base64,cG5n", artifactId };
-  const metadata = createDeferred<Response>();
-  const fetch = vi.fn(() => metadata.promise);
-  vi.stubGlobal("fetch", fetch);
-  draw([inline], { localSubmission: true });
-  const image = container.querySelector("img")!;
-  Object.defineProperty(image, "naturalWidth", { value: 20 });
-  image.dispatchEvent(new Event("load"));
-  expect(intersections).toHaveLength(0);
-
-  const canonical: ImageBlock = { url: `media://inbound/${artifactId}`, artifactId, factIndex: 0 };
-  const options = {
-    localSubmission: true,
-    canonicalMessageKey: "canonical-submission",
-  };
-  draw([canonical], options);
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(container.querySelector("img")).toBe(image);
-  expect(image.getAttribute("src")).toBe(inline.url);
-
-  metadata.resolve(Response.json({ available: true }));
-  await vi.advanceTimersByTimeAsync(0);
-  expect(image.getAttribute("src")).not.toBe(inline.url);
-  image.dispatchEvent(new Event("load"));
-  draw([canonical], options);
-  expect(container.querySelector("img")).toBe(image);
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(intersections).toHaveLength(0);
-});
-
 it("ignores replaced observers and aborts detached artifact resolution before blob fetch", async () => {
-  const first = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-  const second = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+  const first = managedSource();
+  const second = managedSource();
   const artifact = createDeferred<{ url: string }>();
   const resolveArtifactDownload = vi.fn(() => artifact.promise);
   const fetch = vi.fn(async () => imageResponse());
@@ -498,47 +569,124 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
   await vi.advanceTimersByTimeAsync(0);
 
   expect(fetch).not.toHaveBeenCalled();
-  expect(container.querySelector("img")).toBeNull();
+  expect(imageElement()).toBeNull();
 });
 
-it.each(["error", "timeout"] as const)(
-  "retries a canonical upload handoff after native %s without reviving inline pixels",
-  async (failure) => {
-    const artifactId = crypto.randomUUID();
-    const inline: ImageBlock = { url: "data:image/png;base64,cG5n", artifactId };
-    const fetch = vi.fn(async () => ticketResponse());
-    vi.stubGlobal("fetch", fetch);
-    draw([inline], { localSubmission: true });
-    const image = container.querySelector("img")!;
-    Object.defineProperty(image, "naturalWidth", { value: 20 });
-    image.dispatchEvent(new Event("load"));
-    const canonical: ImageBlock = {
-      url: "media://inbound/" + artifactId,
-      artifactId,
-      factIndex: 0,
-    };
-    draw([canonical], { localSubmission: true, canonicalMessageKey: "failed-upload" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(container.querySelector("img")).toBe(image);
-    if (failure === "error") {
-      image.dispatchEvent(new Event("error"));
-      flush();
-    } else {
-      await vi.advanceTimersByTimeAsync(30_000);
+describe("message attachment availability", () => {
+  const panes: { container: HTMLElement; draw: () => void; unmount: () => void }[] = [];
+  afterEach(() => {
+    for (const pane of panes.splice(0)) {
+      pane.unmount();
+      releaseChatMediaResourceOwner(pane.draw);
+      pane.container.remove();
     }
-    expect(container.querySelector("img")).toBeNull();
-    const retry = container.querySelector<HTMLButtonElement>(
+  });
+  function mountPane(source: string, options: ImageRenderOptions) {
+    const target = document.body.appendChild(document.createElement("div"));
+    const images = () => [{ url: source, width: 1200, height: 800 }];
+    const redraw = () =>
+      root.update({ images: images(), options: { ...options, mediaOwner: redraw } });
+    const root = mountImages(
+      { images: images(), options: { ...options, mediaOwner: redraw } },
+      target,
+    );
+    const pane = { container: target, draw: redraw, unmount: root.unmount };
+    panes.push(pane);
+    intersections.at(-1)!();
+    flush();
+    return pane;
+  }
+  const availabilityTicket = (mediaTicket: string) => ticketResponse(mediaTicket, 60_000);
+  it("does not reuse another message's available ticket for the same source", async () => {
+    vi.useFakeTimers();
+    const source = "/tmp/openclaw/" + crypto.randomUUID() + ".png";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(availabilityTicket("readable-message-ticket"))
+      .mockResolvedValueOnce(
+        Response.json({ available: false, reason: "Message unavailable", retryable: false }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const mount = (messageId: string) =>
+      mountPane(source, { sessionKey: "agent:main:shared-source", messageId }).container;
+    const readable = mount("readable-message");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readable.querySelector("img")?.getAttribute("src")).toContain(
+      "mediaTicket=readable-message-ticket",
+    );
+
+    const unavailable = mount("unavailable-message");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(unavailable.querySelector("img")).toBeNull();
+    expect(unavailable.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+    expect(readable.querySelector("img")?.getAttribute("src")).toContain(
+      "mediaTicket=readable-message-ticket",
+    );
+    expect(
+      fetchMock.mock.calls.map(([url]) =>
+        new URL(url instanceof Request ? url.url : url, window.location.origin).searchParams.get(
+          "messageId",
+        ),
+      ),
+    ).toEqual(["readable-message", "unavailable-message"]);
+  });
+
+  it("does not let an aborted late renewal replace a newly mounted pane retry", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-09-19T12:00:00Z");
+    vi.setSystemTime(startedAt);
+    const source = "/tmp/openclaw/" + crypto.randomUUID() + ".png";
+    const retry = createDeferred<Response>();
+    let renewalSignal: AbortSignal | undefined;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(availabilityTicket("original"))
+      .mockImplementationOnce(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            renewalSignal = init?.signal ?? undefined;
+            renewalSignal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("retry superseded renewal", "AbortError")),
+              { once: true },
+            );
+          }),
+      )
+      .mockReturnValueOnce(retry.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const options = { sessionKey: "renewal-retry-proof", agentId: "main" };
+    const first = mountPane(source, options);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.container.querySelector("img")?.getAttribute("src")).toContain(
+      "mediaTicket=original",
+    );
+
+    // A background tab resumes after its scheduled refresh, then a second pane
+    // mounts after expiry while that late renewal is still in flight.
+    vi.setSystemTime(startedAt + 59_000);
+    first.draw();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(startedAt + 60_001);
+    const second = mountPane(source, options);
+    const retryButton = second.container.querySelector<HTMLButtonElement>(
       ".chat-assistant-attachment-card__retry",
     );
-    expect(retry).not.toBeNull();
-    image.dispatchEvent(new Event("load"));
-    expect(container.querySelector("img")).toBeNull();
-    retry!.click();
+    expect(retryButton).not.toBeNull();
+    retryButton!.click();
+    expect(renewalSignal?.aborted).toBe(true);
+    flush();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledTimes(2);
-    const replacement = container.querySelector("img");
-    expect(replacement).not.toBeNull();
-    expect(replacement).not.toBe(image);
-    expect(replacement?.getAttribute("src")).toContain("mediaTicket=image-ticket");
-  },
-);
+
+    expect(resolveAssistantAttachmentAvailability(source, options).status).toBe("checking");
+    expect(second.container.querySelector(".chat-assistant-attachment-card__retry")).toBeNull();
+    retry.resolve(availabilityTicket("retry-success"));
+    await vi.advanceTimersByTimeAsync(0);
+    for (const { container: target } of panes) {
+      expect(target.querySelector("img")?.getAttribute("src")).toContain(
+        "mediaTicket=retry-success",
+      );
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});

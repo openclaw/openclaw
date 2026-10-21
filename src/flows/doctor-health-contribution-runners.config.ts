@@ -97,7 +97,6 @@ export async function runWriteConfigHealth(
     const renamedCron = await maybeRepairProviderRenameCronJobs({
       renames: providerRenames,
       env: ctx.env,
-      shouldRepair: true,
     });
     noteDoctorRepairResult(renamedCron, showDoctorNote);
     const renamedSessions = await maybeRepairCodexSessionRoutes({
@@ -466,9 +465,7 @@ export async function runWriteConfigHealth(
       if (isConfigValidationFailedError(error)) {
         const { note } = await import("../../packages/terminal-core/src/note.js");
         const { formatConfigIssueLines } = await import("../config/issue-format.js");
-        const issueLines = Array.isArray(error.issues)
-          ? formatConfigIssueLines(error.issues, "-", { normalizeRoot: true })
-          : [error.message];
+        const issueLines = formatConfigIssueLines(error.issues, "-", { normalizeRoot: true });
         note(
           [
             "Doctor could not apply config fixes: the repaired config still fails validation.",

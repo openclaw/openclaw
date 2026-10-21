@@ -3,13 +3,9 @@ export function createControlUiMockSessionSubscriptions(
   scenario: { mainSessionKey: string; defaultAgentId: string; sessionScope: string },
   isRecord: (value: unknown) => value is Record<string, unknown>,
 ) {
-  const scopedEvents = new Set([
-    "agent",
-    "chat",
-    "chat.side_result",
-    "session.observer",
-    "session.tool",
-  ]);
+  const scopedEvents = new Set(
+    "agent chat chat.side_result session.observer session.tool".split(" "),
+  );
   const canonicalKey = (key: string): string => {
     const normalized = key.trim();
     if (scenario.sessionScope === "global" && /^agent:[^:]+:main$/u.test(normalized)) {
@@ -31,24 +27,21 @@ export function createControlUiMockSessionSubscriptions(
       stopRepeatingEvents: () => void;
     }) {
       const keys = new Set<string>();
-      let scoped = false;
+      let capabilities: readonly unknown[] = [];
       let observesSessions = false;
+      const hasCapability = (capability: string) => capabilities.includes(capability);
       const hasSubscription = (payload: unknown): boolean => {
-        const source = isRecord(payload)
-          ? [payload, payload.suggestion, payload.request].find(
-              (candidate) =>
-                isRecord(candidate) &&
-                typeof candidate.sessionKey === "string" &&
-                candidate.sessionKey.trim(),
-            )
-          : undefined;
-        return (
-          isRecord(source) &&
-          typeof source.sessionKey === "string" &&
-          keys.has(subscriptionKey(source.sessionKey, source.agentId))
+        const candidates = isRecord(payload) ? [payload, payload.suggestion, payload.request] : [];
+        const source = candidates.find(
+          (candidate): candidate is { sessionKey: string; agentId?: unknown } =>
+            isRecord(candidate) &&
+            typeof candidate.sessionKey === "string" &&
+            Boolean(candidate.sessionKey.trim()),
         );
+        return Boolean(source && keys.has(subscriptionKey(source.sessionKey, source.agentId)));
       };
       return {
+        hasCapability,
         hasSubscription,
         get size() {
           return keys.size;
@@ -62,7 +55,7 @@ export function createControlUiMockSessionSubscriptions(
             return;
           }
           if (method === "connect") {
-            scoped = Array.isArray(params.caps) && params.caps.includes("session-scoped-events");
+            capabilities = Array.isArray(params.caps) ? params.caps : [];
           } else if (method === "sessions.subscribe") {
             observesSessions = isRecord(result) && result.subscribed === true;
           } else if (typeof params.key === "string" && params.key.trim()) {
@@ -79,15 +72,13 @@ export function createControlUiMockSessionSubscriptions(
           }
         },
         allows(event: string, payload: unknown): boolean {
-          // The real observer audience includes broad session-list subscribers,
-          // while tool arguments and transcript events still require a child subscription.
-          if (event === "session.observer" && observesSessions) {
-            return true;
-          }
-          if (event !== "session.typing" && !(scoped && scopedEvents.has(event))) {
-            return true;
-          }
-          return hasSubscription(payload);
+          // Broad observers receive summaries, never unscoped tool/transcript events.
+          return (
+            (event === "session.observer" && observesSessions) ||
+            (event !== "session.typing" &&
+              !(hasCapability("session-scoped-events") && scopedEvents.has(event))) ||
+            hasSubscription(payload)
+          );
         },
       };
     },

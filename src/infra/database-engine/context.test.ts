@@ -1,52 +1,78 @@
 import { afterEach, expect, it } from "vitest";
-import { getDatabaseEngineSelection, installDatabaseEngineSelection } from "./context.js";
+import {
+  withDatabaseEngineSelection as withSelection,
+  getDatabaseEngineInput as getInput,
+  getDatabaseEngineSelection as getSelection,
+  installDatabaseEngineSelection as install,
+  type DatabaseEngineSelection as Selection,
+} from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 
+const sqliteEngines: Selection["effectiveEngines"] = {
+  state: "sqlite",
+  agent: "sqlite",
+  workboard: "sqlite",
+  logbook: "sqlite",
+  "team-reports": "sqlite",
+  quarantine: "sqlite",
+  "managed-update": "sqlite",
+  "package-activation": "sqlite",
+};
+const postgres = { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" };
+const selection = (family?: keyof Selection["effectiveEngines"], input = postgres): Selection => ({
+  effectiveEngines: { ...sqliteEngines, ...(family ? { [family]: "postgres" } : {}) },
+  ...(family ? { postgres: input } : {}),
+});
 afterEach(resetDatabaseEngineSelectionForTest);
 
-it("publishes one immutable selection to existing and new async callers", async () => {
-  const readLater = async () => {
-    await Promise.resolve();
-    return getDatabaseEngineSelection();
-  };
-  const pending = readLater();
-  const input = { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" };
-  installDatabaseEngineSelection({ input });
-  const selected = getDatabaseEngineSelection();
-  expect(await pending).toBe(selected);
-  expect(await readLater()).toBe(selected);
-  expect(selected?.input).toEqual(input);
-  expect(Object.isFrozen(input)).toBe(true);
-  expect(Object.isFrozen(selected)).toBe(true);
-  installDatabaseEngineSelection({ input: { ...input } });
-  expect(getDatabaseEngineSelection()).toBe(selected);
-});
-
-it("keeps an explicit SQLite selection and refuses a different engine", () => {
-  expect(getDatabaseEngineSelection()).toBeUndefined();
-  installDatabaseEngineSelection({ input: undefined });
-  const selected = getDatabaseEngineSelection();
-  expect(selected).toEqual({ input: undefined });
-  installDatabaseEngineSelection({ input: undefined });
-  expect(() =>
-    installDatabaseEngineSelection({
-      input: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" },
-    }),
-  ).toThrow("conflicts with the installed process selection");
-  expect(getDatabaseEngineSelection()).toBe(selected);
-});
+it.each([undefined, "state"] as const)(
+  "publishes an immutable, idempotent selection: %s",
+  async (family) => {
+    const readLater = () => Promise.resolve().then(getSelection);
+    expect(getSelection()).toBeUndefined();
+    const pending = readLater();
+    install(selection(family));
+    const selected = getSelection();
+    expect(selected).toEqual(selection(family));
+    expect(await pending).toBe(selected);
+    expect(await readLater()).toBe(selected);
+    expect([getInput("state"), getInput("agent"), getInput("workboard")]).toEqual([
+      family ? postgres : undefined,
+      undefined,
+      undefined,
+    ]);
+    expect([selected, selected?.effectiveEngines, selected?.postgres].map(Object.isFrozen)).toEqual(
+      [true, true, true],
+    );
+    install(selection(family, { ...postgres }));
+    expect(getSelection()).toBe(selected);
+  },
+);
 
 it.each([
-  { connection: "postgresql://localhost/other", schemaPrefix: "test" },
-  { connection: "postgresql://localhost/synthetic", schemaPrefix: "other" },
-  undefined,
-])("refuses to replace PostgreSQL connection or namespace: %j", (input) => {
-  installDatabaseEngineSelection({
-    input: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" },
+  [selection(), selection("workboard")],
+  [
+    selection("state"),
+    selection("state", { ...postgres, connection: "postgresql://localhost/other" }),
+  ],
+  [selection("state"), selection("state", { ...postgres, schemaPrefix: "other" })],
+  [selection("state"), selection("workboard")],
+])(
+  "refuses replacing the installed engine, family, connection or namespace %#",
+  (before, after) => {
+    install(before);
+    expect(() => install(after)).toThrow(/conflicts with the installed process selection.*restart/);
+    expect(getSelection()).toBe(before);
+  },
+);
+
+it("scopes the family map across awaits without replacing the boot selection", async () => {
+  const boot = selection("state");
+  install(boot);
+  await withSelection(selection("agent"), async () => {
+    await Promise.resolve();
+    expect([getInput("state"), getInput("agent")]).toEqual([undefined, postgres]);
   });
-  const selected = getDatabaseEngineSelection();
-  expect(() => installDatabaseEngineSelection({ input })).toThrow(
-    "conflicts with the installed process selection",
-  );
-  expect(getDatabaseEngineSelection()).toBe(selected);
+  expect(getSelection()).toBe(boot);
+  expect([getInput("state"), getInput("agent")]).toEqual([postgres, undefined]);
 });

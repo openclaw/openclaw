@@ -51,6 +51,7 @@ export type GitHubPublicationClaimRequest = {
   idempotencyKey: string;
   title?: string;
   body?: string;
+  draft?: boolean;
   requester: GitHubPublicationRequester;
   expectedPublisher?: GitHubPublicationPublisher;
 };
@@ -199,6 +200,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         requester: input.requester,
         ...(input.title ? { title: input.title } : {}),
         ...(input.body ? { body: input.body } : {}),
+        ...(input.draft !== undefined ? { draft: input.draft } : {}),
       };
       const accepted = await params.requestForClaimV2(claimRequest);
       assertRequester();
@@ -222,15 +224,19 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     const worktreeOwner = initialAuthority;
     const { worktree } = worktreeOwner;
     assertRequester();
+    const existing = await readGitHubPublicationRequestAsync({
+      sessionId,
+      idempotencyKey: input.idempotencyKey,
+    });
     const requestDigest = digestRequest({
       sessionId,
       idempotencyKey: input.idempotencyKey,
       title: input.title,
       body: input.body,
-    });
-    const existing = await readGitHubPublicationRequestAsync({
-      sessionId,
-      idempotencyKey: input.idempotencyKey,
+      draft:
+        existing && existing.draft == null && input.draft === undefined
+          ? undefined
+          : (input.draft ?? false),
     });
     if (existing) {
       if (existing.request_digest !== requestDigest || !sameWorktree(existing, worktree)) {
@@ -300,6 +306,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
                 idempotencyKey: input.idempotencyKey,
                 title: input.title,
                 body: input.body,
+                draft: input.draft ?? false,
               },
               requestId,
               requestDigest,
@@ -342,7 +349,6 @@ export function createGitHubPublicationCoordinatorMethods(params: {
             assertCurrent: assertCaptureAuthority,
           });
     assertCaptureAuthority();
-    worktreeOwner.assertCurrent();
     const row = await insertSessionRequest(snapshot);
     return await processDuringRun(row, validateLocalExecution);
   };
@@ -465,6 +471,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     ): Promise<SessionGitHubStatusResult | undefined> {
       const row = await readSharedGitHubPublication(session, { requestId });
       return row ? { result: publicationResult(row), confirmation: null } : undefined;
+    },
+
+    async latestPublishedShared(
+      session: PublicationSessionIdentity,
+      preparedRead: Parameters<typeof readSharedGitHubPublication>[2],
+    ): Promise<SessionGitHubStatusResult | null> {
+      const row = await readSharedGitHubPublication(session, { status: "published" }, preparedRead);
+      return row ? { result: publicationResult(row), confirmation: null } : null;
     },
 
     async latestShared(

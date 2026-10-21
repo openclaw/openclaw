@@ -5,6 +5,38 @@ import type {
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 const loaders = {
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.worker.js").then(
+      (m) => m.sandboxPersistentExecOperations,
+    ),
+  sandboxRegistry: () =>
+    import("../agents/sandbox/registry-write.worker.js").then((m) => m.sandboxRegistryOperations),
+  workspace: () =>
+    import("../agents/workspace-state-store.worker.js").then((m) => m.workspaceStateOperations),
+  userPreferences: () =>
+    import("./user-preferences.worker.js").then((m) => m.userPreferenceOperations),
+  tui: () => import("../tui/tui-last-session.kernel.js").then((m) => m.tuiLastSessionOperations),
+  sessionState: () =>
+    import("../sessions/session-state-events.worker.js").then((m) => m.sessionStateOperations),
+  sessionUpstream: () =>
+    import("../sessions/session-upstream-links.worker.js").then((m) => m.sessionUpstreamOperations),
+  subagents: () =>
+    import("../agents/subagents/registry/subagent-registry.store.worker.js").then(
+      (m) => m.subagentRegistryOperations,
+    ),
+  secrets: () =>
+    import("../secrets/store/secret-store.worker.js").then((m) => m.secretStoreOperations),
+  agentProvenance: () =>
+    import("./agent-provenance.worker.js").then((m) => m.agentProvenanceOperations),
+  githubPublication: () =>
+    import("./github-personal-publication-lifecycle.worker.js").then(
+      (m) => m.githubSessionReceiptOperations,
+    ),
+  sessionGroups: () =>
+    import("../gateway/session-group-catalog.kernel.js").then((m) => m.sessionGroupOperations),
+  claws: () =>
+    import("../claws/provenance-runtime-read.worker.js").then((m) => m.clawInstallSchemaOperations),
+  backup: () => import("./backup-run-records.worker.js").then((m) => m.backupRunOperations),
   machineState: () =>
     import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),
   localOnboarding: () =>
@@ -34,8 +66,6 @@ const loaders = {
     import("../gateway/worker-environments/prepared-pool-presence.worker.js").then(
       (m) => m.preparedPoolPresenceOperations,
     ),
-  clawProvenance: () =>
-    import("../claws/provenance-write.worker.js").then((m) => m.clawProvenanceOperations),
   projects: () =>
     import("../projects/project-registry.worker.js").then((m) => m.projectRegistryOperations),
   operatorApprovals: () =>
@@ -79,8 +109,13 @@ const loaders = {
     import("../skills/lifecycle/upload-store.worker.js").then((m) => m.skillUploadOperations),
   skills: () =>
     import("../skills/workshop/changes.worker.js").then((m) => m.skillWorkshopOperations),
-  transcripts: () =>
-    import("../transcripts/store-worker-write.js").then((m) => m.transcriptWriteOperations),
+  transcripts: async () => {
+    const [read, write] = await Promise.all([
+      import("../transcripts/store-worker-read.js").then((m) => m.transcriptReadOperations),
+      import("../transcripts/store-worker-write.js").then((m) => m.transcriptWriteOperations),
+    ]);
+    return { ...read, ...write };
+  },
   webPush: () => import("../infra/push-web-store.worker.js").then((m) => m.webPushOperations),
   apns: () => import("../infra/push-apns-store.worker.js").then((m) => m.apnsOperations),
   worktrees: () =>
@@ -88,12 +123,15 @@ const loaders = {
   mcpOAuth: () => import("../agents/mcp-oauth-store.worker.js").then((m) => m.mcpOAuthOperations),
   legacyMcpOAuth: () =>
     import("../infra/state-migrations.mcp-oauth.worker.js").then((m) => m.legacyMcpOAuthOperations),
+  deferredSessionImport: () =>
+    import("../infra/deferred-plugin-session-source-recovery.worker.js").then(
+      (m) => m.deferredSessionImportOperations,
+    ),
   nativeHookRelay: () =>
     import("../agents/harness/native-hook-relay-store.worker.js").then(
       (m) => m.nativeHookRelayOperations,
     ),
   audit: () => import("../audit/audit-event-writer.worker.js").then((m) => m.auditOperations),
-  promotions: () => import("../infra/promotions-feed.worker.js").then((m) => m.promotionOperations),
   telemetry: () => import("../infra/telemetry-store.worker.js").then((m) => m.telemetryOperations),
   doctor: () => import("../commands/doctor-state.worker.js").then((m) => m.doctorOperations),
   modelCatalog: () =>

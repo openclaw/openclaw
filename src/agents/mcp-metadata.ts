@@ -1,13 +1,70 @@
-import type { ClientCapabilities, ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  ClientCapabilities,
+  ServerCapabilities,
+  Transport,
+} from "@modelcontextprotocol/client";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const MCP_METADATA_TEXT_LIMIT = 1_200;
 const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
+export const MCP_ENTERPRISE_AUTH_CLIENT_EXTENSION =
+  "io.modelcontextprotocol/enterprise-managed-authorization";
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
-export function buildMcpClientCapabilities(mcpAppsEnabled: boolean): ClientCapabilities {
-  return mcpAppsEnabled
+function withMcpEnterpriseClientCapability(
+  capabilities: ClientCapabilities,
+  enabled: boolean,
+): ClientCapabilities {
+  return enabled
+    ? {
+        ...capabilities,
+        extensions: {
+          ...capabilities.extensions,
+          [MCP_ENTERPRISE_AUTH_CLIENT_EXTENSION]: {},
+        },
+      }
+    : capabilities;
+}
+
+/** The SDK's legacy fallback omits per-request capabilities; preserve them on both protocol eras. */
+function advertiseMcpEnterpriseOnRequests(transport: Transport): void {
+  const send = transport.send.bind(transport);
+  transport.send = (message, options) => {
+    if (!("id" in message) || !("method" in message)) {
+      return send(message, options);
+    }
+    const params = isRecord(message.params) ? message.params : {};
+    const meta = isRecord(params._meta) ? params._meta : {};
+    const capabilities = isRecord(meta["io.modelcontextprotocol/clientCapabilities"])
+      ? meta["io.modelcontextprotocol/clientCapabilities"]
+      : {};
+    const extensions = isRecord(capabilities.extensions) ? capabilities.extensions : {};
+    return send(
+      {
+        ...message,
+        params: {
+          ...params,
+          _meta: {
+            ...meta,
+            "io.modelcontextprotocol/clientCapabilities": {
+              ...capabilities,
+              extensions: { ...extensions, [MCP_ENTERPRISE_AUTH_CLIENT_EXTENSION]: {} },
+            },
+          },
+        },
+      },
+      options,
+    );
+  };
+}
+
+function buildMcpClientCapabilities(
+  mcpAppsEnabled: boolean,
+  enterpriseAuth = false,
+): ClientCapabilities {
+  const capabilities: ClientCapabilities = mcpAppsEnabled
     ? {
         elicitation: { form: {}, url: {} },
         extensions: {
@@ -16,6 +73,20 @@ export function buildMcpClientCapabilities(mcpAppsEnabled: boolean): ClientCapab
         },
       }
     : {};
+  return withMcpEnterpriseClientCapability(capabilities, enterpriseAuth);
+}
+
+export function prepareMcpCaps(
+  session: { transport: Transport; enterpriseAuth?: boolean },
+  nativeCapabilities: ClientCapabilities | undefined,
+  mcpAppsEnabled: boolean,
+): ClientCapabilities {
+  if (session.enterpriseAuth === true) {
+    advertiseMcpEnterpriseOnRequests(session.transport);
+  }
+  return nativeCapabilities
+    ? withMcpEnterpriseClientCapability(nativeCapabilities, session.enterpriseAuth === true)
+    : buildMcpClientCapabilities(mcpAppsEnabled, session.enterpriseAuth === true);
 }
 
 export function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | undefined {

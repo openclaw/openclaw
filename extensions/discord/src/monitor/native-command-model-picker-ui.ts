@@ -1,3 +1,4 @@
+import { ComponentType, type APIContainerComponent } from "discord-api-types/v10";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveEffectiveAgentRuntime,
@@ -18,12 +19,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  Container,
-  TextDisplay,
-  type BaseComponentInteraction,
-  type CommandInteraction,
-} from "../internal/discord.js";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import { splitDiscordModelRef } from "./model-picker-preference-primitives.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -99,9 +95,16 @@ export function resolveDiscordModelPickerPreferenceScope(params: {
   };
 }
 
-export function buildDiscordModelPickerNoticePayload(message: string): { components: Container[] } {
+export function buildDiscordModelPickerNoticePayload(message: string): {
+  components: APIContainerComponent[];
+} {
   return {
-    components: [new Container([new TextDisplay(message)])],
+    components: [
+      {
+        type: ComponentType.Container,
+        components: [{ type: ComponentType.TextDisplay, content: message }],
+      },
+    ],
   };
 }
 
@@ -210,7 +213,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
   userId: string;
   accountId: string;
   threadBindings: ThreadBindingManager;
-  preferFollowUp: boolean;
   safeInteractionCall: SafeDiscordInteractionCall;
 }) {
   const route = await resolveDiscordModelPickerRoute(params);
@@ -225,7 +227,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope(params),
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
-    limit: 5,
   });
   const parsedCurrentRef = splitDiscordModelRef(currentModel);
   const initialProvider =
@@ -261,7 +262,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
   };
 
   const delivered = await params.safeInteractionCall("model picker reply", async () => {
-    await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
+    await params.interaction.followUp(payload);
   });
   if (delivered !== null) {
     await recordDeliveredCommandExchange({

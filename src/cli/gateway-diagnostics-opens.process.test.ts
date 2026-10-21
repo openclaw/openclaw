@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { writeCliPluginFixture, writeFixtureJson } from "./cli-fixtures.test-support.js";
 import {
   prepareGatewayCliFixture,
   runIsolatedGatewayCli,
@@ -20,27 +21,11 @@ import {
 async function prepareMessageReadPlugin(root: string): Promise<string> {
   const bundledDir = path.join(root, "extensions");
   const pluginDir = path.join(bundledDir, "discord");
-  await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/discord",
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.js"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "discord",
-      channels: ["discord"],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    }),
-  );
   // Exercise discovery and Gateway routing without requiring built plugin SDK artifacts.
-  await fs.writeFile(
-    path.join(pluginDir, "index.js"),
+  await writeCliPluginFixture(
+    pluginDir,
+    "@openclaw/discord",
+    { id: "discord", channels: ["discord"] },
     `const plugin = {
   id: "discord",
   meta: { id: "discord", label: "Synthetic Discord", docsPath: "/channels/discord", blurb: "CLI read fixture" },
@@ -86,25 +71,30 @@ it.each([
     auth: token ? { mode: "token", token } : { mode: "none" },
   });
   const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({
-      ...config,
-      ...(message
-        ? {
-            agents: { entries: { main: {} } },
-            channels: { discord: { enabled: true, token: "synthetic-discord-token" } },
-          }
-        : {}),
-      diagnostics: { flags: ["timeline"] },
-    }),
-  );
+  await writeFixtureJson(configPath, {
+    ...config,
+    ...(message
+      ? {
+          agents: { entries: { main: {} } },
+          channels: { discord: { enabled: true, token: "synthetic-discord-token" } },
+        }
+      : {}),
+    diagnostics: { flags: ["timeline"] },
+  });
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-  openOpenClawStateDatabase({ path: databasePath });
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    OPENCLAW_HOME: root,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
+  openOpenClawStateDatabase({ path: databasePath, env });
   closeOpenClawStateDatabaseForTest();
   const lock = await acquireGatewayLock({
     allowInTests: true,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+    env,
     port,
   });
   expect(lock).not.toBeNull();
@@ -125,7 +115,7 @@ fs.mkdtempSync = function(prefix, ...rest) {
 const open = fs.openSync;
 fs.openSync = function(file, flags, ...rest) {
   if (String(file) === ${JSON.stringify(databasePath)}) {
-    record({ kind: "source", flags, stack: new Error().stack });
+    record({ kind: "source" });
   }
   return open.call(this, file, flags, ...rest);
 };
@@ -140,29 +130,24 @@ record({ kind: "preload" });
 `,
   );
   try {
+    const commands: Array<[string, Record<string, unknown>]> = message
+      ? [
+          [
+            "message read --channel discord --target 123456789012345678 --limit 1",
+            { action: "read", channel: "discord", payload: { messages: [] } },
+          ],
+        ]
+      : [
+          ["cron list", { jobs: [] }],
+          ["gateway call cron.status", { enabled: true }],
+        ];
     for (const online of [true, false]) {
       if (!online) {
         await closeActiveGatewayServers();
         await lock?.release();
       }
-      const commands = message
-        ? [
-            [
-              "message",
-              "read",
-              "--channel",
-              "discord",
-              "--target",
-              "123456789012345678",
-              "--limit",
-              "1",
-            ],
-          ]
-        : [
-            ["cron", "list"],
-            ["gateway", "call", "cron.status"],
-          ];
-      for (const args of commands) {
+      for (const [command, expected] of commands) {
+        const args = command.split(" ");
         await fs.writeFile(opensPath, "");
         await fs.writeFile(timelinePath, "");
         const result = await runIsolatedGatewayCli({
@@ -189,13 +174,7 @@ record({ kind: "preload" });
         });
         expect(result, result.stderr).toMatchObject({ code: online ? 0 : 1, signal: null });
         if (online) {
-          expect(JSON.parse(result.stdout)).toMatchObject(
-            args[0] === "message"
-              ? { action: "read", channel: "discord", payload: { messages: [] } }
-              : args[0] === "cron"
-                ? { jobs: [] }
-                : { enabled: true },
-          );
+          expect(JSON.parse(result.stdout)).toMatchObject(expected);
         } else {
           expect(result.stdout + result.stderr).toContain("Gateway not reachable");
         }
@@ -211,7 +190,7 @@ record({ kind: "preload" });
               ? event.kind === "snapshot" || event.kind === "capture"
               : event.kind !== "preload",
           ),
-          `${online ? "online" : "offline"} ${args.join(" ")}`,
+          `${online ? "online" : "offline"} ${command}`,
         ).toEqual([]);
       }
     }

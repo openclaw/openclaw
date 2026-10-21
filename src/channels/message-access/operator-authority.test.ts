@@ -1,15 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import {
-  bindOperatorModelExecution,
-  resolveAdmittedRunActiveAssertion,
-} from "../../agents/admitted-run-context.js";
+import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { buildExecAutoReviewTranscript } from "../../agents/exec-auto-review-transcript.js";
 import { castAgentMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import {
   captureCommandOwnerAssertion,
-  CommandOwnerRevokedError,
   getCommandOwnerAuthority,
 } from "../../auto-reply/command-owner-authority.js";
 import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
@@ -70,18 +66,72 @@ import {
   type BuiltChannelInboundEventContext,
 } from "../inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
-import { registerOperatorAssignmentTests } from "./operator-assignment.test-support.js";
+import {
+  registerOperatorAssignmentTests,
+  withOperatorModels,
+} from "./operator-assignment.test-support.js";
 import {
   createCommandOwnerTestGateway,
   withAdminIngress,
 } from "./operator-authority.test-support.js";
 import { createHostChannelIngressRuntime } from "./runtime.js";
 
+function authorize(cfg: Parameters<typeof resolveCommandAuthorization>[0]["cfg"], ctx: MsgContext) {
+  return resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true });
+}
+const authorityFor = (ctx: MsgContext) =>
+  prepareInternalGetReplyOptions(undefined, ctx)?.operatorAuthority;
+const requesterProfile = (prompt: string) =>
+  JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!).requester_profile;
+const namedProfile = (id: string) => ({ id, display_name: "Ada Lovelace" });
+const expectNoRequester = (ctx: MsgContext) =>
+  expect(buildInboundUserContextPrefix(ctx)).not.toContain("requester_profile");
+const forgeSymbols = (ctx: MsgContext, value: unknown) => ({
+  ...ctx,
+  ...Object.fromEntries(Object.getOwnPropertySymbols(ctx).map((key) => [key, value])),
+});
+const githubIdentity = (login: string) =>
+  syncGitHubIdentity({
+    identity: { accountId: 123, login },
+    authenticationAlias: { kind: "email", email: "ada@example.test" },
+  });
+async function hasSessionTools(
+  cfg: Parameters<typeof authorize>[0],
+  ctx: MsgContext,
+  senderIsOwner: boolean,
+) {
+  const { tools } = await resolveGatewayScopedTools({
+    cfg,
+    sessionKey: ctx.SessionKey!,
+    messageProvider: ctx.Provider!,
+    senderIsOwner,
+    surface: "loopback",
+  });
+  return tools.some((tool) => tool.name === "sessions");
+}
+function operatorFixture(fixture: Parameters<Parameters<typeof withAdminIngress>[0]>[0]) {
+  return {
+    ...fixture,
+    admin: fixture.admins[0]!,
+    prepare: (
+      subject: Parameters<typeof prepareChannelOperatorAdmin>[1] = fixture.admins[0]!.identity,
+    ) => prepareChannelOperatorAdmin(fixture.cfg, subject),
+    closeDatabase: () =>
+      closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(fixture.state.env)),
+  };
+}
+function withOperator(
+  run: (fixture: ReturnType<typeof operatorFixture>) => Promise<void>,
+  mode: Parameters<typeof withAdminIngress>[1] = "role",
+) {
+  return withAdminIngress((fixture) => run(operatorFixture(fixture)), mode);
+}
+
 installDiscordRegistryHooks();
 registerOperatorAssignmentTests();
 
 it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as const)(
-  "compares linked-channel steering permissions with %s roles",
+  "keeps linked-channel steering requester-bound with %s roles",
   async (difference) => {
     await withAdminIngress(
       async ({ cfg, admins, context, activatePolicy, gateway }) => {
@@ -100,7 +150,7 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
           await activatePolicy({ roles });
         }
         const overlays = [];
-        for (const { identity } of admins) {
+        for (const { identity } of [admins[0]!, admins[1]!, admins[0]!]) {
           const ctx = await context(identity.senderId);
           const operatorAuthority = expectDefined(
             prepareInternalGetReplyOptions(undefined, ctx)?.operatorAuthority,
@@ -117,6 +167,7 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
         }
         const owner = expectDefined(overlays[0], "owner overlay");
         const steerer = expectDefined(overlays[1], "steerer overlay");
+        const reconnect = expectDefined(overlays[2], "same-requester reconnect overlay");
         expect(owner.operatorAuthority!.scopes).toEqual(steerer.operatorAuthority!.scopes);
         expect(owner.operatorAuthority!.gatewayAccessGrant).toBeNull();
         expect(steerer.operatorAuthority!.gatewayAccessGrant).toBeNull();
@@ -143,18 +194,30 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
           const queueMessage = vi.fn(async () => {});
           operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
           operation.setPhase("running");
-          const accepted = difference === "equivalent" || difference === "roles-disabled";
+          const equivalent = difference === "equivalent" || difference === "roles-disabled";
+          if (equivalent) {
+            expect(owner.operatorAuthority!.rolePolicy).toEqual(
+              steerer.operatorAuthority!.rolePolicy,
+            );
+          } else {
+            expect(owner.operatorAuthority!.rolePolicy).not.toEqual(
+              steerer.operatorAuthority!.rolePolicy,
+            );
+          }
           await expect(
             queueCurrentReplyRunMessage(run.run.sessionId, "Steering from another linked user", {
               isInboundUserMessage: true,
               toolAuthorityOverlay: steerer,
             }),
-          ).resolves.toEqual(
-            accepted
-              ? { status: "accepted" }
-              : { status: "rejected", reason: "tool_authority_mismatch" },
-          );
-          expect(queueMessage).toHaveBeenCalledTimes(accepted ? 1 : 0);
+          ).resolves.toEqual({ status: "rejected", reason: "tool_authority_mismatch" });
+          expect(queueMessage).not.toHaveBeenCalled();
+          await expect(
+            queueCurrentReplyRunMessage(run.run.sessionId, "Steering after reconnect", {
+              isInboundUserMessage: true,
+              toolAuthorityOverlay: reconnect,
+            }),
+          ).resolves.toEqual({ status: "accepted" });
+          expect(queueMessage).toHaveBeenCalledOnce();
           expect(owner.operatorAuthority!.rolePolicy).toEqual(uiCapture.authority.rolePolicy);
           if (difference === "roles-disabled") {
             expect(owner.operatorAuthority!.rolePolicy).toBeUndefined();
@@ -170,100 +233,81 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
   },
 );
 
-it("exposes a verified linked requester in trusted metadata without widening owner tools", async () => {
-  await withAdminIngress(async ({ cfg, admins, context }) => {
-    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    try {
-      for (const [index, sender, verified, role, linked, owner] of [
-        [0, undefined, true, "admin", true, true],
-        [1, undefined, true, "admin", true, true],
-        [0, undefined, false, "admin", false, false],
-        [0, "unlinked", true, "admin", false, false],
-        [0, undefined, true, "member", true, false],
-      ] as const) {
-        const admin = admins[index]!;
-        setDisplayName(admin.profile.id, "Ada Lovelace");
-        setUserProfileRole(admin.profile.id, role);
-        reads.mockClear();
-        const ctx = await context(sender ?? admin.identity.senderId, verified);
-        if (verified) {
-          expect(
-            reads.mock.calls.filter(
-              ([, command]) => command.type === "userProfiles.channelIdentity.resolve",
-            ),
-          ).toHaveLength(1);
-        }
-        const prompt = buildInboundUserContextPrefix({ ...ctx });
-        const metadata = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!);
-        expect(metadata.requester_profile).toEqual(
-          linked ? { id: admin.profile.id, display_name: "Ada Lovelace" } : undefined,
-        );
-        // The requester hint is model-only context; display and CLI-history dedupe strip it.
-        expect(prompt.includes("requester_profile is the verified linked requester")).toBe(linked);
-        expect(stripInboundMetadata(`${prompt}\n\nassign this to me`)).toBe("assign this to me");
-        expect(stripLeadingInboundMetadata(`${prompt}\n\nassign this to me`)).toBe(
-          "assign this to me",
-        );
-        // Claude CLI stores the full prompt; history merge must fold it into the local turn.
-        const sentAt = Date.parse("2026-09-29T03:28:00.915Z");
+it("exposes verified requester metadata without widening owner tools", () =>
+  withOperator(async ({ cfg, admins, context }) => {
+    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    for (const [index, sender, verified, role, linked, owner] of [
+      [0, undefined, true, "admin", true, true],
+      [1, undefined, true, "admin", true, true],
+      [0, undefined, false, "admin", false, false],
+      [0, "unlinked", true, "admin", false, false],
+      [0, undefined, true, "member", true, false],
+    ] as const) {
+      const admin = admins[index]!;
+      setDisplayName(admin.profile.id, "Ada Lovelace");
+      setUserProfileRole(admin.profile.id, role);
+      reads.mockClear();
+      const ctx = await context(sender ?? admin.identity.senderId, verified);
+      if (verified) {
         expect(
-          mergeImportedChatHistoryMessages({
-            localMessages: [{ role: "user", content: "assign this to me", timestamp: sentAt }],
-            importedMessages: [
-              {
-                role: "user",
-                content: `${prompt}\n\nassign this to me`,
-                timestamp: sentAt + 435,
-                __openclaw: { importedFrom: "claude-cli", externalId: "u1", cliSessionId: "s1" },
-              },
-            ],
-          }),
+          reads.mock.calls.filter(
+            ([, command]) => command.type === "userProfiles.channelIdentity.resolve",
+          ),
         ).toHaveLength(1);
-        const auth = resolveCommandAuthorization({ cfg, ctx: { ...ctx }, commandAuthorized: true });
-        expect(auth).toMatchObject({ senderIsOwner: owner, isAuthorizedSender: true });
-        const { senderIsOwner } = auth;
-        if (owner) {
-          const transcript = buildExecAutoReviewTranscript({
-            messages: [
-              castAgentMessage({
-                role: "user",
-                content: "Assign this session to the requester",
-                timestamp: 0,
-                __openclaw: {
-                  senderIsOwner,
-                  senderIdentity: {
-                    type: "observation",
-                    pluginId: "discord",
-                    accountId: "team",
-                    senderKind: "human",
-                    id: admin.identity.senderId,
-                  },
-                },
-              }),
-            ],
-          });
-          expect(transcript.entries[0]?.origin).toBe("operator");
-        }
-        const tools = (
-          await resolveGatewayScopedTools({
-            cfg,
-            sessionKey: ctx.SessionKey!,
-            messageProvider: "discord",
-            senderIsOwner,
-            surface: "loopback",
-          })
-        ).tools;
-        expect(tools.some((tool) => tool.name === "sessions")).toBe(owner);
       }
-    } finally {
-      reads.mockRestore();
+      const prompt = buildInboundUserContextPrefix({ ...ctx });
+      expect(requesterProfile(prompt)).toEqual(linked ? namedProfile(admin.profile.id) : undefined);
+      expect(prompt.includes("requester_profile is the verified linked requester")).toBe(linked);
+      const text = "assign this to me";
+      const submitted = `${prompt}\n\n${text}`;
+      for (const strip of [stripInboundMetadata, stripLeadingInboundMetadata]) {
+        expect(strip(submitted)).toBe(text);
+      }
+      const sentAt = Date.parse("2026-09-29T03:28:00.915Z");
+      expect(
+        mergeImportedChatHistoryMessages({
+          localMessages: [{ role: "user", content: text, timestamp: sentAt }],
+          importedMessages: [
+            {
+              role: "user",
+              content: submitted,
+              timestamp: sentAt + 435,
+              __openclaw: { importedFrom: "claude-cli", externalId: "u1", cliSessionId: "s1" },
+            },
+          ],
+        }),
+      ).toHaveLength(1);
+      const auth = authorize(cfg, { ...ctx });
+      expect(auth).toMatchObject({ senderIsOwner: owner, isAuthorizedSender: true });
+      const { senderIsOwner } = auth;
+      if (owner) {
+        const transcript = buildExecAutoReviewTranscript({
+          messages: [
+            castAgentMessage({
+              role: "user",
+              content: "Assign this session to the requester",
+              timestamp: 0,
+              __openclaw: {
+                senderIsOwner,
+                senderIdentity: {
+                  type: "observation",
+                  pluginId: "discord",
+                  accountId: "team",
+                  senderKind: "human",
+                  id: admin.identity.senderId,
+                },
+              },
+            }),
+          ],
+        });
+        expect(transcript.entries[0]?.origin).toBe("operator");
+      }
+      expect(await hasSessionTools(cfg, ctx, senderIsOwner)).toBe(owner);
     }
-  });
-});
+  }));
 
-it("refreshes requester facts on later turns and rejects unlinked or forged context", async () => {
-  await withAdminIngress(async ({ cfg, admins, context, retire }) => {
-    const admin = admins[0]!;
+it("refreshes requester facts and rejects forged context", () =>
+  withOperator(async ({ cfg, admin, admins, context, retire }) => {
     const original = await context(admin.identity.senderId);
     const stablePrompt = buildInboundMetaSystemPrompt(original, cfg);
     for (const sender of [admins[1]!.identity.senderId, "unlinked"]) {
@@ -282,28 +326,17 @@ it("refreshes requester facts on later turns and rejects unlinked or forged cont
       { ...original, Provider: "slack" },
       { ...original, Surface: "webchat" },
       { ...original, OriginatingChannel: "slack" },
-      {
-        ...original,
-        ...Object.fromEntries(
-          Object.getOwnPropertySymbols(original).map((key) => [
-            key,
-            { profileId: admin.profile.id, isCurrent: () => true },
-          ]),
-        ),
-      },
+      forgeSymbols(original, { profileId: admin.profile.id, isCurrent: () => true }),
       {
         Provider: "discord",
         SenderId: admin.identity.senderId,
         RequesterProfile: { id: admin.profile.id },
       },
     ]) {
-      expect(buildInboundUserContextPrefix(forged)).not.toContain("requester_profile");
+      expectNoRequester(forged);
     }
     const adminContext = await context(admin.identity.senderId);
-    expect(
-      resolveCommandAuthorization({ cfg, ctx: adminContext, commandAuthorized: true })
-        .senderIsOwner,
-    ).toBe(true);
+    expect(authorize(cfg, adminContext).senderIsOwner).toBe(true);
     const authority = getCommandOwnerAuthority(adminContext);
     const constructor: unknown = authority && Reflect.get(authority, "constructor");
     const forgedAuthority =
@@ -320,38 +353,23 @@ it("refreshes requester facts on later turns and rejects unlinked or forged cont
         SenderId: "100",
         GatewayClientScopes: ["operator.admin"],
       },
-      {
-        ...adminContext,
-        ...Object.fromEntries(
-          Object.getOwnPropertySymbols(adminContext).map((key) => [key, { isCurrent: () => true }]),
-        ),
-      },
-      {
-        ...adminContext,
-        ...Object.fromEntries(
-          Object.getOwnPropertySymbols(adminContext).map((key) => [key, forgedAuthority]),
-        ),
-      },
+      forgeSymbols(adminContext, { isCurrent: () => true }),
+      forgeSymbols(adminContext, forgedAuthority),
     ]) {
-      expect(resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner).toBe(
-        false,
-      );
+      expect(authorize(cfg, ctx).senderIsOwner).toBe(false);
     }
     unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-    expect(buildInboundUserContextPrefix(original)).not.toContain("requester_profile");
-    expect(buildInboundUserContextPrefix(await context(admin.identity.senderId))).not.toContain(
-      "requester_profile",
-    );
+    expectNoRequester(original);
+    expectNoRequester(await context(admin.identity.senderId));
     linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
     const relinked = await context(admin.identity.senderId);
     expect(buildInboundUserContextPrefix(relinked)).toContain(admins[1]!.profile.id);
     retire();
-    expect(buildInboundUserContextPrefix(relinked)).not.toContain("requester_profile");
-  });
-});
+    expectNoRequester(relinked);
+  }));
 
-it("keeps native policy readable by schema-19 predecessors without configured owners", async () => {
-  await withAdminIngress(async ({ cfg, activatePolicy }) => {
+it("keeps policy readable by schema-19 predecessors", () =>
+  withOperator(async ({ cfg, activatePolicy }) => {
     for (const owners of [undefined, []]) {
       cfg.commands!.ownerAllowFrom = owners;
       await activatePolicy({});
@@ -360,19 +378,15 @@ it("keeps native policy readable by schema-19 predecessors without configured ow
         .soft(readConfigMachineState("operator.channelPolicy"))
         .toEqual(resolveUserChannelAuthorizationPolicy(cfg.gateway));
     }
-  });
-});
+  }));
 
 it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
   "revokes admitted channel owner authority when its %s changes",
-  async (change) => {
-    await withAdminIngress(
-      async ({ cfg, admins, context, retire }) => {
-        const admin = admins[0]!;
+  (change) =>
+    withOperator(
+      async ({ cfg, admin, admins, context, retire }) => {
         const ctx = await context(admin.identity.senderId);
-        expect(
-          resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner,
-        ).toBe(true);
+        expect(authorize(cfg, ctx).senderIsOwner).toBe(true);
         const prepared = prepareChannelRunAdmission({
           cfg,
           runId: `linked-admin-${change}`,
@@ -385,34 +399,26 @@ it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
         const assertCurrent = resolveAdmittedRunActiveAssertion(admitted);
         expect(assertCurrent).toBeTypeOf("function");
         expect(() => assertCurrent?.()).not.toThrow();
-        if (change === "role") {
-          setUserProfileRole(admin.profile.id, "member");
-        }
-        if (change === "role-scopes") {
-          cfg.gateway!.roles!.definitions.admin!.scopes = ["operator.read"];
-        }
-        if (change === "grant") {
-          delete cfg.gateway!.auth!.identityScopes!["ada@example.test"];
-        }
-        if (change === "link") {
-          unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-        }
-        if (change === "reassign") {
-          unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-          linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
-        }
-        if (change === "host") {
-          retire();
-        }
-        expect(
-          resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner,
-        ).toBe(false);
+        const changes = {
+          role: () => setUserProfileRole(admin.profile.id, "member"),
+          "role-scopes": () => {
+            cfg.gateway!.roles!.definitions.admin!.scopes = ["operator.read"];
+          },
+          grant: () => delete cfg.gateway!.auth!.identityScopes!["ada@example.test"],
+          link: () => unlinkUserChannelIdentity(admin.profile.id, admin.identity),
+          reassign: () => {
+            unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+            linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
+          },
+          host: retire,
+        };
+        changes[change]();
+        expect(authorize(cfg, ctx).senderIsOwner).toBe(false);
         expect(() => assertCurrent?.()).toThrow();
         prepared.close();
       },
       change === "grant" ? "identity-grant" : "role",
-    );
-  },
+    ),
 );
 
 it.each([
@@ -423,75 +429,69 @@ it.each([
   "definition",
   "default",
   "identity-scopes",
-] as const)(
-  "never recovers the original owner after %s retires its durable reference",
-  async (change) => {
-    await withAdminIngress(
-      async ({ cfg, state, admins, activatePolicy, context }) => {
-        const admin = admins[0]!;
-        if (change === "default") {
-          setUserProfileRole(admin.profile.id, null);
-          await activatePolicy({ roles: { ...cfg.gateway!.roles!, default: "admin" } });
-        }
-        const assertCurrent =
-          change === "definition"
-            ? captureCommandOwnerAssertion(await context(admin.identity.senderId))
-            : undefined;
+] as const)("never recovers the original owner after %s retires its durable reference", (change) =>
+  withOperator(
+    async ({ cfg, admin, admins, activatePolicy, context, prepare, closeDatabase }) => {
+      if (change === "default") {
+        setUserProfileRole(admin.profile.id, null);
+        await activatePolicy({ roles: { ...cfg.gateway!.roles!, default: "admin" } });
+      }
+      const assertCurrent =
+        change === "definition"
+          ? captureCommandOwnerAssertion(await context(admin.identity.senderId))
+          : undefined;
+      if (change === "definition") {
+        expect(assertCurrent).toBeTypeOf("function");
+        expect(assertCurrent).not.toThrow();
+      }
+      const admitted = await prepare();
+      expect(admitted?.isCurrent(cfg)).toBe(true);
+      const reference = admitted!.recoveryReference!;
+      expect(reference).toBeDefined();
+      if (change === "role-restore") {
+        setUserProfileRole(admin.profile.id, "member");
+        setUserProfileRole(admin.profile.id, "admin");
+      } else if (change === "relink" || change === "reassign") {
+        unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+        linkUserChannelIdentity(
+          change === "relink" ? admin.profile.id : admins[1]!.profile.id,
+          admin.identity,
+        );
+      } else if (change === "merge") {
+        linkEmail("ada@example.test", admins[1]!.profile.id);
+      } else if (change === "identity-scopes") {
+        const original = structuredClone(cfg.gateway!.auth!);
+        await activatePolicy({ auth: { ...original, identityScopes: undefined } });
+        await activatePolicy({ auth: original });
+      } else {
+        const original = structuredClone(cfg.gateway!.roles!);
+        const revoked = structuredClone(original);
         if (change === "definition") {
-          expect(assertCurrent).toBeTypeOf("function");
-          expect(assertCurrent).not.toThrow();
-        }
-        const admitted = await prepareChannelOperatorAdmin(cfg, admin.identity);
-        expect(admitted?.isCurrent(cfg)).toBe(true);
-        const reference = admitted!.recoveryReference!;
-        expect(reference).toBeDefined();
-        if (change === "role-restore") {
-          setUserProfileRole(admin.profile.id, "member");
-          setUserProfileRole(admin.profile.id, "admin");
-        } else if (change === "relink" || change === "reassign") {
-          unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-          linkUserChannelIdentity(
-            change === "relink" ? admin.profile.id : admins[1]!.profile.id,
-            admin.identity,
-          );
-        } else if (change === "merge") {
-          linkEmail("ada@example.test", admins[1]!.profile.id);
-        } else if (change === "identity-scopes") {
-          const original = structuredClone(cfg.gateway!.auth!);
-          await activatePolicy({ auth: { ...original, identityScopes: undefined } });
-          await activatePolicy({ auth: original });
+          revoked.definitions.admin!.scopes = ["operator.read"];
         } else {
-          const original = structuredClone(cfg.gateway!.roles!);
-          const revoked = structuredClone(original);
-          if (change === "definition") {
-            revoked.definitions.admin!.scopes = ["operator.read"];
-          } else {
-            revoked.default = "member";
-          }
-          await activatePolicy({ roles: revoked });
-          await activatePolicy({ roles: original });
+          revoked.default = "member";
         }
-        if (change === "definition") {
-          const fresh = await context(admin.identity.senderId);
-          expect(
-            resolveCommandAuthorization({ cfg, ctx: fresh, commandAuthorized: true }).senderIsOwner,
-          ).toBe(true);
-          expect(assertCurrent).toThrow();
-        }
-        expect(admitted?.isCurrent(cfg)).toBe(false);
-        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
-        await expect(prepareChannelOperatorAdmin(cfg, reference)).resolves.toBeUndefined();
-        await expect(prepareChannelOperatorAdmin(cfg, reference)).resolves.toBeUndefined();
-      },
-      change === "identity-scopes" ? "identity-grant" : "role",
-    );
-  },
+        await activatePolicy({ roles: revoked });
+        await activatePolicy({ roles: original });
+      }
+      if (change === "definition") {
+        const fresh = await context(admin.identity.senderId);
+        expect(authorize(cfg, fresh).senderIsOwner).toBe(true);
+        expect(assertCurrent).toThrow();
+      }
+      expect(admitted?.isCurrent(cfg)).toBe(false);
+      await closeDatabase();
+      await expect(prepare(reference)).resolves.toBeUndefined();
+      await expect(prepare(reference)).resolves.toBeUndefined();
+    },
+    change === "identity-scopes" ? "identity-grant" : "role",
+  ),
 );
 
 it.each(["allowed", "revoked", "replaced", "unavailable"] as const)(
   "resumes only the original plugin grant when it is %s",
-  async (change) => {
-    await withAdminIngress(async ({ cfg, state, admins, activatePolicy, context }) => {
+  (change) =>
+    withOperator(async ({ cfg, admin, activatePolicy, context, prepare, closeDatabase }) => {
       const pluginId = "channel-owner-access";
       const originalId = "86633673-b1dd-4500-85e2-b6e6e490810f";
       let grantId: string | undefined = originalId;
@@ -523,66 +523,44 @@ it.each(["allowed", "revoked", "replaced", "unavailable"] as const)(
       const roles = structuredClone(cfg.gateway!.roles!);
       roles.definitions.admin!.accessPolicyPlugin = pluginId;
       await activatePolicy({ roles });
-      const original = await prepareChannelOperatorAdmin(cfg, admins[0]!.identity);
+      const original = await prepare();
       const reference = original!.recoveryReference!;
       expect(reference).toBeDefined();
       const authority =
-        change === "revoked"
-          ? prepareInternalGetReplyOptions(undefined, await context(admins[0]!.identity.senderId))
-              ?.operatorAuthority
-          : undefined;
-      const models =
-        change === "revoked"
-          ? [
-              bindOperatorModelExecution(authority, undefined),
-              bindOperatorModelExecution(authority, undefined),
-            ]
-          : [];
-      try {
-        for (const model of models) {
-          expect(model?.signal.aborted).toBe(false);
-        }
+        change === "revoked" ? authorityFor(await context(admin.identity.senderId)) : undefined;
+      const revoke = () => {
         if (change === "revoked" || change === "replaced") {
           lifetime.abort();
           grantId = change === "revoked" ? undefined : "78a7c3d0-c3a6-49a5-91e7-02c153e39ab5";
           lifetime = new AbortController();
         }
-        for (const model of models) {
-          expect(model?.signal.aborted).toBe(true);
-          expect(model?.signal.reason).toBeInstanceOf(CommandOwnerRevokedError);
-          expect(model?.signal.reason).toMatchObject({
-            message: "Channel operator authority changed; send a new request.",
-          });
-        }
-      } finally {
-        for (const model of models) {
-          model?.release();
-        }
+      };
+      if (change === "revoked") {
+        withOperatorModels(authority, revoke);
+      } else {
+        revoke();
       }
       unavailable = change === "unavailable";
-      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
+      await closeDatabase();
       if (change === "unavailable") {
-        await expect(prepareChannelOperatorAdmin(cfg, reference)).rejects.toMatchObject({
+        await expect(prepare(reference)).rejects.toMatchObject({
           name: "GatewayOperatorAccessUnavailableError",
         });
       } else if (change === "allowed") {
-        expect((await prepareChannelOperatorAdmin(cfg, reference))?.isCurrent(cfg)).toBe(true);
+        expect((await prepare(reference))?.isCurrent(cfg)).toBe(true);
       } else {
-        await expect(prepareChannelOperatorAdmin(cfg, reference)).resolves.toBeUndefined();
+        await expect(prepare(reference)).resolves.toBeUndefined();
         // Restoring access creates a successor grant, never the retired grant's identity.
         grantId = "78a7c3d0-c3a6-49a5-91e7-02c153e39ab5";
-        expect((await prepareChannelOperatorAdmin(cfg, admins[0]!.identity))?.isCurrent(cfg)).toBe(
-          true,
-        );
-        await expect(prepareChannelOperatorAdmin(cfg, reference)).resolves.toBeUndefined();
+        expect((await prepare())?.isCurrent(cfg)).toBe(true);
+        await expect(prepare(reference)).resolves.toBeUndefined();
       }
-    });
-  },
+    }),
 );
 
-it("keeps the active policy and its reference when durable policy retirement rolls back", async () => {
-  await withAdminIngress(async ({ cfg, state, admins, activatePolicy }) => {
-    const original = await prepareChannelOperatorAdmin(cfg, admins[0]!.identity);
+it("rolls back policy retirement with its active reference", () =>
+  withOperator(async ({ cfg, activatePolicy, prepare, closeDatabase }) => {
+    const original = await prepare();
     const activeRoles = structuredClone(cfg.gateway!.roles!);
     const changed = structuredClone(activeRoles);
     changed.definitions.admin!.scopes = ["operator.read"];
@@ -593,34 +571,25 @@ it("keeps the active policy and its reference when durable policy retirement rol
     await expect(activatePolicy({ roles: changed })).rejects.toThrow("fixture policy write failed");
     expect(cfg.gateway!.roles).toEqual(activeRoles);
     db.exec("DROP TRIGGER fail_policy_publication");
-    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
-    expect(
-      (await prepareChannelOperatorAdmin(cfg, original!.recoveryReference!))?.isCurrent(cfg),
-    ).toBe(true);
-  });
-});
+    await closeDatabase();
+    expect((await prepare(original!.recoveryReference!))?.isCurrent(cfg)).toBe(true);
+  }));
 
 it.each(["role", "identity-grant", "missing", "malformed", "version", "extra", "basis"] as const)(
   "resumes only an exact, live JSON recovery reference: %s",
-  async (damage) => {
-    await withAdminIngress(
-      async ({ cfg, state, admins }) => {
-        const admitted = await prepareChannelOperatorAdmin(cfg, admins[0]!.identity);
+  (damage) =>
+    withOperator(
+      async ({ cfg, prepare, closeDatabase }) => {
+        const admitted = await prepare();
         const reference = { ...admitted!.recoveryReference! };
         expect(reference.id).toBeTypeOf("string");
-        let encoded = JSON.stringify(reference);
-        if (damage === "missing") {
-          encoded = JSON.stringify({ ...reference, id: "00000000-0000-4000-8000-000000000000" });
-        }
-        if (damage === "malformed") {
-          encoded = JSON.stringify({ ...reference, id: "corrupt" });
-        }
-        if (damage === "version") {
-          encoded = JSON.stringify({ ...reference, version: 2 });
-        }
-        if (damage === "extra") {
-          encoded = JSON.stringify({ ...reference, scopes: ["operator.admin"] });
-        }
+        const mutations: Record<string, object> = {
+          missing: { id: "00000000-0000-4000-8000-000000000000" },
+          malformed: { id: "corrupt" },
+          version: { version: 2 },
+          extra: { scopes: ["operator.admin"] },
+        };
+        const encoded = JSON.stringify({ ...reference, ...mutations[damage] });
         if (damage === "basis") {
           openOpenClawStateDatabase()
             .db.prepare(
@@ -631,21 +600,18 @@ it.each(["role", "identity-grant", "missing", "malformed", "version", "extra", "
         if (damage === "role" || damage === "identity-grant") {
           expect(admitted?.isCurrent(cfg)).toBe(true);
           expect(admitted?.recoveryReference).toEqual({ version: 1, id: expect.any(String) });
-          await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
+          await closeDatabase();
           expect(admitted?.isCurrent(cfg)).toBe(false);
           const decoded = JSON.parse(encoded);
-          const resumed = await prepareChannelOperatorAdmin(cfg, decoded);
+          const resumed = await prepare(decoded);
           expect(resumed?.isCurrent(cfg)).toBe(true);
           expect(resumed?.recoveryReference).toEqual(decoded);
         } else {
-          await expect(
-            prepareChannelOperatorAdmin(cfg, JSON.parse(encoded)),
-          ).resolves.toBeUndefined();
+          await expect(prepare(JSON.parse(encoded))).resolves.toBeUndefined();
         }
       },
       damage === "identity-grant" ? "identity-grant" : "role",
-    );
-  },
+    ),
 );
 
 it.each([
@@ -655,15 +621,11 @@ it.each([
   { role: null, defaultRole: "member", identityGrant: false, owner: true, github: true },
 ])(
   "uses current channel role policy for $role with default $defaultRole (github=$github)",
-  async (scenario) => {
-    await withAdminIngress(async ({ cfg, admins, context, activatePolicy }) => {
-      const admin = admins[0]!;
+  (scenario) =>
+    withOperator(async ({ cfg, admin, context, activatePolicy }) => {
       setUserProfileRole(admin.profile.id, scenario.role);
       if (scenario.github) {
-        syncGitHubIdentity({
-          identity: { accountId: 123, login: "Channel-Admin" },
-          authenticationAlias: { kind: "email", email: "ada@example.test" },
-        });
+        githubIdentity("Channel-Admin");
         await activatePolicy({
           roles: {
             ...cfg.gateway!.roles!,
@@ -680,33 +642,24 @@ it.each([
         }
       }
       const ctx = await context(admin.identity.senderId);
-      expect(resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner).toBe(
-        scenario.owner,
-      );
+      expect(authorize(cfg, ctx).senderIsOwner).toBe(scenario.owner);
       if (scenario.github) {
-        const authority = expectDefined(
-          prepareInternalGetReplyOptions(undefined, ctx)?.operatorAuthority,
-          "GitHub-assigned channel operator authority",
-        );
-        expect(authority.profileId).toBe(admin.profile.id);
-        expect(authority.scopes).toEqual(["operator.admin"]);
-        expect(authority.rolePolicy?.sessionAccessCap).toBe("write");
-        syncGitHubIdentity({
-          identity: { accountId: 123, login: "Renamed-Channel-Admin" },
-          authenticationAlias: { kind: "email", email: "ada@example.test" },
+        const authority = expectDefined(authorityFor(ctx), "GitHub operator authority");
+        expect(authority).toMatchObject({
+          profileId: admin.profile.id,
+          scopes: ["operator.admin"],
+          rolePolicy: { sessionAccessCap: "write" },
         });
+        githubIdentity("Renamed-Channel-Admin");
         expect(() => authority.assertCurrent()).toThrow();
         const renamed = await context(admin.identity.senderId);
-        expect(
-          prepareInternalGetReplyOptions(undefined, renamed)?.operatorAuthority,
-        ).toBeUndefined();
+        expect(authorityFor(renamed)).toBeUndefined();
       }
-    });
-  },
+    }),
 );
 
-it("keeps configured owners independent of Team role and identity links", async () => {
-  await withAdminIngress(async ({ cfg, admins, context }) => {
+it("keeps configured owners independent of role and identity links", () =>
+  withOperator(async ({ cfg, admins, context }) => {
     cfg.commands!.ownerAllowFrom = admins.map(({ identity }) => `discord:${identity.senderId}`);
     const contexts = await Promise.all(admins.map(({ identity }) => context(identity.senderId)));
     const assertions = contexts.map(captureCommandOwnerAssertion);
@@ -715,30 +668,21 @@ it("keeps configured owners independent of Team role and identity links", async 
       unlinkUserChannelIdentity(profile.id, identity);
     }
     for (const [index, ctx] of contexts.entries()) {
-      expect(resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner).toBe(
-        true,
-      );
+      expect(authorize(cfg, ctx).senderIsOwner).toBe(true);
       expect(assertions[index]).toBeTypeOf("function");
       expect(assertions[index]).not.toThrow();
     }
     cfg.commands!.ownerAllowFrom.shift();
-    expect(
-      resolveCommandAuthorization({ cfg, ctx: contexts[0]!, commandAuthorized: true })
-        .senderIsOwner,
-    ).toBe(false);
+    expect(authorize(cfg, contexts[0]!).senderIsOwner).toBe(false);
     expect(assertions[0]).toThrow();
-    expect(
-      resolveCommandAuthorization({ cfg, ctx: contexts[1]!, commandAuthorized: true })
-        .senderIsOwner,
-    ).toBe(true);
+    expect(authorize(cfg, contexts[1]!).senderIsOwner).toBe(true);
     expect(assertions[1]).not.toThrow();
-  });
-});
+  }));
 
-it("carries native Slack requester authority through preparation and keeps replayed relay input asserted", async () => {
-  await withAdminIngress(async ({ cfg, state, admins }) => {
+it("carries native Slack requester authority and keeps relay replays asserted", () =>
+  withOperator(async ({ cfg, state, admin }) => {
     cfg.channels = { slack: { accounts: { team: { allowFrom: ["*"] } } } };
-    const profile = admins[0]!.profile;
+    const profile = admin.profile;
     setDisplayName(profile.id, "Ada Lovelace");
     linkUserChannelIdentity(profile.id, {
       channelId: "slack",
@@ -789,24 +733,12 @@ it("carries native Slack requester authority through preparation and keeps repla
         const check = async (index: number, linked: boolean, isOwner: boolean) => {
           const turn = contexts[index]!;
           const prompt = buildInboundUserContextPrefix(turn);
-          const metadata = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!);
           expect
-            .soft(metadata.requester_profile)
-            .toEqual(linked ? { id: profile.id, display_name: "Ada Lovelace" } : undefined);
-          const { senderIsOwner } = resolveCommandAuthorization({
-            cfg,
-            ctx: turn,
-            commandAuthorized: true,
-          });
+            .soft(requesterProfile(prompt))
+            .toEqual(linked ? namedProfile(profile.id) : undefined);
+          const { senderIsOwner } = authorize(cfg, turn);
           expect.soft(senderIsOwner).toBe(isOwner);
-          const { tools } = await resolveGatewayScopedTools({
-            cfg,
-            sessionKey: turn.SessionKey!,
-            messageProvider: "slack",
-            senderIsOwner,
-            surface: "loopback",
-          });
-          expect.soft(tools.some((tool) => tool.name === "sessions")).toBe(isOwner);
+          expect.soft(await hasSessionTools(cfg, turn, senderIsOwner)).toBe(isOwner);
         };
         await check(0, false, false);
         for (const [index, user, role, linked, isOwner] of [
@@ -827,5 +759,4 @@ it("carries native Slack requester authority through preparation and keeps repla
         await check(4, true, true);
       },
     );
-  });
-});
+  }));

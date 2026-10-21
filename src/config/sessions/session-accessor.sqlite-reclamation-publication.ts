@@ -86,7 +86,6 @@ export function collectReclamationChangedSessionKeys(
           maintenance.archivedEntries.map(({ sessionKey }) => sessionKey),
         ),
       ];
-    case "deletion-plan":
     case "lifecycle-projection-plan":
       return [];
     case "maintenance-plan":

@@ -33,7 +33,7 @@ installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 installInstanceBindingConfigIo();
 
-it("serves active model and chat metadata throughout an admitted plugin call drain", async (ctx) => {
+it("reports plugin reload status and serves metadata throughout an admitted call drain", async (ctx) => {
   const { signal } = ctx;
   const fixture = await prepareInstanceBindingFixture(tempDirs.make("openclaw-drain-readers-"));
   const entered = createDeferredCore();
@@ -73,6 +73,14 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
     await server.startupSettled;
     socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
     const connected = socket;
+    // Complete catalog acquisition before holding a call: retained acquisition
+    // drains before call quiescence and may legitimately change reader status.
+    const refreshed = await rpcReq<{ pendingProviders?: string[] }>(connected, "models.list", {
+      agentId: "main",
+      refresh: true,
+    });
+    expect(refreshed.ok, JSON.stringify(refreshed)).toBe(true);
+    expect(refreshed.payload?.pendingProviders ?? []).toEqual([]);
     const reads = async () =>
       await Promise.all(
         ["models.list", "chat.metadata"].map(async (method) => {
@@ -82,6 +90,14 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
           return { method, durationMs: performance.now() - start, payload: response.payload };
         }),
       );
+    const readReloadStatus = async () => {
+      const response = await rpcReq<{ pluginReload?: unknown }>(connected, "status", {
+        includeChannelSummary: false,
+      });
+      expect(response.ok).toBe(true);
+      return response.payload?.pluginReload;
+    };
+    expect(await readReloadStatus()).toBeUndefined();
     const before = await reads();
     const registry = getActivePluginRegistry();
     const record = registry?.plugins.find((plugin) => plugin.id === "instance-binding-probe");
@@ -172,6 +188,12 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
       ),
       signal,
     );
+    expect(await readReloadStatus()).toMatchObject({
+      phase: "reloading",
+      pluginIds: ["instance-binding-probe"],
+      deadlineAtMs: expect.any(Number),
+      reason: expect.stringContaining("new agent runs wait"),
+    });
     expect(instance.acceptingCalls).toBe(false);
     const during = await withinTest(reads(), signal);
     expect(reloadSettled).toBe(false);
@@ -185,6 +207,7 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
     });
     expect(getActivePluginRegistry()).toBe(registry);
     expect(instance.acceptingCalls).toBe(true);
+    expect(await readReloadStatus()).toBeUndefined();
     const after = await reads();
     expect(after.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));
     console.info(

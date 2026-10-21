@@ -12,13 +12,12 @@ import {
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
+import { createChannelMessage, editChannelMessage } from "./internal/api.messages.js";
 import {
-  createChannelMessage,
-  editChannelMessage,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
-} from "./internal/discord.js";
+} from "./internal/payload.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
@@ -93,15 +92,6 @@ export function registerBuiltDiscordComponentMessage(params: {
     messageId: params.messageId,
     ttlMs: params.ttlMs,
   });
-}
-
-function resolveDiscordComponentRegistryTtlMs(
-  accountConfig: { agentComponents?: { ttlMs?: number } } | undefined,
-): number | undefined {
-  const ttlMs = accountConfig?.agentComponents?.ttlMs;
-  return typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0
-    ? Math.floor(ttlMs)
-    : undefined;
 }
 
 async function buildDiscordComponentPayload(params: {
@@ -280,7 +270,7 @@ async function writeDiscordComponentMessage(
   await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
-    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
+    ttlMs: accountInfo.config.agentComponents?.ttlMs,
   });
   recordChannelActivity({
     channel: "discord",

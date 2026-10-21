@@ -3,8 +3,11 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearRun,
+  registerTestEmbeddedRun as attachRun,
+  createEmbeddedRunHandle,
+} from "../../embedded-agent-runner/runs.test-support.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
@@ -15,57 +18,34 @@ import { addSubagentRunForTests, getSubagentRunByRunId } from "./subagent-regist
 
 const fixture = useSubagentControlFixture();
 
-it.each([
-  { name: "matching current", recorded: "original", current: "original", killed: true },
-  { name: "conflicting current", recorded: "stale", current: "original", killed: false },
-  {
-    name: "missing current with its original execution still running",
-    recorded: "original",
-    current: "original",
-    removeCurrent: true,
-    killed: true,
-  },
-  {
-    name: "matching expected despite a newer current session",
-    recorded: "original",
-    current: "replacement",
-    expected: "original",
-    killed: true,
-  },
-  {
-    name: "conflicting expected despite a matching current session",
-    recorded: "stale",
-    current: "stale",
-    expected: "original",
-    killed: false,
-  },
-  { name: "fully legacy", current: "replacement", expected: "original", killed: true },
-  {
-    // A target for another child key is inapplicable; the worker-read current session decides.
-    name: "matching current despite another child's target",
-    recorded: "original",
-    current: "original",
-    expected: "other",
-    expectedKey: "agent:main:subagent:other-child",
-    killed: true,
-  },
+type IdentityCase = [
+  name: string,
+  recorded: string | undefined,
+  current: string,
+  killed: boolean,
+  expected?: string,
+  removeCurrent?: boolean,
+  expectedKey?: string,
+];
+const otherChild = "agent:main:subagent:other-child";
+it.each<IdentityCase>([
+  ["matching current", "original", "original", true],
+  ["conflicting current", "stale", "original", false],
+  ["missing current; original running", "original", "original", true, undefined, true],
+  ["matching expected; newer current", "original", "replacement", true, "original"],
+  ["conflicting expected; matching current", "stale", "stale", false, "original"],
+  ["fully legacy", undefined, "replacement", true, "original"],
+  // Another child's target is inapplicable; the worker-read current session decides.
+  ["other child's target", "original", "original", true, "other", false, otherChild],
 ])(
-  "checks legacy Stop identity: $name",
-  async ({ recorded, current, removeCurrent, expected, expectedKey, killed }) => {
+  "checks legacy Stop identity: %s",
+  async (_name, recorded, current, killed, expected, removeCurrent, expectedKey) => {
     const sessionKey = "agent:main:subagent:legacy-stop";
     const runId = "legacy-stop";
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey,
-      defaultSessionId: current,
-    });
+    const disk = { stateDir: fixture.stateDir, agentId: "main", sessionKey };
+    const storePath = await writeSubagentSessionEntry({ ...disk, defaultSessionId: current });
     if (removeCurrent) {
-      await removeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey,
-      });
+      await removeSubagentSessionEntry(disk);
     }
     await addSubagentRunForTests({
       runId,
@@ -75,26 +55,25 @@ it.each([
       childSessionIdentity: recorded ? { sessionId: recorded } : undefined,
       execution: {
         status: "running",
-        ...(expected
+        transcriptTarget: expected
           ? {
-              transcriptTarget: {
-                agentId: "main",
-                sessionKey: expectedKey ?? sessionKey,
-                sessionId: expected,
-                storePath,
-              },
+              agentId: "main",
+              sessionKey: expectedKey ?? sessionKey,
+              sessionId: expected,
+              storePath,
             }
-          : {}),
+          : undefined,
       },
     });
     const before = structuredClone(getSubagentRunByRunId(runId));
     const scope = { agentId: "main", storePath, sessionKey };
     const sessionBefore = loadSessionEntry(scope);
-    const executionSessionId = expectedKey ? current : (expected ?? current);
+    const activeId = expectedKey ? current : (expected ?? current);
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ runId, abort });
-    abort.mockImplementation(() => clearActiveEmbeddedRun(executionSessionId, handle, sessionKey));
-    setActiveEmbeddedRun(executionSessionId, handle, sessionKey, undefined, "main");
+    abort.mockImplementation(() => clearRun(activeId, handle, sessionKey));
+    const nativeTarget = { storeScope: storePath };
+    attachRun(activeId, handle, sessionKey, undefined, "main", undefined, undefined, nativeTarget);
     try {
       const result = await killSubagentRunAdmin({
         cfg: { session: { store: storePath } },
@@ -119,7 +98,7 @@ it.each([
       expect(loadSessionEntry(scope)).toEqual(sessionBefore);
       expect(fixture.cleanup).not.toHaveBeenCalled();
     } finally {
-      clearActiveEmbeddedRun(executionSessionId, handle, sessionKey);
+      clearRun(activeId, handle, sessionKey);
     }
   },
 );

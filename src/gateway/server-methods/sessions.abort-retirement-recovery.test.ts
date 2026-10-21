@@ -7,32 +7,30 @@ import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/s
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import * as registry from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  markRequesterTurnYielded,
-  registerSubagentRun,
-  settleRequesterAfterSessionSpawns,
-} from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
 } from "../../infra/sqlite-worker-contract.js";
-import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import * as lifecycleState from "../session-lifecycle-state.js";
-import { createChatAbortContext } from "./chat.abort.test-helpers.js";
-import { sessionAbortHandlers } from "./sessions-abort.js";
+import {
+  abortContext,
+  registerYieldedChild,
+  seedYieldedSession,
+  stopSession,
+} from "./sessions.abort-lifecycle.test-support.js";
 
 const fixture = useSubagentControlFixture();
 
 beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
+  await completeChild();
 });
 const parentKey = "agent:main:dashboard:retirement-parent";
 const parentId = "retirement-parent-session";
@@ -40,86 +38,29 @@ const parentRunId = "retirement-parent-run";
 const childKey = "agent:main:subagent:retirement-child";
 const childId = "retirement-child-session";
 const childRunId = "retirement-child-run";
-
-async function seedYieldedParent() {
-  for (const [sessionKey, sessionId] of [
-    [parentKey, parentId],
-    [childKey, childId],
-  ] as const) {
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey,
-      defaultSessionId: sessionId,
-      lifecycleRevision: "original-incarnation",
-    });
-  }
-  const startedAt = Date.now() - 100;
-  const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  for (const data of [
-    { phase: "start", startedAt },
-    {
-      phase: "end",
-      startedAt,
-      endedAt: startedAt + 50,
-      yielded: true,
-      livenessState: "paused",
-      stopReason: "end_turn",
-    },
-  ]) {
-    await persistGatewaySessionLifecycleEvent({
-      sessionKey: parentKey,
-      agentId: "main",
-      event: { runId: parentRunId, sessionId: parentId, lifecycleGeneration, ts: Date.now(), data },
-    });
-  }
-  await registerSubagentRun({
-    runId: childRunId,
-    childSessionKey: childKey,
-    childAgentId: "main",
-    sessionEntry: { sessionId: childId, lifecycleRevision: "original-incarnation" },
-    requesterSessionKey: parentKey,
-    requesterAgentId: "main",
-    requesterDisplayKey: parentKey,
-    requesterTurnRunId: parentRunId,
-    task: "Cancellation proof",
-    cleanup: "keep",
-    expectsCompletionMessage: true,
-  });
-  expect(
-    await markRequesterTurnYielded({
-      requesterSessionKey: parentKey,
-      requesterAgentId: "main",
-      requesterTurnRunId: parentRunId,
-    }),
-  ).toBe(1);
-  expect(
-    await settleRequesterAfterSessionSpawns({
-      requesterSessionKey: parentKey,
-      requesterAgentId: "main",
-      requesterTurnRunId: parentRunId,
-      requesterYielded: true,
-      acceptedSessionSpawns: [
-        { runId: childRunId, childSessionKey: childKey, expectsCompletionMessage: true },
-      ],
-    }),
-  ).toBe(true);
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
-    lifecycleRunId: parentRunId,
-    endedAt: startedAt + 50,
-    abortedLastRun: false,
-  });
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })?.status).toBeUndefined();
-  expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toMatchObject({
-    requesterYieldBatch: true,
-  });
-}
+const target = { agentId: "main", sessionKey: parentKey };
+const parent = () => loadSessionEntry(target);
+const child = () => subagentRuns.get(childRunId);
 
 async function completeChild() {
-  // Only the external requester delivery is unavailable. Registry publication,
-  // descendant traversal, parent persistence, and restart marking stay real.
+  // Only external requester delivery is unavailable; registry and persistence stay real.
   fixture.wake.mockResolvedValue(false);
-  await seedYieldedParent();
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: childKey,
+    defaultSessionId: childId,
+    lifecycleRevision: "original-incarnation",
+  });
+  const startedAt = await seedYieldedSession(fixture.stateDir, parentKey, parentId, parentRunId);
+  await registerYieldedChild({
+    parentKey,
+    parentRunId,
+    childKey,
+    childRunId,
+    startedAt,
+    sessionEntry: { sessionId: childId, lifecycleRevision: "original-incarnation" },
+  });
   emitAgentEvent({
     runId: childRunId,
     sessionKey: childKey,
@@ -132,38 +73,40 @@ async function completeChild() {
     },
   });
   await fixture.settle();
-  expect(subagentRuns.get(childRunId)?.execution.outcome?.status).toBe("ok");
-  expect(subagentRuns.get(childRunId)?.requesterSettleWake).toBeDefined();
+  expect(child()?.execution.outcome?.status).toBe("ok");
+  expect(child()?.requesterSettleWake).toBeDefined();
 }
 
 async function stopParent() {
   const respond = vi.fn();
-  await sessionAbortHandlers["sessions.abort"]!({
-    req: { type: "req", id: "stop", method: "sessions.abort" },
-    params: { key: parentKey, clearQueued: true },
-    respond,
-    context: createChatAbortContext({
-      getRuntimeConfig,
-      getSessionEventSubscriberConnIds: () => new Set(),
-    }) as never,
-    client: {
-      connId: "operator",
-      connect: { scopes: ["operator.read", "operator.write"] },
-    } as never,
-    isWebchatConnect: () => false,
-  });
+  await stopSession(parentKey, respond, abortContext(), { clearQueued: true });
   return respond.mock.calls[0];
 }
 
+function killChildren(beforeKill?: () => boolean) {
+  return killAllControlledSubagentRuns({
+    cfg: getRuntimeConfig(),
+    controller: {
+      controllerSessionKey: parentKey,
+      controllerAgentId: "main",
+      callerSessionKey: parentKey,
+      callerIsSubagent: false,
+      controlScope: "children",
+    },
+    runs: [child()!],
+    suppressTaskDelivery: true,
+    beforeKill,
+  });
+}
+
 it("persists the yielded parent's cancellation after retiring a successful child's wake", async () => {
-  await completeChild();
   expect((await stopParent())?.slice(0, 2)).toEqual([
     true,
     { ok: true, abortedRunId: null, status: "aborted" },
   ]);
-  expect(subagentRuns.get(childRunId)?.execution.outcome?.status).toBe("ok");
-  expect(subagentRuns.get(childRunId)?.requesterSettleWake).toBeUndefined();
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
+  expect(child()?.execution.outcome?.status).toBe("ok");
+  expect(child()?.requesterSettleWake).toBeUndefined();
+  expect(parent()).toMatchObject({
     status: "killed",
     abortedLastRun: true,
     lastRunId: parentRunId,
@@ -175,65 +118,36 @@ it("persists the yielded parent's cancellation after retiring a successful child
       stateDir: fixture.stateDir,
     }),
   ).toMatchObject({ marked: 0 });
-  const terminalParent = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
+  const terminalParent = parent();
   expect((await stopParent())?.slice(0, 2)).toEqual([
     true,
     { ok: true, abortedRunId: null, status: "no-active-run" },
   ]);
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(terminalParent);
+  expect(parent()).toEqual(terminalParent);
 });
 
 it("reports committed continuation retirement separately from killed executions", async () => {
-  await completeChild();
-  const stop = () =>
-    killAllControlledSubagentRuns({
-      cfg: getRuntimeConfig(),
-      controller: {
-        controllerSessionKey: parentKey,
-        controllerAgentId: "main",
-        callerSessionKey: parentKey,
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
-      runs: [subagentRuns.get(childRunId)!],
-      suppressTaskDelivery: true,
-    });
-  expect(await stop()).toMatchObject({
+  expect(await killChildren()).toMatchObject({
     status: "ok",
     killed: 0,
     labels: [],
     continuationRetired: true,
   });
-  expect(subagentRuns.get(childRunId)?.execution.outcome?.status).toBe("ok");
-  expect(await stop()).toMatchObject({ status: "ok", killed: 0, labels: [] });
-  expect(await stop()).not.toHaveProperty("continuationRetired");
+  expect(child()?.execution.outcome?.status).toBe("ok");
+  expect(await killChildren()).toMatchObject({ status: "ok", killed: 0, labels: [] });
+  expect(await killChildren()).not.toHaveProperty("continuationRetired");
 });
 
 it("does not retire a completed wake when the parent refuses Stop", async () => {
-  await completeChild();
-  const before = structuredClone(subagentRuns.get(childRunId));
-  const result = await killAllControlledSubagentRuns({
-    cfg: getRuntimeConfig(),
-    controller: {
-      controllerSessionKey: parentKey,
-      controllerAgentId: "main",
-      callerSessionKey: parentKey,
-      callerIsSubagent: false,
-      controlScope: "children",
-    },
-    runs: [subagentRuns.get(childRunId)!],
-    suppressTaskDelivery: true,
-    beforeKill: () => false,
-  });
+  const before = structuredClone(child());
+  const result = await killChildren(() => false);
   expect(result).toMatchObject({ status: "ok", killed: 0, labels: [] });
   expect(result).not.toHaveProperty("continuationRetired");
-  expect(subagentRuns.get(childRunId)).toEqual(before);
+  expect(child()).toEqual(before);
 });
 
 it("does not terminalize a parent whose pending final delivery owns its continuation", async () => {
-  await completeChild();
-  const target = { agentId: "main", sessionKey: parentKey };
-  const before = loadSessionEntry(target)!;
+  const before = parent()!;
   replaceSessionEntrySync(target, {
     ...before,
     pendingFinalDelivery: {
@@ -249,68 +163,58 @@ it("does not terminalize a parent whose pending final delivery owns its continua
   expect(loadSessionEntry(target)).toEqual(pendingFinal);
 });
 
-it("retains a replacement parent revision across the terminal write await", async () => {
-  await completeChild();
-  const target = { agentId: "main", sessionKey: parentKey };
-  const replacement = { ...loadSessionEntry(target)!, lifecycleRevision: "replacement-revision" };
-  const persist = lifecycleState.persistGatewaySessionLifecycleEvent;
-  const gate = vi
-    .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-    .mockImplementation(async (params) => {
-      if (params.sessionKey === parentKey && params.expectedWriter) {
-        replaceSessionEntrySync(target, replacement);
-      }
-      await persist(params);
-    });
-  try {
-    expect((await stopParent())?.[0]).toBe(true);
-    expect(loadSessionEntry(target)).toEqual(replacement);
-    expect(subagentRuns.get(childRunId)?.execution.outcome?.status).toBe("ok");
-  } finally {
-    gate.mockRestore();
-  }
-});
-
-it("does not acknowledge or replay an unknown parent persistence outcome", async () => {
-  await completeChild();
-  const before = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
-  const persist = lifecycleState.persistGatewaySessionLifecycleEvent;
-  const unknown = new SqliteWorkerError(
-    "controlled parent write outcome unknown",
-    "outcome-unknown",
-  );
-  // Controlled writer outcome; this does not claim a real lost SQLite reply.
-  const gate = vi
-    .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-    .mockImplementation(async (params) => {
-      if (params.sessionKey === parentKey && params.expectedWriter) {
-        throw unknown;
-      }
-      await persist(params);
-    });
-  try {
-    const result = await stopParent().then(
-      () => undefined,
-      (error: unknown) => error,
+it.each(["replacement revision", "unknown outcome"] as const)(
+  "preserves parent write custody for %s",
+  async (mode) => {
+    const expected =
+      mode === "replacement revision"
+        ? { ...parent()!, lifecycleRevision: "replacement-revision" }
+        : parent();
+    const persist = lifecycleState.persistGatewaySessionLifecycleEvent;
+    const unknown = new SqliteWorkerError(
+      "controlled parent write outcome unknown",
+      "outcome-unknown",
     );
-    expect(hasSqliteWorkerOutcomeUnknown(result)).toBe(true);
-    expect(gate).toHaveBeenCalledOnce();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
-    expect(subagentRuns.get(childRunId)?.execution.outcome?.status).toBe("ok");
-    expect(subagentRuns.get(childRunId)?.requesterSettleWake).toBeUndefined();
-  } finally {
-    gate.mockRestore();
-  }
-});
+    // Controlled writer outcome; this does not claim a real lost SQLite reply.
+    const gate = vi
+      .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+      .mockImplementation(async (params) => {
+        if (params.sessionKey === parentKey && params.expectedWriter) {
+          if (mode === "unknown outcome") {
+            throw unknown;
+          }
+          replaceSessionEntrySync(target, expected!);
+        }
+        await persist(params);
+      });
+    try {
+      if (mode === "unknown outcome") {
+        const result = await stopParent().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(hasSqliteWorkerOutcomeUnknown(result)).toBe(true);
+        expect(gate).toHaveBeenCalledOnce();
+        expect(child()?.requesterSettleWake).toBeUndefined();
+      } else {
+        expect((await stopParent())?.[0]).toBe(true);
+      }
+      expect(parent()).toEqual(expected);
+      expect(child()?.execution.outcome?.status).toBe("ok");
+    } finally {
+      gate.mockRestore();
+    }
+  },
+);
 
-it("preserves a newer wake generation instead of reporting its retirement", async () => {
-  await completeChild();
-  const parentBefore = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
+it("full-session Stop retires a wake rearmed during retirement preparation", async () => {
   const oldGeneration = subagentRuns.get(childRunId)!.requesterSettleWake!.rearmGeneration ?? 0;
-  const cancel = registry.cancelSubagentRequesterSettleWake;
+  const retire = registry.retireSubagentObligations;
   const gate = vi
-    .spyOn(registry, "cancelSubagentRequesterSettleWake")
-    .mockImplementationOnce(async (entry, assertCurrent) => {
+    .spyOn(registry, "retireSubagentObligations")
+    .mockImplementationOnce(async (entry, assertCurrent, options) => {
+      // Parent pending-input selection already ran; the same completed child's
+      // retirement mutation has not yet selected its current wake.
       await mutateSubagentRuns([entry.runId], (rows) => {
         const current = rows.get(entry.runId)!;
         const next = {
@@ -322,15 +226,31 @@ it("preserves a newer wake generation instead of reporting its retirement", asyn
         };
         return { value: undefined, postimages: new Map([[entry.runId, next]]) };
       });
-      await cancel(entry, assertCurrent);
+      expect(subagentRuns.get(childRunId)?.requesterSettleWake?.rearmGeneration).toBe(
+        oldGeneration + 1,
+      );
+      await retire(entry, assertCurrent, options);
     });
   try {
-    expect((await stopParent())?.[0]).toBe(false);
-    expect(subagentRuns.get(childRunId)?.requesterSettleWake?.rearmGeneration).toBe(
-      oldGeneration + 1,
-    );
+    expect((await stopParent())?.slice(0, 2)).toEqual([
+      true,
+      { ok: true, abortedRunId: null, status: "aborted" },
+    ]);
+    expect(gate).toHaveBeenCalledOnce();
+    expect(subagentRuns.get(childRunId)?.requesterSettleWake).toBeUndefined();
     expect(subagentRuns.get(childRunId)?.execution.outcome?.status).toBe("ok");
-    expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(parentBefore);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
+      status: "killed",
+      abortedLastRun: true,
+      lastRunId: parentRunId,
+    });
+    await fixture.settle();
+    expect(
+      await markStartupOrphanedMainSessionsForRecovery({
+        cfg: getRuntimeConfig(),
+        stateDir: fixture.stateDir,
+      }),
+    ).toMatchObject({ marked: 0 });
   } finally {
     gate.mockRestore();
   }

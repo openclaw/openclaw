@@ -37,36 +37,27 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   };
 });
 
+worker.gate = createWorkerSqliteIntegrityGate();
 const { openClient } = setupSessionCreateTestHarness();
 type CreateSessionReply = Awaited<ReturnType<typeof rpcReq<{ key: string; sessionId: string }>>>;
 
 test.for(["new database", "interrupted empty database"])(
   "sessions.create joins canonical schema birth for %s",
   async (scenario, { signal }) => {
+    const beforeSettlement = <T>(
+      gate: PromiseLike<T>,
+      work: PromiseLike<unknown>,
+      message: string,
+    ) => withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
     const agentId = scenario === "new database" ? "firstbirth-new" : "firstbirth-interrupted";
     const stateDir = resolveStateDir();
-    const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-    const configuredDatabasePath = path.join(
-      stateDir,
-      "agents",
-      agentId,
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    const databasePath = path.join(
-      await fs.realpath(stateDir),
-      "agents",
-      agentId,
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    testState.sessionStorePath = path.join(
-      stateDir,
-      "agents",
-      "{agentId}",
-      "sessions",
-      "sessions.json",
-    );
+    const storeAt = (id: string) => path.join(stateDir, "agents", id, "sessions", "sessions.json");
+    const storePath = storeAt(agentId);
+    const databaseAt = (root: string) =>
+      path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
+    const configuredDatabasePath = databaseAt(stateDir);
+    const databasePath = databaseAt(await fs.realpath(stateDir));
+    testState.sessionStorePath = storeAt("{agentId}");
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, [agentId]: {} } };
     setRuntimeConfigSnapshot(loadGatewayTestConfig());
     const { ws } = await openClient();
@@ -75,9 +66,8 @@ test.for(["new database", "interrupted empty database"])(
       await fs.writeFile(databasePath, "");
     }
 
-    const gate = createWorkerSqliteIntegrityGate(databasePath);
-    worker.gate = gate;
-    gate.arm();
+    const gate = worker.gate!;
+    gate.arm(databasePath);
     const nativeWorker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
       { agentId, path: databasePath },
       { version: 2, assertCurrent() {} },
@@ -125,13 +115,10 @@ test.for(["new database", "interrupted empty database"])(
     let cancelledBorrower: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
     let cancelledPreparation: Promise<void> | undefined;
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          gate.entered,
-          opening,
-          "Agent schema creation did not reach its integrity gate",
-        ),
-        signal,
+      await beforeSettlement(
+        gate.entered,
+        opening,
+        "Agent schema creation did not reach its integrity gate",
       );
       // Catalog admission precedes canonical schema creation at this worker gate.
       expect(hasSqliteDatabaseSchemaAdmissionForPath(databasePath)).toBe(true);
@@ -162,39 +149,30 @@ test.for(["new database", "interrupted empty database"])(
       }
       const key = `agent:${agentId}:dashboard:first-birth`;
       observeDiscovery = true;
-      const requestId = "first-birth";
+      const request = {
+        type: "req",
+        id: "first-birth",
+        method: "sessions.create",
+        params: { agentId, key },
+      };
       creating = onceMessage<CreateSessionReply>(
         ws,
-        (response) => response.type === "res" && response.id === requestId,
+        (response) => response.type === "res" && response.id === request.id,
       );
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: requestId,
-          method: "sessions.create",
-          params: { agentId, key },
-        }),
-      );
-      const observed = await withinTest(
-        awaitGateBeforeSettlement(
-          discovery.promise,
-          creating,
-          "sessions.create settled without discovering its physical store",
-        ),
-        signal,
+      ws.send(JSON.stringify(request));
+      const observed = await beforeSettlement(
+        discovery.promise,
+        creating,
+        "sessions.create settled without discovering its physical store",
       );
       gate.release();
       await withinTest(opening, signal);
       const result = await withinTest(creating, signal);
-      const diagnostic = JSON.stringify(result).replace("SessionStoreUnavailableError: ", "");
       // A second unadmitted path would defer dispatch even without joining schema birth.
       expect(observed.candidates).toEqual([
         { path: configuredDatabasePath, physicalPath: databasePath },
       ]);
-      expect(result, diagnostic).toMatchObject({
-        ok: true,
-        payload: { key, sessionId: expect.any(String) },
-      });
+      expect(result).toMatchObject({ ok: true, payload: { key, sessionId: expect.any(String) } });
       expect(observed.dispatched, "Discovery must wait for the canonical agent schema").toBe(0);
       expect(result.payload?.sessionId).toBeTruthy();
       const entry = await readSessionEntryReadOnlyInWorker({
@@ -211,7 +189,6 @@ test.for(["new database", "interrupted empty database"])(
       await nativeWorker.close();
       readCandidates.mockRestore();
       run.mockRestore();
-      worker.gate = undefined;
       await closeGatewayTestWebSocket(ws);
     }
   },

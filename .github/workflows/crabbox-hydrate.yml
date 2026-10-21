@@ -213,7 +213,7 @@ jobs:
             fi
             wait "$pnpm_pid"
           }
-          run_pnpm_install || run_pnpm_install
+          run_pnpm_install
           if ! pnpm_install_artifacts_ready; then
             echo "::error::pnpm install did not leave usable workspace dependencies"
             exit 1

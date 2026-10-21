@@ -1,57 +1,52 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, createRenderEffect, createSignal } from "solid-js";
+import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import { Match, Show, Switch, createMemo } from "solid-js";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationValue,
-} from "../../lit/presentation-binding.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
-import type { SidebarPanelDefinitionParams } from "./chat-pane-embedded-types.ts";
+import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
+import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
+import { usePanePresentation } from "./chat-pane-presentation.ts";
+import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
+import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
 import {
-  closeSessionWorkspacePreview,
+  requestCloseSessionWorkspacePreview,
+  pinSessionWorkspacePreview,
+  setSessionWorkspacePreviewDraft,
+  browseSessionWorkspacePreviewPath,
   selectSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
 import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
+import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
+import type {
+  SidebarPanelDefinition,
+  SidebarPanelHostRegistration,
+} from "./components/chat-sidebar-region-types.ts";
+import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
+import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
 
-/** Park immediately; reveal alongside the parent's next props unless explicitly previewing. */
-export function usePanePresentation(source: () => PresentationValue) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  createRenderEffect(source, (binding) => {
-    if (typeof binding === "boolean") {
-      return undefined;
-    }
-    const changed = () => {
-      if (!binding.isPresented() || binding.preview?.()) {
-        setRevision((value) => value + 1);
-      }
-    };
-    binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, changed);
-    return () => binding.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, changed);
-  });
-  return createMemo(() => {
-    revision();
-    const binding = source();
-    return typeof binding === "boolean" ? binding : binding.isPresented();
-  });
-}
+type PanelHostProps = { registerPanelHost?: SidebarPanelHostRegistration };
+type Props = SidebarPanelDefinitionParams & PanelHostProps;
 
-type Props = SidebarPanelDefinitionParams;
-
-export function TerminalPanel(props: Props) {
+function TerminalPanel(props: Props) {
   return (
     <openclaw-terminal-panel
+      prop:mobile={props.presentation === "mobile"}
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       prop:tabsInHeader={props.terminalTabsInHeader}
       prop:onClose={props.onCloseTerminal}
-      prop:client={props.state.connected ? props.state.client : null}
+      prop:client={props.state.client}
+      prop:gatewayConnected={props.state.connected}
       prop:available={props.state.terminalAvailable}
       prop:agentId={props.agentId}
       prop:sessionKey={props.state.sessionKey}
@@ -61,11 +56,12 @@ export function TerminalPanel(props: Props) {
   );
 }
 
-export function BrowserPanel(props: Props) {
+function BrowserPanel(props: Props) {
   const presented = usePanePresentation(() => props.browserPresented);
   return (
     <openclaw-browser-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       data-chat-autotype-exempt
       prop:client={props.state.connected ? props.state.client : null}
@@ -76,6 +72,8 @@ export function BrowserPanel(props: Props) {
       })}
       prop:presented={presented()}
       prop:tabsInHeader={props.browserTabsInHeader}
+      prop:mobilePresentation={props.presentation === "mobile"}
+      prop:fetchFavicon={resolveChatLinkFaviconFetcher(props.state)}
       prop:refreshOnPresentation={props.browserRefreshOnPresentation}
       prop:sessionKey={props.state.sessionKey}
       prop:preferredTab={props.preferredBrowserTab}
@@ -86,11 +84,13 @@ export function BrowserPanel(props: Props) {
   );
 }
 
-export function CompanionPanel(props: Props) {
+function CompanionPanel(props: Props) {
   const presented = usePanePresentation(() => props.companionPresented);
   return (
     <openclaw-chat-session-rail
+      prop:presentation={props.presentation}
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:presented={presented()}
       prop:focusRequest={props.companionFocusRequest}
       prop:sessionKey={props.state.sessionKey}
@@ -99,8 +99,11 @@ export function CompanionPanel(props: Props) {
       prop:activeRunId={props.activeRunId}
       prop:pullRequests={props.pullRequests}
       prop:companion={props.companion}
+      prop:modelControls={props.companionModelControls}
+      prop:client={props.state.connected ? props.state.client : null}
       prop:connected={props.state.connected}
       prop:sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
+      prop:inputDeviceId={props.state.settings.realtimeTalkInputDeviceId}
       prop:onSubmit={props.onCompanionSubmit}
       prop:onDraftChange={props.onCompanionDraftChange}
       prop:onAttachmentsChange={props.onCompanionAttachmentsChange}
@@ -110,11 +113,22 @@ export function CompanionPanel(props: Props) {
   );
 }
 
-export function DesktopPanel(props: Props) {
+function DesktopPanel(props: Props) {
   const presented = usePanePresentation(() => props.desktopPresented);
   return (
     <openclaw-desktop-panel
+      prop:presentation={
+        props.presentation
+          ? {
+              platform: props.presentation,
+              expanded: props.desktopExpanded,
+              onToggleExpanded: props.onToggleDesktopExpanded,
+              openWindowHref: props.desktopFocusHref,
+            }
+          : undefined
+      }
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       data-chat-autotype-exempt
       prop:client={props.state.connected ? props.state.client : null}
@@ -122,16 +136,19 @@ export function DesktopPanel(props: Props) {
       prop:presented={presented()}
       prop:refreshOnPresentation={props.desktopRefreshOnPresentation}
       prop:requestedSource={props.desktopSource}
+      prop:runtimeConfig={props.desktopRuntimeConfig}
       prop:sessionKey={props.state.sessionKey}
       prop:onFocusTargetChange={props.onDesktopFocusTargetChange}
     />
   );
 }
 
-export function DiscussionPanel(props: Props) {
+function DiscussionPanel(props: Props) {
   return (
     <openclaw-session-discussion
+      prop:presentation={props.presentation}
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:sessionKey={props.discussion!.sessionKey}
       prop:canOpen={props.discussion!.canOpen}
       prop:sourceGeneration={props.discussionSourceGeneration}
@@ -142,7 +159,7 @@ export function DiscussionPanel(props: Props) {
   );
 }
 
-export function PortalPanel(props: Props) {
+function PortalPanel(props: Props) {
   const presented = usePanePresentation(() => props.portalPresented ?? false);
   const portal = () =>
     props.state.sidebarLayout.columns
@@ -150,7 +167,9 @@ export function PortalPanel(props: Props) {
       .find((panel) => panel.slot === "portal");
   return (
     <openclaw-portals-page
+      prop:mobile={props.presentation === "mobile"}
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       prop:presented={presented()}
       prop:requestedPortalId={portal()?.portalId ?? null}
@@ -159,27 +178,104 @@ export function PortalPanel(props: Props) {
   );
 }
 
-export function WorkspacePanel(props: Props & { workspaceState: SessionWorkspaceState }) {
+function WorkspacePanel(props: Props & { workspaceState: SessionWorkspaceState }) {
   const presented = usePanePresentation(() => props.panePresentation ?? true);
+  const workspaceVisible = usePanePresentation(
+    () => props.workspacePresented ?? props.panePresentation ?? true,
+  );
+  const browserPresented = () =>
+    workspaceVisible() &&
+    (props.workspace?.presentation === "desktop" ||
+      props.workspaceState.activePreviewId === null ||
+      props.workspaceState.previews.find(
+        (entry) => entry.id === props.workspaceState.activePreviewId,
+      )?.catalogVisible === true);
+  const Detail = (detail: { content: SidebarContent; previewId: string }) => {
+    const preview = () =>
+      props.workspaceState.previews.find((entry) => entry.id === detail.previewId);
+    const fileSource = () =>
+      detail.content.kind === "file"
+        ? detail.content
+        : detail.content.kind === "image" ||
+            detail.content.kind === "attachment" ||
+            detail.content.kind === "markdown"
+          ? detail.content.file
+          : undefined;
+    const active = () =>
+      workspaceVisible() &&
+      props.workspaceState.activePreviewId === detail.previewId &&
+      preview()?.catalogVisible !== true;
+    return (
+      <ContentPresentation value={active}>
+        <ChatDetailSlot
+          {...props.detail}
+          active={active()}
+          content={detail.content}
+          filePresentation={props.workspace?.presentation}
+          fileBack={
+            props.workspace?.presentation === "mobile"
+              ? {
+                  label: t("chat.sidePanel.files"),
+                  onBack: () => selectSessionWorkspacePreview(props.state, null),
+                }
+              : undefined
+          }
+          fileWorkspace={
+            fileSource() && (fileSource()!.root || fileSource()!.artifactId) && props.workspace
+              ? {
+                  path: fileSource()!.path,
+                  rootLabel: t("chat.workspaceFiles.root"),
+                  sourceLabel: fileSource()!.artifactId
+                    ? t("chat.workspaceFiles.desktop.sessionFiles")
+                    : undefined,
+                  catalog: props.workspace,
+                  showingFolder: preview()?.catalogVisible === true,
+                  onBrowsePath: (path) => {
+                    browseSessionWorkspacePreviewPath(props.state, detail.previewId, path);
+                  },
+                }
+              : undefined
+          }
+          onFileInteraction={(file) => {
+            if (file === detail.content) {
+              pinSessionWorkspacePreview(props.state, detail.previewId);
+            }
+          }}
+          onFileDraftChange={(draft) =>
+            setSessionWorkspacePreviewDraft(props.state, detail.previewId, draft)
+          }
+        />
+      </ContentPresentation>
+    );
+  };
   return (
     <openclaw-chat-files-panel
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
+      prop:sessionKey={props.state.sessionKey}
       prop:tabsInHeader={sidebarMainPanel(props.state.sidebarLayout)?.slot !== "workspace"}
       prop:previews={presented() ? props.workspaceState.previews : []}
       prop:activeId={presented() ? props.workspaceState.activePreviewId : null}
-      prop:browser={props.workspace}
-      prop:renderDetail={props.renderDetail}
+      prop:presentation={props.workspace?.presentation}
+      prop:treeVisible={props.workspace?.navigation?.treeVisible !== false}
+      prop:folderView={props.workspace?.folderView === true}
+      prop:workspace={props.workspace}
+      prop:browserPresented={browserPresented}
+      prop:renderDetail={Detail}
       prop:onSelect={(id: string | null) => selectSessionWorkspacePreview(props.state, id)}
-      prop:onClose={(id: string) => closeSessionWorkspacePreview(props.state, id)}
+      prop:onClose={(id: string) => requestCloseSessionWorkspacePreview(props.state, id)}
     />
   );
 }
 
-export function SubagentsPanel(props: Props) {
+function SubagentsPanel(props: Props) {
   const presented = usePanePresentation(() => props.subagentsPresented);
   return (
     <openclaw-chat-subagents-panel
+      prop:onScrollPortRef={props.onScrollPortRef}
+      prop:mobile={props.presentation === "mobile"}
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:sessionKey={props.state.sessionKey}
       prop:agentId={props.agentId ?? "main"}
       prop:paneId={props.paneId}
@@ -192,11 +288,14 @@ export function SubagentsPanel(props: Props) {
   );
 }
 
-export function ProcessesPanel(props: Props) {
+function ProcessesPanel(props: Props) {
   const presented = usePanePresentation(() => props.processesPresented ?? false);
   return (
     <openclaw-chat-processes-panel
+      prop:onScrollPortRef={props.onScrollPortRef}
+      prop:mobile={props.presentation === "mobile"}
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:sessionKey={props.state.sessionKey}
       prop:agentId={props.agentId ?? "main"}
       prop:presented={presented()}
@@ -204,14 +303,17 @@ export function ProcessesPanel(props: Props) {
   );
 }
 
-export function LinkReaderPanel(props: Props) {
+function LinkReaderPanel(props: Props) {
   const presented = usePanePresentation(() => props.linkReaderPresented ?? false);
   return (
     <openclaw-link-reader-panel
+      prop:onScrollPortRef={props.onScrollPortRef}
+      prop:mobile={props.presentation === "mobile"}
       data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
       prop:embedded={true}
       data-chat-autotype-exempt
-      prop:client={props.state.connected ? props.state.client : null}
+      prop:client={props.state.client}
       prop:available={props.state.connected}
       prop:readers={props.linkReaders ?? EMPTY_LINK_READERS}
       prop:agentId={props.agentId ?? undefined}
@@ -223,9 +325,14 @@ export function LinkReaderPanel(props: Props) {
   );
 }
 
-export function ExternalPanelLink(props: { href: string; label: string }) {
+export function ExternalPanelLink(props: {
+  href: string;
+  label: string;
+  actionRef?: (element: HTMLAnchorElement) => void;
+}) {
   return (
     <a
+      ref={props.actionRef}
       class="rail-header__action"
       href={props.href}
       target="_blank"
@@ -238,17 +345,34 @@ export function ExternalPanelLink(props: { href: string; label: string }) {
   );
 }
 
-export function ClearCompanion(props: Props) {
+/** Snapshot mutable native state so menu diffing can compare the previous action. */
+export function companionClearAction(
+  input: Pick<Props, "connected" | "companion" | "onClearCompanion">,
+) {
+  return {
+    id: "clear-side-chat",
+    label: t("chat.rail.clear"),
+    icon: "trash" as const,
+    disabled: !input.connected || input.companion.turns.some((turn) => turn.status === "pending"),
+    onActivate: () => {
+      void input.onClearCompanion();
+    },
+  };
+}
+
+export function ClearCompanion(
+  props: Props & { actionRef?: (element: HTMLButtonElement) => void },
+) {
+  const action = createMemo(() => companionClearAction(props));
   return (
-    <openclaw-tooltip prop:content={t("chat.rail.clear")}>
+    <openclaw-tooltip prop:content={action().label}>
       <button
+        ref={props.actionRef}
         class="rail-header__action chat-session-rail__clear"
         type="button"
-        aria-label={t("chat.rail.clear")}
-        disabled={
-          !props.connected || props.companion.turns.some((turn) => turn.status === "pending")
-        }
-        onClick={() => props.onClearCompanion()}
+        aria-label={action().label}
+        disabled={action().disabled}
+        onClick={() => action().onActivate()}
       >
         <Icon name="trash" />
       </button>
@@ -256,18 +380,65 @@ export function ClearCompanion(props: Props) {
   );
 }
 
-export function UnavailableDetail(props: { message: string }) {
+function DetailPanel(props: SidebarPanelData) {
+  const presented = usePanePresentation(() => props.detailPresentation);
+  const active = usePanePresentation(() => props.detailPresented ?? props.detailPresentation);
   return (
-    <div class="callout danger review-unavailable" role="alert">
-      <strong>{t("chat.detailPanel.unavailable")}</strong>
-      <span>{props.message}</span>
-    </div>
+    <Show when={presented()}>
+      <ChatDetailSlot {...props.detail} active={active()} content={props.detailContent!} />
+    </Show>
   );
 }
 
-export function PresentedPaneContent(props: { presentation: PresentationValue; content: unknown }) {
-  const presented = usePanePresentation(() => props.presentation);
-  return <LitContent value={presented() ? props.content : undefined} />;
+function DashboardPanel(props: SidebarPanelData) {
+  return <ChatBoardPanel {...props.dashboard!} />;
+}
+
+const embeddedPanels: Partial<
+  Record<SidebarSlotId, (props: SidebarPanelData & PanelHostProps) => SolidJSX.Element>
+> = {
+  terminal: TerminalPanel,
+  browser: BrowserPanel,
+  companion: CompanionPanel,
+  desktop: DesktopPanel,
+  discussion: DiscussionPanel,
+  portal: PortalPanel,
+  subagents: SubagentsPanel,
+  processes: ProcessesPanel,
+  "link-reader": LinkReaderPanel,
+  workspace: WorkspacePanel,
+  detail: DetailPanel,
+  dashboard: DashboardPanel,
+};
+
+export function SidebarPanel(props: { definition: SidebarPanelDefinition } & PanelHostProps) {
+  const Panel = dynamic(() => embeddedPanels[props.definition.slot]);
+  return (
+    <Switch>
+      <Match when={props.definition.loadState === null}>
+        <PanelLoadingSkeleton {...props.definition.loading} />
+      </Match>
+      <Match when={props.definition.loadState}>{(error) => <LazyViewError {...error()} />}</Match>
+      <Match when={props.definition.view}>
+        {(data) => (
+          <Show
+            when={props.definition.slot.startsWith("plugin:")}
+            fallback={<Panel {...data()} registerPanelHost={props.registerPanelHost} />}
+          >
+            <EmbeddedPluginPanel
+              contributionKey={props.definition.slot.slice("plugin:".length)}
+              props={{
+                sessionKey: data().state.sessionKey,
+                agentId: data().agentId ?? undefined,
+              }}
+              presentation={data().isPluginPanelPresented(props.definition.slot)}
+            />
+          </Show>
+        )}
+      </Match>
+      <Match when={props.definition.content != null}>{props.definition.content}</Match>
+    </Switch>
+  );
 }
 
 type EmbeddedAttributes<Element extends HTMLElement> = SolidJSX.HTMLAttributes<Element> &
@@ -276,14 +447,18 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-chat-session-rail": HTMLAttributes<HTMLElement> & {
+        "prop:presentation"?: SidebarPanelDefinitionParams["presentation"];
         "prop:sessionKey"?: SidebarPanelDefinitionParams["state"]["sessionKey"];
         "prop:digest"?: SidebarPanelDefinitionParams["digest"];
         "prop:running"?: boolean;
         "prop:activeRunId"?: SidebarPanelDefinitionParams["activeRunId"];
         "prop:pullRequests"?: SidebarPanelDefinitionParams["pullRequests"];
         "prop:companion"?: SidebarPanelDefinitionParams["companion"];
+        "prop:modelControls"?: SidebarPanelDefinitionParams["companionModelControls"];
+        "prop:client"?: SidebarPanelDefinitionParams["state"]["client"];
         "prop:connected"?: boolean;
         "prop:sendShortcut"?: SidebarPanelDefinitionParams["state"]["settings"]["chatSendShortcut"];
+        "prop:inputDeviceId"?: string;
         "prop:onSubmit"?: SidebarPanelDefinitionParams["onCompanionSubmit"];
         "prop:onDraftChange"?: SidebarPanelDefinitionParams["onCompanionDraftChange"];
         "prop:onAttachmentsChange"?: SidebarPanelDefinitionParams["onCompanionAttachmentsChange"];

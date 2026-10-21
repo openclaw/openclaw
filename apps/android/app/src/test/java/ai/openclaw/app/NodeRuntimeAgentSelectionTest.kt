@@ -14,6 +14,7 @@ import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -172,80 +173,104 @@ class NodeRuntimeAgentSelectionTest {
     }
 
   @Test
-  fun publicationsRevealSelectedAgentModelsWithoutDiscovery() =
+  fun publicationsRefreshOnlySelectedAgentCatalogsWithoutDiscovery() =
     runBlocking {
-      for (event in listOf("config.changed", "chat.metadata.changed")) {
-        val runtime = createConnectedRuntime()
-        val catalogRequests = Channel<Pair<JsonObject, Job>>(Channel.UNLIMITED)
-        val revision = AtomicInteger(0)
-        try {
-          runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
-            when (method) {
-              "models.list" -> {
-                catalogRequests.send(Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject to currentCoroutineContext().job)
-                if (revision.get() == 0) {
-                  """{"models":[]}"""
-                } else {
-                  """{"models":[{"id":"model-1","provider":"fixture","name":"Published","available":true}]}"""
-                }
-              }
-
-              "models.authStatus" -> {
-                assertEquals(
-                  "beta",
-                  Json
-                    .parseToJsonElement(paramsJson.orEmpty())
-                    .jsonObject["agentId"]
-                    ?.jsonPrimitive
-                    ?.content,
-                )
-                """{"providers":[{"provider":"credential-${revision.get()}","status":"ok","profiles":[]}]}"""
-              }
-
-              "config.get" -> {
-                """{"config":{}}"""
-              }
-
-              else -> {
-                error("Unexpected publication request: $method")
+      val runtime = createConnectedRuntime()
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+      val catalogRequests = Channel<Pair<JsonObject, Job>>(Channel.UNLIMITED)
+      val revision = AtomicInteger(0)
+      try {
+        // Settle these synchronous request stubs inline without joining unrelated runtime work.
+        ReflectionHelpers.setField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + Dispatchers.Unconfined))
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          when (method) {
+            "models.list" -> {
+              catalogRequests.send(Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject to currentCoroutineContext().job)
+              if (revision.get() == 0) {
+                """{"models":[]}"""
+              } else {
+                """{"models":[{"id":"model-${revision.get()}","provider":"fixture","name":"Published","available":true}]}"""
               }
             }
+
+            "models.authStatus" -> {
+              assertEquals(
+                "beta",
+                Json
+                  .parseToJsonElement(paramsJson.orEmpty())
+                  .jsonObject["agentId"]
+                  ?.jsonPrimitive
+                  ?.content,
+              )
+              """{"providers":[{"provider":"credential-${revision.get()}","status":"ok","profiles":[]}]}"""
+            }
+
+            "config.get" -> {
+              """{"config":{}}"""
+            }
+
+            else -> {
+              error("Unexpected publication request: $method")
+            }
           }
-          runtime.selectChatAgent("beta")
-          withTimeout(2_000) {
-            repeat(2) { catalogRequests.receive().second.join() }
-          }
-          assertTrue(runtime.modelCatalog.value.isEmpty())
-          assertTrue(runtime.providerModelCatalog.value.isEmpty())
-          assertEquals(
-            "credential-0",
-            runtime.modelAuthProviders.value
-              .single()
-              .id,
+        }
+        runtime.selectChatAgent("beta")
+        withTimeout(2_000) {
+          repeat(2) { catalogRequests.receive().second.join() }
+        }
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals(
+          "credential-0",
+          runtime.modelAuthProviders.value
+            .single()
+            .id,
+        )
+        var publishedRevision = 0
+        val publications =
+          listOf(
+            Triple("chat.metadata.changed", """{"agentId":"beta","modelCatalogChanged":false,"authChanged":false}""", false),
+            Triple("chat.metadata.changed", """{"agentId":"other","modelCatalogChanged":true}""", false),
+            Triple("chat.metadata.changed", """{"agentId":" BETA ","modelCatalogChanged":true}""", true),
+            Triple("chat.metadata.changed", """{"agentId":"beta","modelCatalogChanged":false,"authChanged":true}""", true),
+            Triple("chat.metadata.changed", """{"modelCatalogChanged":false,"modelSelectionChanged":true}""", true),
+            Triple("chat.metadata.changed", "{}", true),
+            Triple("config.changed", "{}", true),
           )
-          revision.set(1)
+        for ((event, payload, refreshes) in publications) {
+          revision.incrementAndGet()
           ReflectionHelpers.callInstanceMethod<Unit>(
             runtime,
             "handleGatewayEvent",
             ReflectionHelpers.ClassParameter.from(String::class.java, event),
-            ReflectionHelpers.ClassParameter.from(String::class.java, "{}"),
+            ReflectionHelpers.ClassParameter.from(String::class.java, payload),
           )
-
           withTimeout(2_000) {
-            runtime.modelCatalog.first { it.singleOrNull()?.id == "model-1" }
-            runtime.providerModelCatalog.first { it.singleOrNull()?.id == "model-1" }
-            runtime.modelAuthProviders.first { it.singleOrNull()?.id == "credential-1" }
-            repeat(2) {
-              val (params, job) = catalogRequests.receive()
-              job.join()
-              assertEquals("beta", params["agentId"]?.jsonPrimitive?.content)
-              assertFalse(params.containsKey("refresh"))
+            if (refreshes) {
+              publishedRevision = revision.get()
+              repeat(2) {
+                val (params, job) = catalogRequests.receive()
+                job.join()
+                assertEquals("beta", params["agentId"]?.jsonPrimitive?.content)
+                assertFalse(params.containsKey("refresh"))
+              }
             }
           }
-        } finally {
-          closeNodeRuntimeTestFixture(runtime)
-          catalogRequests.close()
+          assertTrue("Unexpected catalog read for $event: $payload", catalogRequests.tryReceive().isFailure)
+          val expectedModels = if (publishedRevision == 0) emptyList() else listOf("model-$publishedRevision")
+          assertEquals(expectedModels, runtime.modelCatalog.value.map { it.id })
+          assertEquals(expectedModels, runtime.providerModelCatalog.value.map { it.id })
+          assertEquals(
+            "credential-$publishedRevision",
+            runtime.modelAuthProviders.value
+              .single()
+              .id,
+          )
         }
+      } finally {
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
+        closeNodeRuntimeTestFixture(runtime)
+        catalogRequests.close()
       }
     }
 

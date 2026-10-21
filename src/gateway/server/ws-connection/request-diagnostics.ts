@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -18,6 +19,10 @@ import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { isCoreGatewayMethodClassified } from "../../methods/core-method-policy.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
+import {
+  getSessionListBaseMiss,
+  retainSessionListBaseMiss,
+} from "../../session-list-diagnostics.js";
 
 type RpcEvent = Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
 type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
@@ -25,9 +30,34 @@ type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
 type ModelsListAttribution = Extract<RpcEvent, { phase: "received" }>["modelsList"];
 type SessionsListAttribution = Extract<RpcEvent, { phase: "received" }>["sessionsList"];
 type CronListAttribution = Extract<RpcEvent, { phase: "received" }>["cronList"];
+type ChatHistoryAttribution = NonNullable<Extract<RpcEvent, { phase: "response" }>["chatHistory"]>;
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+const rpcDiagnostics = channel("openclaw.gateway.rpc");
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;
+const sharedResponseFields = new WeakMap<
+  object,
+  { rowsUnchanged: boolean; rowsDelta: true | undefined }
+>();
+
+/** Retain only bounded diagnostic facts for the lifetime of the encoded response. */
+export function retainGatewayRpcResponseDiagnostics(
+  method: string,
+  payload: unknown,
+  serialized: object,
+): void {
+  if (method !== "sessions.list") {
+    return;
+  }
+  const result = asOptionalRecord(payload);
+  if (result) {
+    retainSessionListBaseMiss(serialized, getSessionListBaseMiss(result));
+    sharedResponseFields.set(serialized, {
+      rowsUnchanged: result.rowsUnchanged === true,
+      rowsDelta: result.rowsDelta === undefined ? undefined : true,
+    });
+  }
+}
 
 export type GatewayRpcQueueTiming = { receivedAt: number; dequeuedAt: number };
 
@@ -42,17 +72,20 @@ export class GatewayRpcDiagnostics {
 
   constructor(
     private readonly method: string,
-    private readonly startedAt = performance.now(),
+    clientKind: Extract<RpcEvent, { phase: "received" }>["clientKind"],
+    readonly startedAt = performance.now(),
     queueWaitMs?: number,
     modelsList?: ModelsListAttribution,
-    sessionsList?: SessionsListAttribution,
+    private readonly sessionsList?: SessionsListAttribution,
     cronList?: CronListAttribution,
+    private readonly chatHistoryClient?: Pick<ChatHistoryAttribution, "clientKind" | "source">,
   ) {
     this.queueWaitMs = queueWaitMs;
     this.emit({
       type: "gateway.rpc",
       method,
       phase: "received",
+      clientKind,
       ...(modelsList && { modelsList }),
       ...(sessionsList && { sessionsList }),
       ...(cronList && { cronList }),
@@ -60,6 +93,9 @@ export class GatewayRpcDiagnostics {
   }
 
   private emit(event: RpcEvent): void {
+    if (rpcDiagnostics.hasSubscribers) {
+      rpcDiagnostics.publish({ ...event, operation: `${event.method}.${event.phase}` });
+    }
     // A retained response can run under another request; preserve captured absence too.
     runWithDiagnosticTraceContext(this.trace, () => emitTrustedDiagnosticEvent(event));
   }
@@ -78,7 +114,11 @@ export class GatewayRpcDiagnostics {
     }
   }
 
-  response(outcome: ResponseOutcome, responseBytes?: number): void {
+  response(
+    outcome: ResponseOutcome,
+    responseBytes?: number,
+    response?: { payload: unknown; params: unknown },
+  ): void {
     const sent = outcome === "ok" || outcome === "error";
     const firstResponse = this.responseState !== "sent";
     if (sent ? !firstResponse && responseBytes === undefined : this.deliveryFailureRecorded) {
@@ -94,6 +134,47 @@ export class GatewayRpcDiagnostics {
     }
     // Acceptance and final frames can share one request and outlive its handler.
     // Keep first-response timing separate from each encoded frame's byte count.
+    // Successful replies have passed method validation; never attribute rejected params.
+    let result =
+      outcome === "ok" && (this.sessionsList || this.chatHistoryClient)
+        ? asOptionalRecord(response?.payload)
+        : undefined;
+    const baseMissReason = result ? getSessionListBaseMiss(result) : undefined;
+    if (result) {
+      result = sharedResponseFields.get(result) ?? result;
+    }
+    const params = result ? asOptionalRecord(response?.params) : undefined;
+    let chatHistory: ChatHistoryAttribution | undefined;
+    if (this.chatHistoryClient && result && response) {
+      const limit = typeof params?.limit === "number" ? params.limit : 200;
+      chatHistory = {
+        ...this.chatHistoryClient,
+        shape:
+          params?.inputRunIds !== undefined
+            ? "receipt"
+            : params?.pendingBefore !== undefined
+              ? "pending"
+              : typeof params?.offset === "number" && params.offset > 0
+                ? "older"
+                : params?.cursor !== undefined
+                  ? "cursor"
+                  : params?.messageId !== undefined
+                    ? "anchor"
+                    : "tail",
+        limitBucket: limit <= 20 ? "<=20" : limit <= 80 ? "<=80" : limit <= 200 ? "<=200" : ">200",
+        outcome: result.kind === "delta" ? "delta" : result.kind === "reset" ? "reset" : "page",
+      };
+    }
+    const rowsOutcome =
+      this.sessionsList?.rowMode !== "sidebar" && params?.ifRowsRevision === undefined
+        ? "not-sidebar"
+        : result?.rowsUnchanged === true
+          ? "unchanged"
+          : result?.rowsDelta !== undefined
+            ? "delta"
+            : params?.ifRowsRevision === undefined || params.ifRowsRevision === ""
+              ? "full-no-base"
+              : "full-with-base";
     this.emit({
       type: "gateway.rpc",
       method: this.method,
@@ -101,11 +182,22 @@ export class GatewayRpcDiagnostics {
       outcome,
       firstResponse: sent ? firstResponse : undefined,
       responseBytes,
+      ...(this.sessionsList && result
+        ? {
+            sessionsList: {
+              ...this.sessionsList,
+              rowsOutcome,
+              ...(rowsOutcome === "full-with-base" && baseMissReason ? { baseMissReason } : {}),
+            },
+          }
+        : {}),
+      ...(chatHistory ? { chatHistory } : {}),
       durationMs: performance.now() - this.startedAt,
     });
   }
 
   static async runHandler(
+    method: string,
     invoke: () => Promise<void> | void,
     diagnostics?: GatewayRpcDiagnostics,
   ): Promise<void> {
@@ -122,10 +214,7 @@ export class GatewayRpcDiagnostics {
     }
     let outcome: "returned" | "threw" = "returned";
     try {
-      await runWithMainThreadTask(
-        diagnostics ? `gateway:rpc:${diagnostics.method}` : "gateway:rpc",
-        invoke,
-      );
+      await runWithMainThreadTask(`gateway:rpc:${method}`, invoke);
     } catch (error) {
       outcome = "threw";
       throw error;
@@ -167,8 +256,8 @@ export class GatewayRpcDiagnostics {
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {
-  return areDiagnosticsEnabledForProcess() &&
-    hasInternalDiagnosticEventInterest("gateway.rpc", true)
+  return rpcDiagnostics.hasSubscribers ||
+    (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("gateway.rpc", true))
     ? performance.now()
     : undefined;
 }
@@ -184,6 +273,7 @@ export function createWorkerRpcDiagnostics(
   // unknown method become an unbounded metric dimension.
   return new GatewayRpcDiagnostics(
     workerMethods.has(method) ? method : "unknown",
+    "node",
     timing.receivedAt,
     timing.dequeuedAt - timing.receivedAt,
   );
@@ -200,8 +290,8 @@ export function createGatewayRpcDiagnostics(
   },
 ): GatewayRpcDiagnostics | undefined {
   if (
-    !areDiagnosticsEnabledForProcess() ||
-    !hasInternalDiagnosticEventInterest("gateway.rpc", true)
+    !rpcDiagnostics.hasSubscribers &&
+    (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc", true))
   ) {
     return undefined;
   }
@@ -285,5 +375,44 @@ export function createGatewayRpcDiagnostics(
       page: typeof params?.offset === "number" && params.offset > 0 ? "append" : "first",
     };
   }
-  return new GatewayRpcDiagnostics(label, undefined, undefined, modelsList, sessionsList, cronList);
+  return new GatewayRpcDiagnostics(
+    label,
+    rpcClientKind(listRequest?.clientKind),
+    undefined,
+    undefined,
+    modelsList,
+    sessionsList,
+    cronList,
+    method === "chat.history" && listRequest
+      ? { clientKind: listRequest.clientKind, source: listRequest.source }
+      : undefined,
+  );
+}
+
+function rpcClientKind(
+  id: NonNullable<ModelsListAttribution>["clientKind"] | undefined,
+): NonNullable<Extract<RpcEvent, { phase: "received" }>["clientKind"]> {
+  switch (id) {
+    case "openclaw-control-ui":
+    case "webchat-ui":
+    case "webchat":
+    case "openclaw-browser-copilot":
+      return "control-ui";
+    case "openclaw-macos":
+      return "macos";
+    case "openclaw-ios":
+    case "openclaw-watchos":
+      return "ios";
+    case "openclaw-android":
+      return "android";
+    case "cli":
+    case "openclaw-tui":
+      return "cli";
+    case "node-host":
+    case "openclaw-worker":
+      return "node";
+    default:
+      // Generic gateway clients and scoped plugin calls do not identify a plugin.
+      return "other";
+  }
 }

@@ -17,7 +17,7 @@ afterEach(() => vi.restoreAllMocks());
 it("rebuilds only changed automation bindings and preserves complete unrelated rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
-    const keys = ["agent:main:bound", "agent:main:next", "agent:main:parent", "agent:main:other"];
+    const keys = ["bound", "next", "parent", "other"].map((name) => `agent:main:${name}`);
     for (const [index, sessionKey] of keys.entries()) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey },
@@ -38,14 +38,24 @@ it("rebuilds only changed automation bindings and preserves complete unrelated r
         .map((row) => projection.present(row, { now: 1 }));
     try {
       await projection.ensureMaterialized();
+      for (const key of keys) {
+        projection.describe({ agentId: "main", key });
+      }
       const before = snapshot();
       const databaseReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      let count = projection.materializedCount;
-      invalidateSessionAutomationIndex();
-      await projection.ensureMaterialized();
-      expect(projection.materializedCount - count).toBe(0);
-      expect(snapshot()).toEqual(before);
+      const refresh = async (expectedCount: number, boundKey?: string) => {
+        const count = projection.materializedCount;
+        invalidateSessionAutomationIndex();
+        await projection.ensureMaterialized();
+        expect(projection.materializedCount - count).toBe(expectedCount);
+        expect(snapshot()).toEqual(
+          before.map((row) =>
+            row.key === boundKey ? Object.assign({}, row, { hasAutomation: true }) : row,
+          ),
+        );
+      };
+      await refresh(0);
 
       const binding = {
         id: "binding",
@@ -53,31 +63,15 @@ it("rebuilds only changed automation bindings and preserves complete unrelated r
         sessionTarget: `session:${keys[0]}`,
       } as CronJob;
       jobs.push(binding);
-      invalidateSessionAutomationIndex();
-      await projection.ensureMaterialized();
-      expect(projection.materializedCount - count).toBe(1);
-      const bound = snapshot();
-      expect(bound).toEqual(
-        before.map((row) =>
-          row.key === keys[0] ? Object.assign({}, row, { hasAutomation: true }) : row,
-        ),
-      );
+      await refresh(1, keys[0]);
 
-      count = projection.materializedCount;
       binding.sessionTarget = `session:${keys[1]}`;
-      invalidateSessionAutomationIndex();
-      await projection.ensureMaterialized();
-      expect(projection.materializedCount - count).toBe(2);
-      expect(snapshot()).toEqual(
-        before.map((row) =>
-          row.key === keys[1] ? Object.assign({}, row, { hasAutomation: true }) : row,
-        ),
-      );
+      await refresh(2, keys[1]);
       expect(databaseReads).not.toHaveBeenCalled();
       expect(sharedReads).not.toHaveBeenCalled();
 
       // A real store publication still rebuilds its resident rows.
-      count = projection.materializedCount;
+      const count = projection.materializedCount;
       sessionChanges.emit({ all: true, scope: "stores" });
       await projection.ensureMaterialized();
       expect(projection.materializedCount - count).toBe(keys.length);
@@ -108,6 +102,7 @@ it("keeps automation aliases scoped to their logical agent in a shared store", a
     const projection = await createSessionRowProjection({ cfg });
     try {
       await projection.ensureMaterialized();
+      projection.describe({ agentId: "main", key: "global", storePath });
       const work = projection.describe({ agentId: "work", key: "global", storePath });
       const count = projection.materializedCount;
       binding.enabled = false;

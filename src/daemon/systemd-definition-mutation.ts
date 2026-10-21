@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants, promises as fs, type BigIntStats } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { resolveStateDir } from "../config/paths.js";
@@ -9,6 +10,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { canonicalPathFromExistingAncestor, findExistingAncestor } from "../infra/fs-safe.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
   readServiceFileState,
@@ -96,7 +98,7 @@ async function readStableFile(
         return { sealed: true };
       }
     }
-    return { contents: await handle.readFile() };
+    return { contents: await readFileHandleBounded(handle, Infinity) };
   } finally {
     await handle.close();
   }
@@ -210,7 +212,7 @@ async function inspect(
     }
     return result({ kind: "writable" });
   } catch (error) {
-    if (error instanceof GatewayServiceAuthorityError) {
+    if (error instanceof GatewayServiceAuthorityError || hasCommandProcessCleanupError(error)) {
       throw error;
     }
     return result({ kind: "unknown", reason: "inspection-failed", artifact });
@@ -262,6 +264,9 @@ export async function readSystemdDefinitionMutationCapability(
             ...(options?.requireLoaded ? [{ requireLoaded: true }] : []),
           );
         } catch (error) {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
           const owned =
             isSystemSystemdOwnershipError(error) && error.ownership.status !== "unverifiable";
           if (owned) {
@@ -279,7 +284,12 @@ export async function readSystemdDefinitionMutationCapability(
             requireLoaded: true,
           }).then(
             (inspection) => inspection.capability,
-            () => undefined,
+            (inspectionError: unknown) => {
+              if (hasCommandProcessCleanupError(inspectionError)) {
+                throw inspectionError;
+              }
+              return undefined;
+            },
           );
           return loaded?.kind === "writable" ? loaded : unverified;
         }
@@ -287,7 +297,10 @@ export async function readSystemdDefinitionMutationCapability(
       try {
         return (await inspect(env, environment, { ...readOptions, timeoutMs: remaining() }))
           .capability;
-      } catch {
+      } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
         return { kind: "unknown", reason: "inspection-failed" };
       }
     },
@@ -368,7 +381,6 @@ export async function withSystemdDefinitionMutation<T>(
       }
       try {
         await assertNoSystemGatewayOwnership(env, remainingTimeoutMs());
-        assertGatewayServiceUpdateCurrent();
         const result = await execSystemctlUser(
           env,
           ["daemon-reload"],

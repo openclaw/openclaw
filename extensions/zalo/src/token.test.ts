@@ -1,10 +1,26 @@
-// Zalo tests cover token plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveZaloToken } from "./token.js";
-import type { ZaloConfig } from "./types.js";
+
+function expectUnavailableFile(
+  result: ReturnType<typeof resolveZaloToken>,
+  configPath: string,
+  reason?: string,
+) {
+  const diagnostic = {
+    code: "CREDENTIAL_FILE_UNAVAILABLE",
+    path: configPath,
+    ...(reason ? { reason } : {}),
+  };
+  expect(result).toMatchObject({
+    token: "",
+    source: "configFile",
+    status: "configured_unavailable",
+    credentialDiagnostics: [diagnostic],
+  });
+}
 
 function createSymlinkedFile(targetPath: string, linkPath: string): boolean {
   try {
@@ -22,32 +38,21 @@ describe("resolveZaloToken", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("uses configured defaultAccount token when accountId is omitted", () => {
-    const cfg = {
+    const res = resolveZaloToken({
       defaultAccount: "work",
       botToken: "top-level-token",
-      accounts: {
-        work: {
-          botToken: "work-token",
-        },
-      },
-    } as ZaloConfig;
-    const res = resolveZaloToken(cfg);
-    expect(res.token).toBe("work-token");
-    expect(res.source).toBe("config");
+      accounts: { work: { botToken: "work-token" } },
+    });
+    expect(res).toMatchObject({ token: "work-token", source: "config" });
   });
 
   it("does not inherit top-level token when account token is explicitly blank", () => {
-    const cfg = {
-      botToken: "top-level-token",
-      accounts: {
-        work: {
-          botToken: "",
-        },
-      },
-    } as ZaloConfig;
-    const res = resolveZaloToken(cfg, "work");
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
+    expect(
+      resolveZaloToken(
+        { botToken: "top-level-token", accounts: { work: { botToken: "" } } },
+        "work",
+      ),
+    ).toMatchObject({ token: "", source: "none" });
   });
 
   it("does not fall back from an unavailable top-level token file to the environment", () => {
@@ -56,18 +61,7 @@ describe("resolveZaloToken", () => {
 
     const result = resolveZaloToken({ tokenFile });
 
-    expect(result).toMatchObject({
-      token: "",
-      source: "configFile",
-      status: "configured_unavailable",
-      credentialDiagnostics: [
-        {
-          code: "CREDENTIAL_FILE_UNAVAILABLE",
-          path: "channels.zalo.tokenFile",
-          reason: "not-found",
-        },
-      ],
-    });
+    expectUnavailableFile(result, "channels.zalo.tokenFile", "not-found");
     expect(JSON.stringify(result)).not.toContain(tokenFile);
   });
 
@@ -80,14 +74,7 @@ describe("resolveZaloToken", () => {
       "work",
     );
 
-    expect(result).toMatchObject({
-      token: "",
-      source: "configFile",
-      status: "configured_unavailable",
-      credentialDiagnostics: [
-        { code: "CREDENTIAL_FILE_UNAVAILABLE", path: "channels.zalo.accounts.work.tokenFile" },
-      ],
-    });
+    expectUnavailableFile(result, "channels.zalo.accounts.work.tokenFile");
   });
 
   it("rejects symlinked token files", ({ skip }) => {
@@ -99,22 +86,8 @@ describe("resolveZaloToken", () => {
         skip("file symlinks are unavailable on this host");
       }
 
-      const cfg = {
-        tokenFile: tokenLink,
-      } as ZaloConfig;
-      const result = resolveZaloToken(cfg);
-      expect(result).toMatchObject({
-        token: "",
-        source: "configFile",
-        status: "configured_unavailable",
-        credentialDiagnostics: [
-          {
-            code: "CREDENTIAL_FILE_UNAVAILABLE",
-            path: "channels.zalo.tokenFile",
-            reason: "symlink",
-          },
-        ],
-      });
+      const result = resolveZaloToken({ tokenFile: tokenLink });
+      expectUnavailableFile(result, "channels.zalo.tokenFile", "symlink");
       expect(JSON.stringify(result)).not.toContain(tokenLink);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

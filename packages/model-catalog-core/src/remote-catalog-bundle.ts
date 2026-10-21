@@ -1,11 +1,14 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import {
   MODEL_CATALOG_APIS,
+  MODEL_CATALOG_INPUTS,
   MODEL_CATALOG_MAX_CONTEXT_WINDOWS,
+  MODEL_CATALOG_STATUSES,
   MODEL_CATALOG_THINKING_LEVELS,
 } from "./model-catalog-types.js";
 import type { ModelCatalogModel, ModelCatalogProvider } from "./model-catalog-types.js";
+import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities.js";
 
 export const REMOTE_CATALOG_MAX_FUTURE_SKEW_MS = 24 * 60 * 60_000;
 
@@ -45,7 +48,7 @@ const contextWindowOptionSchema = z
   })
   .strict();
 
-const inputModalitySchema = z.enum(["text", "image", "video", "document"]);
+const inputModalitySchema = z.enum(MODEL_CATALOG_INPUTS);
 const modelFieldsSchema = z.object({
   id: z.string().trim().min(1),
   name: z.string().optional(),
@@ -61,6 +64,7 @@ const modelFieldsSchema = z.object({
     .optional(),
   contextWindowDefault: z.string().trim().min(1).optional(),
   contextTokens: z.number().int().positive().optional(),
+  parameterCount: z.number().int().positive().optional(),
   maxTokens: z.number().finite().positive().optional(),
   thinkingLevelMap: z
     .partialRecord(z.enum(MODEL_CATALOG_THINKING_LEVELS), z.string().nullable())
@@ -68,7 +72,7 @@ const modelFieldsSchema = z.object({
   cost: costSchema.optional(),
   compat: z.record(z.string(), z.unknown()).optional(),
   mediaInput: z.record(z.string(), z.unknown()).optional(),
-  status: z.enum(["available", "preview", "deprecated", "disabled"]).optional(),
+  status: z.enum(MODEL_CATALOG_STATUSES).optional(),
   statusReason: z.string().optional(),
   replaces: z.array(z.string()).optional(),
   replacedBy: z.string().optional(),
@@ -107,11 +111,7 @@ function parseCatalogRows<T extends { id: string }>(
     const row = `${path}.${index}${isRecord(raw) && typeof raw.id === "string" ? ` (${raw.id})` : ""}`;
     let value = raw;
     let droppedInput = false;
-    if (
-      isRecord(raw) &&
-      Array.isArray(raw.input) &&
-      raw.input.every((v) => typeof v === "string")
-    ) {
+    if (isRecord(raw) && isStringArray(raw.input)) {
       const input = raw.input.filter((v) =>
         inputModalitySchema.options.some((known) => known === v),
       );
@@ -267,45 +267,61 @@ const bundleV2FieldsSchema = remoteModelCatalogBundleSchema
     providerPricing: z.record(standalonePricingKeySchema, sourcedPricingV2Schema).optional(),
   });
 
-export const remoteModelCatalogBundleV2Schema = bundleV2FieldsSchema.superRefine(
-  (bundle, context) => {
-    const providers = new Map<string, Set<string>>();
-    for (const [index, model] of bundle.models.entries()) {
-      if (!Object.hasOwn(bundle.providers, model.provider)) {
+function validateBundleModelRefs(
+  bundle: Pick<z.infer<typeof bundleV2FieldsSchema>, "providers" | "models">,
+  context: z.RefinementCtx,
+) {
+  const providers = new Map<string, Set<string>>();
+  for (const [index, model] of bundle.models.entries()) {
+    if (!Object.hasOwn(bundle.providers, model.provider)) {
+      context.addIssue({
+        code: "custom",
+        message: `undeclared model provider: ${model.provider}`,
+        path: ["models", index, "provider"],
+      });
+    }
+    const ids = providers.get(model.provider) ?? new Set<string>();
+    if (ids.has(model.id)) {
+      context.addIssue({
+        code: "custom",
+        message: `duplicate provider/model: ${model.provider}/${model.id}`,
+        path: ["models", index, "id"],
+      });
+    }
+    ids.add(model.id);
+    providers.set(model.provider, ids);
+  }
+  for (const [provider, entry] of Object.entries(bundle.providers)) {
+    for (const [index, id] of (entry.recommendedModels ?? []).entries()) {
+      if (!providers.get(provider)?.has(id)) {
         context.addIssue({
           code: "custom",
-          message: `undeclared model provider: ${model.provider}`,
-          path: ["models", index, "provider"],
+          message: `recommended model must reference a model of provider ${provider}: ${id}`,
+          path: ["providers", provider, "recommendedModels", index],
         });
       }
-      const ids = providers.get(model.provider) ?? new Set<string>();
-      if (ids.has(model.id)) {
-        context.addIssue({
-          code: "custom",
-          message: `duplicate provider/model: ${model.provider}/${model.id}`,
-          path: ["models", index, "id"],
-        });
-      }
-      ids.add(model.id);
-      providers.set(model.provider, ids);
     }
-    for (const [provider, entry] of Object.entries(bundle.providers)) {
-      for (const [index, id] of (entry.recommendedModels ?? []).entries()) {
-        if (!providers.get(provider)?.has(id)) {
-          context.addIssue({
-            code: "custom",
-            message: `recommended model must reference a model of provider ${provider}: ${id}`,
-            path: ["providers", provider, "recommendedModels", index],
-          });
-        }
-      }
-    }
-  },
-);
+  }
+}
+
+export const remoteModelCatalogBundleV2Schema =
+  bundleV2FieldsSchema.superRefine(validateBundleModelRefs);
+
+const modelV3Schema = modelV2Schema.safeExtend({
+  inference: ModelInferenceCapabilitiesSchema.optional(),
+});
+const bundleV3FieldsSchema = bundleV2FieldsSchema.extend({
+  schemaVersion: z.literal(3),
+  models: z.array(modelV3Schema).min(1),
+});
+
+/** Native task metadata is negotiated separately from the strict released v2 wire. */
+export const remoteModelCatalogBundleV3Schema =
+  bundleV3FieldsSchema.superRefine(validateBundleModelRefs);
 
 export type RemoteModelCatalogModelV2 = Omit<
   ModelCatalogModel,
-  "cost" | "baseUrl" | "headers" | "upstreamModel"
+  "cost" | "baseUrl" | "headers" | "upstreamModel" | "inference"
 > & {
   provider: string;
   pricing: RemoteModelCatalogPricingV2;
@@ -315,6 +331,19 @@ export type RemoteModelCatalogBundleV2 = Omit<
   z.infer<typeof remoteModelCatalogBundleV2Schema>,
   "models"
 > & { models: RemoteModelCatalogModelV2[] };
+
+export type RemoteModelCatalogBundleV3 = Omit<
+  RemoteModelCatalogBundleV2,
+  "schemaVersion" | "models"
+> & {
+  schemaVersion: 3;
+  models: Array<RemoteModelCatalogModelV2 & Pick<ModelCatalogModel, "inference">>;
+};
+
+export function parseRemoteModelCatalogBundleV3(value: unknown): RemoteModelCatalogBundleV3 {
+  // SAFETY: the schema validates every field; shared catalog types narrow compat metadata.
+  return remoteModelCatalogBundleV3Schema.parse(value) as RemoteModelCatalogBundleV3;
+}
 
 export function parseRemoteModelCatalogBundleV2(value: unknown): RemoteModelCatalogBundleV2 {
   // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
@@ -346,9 +375,9 @@ function stripRemoteTransportOverrides(value: unknown): unknown {
 
 /** Removes every transport endpoint/header override before remote data reaches persistence. */
 export function sanitizeRemoteModelCatalogBundle<
-  T extends RemoteModelCatalogBundle | RemoteModelCatalogBundleV2,
+  T extends RemoteModelCatalogBundle | RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
 >(bundle: T): T {
-  // v2 provider dictionary keys are identities, even when named "headers" or "baseUrl".
+  // Provider dictionary keys are identities, even when named "headers" or "baseUrl".
   return (
     bundle.schemaVersion === 1
       ? stripRemoteTransportOverrides(bundle)
@@ -383,6 +412,27 @@ export function validateAndSanitizeRemoteModelCatalogBundle(
   return sanitizeRemoteModelCatalogBundle({ ...bundle, providers });
 }
 
+function pruneRemoteCatalogRecommendations(
+  providers: RemoteModelCatalogBundleV2["providers"],
+  models: readonly Pick<RemoteModelCatalogModelV2, "provider" | "id">[],
+) {
+  return Object.fromEntries(
+    Object.entries(providers).map(([id, provider]) => [
+      id,
+      {
+        ...provider,
+        ...(provider.recommendedModels
+          ? {
+              recommendedModels: provider.recommendedModels.filter((modelId) =>
+                models.some((model) => model.provider === id && model.id === modelId),
+              ),
+            }
+          : {}),
+      },
+    ]),
+  );
+}
+
 export function validateAndSanitizeRemoteModelCatalogBundleV2(
   value: unknown,
   warn: CatalogWarning = console.warn,
@@ -402,20 +452,28 @@ export function validateAndSanitizeRemoteModelCatalogBundleV2(
   if (models.length === 0) {
     throw new Error("remote model catalog contains no valid models");
   }
-  const providers = Object.fromEntries(
-    Object.entries(bundle.providers).map(([id, provider]) => [
-      id,
-      {
-        ...provider,
-        ...(provider.recommendedModels
-          ? {
-              recommendedModels: provider.recommendedModels.filter((modelId) =>
-                models.some((model) => model.provider === id && model.id === modelId),
-              ),
-            }
-          : {}),
-      },
-    ]),
+  const providers = pruneRemoteCatalogRecommendations(bundle.providers, models);
+  return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
+}
+
+export function validateAndSanitizeRemoteModelCatalogBundleV3(
+  value: unknown,
+  warn: CatalogWarning = console.warn,
+): RemoteModelCatalogBundleV3 {
+  const bundle = bundleV3FieldsSchema.extend({ models: z.array(z.unknown()) }).parse(value);
+  const models = parseCatalogRows(
+    bundle.models,
+    modelV3Schema.refine((model) => Object.hasOwn(bundle.providers, model.provider)),
+    "models",
+    warn,
+    (model) => JSON.stringify([model.provider, model.id]),
+  );
+  if (models.length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
+  const providers = pruneRemoteCatalogRecommendations(
+    bundle.providers,
+    models.filter((model) => model.inference?.chat !== false),
   );
   return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
 }

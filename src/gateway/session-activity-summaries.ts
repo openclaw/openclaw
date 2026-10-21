@@ -15,9 +15,7 @@ import {
   readSessionActivitySummary,
   type SessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
-import type { SessionEntryPatchCommitted } from "../config/sessions/session-entry-patch.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,13 +31,19 @@ import {
   isIncognitoSessionKey,
   isSubagentSessionKey,
 } from "../routing/session-key.js";
-import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import {
   onSessionIdentityMutation,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import {
+  beginActivitySummaryCompletion,
+  type PendingSessionActivitySummaryCompletion,
+  type SessionActivitySummaryCompletion,
+} from "./session-activity-summary-completion.js";
 import {
   projectActivitySummaryEntry,
   subscribeActivitySummaryEntryReceipts,
@@ -47,6 +51,7 @@ import {
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import {
   activitySummaryScope,
+  createActivitySummaryStorePaths,
   prepareSessionActivitySummaryView,
   resolveActivitySummaryEventTarget,
   sessionActivitySummaryOwnerIsCurrent,
@@ -96,6 +101,7 @@ type Tracked = ActivitySummaryTarget & {
   retryAt: number;
   windowStart: number;
   calls: number;
+  completion?: PendingSessionActivitySummaryCompletion;
 };
 class ActivitySummaryCancelledError extends Error {
   constructor() {
@@ -104,10 +110,11 @@ class ActivitySummaryCancelledError extends Error {
 }
 
 export type SessionActivitySummaryService = {
-  ensure: (
-    target: ActivitySummaryTarget,
+  beginCompletion(
+    target: { key: string; agentId?: string; storePath: string },
     entry: SessionEntry | undefined,
-  ) => Promise<ActivitySummaryView>;
+  ): SessionActivitySummaryCompletion | undefined;
+  ensure(target: ActivitySummaryTarget, entry?: SessionEntry): Promise<ActivitySummaryView>;
   handleEvent: (event: SessionObserverEvent) => void;
   handleTranscript: (event: InternalSessionTranscriptUpdate) => void;
   handleLifecycle: (event: SessionLifecycleEvent) => void;
@@ -119,8 +126,6 @@ export function createSessionActivitySummaries(deps: {
   getConfig: () => OpenClawConfig;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
   onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
-  prepareModel?: typeof defaultPrepareModel;
-  completeModel?: typeof defaultCompleteModel;
 }): SessionActivitySummaryService {
   const states = new Map<string, Tracked>();
   const queue: Tracked[] = [];
@@ -133,18 +138,17 @@ export function createSessionActivitySummaries(deps: {
   const now = () => deps.scheduler.now();
   const modelRef = (target: ActivitySummaryTarget) =>
     resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId: target.agentId });
+  const storePathFor = createActivitySummaryStorePaths(deps.getConfig);
   const scope = (target: ActivitySummaryTarget) => ({
     agentId: target.agentId,
     sessionKey: target.key,
-    storePath: resolveSessionStorePathCore(deps.getConfig().session?.store, {
-      agentId: target.agentId,
-    }),
+    storePath: storePathFor(target.agentId),
   });
   const current = (state: Tracked) =>
     !disposed &&
     states.get(activitySummaryScope(state)) === state &&
     sessionActivitySummaryOwnerIsCurrent(state, owner) &&
-    scope(state).storePath === state.storePath;
+    storePathFor(state.agentId) === state.storePath;
   const publish = (state: Tracked, value: ActivitySummaryView["state"], force = false) => {
     if (!current(state)) {
       return;
@@ -167,6 +171,7 @@ export function createSessionActivitySummaries(deps: {
   };
   const drop = (state: Tracked) => {
     state.controller?.abort(new ActivitySummaryCancelledError());
+    state.completion?.release();
     states.delete(activitySummaryScope(state));
     const index = queue.indexOf(state);
     if (index >= 0) {
@@ -250,7 +255,7 @@ export function createSessionActivitySummaries(deps: {
     if (
       !current(state) ||
       // Deletion and reset retain exact-row snapshots across awaited preparation.
-      isSessionLifecycleMutationActive(state.storePath, [state.key, state.sessionId]) ||
+      isSessionMutationActive(state.storePath, [state.key, state.sessionId]) ||
       modelRef(state) !== expectedModel ||
       state.controller?.signal.aborted
     ) {
@@ -296,7 +301,9 @@ export function createSessionActivitySummaries(deps: {
       state.immediate ? 0 : state.lastStartedAt + REFRESH_MS,
       state.calls >= MAX_CALLS_PER_HOUR ? state.windowStart + HOUR_MS : 0,
     );
-    publish(state, "updating");
+    if (!readSessionActivitySummary(state.entry) || state.readyAt > now()) {
+      publish(state, "updating");
+    }
     // The tracked-session bound also bounds the queue, with at most one entry per session.
     if (!queue.includes(state)) {
       queue.push(state);
@@ -316,18 +323,16 @@ export function createSessionActivitySummaries(deps: {
     const ref = modelRef(state);
     const priorBackoff = ref ? modelBackoffs.get(ref) : undefined;
     let partial = false;
-    let ownedWork: Promise<string> | undefined;
+    const ownedWork = new AsyncWorkScope();
     try {
       if (!ref) {
         publish(state, "unavailable");
         return;
       }
       assertCurrentOwner(state, ref);
-      const entry = state.entry;
-      const transcriptScope = { ...scope(state), sessionId: state.sessionId };
       const source = await readActivitySummarySource({
-        scope: transcriptScope,
-        previous: readSessionActivitySummary(entry),
+        scope: { ...scope(state), sessionId: state.sessionId },
+        previous: readSessionActivitySummary(state.entry),
         assertCurrent: () => assertCurrentOwner(state, ref),
       });
       if (!source) {
@@ -348,6 +353,8 @@ export function createSessionActivitySummaries(deps: {
         publish(state, "current");
         return;
       }
+      // An immediate ensure of a current recap has no visible transition to publish.
+      publish(state, "updating");
       let text = previous?.text ?? "";
       if (text.endsWith(OMISSION_NOTICE)) {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
@@ -370,14 +377,14 @@ export function createSessionActivitySummaries(deps: {
             assertCurrentEntry(state, state.entry);
           };
           const execute = async () => {
-            const prepared = await (deps.prepareModel ?? defaultPrepareModel)({
+            const prepared = await defaultPrepareModel({
               cfg: deps.getConfig(),
               agentId: state.agentId,
               modelRef: ref,
               useUtilityModel: true,
             });
             assertRequestCurrent();
-            const result = await (deps.completeModel ?? defaultCompleteModel)({
+            const result = await defaultCompleteModel({
               ...prepared,
               purpose: "session-activity-summary",
               config: deps.getConfig(),
@@ -395,11 +402,12 @@ export function createSessionActivitySummaries(deps: {
             });
             return result.text;
           };
-          ownedWork = execute();
           text = truncateUtf16Safe(
             (
-              await racePromiseWithAbortSignal(ownedWork, controller.signal, (signal) =>
-                toErrorObject(signal.reason, "Activity recap cancelled"),
+              await racePromiseWithAbortSignal(
+                ownedWork.track(execute),
+                controller.signal,
+                (signal) => toErrorObject(signal.reason, "Activity recap cancelled"),
               )
             )
               .replace(/\s+/gu, " ")
@@ -413,7 +421,6 @@ export function createSessionActivitySummaries(deps: {
           clearTimeout(timer);
         }
       }
-      assertCurrentOwner(state, ref);
       if (omitted && text && !text.endsWith(OMISSION_NOTICE)) {
         text = `${truncateUtf16Safe(text, 449 - OMISSION_NOTICE.length)} ${OMISSION_NOTICE}`;
       }
@@ -431,46 +438,30 @@ export function createSessionActivitySummaries(deps: {
         totalMessages: snapshot.totalMessages,
         omittedContent: omitted,
       };
-      let committedTranscript: SessionEntryPatchCommitted["transcriptPredicate"];
-      const committed = await applySessionEntryOperation(
-        scope(state),
-        { kind: "activity-summary", summary, sessionKey: state.key },
-        {
-          preserveActivity: true,
-          onCommitted: (_entry, transcriptPredicate) => {
-            committedTranscript = transcriptPredicate;
-          },
-          workerGuard: {
-            assertCurrent: () => assertCurrentOwner(state, ref),
-            shouldCommitIf: {
-              kind: "transcript",
-              sessionId: state.sessionId,
-              generation: summary.generation,
-              leafEntryId: summary.leafEntryId,
+      const committed =
+        (await state.completion?.offer(summary)) ??
+        (await applySessionEntryOperation(
+          scope(state),
+          { kind: "activity-summary", summary, sessionKey: state.key },
+          {
+            preserveActivity: true,
+            workerGuard: {
+              assertCurrent: () => assertCurrentOwner(state, ref),
             },
           },
-        },
-      );
+        ));
       if (!committed || !current(state)) {
         state.dirty = true;
         return;
       }
-      if (!committedTranscript) {
-        throw new ActivitySummaryCancelledError();
-      }
       state.entry = { ...state.entry, activitySummary: committed.activitySummary };
-      assertCurrentOwner(state, ref);
-      if (committedTranscript?.sessionId !== state.sessionId) {
-        throw new Error("Activity recap patch omitted its transcript predicate receipt");
-      }
-      // This source-free field patch cannot change the transcript after its transaction guard.
-      const latest = committedTranscript.watermark;
       state.failures = 0;
       if (modelBackoffs.get(ref) === priorBackoff) {
         modelBackoffs.delete(ref);
       }
       partial = summary.coveredMessages < summary.totalMessages;
-      state.dirty ||= latest.generation !== summary.generation || latest.maxSeq !== summary.maxSeq;
+      // Transcript events mark this job dirty; a concurrent rewrite can leave a stale
+      // optional recap until refresh. Readers compare its saved source watermark.
       publish(state, partial || state.dirty ? "updating" : "current", true);
     } catch (error) {
       if (current(state)) {
@@ -520,8 +511,12 @@ export function createSessionActivitySummaries(deps: {
         });
       }
     } finally {
-      // Retain the slot until provider settlement, including after timeout or cancellation.
-      await ownedWork?.catch(() => undefined);
+      // Logical results can precede tracked cleanup. Retain this recap's slot
+      // through descendant settlement without draining its caller's scope.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [ownedWork],
+        () => ownedWork.drain(),
+      );
       state.controller = undefined;
       state.inFlight = false;
       if (current(state) && (state.retryPending || (!state.retryAt && (partial || state.dirty)))) {
@@ -567,7 +562,8 @@ export function createSessionActivitySummaries(deps: {
       if (!current(state)) {
         continue;
       }
-      const work = run(state)
+      // The per-recap scope must not detach cleanup from inherited connection work.
+      const work = trackAsyncWork(() => run(state))
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
         })
@@ -595,16 +591,19 @@ export function createSessionActivitySummaries(deps: {
       return { state: "unavailable" as const };
     }
     const state = admit(target, entry);
-    if (state) {
-      schedule(state, true);
-    }
-    return prepareSessionActivitySummaryView({
+    const readView = await prepareSessionActivitySummaryView({
       ...target,
       cfg: deps.getConfig(),
       entry: state?.entry ?? entry,
       storePath: scope(target).storePath,
       admitted: state !== undefined,
     });
+    if (state && readView().state !== "current") {
+      schedule(state, true);
+    }
+    const view = readView();
+    // A stale recap is admitted work even before the queued source read starts.
+    return state && view.state === "stale" ? { ...view, state: "updating" as const } : view;
   };
   const trackAdmission = <T>(work: Promise<T>): Promise<T> => {
     admissions.add(work);
@@ -646,6 +645,11 @@ export function createSessionActivitySummaries(deps: {
     });
   };
   return {
+    beginCompletion(requested, entry) {
+      const target = eventTarget(requested.key, requested.agentId);
+      const state = target && admit(target, entry, requested.storePath);
+      return state ? beginActivitySummaryCompletion(state) : undefined;
+    },
     ensure,
     handleTranscript(event) {
       const target = eventTarget(
@@ -656,12 +660,11 @@ export function createSessionActivitySummaries(deps: {
         return;
       }
       const sessionId = event.target?.sessionId ?? event.sessionId;
-      const lifecycleRevision = event.lifecycleRevision;
       requestInBackground(
         target,
         (state) =>
           (!sessionId || sessionId === state.sessionId) &&
-          (!lifecycleRevision || lifecycleRevision === state.lifecycleRevision),
+          (!event.lifecycleRevision || event.lifecycleRevision === state.lifecycleRevision),
       );
     },
     handleEvent(event) {
@@ -678,6 +681,7 @@ export function createSessionActivitySummaries(deps: {
         event.agentId ?? runContext?.agentId,
       );
       if (target) {
+        states.get(activitySummaryScope(target))?.completion?.markTerminal();
         requestInBackground(target);
       }
     },

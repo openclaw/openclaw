@@ -24,8 +24,32 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "generateGatewayToken",
   "allowExec",
   "deep",
+  "fullIntegrityCheck",
   "lint",
   "postUpgrade",
+  "clientCredentials",
+  "sessionSqlite",
+  "sessionSqliteStore",
+  "sessionSqliteAgent",
+  "sessionSqliteAllAgents",
+  "githubIssue",
+  "severityMin",
+  "all",
+  "skip",
+  "only",
+] as const;
+
+const CLIENT_CREDENTIALS_CONFLICTING_OPTION_NAMES = [
+  "workspaceSuggestions",
+  "yes",
+  "force",
+  "generateGatewayToken",
+  "allowExec",
+  "deep",
+  "fullIntegrityCheck",
+  "lint",
+  "postUpgrade",
+  "stateSqlite",
   "sessionSqlite",
   "sessionSqliteStore",
   "sessionSqliteAgent",
@@ -64,6 +88,11 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
+    .option(
+      "--client-credentials",
+      "Prepare only local client credentials (requires --repair --non-interactive)",
+      false,
+    )
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option(
       "--allow-exec",
@@ -71,6 +100,7 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
     .option("--lint", "Run read-only health checks and report findings", false)
     .option(
       "--post-upgrade",
@@ -121,6 +151,24 @@ export function registerMaintenanceCommands(
         );
       }
       if (
+        opts.clientCredentials === true &&
+        (!(opts.repair === true || opts.fix === true) || opts.nonInteractive !== true)
+      ) {
+        return exitDoctorError(
+          "doctor --client-credentials requires --repair (or --fix) and --non-interactive.",
+          opts.json === true,
+        );
+      }
+      if (
+        opts.clientCredentials === true &&
+        hasExplicitOptions(command, CLIENT_CREDENTIALS_CONFLICTING_OPTION_NAMES)
+      ) {
+        return exitDoctorError(
+          "doctor --client-credentials can only be combined with --repair (or --fix), --non-interactive, and --json.",
+          opts.json === true,
+        );
+      }
+      if (
         typeof opts.sessionSqlite !== "string" &&
         (typeof opts.sessionSqliteAgent === "string" ||
           opts.githubIssue === true ||
@@ -135,6 +183,7 @@ export function registerMaintenanceCommands(
       const jsonImpliesLint =
         opts.json === true &&
         opts.lint !== true &&
+        opts.clientCredentials !== true &&
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
         typeof opts.sessionSqlite !== "string";
@@ -198,6 +247,15 @@ export function registerMaintenanceCommands(
         );
       }
       try {
+        if (opts.clientCredentials === true) {
+          const { prepareStartupClientCredentials } =
+            await import("../../commands/startup-client-credentials.js");
+          await prepareStartupClientCredentials({ env: process.env, runtime: defaultRuntime });
+          if (opts.json === true) {
+            defaultRuntime.writeJson({ ok: true });
+          }
+          exitCliAfterOutput(defaultRuntime, 0);
+        }
         if (lintMode) {
           const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
           const exitCode = await runDoctorLintCli(defaultRuntime, {
@@ -224,6 +282,7 @@ export function registerMaintenanceCommands(
               generateGatewayToken: Boolean(opts.generateGatewayToken),
               allowExec: Boolean(opts.allowExec),
               deep: Boolean(opts.deep),
+              ...(opts.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
               postUpgrade: Boolean(opts.postUpgrade),
               ...(stateSqlite ? { stateSqlite } : {}),
               ...(sessionSqlite ? { sessionSqlite } : {}),

@@ -627,9 +627,7 @@ describe("CodexNativeSubagentMonitor", () => {
       runtime.deliverAgentHarnessCompletion
         .mockResolvedValueOnce({ delivered: false, path: "direct", error: "pending" })
         .mockResolvedValueOnce({ delivered: true, path: "direct" });
-      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        completionDeliveryRetryDelaysMs: [10],
-      });
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       await registerDetachedChild(client, monitor);
       await client.notify(nativeCompletionNotification());
 
@@ -638,7 +636,7 @@ describe("CodexNativeSubagentMonitor", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
       await parent.unregister();
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);

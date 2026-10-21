@@ -13,6 +13,7 @@ import {
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { formatErrorMessage } from "./errors.js";
 import { heartbeatLog } from "./heartbeat-log.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
@@ -72,6 +73,8 @@ type WakeAttempt = {
   wake: PendingWake;
   terminalPollDisposition: boolean;
   retryIntervalMs?: number | null;
+  /** An earlier attempt of this wake already started work, so a refusal now must retry. */
+  startedBefore: boolean;
 };
 type RequestOptions = Omit<HeartbeatWakeRequest, "retainedWork"> & { coalesceMs?: number };
 
@@ -84,7 +87,6 @@ const GLOBAL_TARGET = "::";
 const RETRY_REASONS = new Set([
   "active-run",
   "requests-in-flight",
-  "cron-in-progress",
   "preempted",
   "channel-not-ready",
 ]);
@@ -416,7 +418,12 @@ function createSessionEventWakeRuntime() {
           }
           return;
         }
-        const attempt: WakeAttempt = { signal, wake, terminalPollDisposition: false };
+        const attempt: WakeAttempt = {
+          signal,
+          wake,
+          terminalPollDisposition: false,
+          startedBefore: wake.workStarted,
+        };
         let result: HeartbeatRunResult;
         try {
           result = await runWithGatewayDetachedWorkAdmission(() => {
@@ -449,12 +456,12 @@ function createSessionEventWakeRuntime() {
             }
             return attempts.run(attempt, () => currentHandler(request, signal));
           }, "heartbeat:wake");
-        } catch {
-          if (wake.retired) {
+        } catch (error) {
+          if (!wake.retired && (signal.aborted || getGatewayRestartDrainSignal().aborted)) {
+            retry(wake);
             continue;
           }
-          retry(wake);
-          continue;
+          result = { status: "failed", reason: formatErrorMessage(error) };
         }
         if (wake.retired) {
           continue;
@@ -681,11 +688,7 @@ function createSessionEventWakeRuntime() {
 
   function isTerminalPollAttempt(attempt: WakeAttempt | undefined): boolean {
     return Boolean(
-      attempt &&
-      !attempt.signal.aborted &&
-      attempt.terminalPollDisposition &&
-      attempt.wake.pureNativePoll &&
-      !attempt.wake.workStarted,
+      attempt?.terminalPollDisposition && !attempt.signal.aborted && attempt.wake.pureNativePoll,
     );
   }
 
@@ -700,22 +703,20 @@ function createSessionEventWakeRuntime() {
         ambientRetryIntervalMs === undefined || attempt.retryIntervalMs === null
           ? null
           : Math.min(attempt.retryIntervalMs ?? Infinity, ambientRetryIntervalMs);
-      attempt.terminalPollDisposition = false;
     }
   }
 
-  function deferSessionEventWakePoll(): boolean {
+  // A turn refused by mailbox admission had no effects, even after this attempt's preparation.
+  function retireRefusedSessionEventWakePoll(): void {
     const attempt = attempts.getStore();
     if (
-      !attempt ||
-      attempt.signal.aborted ||
-      !attempt.wake.pureNativePoll ||
-      attempt.wake.workStarted
+      attempt &&
+      !attempt.signal.aborted &&
+      attempt.wake.pureNativePoll &&
+      !attempt.startedBefore
     ) {
-      return false;
+      attempt.terminalPollDisposition = true;
     }
-    attempt.terminalPollDisposition = true;
-    return true;
   }
 
   return {
@@ -724,7 +725,7 @@ function createSessionEventWakeRuntime() {
     requestSessionEventWakeAndWait,
     getSessionEventWakeAbortSignal: () => attempts.getStore()?.signal,
     markSessionEventWakeWorkStarted,
-    deferSessionEventWakePoll,
+    retireRefusedSessionEventWakePoll,
     isSessionEventWakePollDeferred: () => isTerminalPollAttempt(attempts.getStore()),
     areSessionEventWakesEnabled: () => enabled,
     setSessionEventWakesEnabled: (value: boolean) => {
@@ -740,7 +741,7 @@ export const {
   requestSessionEventWakeAndWait,
   getSessionEventWakeAbortSignal,
   markSessionEventWakeWorkStarted,
-  deferSessionEventWakePoll,
+  retireRefusedSessionEventWakePoll,
   isSessionEventWakePollDeferred,
   areSessionEventWakesEnabled,
   setSessionEventWakesEnabled,

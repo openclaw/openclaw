@@ -2,7 +2,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   createMattermostPost,
   deleteMattermostPost,
@@ -34,10 +34,7 @@ function normalizeMattermostDraftText(text: string, maxChars: number): string {
   if (!trimmed) {
     return "";
   }
-  if (trimmed.length <= maxChars) {
-    return trimmed;
-  }
-  return `${sliceUtf16Safe(trimmed, 0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+  return truncateWithMarker(trimmed, maxChars, { marker: "...", reserve: 3, trimEnd: true });
 }
 
 function consumeMattermostPublishedChunk(params: {
@@ -62,7 +59,6 @@ export function createMattermostDraftStream(params: {
   rootId?: string;
   maxChars?: number;
   throttleMs?: number;
-  renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
@@ -109,8 +105,7 @@ export function createMattermostDraftStream(params: {
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const target = currentGeneration;
-    const rendered = params.renderText?.(text) ?? text;
-    const normalized = normalizeMattermostDraftText(rendered, maxChars);
+    const normalized = normalizeMattermostDraftText(text, maxChars);
     if (!normalized) {
       return false;
     }
@@ -207,8 +202,7 @@ export function createMattermostDraftStream(params: {
           return;
         }
         const sourceText = pendingText.trim() ? pendingText : sealed.latestSourceText;
-        const rendered = params.renderText?.(sourceText) ?? sourceText;
-        const finalizedText = rendered.trim();
+        const finalizedText = sourceText.trim();
         const chunks =
           params.chunkText?.(finalizedText) ??
           chunkMarkdownTextWithMode(finalizedText, maxChars, "length");

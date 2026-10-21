@@ -7,8 +7,9 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
+import { PluginDetailLoadingHero } from "./detail-loading-hero.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -21,6 +22,9 @@ import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-mess
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 export type PluginCatalogDetailProps = {
+  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
+  registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
@@ -41,17 +45,18 @@ export type PluginCatalogDetailProps = {
 };
 
 export function renderPluginReadme(readme: string | undefined): JSX.Element {
-  const readmeHtml = readme
-    ? toSanitizedMarkdownHtml(readme, { mode: "document" })
-        .replaceAll("<h1", "<h2")
-        .replaceAll("</h1>", "</h2>")
-    : null;
   return readme ? (
     <article
       class="plugin-catalog-detail__readme sidebar-markdown"
       onClick={handleMarkdownCodeBlockClick}
     >
-      <SanitizedHtml html={readmeHtml ?? ""} class="lit-content" style={{ display: "contents" }} />
+      <SanitizedHtml
+        html={toSanitizedMarkdownHtml(readme, { mode: "document" })
+          .replaceAll("<h1", "<h2")
+          .replaceAll("</h1>", "</h2>")}
+        class="lit-content"
+        style={{ display: "contents" }}
+      />
     </article>
   ) : (
     <p class="plugin-catalog-detail__empty">{t("pluginsPage.detailNoReadme")}</p>
@@ -62,6 +67,7 @@ function CatalogDetailContent(props: {
   value: PluginDiscoveryDetailResult;
   state: PluginCatalogDetailProps;
 }) {
+  let installButton: HTMLButtonElement | undefined;
   const plugin = () => props.value.plugin;
   const detail = () => props.value.detail;
   const installing = () =>
@@ -72,6 +78,7 @@ function CatalogDetailContent(props: {
     detail().author?.imageUrl ? props.state.iconUrls[detail().author!.imageUrl!] : undefined;
   return (
     <PluginDetailShell
+      registerRemovalHeading={props.state.registerRemovalHeading}
       id="plugin-catalog-detail"
       name={plugin().catalog.name}
       summary={plugin().catalog.summary}
@@ -80,6 +87,7 @@ function CatalogDetailContent(props: {
       onBack={props.state.onBack}
       icon={
         <PluginArtTile
+          registerIcon={props.state.registerIcon}
           slug={plugin().id}
           name={plugin().catalog.name}
           iconUrl={packageIcon()}
@@ -94,8 +102,13 @@ function CatalogDetailContent(props: {
       titleAction={
         <>
           {plugin().local.action === "install" || installing() ? (
-            <ReasonedDisabledControl reason={props.state.installBlockedReason}>
+            <ReasonedDisabledControl
+              reason={props.state.installBlockedReason}
+              descriptionTarget={() => installButton ?? null}
+            >
               <PluginInstallAction
+                registerInstallAction={props.state.registerInstallAction}
+                onButtonRef={(element) => (installButton = element)}
                 buttonClass="btn oc-action plugin-catalog-detail__install"
                 primary
                 disabled={!props.state.canInstall}
@@ -141,7 +154,7 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.
       {props.error ? (
         <div class="callout danger oc-banner oc-banner-error" role="alert">
           <span>{formatUiExternalText(props.error)}</span>
-          <button type="button" class="btn btn--sm" onClick={props.onRetry}>
+          <button type="button" class="btn btn--sm" onClick={() => props.onRetry()}>
             {t("pluginsPage.tryAgain")}
           </button>
         </div>
@@ -155,14 +168,7 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.
           aria-label={t("pluginsPage.detailLoading")}
         >
           <div class="plugin-catalog-detail__back skeleton" />
-          <div class="plugin-catalog-detail__hero">
-            <div class="plugin-catalog-detail__icon skeleton" />
-            <div>
-              <div class="plugin-catalog-detail__loading-title skeleton" />
-              <div class="plugin-catalog-detail__loading-publisher skeleton" />
-              <div class="plugin-catalog-detail__loading-summary skeleton" />
-            </div>
-          </div>
+          <PluginDetailLoadingHero />
           <div class="plugin-catalog-detail__content">
             <div class="plugin-catalog-detail__main" aria-hidden="true">
               <div class="plugin-catalog-detail__loading-card skeleton" />

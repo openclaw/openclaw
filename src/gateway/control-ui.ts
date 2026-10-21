@@ -8,6 +8,7 @@ import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
+import { sendJson as sendJsonResponse } from "../infra/http-json.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import {
   replacePlaybackFileExtension,
@@ -36,6 +37,7 @@ import {
 } from "./assistant-media-content-disposition.js";
 import {
   resolveAssistantMediaPolicy,
+  resolveAssistantMediaWorkspaceTicketKey,
   assertAssistantMediaPolicyCurrent,
   verifyAssistantMediaTicket,
 } from "./assistant-media-policy.js";
@@ -43,6 +45,7 @@ import {
   normalizeAssistantMediaSource,
   openAssistantMedia,
   resolveAssistantMediaAvailability,
+  resolveAssistantMediaSource,
 } from "./control-ui-assistant-media-read.js";
 import { prepareAssistantMessageMedia } from "./control-ui-assistant-message-media.js";
 import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-contract.js";
@@ -68,6 +71,7 @@ import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   isControlUiFileUnmodified,
   isControlUiStaticAssetExtension,
+  resolveControlUiAssetEncodings,
   resolveControlUiHtmlEncoding,
   resolveControlUiRepresentation,
   respondControlUiNotAcceptable,
@@ -91,6 +95,7 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -115,10 +120,8 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(JSON.stringify(body));
+  sendJsonResponse(res, status, body);
 }
 
 function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
@@ -239,13 +242,12 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
   using mediaPolicy = { ...policy, [Symbol.dispose]: () => policy.release() };
-  if (relativeSource) {
-    if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
-      respondControlUiNotFound(res);
-      return true;
-    }
-    source = path.resolve(policy.executionCwd, source);
+  const resolvedSource = resolveAssistantMediaSource(source, policy);
+  if (!resolvedSource) {
+    respondControlUiNotFound(res);
+    return true;
   }
+  source = resolvedSource;
   const ticket = ticketCandidate?.source === source ? ticketCandidate : undefined;
   if (explicitAllow && !policy.canAllow) {
     sendJson(res, 403, { error: "Allowing an outside image requires operator.admin" });
@@ -256,7 +258,8 @@ export async function handleControlUiAssistantMediaRequest(
     ticket.session?.sessionKey === policy.session?.sessionKey &&
     ticket.session?.agentId === policy.session?.agentId &&
     ticket.session?.sessionId === policy.session?.sessionId &&
-    ticket.messageId === policy.messageId;
+    ticket.messageId === policy.messageId &&
+    ticket.workspaceKey === resolveAssistantMediaWorkspaceTicketKey(source, policy);
   if (!isMetaRequest && url.searchParams.has("mediaTicket") && (!ticket || !sameSession)) {
     respondControlUiNotFound(res);
     return true;
@@ -292,7 +295,7 @@ export async function handleControlUiAssistantMediaRequest(
       publish();
     });
   if (isMetaRequest) {
-    const availability = await resolveAssistantMediaAvailability(
+    const { assertSourceCurrent, ...availability } = await resolveAssistantMediaAvailability(
       source,
       policy,
       allowance,
@@ -304,15 +307,16 @@ export async function handleControlUiAssistantMediaRequest(
       return true;
     }
     try {
-      await publishResponse(() =>
+      await publishResponse(() => {
+        assertSourceCurrent?.();
         sendJson(
           res,
           200,
           !availability.available && availability.code === "outside-allowed-folders"
             ? { ...availability, retryable: false, ...(policy.canAllow ? { canAllow: true } : {}) }
             : availability,
-        ),
-      );
+        );
+      });
     } catch {
       respondControlUiNotFound(res);
     }
@@ -321,7 +325,7 @@ export async function handleControlUiAssistantMediaRequest(
 
   let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
-    const media = await openAssistantMedia(source, policy, allowance);
+    const media = await openAssistantMedia(source, policy, allowance, assertCurrentPolicy);
     let opened = media.opened;
     byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const mime = media.mimeType;
@@ -410,6 +414,7 @@ export async function handleControlUiAssistantMediaRequest(
     let delivery: Promise<void> | undefined;
     const stream = byteStream;
     await publishResponse(() => {
+      media.assertSourceCurrent();
       if (media.outsideRoots && mediaKind === "image") {
         applyHttpImageContentSecurityPolicy(res);
       }
@@ -583,6 +588,7 @@ async function prepareControlUiBootstrapConfig(
     res,
     cfg: opts?.cfg ?? opts?.config,
     replyOnFailure,
+    requiredOperatorMethod: "sessions.list",
     onPluginFrameGrants: (grants) => {
       pluginFrameGrants = grants;
     },
@@ -611,13 +617,15 @@ async function prepareControlUiBootstrapConfig(
           : { avatar: identity.avatar, resolution: null };
       return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
     })(),
-    import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
-      listControlUiPluginCatalog().then(
-        ({ plugins }) => plugins,
-        // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
-        () => [],
-      ),
-    ),
+    authorizeOperatorScopesForMethod("plugins.controlUi.list", requestAuth.operatorScopes).allowed
+      ? import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
+          listControlUiPluginCatalog().then(
+            ({ plugins }) => plugins,
+            // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
+            () => [],
+          ),
+        )
+      : [],
     resolveDevInstallGitBranch(),
     import("./control-ui-bootstrap-preferences.js").then(
       ({ prepareControlUiBootstrapPreferences }) =>
@@ -806,7 +814,12 @@ export async function handleControlUiHttpRequest(
     req.method !== "HEAD" &&
     req.headers?.["if-none-match"] === undefined &&
     req.headers?.["if-modified-since"] === undefined;
-  let asset = await readControlUiRootAsset(rootState, fileRel, readBody);
+  const encodings = resolveControlUiAssetEncodings({
+    req,
+    contentPath: fileRel,
+    precompressed: fingerprintedAsset,
+  });
+  let asset = await readControlUiRootAsset(rootState, fileRel, readBody, encodings);
   if (!asset) {
     // Missing assets stay 404; dotted routes can still use the SPA document.
     if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
@@ -816,10 +829,9 @@ export async function handleControlUiHttpRequest(
     if (!route.spaFallback) {
       return false;
     }
-    const indexPath = path.resolve(root, "index.html");
-    if (filePath !== indexPath) {
+    if (filePath !== path.resolve(root, "index.html")) {
       fileRel = "index.html";
-      asset = await readControlUiRootAsset(rootState, fileRel, readBody);
+      asset = await readControlUiRootAsset(rootState, fileRel, readBody, encodings);
     }
   }
 
@@ -841,6 +853,7 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (!asset.file.body) {
+        // Document aliases need the source HTML before dynamic preparation/compression.
         asset = await readControlUiRootAsset(rootState, fileRel, true);
         continue;
       }
@@ -867,12 +880,7 @@ export async function handleControlUiHttpRequest(
     }
     const originatedAtMs = Date.now();
     const lastModifiedMs = Math.floor(Math.min(asset.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
-    const representation = resolveControlUiRepresentation({
-      req,
-      asset,
-      contentPath: fileRel,
-      precompressed: fingerprintedAsset,
-    });
+    const representation = resolveControlUiRepresentation(asset, encodings);
     if (!representation) {
       respondControlUiNotAcceptable(res);
       return true;
@@ -894,7 +902,7 @@ export async function handleControlUiHttpRequest(
     } else if (representation.file.body) {
       serveControlUiAsset(res, fileRel, representation.file.body, headers);
     } else {
-      asset = await readControlUiRootAsset(rootState, fileRel, true);
+      asset = await readControlUiRootAsset(rootState, fileRel, true, encodings);
       continue;
     }
     return true;

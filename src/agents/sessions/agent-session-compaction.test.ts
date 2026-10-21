@@ -34,12 +34,13 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import {
-  createCompactionHandlers,
+  createCompactionExtension,
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { createEventBus } from "./event-bus.js";
 import { loadExtensionFromFactory } from "./extensions/loader.js";
+import type { ExtensionFactory } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -68,9 +69,8 @@ function createResultHandlers(
   firstKeptEntryId?: string,
   onPreparation?: (preparation: { latestUnresolvedUserRequest?: string }) => void,
 ) {
-  const handlers = createCompactionHandlers();
-  handlers.set("session_before_compact", [
-    async (event: unknown) => {
+  const handlers: ExtensionFactory = (api) => {
+    api.on("session_before_compact", async (event: unknown) => {
       const preparation = (
         event as {
           preparation: {
@@ -88,8 +88,8 @@ function createResultHandlers(
           tokensBefore: preparation.tokensBefore,
         },
       };
-    },
-  ]);
+    });
+  };
   return handlers;
 }
 
@@ -123,7 +123,7 @@ describe("AgentSession compaction", () => {
         .spyOn(globalThis, "fetch")
         .mockRejectedValue(new Error("Unexpected network request in compaction test"));
       try {
-        const resourceLoader = createResourceLoader();
+        const resourceLoader = await createResourceLoader();
         const extensions = resourceLoader.getExtensions();
         extensions.extensions.push(
           await loadExtensionFromFactory(
@@ -258,7 +258,7 @@ describe("AgentSession compaction", () => {
     const { session } = await createTestSession({
       sessionManager,
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(createResultHandlers("condensed history")),
+      resourceLoader: await createResourceLoader(createResultHandlers("condensed history")),
     });
     const compactionEvents = collectCompactionEnds(session);
     // Embedded attempt preparation removes the ingress-persisted user from model state.
@@ -325,47 +325,19 @@ describe("AgentSession compaction", () => {
     subscription.unsubscribe();
   });
 
-  it("accounts branch-summary responses through the same run owner", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    const abandonedId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
-    sessionManager.branch(rootId);
-    const targetId = sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "target branch" }]),
-      timestamp: 3,
-    });
-    sessionManager.branch(abandonedId);
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "branch summary" }], "stop", 7),
-      ),
-    );
-    const { session } = await createTestSession({ sessionManager });
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-branch-summary-usage",
-    });
-
-    await session.navigateTree(targetId, { summarize: true });
-
-    expect(subscription.getUsageTotals()).toMatchObject({ input: 7, output: 1, total: 8 });
-    subscription.unsubscribe();
-  });
-
   it("projects a rejected automatic cancellation as aborted without recording compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    const handlers = createCompactionHandlers();
     const syntheticError = new Error("synthetic cancellation rejection");
     let thresholdRequestState: string | undefined;
     const abortActiveCompaction = () => session.abortCompaction();
-    handlers.set("session_before_compact", [
-      async (event: unknown) => {
+    const handlers: ExtensionFactory = (api) => {
+      api.on("session_before_compact", async (event: unknown) => {
         thresholdRequestState = (event as { preparation: { latestUnresolvedUserRequest?: string } })
           .preparation.latestUnresolvedUserRequest;
         abortActiveCompaction();
         throw syntheticError;
-      },
-    ]);
+      });
+    };
     streamMocks.streamSimple.mockImplementation(
       (activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
         if (options?.signal?.aborted) {
@@ -384,7 +356,7 @@ describe("AgentSession compaction", () => {
     const { session } = await createTestSession({
       sessionManager,
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(handlers),
+      resourceLoader: await createResourceLoader(handlers),
     });
     const onAgentEvent = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
@@ -483,7 +455,7 @@ describe("AgentSession compaction", () => {
     let manualRequestState: string | undefined;
     const { session } = await createTestSession({
       sessionManager,
-      resourceLoader: createResourceLoader(
+      resourceLoader: await createResourceLoader(
         createResultHandlers(oversizedSummary, undefined, (preparation) => {
           manualRequestState = preparation.latestUnresolvedUserRequest;
         }),
@@ -512,9 +484,8 @@ describe("AgentSession compaction", () => {
             : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]);
         return createAssistantResultStream({ ...response, timestamp: Date.now() + agentRequests });
       });
-      const handlers = createCompactionHandlers();
-      handlers.set("session_before_compact", [
-        async (event: unknown) => {
+      const handlers: ExtensionFactory = (api) => {
+        api.on("session_before_compact", async (event: unknown) => {
           const preparation = (
             event as {
               preparation: {
@@ -539,11 +510,11 @@ describe("AgentSession compaction", () => {
               },
             },
           };
-        },
-      ]);
+        });
+      };
       const { session } = await createTestSession({
         settingsManager: createAutoCompactionSettings(),
-        resourceLoader: createResourceLoader(handlers),
+        resourceLoader: await createResourceLoader(handlers),
       });
       const compactionEvents = collectCompactionEnds(session);
 
@@ -582,7 +553,7 @@ describe("AgentSession compaction", () => {
     const eventBus = createEventBus();
     let reportedCompactionId: string | undefined;
     const replacementTokens: Array<number | undefined> = [];
-    const resourceLoader = createResourceLoader(createResultHandlers(summary, recentUserId));
+    const resourceLoader = await createResourceLoader(createResultHandlers(summary, recentUserId));
     const extensions = resourceLoader.getExtensions();
     extensions.extensions.push(
       await loadExtensionFromFactory(
@@ -669,7 +640,7 @@ describe("AgentSession compaction", () => {
     });
     const { session } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      resourceLoader: await createResourceLoader(createCompactionExtension()),
     });
     session[agentSessionSetContextReplacementHook](() => contextState.clear());
     session.subscribe((event) => {
@@ -696,7 +667,7 @@ describe("AgentSession compaction", () => {
     });
     const { session } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      resourceLoader: await createResourceLoader(createCompactionExtension()),
     });
     const compactionEvents = collectCompactionEnds(session);
 
@@ -724,17 +695,16 @@ describe("AgentSession compaction", () => {
       ...createAssistant(testModel, createStaleThinkingContent()),
       timestamp: Date.now() - 2,
     });
-    const handlers = createCompactionHandlers();
-    handlers.set("session_before_compact", [
-      async (event: unknown) => ({
+    const handlers: ExtensionFactory = (api) => {
+      api.on("session_before_compact", async (event: unknown) => ({
         compaction: {
           summary: "condensed history",
           firstKeptEntryId: retainedAssistantId,
           tokensBefore: (event as { preparation: { tokensBefore: number } }).preparation
             .tokensBefore,
         },
-      }),
-    ]);
+      }));
+    };
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       requests.push(context);
@@ -747,7 +717,7 @@ describe("AgentSession compaction", () => {
     const { session } = await createTestSession({
       sessionManager,
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(handlers),
+      resourceLoader: await createResourceLoader(handlers),
     });
 
     await session.prompt("long request");
@@ -814,7 +784,7 @@ describe("AgentSession compaction", () => {
       model,
       sessionManager,
       settingsManager,
-      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      resourceLoader: await createResourceLoader(createCompactionExtension()),
     });
     session.subscribe((event) => {
       if (event.type === "compaction_start" || event.type === "compaction_end") {

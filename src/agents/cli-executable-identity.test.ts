@@ -46,6 +46,23 @@ const packageCommandEnv = {
   PATHEXT: ".EXE;.CMD",
 };
 
+function packageIdentity(
+  command: string,
+  overrides: Partial<Parameters<typeof resolveCliExecutableIdentity>[0]> = {},
+) {
+  return resolveCliExecutableIdentity({
+    command,
+    env: packageCommandEnv,
+    runtimeArtifact: commandPackagePolicy,
+    ...overrides,
+  });
+}
+
+function copyExecutable(target: string) {
+  fs.copyFileSync(process.execPath, target);
+  fs.chmodSync(target, 0o755);
+}
+
 describe("CLI executable implementation identity", () => {
   afterEach(() => {
     for (const directory of tempDirs.splice(0)) {
@@ -355,9 +372,7 @@ describe("CLI executable implementation identity", () => {
       resolveCliExecutableIdentity({ command: fixture.entrypoint, env: packageCommandEnv }),
     ).resolves.toBeUndefined();
     await expect(
-      resolveCliExecutableIdentity({
-        command: fixture.entrypoint,
-        env: packageCommandEnv,
+      packageIdentity(fixture.entrypoint, {
         runtimeArtifact: { ...commandPackagePolicy, packageName: "@fixture/other" },
       }),
     ).resolves.toBeUndefined();
@@ -376,13 +391,7 @@ describe("CLI executable implementation identity", () => {
         })}\n`,
       );
 
-      await expect(
-        resolveCliExecutableIdentity({
-          command: fixture.entrypoint,
-          env: packageCommandEnv,
-          runtimeArtifact: commandPackagePolicy,
-        }),
-      ).resolves.toBeUndefined();
+      await expect(packageIdentity(fixture.entrypoint)).resolves.toBeUndefined();
     },
   );
 
@@ -399,8 +408,7 @@ describe("CLI executable implementation identity", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-native-policy-"));
     tempDirs.push(root);
     const executable = path.join(root, "claude");
-    fs.copyFileSync(process.execPath, executable);
-    fs.chmodSync(executable, 0o755);
+    copyExecutable(executable);
 
     await expect(resolveCliExecutableIdentity({ command: executable })).resolves.toBeUndefined();
     await expect(
@@ -420,8 +428,7 @@ describe("CLI executable implementation identity", () => {
 
     if (process.platform !== "win32") {
       const unlistedExecutable = path.join(root, "other-cli");
-      fs.copyFileSync(process.execPath, unlistedExecutable);
-      fs.chmodSync(unlistedExecutable, 0o755);
+      copyExecutable(unlistedExecutable);
       await expect(
         resolveCliExecutableIdentity({
           command: unlistedExecutable,
@@ -434,8 +441,7 @@ describe("CLI executable implementation identity", () => {
 
       const versionedExecutable = path.join(root, "2.1.205");
       const commandLink = path.join(root, "claude-link");
-      fs.copyFileSync(process.execPath, versionedExecutable);
-      fs.chmodSync(versionedExecutable, 0o755);
+      copyExecutable(versionedExecutable);
       fs.symlinkSync(versionedExecutable, commandLink);
       const linkedIdentity = await resolveCliExecutableIdentity({
         command: commandLink,
@@ -459,13 +465,7 @@ describe("CLI executable implementation identity", () => {
         { mode: 0o755 },
       );
 
-      await expect(
-        resolveCliExecutableIdentity({
-          command: fixture.entrypoint,
-          env: packageCommandEnv,
-          runtimeArtifact: commandPackagePolicy,
-        }),
-      ).resolves.toBeUndefined();
+      await expect(packageIdentity(fixture.entrypoint)).resolves.toBeUndefined();
     },
   );
 
@@ -474,30 +474,16 @@ describe("CLI executable implementation identity", () => {
     fs.mkdirSync(path.join(nested.root, "node_modules", "dependency"), { recursive: true });
     const dependency = path.join(nested.root, "node_modules", "dependency", "index.js");
     fs.writeFileSync(dependency, "first\n");
-    const first = await resolveCliExecutableIdentity({
-      command: nested.entrypoint,
-      env: packageCommandEnv,
-      runtimeArtifact: commandPackagePolicy,
-    });
+    const first = await packageIdentity(nested.entrypoint);
     fs.writeFileSync(dependency, "replacement\n");
-    const second = await resolveCliExecutableIdentity({
-      command: nested.entrypoint,
-      env: packageCommandEnv,
-      runtimeArtifact: commandPackagePolicy,
-    });
+    const second = await packageIdentity(nested.entrypoint);
     expect(first?.runtimeArtifact.kind).toBe("package-tree");
     expect(second?.runtimeArtifact).not.toEqual(first?.runtimeArtifact);
 
     if (process.platform !== "win32") {
       const symlinked = makePackage();
       fs.symlinkSync(symlinked.implementation, path.join(symlinked.root, "dist", "redirect.js"));
-      await expect(
-        resolveCliExecutableIdentity({
-          command: symlinked.entrypoint,
-          env: packageCommandEnv,
-          runtimeArtifact: commandPackagePolicy,
-        }),
-      ).resolves.toBeUndefined();
+      await expect(packageIdentity(symlinked.entrypoint)).resolves.toBeUndefined();
     }
   });
 
@@ -507,12 +493,6 @@ describe("CLI executable implementation identity", () => {
     fs.writeFileSync(oversized, "");
     fs.truncateSync(oversized, 1024 * 1024 * 1024 + 1);
 
-    await expect(
-      resolveCliExecutableIdentity({
-        command: fixture.entrypoint,
-        env: packageCommandEnv,
-        runtimeArtifact: commandPackagePolicy,
-      }),
-    ).resolves.toBeUndefined();
+    await expect(packageIdentity(fixture.entrypoint)).resolves.toBeUndefined();
   });
 });

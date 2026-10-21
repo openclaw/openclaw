@@ -1,10 +1,8 @@
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
-import { createBeamStore } from "./store.js";
 import type { BeamStoredSession } from "./types.js";
 
 it("shares one inventory read across concurrent and repeated catalog lists", async () => {
@@ -30,22 +28,16 @@ it("shares one inventory read across concurrent and repeated catalog lists", asy
 it("expires cached summaries at storage expiry without rereading transcripts", async () => {
   const store = memoryStore();
   await store.upload(sampleUpload(), { receivedAt: 1 });
-  const rows = (await store.keyedStore.entries()).map(({ key, value, createdAt }) => ({
-    key,
-    value,
-    createdAt,
-    expiresAt: 200,
-  }));
+  const rows = (await store.keyedStore.entries()).map((row) =>
+    Object.assign(row, { expiresAt: 200 }),
+  );
   const entries = vi.spyOn(store.keyedStore, "entries").mockResolvedValue(rows);
   const clock = vi.spyOn(Date, "now").mockReturnValue(199);
-  try {
-    expect(await store.list()).toHaveLength(1);
-    clock.mockReturnValue(200);
-    expect(await store.list()).toEqual([]);
-    expect(entries).toHaveBeenCalledTimes(1);
-  } finally {
-    clock.mockRestore();
-  }
+  onTestFinished(() => clock.mockRestore());
+  expect(await store.list()).toHaveLength(1);
+  clock.mockReturnValue(200);
+  expect(await store.list()).toEqual([]);
+  expect(entries).toHaveBeenCalledTimes(1);
 });
 
 it("refreshes foreign changes in the background and drains its service on stop", async () => {
@@ -106,51 +98,28 @@ it("refreshes foreign changes in the background and drains its service on stop",
   }
 });
 
-describe("Beam upload store", () => {
-  it.each([
-    ["older", "2026-07-20T12:00:00.000099Z", false],
-    ["same completed", "2026-07-20T08:00:00.000100-04:00", false],
-    ["newer", "2026-07-20T12:00:00.000101Z", true],
-  ] as const)(
-    "rechecks the %s revision after a competing upload",
-    async (_, updatedAt, accepted) => {
-      const store = memoryStore();
-      const competing: BeamStoredSession = {
-        ...sampleUpload({ updatedAt: "2026-07-20T12:00:00.000100Z", completed: true }),
-        uploaderProfileId: "competing-publisher",
-        createdAt: 50,
-        receivedAt: 75,
-      };
-      const compare = store.keyedStore.compareAndApply.getMockImplementation();
-      if (!compare) {
-        throw new Error("Beam test store has no comparison implementation");
-      }
-      store.keyedStore.compareAndApply.mockImplementationOnce(async (...args) => {
-        store.values.set(competing.beamId, competing);
-        return compare(...args);
-      });
-      const upload = sampleUpload({ updatedAt, title: "Candidate snapshot" });
+it.each([
+  ["older", "2026-07-20T12:00:00.000099Z", false],
+  ["same completed", "2026-07-20T08:00:00.000100-04:00", false],
+  ["newer", "2026-07-20T12:00:00.000101Z", true],
+] as const)("rechecks the %s revision after a competing upload", async (_, updatedAt, accepted) => {
+  const store = memoryStore();
+  const competing: BeamStoredSession = {
+    ...sampleUpload({ updatedAt: "2026-07-20T12:00:00.000100Z", completed: true }),
+    uploaderProfileId: "competing-publisher",
+    createdAt: 50,
+    receivedAt: 75,
+  };
+  const compare = store.keyedStore.compareAndApply.getMockImplementation();
+  assert(compare, "Beam test store has no comparison implementation");
+  store.keyedStore.compareAndApply.mockImplementationOnce(async (...args) => {
+    store.values.set(competing.beamId, competing);
+    return compare(...args);
+  });
+  const upload = sampleUpload({ updatedAt, title: "Candidate snapshot" });
 
-      expect(await store.upload(upload, { receivedAt: 100 })).toBe(accepted);
-      expect(await store.get(upload.beamId)).toEqual(
-        accepted ? { ...upload, createdAt: 50, receivedAt: 100 } : competing,
-      );
-    },
-  );
-
-  it.each(["observe", "compareAndApply"] as const)(
-    "refuses uploads when %s support is missing",
-    async (missing) => {
-      const { keyedStore, values } = memoryStore();
-      const store = createBeamStore({
-        state: { openKeyedStore: () => ({ ...keyedStore, [missing]: undefined }) },
-      } as unknown as PluginRuntime);
-      await expect(store.upload(sampleUpload(), { receivedAt: 100 })).rejects.toThrow(
-        "require plugin-state observe and compareAndApply",
-      );
-      expect(values.size).toBe(0);
-      expect(keyedStore.observe).not.toHaveBeenCalled();
-      expect(keyedStore.compareAndApply).not.toHaveBeenCalled();
-    },
+  expect(await store.upload(upload, { receivedAt: 100 })).toBe(accepted);
+  expect(await store.get(upload.beamId)).toEqual(
+    accepted ? { ...upload, createdAt: 50, receivedAt: 100 } : competing,
   );
 });

@@ -186,7 +186,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "codex-app-server-sidecars-to-plugin-state",
     label: "Codex app-server thread bindings",
     // Config normalization loads this artifact too; state-only imports belong
-    // behind the detection and migration callbacks.
+    // behind the inventory, detection, and migration callbacks.
+    collectBackupResources: async (params) =>
+      (
+        await import("./src/migration/session-binding-sidecars.js")
+      ).collectLegacySessionBindingBackupResources(params),
     detectLegacyState: async (params) =>
       (
         await import("./src/migration/session-binding-sidecars.js")
@@ -199,6 +203,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "codex-native-task-assignments",
     label: "Codex native pending assignments",
+    sqliteOnly: { family: "state" },
     collectBackupResources: async (params) =>
       (
         await import("./src/migration/native-task-assignments.js")

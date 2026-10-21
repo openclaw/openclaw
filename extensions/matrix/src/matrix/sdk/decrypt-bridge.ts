@@ -132,7 +132,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
   }
 
-  retryPendingNow(reason: string, options?: { includeExhausted?: boolean }): void {
+  retryPendingNow(options?: { includeExhausted?: boolean }): void {
     if (this.quiescing || this.stopped) {
       return;
     }
@@ -156,7 +156,6 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     if (pending.length === 0) {
       return;
     }
-    LogService.debug("MatrixClientLite", `Retrying pending decryptions due to ${reason}`);
     this.startPendingRetries(pending);
   }
 
@@ -166,13 +165,13 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
     this.cryptoRetrySignalsBound = true;
 
-    for (const [eventName, reason, includeExhausted] of [
-      [CryptoEvent.KeyBackupDecryptionKeyCached, "crypto.keyBackupDecryptionKeyCached", true],
-      [CryptoEvent.RehydrationCompleted, "dehydration.RehydrationCompleted", true],
-      [CryptoEvent.DevicesUpdated, "crypto.devicesUpdated", false],
-      [CryptoEvent.KeysChanged, "crossSigning.keysChanged", false],
+    for (const [eventName, includeExhausted] of [
+      [CryptoEvent.KeyBackupDecryptionKeyCached, true],
+      [CryptoEvent.RehydrationCompleted, true],
+      [CryptoEvent.DevicesUpdated, false],
+      [CryptoEvent.KeysChanged, false],
     ] as const) {
-      crypto.on(eventName, () => this.retryPendingNow(reason, { includeExhausted }));
+      crypto.on(eventName, () => this.retryPendingNow({ includeExhausted }));
     }
   }
 

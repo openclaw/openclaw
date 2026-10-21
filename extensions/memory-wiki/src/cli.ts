@@ -35,12 +35,8 @@ import {
 } from "./obsidian.js";
 import { formatOkfImportSummary, importMemoryWikiOkfBundle } from "./okf.js";
 import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
-import {
-  getMemoryWikiPage,
-  searchMemoryWiki,
-  WIKI_SEARCH_MODES,
-  type WikiSearchMode,
-} from "./query.js";
+import { WIKI_SEARCH_MODES, type WikiSearchMode } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import type { MemoryWikiImportedSourceSyncResult } from "./source-sync.js";
 import {
@@ -154,7 +150,7 @@ function isBoundedGatewayString(
   return typeof value === "string" && value.length <= maxChars;
 }
 
-function isStringArray(
+function isBoundedGatewayStringArray(
   value: unknown,
   maxChars = GATEWAY_RESPONSE_MAX_STRING_CHARS,
 ): value is string[] {
@@ -240,9 +236,9 @@ function isMemoryWikiImportResult(value: unknown): value is MemoryWikiImportedSo
       "artifactCount",
       "workspaces",
     ]) &&
-    isStringArray(value.pagePaths) &&
+    isBoundedGatewayStringArray(value.pagePaths) &&
     typeof value.indexesRefreshed === "boolean" &&
-    isStringArray(value.indexUpdatedFiles) &&
+    isBoundedGatewayStringArray(value.indexUpdatedFiles) &&
     isBoundedGatewayString(value.indexRefreshReason, GATEWAY_RESPONSE_MAX_CODE_CHARS)
   );
 }

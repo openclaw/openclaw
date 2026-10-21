@@ -8,7 +8,7 @@ GEM
     artifactory (3.0.17)
     atomos (0.1.3)
     aws-eventstream (1.4.0)
-    aws-partitions (1.1293.0)
+    aws-partitions (1.1294.0)
     aws-sdk-core (3.257.0)
       aws-eventstream (~> 1, >= 1.3.0)
       aws-partitions (~> 1, >= 1.992.0)
@@ -63,7 +63,7 @@ GEM
     faraday-retry (2.4.0)
       faraday (~> 2.0)
     fastimage (2.4.1)
-    fastlane (2.240.1)
+    fastlane (2.241.0)
       CFPropertyList (>= 2.3, < 5.0.0)
       abbrev (~> 0.1)
       addressable (>= 2.9.0, < 3.0.0)
@@ -79,7 +79,8 @@ GEM
       csv (~> 3.3)
       dotenv (>= 2.1.1, < 3.0.0)
       emoji_regex (>= 0.1, < 4.0)
-      excon (>= 0.71.0, < 2.0.0)
+      erb (>= 4.0, < 7.0)
+      excon (>= 1.0.0, < 2.0.0)
       faraday (~> 2.7)
       faraday-cookie_jar (~> 0.0.8)
       faraday-follow_redirects (~> 0.3)
@@ -90,7 +91,7 @@ GEM
       gh_inspector (>= 1.1.2, < 2.0.0)
       google-apis-androidpublisher_v3 (~> 0.99)
       google-apis-playcustomapp_v1 (~> 0.1)
-      google-cloud-env (>= 1.6.0, < 2.4.0)
+      google-cloud-env (>= 1.6.0, < 2.5.0)
       google-cloud-storage (~> 1.31)
       highline (~> 2.0)
       irb (>= 1.8)
@@ -109,7 +110,7 @@ GEM
       rubyzip (>= 3.4.0, < 4.0.0)
       security (~> 0.3)
       simctl (~> 1.6.3)
-      terminal-notifier (>= 2.0.0, < 3.0.0)
+      terminal-notifier (>= 3.1.0, < 4.0.0)
       terminal-table (~> 4)
       tty-screen (>= 0.6.3, < 1.0.0)
       tty-spinner (>= 0.8.0, < 1.0.0)
@@ -121,7 +122,7 @@ GEM
     gh_inspector (1.1.3)
     google-apis-androidpublisher_v3 (0.109.0)
       google-apis-core (>= 0.15.0, < 2.a)
-    google-apis-core (1.3.0)
+    google-apis-core (1.3.1)
       addressable (~> 2.9)
       faraday (~> 2.13)
       faraday-follow_redirects (~> 0.3)
@@ -134,12 +135,12 @@ GEM
       google-apis-core (>= 0.15.0, < 2.a)
     google-apis-playcustomapp_v1 (0.18.0)
       google-apis-core (>= 0.15.0, < 2.a)
-    google-apis-storage_v1 (0.68.0)
+    google-apis-storage_v1 (0.69.0)
       google-apis-core (>= 0.15.0, < 2.a)
     google-cloud-core (1.9.0)
       google-cloud-env (>= 1.0, < 3.a)
       google-cloud-errors (~> 1.0)
-    google-cloud-env (2.3.1)
+    google-cloud-env (2.4.1)
       base64 (~> 0.2)
       faraday (>= 1.0, < 3.a)
     google-cloud-errors (1.7.0)
@@ -226,7 +227,7 @@ GEM
     simctl (1.6.10)
       CFPropertyList
       naturally
-    terminal-notifier (2.0.0)
+    terminal-notifier (3.1.0)
     terminal-table (4.0.0)
       unicode-display_width (>= 1.1.1, < 4)
     timeout (0.6.1)
@@ -263,7 +264,7 @@ PLATFORMS
   x86_64-linux
 
 DEPENDENCIES
-  fastlane (= 2.240.1)
+  fastlane (= 2.241.0)
 
 CHECKSUMS
   CFPropertyList (3.0.8) sha256=2c99d0d980536d3d7ab252f7bd59ac8be50fbdd1ff487c98c949bb66bb114261
@@ -272,7 +273,7 @@ CHECKSUMS
   artifactory (3.0.17) sha256=3023d5c964c31674090d655a516f38ca75665c15084140c08b7f2841131af263
   atomos (0.1.3) sha256=7d43b22f2454a36bace5532d30785b06de3711399cb1c6bf932573eda536789f
   aws-eventstream (1.4.0) sha256=116bf85c436200d1060811e6f5d2d40c88f65448f2125bc77ffce5121e6e183b
-  aws-partitions (1.1293.0) sha256=d53c028087a7c75b435afb35b310a315a64268e6fb5ecd5d44d8e4f210ce725c
+  aws-partitions (1.1294.0) sha256=e6045b27a414fd3ea5cbbf8b051f69b56b7d474fcade52d3f4969c3b45782ce6
   aws-sdk-core (3.257.0) sha256=a92ad19c7ff668cec6688ee3200ee562da80647a3bbeed9fda02e8b0ca6492c6
   aws-sdk-kms (1.132.0) sha256=094b0097bb3be9d5c1ac87e971ca7f5aebb746801dfb5f0f576480bf98dca69c
   aws-sdk-s3 (1.233.2) sha256=b138737a0de8b02f163ae47a9fc184ac98fc9b90926237c7d7af716a14ea1221
@@ -302,16 +303,16 @@ CHECKSUMS
   faraday-net_http (3.4.4) sha256=0e78af151747ed1b00f33e25973b4bc220d7f16c00c39676817c8b12331eb588
   faraday-retry (2.4.0) sha256=7b79c48fb7e56526faf247b12d94a680071ff40c9fda7cf1ec1549439ad11ebe
   fastimage (2.4.1) sha256=c64bebd46b6fd8943ab70c1e6e85ff728f970f2e48f92ecd249b6bc3a540ad20
-  fastlane (2.240.1) sha256=cf792bc99ec6af6574ea416cda6530f519c8b4b3a46b1a3b52488ebf1696aa5c
+  fastlane (2.241.0) sha256=97e7f364edda44401b3de831bad3837f1e1ac94c8f4c88316dd0ffbb55faa067
   fastlane-sirp (1.1.0) sha256=10bc94f9682efd8e1badfb31452a76dd8981f1f3a33717c765fde6d75b54d847
   gh_inspector (1.1.3) sha256=04cca7171b87164e053aa43147971d3b7f500fcb58177698886b48a9fc4a1939
   google-apis-androidpublisher_v3 (0.109.0) sha256=b4fdbb8af4a0d235e86bd173bd51eccd10effdc5de067ab10c1c0d22048a2a56
-  google-apis-core (1.3.0) sha256=94543a5a1d0a0de98c165ac6ae68d2c1f131ad3734123994136b74c6484664f0
+  google-apis-core (1.3.1) sha256=20ce9ee1fde0be87fe30a135dfdbd4b9ee33ba32172794c1f2770e7a45361b2f
   google-apis-iamcredentials_v1 (0.28.0) sha256=0a92ffe6cc39c569554af2a77a25dfc61519ed8bbb64ab04cffdd352dc5ef106
   google-apis-playcustomapp_v1 (0.18.0) sha256=44b277b9dee4a59ac5e9d98be1485edc5e382d2f9d73c79ae8908a455786a254
-  google-apis-storage_v1 (0.68.0) sha256=43387d0466b4fc569fca05fdef5098ecf135ce173626b5c5f45bfe5e8db959fc
+  google-apis-storage_v1 (0.69.0) sha256=ca5faad4a244c609bb434f81884432c449e34b31a87623f7c32b582e464ca7c8
   google-cloud-core (1.9.0) sha256=ab55409f51488e8deefb6edcc1ce4771dfb5da2fe7b3bc075709a030c2b682a4
-  google-cloud-env (2.3.1) sha256=0faac01eb27be78c2591d64433663b1a114f8f7af55a4f819755426cac9178e7
+  google-cloud-env (2.4.1) sha256=987cc58afc50ce2903128ab4dcd442159be4457246b8137e41d49d5c3fc590dd
   google-cloud-errors (1.7.0) sha256=6e682f42d89aae08689f36f28495de629d756da076bafff0003bac7f8042ebb3
   google-cloud-storage (1.62.1) sha256=10dbf2ebda3af1b4b841335364cb889827c6cb17bf6c9f8bc5313b6bef7a4d3c
   google-logging-utils (0.2.0) sha256=675462b4ea5affa825a3442694ca2d75d0069455a1d0956127207498fca3df7b
@@ -355,7 +356,7 @@ CHECKSUMS
   security (0.3.0) sha256=bc9d06718258a96c8552ce4044bfe69144491b10d3403d74c4753a03a720ecf0
   signet (0.22.0) sha256=b76d495ccb07ad35dbc89f3e920665a9d8ed717141955034005d7843dcfe4780
   simctl (1.6.10) sha256=b99077f4d13ad81eace9f86bf5ba4df1b0b893a4d1b368bd3ed59b5b27f9236b
-  terminal-notifier (2.0.0) sha256=7a0d2b2212ab9835c07f4b2e22a94cff64149dba1eed203c04835f7991078cea
+  terminal-notifier (3.1.0) sha256=073609e9da7bb60176ffadda903c8d9231fcdf18ffa7074dc9478b63fe25c69c
   terminal-table (4.0.0) sha256=f504793203f8251b2ea7c7068333053f0beeea26093ec9962e62ea79f94301d2
   timeout (0.6.1) sha256=78f57368a7e7bbadec56971f78a3f5ecbcfb59b7fcbb0a3ed6ddc08a5094accb
   trailblazer-option (0.1.2) sha256=20e4f12ea4e1f718c8007e7944ca21a329eee4eed9e0fa5dde6e8ad8ac4344a3
@@ -373,7 +374,7 @@ CHECKSUMS
   xcpretty-travis-formatter (1.0.1) sha256=aacc332f17cb7b2cba222994e2adc74223db88724fe76341483ad3098e232f93
 
 RUBY VERSION
-  ruby 3.4.11
+  ruby 4.0.7
 
 BUNDLED WITH
   4.0.22

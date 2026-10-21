@@ -1,4 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  controlUiSessionSlug,
+  SESSION_UUID_SUFFIX_RE,
+} from "../../packages/session-url-contract/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
@@ -56,6 +60,13 @@ export function createSessionRowProjectionFixture(params: {
   let revisionToken = {};
   const id = (row: Pick<Row, "agentId" | "key" | "storeTarget">) =>
     `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`;
+  const matching = (query: { agentId?: string; key?: string; storePath?: string }) =>
+    [...rows.values()].filter(
+      (row) =>
+        (!query.agentId || row.agentId === query.agentId) &&
+        (!query.key || row.key === query.key) &&
+        (!query.storePath || row.storeTarget.storePath === query.storePath),
+    );
   const describe: SessionRowProjection["describe"] = (
     { agentId, key, storePath: path },
     captured,
@@ -64,18 +75,9 @@ export function createSessionRowProjectionFixture(params: {
       return undefined;
     }
     const canonical = resolveStoredSessionKeyForAgentStore({ cfg, agentId, sessionKey: key });
-    const exact = [...rows.values()].find(
-      (row) =>
-        row.agentId === agentId && row.key === key && (!path || row.storeTarget.storePath === path),
-    );
+    const candidates = matching({ storePath: path }).filter((row) => row.agentId === agentId);
     return (
-      exact ??
-      [...rows.values()].find(
-        (row) =>
-          row.agentId === agentId &&
-          row.key === canonical &&
-          (!path || row.storeTarget.storePath === path),
-      )
+      candidates.find((row) => row.key === key) ?? candidates.find((row) => row.key === canonical)
     );
   };
   function setEntry(key: string, entry: SessionEntry | undefined) {
@@ -122,11 +124,9 @@ export function createSessionRowProjectionFixture(params: {
     rows.set(id(fields), {
       ...createSessionRow(fields, entry),
       entry,
-      storedEntry: entry,
       materialized: materializeSessionRow(inputs),
       materializedSequence: revision,
       fallbackModel: presentation.activeModel,
-      membership: new Set(),
       parents: new Set(
         [
           entry.spawnedBy,
@@ -159,32 +159,41 @@ export function createSessionRowProjectionFixture(params: {
           )
           .map((row) => row.key),
       );
-    const selected = [...rows.values()].filter(
+    const selected = matching(query).filter(
       (row) =>
-        (!query.agentId || row.agentId === query.agentId) &&
-        (!query.storePath || row.storeTarget.storePath === query.storePath) &&
-        (!query.key || row.key === query.key) &&
         (!matchingKeys || matchingKeys.has(row.key)) &&
         (!query.parentSessionKey || row.parents.has(query.parentSessionKey)),
     );
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    findUrlCandidates(selection, agentId) {
+      return matching({ agentId })
+        .filter((row) => {
+          const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+          return "shortId" in selection
+            ? Boolean(
+                uuid?.toLowerCase().replaceAll("-", "").startsWith(selection.shortId.toLowerCase()),
+              )
+            : row.key === selection.key ||
+                Boolean(
+                  uuid &&
+                  selection.slug &&
+                  controlUiSessionSlug(resolveGatewaySessionDisplayName(row.key, row.entry)) ===
+                    selection.slug,
+                );
+        })
+        .map((row) => ({
+          agentId: row.agentId,
+          key: row.key,
+          storePath: row.storeTarget.storePath,
+        }));
+    },
     async readLookup() {
       throw new Error("Indexed lookup requires a real session row projection");
     },
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
-    observeGeneration() {
-      const observedRevision = revision;
-      let active = true;
-      return {
-        isCurrent: (row) => active && revision === observedRevision && projection.isCurrent(row),
-        dispose() {
-          active = false;
-        },
-      };
-    },
     readPreparedRowContext: () => rowContext,
     readPreparedSpawnedBy(query) {
       const row = describe(query);
@@ -204,6 +213,7 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    readPreview: () => undefined,
     readSource: () => undefined,
     readMembership: (query) => describe(query)?.membership,
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
@@ -296,6 +306,7 @@ export function createSessionRowProjectionFixture(params: {
     get sharingRevision() {
       return revisionToken;
     },
+    physicalPaths: (locator) => [locator],
     state: {
       get revision() {
         return revisionToken;
@@ -304,6 +315,7 @@ export function createSessionRowProjectionFixture(params: {
       policyConfig: cfg,
       modelCatalog,
       rowContext,
+      physicalStorePaths: (path) => [path],
       scope: (options) => {
         const ownerAgentIds = new Set(listAgentIds(cfg));
         return {

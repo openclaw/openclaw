@@ -52,7 +52,7 @@ export function LazyElementModal(props: {
         <openclaw-modal-dialog
           class={state().status === "loading" ? "lazy-element-loading-modal" : undefined}
           label={state().element.label}
-          onModal-cancel={props.onClose}
+          onModal-cancel={() => props.onClose()}
         >
           <Show
             when={state().status === "loading"}
@@ -71,7 +71,7 @@ export function LazyElementModal(props: {
                   class="btn btn--ghost btn--icon"
                   type="button"
                   aria-label={t("common.close")}
-                  onClick={props.onClose}
+                  onClick={() => props.onClose()}
                 >
                   <Icon name="x" />
                 </button>
@@ -98,6 +98,7 @@ export function LazyViewError(props: {
   error: unknown;
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
+  retryRef?: (element: HTMLButtonElement) => void;
   render?: () => SolidJSX.Element;
   inline?: boolean;
   stale?: boolean;
@@ -114,7 +115,11 @@ export function LazyViewError(props: {
         }
         actions={
           <>
-            <button class="btn lazy-view-error__action" onClick={(event) => props.onRetry(event)}>
+            <button
+              ref={props.retryRef}
+              class="btn lazy-view-error__action"
+              onClick={(event) => props.onRetry(event)}
+            >
               {props.actionLabel ?? (props.stale ? t("common.reload") : t("lazyView.retry"))}
             </button>
             {props.onClose ? (

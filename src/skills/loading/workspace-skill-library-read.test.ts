@@ -20,8 +20,9 @@ import {
 } from "./workspace-skill-loader.js";
 
 // Plugin command discovery owns separate storage; this regression measures Library reads.
-vi.mock("../../plugins/bundle-commands.js", () => ({
-  loadEnabledClaudeBundleCommands: () => [],
+vi.mock("../../plugins/plugin-registry-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/plugin-registry-contributions.js")>()),
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
 }));
 
 const dirs = useStateDatabaseTempDirs();
@@ -39,27 +40,21 @@ async function fixture() {
     getConfig: () => config,
     assertCurrent() {},
   };
-  const saved = await saveSkillLibrary(
-    authority,
-    { slug: "guide", content, expectedRevision: null },
-    options,
-  );
-  const pin = {
-    skillId: saved.entry.skillId,
-    revision: saved.entry.revision,
-    name: saved.entry.name,
-    ownerProfileId: saved.entry.ownerProfileId,
-  };
-  const updated = await saveSkillLibrary(
-    authority,
-    {
-      skillId: pin.skillId,
-      slug: "guide",
-      content: content.replace("Saved procedure", "Replacement procedure"),
-      expectedRevision: pin.revision,
-    },
-    options,
-  );
+  const save = (body: string, prior?: { skillId: string; revision: string }) =>
+    saveSkillLibrary(
+      authority,
+      {
+        slug: "guide",
+        content: body,
+        expectedRevision: prior?.revision ?? null,
+        ...(prior ? { skillId: prior.skillId } : {}),
+      },
+      options,
+    );
+  const saved = await save(content);
+  const { skillId, revision, name, ownerProfileId } = saved.entry;
+  const pin = { skillId, revision, name, ownerProfileId };
+  const updated = await save(content.replace("Saved procedure", "Replacement procedure"), pin);
   await closeOpenClawStateDatabaseAsync();
   const loadOptions = {
     config,
@@ -75,15 +70,14 @@ async function fixture() {
     pin,
     updated,
     loadOptions,
-    run<T>(use: () => Promise<T>) {
-      return withEnvAsync(
+    run: <T>(use: () => Promise<T>) =>
+      withEnvAsync(
         {
           OPENCLAW_STATE_DIR: root,
           OPENCLAW_BUNDLED_SKILLS_DIR: loadOptions.bundledSkillsDir,
         },
         use,
-      );
-    },
+      ),
   };
 }
 
@@ -99,6 +93,35 @@ async function prepare(surface: Surface, test: Fixture, assertCurrent?: () => vo
           assertCurrent,
         })
       ).eligible;
+}
+
+function holdLibraryRead(afterRead = false) {
+  const entered = createDeferredCore();
+  const gate = createDeferredCore();
+  const original = librarySelection.prepareSkillLibrarySelection;
+  vi.spyOn(librarySelection, "prepareSkillLibrarySelection").mockImplementationOnce(
+    async (...args) => {
+      const entries = afterRead ? await original(...args) : undefined;
+      entered.resolve();
+      await gate.promise;
+      return entries ?? original(...args);
+    },
+  );
+  return async <T>(pending: Promise<T>, change: () => void | Promise<void>) => {
+    const settled = pending.catch(() => undefined);
+    try {
+      expect(
+        await Promise.race([entered.promise.then(() => true), settled.then(() => false)]),
+        "Library preparation did not yield",
+      ).toBe(true);
+      await change();
+      gate.resolve();
+      return await pending;
+    } finally {
+      gate.resolve();
+      await settled;
+    }
+  };
 }
 
 it("prepares cold and warm pinned commands without parent SQL and preserves filtering", async () => {
@@ -150,27 +173,10 @@ it.each(["workspace", "prompt"] as const)(
     const test = await fixture();
     const originalPin = { ...test.pin };
     const otherRoot = dirs.make("workspace-library-other-");
-    const entered = createDeferredCore();
-    const gate = createDeferredCore();
-    const original = librarySelection.prepareSkillLibrarySelection;
-    vi.spyOn(librarySelection, "prepareSkillLibrarySelection").mockImplementationOnce(
-      async (...args) => {
-        entered.resolve();
-        await gate.promise;
-        return original(...args);
-      },
-    );
+    const hold = holdLibraryRead();
     await test.run(async () => {
       const pending = prepare(surface, test);
-      const settled = pending.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        expect(
-          await Promise.race([entered.promise.then(() => true), settled.then(() => false)]),
-          "Library preparation did not yield",
-        ).toBe(true);
+      await hold(pending, async () => {
         process.env.OPENCLAW_STATE_DIR = otherRoot;
         test.pin.revision = test.updated.entry.revision;
         test.pin.name = "changed-during-preparation";
@@ -184,26 +190,22 @@ it.each(["workspace", "prompt"] as const)(
           description: "Arrived during preparation",
         });
         bumpSkillsSnapshotVersion({ workspaceDir: test.workspaceDir, reason: "manual" });
-        gate.resolve();
-        const entries = await pending;
-        expect(entries.map(({ skill }) => skill.name)).toEqual(["arrived", originalPin.name]);
-        expect(entries[1]?.skill.description).toBe("Saved procedure");
-        expect(entries[1]?.skill.filePath).toBe(
-          path.join(
-            test.root,
-            "skill-library",
-            originalPin.skillId,
-            "revisions",
-            originalPin.revision,
-            "SKILL.md",
-          ),
-        );
-        expect(fs.readFileSync(entries[1]!.skill.filePath, "utf8")).toBe(content);
-        expect(fs.existsSync(path.join(otherRoot, "state", "openclaw.sqlite"))).toBe(false);
-      } finally {
-        gate.resolve();
-        await settled;
-      }
+      });
+      const entries = await pending;
+      expect(entries.map(({ skill }) => skill.name)).toEqual(["arrived", originalPin.name]);
+      expect(entries[1]?.skill.description).toBe("Saved procedure");
+      expect(entries[1]?.skill.filePath).toBe(
+        path.join(
+          test.root,
+          "skill-library",
+          originalPin.skillId,
+          "revisions",
+          originalPin.revision,
+          "SKILL.md",
+        ),
+      );
+      expect(fs.readFileSync(entries[1]!.skill.filePath, "utf8")).toBe(content);
+      expect(fs.existsSync(path.join(otherRoot, "state", "openclaw.sqlite"))).toBe(false);
     });
   },
 );
@@ -219,17 +221,7 @@ it.each([
       if (warm) {
         await prepare(surface, test);
       }
-      const entered = createDeferredCore();
-      const gate = createDeferredCore();
-      const original = librarySelection.prepareSkillLibrarySelection;
-      vi.spyOn(librarySelection, "prepareSkillLibrarySelection").mockImplementationOnce(
-        async (...args) => {
-          const entries = await original(...args);
-          entered.resolve();
-          await gate.promise;
-          return entries;
-        },
-      );
+      const hold = holdLibraryRead(true);
       const closed = new Error("Synthetic Library caller was invalidated");
       let current = true;
       const pending = prepare(surface, test, () => {
@@ -237,22 +229,11 @@ it.each([
           throw closed;
         }
       });
-      const settled = pending.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        expect(
-          await Promise.race([entered.promise.then(() => true), settled.then(() => false)]),
-          "Library preparation did not yield",
-        ).toBe(true);
-        current = false;
-        gate.resolve();
-        expect(await settled).toEqual({ error: closed });
-      } finally {
-        gate.resolve();
-        await settled;
-      }
+      await expect(
+        hold(pending, () => {
+          current = false;
+        }),
+      ).rejects.toBe(closed);
     });
   },
 );

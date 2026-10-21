@@ -3,8 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
-    "sandbox": "4.6.1",
-    "vercel": "63.0.2"
+    "sandbox": "4.8.0",
+    "vercel": "63.1.2"
   },
   "overrides": {
     "@bytecodealliance/preview2-shim@0.17.6": "0.28.0",
@@ -15,7 +15,7 @@
     "minimatch@10.1.1": "10.2.6",
     "path-to-regexp@6.1.0": "6.3.0",
     "path-to-regexp@8.2.0 || 8.3.0": "8.4.2",
-    "smol-toml@1.5.2": "1.9.0",
+    "smol-toml@1.5.2": "1.9.1",
     "tar@7.5.7 || 7.5.11": "7.5.22",
     "undici@5.28.4 || 5.29.0": "6.29.0"
   }

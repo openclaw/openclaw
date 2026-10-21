@@ -3,6 +3,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { WebSocketServer } from "ws";
 import { disposeAcpSessionManager } from "../acp/control-plane/manager.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { disposeAllCliLiveSessions } from "../agents/cli-runner/cli-live-session-registry.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
@@ -12,6 +13,7 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
@@ -24,6 +26,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { clearArtifactDownloads } from "./artifact-download-grants.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
@@ -175,7 +178,6 @@ export type GatewayCloseParams = {
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
-  heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
   clients: Set<{
@@ -226,9 +228,6 @@ export async function prepareGatewayClose(
   const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
-  // Debug-level: the signal handler already announced the stop/restart at
-  // info, and the completion line below reports duration and outcome.
-  shutdownLog.debug(`shutdown started: ${reason}`);
 
   const triggerLifecycleHook = (action: "shutdown" | "pre-restart", timeoutMs: number) => {
     const hookName = `gateway:${action}` as const;
@@ -347,6 +346,7 @@ async function closeGatewayResources(
   const disposeRuntime = async (
     label:
       | "plugin-services"
+      | "cli-live-sessions"
       | "agent-harnesses"
       | "bundle-mcp"
       | "bundle-lsp"
@@ -404,6 +404,7 @@ async function closeGatewayResources(
         await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId));
       }
     });
+    await disposeRuntime("cli-live-sessions", disposeAllCliLiveSessions);
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
     await shutdownStep("provider-transport-dispatchers", () =>
@@ -415,6 +416,7 @@ async function closeGatewayResources(
         disposeRuntime("bundle-lsp", params.disposeAllBundleLspRuntimes),
       ]);
     });
+    await shutdownStep("artifact-downloads", clearArtifactDownloads);
     await shutdownStep("periodic-maintenance", () => params.maintenance?.stopPeriodicTasks());
     await shutdownStep("skill-usage", () => params.maintenance?.skillUsageCleanup());
     try {
@@ -441,9 +443,7 @@ async function closeGatewayResources(
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!());
     }
-    if (params.heartbeatUnsub) {
-      await shutdownStep("heartbeat-unsub", () => params.heartbeatUnsub!());
-    }
+    heartbeatNotifications.onEvent = () => {};
     if (params.transcriptUnsub) {
       await shutdownStep("transcript-unsub", () => params.transcriptUnsub!());
     }

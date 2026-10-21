@@ -22,13 +22,12 @@ export class DiscordActivitiesRuntime {
 
   constructor(
     readonly store: DiscordActivityStore,
-    private readonly startupConfig: OpenClawConfig,
-    private readonly getCurrentConfig?: () => OpenClawConfig | undefined,
+    private readonly getCurrentConfig: () => OpenClawConfig,
     private readonly env: NodeJS.ProcessEnv = process.env,
   ) {}
 
   currentConfig(): OpenClawConfig {
-    return selectDiscordActivitiesRuntimeConfig(this.getCurrentConfig?.() ?? this.startupConfig);
+    return selectDiscordActivitiesRuntimeConfig(this.getCurrentConfig());
   }
 
   registerApplicationId(accountId: string, applicationId: string): void {
@@ -83,7 +82,8 @@ export class DiscordActivitiesRuntime {
     return accounts.length === 1 ? (accounts[0] ?? null) : null;
   }
 
-  hasEnabledAccounts(cfg = this.currentConfig()): boolean {
+  hasEnabledAccounts(): boolean {
+    const cfg = this.currentConfig();
     return listDiscordAccountIds(cfg).some(
       (accountId) => this.resolveAccount(accountId, cfg) !== null,
     );

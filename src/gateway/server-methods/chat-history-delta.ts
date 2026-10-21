@@ -52,6 +52,7 @@ type ChatHistoryDeltaParams = {
   agentId: string;
   cursor: string;
   maxBytes?: number;
+  maxChars?: number;
   toolResultMaxChars?: number;
   includePluginSteering?: boolean;
   scope: SessionTranscriptReadScope;
@@ -188,6 +189,7 @@ async function projectChatHistoryDelta(
       agentId: params.agentId,
       historyDelta: true,
       includePluginSteering: params.includePluginSteering,
+      maxChars: params.maxChars,
       toolResultMaxChars: params.toolResultMaxChars,
       message: entryMessage,
       ...(typeof messageId === "string" && messageId ? { messageId } : {}),

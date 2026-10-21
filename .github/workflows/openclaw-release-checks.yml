@@ -1413,7 +1413,7 @@ jobs:
       openai_model: openai/gpt-5.6-luna
       ubuntu_runner: ubuntu-24.04
       windows_runner: windows-2025
-      macos_runner: macos-26
+      macos_runner: xcode-27
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -1923,11 +1923,6 @@ jobs:
             --status-dir .artifacts/release-check-status \
             --validated-file "$validated_file"
           jq -e 'length == 2 and all(.[]; .status == "success")' "$validated_file" >/dev/null
-
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build qaRuntime
 
       - name: Generate parity report
         id: generate_report

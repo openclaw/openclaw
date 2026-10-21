@@ -76,9 +76,7 @@ describe("browser config", () => {
         mode: "lightweight-cdp",
         browserFilesystemLocal: false,
         usesPersistentPlaywright: true,
-        supportsJsonTabEndpoints: false,
         supportsPerTabWs: false,
-        supportsMultipleTabs: false,
         supportsPageText: true,
         supportsScreenshots: false,
         supportsVisualActions: false,
@@ -86,8 +84,6 @@ describe("browser config", () => {
         supportsPdf: false,
         supportsUploads: false,
         supportsDialogs: false,
-        supportsStorage: false,
-        supportsScreencast: false,
         supportsConsole: false,
         supportsBatchActions: false,
         supportsRequests: false,
@@ -570,8 +566,8 @@ describe("browser config", () => {
     it("uses defaults for local launch and post-launch readiness windows", () => {
       const resolved = resolveBrowserConfig({});
 
-      expect(resolved.localLaunchTimeoutMs).toBe(15_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(8_000);
+      expect(resolved.localLaunchTimeoutMs).toBe(60_000);
+      expect(resolved.localCdpReadyTimeoutMs).toBe(30_000);
     });
   });
 

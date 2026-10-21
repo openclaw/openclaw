@@ -186,12 +186,8 @@ export function createWorkerSessionToolExecutor(
       .filter((name) =>
         params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
       );
-    // The child has its own workspace; this private capture passed the same
-    // policies and prompt limits without granting the parent a callable tool.
-    const inheritedPublicationTool = toolRuntime.getInheritedPublicationToolName();
-    if (inheritedPublicationTool) {
-      authorizedTools.push(inheritedPublicationTool);
-    }
+    // Workspace-dependent capabilities inherit policy, not the parent's availability.
+    authorizedTools.push(...toolRuntime.getAdditionalInheritedToolNames());
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
       requestParams: Record<string, unknown>,
@@ -605,6 +601,7 @@ export async function createWorkerGatewayTools(
   const source = capability.sessionTarget;
   const toolOptions = { agentSessionKey: source.sessionKey, workerPlacement: true };
   const portal = createAvailablePortalTools({
+    workerScoped: true,
     sessionPortalTarget: {
       agentId: source.agentId,
       sessionKey: source.sessionKey,

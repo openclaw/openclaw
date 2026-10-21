@@ -5,6 +5,7 @@ import {
   type IncomingMessage,
 } from "node:http";
 import { duplexPair, Writable } from "node:stream";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { WebSocket, createWebSocketStream } from "../../packages/gateway-client/src/websocket.js";
 import {
   GatewayControlUiIngressError,
@@ -12,6 +13,7 @@ import {
   type GatewayControlUiIngressWebSocketRequestV1,
   type GatewayIngressSocketV1,
 } from "../plugins/gateway-ingress.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { readGatewayPluginReadCookies } from "./control-ui-plugin-auth-cookie.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
@@ -20,10 +22,6 @@ import type { RemoteControlUiIngressContext } from "./server/client-identity-typ
 
 const MAX_BODY_BYTES = 100 * 1024 * 1024;
 const WS_OPEN_TIMEOUT_MS = 10_000;
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
 
 function limitError(message: string): GatewayControlUiIngressError {
   return new GatewayControlUiIngressError("limit-exceeded", message);
@@ -52,10 +50,7 @@ export function createRemoteControlUiTransport({
     signal.throwIfAborted();
     const [client, serverSocket] = duplexPair({ highWaterMark: 64 * 1024 });
     let finished = false;
-    let resolveClosed!: () => void;
-    const closed = new Promise<void>((resolve) => {
-      resolveClosed = resolve;
-    });
+    const { promise: closed, resolve: resolveClosed } = createDeferredCore();
     const abort = (error: unknown) => controller.abort(error);
     let idleMs = 0;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -64,23 +59,18 @@ export function createRemoteControlUiTransport({
       idleTimer = idleMs > 0 ? setTimeout(() => serverSocket.emit("timeout"), idleMs) : undefined;
       idleTimer?.unref();
     };
-    const finish = () => {
+    const finish = (error?: Error) => {
       if (finished) {
         return;
       }
       finished = true;
       clearTimeout(idleTimer);
       signal.removeEventListener("abort", destroy);
-      client.destroy();
-      serverSocket.destroy();
-      resolveClosed();
-    };
-    const destroy = () => {
-      const error = asError(signal.reason);
       client.destroy(error);
       serverSocket.destroy(error);
-      finish();
+      resolveClosed();
     };
+    const destroy = () => finish(toStringifiedError(signal.reason));
     signal.addEventListener("abort", destroy, { once: true });
     const check = () => {
       signal.throwIfAborted();
@@ -240,7 +230,7 @@ export function createRemoteControlUiTransport({
       };
     } catch (error) {
       op.abort(error);
-      throw asError(op.signal.reason);
+      throw toStringifiedError(op.signal.reason);
     }
   }
 
@@ -276,7 +266,7 @@ export function createRemoteControlUiTransport({
     }
     const messages = createWebSocketStream(ws, { readableObjectMode: true, highWaterMark: 1 });
     messages.on("error", op.abort);
-    const abort = () => messages.destroy(asError(op.signal.reason));
+    const abort = () => messages.destroy(toStringifiedError(op.signal.reason));
     op.signal.addEventListener("abort", abort, { once: true });
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       ws.once("close", (code, reason) => {
@@ -290,7 +280,7 @@ export function createRemoteControlUiTransport({
       ws.once("error", reject);
       ws.once("close", () =>
         reject(
-          asError(
+          toStringifiedError(
             op.signal.reason ?? new Error("Remote Control UI WebSocket closed before opening"),
           ),
         ),
@@ -306,7 +296,7 @@ export function createRemoteControlUiTransport({
       op.check();
     } catch (error) {
       op.abort(error);
-      throw asError(op.signal.reason);
+      throw toStringifiedError(op.signal.reason);
     } finally {
       clearTimeout(openTimer);
     }

@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { describe, expect, it } from "vitest";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import { createGatewayStoreTestStore } from "../app/gateway-store.test-support.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
@@ -26,6 +27,7 @@ describe("native session pages", () => {
       const sessions = createTestSessionCapability(gateway);
       const context = Object.assign(pageContext(gateway, agents, { sessions }), {
         basePath: "",
+        config: createApplicationConfigCapability({ resourceBasePath: "" }),
         channels,
         runtimeConfig,
         navigation: createNavigationPreferencesFixture(),
@@ -53,14 +55,14 @@ describe("native session pages", () => {
         ),
         { container: content, wrapper: provider.wrapper },
       );
+      // Settings Agents keeps the toolbar-row title; Activity uses the stacked page header.
+      const headerTrait = page === "agents" ? "content--toolbar-header" : "content--hub-header";
       try {
-        await waitForSolid(() =>
-          expect(content.classList.contains("content--toolbar-header")).toBe(true),
-        );
+        await waitForSolid(() => expect(content.classList.contains(headerTrait)).toBe(true));
         const host = content.querySelector(`openclaw-${page}-page`);
         expect(host).not.toBeNull();
         expect(host?.querySelector(".content-header")).not.toBeNull();
-        expect(content.classList.contains("content--toolbar-header")).toBe(true);
+        expect(content.classList.contains(headerTrait)).toBe(true);
         expect(content.classList.contains("content--settings-workspace")).toBe(true);
         if (page === "activity") {
           expect(content.classList.contains("content--activity-page")).toBe(true);

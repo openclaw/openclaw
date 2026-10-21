@@ -12,12 +12,13 @@ export const SESSION_LIST_SOURCES = [
   "agent-roster",
   "command-palette",
   "skill-workshop",
+  "workboard-lifecycle",
 ] as const;
 
 export const SessionsListParamsSchema = closedObject({
   /** Bounded caller attribution for response diagnostics; does not affect selection. */
   source: Type.Optional(Type.Enum(SESSION_LIST_SOURCES)),
-  /** Omit unchanged sidebar rows; delta:<revision> also accepts a retained window delta. */
+  /** Opt into shared/conditional rows (empty initially); delta:<revision> accepts window deltas. */
   ifRowsRevision: Type.Optional(Type.String({ maxLength: 64 })),
   /** Compact omits capabilities; sidebar/dashboard retain their view and membership facts. */
   rowMode: Type.Optional(stringLiteralUnion(["compact", "dashboard", "sidebar"])),
@@ -108,6 +109,12 @@ export const SessionsListParamsSchema = closedObject({
 });
 
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
+
+export const SessionsSubscribeParamsSchema = closedObject({
+  ...SessionsListParamsSchema.properties,
+  /** Retain full roster message bodies on this connection, including for plugins. */
+  includeMessageBodies: Type.Optional(Type.Boolean()),
+});
 
 /** One canonical profile owner with at least one visible, matching unarchived session. */
 export const SessionOwnerSessionCountSchema = closedObject({

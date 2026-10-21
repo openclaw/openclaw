@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
@@ -17,7 +19,10 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import {
+  AgentDatabaseAdmissionError,
+  assertAgentDatabaseAdmitted,
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
   listAgentDatabaseAdmissionRefusals,
@@ -270,16 +275,32 @@ class AgentDatabaseStartupAdmission {
   /** Join only the current agent preparation, without holding channel startup or healthy agents. */
   waitForAgentPreparation(
     agentId: string,
-    options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+    options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; forWrite?: boolean } = {},
   ): Promise<void> | undefined {
     const pending = this.pending.get(normalizeAgentId(agentId));
     if (!pending || readAgentDatabaseAdmissionRefusal(agentId, options) !== pending.refusal) {
       return undefined;
     }
-    return racePromiseWithAbortSignal(
+    const signal = options.signal ? AbortSignal.any([this.signal, options.signal]) : this.signal;
+    if (!options.forWrite) {
+      return racePromiseWithAbortSignal(pending.completion, signal);
+    }
+    // Allow five minutes for slow-host startup, plus a minute per queued inspection batch.
+    const timeoutMs =
+      GATEWAY_STARTUP_ADMISSION_WAIT_MS +
+      Math.ceil(this.pending.size / AGENT_DATABASE_PREFLIGHT_CONCURRENCY) * 60_000;
+    return raceWithTimeout(
       pending.completion,
-      options.signal ? AbortSignal.any([this.signal, options.signal]) : this.signal,
-    );
+      timeoutMs,
+      () => {
+        throw new AgentDatabaseAdmissionError({
+          ...pending.refusal,
+          repairHint:
+            "This agent is still preparing. Retry the request after background inspection and preparation finish.",
+        });
+      },
+      { signal, ref: false },
+    ).then(() => assertAgentDatabaseAdmitted(agentId, options));
   }
 
   track(work: Promise<unknown>): void {
@@ -526,10 +547,10 @@ class AgentDatabaseStartupAdmission {
                     await activation.publishAgent(input);
                     break;
                   } catch (error) {
-                    if (
-                      !(error instanceof AgentDatabaseStartupSupersededError) ||
-                      attempt >= STARTUP_PUBLICATION_ATTEMPTS
-                    ) {
+                    const retryable =
+                      error instanceof AgentDatabaseStartupSupersededError ||
+                      error instanceof AgentDatabaseSchemaAdmissionChangedError;
+                    if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
                       throw error;
                     }
                     log.warn("agent database startup preparation was superseded; retrying", {

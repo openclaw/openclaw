@@ -178,6 +178,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   ) =>
     resolvePreparedExtraParams({
       cfg: config,
+      transportConfig: asOpenClawConfig(params.transportConfig),
       provider: params.provider,
       modelId: params.modelId,
       agentDir: params.agentDir,

@@ -7,6 +7,7 @@ import type {
   MeetingParticipationAttempt,
   MeetingParticipationOptions,
   MeetingParticipationRequest,
+  MeetingParticipationResult,
   MeetingParticipationSource,
 } from "./participation-types.js";
 import { MeetingParticipation } from "./participation.js";
@@ -24,6 +25,63 @@ const source: MeetingParticipationSource = {
   text: "Please reply in chat.",
   finalized: true,
 };
+
+function observe(
+  owner: MeetingParticipation<object>,
+  overrides: Partial<MeetingParticipationSource> = {},
+) {
+  return owner.observe(sessionId, { ...source, ...overrides });
+}
+
+function execute(
+  owner: MeetingParticipation<object>,
+  overrides: Partial<MeetingParticipationRequest> = {},
+  id = sessionId,
+) {
+  return owner.execute(id, { ...request, ...overrides });
+}
+
+async function check(
+  owner: MeetingParticipation<object>,
+  expected: Partial<MeetingParticipationResult> | MeetingParticipationResult["status"],
+  overrides: Partial<MeetingParticipationRequest> = {},
+  id = sessionId,
+) {
+  await expect(execute(owner, overrides, id)).resolves.toMatchObject(
+    typeof expected === "string" ? { status: expected } : expected,
+  );
+}
+
+async function withSqliteStore(
+  maxEntries: number,
+  run: (
+    store: MeetingParticipationOptions<object>["store"],
+    reopen: () => MeetingParticipationOptions<object>["store"],
+  ) => Promise<void>,
+) {
+  const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
+    await import("../plugin-state/plugin-state-store.js");
+  await withOpenClawTestState(
+    { label: "meeting-participation", applyEnv: false },
+    async (state) => {
+      const createStore = () =>
+        createPluginStateKeyedStore<MeetingParticipationAttempt>("google-meet", {
+          namespace: "meeting-participation",
+          maxEntries,
+          overflowPolicy: "reject-new",
+          env: state.env,
+        });
+      try {
+        await run(createStore(), () => {
+          resetPluginStateStoreForTests();
+          return createStore();
+        });
+      } finally {
+        resetPluginStateStoreForTests();
+      }
+    },
+  );
+}
 
 function memoryStore(maxEntries = Infinity): MeetingParticipationOptions<object>["store"] {
   const rows = new Map<string, MeetingParticipationAttempt>();
@@ -148,43 +206,24 @@ describe("meeting participation authority and durable attempts", () => {
     });
     const first = owner.execute(sessionId, request);
     await started.promise;
-    await expect(owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "uncertain",
-      replayed: true,
-    });
+    await check(owner, { status: "uncertain", replayed: true });
     complete.release();
     const result = await first;
     expect(result).toMatchObject({ status: "succeeded", observed: { sent: true } });
     await expect(owner.execute(sessionId, request)).resolves.toEqual({ ...result, replayed: true });
-    await expect(
-      owner.execute(sessionId, { ...request, action: { type: "chat", text: "Different answer" } }),
-    ).resolves.toMatchObject({ status: "rejected" });
+    await check(owner, "rejected", { action: { type: "chat", text: "Different answer" } });
     expect(effect).toHaveBeenCalledTimes(1);
   });
 
   it("does not replay a consumed source under a new request or after its text is revised", async () => {
     const { owner, effect } = harness();
-    const sourceId = owner.observe(sessionId, source);
-    await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toMatchObject({
-      status: "succeeded",
-    });
-    await expect(
-      owner.execute(sessionId, { ...request, sourceId, requestId: "another-request" }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    const revisedSourceId = owner.observe(sessionId, {
-      ...source,
-      revision: "2",
-      text: "Please reply now.",
-    });
+    const sourceId = observe(owner);
+    await check(owner, "succeeded", { sourceId });
+    await check(owner, "rejected", { sourceId, requestId: "another-request" });
+    const revisedSourceId = observe(owner, { revision: "2", text: "Please reply now." });
     expect(revisedSourceId).toBeTruthy();
     expect(revisedSourceId).not.toBe(sourceId);
-    await expect(
-      owner.execute(sessionId, {
-        ...request,
-        sourceId: revisedSourceId,
-        requestId: "after-revision",
-      }),
-    ).resolves.toMatchObject({ status: "rejected" });
+    await check(owner, "rejected", { sourceId: revisedSourceId, requestId: "after-revision" });
     expect(effect).toHaveBeenCalledTimes(1);
   });
 
@@ -212,23 +251,15 @@ describe("meeting participation authority and durable attempts", () => {
           observed: { unsupportedValue: undefined },
         });
       }
-      await expect(first.owner.execute(sessionId, request)).resolves.toMatchObject({
-        status: "uncertain",
-      });
+      await check(first.owner, "uncertain");
       if (failure !== "native response") {
         expect(await store.lookup(`${sessionId}:request:${request.requestId}`)).not.toHaveProperty(
           "result",
         );
       }
-      await expect(first.owner.execute(sessionId, request)).resolves.toMatchObject({
-        status: "uncertain",
-        replayed: true,
-      });
+      await check(first.owner, { status: "uncertain", replayed: true });
       const restored = harness({ store });
-      await expect(restored.owner.execute(sessionId, request)).resolves.toMatchObject({
-        status: "uncertain",
-        replayed: true,
-      });
+      await check(restored.owner, { status: "uncertain", replayed: true });
       expect(first.effect).toHaveBeenCalledTimes(1);
       expect(restored.effect).not.toHaveBeenCalled();
     },
@@ -236,9 +267,7 @@ describe("meeting participation authority and durable attempts", () => {
 
   it("checks current capabilities without producing an effect for unsupported actions", async () => {
     const { owner, effect } = harness({ capabilities: () => [] });
-    await expect(owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "unsupported",
-    });
+    await check(owner, "unsupported");
     expect(effect).not.toHaveBeenCalled();
   });
 
@@ -264,7 +293,7 @@ describe("meeting participation authority and durable attempts", () => {
       });
       const mutable = structuredClone(request);
       if (change === "revoke capability") {
-        mutable.sourceId = owner.observe(sessionId, source);
+        mutable.sourceId = observe(owner);
       }
       const result = owner.execute(sessionId, mutable);
       await claimed.promise;
@@ -292,37 +321,17 @@ describe("meeting participation authority and durable attempts", () => {
   );
 
   it("persists completed attempts across independent SQLite store and owner instances", async () => {
-    const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
-      await import("../plugin-state/plugin-state-store.js");
-    await withOpenClawTestState(
-      { label: "meeting-participation", applyEnv: false },
-      async (state) => {
-        const options = {
-          namespace: "meeting-participation",
-          maxEntries: 100,
-          overflowPolicy: "reject-new" as const,
-          env: state.env,
-        };
-        try {
-          const first = harness({
-            store: createPluginStateKeyedStore<MeetingParticipationAttempt>("google-meet", options),
-          });
-          const result = await first.owner.execute(sessionId, request);
-          expect(result.status).toBe("succeeded");
-          resetPluginStateStoreForTests();
-          const restored = harness({
-            store: createPluginStateKeyedStore<MeetingParticipationAttempt>("google-meet", options),
-          });
-          await expect(restored.owner.execute(sessionId, request)).resolves.toEqual({
-            ...result,
-            replayed: true,
-          });
-          expect(restored.effect).not.toHaveBeenCalled();
-        } finally {
-          resetPluginStateStoreForTests();
-        }
-      },
-    );
+    await withSqliteStore(100, async (store, reopen) => {
+      const first = harness({ store });
+      const result = await first.owner.execute(sessionId, request);
+      expect(result.status).toBe("succeeded");
+      const restored = harness({ store: reopen() });
+      await expect(restored.owner.execute(sessionId, request)).resolves.toEqual({
+        ...result,
+        replayed: true,
+      });
+      expect(restored.effect).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -345,7 +354,7 @@ describe("meeting participation observed source identities", () => {
       execute: effect,
       current: () => current,
     });
-    const sourceId = owner.observe(sessionId, source);
+    const sourceId = observe(owner);
     expect(sourceId).toBeTruthy();
     expect(owner.context(sessionId).sources).toHaveLength(1);
     const inspection = owner.inspect(sessionId, sourceId!);
@@ -383,9 +392,7 @@ describe("meeting participation observed source identities", () => {
     }
     expect(() => inspection?.assertCurrent()).toThrow();
     expect(owner.inspect(sessionId, sourceId!)).toBeUndefined();
-    await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toMatchObject({
-      status: "rejected",
-    });
+    await check(owner, "rejected", { sourceId });
     if (label === "empty document") {
       expect(owner.context(sessionId).sources).toEqual([]);
       expect(owner.observeEpoch(sessionId, "caption", source.epoch)).toBe(false);
@@ -397,48 +404,38 @@ describe("meeting participation observed source identities", () => {
 
   it("advances the observation watermark for interim text without granting an actionable source", () => {
     const { owner } = harness();
-    expect(owner.observe(sessionId, { ...source, finalized: false })).toBeUndefined();
+    expect(observe(owner, { finalized: false })).toBeUndefined();
     const cutoff = owner.context(sessionId).sourceOrder;
     expect(cutoff).toBe(1);
     expect(owner.context(sessionId).sources).toEqual([]);
-    owner.observe(sessionId, { ...source, revision: "2", finalized: true });
+    observe(owner, { revision: "2", finalized: true });
     expect(owner.context(sessionId).sources[0]?.order).toBe(cutoff);
-    owner.observe(sessionId, { ...source, id: "new-message" });
+    observe(owner, { id: "new-message" });
     expect(owner.context(sessionId).sourceOrder).toBe(2);
     expect(owner.context(sessionId).sources[1]?.order).toBeGreaterThan(cutoff);
   });
 
   it("preserves correction order, detects identical observations, and never rehabilitates an own echo", () => {
     const { owner } = harness();
-    const original = owner.observe(sessionId, source);
-    expect(owner.observe(sessionId, source)).toBe(original);
-    const corrected = owner.observe(sessionId, { ...source, revision: "2", text: "Correction." });
+    const original = observe(owner);
+    expect(observe(owner)).toBe(original);
+    const corrected = observe(owner, { revision: "2", text: "Correction." });
     expect(owner.context(sessionId).sources).toMatchObject([
       { sourceId: corrected, order: 1, replacesSourceId: original },
     ]);
-    owner.observe(sessionId, { ...source, revision: "2", ownEcho: true });
-    expect(owner.observe(sessionId, { ...source, revision: "3", ownEcho: false })).toBeUndefined();
+    observe(owner, { revision: "2", ownEcho: true });
+    expect(observe(owner, { revision: "3", ownEcho: false })).toBeUndefined();
     expect(owner.context(sessionId).sources).toEqual([]);
   });
 
   it("ignores historical revisions and epochs without displacing current authority", () => {
     const { owner } = harness();
-    owner.observe(sessionId, source);
-    const revision = owner.observe(sessionId, {
-      ...source,
-      revision: "2",
-      text: "Current revision.",
-    });
-    expect(owner.observe(sessionId, source)).toBeUndefined();
+    observe(owner);
+    const revision = observe(owner, { revision: "2", text: "Current revision." });
+    expect(observe(owner)).toBeUndefined();
     expect(owner.context(sessionId).sources).toMatchObject([{ sourceId: revision }]);
-    const epoch = owner.observe(sessionId, {
-      ...source,
-      epoch: "document-2",
-      text: "Current document.",
-    });
-    expect(
-      owner.observe(sessionId, { ...source, revision: "3", text: "Old document." }),
-    ).toBeUndefined();
+    const epoch = observe(owner, { epoch: "document-2", text: "Current document." });
+    expect(observe(owner, { revision: "3", text: "Old document." })).toBeUndefined();
     expect(owner.context(sessionId).sources).toMatchObject([
       { sourceId: epoch, epoch: "document-2" },
     ]);
@@ -447,18 +444,14 @@ describe("meeting participation observed source identities", () => {
   it("expires observations and refuses to restore authority after closing", async () => {
     vi.useFakeTimers();
     const { owner, effect } = harness();
-    const sourceId = owner.observe(sessionId, source);
+    const sourceId = observe(owner);
     vi.advanceTimersByTime(120_001);
     expect(owner.context(sessionId).sources).toEqual([]);
-    expect(owner.observe(sessionId, source)).toBeUndefined();
-    expect(
-      owner.observe(sessionId, { ...source, revision: "2", text: "Updated after expiry." }),
-    ).toBeUndefined();
-    await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toMatchObject({
-      status: "rejected",
-    });
+    expect(observe(owner)).toBeUndefined();
+    expect(observe(owner, { revision: "2", text: "Updated after expiry." })).toBeUndefined();
+    await check(owner, "rejected", { sourceId });
     owner.close(sessionId);
-    expect(owner.observe(sessionId, { ...source, id: "new-message" })).toBeUndefined();
+    expect(observe(owner, { id: "new-message" })).toBeUndefined();
     expect(owner.context(sessionId)).toMatchObject({
       active: false,
       sources: [],
@@ -498,9 +491,7 @@ describe("meeting participation live source capacity", () => {
 
       expect(() => inspection!.assertCurrent()).not.toThrow();
       expect(owner.context(sessionId)).toEqual(before);
-      await expect(
-        owner.execute(sessionId, { ...request, sourceId: retained.sourceId }),
-      ).resolves.toMatchObject({ status: "succeeded" });
+      await check(owner, "succeeded", { sourceId: retained.sourceId });
       expect(effect).toHaveBeenCalledOnce();
     },
   );
@@ -532,7 +523,7 @@ describe("meeting participation live source capacity", () => {
     expect(correctedSource.source.order).toBe(1);
     expect(() => correctedSource.assertCurrent()).not.toThrow();
 
-    owner.observe(sessionId, { ...source, kind: "caption", id: "next-caption" });
+    observe(owner, { kind: "caption", id: "next-caption" });
     expect(owner.context(sessionId).sources).toHaveLength(1_024);
     expect(() => correctedSource.assertCurrent()).toThrow();
     expect(() => retained.assertCurrent()).not.toThrow();
@@ -545,7 +536,7 @@ describe("meeting participation bounded correction", () => {
     "allows one correction retaining source and action (native rejection: %s)",
     async (native) => {
       const { owner, effect } = harness();
-      const sourceId = owner.observe(sessionId, source);
+      const sourceId = observe(owner);
       if (native) {
         effect.mockResolvedValueOnce({
           status: "rejected",
@@ -553,8 +544,7 @@ describe("meeting participation bounded correction", () => {
           correctable: true,
         });
       }
-      const rejected = await owner.execute(sessionId, {
-        ...request,
+      const rejected = await execute(owner, {
         sourceId,
         action: native ? request.action : { type: "chat", text: "" },
       });
@@ -568,28 +558,20 @@ describe("meeting participation bounded correction", () => {
       } else {
         expect(rejected).toMatchObject({ status: "rejected", correctionOf: request.requestId });
       }
-      await expect(
-        owner.execute(sessionId, { ...request, sourceId, requestId: "bypass-invalid-request" }),
-      ).resolves.toMatchObject({ status: "rejected" });
+      await check(owner, "rejected", { sourceId, requestId: "bypass-invalid-request" });
       const correction = {
         ...request,
         sourceId,
         requestId: "correction-1",
         correctionOf: request.requestId,
       };
-      await expect(owner.execute(sessionId, correction)).resolves.toMatchObject({
-        status: "succeeded",
+      await check(owner, "succeeded", correction);
+      await check(owner, "rejected", { ...correction, requestId: "correction-2" });
+      await check(owner, "rejected", {
+        ...correction,
+        requestId: "grandchild",
+        correctionOf: correction.requestId,
       });
-      await expect(
-        owner.execute(sessionId, { ...correction, requestId: "correction-2" }),
-      ).resolves.toMatchObject({ status: "rejected" });
-      await expect(
-        owner.execute(sessionId, {
-          ...correction,
-          requestId: "grandchild",
-          correctionOf: correction.requestId,
-        }),
-      ).resolves.toMatchObject({ status: "rejected" });
       expect(effect).toHaveBeenCalledTimes(native ? 2 : 1);
     },
   );
@@ -610,13 +592,10 @@ describe("meeting participation bounded correction", () => {
       if (native) {
         expect(result).toEqual({ requestId: correction.requestId, status: "rejected" });
       }
-      await expect(
-        owner.execute(sessionId, {
-          ...request,
-          requestId: "grandchild",
-          correctionOf: correction.requestId,
-        }),
-      ).resolves.toMatchObject({ status: "rejected" });
+      await check(owner, "rejected", {
+        requestId: "grandchild",
+        correctionOf: correction.requestId,
+      });
       expect(effect).toHaveBeenCalledTimes(native ? 2 : 0);
     },
   );
@@ -625,21 +604,18 @@ describe("meeting participation bounded correction", () => {
     "rejects a correction with %s",
     async (change) => {
       const { owner, effect } = harness();
-      const sourceId = owner.observe(sessionId, source);
-      const anotherSourceId = owner.observe(sessionId, { ...source, id: "provider-message-2" });
-      await owner.execute(sessionId, {
-        ...request,
+      const sourceId = observe(owner);
+      const anotherSourceId = observe(owner, { id: "provider-message-2" });
+      await execute(owner, {
         sourceId: change === "new source authority" ? undefined : sourceId,
         action: { type: "chat", text: "" },
       });
-      await expect(
-        owner.execute(sessionId, {
-          requestId: "correction-1",
-          correctionOf: request.requestId,
-          sourceId: change === "different source" ? anotherSourceId : sourceId,
-          action: change === "different action" ? { type: "reaction" } : request.action,
-        }),
-      ).resolves.toMatchObject({ status: "rejected" });
+      await check(owner, "rejected", {
+        requestId: "correction-1",
+        correctionOf: request.requestId,
+        sourceId: change === "different source" ? anotherSourceId : sourceId,
+        action: change === "different action" ? { type: "reaction" } : request.action,
+      });
       expect(effect).not.toHaveBeenCalled();
     },
   );
@@ -649,8 +625,7 @@ describe("meeting participation SQLite value contract", () => {
   it("omits absent optional claim and result fields before canonical validation", async () => {
     const { owner, store, effect } = harness();
     effect.mockResolvedValue({ status: "succeeded", message: undefined, observed: undefined });
-    const outcome = await owner.execute(sessionId, {
-      ...request,
+    const outcome = await execute(owner, {
       sourceId: undefined,
       correctionOf: undefined,
     });
@@ -707,38 +682,18 @@ describe("meeting participation ledger capacity", () => {
       replayed: true,
     });
 
-    await expect(owner.execute("next", request)).resolves.toMatchObject({ status: "succeeded" });
+    await check(owner, "succeeded", {}, "next");
     expect(await store.lookup(`closed:request:${request.requestId}`)).toBeUndefined();
     expect(await store.lookup(`active:request:${request.requestId}`)).toMatchObject({
       result: { status: "succeeded" },
     });
-    await expect(owner.execute("active", request)).resolves.toMatchObject({
-      status: "succeeded",
-      replayed: true,
-    });
-    await expect(owner.execute("closed", request)).resolves.toMatchObject({ status: "rejected" });
+    await check(owner, { status: "succeeded", replayed: true }, {}, "active");
+    await check(owner, "rejected", {}, "closed");
     expect(effect).toHaveBeenCalledTimes(3);
   }
 
   it("makes space for new meetings in the real SQLite namespace without evicting active claims", async () => {
-    const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
-      await import("../plugin-state/plugin-state-store.js");
-    await withOpenClawTestState(
-      { label: "meeting-participation-capacity", applyEnv: false },
-      async (state) => {
-        try {
-          const store = createPluginStateKeyedStore<MeetingParticipationAttempt>("google-meet", {
-            namespace: "meeting-participation",
-            maxEntries: 2,
-            overflowPolicy: "reject-new",
-            env: state.env,
-          });
-          await verifyClosedSessionCleanup(store);
-        } finally {
-          resetPluginStateStoreForTests();
-        }
-      },
-    );
+    await withSqliteStore(2, verifyClosedSessionCleanup);
   });
 
   async function verifyInvalidIdentifiersPreserveClosedLedger(
@@ -785,24 +740,7 @@ describe("meeting participation ledger capacity", () => {
   }
 
   it("does not clean up closed SQLite claims for oversized or blank input fields", async () => {
-    const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
-      await import("../plugin-state/plugin-state-store.js");
-    await withOpenClawTestState(
-      { label: "meeting-participation-invalid-fields", applyEnv: false },
-      async (state) => {
-        try {
-          const store = createPluginStateKeyedStore<MeetingParticipationAttempt>("google-meet", {
-            namespace: "meeting-participation",
-            maxEntries: 1,
-            overflowPolicy: "reject-new",
-            env: state.env,
-          });
-          await verifyInvalidIdentifiersPreserveClosedLedger(store);
-        } finally {
-          resetPluginStateStoreForTests();
-        }
-      },
-    );
+    await withSqliteStore(1, verifyInvalidIdentifiersPreserveClosedLedger);
   });
 
   it("does not evict current session claims when capacity is exhausted", async () => {
@@ -812,10 +750,7 @@ describe("meeting participation ledger capacity", () => {
     await expect(
       owner.execute(sessionId, { ...request, requestId: "new-request" }),
     ).rejects.toMatchObject({ code: "PLUGIN_STATE_LIMIT_EXCEEDED" });
-    await expect(owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "succeeded",
-      replayed: true,
-    });
+    await check(owner, { status: "succeeded", replayed: true });
     expect(effect).toHaveBeenCalledTimes(1);
     expect(await store.entries()).toHaveLength(1);
   });
@@ -824,16 +759,9 @@ describe("meeting participation ledger capacity", () => {
     const store = memoryStore(1);
     await harness({ store }).owner.execute(sessionId, request);
     const restored = harness({ store }, ["new-session"]);
-    await expect(restored.owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "succeeded",
-      replayed: true,
-    });
-    await expect(restored.owner.execute("new-session", request)).resolves.toMatchObject({
-      status: "succeeded",
-    });
-    await expect(restored.owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "rejected",
-    });
+    await check(restored.owner, { status: "succeeded", replayed: true });
+    await check(restored.owner, "succeeded", {}, "new-session");
+    await check(restored.owner, "rejected");
     expect(restored.effect).toHaveBeenCalledTimes(1);
   });
 
@@ -875,9 +803,7 @@ describe("meeting participation ledger capacity", () => {
       await store.register(`closed:request:${index}`, { ...attempt, requestId: String(index) });
     }
     await owner.execute(sessionId, request);
-    await expect(
-      owner.execute(sessionId, { ...request, requestId: "next-request" }),
-    ).resolves.toMatchObject({ status: "succeeded" });
+    await check(owner, "succeeded", { requestId: "next-request" });
     expect((await store.entries()).map((row) => row.key)).toEqual([
       "unrelated-key",
       "closed:request:1000",

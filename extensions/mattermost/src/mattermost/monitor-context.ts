@@ -1,4 +1,5 @@
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { countOutboundMedia } from "openclaw/plugin-sdk/reply-payload";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
@@ -104,7 +105,7 @@ export function formatMattermostFinalDeliveryOutcomeLog(params: {
   }
   if (params.outcome === "empty") {
     // Detect dropped substantive payloads even when the agent run succeeded (#80501).
-    const finalText = typeof params.payload.text === "string" ? params.payload.text.trim() : "";
+    const finalText = params.payload.text?.trim() ?? "";
     const mediaUrlCount = countOutboundMedia(params.payload);
     if (finalText.length > 0 || mediaUrlCount > 0) {
       return (
@@ -121,27 +122,19 @@ export function formatMattermostFinalDeliveryOutcomeLog(params: {
   return undefined;
 }
 
-export function resolveMattermostEffectiveReplyToId(params: {
-  kind: ChatType;
-  postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
-  threadRootId?: string | null;
-}): string | undefined {
-  // Flat DMs never thread; rooms retain existing roots even when new replies are off.
-  return params.kind === "direct" && params.replyToMode === "off"
-    ? undefined
-    : (normalizeOptionalString(params.threadRootId) ??
-        (params.replyToMode !== "off" ? normalizeOptionalString(params.postId) : undefined));
-}
-
 export function resolveMattermostThreadSessionContext(params: {
   baseSessionKey: string;
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
-  const effectiveReplyToId = resolveMattermostEffectiveReplyToId(params);
+  // Flat DMs never thread; rooms retain existing roots even when new replies are off.
+  const effectiveReplyToId =
+    params.kind === "direct" && params.replyToMode === "off"
+      ? undefined
+      : (normalizeOptionalString(params.threadRootId) ??
+        (params.replyToMode !== "off" ? normalizeOptionalString(params.postId) : undefined));
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: params.baseSessionKey,
     threadId: effectiveReplyToId,

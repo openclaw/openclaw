@@ -162,21 +162,6 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
-  const missing = [
-    scenario.openclawTokens > 0
-      ? undefined
-      : `${scenario.openclawStatus === "pass" ? "openclaw" : "openclaw failed"}=0`,
-    scenario.codexTokens > 0
-      ? undefined
-      : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
-  ].filter((entry): entry is string => Boolean(entry));
-  if (missing.length === 0) {
-    return undefined;
-  }
-  return `${scenarioName} missing live assistant-message usage (${missing.join(", ")}).`;
-}
-
 function requiredCoverageStatus(
   scenario: QaRuntimeParitySuiteScenario | undefined,
 ): "pass" | "fail" | "skip" | "missing" {
@@ -228,36 +213,19 @@ function verifySummaryLabelMatch(params: {
   ) {
     return;
   }
-  throw new QaParityLabelMismatchError({
-    role: params.role,
-    label: params.label,
-    runProvider,
-    runModel,
-  });
-}
-
-class QaParityLabelMismatchError extends Error {
-  readonly role: "candidate" | "baseline";
-  readonly label: string;
-  readonly runProvider: string;
-  readonly runModel: string;
-
-  constructor(params: {
-    role: "candidate" | "baseline";
-    label: string;
-    runProvider: string;
-    runModel: string;
-  }) {
-    super(
-      `${params.role} summary run.primaryProvider=${params.runProvider} and run.primaryModel=${params.runModel} do not match --${params.role}-label=${params.label}. ` +
+  throw Object.assign(
+    new Error(
+      `${params.role} summary run.primaryProvider=${runProvider} and run.primaryModel=${runModel} do not match --${params.role}-label=${params.label}. ` +
         `Check that the --candidate-summary / --baseline-summary paths weren't swapped.`,
-    );
-    this.name = "QaParityLabelMismatchError";
-    this.role = params.role;
-    this.label = params.label;
-    this.runProvider = params.runProvider;
-    this.runModel = params.runModel;
-  }
+    ),
+    {
+      name: "QaParityLabelMismatchError",
+      role: params.role,
+      label: params.label,
+      runProvider,
+      runModel,
+    },
+  );
 }
 
 export function buildQaAgenticParityComparison(params: {
@@ -514,13 +482,21 @@ export function buildQaRuntimeParityReport(params: {
         `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
       );
     }
-    const usageFailure =
-      requiresLiveUsage && runtimeParityUsage.expectation === "assistant-message-required"
-        ? describeLiveUsageFailure(scenario.name, reportScenario)
-        : undefined;
-    if (usageFailure) {
-      failures.push(usageFailure);
-      return { ...reportScenario, status: "fail" };
+    if (requiresLiveUsage && runtimeParityUsage.expectation === "assistant-message-required") {
+      const missing = [
+        reportScenario.openclawTokens > 0
+          ? undefined
+          : `${reportScenario.openclawStatus === "pass" ? "openclaw" : "openclaw failed"}=0`,
+        reportScenario.codexTokens > 0
+          ? undefined
+          : `${reportScenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
+      ].filter((entry): entry is string => Boolean(entry));
+      if (missing.length > 0) {
+        failures.push(
+          `${scenario.name} missing live assistant-message usage (${missing.join(", ")}).`,
+        );
+        return { ...reportScenario, status: "fail" };
+      }
     }
     return reportScenario;
   });

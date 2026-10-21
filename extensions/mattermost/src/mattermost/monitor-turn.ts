@@ -179,7 +179,7 @@ export async function dispatchMattermostInboundTurn(
   });
 
   const resolvePreviewFinalText = (text?: string): MattermostPreviewFinalResolution | undefined => {
-    const finalText = typeof text === "string" ? text : "";
+    const finalText = text ?? "";
     const resolution = draftStream?.resolveFinalText(finalText) ?? {
       kind: "full",
       text: finalText,
@@ -290,9 +290,6 @@ export async function dispatchMattermostInboundTurn(
             account.accountId,
             channelId,
             effectiveReplyToId,
-            {
-              agentId: route.agentId,
-            },
           );
         }
       };
@@ -310,7 +307,7 @@ export async function dispatchMattermostInboundTurn(
           const finalTextResolution =
             info.kind === "final" &&
             !payloadToDeliver.isError &&
-            typeof payloadToDeliver.text === "string"
+            payloadToDeliver.text !== undefined
               ? draftStream?.resolveFinalText(payloadToDeliver.text)
               : undefined;
           const resolvedPayload = finalTextResolution

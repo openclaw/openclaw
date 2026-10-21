@@ -34,6 +34,7 @@ import type {
 } from "../deliver-reply.js";
 import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
+import { resolveWebMonitorConfigSnapshot } from "./config.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import type {
@@ -47,12 +48,10 @@ import {
   jidToE164,
   logVerbose,
   resolveChunkMode,
-  resolveIdentityNamePrefix,
   resolveInboundLastRouteSessionKey,
   resolveMarkdownTableMode,
   resolveSendableOutboundReplyParts,
   resolveTextChunkLimit,
-  shouldLogVerbose,
   type getChildLogger,
   type getReplyFromConfig,
   type LoadConfigFn,
@@ -249,12 +248,10 @@ function createWhatsAppMediaOnlyReplyCoalescer(params: {
     },
     flushNonDuplicateMedia: (mediaUrls: Set<string>) =>
       flushWhere((pending) => !hasWhatsAppMediaUrlOverlap(pending.mediaUrls, mediaUrls)),
-    supersedeMedia(mediaUrl: string): number {
-      let droppedDuplicateMedia = 0;
+    supersedeMedia(mediaUrl: string): void {
       const retained: PendingWhatsAppMediaOnlyPayload[] = [];
       for (const pending of pendingMediaOnlyPayloads.splice(0)) {
         if (pending.mediaUrls.delete(mediaUrl)) {
-          droppedDuplicateMedia += 1;
           // The original finalization still owns every unmatched attachment, in order.
           const mediaUrls = [...pending.mediaUrls];
           pending.payload = { ...pending.payload, mediaUrl: mediaUrls[0], mediaUrls };
@@ -266,40 +263,9 @@ function createWhatsAppMediaOnlyReplyCoalescer(params: {
         retained.push(pending);
       }
       pendingMediaOnlyPayloads.push(...retained);
-      return droppedDuplicateMedia;
     },
     flushAll: () => flushWhere(() => true),
   };
-}
-
-function logWhatsAppMediaOnlyFlushResult(delivered: number, droppedDuplicateMedia = 0) {
-  if (!shouldLogVerbose()) {
-    return;
-  }
-  if (droppedDuplicateMedia > 0) {
-    logVerbose(
-      `Superseded ${droppedDuplicateMedia} deferred WhatsApp attachment(s) with accepted replacement media`,
-    );
-  }
-  if (delivered > 0) {
-    logVerbose(`Flushed ${delivered} deferred media-only WhatsApp reply payload(s)`);
-  }
-}
-
-export function resolveWhatsAppResponsePrefix(params: {
-  cfg: ReturnType<LoadConfigFn>;
-  agentId: string;
-  isSelfChat: boolean;
-  pipelineResponsePrefix?: string;
-}): string | undefined {
-  const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
-  return (
-    params.pipelineResponsePrefix ??
-    (configuredResponsePrefix === "auto"
-      ? resolveIdentityNamePrefix(params.cfg, params.agentId)
-      : configuredResponsePrefix) ??
-    (params.isSelfChat ? resolveIdentityNamePrefix(params.cfg, params.agentId) : undefined)
-  );
 }
 
 export function buildWhatsAppInboundTransportContext(
@@ -544,7 +510,7 @@ export function createWhatsAppReplyPlan(params: {
 }): WhatsAppReplyPlan {
   const conversationId = params.conversationId;
   const statusReactionController = params.statusReactionController ?? null;
-  const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp");
+  const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp", params.route.accountId);
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
@@ -559,7 +525,6 @@ export function createWhatsAppReplyPlan(params: {
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp);
   let didSendReply = false;
-  let didLogHeartbeatStrip = false;
   let reactionDeferred = false;
   let agentRunOutcome: "completed" | "failed" | undefined;
   let queuedDeliveryOutcome: typeof agentRunOutcome | "neutral";
@@ -587,18 +552,6 @@ export function createWhatsAppReplyPlan(params: {
     }
   };
 
-  const recordDeliveredPayload = (
-    payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>,
-  ): void => {
-    didSendReply = true;
-    if (shouldLogVerbose()) {
-      const reply = resolveSendableOutboundReplyParts(payload);
-      logVerbose(
-        `Reply delivered: ${reply.text.length} chars${reply.hasMedia ? " (media)" : ""} -> ${conversationId}`,
-      );
-    }
-  };
-
   const deliverNormalizedPayload = async (
     normalizedDeliveryPayload: DeliverableWhatsAppOutboundPayload<ReplyPayload>,
     info: ReplyDeliveryInfo,
@@ -620,7 +573,6 @@ export function createWhatsAppReplyPlan(params: {
         chunkMode,
         replyLogger: params.replyLogger,
         connectionId: params.connectionId,
-        skipLog: false,
         tableMode,
         onMediaAccepted: options?.onMediaAccepted,
       });
@@ -656,7 +608,7 @@ export function createWhatsAppReplyPlan(params: {
       return result;
     }
     if (options?.recordDelivery !== false) {
-      recordDeliveredPayload(normalizedDeliveryPayload);
+      didSendReply = true;
     }
     return result;
   };
@@ -669,15 +621,8 @@ export function createWhatsAppReplyPlan(params: {
 
   const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     ...params.replyPipeline,
-    onHeartbeatStrip: () => {
-      if (!didLogHeartbeatStrip) {
-        didLogHeartbeatStrip = true;
-        logVerbose("Stripped stray HEARTBEAT_OK token from web reply");
-      }
-    },
     onSettled: async () => {
       const delivered = await mediaOnlyCoalescer.flushAll();
-      logWhatsAppMediaOnlyFlushResult(delivered);
       return { visibleReplySent: didSendReply || delivered > 0 };
     },
     onReplyStart: params.transport.sendComposing,
@@ -701,12 +646,11 @@ export function createWhatsAppReplyPlan(params: {
         return normalizedDeliveryPayload;
       }
       const mediaUrls = new Set(normalizedDeliveryPayload.mediaUrls);
-      const flushResult = reply.hasMedia
-        ? shouldDeferWhatsAppMediaOnlyPayload({ info, mediaUrls, reply })
-          ? 0
-          : await mediaOnlyCoalescer.flushNonDuplicateMedia(mediaUrls)
-        : await mediaOnlyCoalescer.flushAll();
-      logWhatsAppMediaOnlyFlushResult(flushResult);
+      if (!reply.hasMedia) {
+        await mediaOnlyCoalescer.flushAll();
+      } else if (!shouldDeferWhatsAppMediaOnlyPayload({ info, mediaUrls, reply })) {
+        await mediaOnlyCoalescer.flushNonDuplicateMedia(mediaUrls);
+      }
       return normalizedDeliveryPayload;
     },
     durable: (payload, info) => {
@@ -715,6 +659,8 @@ export function createWhatsAppReplyPlan(params: {
         return false;
       }
       return {
+        prepareRuntimeHandoff: (cfg) =>
+          resolveWebMonitorConfigSnapshot({ cfg, accountId: params.route.accountId }).cfg,
         to: conversationId,
         replyToId: resolveWhatsAppDurableReplyToId({
           context: params.context,
@@ -754,14 +700,14 @@ export function createWhatsAppReplyPlan(params: {
         // transfers attachment ownership, including before later bookkeeping fails.
         onMediaAccepted: (mediaUrl) => {
           didSendReply = true;
-          logWhatsAppMediaOnlyFlushResult(0, mediaOnlyCoalescer.supersedeMedia(mediaUrl));
+          mediaOnlyCoalescer.supersedeMedia(mediaUrl);
         },
       });
     },
     onDelivered: (payload, _info, result) => {
       const reply = resolveSendableOutboundReplyParts(payload);
       if (!reply.hasMedia && result?.visibleReplySent === true) {
-        recordDeliveredPayload(payload as DeliverableWhatsAppOutboundPayload<ReplyPayload>);
+        didSendReply = true;
       }
     },
     onError: (err, info) => {

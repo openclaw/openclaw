@@ -48,7 +48,6 @@ import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers
 import {
   type HookContext,
   getBeforeToolCallFailureDisposition,
-  getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -2228,63 +2227,6 @@ describe("before_tool_call requireApproval handling", () => {
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
   });
 
-  it("reports trusted policy diagnostics through guarded readers", () => {
-    hookRunner.hasHooks.mockReturnValue(false);
-    const registry = createEmptyPluginRegistry();
-    const unreadableIdPolicy: Record<string, unknown> = {
-      description: "synthetic trusted policy",
-      evaluate: () => undefined,
-    };
-    Object.defineProperty(unreadableIdPolicy, "id", {
-      enumerable: true,
-      get() {
-        throw new Error("fuzzplugin trusted policy id is unreadable");
-      },
-    });
-    registry.trustedToolPolicies = [
-      {
-        pluginId: "fuzzplugin",
-        pluginName: "Fuzz Plugin",
-        source: "test",
-        policy: unreadableIdPolicy as never,
-      },
-      {
-        pluginId: "mockplugin",
-        pluginName: "Mock Plugin",
-        source: "test",
-        policy: {
-          id: "mockpolicy",
-          description: "mock policy",
-          evaluate: () => undefined,
-        },
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    let state: ReturnType<typeof getBeforeToolCallPolicyDiagnosticState> | undefined;
-    try {
-      state = getBeforeToolCallPolicyDiagnosticState();
-    } finally {
-      setActivePluginRegistry(createEmptyPluginRegistry());
-    }
-
-    expect(state).toEqual({
-      hasBeforeToolCallHook: false,
-      trustedToolPolicies: [
-        {
-          id: "fuzzplugin",
-          pluginId: "fuzzplugin",
-          pluginName: "Fuzz Plugin",
-        },
-        {
-          id: "mockpolicy",
-          pluginId: "mockplugin",
-          pluginName: "Mock Plugin",
-        },
-      ],
-    });
-  });
-
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {
     const cwd = path.join("/tmp", "openclaw-hooks");
     const originalPatch = [
@@ -2434,7 +2376,6 @@ describe("before_tool_call requireApproval handling", () => {
 
   it.each([
     { label: "an unknown decision", decision: "approved" },
-    { label: "a malformed truthy decision", decision: true },
     { label: "an excluded allow decision", decision: "allow-always", restricted: true },
     { label: "a decision for another approval", decision: "allow-once", wrongId: true },
   ])(

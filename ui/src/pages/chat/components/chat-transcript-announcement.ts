@@ -4,7 +4,8 @@ import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
-import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 
@@ -15,7 +16,7 @@ export type TranscriptAnnouncement = {
   text: string;
 };
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 const ANNOUNCEMENT_MAX_CHARS = 500;
 
 function assistantMessageAttachmentFailureText(message: unknown): string | null {
@@ -43,13 +44,15 @@ function assistantMessageAnnouncementText(message: unknown): string | null {
 
 export function latestTranscriptAnnouncement(
   items: readonly ChatRenderItem[],
+  liveItem?: ChatRenderItem,
 ): TranscriptAnnouncement | null {
   const announcement = (key: string, text: string): TranscriptAnnouncement => ({
     key,
     text: truncateUtf16Safe(text, ANNOUNCEMENT_MAX_CHARS),
   });
   for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-    const item = items[itemIndex];
+    const base = items[itemIndex];
+    const item = base?.key === liveItem?.key ? liveItem : base;
     if (!item) {
       continue;
     }

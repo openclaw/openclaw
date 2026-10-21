@@ -12,7 +12,7 @@ import {
 } from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { createReasoningTagProbe, stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
   createConditionalTextProjector,
@@ -130,21 +130,6 @@ function stripMinimaxToolCallXml(text: string): string {
   return result;
 }
 
-function isLegacyBracketToolCallPayload(value: string): boolean {
-  return (
-    /\btool\s*=>\s*["'][A-Za-z_][A-Za-z0-9_.:-]{0,119}["']/i.test(value) &&
-    /\bargs\s*=>/i.test(value)
-  );
-}
-
-function isLegacyBracketToolResultPayload(value: string): boolean {
-  return (
-    /^\s*[{[]/.test(value) ||
-    /\b(?:tool|result|output|content)\s*=>/i.test(value) ||
-    /\b(?:tool|result|output|content)\s*:/i.test(value)
-  );
-}
-
 export function stripLegacyBracketToolCallBlocks(text: string): string {
   if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
     return text;
@@ -168,8 +153,11 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
     }
     const payload = text.slice(payloadStart, closeMatch?.index);
     const isToolPayload = isResult
-      ? isLegacyBracketToolResultPayload(payload)
-      : isLegacyBracketToolCallPayload(payload);
+      ? /^\s*[{[]/.test(payload) ||
+        /\b(?:tool|result|output|content)\s*=>/i.test(payload) ||
+        /\b(?:tool|result|output|content)\s*:/i.test(payload)
+      : /\btool\s*=>\s*["'][A-Za-z_][A-Za-z0-9_.:-]{0,119}["']/i.test(payload) &&
+        /\bargs\s*=>/i.test(payload);
     if (!isToolPayload) {
       continue;
     }
@@ -254,16 +242,17 @@ export function assistantVisibleTextFilters(
       : options?.preserveTrailingWhitespace
         ? "start"
         : "both";
+  const stripReasoning = (text: string) =>
+    stripReasoningTagsFromText(text, {
+      mode: preserve ? "preserve" : "strict",
+      scope: profile === "final-answer-delivery" ? "leading" : "all",
+      trim: preserveCodeIndentation ? "none" : trim,
+      // An unfinished stream cannot use terminal malformed-output recovery.
+      recoverUnclosed: !streaming,
+    });
   const reasoning: TextFilter = {
-    activationTokens: ["<"],
-    transform: (text) =>
-      stripReasoningTagsFromText(text, {
-        mode: preserve ? "preserve" : "strict",
-        scope: profile === "final-answer-delivery" ? "leading" : "all",
-        trim: preserveCodeIndentation ? "none" : trim,
-        // An unfinished stream cannot use terminal malformed-output recovery.
-        recoverUnclosed: !streaming,
-      }),
+    transform: stripReasoning,
+    create: () => createConditionalTextProjector(stripReasoning, createReasoningTagProbe()),
   };
   const filters: TextFilter[] = [
     ...(!preserve ? [minimaxToolCallTextFilter] : []),
@@ -294,7 +283,26 @@ export function assistantVisibleTextFilters(
     preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
     {
       transform: stripInvisibleAssistantText,
-      create: () => createConditionalTextProjector(stripInvisibleAssistantText, () => true),
+      create: () => {
+        let visible = false;
+        let trailingHighSurrogate = "";
+        return createConditionalTextProjector(
+          () => "",
+          (input) => {
+            if (!visible) {
+              const appended = trailingHighSurrogate + (input.delta ?? input.text);
+              // A split supplementary character cannot permanently establish visibility yet.
+              trailingHighSurrogate = /[\uD800-\uDBFF]$/.test(appended) ? appended.slice(-1) : "";
+              visible = Boolean(
+                stripInvisibleAssistantText(
+                  trailingHighSurrogate ? appended.slice(0, -1) : appended,
+                ),
+              );
+            }
+            return !visible;
+          },
+        );
+      },
     },
   );
   profileFilters.set(key, filters);
@@ -315,64 +323,62 @@ export const legacyBracketToolCallTextFilter: TextFilter = {
 
 export const assistantTraceTextFilter: TextFilter = {
   transform: stripAssistantInternalTraceLines,
-  create: createAssistantTraceProjector,
-};
-
-function createAssistantTraceProjector() {
-  let active = false;
-  const resetLine = () => traceLineHeads.map((parts) => ({ parts, part: 0, offset: 0 }));
-  let candidates = resetLine();
-  return createConditionalTextProjector(
-    stripAssistantInternalTraceLines,
-    (input) => {
-      if (active) {
-        return true;
-      }
-      const appended = input.delta ?? input.text;
-      for (let at = 0; at < appended.length; at++) {
-        const char = appended.charAt(at).toLowerCase();
-        if (char === "\n") {
-          candidates = resetLine();
-          continue;
-        }
-        const whitespace = /\s/.test(char);
-        candidates = candidates.filter((candidate) => {
-          if (candidate.offset === 0 && whitespace) {
-            return true;
-          }
-          if (candidate.parts[candidate.part]?.charAt(candidate.offset) !== char) {
-            return false;
-          }
-          candidate.offset++;
-          if (candidate.offset === candidate.parts[candidate.part]?.length) {
-            candidate.part++;
-            candidate.offset = 0;
-            active ||= candidate.part === candidate.parts.length;
-          }
-          return true;
-        });
-        // The canonical transform owns code protection and corrections after activation.
+  create() {
+    let active = false;
+    const resetLine = () => traceLineHeads.map((parts) => ({ parts, part: 0, offset: 0 }));
+    let candidates = resetLine();
+    return createConditionalTextProjector(
+      stripAssistantInternalTraceLines,
+      (input) => {
         if (active) {
           return true;
         }
-        if (candidates.length === 0) {
-          const newline = appended.indexOf("\n", at + 1);
-          if (newline === -1) {
-            break;
+        const appended = input.delta ?? input.text;
+        for (let at = 0; at < appended.length; at++) {
+          const char = appended.charAt(at).toLowerCase();
+          if (char === "\n") {
+            candidates = resetLine();
+            continue;
           }
-          at = newline - 1;
+          const whitespace = /\s/.test(char);
+          candidates = candidates.filter((candidate) => {
+            if (candidate.offset === 0 && whitespace) {
+              return true;
+            }
+            if (candidate.parts[candidate.part]?.charAt(candidate.offset) !== char) {
+              return false;
+            }
+            candidate.offset++;
+            if (candidate.offset === candidate.parts[candidate.part]?.length) {
+              candidate.part++;
+              candidate.offset = 0;
+              active ||= candidate.part === candidate.parts.length;
+            }
+            return true;
+          });
+          // The canonical transform owns code protection and corrections after activation.
+          if (active) {
+            return true;
+          }
+          if (candidates.length === 0) {
+            const newline = appended.indexOf("\n", at + 1);
+            if (newline === -1) {
+              break;
+            }
+            at = newline - 1;
+          }
         }
-      }
-      return false;
-    },
-    (text, retainStart) =>
-      projectLinesOutsideCode(
-        text,
-        (line) => INTERNAL_TRACE_LINE_RE.test(line.trim()),
-        retainStart,
-      ),
-  );
-}
+        return false;
+      },
+      (text, retainStart) =>
+        projectLinesOutsideCode(
+          text,
+          (line) => INTERNAL_TRACE_LINE_RE.test(line.trim()),
+          retainStart,
+        ),
+    );
+  },
+};
 
 export const plainToolCallTextFilter: TextFilter = {
   transform: (text) =>
@@ -400,11 +406,6 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
-}
-
-/** Sanitizes text already marked as final-answer prose by the agent runtime. */
-export function sanitizeAssistantFinalAnswerText(text: string): string {
-  return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
 }
 
 /**

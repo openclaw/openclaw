@@ -7,7 +7,6 @@ import {
 } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isVitestRuntimeEnv } from "../infra/env.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan,
@@ -20,7 +19,6 @@ import {
 } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
 function collectConfiguredChannelIds(
@@ -51,67 +49,11 @@ function collectConfiguredChannelIds(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function addBundledChannelOwnerPluginIds(params: {
-  pluginIds: Set<string>;
-  config: OpenClawConfig;
-  channelIds: readonly string[];
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  bundledPluginsDir?: string;
-  manifestRecords?: readonly PluginManifestRecord[];
-}): void {
-  // Channel state callbacks run before this pass and may update config.
-  const plugins = normalizePluginsConfig(params.config.plugins);
-  const channelIds = new Set(params.channelIds);
-  if (channelIds.size === 0) {
-    return;
-  }
-  const env = params.bundledPluginsDir
-    ? {
-        ...params.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir,
-        ...(isVitestRuntimeEnv(params.env) || isVitestRuntimeEnv()
-          ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
-          : {}),
-      }
-    : params.env;
-  const records =
-    params.manifestRecords ??
-    loadManifestMetadataSnapshot({
-      config: params.config,
-      env,
-      workspaceDir: params.workspaceDir,
-    }).plugins;
-  for (const plugin of records) {
-    if (plugin.origin !== "bundled") {
-      continue;
-    }
-    if (
-      plugin.channels.some((channelId) =>
-        channelIds.has(normalizeOptionalLowercaseString(channelId) ?? ""),
-      )
-    ) {
-      const pluginId = normalizeOptionalLowercaseString(plugin.id);
-      if (
-        pluginId &&
-        passesManifestOwnerBasePolicy({
-          plugin: { id: pluginId },
-          normalizedConfig: plugins,
-          allowRestrictiveAllowlistBypass: true,
-        })
-      ) {
-        params.pluginIds.add(pluginId);
-      }
-    }
-  }
-}
-
 /** Lists plugin ids that are effectively enabled for a config/discovery context. */
 type ResolveEffectivePluginIdsParams = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
-  bundledPluginsDir?: string;
   /** Prepared metadata for this invocation. Without it every lookup below rebuilds
    * the registry, so callers that already hold a snapshot must pass it. */
   metadataSnapshot?: PluginMetadataSnapshot;
@@ -124,10 +66,7 @@ export function resolveEffectivePluginIds(params: ResolveEffectivePluginIdsParam
 export async function resolveEffectivePluginIdsAsync(
   params: ResolveEffectivePluginIdsParams,
 ): Promise<string[]> {
-  const prepared =
-    params.bundledPluginsDir || params.metadataSnapshot?.pluginIds
-      ? undefined
-      : params.metadataSnapshot;
+  const prepared = params.metadataSnapshot?.pluginIds ? undefined : params.metadataSnapshot;
   const autoEnabled = applyPluginAutoEnable({
     config: params.config,
     env: params.env,
@@ -153,12 +92,8 @@ function resolveEffectivePluginIdsWithChannels(
   },
 ): string[] {
   // Effective ids are a whole-config question. A plugin-scoped snapshot only carries
-  // its own manifests, and a bundled-plugins-dir override rewrites the discovery env,
-  // so neither can answer it — those callers keep re-deriving.
-  const prepared =
-    params.bundledPluginsDir || params.metadataSnapshot?.pluginIds
-      ? undefined
-      : params.metadataSnapshot;
+  // its own manifests, so those callers keep re-deriving.
+  const prepared = params.metadataSnapshot?.pluginIds ? undefined : params.metadataSnapshot;
   const autoEnabled =
     preparedChannels?.autoEnabled ??
     applyPluginAutoEnable({
@@ -211,15 +146,40 @@ function resolveEffectivePluginIdsWithChannels(
   for (const pluginId of configuredPluginIds) {
     ids.add(pluginId);
   }
-  addBundledChannelOwnerPluginIds({
-    pluginIds: ids,
-    config: effectiveConfig,
-    channelIds: configuredChannelIds,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-    manifestRecords: prepared?.plugins,
-    ...(params.bundledPluginsDir ? { bundledPluginsDir: params.bundledPluginsDir } : {}),
-  });
+  // Channel state callbacks run before this pass and may update config.
+  const bundledOwnerPlugins = normalizePluginsConfig(effectiveConfig.plugins);
+  const channelIds = new Set(configuredChannelIds);
+  if (channelIds.size > 0) {
+    const records =
+      prepared?.plugins ??
+      loadManifestMetadataSnapshot({
+        config: effectiveConfig,
+        env: params.env,
+        workspaceDir: params.workspaceDir,
+      }).plugins;
+    for (const plugin of records) {
+      if (plugin.origin !== "bundled") {
+        continue;
+      }
+      if (
+        plugin.channels.some((channelId) =>
+          channelIds.has(normalizeOptionalLowercaseString(channelId) ?? ""),
+        )
+      ) {
+        const pluginId = normalizeOptionalLowercaseString(plugin.id);
+        if (
+          pluginId &&
+          passesManifestOwnerBasePolicy({
+            plugin: { id: pluginId },
+            normalizedConfig: bundledOwnerPlugins,
+            allowRestrictiveAllowlistBypass: true,
+          })
+        ) {
+          ids.add(pluginId);
+        }
+      }
+    }
+  }
   for (const pluginId of loadGatewayStartupPluginPlan({
     config: effectiveConfig,
     activationSourceConfig: params.config,

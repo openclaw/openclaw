@@ -35,11 +35,22 @@ describe("cron model schema regressions", () => {
       { management: "only" as const },
       { management: "also" as const },
       { selfRemoveOnly: true },
+      { readOnly: true },
     ]) {
       const changed = createCronToolSchema(options);
       expect(changed).not.toBe(unscoped);
       expect(changed).not.toEqual(unscoped);
       expect(createCronToolSchema({ ...options })).toBe(changed);
+    }
+    const recovery = createCronToolSchema({ readOnly: true });
+    expect(Value.Check(unscoped, { action: "remove", jobId: "saved-job" })).toBe(true);
+    for (const [action, accepted] of [
+      ["list", true],
+      ["get", true],
+      ["status", false],
+      ["remove", false],
+    ] as const) {
+      expect(Value.Check(recovery, { action, jobId: "saved-job" })).toBe(accepted);
     }
   });
 
@@ -51,7 +62,6 @@ describe("cron model schema regressions", () => {
       "get",
       "remove",
       "runs",
-      "next_check",
     ]);
     for (const field of ["job", "text", "mode", "runMode", "sessionKey", "contextMessages"]) {
       expect(restricted.parameters).not.toHaveProperty(`properties.${field}`);
@@ -62,6 +72,26 @@ describe("cron model schema regressions", () => {
     expect(restricted.description).not.toContain("ADD: job");
     expect(restricted.description).not.toContain("delayed self-wakeups");
     expect(restricted.description).toContain("remove");
+    const active = createCronToolSchema({ selfRemoveOnly: true, activeRun: true });
+    const paced = createCronToolSchema({
+      selfRemoveOnly: true,
+      activeRun: true,
+      nextCheckEnabled: true,
+    });
+    const recovery = createCronToolSchema({
+      selfRemoveOnly: true,
+      activeRun: true,
+      nextCheckEnabled: true,
+      readOnly: true,
+    });
+    for (const action of ["scratch_get", "scratch_set", "record_result"]) {
+      expect(Value.Check(restricted.parameters, { action })).toBe(false);
+      expect(Value.Check(active, { action })).toBe(true);
+      expect(Value.Check(recovery, { action })).toBe(false);
+    }
+    expect(Value.Check(active, { action: "next_check" })).toBe(false);
+    expect(Value.Check(paced, { action: "next_check" })).toBe(true);
+    expect(Value.Check(recovery, { action: "next_check" })).toBe(false);
   });
 
   it("advertises timeout clears while retaining numeric bounds", () => {
@@ -217,10 +247,19 @@ describe("cron model schema regressions", () => {
     expect(disabled.description).not.toContain('kind:"script"');
   });
 
-  it("keeps the full surface when config omits cron.triggers", () => {
-    const defaults = createCronTool({ config: { cron: { enabled: true } } }).parameters;
-    expect(propertyAt(defaults, "job.trigger.script")).toMatchObject({ type: "string" });
-    expect(propertyAt(defaults, "job.schedule.kind")?.enum).toContain("stream");
-    expect(propertyAt(defaults, "job.payload.kind")?.enum).toContain("script");
+  it("keeps the full trigger surface and approval guidance when config omits cron.triggers", () => {
+    const defaults = createCronTool({ config: { cron: { enabled: true } } });
+    expect(propertyAt(defaults.parameters, "job.trigger.script")).toMatchObject({ type: "string" });
+    expect(propertyAt(defaults.parameters, "job.schedule.kind")?.enum).toContain("stream");
+    expect(propertyAt(defaults.parameters, "job.payload.kind")?.enum).toContain("script");
+    expect(defaults.description).toContain(
+      "add/update waits for user approval through the native client",
+    );
+    expect(defaults.description).toContain(
+      "A saved add/update result means any required approval has already completed",
+    );
+    expect(defaults.description).toContain(
+      "Do not ask again or disable the saved stream solely because no user approval reply is visible in chat",
+    );
   });
 });

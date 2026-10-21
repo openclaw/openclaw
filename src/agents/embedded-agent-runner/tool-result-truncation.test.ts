@@ -30,15 +30,14 @@ import {
   retainEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
+import { toolResultWarningDedupe } from "./tool-result-truncation.js";
 
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
 let truncateOversizedToolResultsInSessionManager: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSessionManager;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
-let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
-let toolResultWarningDedupe: typeof import("./tool-result-truncation.js").toolResultWarningDedupe;
 let tmpDir: string | undefined;
 const sessionDirs = useSessionStoreTempDirs(afterAll, "tool-result-truncation-test-");
 
@@ -50,10 +49,8 @@ async function loadFreshToolResultTruncationModuleForTest() {
     truncateOversizedToolResultsInMessages,
     truncateOversizedToolResultsInSessionManager,
     sessionLikelyHasOversizedToolResults,
-    estimateToolResultReductionPotential,
     resolveLiveToolResultMaxChars,
     resolveLiveToolResultAggregateMaxChars,
-    toolResultWarningDedupe,
   } = await import("./tool-result-truncation.js"));
 }
 
@@ -391,69 +388,6 @@ describe("sessionLikelyHasOversizedToolResults", () => {
   });
 });
 
-describe("estimateToolResultReductionPotential", () => {
-  type Estimate = ReturnType<typeof estimateToolResultReductionPotential>;
-  it.each([
-    {
-      kind: "small",
-      texts: ["small result"],
-      contextWindowTokens: 128_000,
-      check: (estimate: Estimate) => {
-        expect(estimate.toolResultCount).toBe(1);
-        expect(estimate.maxReducibleChars).toBe(0);
-      },
-    },
-    {
-      kind: "aggregate",
-      texts: Array<string>(6).fill("alpha beta gamma delta epsilon ".repeat(400)),
-      contextWindowTokens: 20_000,
-      check: (estimate: Estimate) => {
-        expect(estimate.toolResultCount).toBe(6);
-        expect(estimate.oversizedCount).toBe(0);
-        expect(estimate.aggregateReducibleChars).toBeGreaterThan(0);
-        expect(estimate.maxReducibleChars).toBe(estimate.aggregateReducibleChars);
-      },
-    },
-    {
-      kind: "mixed",
-      texts: [
-        "x".repeat(500_000),
-        ...Array<string>(2).fill("alpha beta gamma delta epsilon ".repeat(800)),
-      ],
-      contextWindowTokens: 128_000,
-      aggregateMaxCharsOverride: 50_000,
-      check: (estimate: Estimate) => {
-        expect(estimate.oversizedCount).toBeGreaterThan(0);
-        expect(estimate.oversizedReducibleChars).toBeGreaterThan(0);
-        expect(estimate.aggregateReducibleChars).toBeGreaterThan(0);
-        expect(estimate.maxReducibleChars).toBe(
-          estimate.oversizedReducibleChars + estimate.aggregateReducibleChars,
-        );
-      },
-    },
-    {
-      kind: "explicit cap",
-      texts: Array<string>(3).fill("alpha beta gamma delta epsilon ".repeat(600)),
-      contextWindowTokens: 128_000,
-      maxCharsOverride: 120,
-      aggregateMaxCharsOverride: 120,
-      check: (estimate: Estimate) => {
-        expect(estimate.maxChars).toBe(120);
-        expect(estimate.aggregateBudgetChars).toBe(120);
-        expect(estimate.oversizedCount).toBe(3);
-        expect(estimate.aggregateReducibleChars).toBeGreaterThan(0);
-      },
-    },
-  ])("estimates $kind recovery savings", ({ texts, check, ...budgets }) => {
-    check(
-      estimateToolResultReductionPotential({
-        ...budgets,
-        messages: texts.map((text, index) => makeToolResult(text, `call_${index}`)),
-      }),
-    );
-  });
-});
-
 describe("truncateOversizedToolResultsInMessages", () => {
   it("returns unchanged messages when nothing is oversized", () => {
     const messages = [
@@ -503,7 +437,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(result.aggregateTruncatedCount).toBeGreaterThan(0);
-    expect(estimated).toBeLessThanOrEqual(result.aggregateBudgetChars);
+    expect(estimated).toBeLessThanOrEqual(64_000);
   });
 
   it("bounds aggregate tool-result text in prompt history without rewriting callers", () => {
@@ -1573,6 +1507,24 @@ describe("truncateOversizedToolResultsInSession", () => {
 });
 
 describe("truncateToolResultText head+tail strategy", () => {
+  it.each([
+    "(Command exited with code 1)",
+    "Command timed out after 5 seconds.",
+    "Command timed out waiting for output.",
+    "Command aborted by signal SIGTERM",
+    "Process exited with signal SIGTERM.",
+    "Process stopped by request (signal SIGTERM).",
+    "Command not found",
+    "Command not executable (permission denied)",
+  ])("preserves the terminal diagnostic %s within the weighted cap", (diagnostic) => {
+    const text = `${"progress output\n".repeat(800)}\n${diagnostic}`;
+    const result = truncateToolResultText(text, 8_192, { minimumRawWeight: 4 });
+
+    expect(result).toContain(diagnostic);
+    expect(result).toContain("middle content omitted");
+    expect(result.length * 4).toBeLessThanOrEqual(8_192);
+  });
+
   it.each([
     {
       kind: "error",

@@ -9,6 +9,7 @@ import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-his
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { VoiceSessionMatch } from "../../talk/client-voice-session-store.js";
 import type {
@@ -29,6 +30,10 @@ import type {
   CombinedSessionStoreTopologyRequest,
   CombinedSessionStoreTopologyResult,
 } from "./combined-store.types.js";
+import type {
+  ConversationBindingsWorkerInput,
+  ConversationBindingSnapshot,
+} from "./conversation-binding-facts.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,
@@ -207,6 +212,7 @@ export type SessionPreviewWorkerInput = {
 type SessionTitleFieldsWorkerInput = {
   kind: "session-title-fields";
   database: { agentId: string; path: string };
+  skillCommands?: SkillCommandSpec[];
   scope: SessionTranscriptReadScope;
   includeInterSession?: boolean;
   admission?: UserTurnTranscriptAdmissionReceipt;
@@ -323,6 +329,7 @@ export type SessionHistoryWorkerInput =
   | HarnessCompletionSourceWorker.Input
   | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
+  | ConversationBindingsWorkerInput
   | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
@@ -395,6 +402,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     };
     "cli-process-history": ChatHistoryDisplayResult;
     "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
+    "conversation-bindings": {
+      kind: "conversation-bindings";
+      snapshot: ConversationBindingSnapshot;
+    };
     "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
     prewarm: { kind: "prewarm" };
     "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
@@ -552,11 +563,13 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readMessagePresence: CancellableSessionHistoryReader<"transcript-message-presence", "present">;
     readAnchors: CancellableSessionHistoryReader<"transcript-anchors", "facts">;
     readConversations: SessionHistoryReader<"conversation-rows", "rows">;
+    readConversationBindings: SessionHistoryReader<"conversation-bindings", "snapshot">;
     prewarm: (input: { env: NodeJS.ProcessEnv; history: boolean }) => Promise<void>;
     readPendingArchives: CancellableSessionHistoryReader<"session-pending-archives", "pending">;
     readLifecycleArtifactPlan: CancellableSessionHistoryReader<"lifecycle-artifact-plan">;
     findTranscriptEvent: (
       request: SessionTranscriptMatchWorkerInput["request"],
+      signal?: AbortSignal,
     ) => Promise<SessionTranscriptWorkerValues["transcript-match"]["result"]>;
     readHistoricalEvictionCandidates: (
       input: Omit<SessionHistoricalEvictionCandidatesWorkerInput, "kind" | "database">,

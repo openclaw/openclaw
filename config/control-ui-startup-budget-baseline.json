@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 374285,
-  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
-  "updatedAt": "2026-10-12"
+  "startupJsGzipBytes": 324900,
+  "reason": "Enterprise MCP auth config adds 338 B to measured startup JS; retain 100 B below the committed baseline cap.",
+  "updatedAt": "2026-10-20"
 }

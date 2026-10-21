@@ -63,7 +63,13 @@ export async function listLocalClaudeSessionPage(
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
-  const records = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).filter((record) => {
+  const scan = await listClaudeSessions(resolvedHome, resolvedScanOptions);
+  // Exact lookup reads only matching transcripts, independent of the ordinary discovery frontier.
+  const exact =
+    search && !scan.records.some((record) => record.threadId.toLocaleLowerCase() === search)
+      ? await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, sessionId: search })
+      : undefined;
+  const records = [...(exact?.records ?? []), ...scan.records].filter((record) => {
     if (!search) {
       return true;
     }
@@ -75,9 +81,20 @@ export async function listLocalClaudeSessionPage(
     .slice(offset, offset + params.limit)
     .map(({ filePath: _filePath, ...record }) => record);
   const nextOffset = offset + page.length;
+  const hasMore = nextOffset < records.length;
   return {
     sessions: page,
-    ...(nextOffset < records.length ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    ...(hasMore ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    // Host errors stop automatic pagination, so report the frontier after all discovered rows.
+    ...(!hasMore && scan.truncated
+      ? {
+          error: {
+            code: "DISCOVERY_TRUNCATED",
+            message:
+              "Claude session discovery reached its scan limit; some sessions are omitted. Search by exact session ID.",
+          },
+        }
+      : {}),
   };
 }
 
@@ -90,15 +107,16 @@ export async function readLocalClaudeTranscriptPage(
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
-  let filePath = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).find(
+  const lookupOptions = { ...resolvedScanOptions, sessionId: params.threadId };
+  let filePath = (await listClaudeSessions(resolvedHome, lookupOptions)).records.find(
     (record) => record.threadId === params.threadId,
   )?.filePath;
   if (!filePath) {
     // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
     // opening a new thread never fails only because the assembled catalog is still warm.
     filePath = (
-      await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, forceRefresh: true })
-    ).find((record) => record.threadId === params.threadId)?.filePath;
+      await listClaudeSessions(resolvedHome, { ...lookupOptions, forceRefresh: true })
+    ).records.find((record) => record.threadId === params.threadId)?.filePath;
   }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");

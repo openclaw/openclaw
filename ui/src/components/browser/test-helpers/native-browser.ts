@@ -1,25 +1,22 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import type {
-  NativeBrowserMessage,
-  NativeBrowserState,
-  NativeBrowserTab,
-} from "../../../app/native-browser-bridge.ts";
+import type * as Bridge from "../../../app/native-browser-bridge.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
 import {
   createBrowserClient,
+  createBrowserPanelTestMetrics,
   createInspectedNode,
   stubScreenshotMedia,
   TestBrowserPanelHost,
 } from "../browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "../browser-panel-controller.ts";
+import type { BrowserPanel } from "../browser-panel-owner.ts";
 import "../browser-panel.ts";
 
 export const nativeTab = (
   id: string,
   url = "https://example.test/page",
   sessionKey = "",
-): NativeBrowserTab => ({
+): Bridge.NativeBrowserTab => ({
   id,
   sessionKey,
   url,
@@ -30,14 +27,14 @@ export const nativeTab = (
   openedBy: "web",
 });
 
-export function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false) {
-  let state: NativeBrowserState = { revision: 0, tabs };
-  const publish = (nextTabs: NativeBrowserTab[]) => {
+export function fakeNativeBrowser(tabs: Bridge.NativeBrowserTab[] = [], legacy = false) {
+  let state: Bridge.NativeBrowserState = { revision: 0, tabs };
+  const publish = (nextTabs: Bridge.NativeBrowserTab[]) => {
     state = { revision: state.revision + 1, tabs: nextTabs };
     vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
     window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: state }));
   };
-  const postMessage = vi.fn(async (message: NativeBrowserMessage) => {
+  const postMessage = vi.fn(async (message: Bridge.NativeBrowserMessage) => {
     switch (message.type) {
       case "open": {
         const tab = nativeTab(message.tabId, message.url, message.sessionKey);
@@ -51,12 +48,7 @@ export function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false)
         publish(state.tabs.filter((tab) => tab.id !== message.tabId));
         break;
       case "snapshot":
-        return {
-          ok: true,
-          dataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
-          cssWidth: 100,
-          cssHeight: 100,
-        };
+        return { ok: true, dataUrl: "data:image/png;base64,AA==", cssWidth: 100, cssHeight: 100 };
       case "inspect":
         return { ok: true, node: createInspectedNode("Save") };
       case "download":
@@ -74,77 +66,58 @@ export function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false)
   });
   vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage } } });
   vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
-  return {
-    publish,
-    postMessage,
-    messages: () => postMessage.mock.calls.map(([message]) => message),
-  };
+  const messages = () => postMessage.mock.calls.map(([message]) => message);
+  return { publish, postMessage, messages };
 }
 
 export function setupNativeBrowserPanelTests() {
-  const controllers: BrowserPanelController[] = [];
+  const controllers: BrowserPanel[] = [];
+  const cleanups: (() => void)[] = [];
   let hit: Element | null;
   let frames: Map<number, FrameRequestCallback>;
   let nextFrame: number;
 
   function controllerFixture(screencast = false, sessionKey = "") {
     let remoteOpen = true;
+    const remote = { targetId: "remote", url: "https://remote.test/" };
     const { client, request } = createBrowserClient(
-      async (envelope) => {
-        if (envelope.method === "DELETE" && envelope.path === "/tabs/remote") {
+      async ({ method, path }) => {
+        if (method === "DELETE" && path === "/tabs/remote") {
           remoteOpen = false;
           return { ok: true };
         }
-        if (envelope.path === "/tabs" && !remoteOpen) {
-          return { running: true, tabs: [] };
-        }
-        if (envelope.path === "/tabs") {
-          return {
-            running: true,
-            tabs: [
-              { tabId: "remote", targetId: "remote", title: "Remote", url: "https://remote.test/" },
-            ],
-          };
-        }
-        if (envelope.path === "/screencast") {
-          return {
-            token: "token",
-            wsPath: "/browser/screencast?token=token",
-            targetId: "remote",
-            url: "https://remote.test/",
-          };
-        }
-        if (envelope.path === "/screenshot") {
-          return { path: "/fresh.png", targetId: "remote", url: "https://remote.test/" };
-        }
-        if (envelope.path === "/download") {
-          return { download: { path: "/managed/remote.png", suggestedFilename: "remote.png" } };
-        }
-        if (envelope.path === "/act") {
-          return {
-            result: { cssWidth: 100, cssHeight: 100, title: "Remote", url: "https://remote.test/" },
-          };
-        }
-        return { ok: true };
+        const tabs = remoteOpen ? [{ ...remote, tabId: "remote", title: "Remote" }] : [];
+        const replies: Record<string, unknown> = {
+          "/tabs": { running: true, tabs },
+          "/screencast": { ...remote, token: "token", wsPath: "/browser/screencast?token=token" },
+          "/screenshot": { ...remote, path: "/fresh.png" },
+          "/download": {
+            download: { path: "/managed/remote.png", suggestedFilename: "remote.png" },
+          },
+          "/act": createBrowserPanelTestMetrics(remote.url, "Remote"),
+        };
+        return Object.hasOwn(replies, path) ? replies[path] : { ok: true };
       },
       { screencast },
     );
     const host = new TestBrowserPanelHost(client);
     host.sessionKey = sessionKey;
     document.body.append(host.renderRoot);
-    hit = host.renderRoot.querySelector(".bp-stage");
-    const controller = new BrowserPanelController(host);
+    hit = host.stage;
+    const controller = host.createPanel();
+    cleanups.push(controller.native.presentation.mountStage(host.stage));
     controllers.push(controller);
-    controller.hostConnected();
+    const stopNative = controller.native.mount();
+    if (stopNative) {
+      cleanups.push(stopNative);
+    }
     return { controller, host, request };
   }
 
   function flushFrames() {
     const pending = [...frames.values()];
     frames.clear();
-    for (const frame of pending) {
-      frame(0);
-    }
+    pending.forEach((frame) => frame(0));
   }
 
   beforeEach(() => {
@@ -152,8 +125,14 @@ export function setupNativeBrowserPanelTests() {
     nextFrame = 0;
     hit = null;
     vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("ResizeObserver", undefined);
-    vi.stubGlobal("IntersectionObserver", undefined);
+    // Geometry and hit testing below own this no-layout native presentation.
+    class GeometryObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", GeometryObserver);
+    vi.stubGlobal("IntersectionObserver", GeometryObserver);
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       frames.set(++nextFrame, callback);
       return nextFrame;
@@ -164,9 +143,8 @@ export function setupNativeBrowserPanelTests() {
   });
 
   afterEach(() => {
-    for (const controller of controllers.splice(0)) {
-      controller.hostDisconnected();
-    }
+    cleanups.splice(0).forEach((cleanup) => cleanup());
+    controllers.splice(0).forEach((controller) => controller.suspendView());
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.unstubAllGlobals();

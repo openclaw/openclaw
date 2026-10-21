@@ -101,9 +101,7 @@ type PromptDefaultModelParams = {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   runtime?: RuntimeEnv;
-  message?: string;
 };
 
 type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
@@ -231,18 +229,7 @@ function createModelRouteRuntimeResolver(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): ModelRouteRuntimeResolver {
-  const cache = new Map<string, "codex" | "openclaw" | undefined>();
   return (route) => {
-    const baseUrlKey =
-      typeof route.baseUrl === "string"
-        ? route.baseUrl
-        : route.baseUrl == null
-          ? ""
-          : typeof route.baseUrl;
-    const key = [route.provider, route.modelId, route.api ?? "", baseUrlKey].join("\0");
-    if (cache.has(key)) {
-      return cache.get(key);
-    }
     const policy = resolveAgentHarnessPolicy({
       provider: route.provider,
       modelId: route.modelId,
@@ -251,10 +238,11 @@ function createModelRouteRuntimeResolver(params: {
       config: params.config,
       env: params.env,
     });
-    const runtime =
-      policy.runtime === "codex" ? "codex" : policy.runtime === "openclaw" ? "openclaw" : undefined;
-    cache.set(key, runtime);
-    return runtime;
+    return policy.runtime === "codex"
+      ? "codex"
+      : policy.runtime === "openclaw"
+        ? "openclaw"
+        : undefined;
   };
 }
 
@@ -494,7 +482,7 @@ export async function promptDefaultModel(
 ): Promise<PromptDefaultModelResult> {
   const cfg = params.config;
   const pickerConfig = resolveModelPickerConfig(cfg, params.agentId);
-  const pickerAgentDir = params.agentDir ?? resolveDefaultAgentDir(cfg, params.env ?? process.env);
+  const pickerAgentDir = params.agentDir ?? resolveDefaultAgentDir(cfg);
   const allowKeep = params.allowKeep ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const loadCatalog = params.loadCatalog ?? true;
@@ -523,7 +511,6 @@ export async function promptDefaultModel(
       literalPrefixProvidersCache = await resolveLiteralPrefixProviderIds({
         cfg,
         workspaceDir: params.workspaceDir,
-        env: params.env,
         ...(providerScopedCatalog && preferredProvider
           ? { providerRefs: [preferredProvider] }
           : {}),
@@ -579,7 +566,7 @@ export async function promptDefaultModel(
       });
     }
     const selection = await params.prompter.select({
-      message: params.message ?? t("wizard.model.defaultModel"),
+      message: t("wizard.model.defaultModel"),
       options,
       initialValue: allowKeep ? KEEP_VALUE : configuredKey || MANUAL_VALUE,
       searchable: false,
@@ -607,7 +594,6 @@ export async function promptDefaultModel(
         providerScoped: providerScopedCatalog,
         agentDir: pickerAgentDir,
         ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-        ...(params.env !== undefined ? { env: params.env } : {}),
       })
     ).snapshot;
   } finally {
@@ -627,11 +613,9 @@ export async function promptDefaultModel(
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: pickerAgentDir,
-    env: params.env,
   });
   const resolveModelRouteRuntime = createModelRouteRuntimeResolver({
     config: cfg,
-    env: params.env,
   });
   const models = await resolvePickerLogicalCatalog({
     cfg: pickerConfig,
@@ -647,7 +631,6 @@ export async function promptDefaultModel(
 
   const isVisibleProvider = createModelPickerVisibleProviderPredicate({
     config: cfg,
-    env: params.env,
     includeSetupRegistry: !providerScopedCatalog,
   });
   const matchesPreferredProvider = preferredProvider
@@ -655,7 +638,6 @@ export async function promptDefaultModel(
         preferredProvider,
         cfg,
         workspaceDir: params.workspaceDir,
-        env: params.env,
       })
     : undefined;
   const filteredModels = await maybeFilterModelsByProvider({
@@ -692,7 +674,6 @@ export async function promptDefaultModel(
       ...(await resolveProviderPluginSetupOptions({
         cfg,
         workspaceDir: params.workspaceDir,
-        env: params.env,
       })),
     );
   }
@@ -737,7 +718,7 @@ export async function promptDefaultModel(
   }
 
   const selection = await params.prompter.select({
-    message: params.message ?? t("wizard.model.defaultModel"),
+    message: t("wizard.model.defaultModel"),
     options,
     initialValue,
     searchable: true,
@@ -756,7 +737,6 @@ export async function promptDefaultModel(
     prompter: params.prompter,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     runtime: params.runtime,
   });
   if (providerPluginResult) {
@@ -771,7 +751,6 @@ export async function promptDefaultModel(
     prompter: params.prompter,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
-    env: params.env,
   });
   return { model };
 }

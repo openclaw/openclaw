@@ -132,7 +132,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '1' }}
           persist-credentials: false
 
       - name: Bound Testbox idle lifetime
@@ -216,10 +216,6 @@ jobs:
           NODE_OPTIONS: ${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}
         run: pnpm build:ci-artifacts
 
-      - name: Build Control UI on cache miss
-        if: steps.dist-cache.outputs.cache-hit != 'true'
-        run: pnpm ui:build
-
       - name: Verify build artifacts
         shell: bash
         run: |
@@ -249,7 +245,7 @@ jobs:
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:
-          base-ref: ${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}
+          base-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}
 
       - name: Hydrate Testbox provider env helper
         shell: bash

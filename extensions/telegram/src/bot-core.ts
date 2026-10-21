@@ -15,15 +15,16 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   danger,
   logVerbose,
   shouldLogVerbose,
   getChildLogger,
-  createSubsystemLogger,
   createNonExitingRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   registerSessionBindingAdapterV2,
@@ -33,10 +34,8 @@ import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
-import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   ensureTelegramMessageProcessingResult,
@@ -61,17 +60,15 @@ import {
   prepareTelegramPollAnswerContextAsync,
   settleTelegramPollAnswerContext,
 } from "./poll-answer-context.js";
-import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { createTelegramSequentializer } from "./sequentialize.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export async function createTelegramBotCore(
-  opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
+  opts: TelegramBotOptions,
 ): Promise<InstanceType<typeof Bot>> {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
-  const telegramDeps = opts.telegramDeps;
-  const cfg = opts.config ?? telegramDeps.getRuntimeConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,
@@ -134,7 +131,6 @@ export async function createTelegramBotCore(
       typeof opts.updateOffset?.persistenceFloorUpdateId === "number"
         ? opts.updateOffset.persistenceFloorUpdateId
         : initialUpdateId,
-    ackPolicy: "after_agent_dispatch",
     ...(typeof opts.updateOffset?.onUpdateId === "function"
       ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
       : {}),
@@ -237,19 +233,6 @@ export async function createTelegramBotCore(
     await next();
   });
 
-  const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
-
-  bot.use(async (ctx, next) => {
-    if (shouldLogVerbose()) {
-      try {
-        rawUpdateLogger.debug(`telegram update: ${formatTelegramRawUpdateForLog(ctx.update)}`);
-      } catch (err) {
-        rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
-      }
-    }
-    await next();
-  });
-
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "telegram",
     providerSetting: telegramCfg.commands?.native,
@@ -275,10 +258,10 @@ export async function createTelegramBotCore(
     cfg: OpenClawConfig;
   }) => {
     const agentId = params.agentId ?? ownerAgentId;
-    const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
     try {
       const storedActivation = (
-        await telegramDeps.getSessionEntryAsync({
+        await getSessionEntryAsync({
           storePath,
           sessionKey: params.sessionKey,
         })
@@ -317,7 +300,6 @@ export async function createTelegramBotCore(
     bot,
     runtime,
     opts: runtimeOpts,
-    telegramDeps,
     resolveTelegramGroupConfig,
   };
   const { nativeCommandNames, nativeCommandCallbackDispatcher } =
@@ -331,11 +313,6 @@ export async function createTelegramBotCore(
       nativeSkillsEnabled,
       resolveGroupPolicy,
       shouldSkipUpdate,
-      telegramDeps: {
-        ...telegramDeps,
-        runModelsAuthLoginFlow: defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow,
-        sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
-      },
     });
   const messageContext = {
     ...botContext,

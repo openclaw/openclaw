@@ -66,7 +66,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = mocks.defaultRuntime;
 const loadFeed = mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries;
 const output = () => runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
-const warning = "Previous plugin service could not stop.";
 const privateUrl = "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag";
 const calendar = {
   name: "@acme/calendar",
@@ -200,11 +199,7 @@ describe("plugins marketplace entries", () => {
     const filename = timeline();
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "1");
     loadFeed.mockResolvedValue(
-      feed({
-        source: "hosted-snapshot",
-        url: privateUrl,
-        entries: [calendar],
-      }),
+      feed({ source: "hosted-snapshot", url: privateUrl, entries: [calendar] }),
     );
     await entries({ feedProfile: "acme", offline: true });
     expect(output()).toContain("signed by acme-root-2026 (1/1)");
@@ -229,10 +224,6 @@ describe("plugins marketplace refresh", () => {
       loadFeed.mockResolvedValue(
         feed({ entries: [calendar], checksum: "sha256:abcdef", includeTrust: false }),
       );
-      mocks.pluginLifecycleGateway.mockResolvedValue({
-        runtime: { generation: 4 },
-        ...(expectedSha256 === checksum ? {} : { warnings: [warning] }),
-      });
       await marketplaceCommand([
         "refresh",
         "--feed-profile",
@@ -267,10 +258,6 @@ describe("plugins marketplace refresh", () => {
     loadFeed.mockResolvedValue(
       feed({ entries: [{ name: "@acme/calendar" }], url: privateUrl, etag: '"abc"' }),
     );
-    mocks.pluginLifecycleGateway.mockResolvedValue({
-      runtime: { generation: 4 },
-      warnings: [warning],
-    });
     await refresh({
       expectedSha256: "feed-sha",
       feedProfile: "acme",
@@ -386,6 +373,45 @@ describe("plugins marketplace list", () => {
       expect(runtime.error).not.toHaveBeenCalled();
     },
   );
+
+  it("sanitizes terminal control characters in human output but not JSON", async () => {
+    const injected = {
+      name: "Market\u001b]0;marketplace-title-pwned\u0007place",
+      version: "1.0.0",
+      plugins: [
+        {
+          name: "\u001b[31mred-plugin\u001b[0m",
+          version: "\u001b[32m1.2.3\u001b[0m",
+          description: "drops \r\n\u0007bell and \u001b[2J clear",
+          source: { kind: "path", path: "./plugins/demo" },
+        },
+      ],
+    };
+    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
+      ok: true,
+      sourceLabel: source,
+      manifest: injected,
+    }));
+
+    await list(source, { json: true });
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ source, ...injected });
+    expect(runtime.log).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
+      ok: true,
+      sourceLabel: source,
+      manifest: injected,
+    }));
+    await list(source, { json: false });
+    const human = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(human).not.toContain("\u001b");
+    expect(human).not.toContain("\u0007");
+    expect(human).toContain("Marketplace");
+    expect(human).toContain("red-plugin");
+    expect(human).toContain("v1.2.3");
+    expect(human).toContain("drops \\r\\nbell and  clear");
+  });
 
   it("hands quiet failures to the canonical JSON error renderer", async () => {
     const message = "mock git remote unavailable";

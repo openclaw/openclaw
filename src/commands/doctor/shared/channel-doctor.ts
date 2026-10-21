@@ -38,7 +38,7 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
     skipWhenPluginsDisabled: true,
     excludeExplicitlyDisabled: true,
     sort: "codepoint",
-  }).filter((channelId) => !isChannelDoctorBlockedByConfig(channelId, cfg));
+  });
 }
 
 function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {
@@ -230,7 +230,6 @@ export function collectChannelDoctorCompatibilityMutations(
   return mutation.changes.length || mutation.warnings?.length ? [mutation] : [];
 }
 
-/** Collect stale channel config cleanup mutations from configured channel doctor adapters. */
 export async function collectChannelDoctorStaleConfigMutations(
   cfg: OpenClawConfig,
   options: { env?: NodeJS.ProcessEnv; channelIds?: readonly string[] } = {},
@@ -242,7 +241,6 @@ export async function collectChannelDoctorStaleConfigMutations(
   );
 }
 
-/** Collect channel-specific doctor preview warnings for configured channels. */
 export async function collectChannelDoctorPreviewWarnings(
   params: Parameters<NonNullable<ChannelDoctorAdapter["collectPreviewWarnings"]>>[0],
 ): Promise<string[]> {

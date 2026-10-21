@@ -32,10 +32,7 @@ export function registerMatrixAutoJoin(params: {
     return () => {};
   }
 
-  if (autoJoin === "always") {
-    logVerbose("matrix: auto-join enabled for all invites");
-  } else {
-    logVerbose("matrix: auto-join enabled for allowlist invites");
+  if (autoJoin === "allowlist") {
     // Room-scoped matching only understands a room ID, an alias, or "*". Surface
     // entries that can never match (for example a Matrix user ID, which is not a
     // room target) at the default log level, otherwise an inert allowlist

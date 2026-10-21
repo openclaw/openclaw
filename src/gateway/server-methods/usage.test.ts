@@ -1,14 +1,10 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => ({
   ...(await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -24,297 +20,221 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { resolveDateRange } from "./usage-date-range.js";
 import { loadCostUsageSummaryCached } from "./usage-result-cache.js";
-import { usageHandlers } from "./usage.js";
+import { invokeUsage, usageReply, usageTotals } from "./usage.test-support.js";
 
+const loadCost = vi.mocked(loadCostUsageSummaryFromCache);
 function costSummary(totalTokens: number, totalCost: number) {
-  const totals = {
-    ...createEmptyCostUsageTotals(),
-    input: totalTokens,
-    totalTokens,
-    totalCost,
-    inputCost: totalCost,
-  };
+  const totals = usageTotals(totalTokens, totalCost);
   return { updatedAt: Date.now(), days: 1, daily: [{ date: "2026-02-01", ...totals }], totals };
 }
 const dates = { startDate: "2026-02-01", endDate: "2026-02-02" };
+const allAgents = { ...dates, agentScope: "all" };
 async function request(
-  method: "usage.cost" | "sessions.usage",
   params: Record<string, unknown>,
   config: OpenClawConfig = {},
+  method: "usage.cost" | "sessions.usage" = "usage.cost",
   respond = vi.fn(),
 ) {
-  const handler = expectDefined(usageHandlers[method], "usage handler");
-  const projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
-  try {
-    await handler({
-      respond,
-      params,
-      context: bindSessionRowProjection({ getRuntimeConfig: () => config }, () => projection),
-    } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
-  } finally {
-    projection.dispose();
-  }
-  expect(respond).toHaveBeenCalledOnce();
-  return expectDefined(respond.mock.calls[0], "usage response");
+  return usageReply(await invokeUsage(method, params, config, { respond }));
 }
-function range(params: Parameters<typeof resolveDateRange>[0]) {
-  const result = resolveDateRange(params);
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  return result.value;
+type RangeParams = Parameters<typeof resolveDateRange>[0];
+function expectRange(params: RangeParams, [startMs, endMs]: [number, number]) {
+  expect(resolveDateRange(params)).toEqual({ ok: true, value: { startMs, endMs } });
+}
+function agents(...ids: string[]): OpenClawConfig {
+  return { agents: { entries: Object.fromEntries(ids.map((id) => [id, {}])) } };
+}
+function expectUsage(reply: ReturnType<typeof usageReply>, shape: object) {
+  expect(reply).toMatchObject([true, shape, undefined]);
 }
 
-describe("gateway usage", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-    vi.clearAllMocks();
-  });
+beforeEach(() => {
+  vi.useRealTimers();
+  vi.clearAllMocks();
+});
 
-  it.each([
-    [{ startDate: "2026-02-30" }, "invalid startDate"],
-    [{ endDate: "2026-2-5" }, "invalid endDate"],
-    [{ startDate: "2026-02-01", endDate: "2026-13-01" }, "invalid endDate"],
-  ])("rejects invalid explicit ranges %j", (params, error) => {
-    expect(resolveDateRange(params)).toEqual({ ok: false, error: expect.stringContaining(error) });
-  });
+it.each([
+  [{ startDate: "2026-02-30" }, "invalid startDate"],
+  [{ endDate: "2026-2-5" }, "invalid endDate"],
+  [{ startDate: "2026-02-01", endDate: "2026-13-01" }, "invalid endDate"],
+])("rejects invalid explicit ranges %j", (params, error) => {
+  expect(resolveDateRange(params)).toEqual({ ok: false, error: expect.stringContaining(error) });
+});
 
-  it.each([
-    ["usage.cost", { startDate: 0 }, "startDate"],
-    ["sessions.usage", { mode: "specific", timeZone: "Invalid/Timezone" }, "invalid timeZone"],
-    [
-      "sessions.usage",
-      { startDate: "2026-02-03", endDate: "2026-02-02" },
-      "startDate must not be after endDate",
-    ],
-    ["usage.cost", { startDate: "2026-02-01" }, "startDate and endDate must be provided together"],
-    [
-      "sessions.usage",
-      { endDate: "2026-02-01" },
-      "startDate and endDate must be provided together",
-    ],
-  ] as const)("%s rejects %j before loading usage", async (method, params, message) => {
-    expect(await request(method, params)).toEqual([
-      false,
-      undefined,
-      { code: "INVALID_REQUEST", message: expect.stringContaining(message) },
-    ]);
-    expect(loadCostUsageSummaryFromCache).not.toHaveBeenCalled();
-    expect(discoverAllSessions).not.toHaveBeenCalled();
-  });
+it.each([
+  ["usage.cost", { startDate: 0 }, "startDate"],
+  ["sessions.usage", { mode: "specific", timeZone: "Invalid/Timezone" }, "invalid timeZone"],
+  [
+    "sessions.usage",
+    { startDate: "2026-02-03", endDate: "2026-02-02" },
+    "startDate must not be after endDate",
+  ],
+  ["usage.cost", { startDate: "2026-02-01" }, "startDate and endDate must be provided together"],
+  ["sessions.usage", { endDate: "2026-02-01" }, "startDate and endDate must be provided together"],
+] as const)("%s rejects %j before loading usage", async (method, params, message) => {
+  expect(await request(params, {}, method)).toEqual([
+    false,
+    undefined,
+    { code: "INVALID_REQUEST", message: expect.stringContaining(message) },
+  ]);
+  expect(loadCost).not.toHaveBeenCalled();
+  expect(discoverAllSessions).not.toHaveBeenCalled();
+});
 
-  it("falls back to the offset when Gateway ICU does not recognize the browser timezone", async () => {
-    expect(
-      await request("usage.cost", {
-        mode: "specific",
-        timeZone: "Newer/BrowserZone",
-        utcOffset: "UTC+1",
-      }),
-    ).toEqual([true, expect.any(Object), undefined]);
-    expect(loadCostUsageSummaryFromCache).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 60 },
-      }),
-    );
-  });
+it("falls back to the offset when Gateway ICU does not recognize the browser timezone", async () => {
+  const params = { mode: "specific", timeZone: "Newer/BrowserZone", utcOffset: "UTC+1" };
+  expect(await request(params)).toEqual([true, expect.any(Object), undefined]);
+  expect(loadCost).toHaveBeenCalledWith(
+    expect.objectContaining({ dayBucket: { mode: "utc-offset", utcOffsetMinutes: 60 } }),
+  );
+});
 
-  it("crosses a skipped IANA civil date for the prior day's end", () => {
-    const params = { mode: "specific", timeZone: "Pacific/Apia" };
-    expect(range({ ...params, startDate: "2011-12-29", endDate: "2011-12-29" })).toEqual({
-      startMs: Date.parse("2011-12-29T10:00:00.000Z"),
-      endMs: Date.parse("2011-12-30T10:00:00.000Z") - 1,
-    });
+it.each(["specific", "gateway"])("handles skipped civil dates in %s mode", (mode) => {
+  withEnv({ TZ: "Pacific/Apia" }, () => {
+    const params = { mode, ...(mode === "specific" ? { timeZone: "Pacific/Apia" } : {}) };
     expect(resolveDateRange({ ...params, startDate: "2011-12-30", endDate: "2011-12-30" })).toEqual(
       {
         ok: false,
         error: "calendar day does not exist in requested time zone",
       },
     );
+    expectRange({ ...params, startDate: "2011-12-29", endDate: "2011-12-29" }, [
+      Date.UTC(2011, 11, 29, 10),
+      Date.UTC(2011, 11, 30, 10) - 1,
+    ]);
   });
+});
 
-  it("rejects a host civil date the gateway timezone skipped", () => {
-    withEnv({ TZ: "Pacific/Apia" }, () => {
-      expect(
-        resolveDateRange({
-          mode: "gateway",
-          startDate: "2011-12-30",
-          endDate: "2011-12-30",
-        }),
-      ).toEqual({
-        ok: false,
-        error: "calendar day does not exist in requested time zone",
-      });
-      expect(range({ mode: "gateway", startDate: "2011-12-29", endDate: "2011-12-29" })).toEqual({
-        startMs: Date.parse("2011-12-29T10:00:00.000Z"),
-        endMs: Date.parse("2011-12-30T10:00:00.000Z") - 1,
-      });
-    });
+it.each([null, ""])("retains UTC for omitted or blank offset %j", (utcOffset) => {
+  expectRange({ ...dates, mode: "specific", utcOffset }, [
+    Date.UTC(2026, 1, 1),
+    Date.UTC(2026, 1, 3) - 1,
+  ]);
+});
+
+it.each(["UTC+14:01", "UTC-12:01", "UTC+5:60", 330])("rejects malformed offset %j", (utcOffset) => {
+  expect(resolveDateRange({ ...dates, mode: "specific", utcOffset })).toEqual({
+    ok: false,
+    error: "invalid utcOffset: expected UTC-12:00 through UTC+14:00",
   });
+});
 
-  it.each([null, ""])("retains UTC for omitted or blank offset %j", (utcOffset) => {
-    expect(range({ ...dates, mode: "specific", utcOffset })).toEqual({
-      startMs: Date.parse("2026-02-01T00:00:00.000Z"),
-      endMs: Date.parse("2026-02-02T23:59:59.999Z"),
-    });
-  });
+it("uses the specific offset for today/day math after UTC midnight", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-02-17T03:57:00.000Z"));
+  expectRange({ days: 1, mode: "specific", utcOffset: "UTC-5" }, [
+    Date.UTC(2026, 1, 16, 5),
+    Date.UTC(2026, 1, 17, 5) - 1,
+  ]);
+});
 
-  it.each(["UTC+14:01", "UTC-12:01", "UTC+5:60", 330])(
-    "rejects malformed offset %j",
-    (utcOffset) => {
-      expect(resolveDateRange({ ...dates, mode: "specific", utcOffset })).toEqual({
-        ok: false,
-        error: "invalid utcOffset: expected UTC-12:00 through UTC+14:00",
-      });
-    },
-  );
-
-  it("uses the specific offset for today/day math after UTC midnight", () => {
+it("keeps trailing gateway ranges on calendar days across DST", () => {
+  withEnv({ TZ: "America/New_York" }, () => {
+    expect([8, 9].map((day) => new Date(2026, 2, day).getTimezoneOffset())).toEqual([300, 240]);
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-17T03:57:00.000Z"));
-    expect(range({ days: 1, mode: "specific", utcOffset: "UTC-5" })).toEqual({
-      startMs: Date.UTC(2026, 1, 16, 5),
-      endMs: Date.UTC(2026, 1, 17, 5) - 1,
-    });
+    vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
+    expectRange({ days: 2, mode: "gateway" }, [
+      Date.UTC(2026, 2, 8, 5),
+      Date.UTC(2026, 2, 10, 4) - 1,
+    ]);
   });
+});
 
-  it("keeps trailing gateway ranges on calendar days across DST", () => {
-    withEnv({ TZ: "America/New_York" }, () => {
-      expect(new Date("2026-03-08T05:00:00.000Z").getTimezoneOffset()).toBe(300);
-      expect(new Date("2026-03-09T04:00:00.000Z").getTimezoneOffset()).toBe(240);
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
-      expect(range({ days: 2, mode: "gateway" })).toEqual({
-        startMs: Date.parse("2026-03-08T05:00:00.000Z"),
-        endMs: Date.parse("2026-03-10T04:00:00.000Z") - 1,
-      });
-    });
+it("keeps refreshing cost summaries fresh for the TTL window", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+  loadCost.mockResolvedValueOnce({
+    ...costSummary(1, 0),
+    cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 1 },
   });
+  const params = { startMs: 1, endMs: 2, config: agents("ops") };
+  await loadCostUsageSummaryCached(params);
+  expect(loadCost.mock.calls[0]?.[0]?.agentId).toBe("ops");
+  await vi.advanceTimersByTimeAsync(29_999);
+  await loadCostUsageSummaryCached(params);
+  expect(loadCost).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  await loadCostUsageSummaryCached(params);
+  expect(loadCost).toHaveBeenCalledTimes(2);
+});
 
-  it("keeps refreshing cost summaries fresh for the TTL window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
-    vi.mocked(loadCostUsageSummaryFromCache).mockResolvedValueOnce({
-      ...costSummary(1, 0),
-      cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 1 },
-    });
-    const params = {
-      startMs: 1,
-      endMs: 2,
-      config: { agents: { entries: { ops: {} } } },
-    };
-    await loadCostUsageSummaryCached(params);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("ops");
-    await vi.advanceTimersByTimeAsync(29_999);
-    await loadCostUsageSummaryCached(params);
-    expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await loadCostUsageSummaryCached(params);
-    expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not project local avatar bytes for usage-only agent enumeration", async () => {
-    await withTestDir({ prefix: "openclaw-usage-avatar-" }, async (workspace) => {
-      await fs.writeFile(`${workspace}/avatar.png`, "avatar");
-      const config: OpenClawConfig = {
-        agents: { entries: { main: { workspace, identity: { avatar: "avatar.png" } } } },
-      };
-      const readSync = vi.spyOn(fsSync, "readSync");
-      try {
-        await request("usage.cost", { ...dates, agentScope: "all" }, config);
-        await request("sessions.usage", { ...dates, agentScope: "all" }, config);
-        expect(readSync).not.toHaveBeenCalled();
-      } finally {
-        readSync.mockRestore();
-      }
-    });
-  });
-
-  it("isolates per-agent cost caches and aggregates only for explicit all-agent scope", async () => {
-    vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async (params) =>
-      params?.agentId === "opus" ? costSummary(20, 2) : costSummary(10, 1),
-    );
+it("does not project local avatar bytes for usage-only agent enumeration", async () => {
+  await withTestDir({ prefix: "openclaw-usage-avatar-" }, async (workspace) => {
+    await fs.writeFile(`${workspace}/avatar.png`, "avatar");
     const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
-        entries: { main: {}, opus: {} },
-      },
+      agents: { entries: { main: { workspace, identity: { avatar: "avatar.png" } } } },
     };
-    const params = { ...dates, endDate: dates.startDate, mode: "utc" };
-    const [, defaultResult] = await request("usage.cost", params, config);
-    expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("main");
-    expect(defaultResult).toMatchObject({ totals: { totalTokens: 10, totalCost: 1 } });
-    for (const [agentId, totalTokens, totalCost] of [
-      ["opus", 20, 2],
-      ["main", 10, 1],
-      ["opus", 20, 2],
-    ] as const) {
-      const [ok, result] = await request("usage.cost", { ...params, agentId }, config);
-      expect(ok).toBe(true);
-      expect(result).toMatchObject({ totals: { totalTokens, totalCost } });
-      expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(2);
-    }
-    const [ok, aggregate] = await request("usage.cost", { ...params, agentScope: "all" }, config);
-    expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(4);
-    expect(ok).toBe(true);
-    expect(aggregate).toMatchObject({
-      totals: { totalTokens: 30, totalCost: 3 },
-      daily: [{ date: "2026-02-01", totalTokens: 30, totalCost: 3 }],
-    });
+    const readSync = vi.spyOn(fsSync, "readSync");
+    onTestFinished(() => readSync.mockRestore());
+    await request(allAgents, config);
+    await request(allAgents, config, "sessions.usage");
+    expect(readSync).not.toHaveBeenCalled();
   });
+});
 
-  it("bounds all-agent cache loads", async () => {
-    const { promise: released, resolve: release } = createDeferred();
-    const { promise: firstBatch, resolve: startedBatch } = createDeferred();
-    vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async () => {
-      if (vi.mocked(loadCostUsageSummaryFromCache).mock.calls.length === 12) {
-        startedBatch();
-      }
-      await released;
-      return costSummary(1, 0);
+it("isolates per-agent cost caches and aggregates only for explicit all-agent scope", async () => {
+  loadCost.mockImplementation(async (params) =>
+    params?.agentId === "opus" ? costSummary(20, 2) : costSummary(10, 1),
+  );
+  const config: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, opus: {} },
+    },
+  };
+  const params = { ...dates, endDate: dates.startDate, mode: "utc" };
+  const [, defaultResult] = await request(params, config);
+  expect(loadCost).toHaveBeenCalledTimes(1);
+  expect(loadCost.mock.calls[0]?.[0]?.agentId).toBe("main");
+  expect(defaultResult).toMatchObject({ totals: { totalTokens: 10, totalCost: 1 } });
+  for (const [agentId, totalTokens, totalCost] of [
+    ["opus", 20, 2],
+    ["main", 10, 1],
+    ["opus", 20, 2],
+  ] as const) {
+    expectUsage(await request({ ...params, agentId }, config), {
+      totals: { totalTokens, totalCost },
     });
-    const response = request(
-      "usage.cost",
-      { ...dates, agentScope: "all" },
-      {
-        agents: {
-          entries: Object.fromEntries(Array.from({ length: 13 }, (_, i) => [`agent-${i}`, {}])),
-        },
-      },
-    );
-    try {
-      await firstBatch;
-      expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(12);
-      release();
-      expect(await response).toEqual([
-        true,
-        expect.objectContaining({ totals: expect.objectContaining({ totalTokens: 13 }) }),
-        undefined,
-      ]);
-    } finally {
-      release();
-      await response;
-    }
+    expect(loadCost).toHaveBeenCalledTimes(2);
+  }
+  const aggregate = await request({ ...params, agentScope: "all" }, config);
+  expect(loadCost).toHaveBeenCalledTimes(4);
+  expectUsage(aggregate, {
+    totals: { totalTokens: 30, totalCost: 3 },
+    daily: [{ date: "2026-02-01", totalTokens: 30, totalCost: 3 }],
   });
+});
 
-  it("rejects the aggregate when one agent task fails", async () => {
-    const failure = new Error("agent usage load failed");
-    vi.mocked(loadCostUsageSummaryFromCache)
-      .mockResolvedValueOnce(costSummary(1, 0))
-      .mockRejectedValueOnce(failure);
-    const respond = vi.fn();
-    await expect(
-      request(
-        "usage.cost",
-        { ...dates, agentScope: "all" },
-        {
-          agents: { entries: { main: {}, broken: {} } },
-        },
-        respond,
-      ),
-    ).rejects.toBe(failure);
-    expect(respond).not.toHaveBeenCalled();
+it("bounds all-agent cache loads", async () => {
+  const { promise: released, resolve: release } = createDeferred();
+  const { promise: firstBatch, resolve: startedBatch } = createDeferred();
+  loadCost.mockImplementation(async () => {
+    if (loadCost.mock.calls.length === 12) {
+      startedBatch();
+    }
+    await released;
+    return costSummary(1, 0);
   });
+  const config = agents(...Array.from({ length: 13 }, (_, i) => `agent-${i}`));
+  const response = request(allAgents, config);
+  try {
+    await firstBatch;
+    expect(loadCost).toHaveBeenCalledTimes(12);
+    release();
+    expect(await response).toMatchObject([true, { totals: { totalTokens: 13 } }, undefined]);
+  } finally {
+    release();
+    await response;
+  }
+});
+
+it("rejects the aggregate when one agent task fails", async () => {
+  const failure = new Error("agent usage load failed");
+  loadCost.mockResolvedValueOnce(costSummary(1, 0)).mockRejectedValueOnce(failure);
+  const respond = vi.fn();
+  await expect(request(allAgents, agents("main", "broken"), "usage.cost", respond)).rejects.toBe(
+    failure,
+  );
+  expect(respond).not.toHaveBeenCalled();
 });

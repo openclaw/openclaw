@@ -49,6 +49,7 @@ type DisabledHeartbeatOneShotRetryDecision = {
 type QueuedSystemEventHandle = {
   accepted: boolean;
   remove?: () => boolean | void;
+  adopted?: Promise<boolean>;
 };
 
 /** Persists non-busy trigger evaluation state without touching payload-run history. */
@@ -231,10 +232,11 @@ export function normalizeQueuedSystemEventHandle(
   if (typeof result === "boolean") {
     return { accepted: result };
   }
-  if (result && typeof result === "object") {
+  if (result) {
     return {
       accepted: result.accepted !== false,
       ...(result.remove ? { remove: result.remove } : {}),
+      ...(result.adopted ? { adopted: result.adopted } : {}),
     };
   }
   return { accepted: true };

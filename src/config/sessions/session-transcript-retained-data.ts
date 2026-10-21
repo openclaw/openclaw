@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type AliasableExpression } from "kysely";
@@ -9,6 +8,7 @@ import {
   jsonValid,
 } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
@@ -28,7 +28,7 @@ import {
 
 /** Admit suffix repairs against their projected bytes without decoding opaque bodies. */
 export function transcriptRetainedDataBytesSql(
-  database: DatabaseSync,
+  database: EngineConnection,
   retainedIds: readonly string[],
 ) {
   if (retainedIds.length === 0) {
@@ -44,7 +44,7 @@ export function transcriptRetainedDataBytesSql(
 
 /** Custom data is opaque to topology and indexing; cleanup keeps it in SQLite. */
 export function projectTranscriptRetainedDataSql(
-  database: DatabaseSync,
+  database: EngineConnection,
   event: AliasableExpression<string>,
   retainedIds: readonly string[],
 ): AliasableExpression<string> {

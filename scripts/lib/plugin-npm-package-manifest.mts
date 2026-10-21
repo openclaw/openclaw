@@ -1082,6 +1082,7 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
     loadPluginControlUiDeclaration({
       rootDir: packageDir,
       controlUi: manifest.controlUi,
+      channels: manifest.channels,
       rejectHardlinks: false,
     }),
   );

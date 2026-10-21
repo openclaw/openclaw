@@ -150,7 +150,6 @@ export function createGitHubPublicationCoordinator(params: {
     );
     const worktreeOwner = admitted;
     const { worktree } = worktreeOwner;
-    assertRequester();
     if (!params.placements.validateTurnClaim(request.claim)) {
       throw new Error("GitHub publication lost the live session turn claim after verification.");
     }
@@ -162,6 +161,10 @@ export function createGitHubPublicationCoordinator(params: {
       idempotencyKey: request.idempotencyKey,
       title: request.title,
       body: request.body,
+      draft:
+        existing && existing.draft == null && request.draft === undefined
+          ? undefined
+          : (request.draft ?? false),
     });
     const now = Date.now();
     const requestId = randomUUID();
@@ -172,6 +175,7 @@ export function createGitHubPublicationCoordinator(params: {
         idempotencyKey: request.idempotencyKey,
         title: request.title,
         body: request.body,
+        draft: request.draft ?? false,
       },
       requestId,
       requestDigest,

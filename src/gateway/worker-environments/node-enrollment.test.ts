@@ -137,6 +137,7 @@ describe("worker node enrollment", () => {
         path.join(packageRoot, "node-runtime-recovery.mjs"),
         "export const recovery = true;",
       ),
+      fs.writeFile(path.join(packageRoot, "cli-parent-lifetime.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "cli-invocation.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),
@@ -291,8 +292,11 @@ describe("worker node enrollment", () => {
     const record = await createProvisioning();
     let transferNow = 0;
     let tarballBytes = 1;
-    transfer = createWorkerBootstrapArtifactTransferService({ now: () => transferNow });
+    const enrollmentNow = Date.now;
+    vi.spyOn(Date, "now").mockImplementation(() => transferNow);
+    transfer = createWorkerBootstrapArtifactTransferService();
     const manager = createManager({
+      now: enrollmentNow,
       prepareArtifact: async () => ({ ...artifact(), tarballBytes }),
     });
     for (const { bytes, enrollmentMs, runtimeMs } of [

@@ -1,22 +1,27 @@
-// Imessage test support covers poll rendering.
 import { describe, expect, it } from "vitest";
 import { renderIMessagePollBody } from "./poll-render.js";
+
+const options = [
+  { id: "a", text: "Red" },
+  { id: "b", text: "Blue" },
+];
+const selection = (option_id: string, option_text: string) => ({
+  participant: "+12065550123",
+  option_id,
+  option_text,
+  event_type: "selected" as const,
+});
 
 describe("renderIMessagePollBody", () => {
   it("renders a created poll with numbered options", () => {
     const out = renderIMessagePollBody({
       kind: "created",
       question: "Favorite color?",
-      options: [
-        { id: "a", text: "Red" },
-        { id: "b", text: "Blue" },
-      ],
+      options,
     });
     expect(out).toContain("Favorite color?");
     expect(out).toContain("1) Red");
     expect(out).toContain("2) Blue");
-    // Must cue the vote action so the agent votes instead of replying in prose;
-    // the 📊 Poll prefix matches agents' vote-instruction trigger.
     expect(out).toContain("poll-vote");
     expect(out).toContain("\u{1F4CA} Poll");
   });
@@ -43,10 +48,7 @@ describe("renderIMessagePollBody", () => {
   it("folds in vote tallies", () => {
     const out = renderIMessagePollBody({
       kind: "created",
-      options: [
-        { id: "a", text: "Red" },
-        { id: "b", text: "Blue" },
-      ],
+      options,
       votes: [
         { option_id: "b", event_type: "selected" },
         { option_id: "b", event_type: "selected" },
@@ -54,7 +56,6 @@ describe("renderIMessagePollBody", () => {
       ],
     });
     expect(out).toContain("2) Blue [2]");
-    // Removed votes and unvoted options carry no tally suffix.
     expect(out).toContain("1) Red");
     expect(out).not.toContain("Red [");
   });
@@ -71,26 +72,8 @@ describe("renderIMessagePollBody", () => {
   it("renders the full selection snapshot instead of a stale singular vote", () => {
     const out = renderIMessagePollBody({
       kind: "vote",
-      vote: {
-        participant: "+12065550123",
-        option_id: "a",
-        option_text: "Lobster",
-        event_type: "selected",
-      },
-      votes: [
-        {
-          participant: "+12065550123",
-          option_id: "a",
-          option_text: "Lobster",
-          event_type: "selected",
-        },
-        {
-          participant: "+12065550123",
-          option_id: "b",
-          option_text: "Also lobster",
-          event_type: "selected",
-        },
-      ],
+      vote: selection("a", "Lobster"),
+      votes: [selection("a", "Lobster"), selection("b", "Also lobster")],
     });
 
     expect(out).toContain('currently selected "Lobster", "Also lobster"');
@@ -100,20 +83,8 @@ describe("renderIMessagePollBody", () => {
   it("does not report a remaining selection as a new vote", () => {
     const out = renderIMessagePollBody({
       kind: "vote",
-      vote: {
-        participant: "+12065550123",
-        option_id: "b",
-        option_text: "Beta",
-        event_type: "selected",
-      },
-      votes: [
-        {
-          participant: "+12065550123",
-          option_id: "b",
-          option_text: "Beta",
-          event_type: "selected",
-        },
-      ],
+      vote: selection("b", "Beta"),
+      votes: [selection("b", "Beta")],
     });
 
     expect(out).toContain('currently selected "Beta"');
@@ -121,13 +92,7 @@ describe("renderIMessagePollBody", () => {
   });
 
   it("scopes an empty selection snapshot to the event sender", () => {
-    const out = renderIMessagePollBody(
-      {
-        kind: "vote",
-        votes: [],
-      },
-      "+12065550123",
-    );
+    const out = renderIMessagePollBody({ kind: "vote", votes: [] }, "+12065550123");
 
     expect(out).toBe("\u{1F4CA} Poll selections: +12065550123 currently selected no options");
   });

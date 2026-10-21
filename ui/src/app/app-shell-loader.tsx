@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Errored, Loading, lazy, onCleanup } from "solid-js";
+import { Errored, Loading, lazy, onSettled } from "solid-js";
 import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import type { OpenClawShellProps } from "./app-host.tsx";
 import {
@@ -20,6 +20,7 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
           runtime={props.runtime}
           getReadiness={props.getReadiness}
           onboarding={props.onboarding}
+          onShell={props.onShell}
         />
       </Loading>
     </Errored>
@@ -28,7 +29,7 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
 
 function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.Element {
   let active = true;
-  onCleanup(() => {
+  onSettled(() => () => {
     active = false;
   });
   const retry = async () => {

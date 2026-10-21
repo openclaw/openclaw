@@ -11,7 +11,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { appendSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
 
 const mocks = vi.hoisted(() => ({
@@ -283,7 +282,25 @@ describe("session status cost line", () => {
       "openclaw-agent.sqlite",
     );
     mocks.loadSessionCostSummariesFromCache.mockReset();
+    mocks.loadProviderUsageSummary.mockReset().mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        { provider: "openai", displayName: "OpenAI", windows: [{ label: "5h", usedPercent: 25 }] },
+      ],
+    });
   });
+
+  function renderCostStatus() {
+    return buildStatusText(
+      statusParams({
+        sessionEntry,
+        storePath,
+        modelAuthOverride: "oauth",
+        activeModelAuthOverride: "oauth",
+        pluginHealthLineOverride: "Plugins: test",
+      }),
+    );
+  }
 
   it("shows cached current-session cost and tokens", async () => {
     mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
@@ -301,9 +318,7 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry, storePath)).resolves.toBe(
-      "💵 $1.23 · 456k tok (today)",
-    );
+    await expect(renderCostStatus()).resolves.toContain("💵 $1.23 · 456k tok (today)");
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
       expect.objectContaining({
         sessions: [
@@ -311,6 +326,14 @@ describe("session status cost line", () => {
         ],
       }),
     );
+  });
+
+  it("preserves existing usage when the session cost cache fails", async () => {
+    mocks.loadSessionCostSummariesFromCache.mockRejectedValue(new Error("cache unavailable"));
+
+    const text = await renderCostStatus();
+    expect(text).toContain("📊 Usage: 5h 75% left");
+    expect(text).not.toContain("💵");
   });
 
   it("omits a stale cached summary", async () => {
@@ -334,9 +357,7 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(
-      appendSessionCostLine(null, {}, "main", sessionEntry, storePath),
-    ).resolves.toBeNull();
+    await expect(renderCostStatus()).resolves.not.toContain("💵");
   });
 
   it("marks incomplete pricing", async () => {
@@ -359,7 +380,7 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry, storePath)).resolves.toBe(
+    await expect(renderCostStatus()).resolves.toContain(
       "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
     );
   });

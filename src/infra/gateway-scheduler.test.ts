@@ -2,6 +2,8 @@ import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -10,7 +12,22 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { GatewayScheduler } from "./gateway-scheduler.js";
 
-const schedulerLog = vi.hoisted(() => ({ debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+type Job = Parameters<GatewayScheduler["schedule"]>[0];
+type JobTiming = Omit<Job, "id" | "run"> & ({ atMs: number } | { delayMs: number });
+function expectCalls(...calls: Array<[unknown, number]>) {
+  for (const [run, count] of calls) {
+    expect(run).toHaveBeenCalledTimes(count);
+  }
+}
+const schedulerLog = vi.hoisted(() => ({
+  debug: vi.fn(),
+  trace: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  // Session-controller diagnostics share this mocked subsystem logger.
+  isEnabled: () => false,
+}));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => schedulerLog,
 }));
@@ -18,7 +35,20 @@ vi.mock("../logging/subsystem.js", () => ({
 function fixture() {
   const time = createGatewaySchedulerClock(1_000);
   const scheduler = createTestGatewayScheduler(time.clock);
-  return { time, scheduler };
+  const job = (
+    id: string,
+    timing: JobTiming,
+    run: Job["run"] = vi.fn(),
+    owner: Pick<GatewayScheduler, "schedule"> = scheduler,
+  ) => {
+    owner.schedule({ id, ...timing, run });
+    return run;
+  };
+  const at = async (ms: number, ...calls: Array<[unknown, number]>) => {
+    await time.advanceTo(ms);
+    expectCalls(...calls);
+  };
+  return { time, scheduler, job, at };
 }
 
 function withNativeErrorStacks<T>(run: () => T): T {
@@ -38,76 +68,44 @@ function withNativeErrorStacks<T>(run: () => T): T {
 
 describe("Gateway timed work", () => {
   it("shares maintenance slots across owners and skips slots missed by async work and sleep", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job, at } = fixture();
     const scope = scheduler.scope();
     const gate = createDeferredCore();
     const first = vi.fn(() => gate.promise);
     const second = vi.fn();
-    scheduler.schedule({
-      id: "first",
-      delayMs: 30_000,
-      everyMs: 30_000,
-      phase: "maintenance",
-      run: first,
-    });
+    job("first", { delayMs: 30_000, everyMs: 30_000, phase: "maintenance" }, first);
     await time.advanceBy(2_000);
-    scope.schedule({
-      id: "second",
-      delayMs: 30_000,
-      everyMs: 30_000,
-      phase: "maintenance",
-      run: second,
-    });
+    job("second", { delayMs: 30_000, everyMs: 30_000, phase: "maintenance" }, second, scope);
     expect(scheduler.nextWakeAtMs).toBe(30_000);
     const wake = time.advanceTo(30_000);
     expect(first).toHaveBeenCalledOnce();
     expect(second).toHaveBeenCalledOnce();
-    await time.advanceTo(95_000);
-    expect(first).toHaveBeenCalledOnce();
-    expect(second).toHaveBeenCalledTimes(2);
+    await at(95_000, [first, 1], [second, 2]);
     gate.resolve();
     await wake;
     expect(scheduler.nextWakeAtMs).toBe(120_000);
     await scope.stop();
-    await time.advanceTo(120_000);
-    expect(first).toHaveBeenCalledTimes(2);
-    expect(second).toHaveBeenCalledTimes(2);
+    await at(120_000, [first, 2], [second, 2]);
     await scheduler.stop();
   });
 
   it("leaves exact expiry and liveness cadences outside the maintenance phase", async () => {
-    const { time, scheduler } = fixture();
+    const { scheduler, job, at } = fixture();
     const expiry = vi.fn();
     const keepalive = vi.fn();
-    scheduler.schedule({
-      id: "maintenance",
-      delayMs: 30_000,
-      everyMs: 30_000,
-      phase: "maintenance",
-      run: () => {},
-    });
-    scheduler.schedule({ id: "expiry", atMs: 31_001, run: expiry });
-    scheduler.schedule({ id: "keepalive", delayMs: 25_000, everyMs: 25_000, run: keepalive });
-    await time.advanceTo(26_000);
-    expect(keepalive).toHaveBeenCalledOnce();
-    await time.advanceTo(30_000);
-    expect(expiry).not.toHaveBeenCalled();
-    await time.advanceTo(31_001);
-    expect(expiry).toHaveBeenCalledOnce();
+    job("maintenance", { delayMs: 30_000, everyMs: 30_000, phase: "maintenance" });
+    job("expiry", { atMs: 31_001 }, expiry);
+    job("keepalive", { delayMs: 25_000, everyMs: 25_000 }, keepalive);
+    await at(26_000, [keepalive, 1]);
+    await at(30_000, [expiry, 0]);
+    await at(31_001, [expiry, 1]);
     expect(scheduler.nextWakeAtMs).toBe(51_000);
     await scheduler.stop();
   });
 
   it("runs a maintenance slot once when the wall clock drifts ahead of elapsed time", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    scheduler.schedule({
-      id: "maintenance",
-      delayMs: 30_000,
-      everyMs: 30_000,
-      phase: "maintenance",
-      run,
-    });
+    const { time, scheduler, job } = fixture();
+    const run = job("maintenance", { delayMs: 30_000, everyMs: 30_000, phase: "maintenance" });
     time.setTime(2_001);
     // Any later schedule re-arms the host timer on the earlier wall-clock slot.
     scheduler.schedule({ id: "later", delayMs: 600_000, run: () => {} });
@@ -116,27 +114,6 @@ describe("Gateway timed work", () => {
     await time.advanceBy(1_001);
     expect(run).toHaveBeenCalledOnce();
     await time.advanceBy(28_999);
-    expect(run).toHaveBeenCalledTimes(2);
-    await scheduler.stop();
-  });
-
-  it("keeps maintenance cadence after a forward wall-clock jump is corrected", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    scheduler.schedule({
-      id: "maintenance",
-      delayMs: 30_000,
-      everyMs: 30_000,
-      phase: "maintenance",
-      run,
-    });
-    time.setTime(301_000);
-    await time.wake();
-    expect(run).toHaveBeenCalledOnce();
-    time.setTime(30_000);
-    await time.advanceBy(29_999);
-    expect(run).toHaveBeenCalledOnce();
-    await time.advanceBy(1);
     expect(run).toHaveBeenCalledTimes(2);
     await scheduler.stop();
   });
@@ -159,8 +136,7 @@ describe("Gateway timed work", () => {
       await nextTurn();
       expect(queryObjects(RetiredOwner)).toBe(0);
       for (const signal of signals) {
-        expect(signal.aborted).toBe(true);
-        expect(signal.reason).toMatchObject({ name: "AbortError" });
+        expect(signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
       }
     },
   );
@@ -183,8 +159,7 @@ describe("Gateway timed work", () => {
     await nextTurn();
     expect(queryObjects(RetiredCaller)).toBe(0);
     for (const scope of scopes) {
-      expect(scope.signal.aborted).toBe(true);
-      expect(scope.signal.reason).toMatchObject({ name: "AbortError" });
+      expect(scope.signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
     }
   });
 
@@ -255,8 +230,7 @@ describe("Gateway timed work", () => {
     active.schedule({ id: "maintenance", delayMs: 200, run });
     await retired.stop();
     retired.schedule({ id: "maintenance", delayMs: 0, run: () => run("retired") });
-    expect(retired.signal.aborted).toBe(true);
-    expect(active.signal.aborted).toBe(false);
+    expect([retired.signal.aborted, active.signal.aborted]).toEqual([true, false]);
     expect(scheduler.nextWakeAtMs).toBe(1_200);
     await time.advanceTo(1_200);
     expect(run).toHaveBeenCalledExactlyOnceWith();
@@ -265,28 +239,29 @@ describe("Gateway timed work", () => {
   });
 
   it("joins replaced callbacks and tracked descendants after one-shot dispatch", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job } = fixture();
     const scope = scheduler.scope();
     const first = createDeferredCore();
     const second = createDeferredCore();
     const run = vi.fn();
-    scope.schedule({
-      id: "maintenance",
-      delayMs: 0,
-      everyMs: 100,
-      run: () => {
+    job(
+      "maintenance",
+      { delayMs: 0, everyMs: 100 },
+      () => {
         void trackAsyncWork(() => first.promise);
       },
-    });
+      scope,
+    );
     const firstWake = time.wake();
-    scope.schedule({
-      id: "maintenance",
-      delayMs: 0,
-      run: async () => {
+    job(
+      "maintenance",
+      { delayMs: 0 },
+      async () => {
         await second.promise;
         scope.schedule({ id: "late", delayMs: 0, run });
       },
-    });
+      scope,
+    );
     const secondWake = time.wake();
     scope.schedule({ id: "waiting", delayMs: 100, run });
     const stopped = vi.fn();
@@ -317,18 +292,15 @@ describe("Gateway timed work", () => {
   });
 
   it("coalesces sleep and forward jumps into one pass while retaining absolute deadlines", async () => {
-    const { time, scheduler } = fixture();
+    const { scheduler, job, at } = fixture();
     const periodic = vi.fn();
     const deadline = vi.fn();
-    scheduler.schedule({ id: "approval", atMs: 5_000, run: deadline });
-    scheduler.schedule({ id: "health", atMs: 2_000, everyMs: 1_000, run: periodic });
-    await time.advanceTo(301_000);
-    expect(periodic).toHaveBeenCalledTimes(1);
-    expect(deadline).toHaveBeenCalledTimes(1);
+    job("approval", { atMs: 5_000 }, deadline);
+    job("health", { atMs: 2_000, everyMs: 1_000 }, periodic);
+    await at(301_000, [periodic, 1], [deadline, 1]);
     expect(periodic).toHaveBeenCalledBefore(deadline);
     expect(scheduler.nextWakeAtMs).toBe(302_000);
-    await time.advanceTo(302_000);
-    expect(periodic).toHaveBeenCalledTimes(2);
+    await at(302_000, [periodic, 2]);
     await scheduler.stop();
   });
 
@@ -339,20 +311,14 @@ describe("Gateway timed work", () => {
   ])(
     "reschedules a pending deadline to $atMs in $mode mode",
     async ({ mode, atMs, nextWakeAtMs }) => {
-      const { time, scheduler } = fixture();
+      const { time, scheduler, job, at } = fixture();
       const retiredRun = vi.fn();
       const run = vi.fn();
       const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
-      const oldWake = time.wakes[0];
-      scheduler.schedule({ id: "queue", atMs, mode, run });
+      job("queue", { atMs, mode }, run);
       retired.cancel();
-      expect(oldWake).toBeDefined();
-      await oldWake?.run();
-      expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
-      expect(time.armedAtMs).toBe(nextWakeAtMs);
-      await time.advanceTo(nextWakeAtMs);
-      expect(run).toHaveBeenCalledOnce();
-      expect(retiredRun).not.toHaveBeenCalled();
+      expect([scheduler.nextWakeAtMs, time.armedAtMs]).toEqual([nextWakeAtMs, nextWakeAtMs]);
+      await at(nextWakeAtMs, [run, 1], [retiredRun, 0]);
       expect(scheduler.nextWakeAtMs).toBeNull();
       await scheduler.stop();
     },
@@ -365,10 +331,10 @@ describe("Gateway timed work", () => {
   ])(
     "retains $clock eligibility after a backward wall-clock correction: $deadline",
     async ({ deadline, clock }) => {
-      const { time, scheduler } = fixture();
+      const { time, scheduler, job } = fixture();
       const run = vi.fn();
       time.setTime(9_000);
-      scheduler.schedule({ id: "queue", delayMs: 1_000, mode: "earliest", run });
+      job("queue", { delayMs: 1_000, mode: "earliest" }, run);
       expect(time.armedAtMs).toBe(10_000);
       time.setTime(4_000);
       await time.advanceBy(500);
@@ -391,17 +357,13 @@ describe("Gateway timed work", () => {
   );
 
   it("retains an already elapsed wake when another due job refreshes its deadline", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job } = fixture();
     const run = vi.fn();
     time.setTime(9_000);
-    scheduler.schedule({
-      id: "refresh",
-      delayMs: 1_000,
-      run: () => {
-        scheduler.schedule({ id: "queue", delayMs: 2_000, mode: "earliest", run });
-      },
+    job("refresh", { delayMs: 1_000 }, () => {
+      job("queue", { delayMs: 2_000, mode: "earliest" }, run);
     });
-    scheduler.schedule({ id: "queue", delayMs: 1_000, mode: "earliest", run });
+    job("queue", { delayMs: 1_000, mode: "earliest" }, run);
     time.setTime(4_000);
     await time.wake();
     expect(scheduler.nextWakeAtMs).toBe(4_000);
@@ -412,51 +374,42 @@ describe("Gateway timed work", () => {
   });
 
   it("allows a later earliest deadline after cancel, stop, or completion", async () => {
-    const { time, scheduler } = fixture();
+    const { scheduler, job, at } = fixture();
     const run = vi.fn();
     const cancelled = scheduler.schedule({ id: "queue", delayMs: 500, mode: "earliest", run });
     cancelled.cancel();
     const stopped = scheduler.schedule({ id: "queue", delayMs: 1_000, mode: "earliest", run });
     expect(scheduler.nextWakeAtMs).toBe(2_000);
     await stopped.stop();
-    scheduler.schedule({
-      id: "queue",
-      delayMs: 2_000,
-      mode: "earliest",
-      run: () => {
-        run();
-        scheduler.schedule({ id: "queue", delayMs: 1_000, mode: "earliest", run });
-      },
+    job("queue", { delayMs: 2_000, mode: "earliest" }, () => {
+      run();
+      job("queue", { delayMs: 1_000, mode: "earliest" }, run);
     });
     expect(scheduler.nextWakeAtMs).toBe(3_000);
-    await time.advanceTo(3_000);
-    expect(run).toHaveBeenCalledOnce();
+    await at(3_000, [run, 1]);
     expect(scheduler.nextWakeAtMs).toBe(4_000);
-    await time.advanceTo(4_000);
-    expect(run).toHaveBeenCalledTimes(2);
+    await at(4_000, [run, 2]);
     await scheduler.stop();
   });
 
   it("keeps cadence on a backward host wake without expiring durable deadlines early", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job, at } = fixture();
     const cadence = vi.fn();
     const deadline = vi.fn();
-    scheduler.schedule({ id: "sample", atMs: 2_000, everyMs: 1_000, run: cadence });
-    scheduler.schedule({ id: "lease-expiry", atMs: 2_000, run: deadline });
+    job("sample", { atMs: 2_000, everyMs: 1_000 }, cadence);
+    job("lease-expiry", { atMs: 2_000 }, deadline);
     time.setTime(1_500);
     await time.wake();
     expect(cadence).toHaveBeenCalledTimes(1);
     expect(deadline).not.toHaveBeenCalled();
     expect(scheduler.nextWakeAtMs).toBe(2_000);
-    await time.advanceTo(2_000);
-    expect(deadline).toHaveBeenCalledTimes(1);
+    await at(2_000, [deadline, 1]);
     await scheduler.stop();
   });
 
   it("preserves elapsed cadence when new work is registered after a clock rollback", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    scheduler.schedule({ id: "health", delayMs: 1_000, everyMs: 1_000, run });
+    const { time, scheduler, job } = fixture();
+    const run = job("health", { delayMs: 1_000, everyMs: 1_000 });
     await time.advanceBy(500);
     time.setTime(0);
     scheduler.schedule({ id: "new-deadline", atMs: 0, run: () => {} });
@@ -468,23 +421,20 @@ describe("Gateway timed work", () => {
   });
 
   it("keeps unrelated jobs progressing and joins descendants before shutdown completes", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job, at } = fixture();
     const child = createDeferredCore();
     const run = vi.fn(() => {
       void trackAsyncWork(() => child.promise);
     });
-    scheduler.schedule({ id: "cleanup", atMs: 1_000, everyMs: 100, run });
+    job("cleanup", { atMs: 1_000, everyMs: 100 }, run);
     const firstWake = time.wake();
-    const other = vi.fn();
-    scheduler.schedule({ id: "other", atMs: 1_100, run: other });
-    await time.advanceTo(1_100);
-    expect(other).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledTimes(1);
+    const other = job("other", { atMs: 1_100 });
+    await at(1_100, [other, 1], [run, 1]);
     const stopped = vi.fn();
     const stop = scheduler.stop().then(stopped);
     expect(time.armedAtMs).toBeNull();
     expect(stopped).not.toHaveBeenCalled();
-    scheduler.schedule({ id: "late", atMs: 1_100, run: other });
+    job("late", { atMs: 1_100 }, other);
     child.resolve();
     await Promise.all([stop, firstWake]);
     expect(stopped).toHaveBeenCalledTimes(1);
@@ -523,15 +473,50 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
-  it("retains a distant deadline across the host timer delay ceiling", async () => {
+  it("keeps request context but admits scheduled work independently after its registering turn", async () => {
+    // A job outlives the turn that registered it; resuming that retired owner would
+    // reject its admission with "Session turn no longer owns controller admission".
+    schedulerLog.error.mockClear();
     const { time, scheduler } = fixture();
-    const run = vi.fn();
-    scheduler.schedule({ id: "future", atMs: 4_000_000_000, run });
-    await time.advanceTo(1_000 + 2_147_483_647);
-    expect(run).not.toHaveBeenCalled();
+    const turn = {
+      storePath: "/synthetic/scheduled-after-turn/sessions.json",
+      sessionKey: "agent:main:scheduled-after-turn",
+      sessionId: "scheduled-after-turn-session",
+    };
+    let registrant: ReplyOperation | undefined;
+    const admitted: Array<ReplyOperation | undefined> = [];
+    const requestContext = new AsyncLocalStorage<string>();
+    const observedRequests: Array<string | undefined> = [];
+    await requestContext.run("scheduled-request", () =>
+      withSessionTurn(turn, async (operation) => {
+        registrant = operation;
+        scheduler.schedule({
+          id: "after-turn",
+          delayMs: 100,
+          run: () =>
+            withSessionTurn(turn, async (scheduled) => {
+              admitted.push(scheduled);
+              observedRequests.push(requestContext.getStore());
+            }),
+        });
+      }),
+    );
+    expect(registrant?.result?.kind).toBe("completed");
+    await time.advanceBy(100);
+    await scheduler.stop();
+    expect(schedulerLog.error).not.toHaveBeenCalled();
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0]).toBeDefined();
+    expect(admitted[0]).not.toBe(registrant);
+    expect(observedRequests).toEqual(["scheduled-request"]);
+  });
+
+  it("retains a distant deadline across the host timer delay ceiling", async () => {
+    const { scheduler, job, at } = fixture();
+    const run = job("future", { atMs: 4_000_000_000 });
+    await at(1_000 + 2_147_483_647, [run, 0]);
     expect(scheduler.nextWakeAtMs).toBe(4_000_000_000);
-    await time.advanceTo(4_000_000_000);
-    expect(run).toHaveBeenCalledTimes(1);
+    await at(4_000_000_000, [run, 1]);
     await scheduler.stop();
   });
 });

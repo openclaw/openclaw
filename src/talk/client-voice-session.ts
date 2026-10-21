@@ -307,6 +307,7 @@ function appendVoiceTranscript(
     entryId: string;
     role: "user" | "assistant";
     text: string;
+    providerOwned?: boolean;
     timestamp?: number;
     config?: OpenClawConfig;
   },
@@ -367,6 +368,7 @@ function appendVoiceTranscript(
                   text: normalized.text,
                   timestamp,
                   provider: record.provider ?? "realtime",
+                  providerOwned: normalized.providerOwned,
                 }),
                 now: timestamp,
               };
@@ -709,7 +711,6 @@ export async function closeStaleClientVoiceSessions(params: {
 const clientVoiceSessionTesting = {
   readRecord,
   digestDeliveryPolicy: CLIENT_VOICE_MUTATION_DIGEST_POLICY,
-  digestDeliverySnapshot: () => mutationDigestDeliveryOwner.snapshot(),
   reset(): void {
     for (const [runId, owner] of voiceSessionByRunId) {
       retireClientVoiceRun(runId, owner, false);

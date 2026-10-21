@@ -1,15 +1,11 @@
 import { expect, it, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
+import * as runs from "../agents/embedded-agent-runner/runs.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import type { RespondFn } from "./server-methods/types.js";
 
-/** Reuse the suite's admission, queue and reply owners; only provider execution is simulated. */
 export function registerGoalAutomaticContinuationCases(
   scope: () => { agentId: string; sessionKey: string; sessionId: string; storePath: string },
   runEmbeddedAgent: MockInstance<typeof executeEmbeddedAgent>,
@@ -20,40 +16,44 @@ export function registerGoalAutomaticContinuationCases(
   goalStart: (message: string) => Record<string, unknown>,
   userMessages: () => readonly unknown[],
 ) {
+  const result = (sessionId: string, aborted?: boolean) => ({
+    payloads: aborted ? [] : [{ text: "More work remains." }],
+    meta: {
+      durationMs: 0,
+      stopReason: aborted ? "aborted" : "end_turn",
+      ...(aborted === undefined ? {} : { aborted }),
+      agentMeta: { sessionId, provider: "test", model: "test", usage: { input: 1, output: 1 } },
+    },
+  });
+  const expectDrained = async () =>
+    expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
+  const setGoalStatus = (status: "complete" | "paused") =>
+    patchSessionEntryCore(scope(), (entry) => ({
+      goal: entry.goal ? { ...entry.goal, status } : undefined,
+    }));
+  const start = async (message: string) =>
+    expect((await rpc("chat.send", goalStart(message))).mock.calls[0]?.[0]).toBe(true);
   it("nudges consecutive normal final turns until the same Goal is complete", async () => {
     const completed = createDeferred();
     runEmbeddedAgent.mockImplementation(async (params) => {
       const calls = runEmbeddedAgent.mock.calls.length;
       if (calls === 3) {
-        await patchSessionEntryCore(scope(), (entry) => ({
-          goal: entry.goal ? { ...entry.goal, status: "complete" } : undefined,
-        }));
+        await setGoalStatus("complete");
         completed.resolve();
       }
-      return {
-        payloads: [{ text: calls === 3 ? "Verified the goal." : "More work remains." }],
-        meta: {
-          durationMs: 0,
-          stopReason: "end_turn",
-          agentMeta: {
-            sessionId: params.sessionId,
-            provider: "test",
-            model: "test",
-            usage: { input: 1, output: 1 },
-          },
-        },
-      };
+      return result(params.sessionId);
     });
-    const started = await rpc("chat.send", goalStart("Finish a three-turn checklist"));
-    expect(started.mock.calls[0]?.[0]).toBe(true);
+    await start("Finish a three-turn checklist");
     await completed.promise;
-    const drained = await waitForGatewayActiveWork(30_000);
-    expect(drained.drained).toBe(true);
+    await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
     expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain("Advance");
     expect(runEmbeddedAgent.mock.calls[2]?.[0].prompt).toContain("Advance");
     expect(userMessages()).toHaveLength(1);
-    expect(loadSessionEntry(scope())?.goal?.status).toBe("complete");
+    expect(loadSessionEntry(scope())?.goal).toMatchObject({
+      status: "complete",
+      continuationTurns: 2,
+    });
   });
 
   it("stops automatic goal pursuit when the operator stops a continuation", async () => {
@@ -63,6 +63,7 @@ export function registerGoalAutomaticContinuationCases(
     let continuationSignal: AbortSignal | undefined;
     let continuationRunId: string | undefined;
     runEmbeddedAgent.mockImplementation(async (params) => {
+      const { sessionId: id, sessionFile: file, replyOperation: operation } = params;
       const second = runEmbeddedAgent.mock.calls.length === 2;
       if (second) {
         continuationRunId = params.runId;
@@ -85,34 +86,19 @@ export function registerGoalAutomaticContinuationCases(
           isCompacting: () => false,
           queueMessage: async () => {},
         };
-        params.replyOperation?.attachBackend(backend);
-        setActiveEmbeddedRun(params.sessionId, backend, sessionKey, params.sessionFile, "main");
+        operation?.attachBackend(backend);
+        runs.attachActiveEmbeddedRun(id, backend, sessionKey, file, "main", operation);
         secondStarted.resolve();
         try {
           await released.promise;
         } finally {
-          clearActiveEmbeddedRun(params.sessionId, backend, sessionKey, params.sessionFile);
-          params.replyOperation?.detachBackend(backend);
+          runs.detachActiveEmbeddedRun(id, backend, sessionKey, file);
+          operation?.detachBackend(backend);
         }
       }
-      const aborted = continuationSignal?.aborted === true;
-      return {
-        payloads: aborted ? [] : [{ text: "The goal is not complete yet." }],
-        meta: {
-          durationMs: 0,
-          stopReason: aborted ? "aborted" : "end_turn",
-          aborted,
-          agentMeta: {
-            sessionId: params.sessionId,
-            provider: "test",
-            model: "test",
-            usage: { input: 1, output: 1 },
-          },
-        },
-      };
+      return result(id, continuationSignal?.aborted === true);
     });
-    const started = await rpc("chat.send", goalStart("Keep working until stopped"));
-    expect(started.mock.calls[0]?.[0]).toBe(true);
+    await start("Keep working until stopped");
     try {
       await secondStarted.promise;
       const stopped = await rpc("sessions.abort", { key: sessionKey, runId: continuationRunId });
@@ -120,14 +106,11 @@ export function registerGoalAutomaticContinuationCases(
       expect(continuationSignal?.aborted).toBe(true);
     } finally {
       if (continuationSignal?.aborted !== true) {
-        await patchSessionEntryCore(scope(), (entry) => ({
-          goal: entry.goal ? { ...entry.goal, status: "paused" } : undefined,
-        }));
+        await setGoalStatus("paused");
       }
       released.resolve();
     }
-    const drained = await waitForGatewayActiveWork(30_000);
-    expect(drained.drained).toBe(true);
+    await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
     expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
   });

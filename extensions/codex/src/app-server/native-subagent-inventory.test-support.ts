@@ -112,6 +112,7 @@ export async function fixture() {
     const authority = createNativeSubagentSessionAuthority(parent);
     const assignmentStore = createNativeSubagentAssignmentStore({
       bindingStore: registrationStore,
+      readBinding: () => registrationStore.read(identity),
       identity,
       owner,
       assertLifecycleCurrentAsync: parent.assertCurrent,

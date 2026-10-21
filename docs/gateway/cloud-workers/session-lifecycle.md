@@ -39,6 +39,8 @@ A message that arrives while the Gateway is installing an updated worker runtime
 
 Graceful Gateway stop and restart interrupt OpenClaw worker turns as soon as draining begins, because worker protocol admission is closed during shutdown. The Gateway retains each interrupted turn's claim and pending workspace results for startup recovery instead of waiting for worker admission retries or failing the placement. Local embedded turns keep their normal drain behavior.
 
+Shutdown also cancels active worker provisioning and allocation recovery, then waits for their commands to settle before closing state. It retains the allocation's operation ID and recorded lease for restart recovery; stopping the Gateway does not request destruction of the machine.
+
 For node-backed sessions interrupted by a restart, recovery confirms the old worker has stopped, settles pending workspace results, and retires the interrupted turn while retaining the machine. An interrupted claim without a finishing acknowledgment enters the same result recovery flow, so edits already made on the retained machine are accepted before the next turn. The next message receives fresh authority; it does not replay the interrupted tool call automatically. Explicit Stop, Move, and failed-provider cleanup retain their normal teardown behavior.
 
 ## Synchronize workspace files
@@ -74,6 +76,8 @@ the live owner before acceptance, and preserves result refs for restart recovery
 A change on either side uses the full reconciliation path, including conflict handling.
 
 Completed cloud turns preserve eligible, size-bounded workspace files before the turn claim is released. Repository-only sessions accept a cumulative immutable checkpoint in the Gateway's bare artifact repository. Gateway-source sessions apply those changes to their managed worktree. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. Gateway-source changes remain in the managed worktree for normal review and commit; repository-only changes remain on the node and in the accepted checkpoint.
+
+At the checkout root, `.cache/vitest/`, `.cache/openclaw/bun/`, `.cache/ms-playwright/`, and `.local/share/pnpm/store/` are derived caches, `.artifacts/vitest-workers/` contains generated compiler outputs, and `.artifacts/dist-artifacts.lock/` contains runtime ownership files. Workspace capture, transfer, and reconciliation exclude these exact roots. Recovery applies the same rule to previously retained results without changing their authenticated receipts. Other files under `.cache/`, `.local/`, and `.artifacts/`, nested paths, and explicit staged inputs remain subject to the normal workspace eligibility and size limits; genuine concurrent source edits still produce conflicts.
 
 ### Retain idle workers
 
@@ -173,7 +177,7 @@ When a single-session Delete or Archive is blocked by unsynced work on an offlin
 
 ### Reclaim through the API
 
-For a broken or runaway cloud environment, an administrator can call the admin-only `environments.destroy` method with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment. For an unreachable paired device, forced destroy succeeds without waiting for reconnection and discards unsynced device changes.
+For a broken or runaway cloud environment, an administrator can call the admin-only `environments.destroy` method with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment. Delayed cleanup remains bound to the placement and turn claim captured for abandonment; it preserves a replacement owner and its pending workspace result. For an unreachable paired device, forced destroy succeeds without waiting for reconnection and discards unsynced device changes.
 
 The equivalent write-scoped session RPC is:
 
@@ -196,6 +200,8 @@ Dispatch and reconcile-first Move validate and record their durable decision bef
 The result placement is `reclaimed` after an active worker is safely stopped. Reclaim also waits for an in-flight dispatch and retries pending teardown for a failed placement before returning `local`. No other placement states are successful reclaim results.
 
 Crabbox lease teardown reserves time for the CLI's full bounded release attempts, retries, cleanup observation, and process settlement. Inspection keeps its shorter timeout. Failed node enrollment also reserves time for diagnostics before teardown; optional image capture has its own additional budget.
+
+On a dedicated cloud machine, each desktop cleanup phase gets up to one minute to finish in-flight computer actions and close the driver. If it fails or times out, OpenClaw logs a warning and continues provider teardown, including forced destruction. Check the provider's lease status and retry Stop if the machine remains running. Shared or unknown hosts still require confirmation that their specific worker stopped.
 
 If provider teardown fails or times out during stop or move, the request reports the bounded, redacted provider cause even if recovery subsequently finishes cleanup. Retrying Stop on a failed placement reports that cleanup attempt's cause, which can differ from the original session failure. Follow the reported recovery guidance and check the current placement before retrying. A dedicated cloud worker can remain recorded as attached while destruction is uncertain, but its closed authority cannot resume remote workspace processes.
 

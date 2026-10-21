@@ -3,7 +3,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type TestContext } from "vitest";
 import { resolveDefaultAgentDir } from "../../../src/agents/agent-scope.js";
-import { prepareHostConfigSnapshot } from "../../../src/config/io.snapshot-preparation.js";
 import * as configFileSource from "../../../src/config/source-file.js";
 import { GatewayClient, GatewayClientRequestError } from "../../../src/gateway/client.js";
 import { invalidateConfigGetResponseCache } from "../../../src/gateway/config-get-response.js";
@@ -149,7 +148,6 @@ async function startConfigRpcGateway(
   recordPhase?.("server.start");
   server = await startGatewayServer(port, {
     auth: { mode: "token", token: GATEWAY_TOKEN },
-    prepareConfigSnapshot: prepareHostConfigSnapshot,
     controlUiEnabled: false,
     hotReloadRecovery,
   });

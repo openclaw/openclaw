@@ -7,7 +7,7 @@ import {
 } from "./usage-state.js";
 
 export function resolveUsageWindowUntil(now: number, durationMs: number): number {
-  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+  if (durationMs <= 0) {
     return now;
   }
   return (
@@ -68,6 +68,7 @@ export function computeNextProfileUsageStats(params: {
   now: number;
   reason: AuthProfileFailureReason;
   modelId?: string;
+  retryAfterMs?: number;
 }): ProfileUsageStats {
   // The provider quota writer already recorded this failure and its retry deadline.
   if (
@@ -130,11 +131,16 @@ export function computeNextProfileUsageStats(params: {
   const window = disabledFailureReason ? "disabledUntil" : "cooldownUntil";
   // Retries within either active window cannot push recovery further out.
   const existingUntil = params.existing[window];
-  const recomputedUntil = resolveUsageWindowUntil(params.now, backoffMs);
+  const cooldownMs =
+    params.reason === "rate_limit" &&
+    params.retryAfterMs !== undefined &&
+    Number.isFinite(params.retryAfterMs) &&
+    params.retryAfterMs > 0
+      ? Math.min(params.retryAfterMs, FAILURE_BACKOFF_POLICIES.rate_limit.maxMs)
+      : backoffMs;
+  const recomputedUntil = resolveUsageWindowUntil(params.now, cooldownMs);
   updatedStats[window] =
-    typeof existingUntil === "number" &&
-    Number.isFinite(existingUntil) &&
-    existingUntil > params.now
+    typeof existingUntil === "number" && existingUntil > params.now
       ? existingUntil
       : recomputedUntil;
   if (disabledFailureReason) {

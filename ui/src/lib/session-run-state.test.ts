@@ -1,27 +1,27 @@
 // Control UI tests cover session run state behavior.
 import { describe, expect, it } from "vitest";
-import { isSessionRunActive } from "./session-run-state.ts";
+import { isSessionRunStateActive } from "./session-run-state.ts";
 
-describe("isSessionRunActive", () => {
+describe("isSessionRunStateActive", () => {
   it("uses explicit live-run state over stale running status", () => {
-    expect(isSessionRunActive({ status: "running", hasActiveRun: false })).toBe(false);
-    expect(isSessionRunActive({ status: "running", hasActiveRun: true })).toBe(true);
+    expect(isSessionRunStateActive({ status: "running", hasActiveRun: false })).toBe(false);
+    expect(isSessionRunStateActive({ status: "running", hasActiveRun: true })).toBe(true);
   });
 
   it("keeps terminal status authoritative over stale active flags", () => {
-    expect(isSessionRunActive({ status: "done", hasActiveRun: true })).toBe(false);
-    expect(isSessionRunActive({ status: "failed", hasActiveRun: true })).toBe(false);
-    expect(isSessionRunActive({ status: "killed", hasActiveRun: true })).toBe(false);
-    expect(isSessionRunActive({ status: "timeout", hasActiveRun: true })).toBe(false);
+    expect(isSessionRunStateActive({ status: "done", hasActiveRun: true })).toBe(false);
+    expect(isSessionRunStateActive({ status: "failed", hasActiveRun: true })).toBe(false);
+    expect(isSessionRunStateActive({ status: "killed", hasActiveRun: true })).toBe(false);
+    expect(isSessionRunStateActive({ status: "timeout", hasActiveRun: true })).toBe(false);
   });
 
   it("keeps legacy running status active when no live-run flag exists", () => {
-    expect(isSessionRunActive({ status: "running" })).toBe(true);
-    expect(isSessionRunActive({ hasActiveRun: true })).toBe(true);
+    expect(isSessionRunStateActive({ status: "running" })).toBe(true);
+    expect(isSessionRunStateActive({ hasActiveRun: true })).toBe(true);
   });
 
   it("keeps queued work active before execution starts", () => {
-    expect(isSessionRunActive({ status: "queued", hasActiveRun: true })).toBe(true);
-    expect(isSessionRunActive({ status: "queued" })).toBe(true);
+    expect(isSessionRunStateActive({ status: "queued", hasActiveRun: true })).toBe(true);
+    expect(isSessionRunStateActive({ status: "queued" })).toBe(true);
   });
 });

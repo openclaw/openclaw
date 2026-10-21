@@ -5,6 +5,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createConfigPage } from "./config-page-state.ts";
 import { ConfigPage, type ConfigPageId } from "./config-page.tsx";
 import type { ConfigRouteData } from "./route-data.ts";
 
@@ -54,7 +55,6 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
     },
     theme: context.theme ?? {
       branding: resolveThemeBranding(undefined),
-      serverSelection: null,
       subscribe,
     },
     overlays: context.overlays ?? { snapshot: {}, subscribe },
@@ -89,7 +89,6 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   Object.assign(context.webPush, { snapshot: context.webPush.snapshot ?? {} });
   Object.assign(context.theme, {
     branding: context.theme.branding ?? resolveThemeBranding(undefined),
-    serverSelection: context.theme.serverSelection ?? null,
     settings: context.theme.settings ?? loadSettings(),
   });
   Object.assign(context.gateway, {
@@ -157,6 +156,34 @@ export function mountConfigPage(
     },
     update(next: Partial<typeof initial>) {
       setProps((previous) => ({ ...previous, ...next }));
+      flush();
+    },
+    dispose: view.unmount,
+  };
+}
+
+/** Mount the page's public presentation contract without rendering unrelated settings sections. */
+export function mountConfigPageState(
+  initialContext: ApplicationContext,
+  initial: { pageId?: ConfigPageId; routeData?: ConfigRouteData | null } = {},
+) {
+  const context = completeConfigContext(initialContext);
+  const [route, setRoute] = createSignal(initial);
+  const host = document.createElement("openclaw-config-page");
+  let state!: ReturnType<typeof createConfigPage>;
+  const view = mountSolid(() => {
+    state = createConfigPage(
+      context,
+      () => ({ pageId: route().pageId ?? "advanced", routeData: route().routeData ?? null }),
+      () => host,
+    );
+    return host;
+  });
+  flush();
+  return {
+    state,
+    update(next: Partial<typeof initial>) {
+      setRoute((previous) => ({ ...previous, ...next }));
       flush();
     },
     dispose: view.unmount,

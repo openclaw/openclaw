@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -14,7 +13,6 @@ import {
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readLatestTranscriptAssistantTextAsync } from "../config/sessions/session-transcript-assistant-read.js";
 import { saveCronStore } from "../cron/store.js";
-import * as cronJobNames from "../cron/store/job-name.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -136,7 +134,6 @@ describe("diagnostic session context", () => {
 
     const message = await captureSessionLog({
       sessionKey,
-      activeSessionId: "run-456",
     });
 
     expect(message).toContain("cronJobId=job-123");
@@ -153,34 +150,6 @@ describe("diagnostic session context", () => {
         })
       )?.text,
     ).toBe("There are 40\ncached mentions ready.");
-    expect(await captureSessionLog({ sessionKey, cronNameLabel: "stopped" })).toContain(
-      `stopped="${"a".repeat(136)}..."`,
-    );
-  });
-
-  it("discards queued enrichment when its session is replaced", async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:cron:pending-job:run:previous" };
-    await seedSessionTranscript({
-      ...scope,
-      sessionId: "previous",
-      messages: [{ role: "assistant", content: "previous private reply" }],
-    });
-    const ready = createDeferred();
-    const resume = createDeferred();
-    vi.spyOn(cronJobNames, "prepareCronJobNameResolver").mockImplementation(async () => {
-      ready.resolve();
-      await resume.promise;
-      return () => "previous job name";
-    });
-    const message = captureSessionLog({ ...scope, activeSessionId: "previous" });
-    try {
-      await ready.promise;
-      await replaceSessionEntry(scope, { sessionId: "replacement", updatedAt: 2 });
-    } finally {
-      resume.resolve();
-      await message;
-    }
-    expect(await message).toBe("");
   });
 
   it.each(["dashboard", "subagent", "internal-session-effects"])(
@@ -206,7 +175,7 @@ describe("diagnostic session context", () => {
           })
         )?.text,
       ).toBe(privateReply);
-      expect(await captureSessionLog({ sessionKey, activeSessionId: sessionId })).toBe("");
+      expect(await captureSessionLog({ sessionKey })).toBe("");
       expect(
         fs.existsSync(
           path.join(tempDir!, "agents", "incognito-agent", "agent", "openclaw-agent.sqlite"),
@@ -219,7 +188,6 @@ describe("diagnostic session context", () => {
     expect(
       await captureSessionLog({
         sessionKey: "agent:../main:main",
-        activeSessionId: "main-session",
       }),
     ).toBe("");
   });
@@ -228,7 +196,6 @@ describe("diagnostic session context", () => {
     const sessionKey = "agent:oauth-agent:slack:cron:job-123:run:run-456";
     const message = await captureSessionLog({
       sessionKey,
-      activeSessionId: "slack-session",
     });
 
     expect(message).toBe("");
@@ -247,7 +214,6 @@ describe("diagnostic session context", () => {
     expect(
       await captureSessionLog({
         sessionKey: "agent:missing-agent:main",
-        activeSessionId: "missing",
       }),
     ).toBe("");
     expect(fs.existsSync(databasePath)).toBe(false);

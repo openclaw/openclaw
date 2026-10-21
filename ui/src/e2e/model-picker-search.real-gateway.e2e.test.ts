@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
@@ -28,12 +27,8 @@ const models = [
   "elm",
   "forest",
   "granite",
-  "harbor",
-  "iris",
-  "juniper",
 ].map((id) => ({ id, name: id }));
 let owner: OpenClawTestInstance;
-let proofDir: string | undefined;
 const suite = createControlUiE2eSuite({
   name: "Model picker search with a real Gateway",
   startServerBeforeBrowser: true,
@@ -63,25 +58,7 @@ const suite = createControlUiE2eSuite({
       await owner.startGateway();
       return {
         baseUrl: `http://127.0.0.1:${owner.port}/`,
-        close: async () => {
-          const child = owner.child;
-          await owner.cleanup();
-          if (proofDir) {
-            await fs.writeFile(
-              path.join(proofDir, "lifecycle.json"),
-              JSON.stringify(
-                {
-                  pid: child?.pid,
-                  exitCode: child?.exitCode,
-                  signalCode: child?.signalCode,
-                  cleanupReturned: true,
-                },
-                null,
-                2,
-              ),
-            );
-          }
-        },
+        close: () => owner.cleanup(),
       };
     } catch (error) {
       await owner.cleanup();
@@ -92,14 +69,8 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("keeps compact choices readable and an unsaved search current through catalog replacement", async () => {
-    proofDir = createControlUiE2eArtifactDir("model-picker-public");
-    const directory = proofDir;
-    const frames: unknown[] = [];
-    const commands: unknown[] = [];
-    const observations: unknown[] = [];
-    const requests = new Map<string, string>();
+    const directory = createControlUiE2eArtifactDir("model-picker-public");
     const mutations: string[] = [];
-    const assets: Array<Promise<unknown>> = [];
     const redact = (text: string) =>
       text
         .replaceAll(owner.gatewayToken, "[synthetic token]")
@@ -109,11 +80,6 @@ suite.define(() => {
         .replaceAll(process.cwd(), "[checkout]");
     const cli = async (args: string[]) => {
       const result = await owner.cli(args);
-      commands.push({
-        args,
-        ...result,
-        stdout: args[0] === "dashboard" ? "[one-time handoff omitted]" : result.stdout,
-      });
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
@@ -149,26 +115,10 @@ suite.define(() => {
     const issued = new URL(handoff.browserUrl);
     const url = new URL("cron", issued);
     url.hash = issued.hash;
-    const buildInfo = JSON.parse(await fs.readFile(path.resolve("dist/build-info.json"), "utf8"));
     try {
       await suite.withPage(
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
-          page.on("response", (response) => {
-            const assetUrl = new URL(response.url());
-            if (
-              assetUrl.origin === issued.origin &&
-              /\/assets\/.*\.(?:js|css)$/u.test(assetUrl.pathname)
-            ) {
-              assets.push(
-                response.body().then((body) => ({
-                  path: assetUrl.pathname,
-                  status: response.status(),
-                  sha256: createHash("sha256").update(body).digest("hex"),
-                })),
-              );
-            }
-          });
           page.on("websocket", (socket) => {
             socket.on("framesent", ({ payload }) => {
               const frame = record(JSON.parse(payload.toString()));
@@ -176,84 +126,37 @@ suite.define(() => {
                 frame.type === "req" &&
                 frame.method !== "connect" &&
                 typeof frame.id === "string" &&
-                typeof frame.method === "string"
+                typeof frame.method === "string" &&
+                [
+                  "config.patch",
+                  "config.set",
+                  "cron.add",
+                  "cron.update",
+                  "cron.run",
+                  "cron.scratch.set",
+                  "sessions.patch",
+                ].includes(frame.method)
               ) {
-                requests.set(frame.id, frame.method);
-                frames.push({ direction: "sent", frame });
-                if (
-                  [
-                    "config.patch",
-                    "config.set",
-                    "cron.add",
-                    "cron.update",
-                    "cron.run",
-                    "cron.scratch.set",
-                    "sessions.patch",
-                  ].includes(frame.method)
-                ) {
-                  mutations.push(frame.method);
-                }
-              }
-            });
-            socket.on("framereceived", ({ payload }) => {
-              const frame = record(JSON.parse(payload.toString()));
-              if (
-                (frame.type === "res" && typeof frame.id === "string" && requests.has(frame.id)) ||
-                frame.event === "config.changed" ||
-                frame.event === "chat.metadata.changed"
-              ) {
-                frames.push({ direction: "received", frame });
+                mutations.push(frame.method);
               }
             });
           });
-          const press = async (key: string) => {
-            await page.keyboard.press(key);
-            observations.push({ action: "keyboard", key });
-          };
-          // Focus attributes and leaf labels cannot expose inline page scripts.
+          const press = (key: string) => page.keyboard.press(key);
           const capture = async (label: string, picker: Locator) => {
             const surface = page.locator(".cron-page");
             await waitForControlUiProofSurface(surface, [picker]);
             const menu = await picker.evaluate((element) => {
               const rect = element.querySelector(".picker-select__menu")!.getBoundingClientRect();
               const triggerBounds = element.querySelector("button")!.getBoundingClientRect();
-              const active = document.activeElement;
+              const bounds = ({ x, y, width, height }: DOMRect) => ({ x, y, width, height });
               return {
-                trigger: element.querySelector("button")?.getAttribute("aria-label"),
-                triggerBounds: {
-                  x: triggerBounds.x,
-                  y: triggerBounds.y,
-                  width: triggerBounds.width,
-                  height: triggerBounds.height,
-                },
-                expanded: element.querySelector("button")?.getAttribute("aria-expanded"),
+                triggerBounds: bounds(triggerBounds),
                 query: element.querySelector<HTMLInputElement>(".picker-select__search")?.value,
-                placement: rect.bottom <= triggerBounds.top ? "top" : "bottom",
                 menu: {
-                  x: rect.x,
-                  y: rect.y,
-                  width: rect.width,
-                  height: rect.height,
+                  ...bounds(rect),
                   viewportWidth: innerWidth,
                   viewportHeight: innerHeight,
                   scrollX,
-                  scrollY,
-                  visualViewport: window.visualViewport
-                    ? {
-                        width: window.visualViewport.width,
-                        height: window.visualViewport.height,
-                        offsetLeft: window.visualViewport.offsetLeft,
-                        offsetTop: window.visualViewport.offsetTop,
-                        scale: window.visualViewport.scale,
-                      }
-                    : null,
-                },
-                focused: {
-                  tag: active?.tagName,
-                  id: active?.id,
-                  role: active?.getAttribute("role"),
-                  label: active?.getAttribute("aria-label"),
-                  activeDescendant: active?.getAttribute("aria-activedescendant"),
                 },
                 rows: [...element.querySelectorAll<HTMLElement>("[role=option]:not([hidden])")].map(
                   (row) => {
@@ -263,17 +166,10 @@ suite.define(() => {
                       label: labelElement.textContent ?? "",
                       labelWidth: labelElement.clientWidth,
                       labelScrollWidth: labelElement.scrollWidth,
-                      disabled: row.getAttribute("aria-disabled"),
-                      selected: row.getAttribute("aria-selected"),
                     };
                   },
                 ),
               };
-            });
-            observations.push({
-              label,
-              menu,
-              accessibility: await page.locator("body").ariaSnapshot(),
             });
             await fs.writeFile(
               path.join(directory, `${label}.png`),
@@ -286,8 +182,8 @@ suite.define(() => {
           await page.locator('[data-test-id="cron-new-task"]').click();
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           const trigger = picker.locator(".picker-select__trigger");
-          await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
           await trigger.click();
+          await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
           await picker.getByRole("listbox").waitFor({ state: "visible" });
           const compact = await capture("compact-desktop", picker);
           expect(compact.query).toBeUndefined();
@@ -302,6 +198,7 @@ suite.define(() => {
           expect(await pickerValue(picker)).toBe("");
 
           await publish(models);
+          await trigger.click();
           await expect
             .poll(() => picker.locator('[data-value="fixture/aurora-large"]').count())
             .toBe(1);
@@ -309,6 +206,7 @@ suite.define(() => {
             .locator("[role=option]:not([hidden])")
             .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value")));
           expect(inventory.length).toBeGreaterThan(8);
+          await trigger.click();
           await page.locator("#cron-name").fill("Keep this draft");
           await page.locator("#cron-payload-text").fill("Do not submit this automation");
           const writesBeforeSearch = mutations.length;
@@ -383,18 +281,12 @@ suite.define(() => {
           await search.fill("no-matches-741");
           const phone = await capture("draft-phone-no-results", picker);
           expect(phone.menu.scrollX).toBe(0);
-          expect(phone.triggerBounds.x).toBeGreaterThanOrEqual(0);
-          expect(phone.triggerBounds.x + phone.triggerBounds.width).toBeLessThanOrEqual(
-            phone.menu.viewportWidth,
-          );
-          expect(phone.triggerBounds.y).toBeGreaterThanOrEqual(0);
-          expect(phone.triggerBounds.y + phone.triggerBounds.height).toBeLessThanOrEqual(
-            phone.menu.viewportHeight,
-          );
-          expect(phone.menu.x).toBeGreaterThanOrEqual(0);
-          expect(phone.menu.x + phone.menu.width).toBeLessThanOrEqual(phone.menu.viewportWidth);
-          expect(phone.menu.y).toBeGreaterThanOrEqual(0);
-          expect(phone.menu.y + phone.menu.height).toBeLessThanOrEqual(phone.menu.viewportHeight);
+          for (const box of [phone.triggerBounds, phone.menu]) {
+            expect(box.x).toBeGreaterThanOrEqual(0);
+            expect(box.x + box.width).toBeLessThanOrEqual(phone.menu.viewportWidth);
+            expect(box.y).toBeGreaterThanOrEqual(0);
+            expect(box.y + box.height).toBeLessThanOrEqual(phone.menu.viewportHeight);
+          }
           await press("Escape");
           expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
           expect(await page.locator("#cron-payload-text").inputValue()).toBe(
@@ -407,16 +299,6 @@ suite.define(() => {
         },
       );
     } finally {
-      await fs.writeFile(
-        path.join(directory, "proof.json"),
-        redact(
-          JSON.stringify(
-            { buildInfo, frames, commands, observations, assets: await Promise.allSettled(assets) },
-            null,
-            2,
-          ),
-        ),
-      );
       await fs.writeFile(path.join(directory, "gateway.log"), redact(owner.logs()));
     }
   }, 120_000);

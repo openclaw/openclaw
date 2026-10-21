@@ -1,17 +1,38 @@
 import assert from "node:assert/strict";
+import { linkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import {
   captureSqliteWorkerOpen,
   reclaimSqliteWorkerClient,
   reserveSqliteWorkerClient,
 } from "./sqlite-worker-broker-admission.js";
+import * as workerLifecycle from "./sqlite-worker-broker-lifecycle.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import { createSqliteWorkerClient } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
-import { useSqliteWorkerStoreFixture } from "./sqlite-worker-fixture.test-support.js";
+import {
+  useSqliteWorkerStoreFixture,
+  readWorkerRows,
+  appendWorkerRow,
+} from "./sqlite-worker-fixture.test-support.js";
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
+import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
+
+function inputAdmission() {
+  return new SqliteWorkerInputAdmission({
+    queuedBytes: () => 0,
+    isClosing: () => false,
+    maxQueuedBytes: 1024,
+    maxQueuedInputBytes: 1024,
+    maxMessageBytes: 1024,
+    maxPendingOpens: 2,
+  });
+}
 
 function capacityFixture() {
   const reservations = new Set<object>();
@@ -95,14 +116,7 @@ it("propagates retirement failure without admitting a replacement", async () => 
 });
 
 it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", async (kind) => {
-  const admission = new SqliteWorkerInputAdmission({
-    queuedBytes: () => 0,
-    isClosing: () => false,
-    maxQueuedBytes: 1024,
-    maxQueuedInputBytes: 1024,
-    maxMessageBytes: 1024,
-    maxPendingOpens: 2,
-  });
+  const admission = inputAdmission();
   const finish = createDeferredCore();
   let finished = false;
   const open = async () => {
@@ -129,8 +143,100 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
   expect(admission.retainedBytes).toBe(0);
 });
 
+it("admits cold shared state while an agent opens, with one shared input budget", async () => {
+  const admission = inputAdmission();
+  const finishAgent = createDeferredCore();
+  const sharedStarted = createDeferredCore();
+  const finishShared = createDeferredCore();
+  const openShared = <T>(bytes: number, run: () => Promise<T>) =>
+    admission.open(bytes, run, undefined, undefined, true);
+  const agent = admission.open(512, () => finishAgent.promise);
+  const shared = openShared(512, async () => {
+    sharedStarted.resolve();
+    await finishShared.promise;
+  });
+  try {
+    await sharedStarted.promise;
+    await expect(admission.open(1, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+    finishShared.resolve();
+    await shared;
+    expect(admission.retainedBytes).toBe(512);
+    await expect(openShared(513, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+    await expect(openShared(512, async () => "shared reopened")).resolves.toBe("shared reopened");
+  } finally {
+    finishShared.resolve();
+    finishAgent.resolve();
+    await Promise.all([agent, shared]);
+  }
+  expect(admission.retainedBytes).toBe(0);
+});
+
 await initializeSqliteRuntimeCapabilities();
 const { databasePath } = useSqliteWorkerStoreFixture("sqlite-capacity-drain-");
+it("keeps one physical owner when shared and ordinary opens acquire carriers together", async ({
+  signal,
+}) => {
+  const pathname = databasePath();
+  const alias = `${pathname}.alias`;
+  const database = openNodeSqliteDatabase(pathname);
+  database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
+  admitSqliteSchema(database);
+  linkSync(pathname, alias);
+  const acquired = createDeferredCore();
+  let count = 0;
+  const createLifecycle = workerLifecycle.createSqliteWorkerLifecycle;
+  const lifecycleSpy = vi
+    .spyOn(workerLifecycle, "createSqliteWorkerLifecycle")
+    .mockImplementation((options) => {
+      const lifecycle = createLifecycle(options);
+      const acquireSlot = lifecycle.acquireSlot;
+      lifecycle.acquireSlot = async (...args) => {
+        const slot = await acquireSlot(...args);
+        if (++count === 2) {
+          acquired.resolve();
+        }
+        await acquired.promise;
+        return slot;
+      };
+      return lifecycle;
+    });
+  const broker = new SqliteWorkerBroker();
+  const options = {
+    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+    databasePath: pathname,
+    existingOnly: true,
+    input: undefined,
+  };
+  const opening = Promise.allSettled([
+    broker.open<FixtureOperations>(options, undefined, undefined, { sharedState: true }),
+    broker.open<FixtureOperations>({ ...options, databasePath: alias }),
+  ]);
+  try {
+    const outcomes = await withinTest(opening, signal);
+    const opened = outcomes.flatMap((outcome) =>
+      outcome.status === "fulfilled" && outcome.value ? [outcome.value] : [],
+    );
+    expect(opened).toHaveLength(1);
+    expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({
+      reason: { code: "overloaded", message: expect.stringContaining("retry open") },
+    });
+    const store = opened[0]!;
+    await appendWorkerRow(store, "still owned");
+    await expect(readWorkerRows(store)).resolves.toEqual(["still owned"]);
+  } finally {
+    acquired.resolve();
+    const outcomes = await opening;
+    await Promise.all(
+      outcomes.flatMap((outcome) =>
+        outcome.status === "fulfilled" && outcome.value ? [outcome.value.close()] : [],
+      ),
+    );
+    await broker.close();
+    lifecycleSpy.mockRestore();
+    database.close();
+  }
+});
+
 it("joins host drainage during reclamation without cycling through open admission", async () => {
   const broker = new SqliteWorkerBroker();
   const options = {

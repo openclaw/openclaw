@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { ok } from "@openclaw/normalization-core/result";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { readResolvedSessionEntriesInWorker } from "../config/sessions/session-accessor.entry.js";
@@ -107,7 +106,7 @@ async function includeDirectChildEntriesInWorker(
   target: GatewaySessionStoreTargetWithStore,
   params: GatewaySessionStoreLookupParams,
 ): Promise<GatewaySessionStoreTargetWithStore> {
-  if (!params.includeStoreChildEntries || isIncognitoSessionKey(target.canonicalKey)) {
+  if (!params.includeStoreChildEntries) {
     return target;
   }
   try {
@@ -123,13 +122,7 @@ async function includeDirectChildEntriesInWorker(
       [...parentKeys],
     );
     for (const { sessionKey, entry } of children) {
-      if (
-        !parentKeys.has(sessionKey) &&
-        ((entry.parentSessionKey && parentKeys.has(entry.parentSessionKey)) ||
-          (entry.spawnedBy && parentKeys.has(entry.spawnedBy)))
-      ) {
-        target.store[sessionKey] = entry;
-      }
+      target.store[sessionKey] = entry;
     }
     const hintedKeys = [
       ...new Set(
@@ -263,10 +256,8 @@ async function prepareGatewaySessionStoreReadInWorker(
                   continuation,
                 );
                 assertSourceCurrent();
-                read.result = ok(
-                  Object.fromEntries(
-                    result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                  ),
+                read.result = Object.fromEntries(
+                  result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
                 );
                 read.readSource = { agentId: database.agentId, path: database.path };
                 read.capturedReadSource = result.source;
@@ -291,10 +282,8 @@ async function prepareGatewaySessionStoreReadInWorker(
             assertCurrent();
             for (const [index, read] of pending.entries()) {
               const preparedRead = loaded[index]!;
-              read.result = ok(
-                Object.fromEntries(
-                  preparedRead.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                ),
+              read.result = Object.fromEntries(
+                preparedRead.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
               );
               read.readSource = {
                 agentId: preparedRead.database.agentId,
@@ -392,8 +381,8 @@ async function prepareGatewaySessionStoreReadInWorker(
         ) {
           throw new Error("Prepared session lookup source changed");
         }
-        read.result = ok(
-          Object.fromEntries(current.entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+        read.result = Object.fromEntries(
+          current.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
         );
         read.readSource = current.source;
         read.capturedReadSource = current.capturedReadSource;

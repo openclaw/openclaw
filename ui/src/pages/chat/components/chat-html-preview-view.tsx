@@ -1,12 +1,13 @@
-import type { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
+import type { LazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent, type LegacyDirectiveResult } from "../../../lit/solid-content.tsx";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
 
-type PreviewProps = {
-  state: LazyCustomElementRequestController["visibleState"];
+export type PreviewProps = {
+  desktop?: boolean;
+  state: LazyCustomElementRequests["visibleState"];
   onRetry: () => void;
   content: string;
   sourceIdentity: string;
@@ -15,7 +16,11 @@ type PreviewProps = {
   sessionFileSource?: SessionFileSource;
 };
 
-function HtmlPreview(props: PreviewProps) {
+export function HtmlPreviewLoading() {
+  return <PanelLoadingSkeleton variant="document" label={t("common.loading")} compact />;
+}
+
+export function HtmlPreview(props: PreviewProps) {
   return (
     <>
       {props.state?.status === "error" ? (
@@ -25,9 +30,10 @@ function HtmlPreview(props: PreviewProps) {
           onRetry={props.onRetry}
         />
       ) : props.state ? (
-        <div role="status">{t("common.loading")}</div>
+        <HtmlPreviewLoading />
       ) : undefined}
       <openclaw-chat-html-preview
+        prop:desktop={props.desktop ?? false}
         prop:html={props.content}
         prop:sourceIdentity={props.sourceIdentity}
         prop:title={props.title}
@@ -38,26 +44,18 @@ function HtmlPreview(props: PreviewProps) {
   );
 }
 
-type SourceFallbackProps = {
+export type SourceFallbackProps = {
   error: Error;
   stale: boolean;
   onRetry: () => void;
   text: string;
 };
 
-function HtmlPreviewSourceFallback(props: SourceFallbackProps) {
+export function HtmlPreviewSourceFallback(props: SourceFallbackProps) {
   return (
     <>
       <LazyViewError error={props.error} stale={props.stale} onRetry={props.onRetry} />
       <pre class="sidebar-attachment-preview__text">{props.text}</pre>
     </>
   );
-}
-
-export function renderHtmlPreview(props: PreviewProps): LegacyDirectiveResult {
-  return solidContent(HtmlPreview, props);
-}
-
-export function renderHtmlPreviewSourceFallback(props: SourceFallbackProps): LegacyDirectiveResult {
-  return solidContent(HtmlPreviewSourceFallback, props);
 }

@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
 import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -171,10 +171,7 @@ export class TranscriptsStore {
     try {
       entries = await fs.readdir(sessionDir, { withFileTypes: true });
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return;
-      }
-      throw error;
+      return ignoreMissingPath(error);
     }
     const row = await operation.read("transcripts.exportOwnership", {
       params: { session: { sessionId: session.sessionId, startedAt: session.startedAt } },
@@ -232,14 +229,10 @@ export class TranscriptsStore {
     return this.readWorker("transcripts.latest", { params: undefined });
   }
 
-  async readNotes(
-    session: TranscriptSessionDescriptor,
-    purpose: read.TranscriptReadPurpose = "page",
-  ) {
+  async readNotes(session: TranscriptSessionDescriptor) {
     return this.readWorker("transcripts.notes", {
       params: {
         session: { sessionId: session.sessionId, startedAt: session.startedAt },
-        purpose,
       },
     });
   }
@@ -513,12 +506,10 @@ export class TranscriptsStore {
 
   async readUtterancesForSession(
     session: TranscriptSessionDescriptor,
-    options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
     return this.readWorker("transcripts.utterances", {
       params: {
         session: { sessionId: session.sessionId, startedAt: session.startedAt },
-        maxUtterances: options.maxUtterances,
       },
     });
   }

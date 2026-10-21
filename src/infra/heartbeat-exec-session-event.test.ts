@@ -11,6 +11,7 @@ import {
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
+import { admitModelTurn, completionConfig } from "../agents/bash-tools.lifecycle.test-support.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { buildPayloads } from "../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
@@ -30,6 +31,9 @@ import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCronServiceState } from "../cron/service/state.js";
+import { wake as wakeCronService } from "../cron/service/wake.js";
+import { createGatewayCronTargetResolver } from "../gateway/server-cron-targets.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -37,10 +41,14 @@ import {
 } from "../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
+import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
+import { bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { seedHeartbeatScratchForTest } from "./heartbeat-runner.test-utils.js";
+import { requestHeartbeat } from "./heartbeat-wake.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
@@ -53,6 +61,97 @@ await Promise.all([
     runtime.prewarmConfigDrivenReplyRuntime(),
   ),
 ]);
+
+it("runs a targeted manual next-heartbeat wake when recurring heartbeats are disabled", async ({
+  signal,
+  onTestFinished,
+}) => {
+  const fixtureWork = withOpenClawTestState(
+    { label: "manual-wake-without-cadence", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const cfg = completionConfig(state.workspaceDir);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: { ...cfg.agents?.defaults, heartbeat: { every: "0m" } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      await state.writeConfig(cfg);
+      openOpenClawStateDatabase();
+      const scope = { agentId: "main", sessionKey: "agent:main:main" };
+      await replaceSessionEntry(scope, {
+        sessionId: "manual-wake-session",
+        lifecycleRevision: "original",
+        updatedAt: Date.now(),
+        sessionStartedAt: Date.now(),
+        permissionMode: "full",
+      });
+      const text = "Operator requested a session update.";
+      model.mockReset().mockImplementation(async (params) => {
+        await admitModelTurn(params);
+        expect(params.trigger).toBe("event");
+        expect(params.sessionKey).toBe(scope.sessionKey);
+        expect(params.prompt).toContain(text);
+        return { payloads: [{ text: "Manual wake completed" }], meta: { durationMs: 1 } };
+      });
+      const receipts: sessionEvents.SessionEventReceipt[] = [];
+      const enqueue = sessionEvents.enqueueSessionEventForHost;
+      const observe = vi
+        .spyOn(sessionEvents, "enqueueSessionEventForHost")
+        .mockImplementation((message, options) => {
+          const receipt = enqueue(message, options);
+          receipts.push(receipt);
+          return receipt;
+        });
+      const runOnce = vi.fn<typeof runHeartbeatOnce>().mockResolvedValue({
+        status: "skipped",
+        reason: "disabled",
+      });
+      const runner = startHeartbeatRunner({ cfg, runOnce });
+      const scheduler = createTestGatewayScheduler();
+      const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const enqueueSystemEvent = vi.fn();
+      const cron = createCronServiceState({
+        scheduler,
+        storePath: state.path("cron.json"),
+        cronEnabled: true,
+        log,
+        enqueueSystemEvent,
+        requestHeartbeat: (request) => requestHeartbeat({ ...request, coalesceMs: 0 }),
+        runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
+        enqueueSessionEvent: createGatewayCronTargetResolver(state.env, log).enqueueSessionEvent,
+      });
+      try {
+        await expect(
+          wakeCronService(cron, { mode: "next-heartbeat", text, ...scope }),
+        ).resolves.toEqual({ ok: true });
+        expect(receipts).toHaveLength(1);
+        const receipt = expectDefined(receipts[0], "ordinary manual wake receipt");
+        await expect(withinTest(receipt.settled, signal)).resolves.toMatchObject({
+          status: "completed",
+          executionStarted: true,
+          summary: "Manual wake completed",
+        });
+        expect(model).toHaveBeenCalledOnce();
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(runOnce).not.toHaveBeenCalled();
+        expect(peekSystemEvents(scope.sessionKey)).toEqual([]);
+      } finally {
+        runner.stop();
+        for (const receipt of receipts) {
+          receipt.cancel();
+        }
+        await Promise.allSettled(receipts.map((receipt) => receipt.settled));
+        await scheduler.stop();
+        observe.mockRestore();
+        resetSystemEventsForTest();
+      }
+    },
+  );
+  onTestFinished(async () => {
+    await Promise.allSettled([fixtureWork]);
+  });
+  await fixtureWork;
+});
 
 function nodeCommand(source: string): string {
   const quote = (value: string) =>
@@ -116,12 +215,11 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
         const runtimeRegistry = vi
           .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
           .mockReturnValue(registry);
-        const sendHeartbeat = vi
-          .fn()
-          .mockResolvedValue({ messageId: "periodic-send", chatId: destination });
-        const sendCompletion = vi
-          .spyOn(routedReplies, "routeReply")
-          .mockResolvedValue({ ok: true, delivered: true, messageId: "completion-send" });
+        const sendTransport = vi.fn(async (to: string, _text: string) => ({
+          messageId: "periodic-send",
+          chatId: to,
+        }));
+        const sendCompletion = vi.spyOn(routedReplies, "routePreparedReply");
         const completionCreated =
           createDeferred<ReturnType<typeof sessionEvents.enqueueSessionEventForHost>>();
         const enqueue = sessionEvents.enqueueSessionEventForHost;
@@ -180,13 +278,13 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
         });
         let completion: ReturnType<typeof sessionEvents.enqueueSessionEventForHost> | undefined;
         try {
+          bindHeartbeatSend("telegram", sendTransport);
           const periodic = await runHeartbeatOnce({
             cfg: config,
             agentId: "main",
             source: "interval",
             intent: "scheduled",
             reason: "interval",
-            deps: { telegram: sendHeartbeat },
           });
           expect(periodic).toMatchObject({ status: "ran" });
           completion = await withinTest(completionCreated.promise, signal);
@@ -198,9 +296,12 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
             delivered: visible,
           });
           expect(model).toHaveBeenCalledTimes(2);
-          expect(sendHeartbeat).toHaveBeenCalledTimes(visible ? 1 : 0);
+          expect(sendTransport).toHaveBeenCalledTimes(visible ? 2 : 0);
           expect(sendCompletion).toHaveBeenCalledTimes(visible ? 1 : 0);
           if (visible) {
+            expect(sendTransport.mock.calls.map(([, text]) => text)).toEqual(
+              expect.arrayContaining(["Periodic work completed", "Background result is ready"]),
+            );
             expect(sendCompletion).toHaveBeenCalledWith(
               expect.objectContaining({ channel: "telegram", to: destination }),
             );
@@ -332,9 +433,12 @@ it.for(completionRoutingCases)(
         const runtimeRegistry = vi
           .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
           .mockReturnValue(registry);
-        const send = vi
-          .spyOn(routedReplies, "routeReply")
-          .mockResolvedValue({ ok: true, delivered: true, messageId: "completion" });
+        const send = vi.fn(async (to: string, _text: string) => ({
+          messageId: "completion",
+          chatId: to,
+        }));
+        const sendRaw = vi.spyOn(routedReplies, "routeReply");
+        const sendPrepared = vi.spyOn(routedReplies, "routePreparedReply");
         const receipts: sessionEvents.SessionEventReceipt[] = [];
         const enqueue = sessionEvents.enqueueSessionEventForHost;
         const observe = vi
@@ -487,6 +591,7 @@ it.for(completionRoutingCases)(
           };
         });
         try {
+          bindHeartbeatSend("telegram", send);
           const command = nodeCommand(
             testCase.redirected
               ? `require("node:fs").writeFileSync(${JSON.stringify(state.path("report.txt"))}, "RESULT-7F3A")`
@@ -532,7 +637,7 @@ it.for(completionRoutingCases)(
             });
           }
           expect(model).toHaveBeenCalledTimes(testCase.reply === "chain" ? 2 : 1);
-          const sent = send.mock.calls.map(([request]) => request.payload.text);
+          const sent = send.mock.calls.map(([, text]) => text);
           if (testCase.reply === "quiet" || testCase.groupMessageToolOnly) {
             expect(sent).toEqual([]);
             if (testCase.groupMessageToolOnly) {
@@ -543,7 +648,7 @@ it.for(completionRoutingCases)(
               testCase.actionableFailure ? 1 : 0,
             );
             if (testCase.actionableFailure) {
-              expect(send.mock.calls[0]?.[0].payload).toMatchObject({
+              expect(sendPrepared.mock.calls[0]?.[0].plan.payload).toMatchObject({
                 isError: true,
                 text: expect.stringContaining("Sign in again"),
               });
@@ -568,7 +673,7 @@ it.for(completionRoutingCases)(
               expect(sent).toHaveLength(2);
             }
           }
-          for (const [request] of send.mock.calls) {
+          for (const [request] of [...sendRaw.mock.calls, ...sendPrepared.mock.calls]) {
             expect(request).toMatchObject({
               channel: "telegram",
               to: topic,
@@ -588,7 +693,8 @@ it.for(completionRoutingCases)(
           }
           await Promise.allSettled(receipts.map((receipt) => receipt.settled));
           observe.mockRestore();
-          send.mockRestore();
+          sendRaw.mockRestore();
+          sendPrepared.mockRestore();
           runtimeRegistry.mockRestore();
           restoreActivePluginRegistrySnapshot(previousRegistry);
           resetProcessRegistryForTests();

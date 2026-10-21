@@ -46,13 +46,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
     if (runActivityHeartbeat || activeRuns <= 0 || !lifecycleActive) {
       return;
     }
-    runActivityHeartbeat = setInterval(() => {
-      if (!lifecycleActive || activeRuns <= 0) {
-        clearHeartbeat();
-        return;
-      }
-      publish();
-    }, heartbeatMs);
+    runActivityHeartbeat = setInterval(publish, heartbeatMs);
     runActivityHeartbeat.unref?.();
   };
 

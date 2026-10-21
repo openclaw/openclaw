@@ -1,15 +1,7 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  isolatedAssistant,
-  isolatedCompletionMocks as mocks,
-  isolatedRequest,
-  preparedModelRuntime,
-  registerIsolatedHarness,
-  resetIsolatedCompletionTestState,
-  runIsolatedCompletion,
-} from "./isolated-completion.test-support.js";
+import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
+import * as fixtures from "./isolated-completion.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 // Keep inference/auth synthetic; exercise the real entrypoint's registry plan and loader.
@@ -28,8 +20,9 @@ const { clearActivePluginRegistry, disposePluginRegistryInstances } =
 
 const contextEvaluation = Symbol.for("openclaw.test.isolatedContextEvaluation");
 const { resolveIsolatedCompletionRuntime } = await import("./isolated-completion-route.js");
+const mocks = fixtures.isolatedCompletionMocks;
 
-beforeEach(resetIsolatedCompletionTestState);
+beforeEach(fixtures.resetIsolatedCompletionTestState);
 afterEach(async () => {
   await clearActivePluginRegistry();
   resetPluginLoaderTestStateForTest();
@@ -37,45 +30,44 @@ afterEach(async () => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+function writeManifest(plugin: ReturnType<typeof writePlugin>, metadata: object) {
+  const manifest = { id: plugin.id, ...metadata, configSchema: { type: "object" } };
+  writeFileSync(path.join(plugin.dir, "openclaw.plugin.json"), JSON.stringify(manifest));
+}
+
+function unloadedPlugin(id: string) {
+  return writePlugin({
+    id,
+    body: `globalThis[Symbol.for("openclaw.test.isolatedContextEvaluation")] = true;
+      throw new Error("Prompt-only inference must not load ${id}");`,
+  });
+}
+
+function useHarness(text: string) {
+  const assistant = fixtures.isolatedAssistant([{ type: "text", text }]);
+  fixtures.registerIsolatedHarness({
+    runIsolatedCompletionV2: async () => ({ assistant }),
+  });
+}
+
 it("completes without loading configured context/memory or unrelated startup plugins", async () => {
   useNoBundledPlugins();
-  const engine = writePlugin({
-    id: "expensive-engine",
-    body: `globalThis[Symbol.for("openclaw.test.isolatedContextEvaluation")] = true;
-      throw new Error("Prompt-only inference must not load the configured engine");`,
-  });
+  const engine = unloadedPlugin("expensive-engine");
   // Large configured packages must stay outside capture, regardless of their contents.
   writeFileSync(path.join(engine.dir, "unused-runtime-data.bin"), Buffer.alloc(1024 * 1024));
-  const memory = writePlugin({
-    id: "expensive-memory",
-    body: `globalThis[Symbol.for("openclaw.test.isolatedContextEvaluation")] = true;
-      throw new Error("Prompt-only inference must not load the configured memory plugin");`,
-  });
-  writeFileSync(
-    path.join(memory.dir, "openclaw.plugin.json"),
-    JSON.stringify({ id: memory.id, kind: "memory", configSchema: { type: "object" } }),
-  );
+  const memory = unloadedPlugin("expensive-memory");
+  writeManifest(memory, { kind: "memory" });
   const provider = writePlugin({
     id: "openai",
     registration: 'api.registerProvider({ id: "openai", label: "Fixture", auth: [] });',
   });
-  writeFileSync(
-    path.join(provider.dir, "openclaw.plugin.json"),
-    JSON.stringify({ id: "openai", providers: ["openai"], configSchema: { type: "object" } }),
-  );
+  writeManifest(provider, { providers: ["openai"] });
   const harness = writePlugin({
     id: "codex",
     registration: `api.registerAgentHarness({ id: "codex", label: "Fixture",
       supports: () => ({ supported: true }), runAttempt: async () => {} });`,
   });
-  writeFileSync(
-    path.join(harness.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "codex",
-      activation: { onAgentHarnesses: ["codex"] },
-      configSchema: { type: "object" },
-    }),
-  );
+  writeManifest(harness, { activation: { onAgentHarnesses: ["codex"] } });
   const config = {
     plugins: {
       allow: [engine.id, memory.id, provider.id, harness.id],
@@ -108,7 +100,7 @@ it("completes without loading configured context/memory or unrelated startup plu
     expect(registry?.contextEngines.size).toBe(0);
     return {
       snapshot: {
-        ...preparedModelRuntime,
+        ...fixtures.preparedModelRuntime,
         config,
         metadataSnapshot: metadata,
         pluginRegistry: registry,
@@ -120,12 +112,10 @@ it("completes without loading configured context/memory or unrelated startup plu
       },
     };
   });
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "Gateway log rotation" }]),
-    })),
-  });
-  await expect(runIsolatedCompletion({ ...isolatedRequest(), config })).resolves.toMatchObject({
+  useHarness("Gateway log rotation");
+  await expect(
+    fixtures.runIsolatedCompletion({ ...fixtures.isolatedRequest(), config }),
+  ).resolves.toMatchObject({
     text: "Gateway log rotation",
   });
   expect(Reflect.get(globalThis, contextEvaluation)).toBeUndefined();
@@ -137,10 +127,9 @@ it("keeps isolated registry preparation distinct from an ordinary agent publicat
     ...input,
     runtimePluginPurpose: "isolated-completion",
   };
-  expect(ownerKey(input)).not.toBe(ownerKey(isolated));
-  expect(preparedModelRuntimeWorkspaceFactsKey(input)).not.toBe(
-    preparedModelRuntimeWorkspaceFactsKey(isolated),
-  );
+  for (const key of [ownerKey, preparedModelRuntimeWorkspaceFactsKey]) {
+    expect(key(input)).not.toBe(key(isolated));
+  }
   expect(hasSameLifecycleInput(input, isolated)).toBe(false);
 });
 
@@ -149,22 +138,20 @@ it.each(["cli", "harness"] as const)("reports the %s owner the run dispatches to
   mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(
     cli ? { provider: "claude-cli" } : undefined,
   );
-  mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "done" }]),
-    })),
+  mocks.runCliAgent.mockResolvedValue({
+    payloads: [{ text: "Utility result" }],
   });
+  useHarness("done");
   const request = cli
     ? {
-        ...isolatedRequest(),
+        ...fixtures.isolatedRequest(),
         provider: "anthropic",
         model: "claude-test",
         agentHarnessRuntimeOverride: undefined,
       }
-    : isolatedRequest();
+    : fixtures.isolatedRequest();
   const status = await resolveIsolatedCompletionRuntime(request);
-  const run = await runIsolatedCompletion(request);
+  const run = await fixtures.runIsolatedCompletion(request);
   expect(run.owner).toEqual({ kind, id: cli ? "claude-cli" : "codex" });
   expect(status).toEqual({ id: run.owner.id, kind, ...(cli ? {} : { harnessLabel: "Codex" }) });
 });

@@ -843,10 +843,20 @@ console.log("full-ws loaded without node_modules");
       require: createRequire(filename),
       exports: {},
     });
-    vm.runInContext(source, context);
-    expect(() => vm.runInContext("exports.getLoadablePath()", context)).toThrow(
-      "Cannot find module",
+    // Adapter discovery can cache resolutions; a fresh process proves the pruned image has no fallback.
+    const untransformed = spawnSync(
+      process.execPath,
+      [
+        "--eval",
+        `const require = process.getBuiltinModule("module").createRequire(${JSON.stringify(filename)});
+const exports = {};
+${source}
+try { exports.getLoadablePath(); } catch (error) { console.error(error.code); process.exit(1); }`,
+      ],
+      { cwd: root, encoding: "utf8" },
     );
+    expect(untransformed.status, untransformed.stderr).toBe(1);
+    expect(untransformed.stderr.trim()).toBe("MODULE_NOT_FOUND");
     vm.runInContext(
       adapter.bootstrap
         .replace(/^import[^\n]+\n/, "")

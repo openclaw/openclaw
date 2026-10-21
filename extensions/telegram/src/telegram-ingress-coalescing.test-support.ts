@@ -1,14 +1,10 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { vi } from "vitest";
-import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   holdTelegramMediaTimeouts,
   resolveFlushTimerForDelay,
 } from "./bot-media-timers.test-support.js";
-import * as telegramSessionRuntime from "./bot-message-context.session.runtime.js";
 
 export function createBotApiTransport() {
   let getFileCall = 0;
@@ -31,31 +27,65 @@ export function createBotApiTransport() {
   return { fetch: fetchImpl, sourceFetch: fetchImpl, close: async () => {} };
 }
 
-export function createTelegramDeps(stateDir: string, cfg: OpenClawConfig): TelegramBotDeps {
-  return {
-    ...telegramDirectDeliveryDepsForTest,
-    ...telegramSessionRuntime,
-    getSessionEntryAsync,
-    getRuntimeConfig: () => cfg,
-    resolveStorePath: (storePath?: string) => storePath ?? path.join(stateDir, "sessions.json"),
-    readChannelAllowFromStore: async () => [],
-    upsertChannelPairingRequest: async () => ({ code: "PAIRCODE", created: true }),
-    enqueueRoutedSystemEvent: () => false,
-    dispatchReplyWithBufferedBlockDispatcher: async () => ({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    }),
-    buildModelsProviderData: async () => ({
-      byProvider: new Map<string, Set<string>>(),
-      providers: [],
-      resolvedDefault: { provider: "openai", model: "gpt-test" },
-      modelNames: new Map<string, string>(),
-      modelCatalog: [],
-    }),
-    prepareSkillCommandsForAgents: async () => [],
-    wasSentByBot: () => false,
-  };
+let runtimeConfig: OpenClawConfig;
+let sessionStateDir: string;
+
+export function configureTelegramModuleMocks(stateDir: string, cfg: OpenClawConfig): void {
+  runtimeConfig = cfg;
+  sessionStateDir = stateDir;
 }
+
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>()),
+  // This harness proves the direct-delivery fallback, not durable owner admission.
+  deliverStructuredInboundReplyWithMessageSendContext: async () => ({
+    status: "unsupported",
+    reason: "missing_outbound_handler",
+  }),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: () => runtimeConfig,
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  resolveStorePath: (storePath?: string) =>
+    storePath ?? path.join(sessionStateDir, "sessions.json"),
+}));
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  readChannelAllowFromStore: async () => [],
+  upsertChannelPairingRequest: async () => ({ code: "PAIRCODE", created: true }),
+}));
+
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
+  enqueueRoutedSystemEvent: () => false,
+}));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  buildPreparedModelsProviderData: async () => ({
+    byProvider: new Map<string, Set<string>>(),
+    providers: [],
+    resolvedDefault: { provider: "openai", model: "gpt-test" },
+    modelNames: new Map<string, string>(),
+    modelCatalog: [],
+  }),
+}));
+
+vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
+  prepareSkillCommandsForAgents: async () => [],
+}));
+
+vi.mock("./sent-message-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sent-message-cache.js")>()),
+  wasSentByBot: () => false,
+}));
 
 /** Holds the production forward quiet window; a frozen clock keeps its 1 s delay. */
 export function holdForwardWindow() {
@@ -73,27 +103,35 @@ export function holdForwardWindow() {
   };
 }
 
-export function photoUpdate(params: { updateId: number; messageId: number; caption?: string }) {
+type MessageIds = { updateId: number; messageId: number };
+
+function messageUpdate<T extends object>({ updateId, messageId }: MessageIds, content: T) {
   return {
-    update_id: params.updateId,
+    update_id: updateId,
     message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
+      message_id: messageId,
+      date: 1_736_380_800 + messageId,
       chat: { id: 111, type: "private" as const, first_name: "Ada" },
       from: { id: 111, is_bot: false, first_name: "Ada" },
-      media_group_id: "album-115325",
-      ...(params.caption ? { caption: params.caption } : {}),
-      photo: [
-        {
-          file_id: `photo-${params.messageId}`,
-          file_unique_id: `unique-${params.messageId}`,
-          width: 100,
-          height: 100,
-          file_size: 4,
-        },
-      ],
+      ...content,
     },
   };
+}
+
+export function photoUpdate(params: MessageIds & { caption?: string }) {
+  return messageUpdate(params, {
+    media_group_id: "album-115325",
+    ...(params.caption ? { caption: params.caption } : {}),
+    photo: [
+      {
+        file_id: `photo-${params.messageId}`,
+        file_unique_id: `unique-${params.messageId}`,
+        width: 100,
+        height: 100,
+        file_size: 4,
+      },
+    ],
+  });
 }
 
 // forward_origin puts the entry on the forward debounce lane (1 s window).
@@ -103,43 +141,17 @@ const forwardOrigin = {
   sender_user: { id: 555, is_bot: false, first_name: "Origin" },
 };
 
-export function forwardedTextUpdate(params: { updateId: number; messageId: number; text: string }) {
-  return {
-    update_id: params.updateId,
-    message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
-      chat: { id: 111, type: "private" as const, first_name: "Ada" },
-      from: { id: 111, is_bot: false, first_name: "Ada" },
-      forward_origin: forwardOrigin,
-      text: params.text,
-    },
-  };
+export function forwardedTextUpdate(params: MessageIds & { text: string }) {
+  return messageUpdate(params, { text: params.text, forward_origin: forwardOrigin });
 }
 
-export function forwardedPhotoUpdate(params: { updateId: number; messageId: number }) {
-  return {
-    update_id: params.updateId,
-    message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
-      chat: { id: 111, type: "private" as const, first_name: "Ada" },
-      from: { id: 111, is_bot: false, first_name: "Ada" },
-      forward_origin: forwardOrigin,
-      photo: photoUpdate(params).message.photo,
-    },
-  };
+export function forwardedPhotoUpdate(params: MessageIds) {
+  return messageUpdate(params, {
+    forward_origin: forwardOrigin,
+    photo: photoUpdate(params).message.photo,
+  });
 }
 
-export function textUpdate(params: { updateId: number; messageId: number; text: string }) {
-  return {
-    update_id: params.updateId,
-    message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
-      chat: { id: 111, type: "private" as const, first_name: "Ada" },
-      from: { id: 111, is_bot: false, first_name: "Ada" },
-      text: params.text,
-    },
-  };
+export function textUpdate(params: MessageIds & { text: string }) {
+  return messageUpdate(params, { text: params.text });
 }

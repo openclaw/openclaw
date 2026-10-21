@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { Selectable } from "kysely";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { truncateOptionalText } from "../shared/text-truncate.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -96,11 +97,6 @@ export function formatGatewayRestartHandoffDiagnostic(
   return `Recent restart handoff: ${detail.join("; ")}`;
 }
 
-function normalizeText(value: unknown, maxLength: number): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? truncateUtf16Safe(text, maxLength) : undefined;
-}
-
 function normalizeCreatedAt(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -183,7 +179,7 @@ function isSupervisorMode(value: unknown): value is GatewayRestartHandoffSupervi
 function normalizeGatewayRestartHandoffRow(
   row: GatewayRestartHandoffRow,
 ): GatewayRestartHandoff | null {
-  const intentId = normalizeText(row.intent_id, MAX_INTENT_ID_LENGTH);
+  const intentId = truncateOptionalText(readStringValue(row.intent_id), MAX_INTENT_ID_LENGTH);
   if (
     row.kind !== GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND ||
     row.version !== GATEWAY_RESTART_HANDOFF_SCHEMA_VERSION ||
@@ -209,8 +205,11 @@ function normalizeGatewayRestartHandoffRow(
       : null,
   );
 
-  const processInstanceId = normalizeText(row.process_instance_id, MAX_PROCESS_INSTANCE_ID_LENGTH);
-  const reason = normalizeText(row.reason, MAX_REASON_LENGTH);
+  const processInstanceId = truncateOptionalText(
+    readStringValue(row.process_instance_id),
+    MAX_PROCESS_INSTANCE_ID_LENGTH,
+  );
+  const reason = truncateOptionalText(readStringValue(row.reason), MAX_REASON_LENGTH);
   return {
     kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
     version: GATEWAY_RESTART_HANDOFF_SCHEMA_VERSION,
@@ -291,8 +290,11 @@ export async function writeGatewayRestartHandoff(
   const env = opts.env ?? process.env;
   const createdAt = normalizeCreatedAt(opts.createdAt);
   const ttlMs = normalizeTtlMs(opts.ttlMs);
-  const reason = normalizeText(opts.reason, MAX_REASON_LENGTH);
-  const processInstanceId = normalizeText(opts.processInstanceId, MAX_PROCESS_INSTANCE_ID_LENGTH);
+  const reason = truncateOptionalText(opts.reason, MAX_REASON_LENGTH);
+  const processInstanceId = truncateOptionalText(
+    opts.processInstanceId,
+    MAX_PROCESS_INSTANCE_ID_LENGTH,
+  );
   const restartTrace = normalizeRestartTraceHandoff(opts.restartTrace);
   const payload: GatewayRestartHandoff = {
     kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
@@ -387,20 +389,14 @@ export function readGatewayRestartHandoffSync(
 export function consumeGatewayRestartHandoffSync(opts: {
   env?: NodeJS.ProcessEnv;
   expectedPid: number;
-  now?: number;
 }): GatewayRestartHandoffConsumeResult {
   const expectedPid = asPositiveSafeInteger(opts.expectedPid) ?? null;
   if (expectedPid === null) {
     throw new Error("expectedPid must be a positive safe integer");
   }
-  const fixedNow =
-    typeof opts.now === "number" && Number.isFinite(opts.now) && opts.now >= 0
-      ? Math.floor(opts.now)
-      : undefined;
-
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const now = fixedNow ?? Date.now();
+      const now = Date.now();
       const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
       const row = selectGatewayRestartHandoffRowSync(db);
       if (!row) {

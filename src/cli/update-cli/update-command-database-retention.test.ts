@@ -63,6 +63,7 @@ it.each([false, true])(
         onStateHandoff: () => {},
         admitExecutor: () => {},
         assertCurrent: () => {},
+        waitForCurrent: async () => {},
         assertBoundChildCurrent: () => {},
       },
       stop: () => {},

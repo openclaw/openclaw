@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { createCliOutputFailoverError } from "../../agents/cli-runner/output-error.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
 import type { TemplateContext } from "../templating.js";
@@ -144,17 +143,16 @@ describe("executeAgentTurn: authentication failures", () => {
   });
 
   it("surfaces Agent SDK OAuth session expiry in Discord channels", async () => {
-    const error = createCliOutputFailoverError({
-      output: {
-        text: "",
-        errorText: "Failed to authenticate: OAuth session expired and could not be refreshed",
+    const error = new FailoverError(
+      "Failed to authenticate: OAuth session expired and could not be refreshed",
+      {
+        reason: "auth",
+        provider: "claude-cli",
+        model: "claude-opus-5",
+        status: 401,
+        rawError: "Failed to authenticate: OAuth session expired and could not be refreshed",
       },
-      provider: "claude-cli",
-      model: "claude-opus-5",
-    });
-    if (!error) {
-      throw new Error("expected CLI output failure");
-    }
+    );
     state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();

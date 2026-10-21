@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
+import { CORE_BOARD_WIDGET_ELEMENTS } from "../../lib/board/widgets/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -31,8 +32,8 @@ function callbacks(): BoardWidgetCellCallbacks {
     focus: vi.fn(),
     focusChanged: vi.fn(),
     frameLoadFailed: noAction,
-    widgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
-    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
+    widgetAppView: vi.fn(async () => ({ status: "stale" as const })),
+    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const })),
   };
 }
 
@@ -149,7 +150,18 @@ describe("plugin board widget cells", () => {
     },
   );
 
-  it("renders an advertised pure report independently of optional plugin UI", async () => {
+  it("reveals a lazily registered report independently of optional plugin UI", async () => {
+    const report = CORE_BOARD_WIDGET_ELEMENTS.find((entry) => entry.kind === "session:report")!;
+    const loadModule = report.loadModule;
+    const loadGate = Promise.withResolvers<void>();
+    const load = vi.spyOn(report, "loadModule").mockImplementation(async () => {
+      await loadGate.promise;
+      return loadModule();
+    });
+    onTestFinished(() => {
+      loadGate.resolve();
+      load.mockRestore();
+    });
     const request = vi.fn();
     const registrations = vi.fn(() => []);
     const provider = createApplicationContextProvider({
@@ -184,6 +196,12 @@ describe("plugin board widget cells", () => {
     cell.callbacks = callbacks();
     provider.append(cell);
     mount(provider);
+    await waitForSolid(() => {
+      expect(load).toHaveBeenCalledOnce();
+      expect(cell.querySelector(".board-widget__plugin-loading")).not.toBeNull();
+    });
+    expect(cell.querySelector("openclaw-report-widget")).toBeNull();
+    loadGate.resolve();
     await vi.waitFor(
       () =>
         expect(cell.querySelector("openclaw-report-widget")?.textContent).toContain(

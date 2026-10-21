@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
@@ -103,7 +103,7 @@ export function commitSessionLifecycleProjection(
           maintenancePlans: result.maintenancePlans,
         },
         database,
-        { postimages },
+        { captureFullFacts: true, postimages },
       ),
     };
     if (
@@ -143,7 +143,7 @@ export type SessionLifecyclePlanningOperations = {
 /** Private planning commands borrow the executor's admitted connection. */
 export function bindSqliteWorkerBackend(
   binding: { agentId: string },
-  context: { database: DatabaseSync; databasePath: string },
+  context: { database: EngineConnection; databasePath: string },
 ): SqliteWorkerBackend<SessionLifecyclePlanningOperations> {
   const database = getOpenClawAgentDatabaseIfOpen({
     agentId: binding.agentId,
@@ -199,7 +199,7 @@ export function bindSqliteWorkerBackend(
       // Archive recovery is an independent hint carried across asynchronous builders.
       return command.type === "prepare" && command.input.removals.length === 0
         ? prepare()
-        : runSqliteDeferredTransactionSync(database.db, prepare);
+        : runSqliteReadSnapshotSync(database.db, prepare);
     },
   });
 }

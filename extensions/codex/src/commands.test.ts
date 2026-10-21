@@ -32,13 +32,14 @@ import {
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexPluginsConfigBlock, CodexPluginsManagementIO } from "./command-plugin-config.js";
-import type { CodexControlRequestOptions, SafeCodexControlRequestFn } from "./command-rpc.js";
+import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createContext,
   createCodexRuntimeContextOverrides,
   createDeps,
+  dispatchCodexCommandForTest as handleCodexCommand,
+  type SafeCodexControlRequestFn,
   createThreadResumeResponse,
   holdCodexThreadQueue,
   expectedDiagnosticsTargetBlock,
@@ -93,8 +94,6 @@ function nodeExecContext(
     ...overrides,
   };
 }
-
-const handleCodexCommand = dispatchCodexCommand;
 
 function createResumeControlRequest(
   response:
@@ -1089,7 +1088,7 @@ describe("codex command", () => {
     );
     expect(codexControlRequest).toHaveBeenCalledTimes(1);
     expect(codexControlRequest).toHaveBeenCalledWith(
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.resumeThread,
       expect.anything(),
       expect.objectContaining({ storePath }),
@@ -1315,7 +1314,7 @@ describe("codex command", () => {
     );
 
     expect(codexControlRequest).toHaveBeenCalledWith(
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.resumeThread,
       expect.any(Object),
       expect.objectContaining({ agentDir, authProfileId: undefined }),
@@ -1677,7 +1676,7 @@ describe("codex command", () => {
     );
     const result = await runCommand("status", { readCodexStatusProbes }, { config });
     expect(readCodexStatusProbes).toHaveBeenCalledExactlyOnceWith(
-      undefined,
+      {},
       config,
       resolveDefaultAgentDir(config),
     );
@@ -1838,7 +1837,7 @@ describe("codex command", () => {
         expect(result.text).toContain("Account: codex@example.com");
         expect(result.text).toContain("Codex is available.");
         expect(safeCodexControlRequest).toHaveBeenCalledWith(
-          undefined,
+          {},
           CODEX_CONTROL_METHODS.account,
           { refreshToken: false },
           expect.objectContaining({
@@ -1954,13 +1953,12 @@ describe("codex command", () => {
       ]) {
         expect(result.text).not.toContain(omitted);
       }
-      expect(request).toHaveBeenNthCalledWith(
-        3,
-        undefined,
-        CODEX_CONTROL_METHODS.rateLimits,
-        undefined,
-        { config, agentDir, authProfileId: "openai:personal-email@gmail.com", isolated: true },
-      );
+      expect(request).toHaveBeenNthCalledWith(3, {}, CODEX_CONTROL_METHODS.rateLimits, undefined, {
+        config,
+        agentDir,
+        authProfileId: "openai:personal-email@gmail.com",
+        isolated: true,
+      });
     });
 
     it("shows temporary and permanent auth cooldowns as expired subscriptions", async () => {
@@ -2286,7 +2284,7 @@ describe("codex command", () => {
 
     expectResultTextContains(result, "Computer Use: ready");
     expect(installCodexComputerUse).toHaveBeenCalledWith({
-      pluginConfig: undefined,
+      pluginConfig: {},
       config: {},
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       forceEnable: true,
@@ -2444,6 +2442,7 @@ describe("codex command", () => {
         ...testCodexAppServerBindingStore,
         read: readBinding,
         readAsync: async () => readBinding(),
+        prepareRead: async () => ({ read: readBinding, release() {} }),
       },
       safeCodexControlRequest,
     });
@@ -2515,7 +2514,7 @@ describe("codex command", () => {
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
-    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toEqual({});
     expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
     const feedbackParams = requestParams(safeCodexControlRequest);
     expect(feedbackParams.classification).toBe("bug");
@@ -2776,35 +2775,35 @@ describe("codex command", () => {
     });
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       1,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.listThreads,
       { limit: 10 },
       expectedScope,
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       2,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.listMcpServers,
       { limit: 100 },
       expectedScope,
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       3,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.listSkills,
       {},
       expectedScope,
     );
     expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
       1,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.account,
       { refreshToken: false },
       expectedScope,
     );
     expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
       2,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.rateLimits,
       undefined,
       expectedScope,
@@ -2888,28 +2887,28 @@ describe("codex command", () => {
 
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       1,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.getThreadGoal,
       { threadId: "thread-goal" },
       expect.any(Object),
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       2,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.setThreadGoal,
       { threadId: "thread-goal", objective: "Ship native goals" },
       expect.any(Object),
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       3,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.setThreadGoal,
       { threadId: "thread-goal", objective: "Refine native goals" },
       expect.any(Object),
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       4,
-      undefined,
+      {},
       CODEX_CONTROL_METHODS.clearThreadGoal,
       { threadId: "thread-goal" },
       expect.any(Object),
@@ -3190,6 +3189,28 @@ describe("codex command", () => {
       threadId: "thread-new",
     });
   });
+
+  it.each([
+    { label: "trailing space", input: "/tmp/job " },
+    { label: "leading space", input: " /tmp/job" },
+    { label: "both sides", input: " /tmp/job " },
+  ])(
+    "preserves significant whitespace in bind --cwd ($label) through command dispatch",
+    async ({ input }) => {
+      let requestedData: Record<string, unknown> | undefined;
+      const requestConversationBinding = vi.fn(
+        async (request?: { data?: Record<string, unknown> }) => {
+          requestedData = request?.data;
+          return { status: "bound" as const, binding: publicConversationBinding() };
+        },
+      );
+
+      await runCommand(`bind --cwd "${input}"`, {}, { requestConversationBinding });
+
+      expect(requestConversationBinding).toHaveBeenCalledTimes(1);
+      expect(requestedData?.workspaceDir).toBe(input);
+    },
+  );
 
   it("reuses the existing owner for a lazy Codex rebind", async () => {
     await writeTestBinding(
@@ -3699,16 +3720,8 @@ function computerUseReadyStatus(): CodexComputerUseStatus {
     mcpServerName: "computer-use",
     marketplaceName: "desktop-tools",
     tools: ["list_apps"],
-    installation: {
-      status: "installed",
-      ok: true,
-      message: "Computer Use plugin is installed and enabled.",
-    },
-    exposure: {
-      status: "available",
-      ok: true,
-      message: "Computer Use MCP server computer-use exposes 1 tools.",
-    },
+    installation: "installed",
+    exposure: "available",
     liveTest: {
       status: "passed",
       ok: true,

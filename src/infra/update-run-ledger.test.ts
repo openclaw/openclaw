@@ -29,6 +29,7 @@ import { renderUpdateRunReport } from "./update-run-report.js";
 import { parseUpdateAdmissionVerdict } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import * as windowsUser from "./windows-user-sid.js";
 
 const tempDirs = createTempDirTracker();
 const admissionRouting = {
@@ -60,6 +61,26 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
+  it("confirms channel-only outages without inheriting a stale core proof", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    recordUpdateRunVerification(run.runId, { coreReady: true }, options);
+    const facts = {
+      serviceRunning: true,
+      versionMatch: true,
+      settled: true,
+      pluginErrors: [],
+      readyz: false,
+      channelsReady: false,
+    };
+    expect(recordUpdateRunVerification(run.runId, facts, options).confirmedAtMs).toBeNull();
+    recordUpdateRunVerification(run.runId, { ...facts, coreReady: true }, options);
+    expect(getUpdateRun(run.runId, options)).toMatchObject({
+      confirmedAtMs: expect.any(Number),
+      verification: { ...facts, coreReady: true },
+    });
+  });
+
   it("persists and reports installed admission through the existing origin metadata", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);
@@ -166,7 +187,9 @@ describe("update run ledger", () => {
         ],
         status: "restore-failed" as const,
       },
+      windowsUserSid: "S-1-5-21-100",
     };
+    vi.spyOn(windowsUser, "readWindowsUserSid").mockReturnValue(receipts.windowsUserSid);
     receipts.updateRecoveryCapture.warnings[0]!.message += "w".repeat(
       16 * 1024 - Buffer.byteLength(JSON.stringify(receipts)),
     );

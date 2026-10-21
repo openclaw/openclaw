@@ -25,12 +25,10 @@ export function existingPathOrUndefined(pathname: string): string | undefined {
   }
 }
 
-/** Resolve the directory that contains the shared state SQLite file. */
 export function resolveOpenClawStateSqliteDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.dirname(resolveOpenClawStateSqlitePath(env));
 }
 
-/** Resolve the shared state SQLite file path. */
 export function resolveOpenClawStateSqlitePath(env: NodeJS.ProcessEnv = process.env): string {
   return normalizeDatabasePath(path.join(resolveStateDir(env), "state", "openclaw.sqlite"));
 }

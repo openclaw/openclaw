@@ -16,6 +16,12 @@ export async function write(root: string, relative: string, contents: string | o
   await fs.writeFile(target, typeof contents === "string" ? contents : JSON.stringify(contents));
 }
 
+async function writeFiles(root: string, files: Record<string, string | object>) {
+  for (const [relative, contents] of Object.entries(files)) {
+    await write(root, relative, contents);
+  }
+}
+
 export type OwnedRuntimeChunk = { source: string; extensions: readonly string[] };
 
 export async function writeOwnedChunks(
@@ -53,20 +59,15 @@ export async function writeBundledBrowser(packageRoot: string) {
     bin: { browser: "./build/src/bin/browser.js" },
     files: ["build/src", "LICENSE", "skills", "!*.js.map"],
   });
-  await write(
-    browserRoot,
-    "build/src/index.js",
-    'import { readFileSync } from "node:fs"; export const notice = readFileSync(new URL("./third_party/THIRD_PARTY_NOTICES", import.meta.url), "utf8");',
-  );
-  await write(
-    browserRoot,
-    "build/src/bin/browser.js",
-    'import { notice } from "../index.js"; console.log(notice);',
-  );
-  await write(browserRoot, "build/src/third_party/THIRD_PARTY_NOTICES", "bundled-notice");
-  await write(browserRoot, "build/src/OPENCLAW_PATCH_NOTICE.md", "patched-runtime");
-  await write(browserRoot, "skills/browser/SKILL.md", "browser-skill");
-  await write(browserRoot, "LICENSE", "fixture-license");
+  await writeFiles(browserRoot, {
+    "build/src/index.js":
+      'import { readFileSync } from "node:fs"; export const notice = readFileSync(new URL("./third_party/THIRD_PARTY_NOTICES", import.meta.url), "utf8");',
+    "build/src/bin/browser.js": 'import { notice } from "../index.js"; console.log(notice);',
+    "build/src/third_party/THIRD_PARTY_NOTICES": "bundled-notice",
+    "build/src/OPENCLAW_PATCH_NOTICE.md": "patched-runtime",
+    "skills/browser/SKILL.md": "browser-skill",
+    LICENSE: "fixture-license",
+  });
   return browserRoot;
 }
 
@@ -121,57 +122,49 @@ export function useNodeBootstrapArtifactFixtures() {
       'import "./cli-invocation.mjs"; import "./dist/entry.js";',
       { mode: 0o755 },
     );
-    await fs.copyFile("cli-invocation.mjs", path.join(packageRoot, "cli-invocation.mjs"));
-    await write(packageRoot, "node-version.mjs", "export const supported = true;");
-    await write(packageRoot, "node-sqlite.mjs", "export const probe = true;");
-    await write(packageRoot, "node-runtime-update.mjs", "export const update = true;");
-    await write(packageRoot, "node-runtime-recovery.mjs", "export const recovery = true;");
-    await write(packageRoot, "node-runtime-env.mjs", "export {};");
-    await write(packageRoot, "cli-root-options.mjs", "export {};");
-    await write(packageRoot, "gateway-run-argv.mjs", "export {};");
-    await write(packageRoot, "gateway-shutdown-budget.mjs", "export {};");
-    await write(packageRoot, "node-host-launcher.mjs", "export const launcher = true;");
-    await write(packageRoot, "node-compile-cache.mjs", "export {};");
-    await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
-    await write(
-      packageRoot,
-      "scripts/postinstall.mjs",
-      'import { rmSync } from "node:fs"; rmSync(new URL("../.openclaw-lifecycle-pending", import.meta.url));',
-    );
-    await write(
-      packageRoot,
-      "dist/entry.js",
-      'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "../node_modules/@fixture/ai/dist/index.js"; console.log(`${name}:${answer}`);',
-    );
-    await write(packageRoot, "dist/control-ui/index.html", "<title>Gateway dashboard</title>");
-    await write(packageRoot, "dist/control-ui/assets/app.js", 'console.log("gateway-ui");');
-    await write(packageRoot, "dist/shared.js", 'export const answer = "cloud-ready";');
-    await write(packageRoot, "dist/empty.js", "");
-    await write(packageRoot, longEntryPath, { payload: longEntryPayload });
-    await write(packageRoot, "dist/worker/worker.mjs", 'console.log("separate-worker-bundle");');
-    await write(packageRoot, "dist/worker/workspace-rsync-receiver.mjs", "export {};");
-    await write(packageRoot, "dist/worker/github-exec-launcher.mjs", "export {};");
-    await write(packageRoot, "dist/worker-artifacts/fixture.tgz", "separate-worker-archive");
-    await write(packageRoot, "dist/build-info.json", { version, buildId });
-    await write(packageRoot, "dist/extensions/remote-runtime/package.json", pluginPackage);
-    await write(packageRoot, "dist/extensions/remote-runtime/openclaw.plugin.json", {
-      id: "remote-runtime",
+    for (const filename of [
+      "cli-invocation.mjs",
+      "cli-parent-lifetime.mjs",
+      "gateway-shutdown-budget.mjs",
+    ]) {
+      await fs.copyFile(filename, path.join(packageRoot, filename));
+    }
+    await writeFiles(packageRoot, {
+      "node-version.mjs": "export const supported = true;",
+      "node-sqlite.mjs": "export const probe = true;",
+      "node-runtime-update.mjs": "export const update = true;",
+      "node-runtime-recovery.mjs": "export const recovery = true;",
+      "node-runtime-env.mjs": "export {};",
+      "cli-root-options.mjs": "export {};",
+      "gateway-run-argv.mjs": "export {};",
+      "node-host-launcher.mjs": "export const launcher = true;",
+      "node-compile-cache.mjs": "export {};",
+      "scripts/preinstall.mjs": "export {};\n",
+      "scripts/postinstall.mjs":
+        'import { rmSync } from "node:fs"; rmSync(new URL("../.openclaw-lifecycle-pending", import.meta.url));',
+      "dist/entry.js":
+        'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "../node_modules/@fixture/ai/dist/index.js"; console.log(`${name}:${answer}`);',
+      "dist/control-ui/index.html": "<title>Gateway dashboard</title>",
+      "dist/control-ui/assets/app.js": 'console.log("gateway-ui");',
+      "dist/shared.js": 'export const answer = "cloud-ready";',
+      "dist/empty.js": "",
+      [longEntryPath]: { payload: longEntryPayload },
+      "dist/worker/worker.mjs": 'console.log("separate-worker-bundle");',
+      "dist/worker/workspace-rsync-receiver.mjs": "export {};",
+      "dist/worker/github-exec-launcher.mjs": "export {};",
+      "dist/worker-artifacts/fixture.tgz": "separate-worker-archive",
+      "dist/build-info.json": { version, buildId },
+      "dist/extensions/remote-runtime/package.json": pluginPackage,
+      "dist/extensions/remote-runtime/openclaw.plugin.json": { id: "remote-runtime" },
+      "dist/extensions/remote-runtime/index.js": 'export { answer } from "../../shared.js";',
+      "dist/extensions/remote-runtime/node_modules/native-runtime/vendor/host-native":
+        "do-not-transfer-native",
+      "dist/.buildstamp": "local-build-only",
+      "dist/debug.js.map": "source-map-only",
+      ".env": "FAKE_PRIVATE_VALUE=do-not-transfer",
+      "src/private.ts": "source-only",
+      "extensions/remote-runtime/package.json": pluginPackage,
     });
-    await write(
-      packageRoot,
-      "dist/extensions/remote-runtime/index.js",
-      'export { answer } from "../../shared.js";',
-    );
-    await write(
-      packageRoot,
-      "dist/extensions/remote-runtime/node_modules/native-runtime/vendor/host-native",
-      "do-not-transfer-native",
-    );
-    await write(packageRoot, "dist/.buildstamp", "local-build-only");
-    await write(packageRoot, "dist/debug.js.map", "source-map-only");
-    await write(packageRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
-    await write(packageRoot, "src/private.ts", "source-only");
-    await write(packageRoot, "extensions/remote-runtime/package.json", pluginPackage);
     const aiRoot =
       mode === "source"
         ? path.join(root, "ai-source")
@@ -198,18 +191,16 @@ export function useNodeBootstrapArtifactFixtures() {
     );
     if (mode === "external-plugin") {
       pluginRoot = path.join(root, "installed-plugin");
-      await write(pluginRoot, "package.json", {
-        ...pluginPackage,
-        openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
+      await writeFiles(pluginRoot, {
+        "package.json": {
+          ...pluginPackage,
+          openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
+        },
+        "openclaw.plugin.json": { id: "remote-runtime" },
+        "dist/index.js": 'export const answer = "cloud-ready";',
+        ".env": "FAKE_PRIVATE_VALUE=do-not-transfer",
+        "node_modules/native-runtime/vendor/host-native": "do-not-transfer-native",
       });
-      await write(pluginRoot, "openclaw.plugin.json", { id: "remote-runtime" });
-      await write(pluginRoot, "dist/index.js", 'export const answer = "cloud-ready";');
-      await write(pluginRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
-      await write(
-        pluginRoot,
-        "node_modules/native-runtime/vendor/host-native",
-        "do-not-transfer-native",
-      );
       await write(
         packageRoot,
         "dist/entry.js",

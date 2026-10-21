@@ -45,10 +45,9 @@ import {
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-  resolveEmptyResponseRetryInstruction,
-  resolveReasoningOnlyRetryInstruction,
+  resolveNonVisibleTurnRetryInstructions,
   resolveSettledToolBatchEvidence,
-  resolveSettledToolTerminalContinuationInstruction,
+  resolveSettledToolTerminalContinuation,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import {
@@ -148,7 +147,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
   if (emptyAssistantReplyIsSilent) {
     return null;
   }
-  return resolveSettledToolTerminalContinuationInstruction({
+  const continuation = resolveSettledToolTerminalContinuation({
     provider: input.activeErrorContext.provider,
     modelId: input.activeErrorContext.model,
     modelApi: input.modelApi,
@@ -162,6 +161,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
     timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
+  return continuation?.disableTools ? continuation.instruction : null;
 }
 
 export async function resolveEmbeddedRunTerminal(input: {
@@ -251,22 +251,24 @@ export async function resolveEmbeddedRunTerminal(input: {
     (replyExpectation === "optional" ||
       emptyAssistantReplyIsSilent ||
       input.prepared.replyDeliveryState !== "missing");
-  const retryInput = {
-    provider: input.activeErrorContext.provider,
-    modelId: input.activeErrorContext.model,
-    modelApi: input.modelApi,
-    executionContract: input.executionContract,
-    terminalReplyExpectation: replyExpectation,
-    replyDeliveryState: input.prepared.replyDeliveryState,
-    ...terminalFacts,
-  };
   const replyRecoveryAllowed = !replyRecoverySuppressed && !settledTurnFinalizationAttempted;
-  const nextReasoningOnlyRetryInstruction = replyRecoveryAllowed
-    ? resolveReasoningOnlyRetryInstruction(retryInput)
-    : null;
-  const nextEmptyResponseRetryInstruction = replyRecoveryAllowed
-    ? resolveEmptyResponseRetryInstruction(retryInput)
-    : null;
+  const [nextReasoningOnlyRetryInstruction, nextEmptyResponseRetryInstruction] =
+    replyRecoveryAllowed
+      ? resolveNonVisibleTurnRetryInstructions({
+          provider: input.activeErrorContext.provider,
+          modelId: input.activeErrorContext.model,
+          modelApi: input.modelApi,
+          executionContract: input.executionContract,
+          terminalReplyExpectation: replyExpectation,
+          replyDeliveryState: input.prepared.replyDeliveryState,
+          ...terminalFacts,
+          settledToolPayloadCount: countSettledTurnDeliveryPayloads({
+            payloads: payloadsForTerminalPath,
+            attempt,
+          }),
+          hasTerminalToolPresentation: Boolean(input.readTerminalToolPresentation()),
+        })
+      : [null, null];
   const emptyResponseRetryCounter = attempt.textToolCallAttempt
     ? "textToolCallAttempts"
     : "emptyResponseAttempts";
@@ -530,9 +532,6 @@ async function completeEmbeddedRun(
       }
     }
   } else {
-    log.debug(
-      `embedded run done: runId=${input.runParams.runId} sessionId=${input.runParams.sessionId} durationMs=${Date.now() - input.startedAtMs} aborted=${terminalAborted}`,
-    );
     markEmbeddedRunAuthProfileSuccess({
       authProfileStateMode: input.runParams.authProfileStateMode,
       profileId: input.authProfileId,
@@ -580,10 +579,10 @@ async function completeEmbeddedRun(
   // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)
   const isMissingReplyNotice =
     input.incompleteTurnText?.startsWith(MISSING_REPLY_NOTICE_TEXT) === true;
+  const suppressErrorNotice =
+    isMissingReplyNotice && !shouldDeliverMissingReplyNotice(input.runParams);
   const suppressMissingReplyNotice =
-    isMissingReplyNotice &&
-    (input.incompleteTurnFallbackSafe === true ||
-      !shouldDeliverMissingReplyNotice(input.runParams));
+    isMissingReplyNotice && (input.incompleteTurnFallbackSafe === true || suppressErrorNotice);
   const incompleteText =
     input.terminalToolPresentation && input.incompleteTurnText !== undefined
       ? input.terminalToolPresentation.concat("\n\n", input.incompleteTurnText)
@@ -652,6 +651,7 @@ async function completeEmbeddedRun(
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
         terminalReply,
         terminalReplyExpectation: resolveReplyExpectation(input.runParams),
+        ...(suppressErrorNotice ? { suppressErrorNotice } : {}),
         ...(error
           ? { error }
           : {

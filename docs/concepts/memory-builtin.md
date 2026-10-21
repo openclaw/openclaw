@@ -158,8 +158,12 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
-When Memory Core owns the memory slot, its Gateway service schedules each configured
-agent's memory manager to open at startup and after plugin replacement. This
+When Memory Core owns the memory slot, a fresh Gateway start opens an agent's
+memory manager on its first memory search, flush, or turn that needs it, so an
+idle Gateway does not start index and transcript workers for every agent. Once a
+manager has run in the Gateway process, the Memory Core service schedules each
+configured agent's memory manager to open again whenever the service restarts,
+including after plugin replacement and memory or agent configuration changes. This
 background activation waits for that agent's database preparation, including
 after an upgrade or restart, without delaying Gateway readiness. Failed
 preparation reports the database's repair guidance. Watched file changes can
@@ -187,6 +191,8 @@ period. It never starts during a running turn. One pass covers the agent's pendi
 sessions, sharing transcript preparation, embedding-cache reads, and bounded
 publication transactions. If a turn starts during a pass, indexing finishes its
 current bounded group and resumes after the next quiet period.
+Repeated notifications for an unchanged transcript do not rewrite its source
+metadata; changes to its content, timestamp, or size still update the index.
 
 Failed session passes, including handled embedding-provider fallback failures,
 retain their pending work and retry after 1, 5, and 15 minutes, subject to the same
@@ -198,12 +204,17 @@ New session content becomes searchable after that delay. The current turn alread
 has its own content in context; `memory_search` does not force a transcript flush.
 Graceful shutdown does not flush queued indexing. On the next startup, incremental
 catch-up resumes from each source's indexed sequence, including rewrites and
-compaction. A failed full rebuild retains
+compaction. Startup compares source metadata; missing transcripts are parsed and
+checked for indexing eligibility once the background pass can run. Explicit source
+diagnostics still inspect content to exclude system-only transcripts from eligible
+counts. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
 An index built before any content exists remains valid as content arrives;
 restarting does not require a full rebuild just because the index started empty.
-Growing session transcripts retain unchanged indexed chunks and embed only new
-or changed chunks, even when the embedding cache is disabled. An explicit full
+Growing session transcripts and edited memory files retain unchanged indexed
+chunks and embed only new or changed chunks, even when the embedding cache is
+disabled. An edit that changes every chunk of a memory file, such as a line
+inserted at the top, still replaces that file's chunks. An explicit full
 rebuild still replaces the complete index.
 If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
@@ -220,6 +231,20 @@ with search-triggered maintenance. Searches retain keyword recall, and existing
 semantic indexes remain intact. An already keyword-only index can still accept
 file updates during the cooldown; semantic indexing resumes after recovery.
 
+Local file observation runs in one shared file worker, including initial directory
+discovery, native watching, and change settling. Large memory trees therefore do
+not require directory traversal on the Gateway's main thread. Indexing stays with
+the memory manager, which receives dirty notifications before debounce and reads
+published watcher health without polling the worker. Startup waits for watcher
+readiness; shutdown joins native cleanup, and the last watcher closes the worker.
+
+If the shared file worker exits unexpectedly, Memory Core reports unavailable
+watcher health and logs a warning. It restarts after 0.5, 2, and 5 seconds,
+restoring live subscriptions and rescanning their scopes to catch missed edits.
+Four failures within one minute stop automatic restarts; health remains unavailable
+and searches refresh memory in the background. Restart the Gateway after resolving
+the worker failure to resume observation. Normal shutdown does not restart the worker.
+
 When native file watching is unavailable, Memory Core uses background polling
 with a 30-second default interval, including when polling is explicitly enabled
 with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
@@ -230,7 +255,9 @@ recovery scan every five minutes, so a missed native event can take that long to
 be detected. This recovery interval does not change polling cadence. Automatic
 fallback logs one warning per watcher lifetime. Agents in the same process share
 observations of the same admitted root, retaining each agent's file-selection
-rules. More than 128 combined scopes use additional bounded subscriptions. If a
+rules. Joining or leaving an unchanged selection keeps the existing filesystem
+baseline; changes to the combined scopes or enabled file kinds rescan it.
+More than 128 combined scopes use additional bounded subscriptions. If a
 shared observation fails, its members retry independently for the rest of their
 watcher lifetimes, so one failing scope cannot repeatedly disable healthy peers.
 The last agent to stop observing a root closes its subscription. A running memory
@@ -248,14 +275,23 @@ background work finishes; subsequent searches see the updated content. Restart
 the Gateway after restoring watch capacity to enable native watching again.
 
 Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when
-another SQLite writer is active. Cache pruning removes the oldest entries in
-bounded batches, yielding between batches while preserving the existing cache cap.
+another SQLite writer is active. Cache pruning removes entries in bounded
+batches, in the order described below, yielding between batches while preserving
+the existing cache cap.
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache
 is bounded before publication, not after copying excess entries into the
-shared database.
+shared database. When new entries would take the cache past its row cap, or it
+is already over the cap, it removes exactly as many entries as before, but first
+takes entries for the active embedding provider that no published chunk
+references and that were written before the oldest published chunk, oldest
+first. A full reindex rewrites every chunk, so these entries predate the index
+that dropped them. Incremental syncs keep unchanged chunks, so the oldest
+published chunk can be much older and fewer entries qualify. Newer unreferenced
+entries, such as a retry's or another sync's unpublished vectors, keep plain
+oldest-first order. At or below the cap nothing is removed.
 
 Other agent state, including sessions and transcripts in the same database,
 is retained. Use the [memory index command](/cli/memory#memory-index) for
@@ -326,7 +362,7 @@ Builtin now covers most QMD use cases with:
 - hybrid BM25 and vector retrieval by default, followed by temporal decay,
   importance, and project affinity before MMR diversity,
 - bounded lexical query expansion for conversational searches,
-- string or `{ path, pattern }` entries in `memory.search.extraPaths`, and
+- string or `{ path, pattern, evergreen }` entries in `memory.search.extraPaths`, and
 - optional image and audio indexing under `extraPaths` only.
 
 QMD query mode's learned cross-encoder reranking and HyDE generation are not

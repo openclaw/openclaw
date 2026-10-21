@@ -1,9 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import {
+  createTestTranscript as createTranscript,
+  stubAnimationFrames,
+} from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import {
   render,
@@ -11,629 +14,544 @@ import {
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
 import * as chatMessage from "./chat-message-group-frame.ts";
-import { getTranscriptState, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
+import {
+  getTranscriptState,
+  toggleTranscriptSearch,
+  type ChatThreadProps,
+} from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
+  requireElement,
   threadProps,
 } from "./chat-transcript.test-support.ts";
 
-function requireElement(container: ParentNode, selector: string): HTMLElement {
-  return expectDefined(container.querySelector<HTMLElement>(selector), selector);
+const transcripts: ReturnType<typeof createTranscript>[] = [];
+function createTestTranscript(...args: Parameters<typeof createTranscript>) {
+  const transcript = createTranscript(...args);
+  transcripts.push(transcript);
+  return transcript;
+}
+function threadView(props: ChatThreadProps, transcript = createTestTranscript()) {
+  const container = document.body.appendChild(document.createElement("div"));
+  const rerender = (start = false) => {
+    render(renderChatThread(props, transcript), container);
+    if (start) {
+      transcript.start();
+    }
+    transcript.update();
+  };
+  const start = async () => {
+    rerender();
+    transcript.start();
+    await flushDeferredRowPrune();
+  };
+  return { transcript, container, rerender, start };
+}
+const inlineReply = ".chat-reply-attribution--inline button";
+const replyName = ".chat-reply-attribution__name";
+const replyTarget = "chat-bubble--reply-target";
+function replyAccess(
+  read: () => unknown = () => undefined,
+): NonNullable<ChatThreadProps["replyMessageAccess"]> {
+  return { revision: 0, navigationId: null, read, open: vi.fn() };
+}
+function replyProps(messages: ChatThreadProps["messages"], changes: Partial<ChatThreadProps> = {}) {
+  return { ...threadProps("replies", "agent:main:main", messages), ...changes };
 }
 
-describe("chat transcript replies", () => {
-  beforeEach(installTranscriptDomMocks);
-  afterEach(resetTranscriptTestDom);
-
-  async function commitLayout() {
-    flush();
-    await Promise.resolve();
-    vi.advanceTimersToNextFrame();
-    flush();
+beforeEach(installTranscriptDomMocks);
+afterEach(() => {
+  for (const transcript of transcripts.splice(0)) {
+    transcript.dispose();
   }
+  vi.useRealTimers();
+  resetTranscriptTestDom();
+});
 
-  function replyMessages(
-    client?: readonly [id: string, mode: string, displayName: string] | null,
-    namedHuman = false,
-  ) {
-    const [id, mode, displayName] = client ?? [];
-    return [
-      {
-        role: client ? "user" : "assistant",
-        content: "The original answer",
-        __openclaw: {
-          id: "source-message",
-          ...(namedHuman
-            ? {
-                senderId: "profile-alice",
-                senderName: "Alice",
-                senderIdentity: { type: "profile", id: "profile-alice" },
-              }
-            : {}),
-          ...(client ? { transport: { clients: [{ id, mode, displayName }] } } : {}),
-        },
-        timestamp: 1_000,
-      },
+function replyMessages(
+  client?: readonly [id: string, mode: string, displayName: string] | null,
+  namedHuman = false,
+) {
+  const [id, mode, displayName] = client ?? [];
+  const metadata = {
+    ...(namedHuman ? person("profile-alice", "Alice") : {}),
+    ...(client ? { transport: { clients: [{ id, mode, displayName }] } } : {}),
+  };
+  return [
+    turn("source", client ? "user" : "assistant", "The original answer", metadata, 1_000),
+    turn("followup", "user", "Follow up", { replyToId: "source" }, 2_000),
+  ] as const;
+}
+
+it.each([
+  { name: "ordinary motion", reducedMotion: false, textless: false },
+  { name: "reduced motion", reducedMotion: true, textless: false },
+  { name: "textless original", reducedMotion: false, textless: true },
+])(
+  "reveals loaded replies and owns their flash lifetime: $name",
+  async ({ reducedMotion, textless }) => {
+    const flushFrames = stubAnimationFrames();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query.includes("prefers-reduced-motion") && reducedMotion,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    const [source, reply] = replyMessages();
+    const access = replyAccess();
+    const props = replyProps([
+      textless
+        ? {
+            ...source,
+            role: "user",
+            content: [],
+            __openclaw: { ...source["__openclaw"], replyToId: "elsewhere" },
+          }
+        : source,
+      reply,
+    ]);
+    props.replyMessageAccess = access;
+    const { transcript, container, rerender } = threadView(props);
+    rerender(true);
+    await flushDeferredRowPrune();
+
+    const preview = container.querySelector<HTMLButtonElement>(inlineReply);
+    if (!textless) {
+      expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
+    }
+    expect(preview?.textContent).not.toContain("source");
+
+    const sourceBubble = requireElement(container, ".chat-bubble[data-entry-id='source']");
+    const clickReply = async () => {
+      preview?.click();
+      await Promise.resolve();
+      flush();
+      await Promise.resolve();
+      flushFrames();
+      flush();
+      await Promise.resolve();
+    };
+    const duration = reducedMotion ? 1_000 : 1_200;
+    vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    await clickReply();
+    expect(access.open).not.toHaveBeenCalled();
+    expect(sourceBubble.classList.contains(replyTarget)).toBe(true);
+    if (!textless) {
+      sourceBubble.firstElementChild!.dispatchEvent(new Event("animationend", { bubbles: true }));
+    }
+    expect(sourceBubble.classList.contains(replyTarget)).toBe(true);
+    vi.advanceTimersByTime(duration / 2);
+    await clickReply();
+    vi.advanceTimersByTime(duration - 1);
+    expect(sourceBubble.classList.contains(replyTarget)).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(sourceBubble.classList.contains(replyTarget)).toBe(false);
+    await clickReply();
+    transcript.dispose();
+    expect(sourceBubble.classList.contains(replyTarget)).toBe(false);
+  },
+);
+
+it.each([
+  ["assistant", null, false, "Molty"],
+  ["CLI", ["cli", "cli", "Release helper"], false, "via CLI (Release helper)"],
+  ["RPC", ["gateway-client", "backend", "Build helper"], false, "via RPC (Build helper)"],
+  ["named human via CLI", ["cli", "cli", "Release helper"], true, "Alice"],
+] as const)(
+  "hydrates an unloaded %s reply preview without inserting its source row",
+  async (_source, client, namedHuman, senderLabel) => {
+    const [sourceMessage, followUp] = replyMessages(client, namedHuman);
+    let resolvedMessage: unknown = undefined;
+    const access = replyAccess(() => resolvedMessage);
+    const props = replyProps([followUp], {
+      userId: "profile-viewer",
+      userName: "Unrelated Viewer",
+      replyMessageAccess: access,
+    });
+    const { container, rerender, start } = threadView(props);
+    await start();
+
+    expect(container.querySelector("[data-entry-id='source']")).toBeNull();
+
+    resolvedMessage = { ...sourceMessage, content: "The original message" };
+    access.revision += 1;
+    rerender();
+
+    const preview = container.querySelector<HTMLButtonElement>(inlineReply);
+    expect(preview?.querySelector(replyName)?.textContent?.trim()).toBe(senderLabel);
+    expect(container.querySelector("[data-entry-id='source']")).toBeNull();
+    preview?.click();
+    expect(access.open).toHaveBeenCalledWith("source");
+  },
+);
+
+it.each([false, true])(
+  "opens folded work when a reply navigation loads its source (run frame: %s)",
+  async (framed) => {
+    const [sourceMessage, followUp] = replyMessages();
+    const props = replyProps([followUp], { sessionKey: "agent:main:dashboard:reply" });
+    const access = replyAccess(() => sourceMessage);
+    props.replyMessageAccess = access;
+    const { transcript, container, rerender, start } = threadView(
+      props,
+      createTestTranscript(props.paneId),
+    );
+    await start();
+    const viewport = requireElement(container, ".chat-thread");
+    viewport.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
+      viewport.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+      viewport.dispatchEvent(new Event("scroll"));
+    };
+    requireElement(container, inlineReply).click();
+    expect(access.open).toHaveBeenCalledWith("source");
+    props.replyMessageAccess.navigationId = "source";
+    props.messages = [
       {
         role: "user",
-        content: "Follow up",
-        __openclaw: { id: "reply-message", replyToId: "source-message" },
-        timestamp: 2_000,
+        content: "Prepare an answer",
+        timestamp: 0,
+        ...(framed ? { __openclaw: { idempotencyKey: "source-run:user" } } : {}),
       },
-    ] as const;
-  }
-
-  it.each([
-    { name: "ordinary motion", reducedMotion: false, textless: false },
-    { name: "reduced motion", reducedMotion: true, textless: false },
-    { name: "textless original", reducedMotion: false, textless: true },
-  ])(
-    "reveals loaded replies and owns their flash lifetime: $name",
-    async ({ reducedMotion, textless }) => {
-      const flushFrames = stubAnimationFrames();
-      const commitReplyLayout = async () => {
-        flush();
-        await Promise.resolve();
-        flushFrames();
-        flush();
-      };
-      vi.stubGlobal("matchMedia", (query: string) => ({
-        matches: query.includes("prefers-reduced-motion") && reducedMotion,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      }));
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const [source, reply] = replyMessages();
-      const open = vi.fn();
-      const props = threadProps("pane-reply-preview", "agent:main:main", [
-        textless
-          ? {
-              ...source,
-              role: "user",
-              content: [],
-              __openclaw: { ...source["__openclaw"], replyToId: "elsewhere" },
-            }
-          : source,
-        reply,
-      ]);
-      props.replyMessageAccess = { revision: 0, navigationId: null, read: () => undefined, open };
-      render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
-      await flushDeferredRowPrune();
-
-      const preview = container.querySelector<HTMLButtonElement>(
-        ".chat-reply-attribution--inline button",
-      );
-      if (!textless) {
-        expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
-      }
-      expect(preview?.textContent).not.toContain("source-message");
-
-      const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
-        (bubble) => bubble.dataset.entryId === "source-message",
-      )!;
-      const duration = reducedMotion ? 1_000 : 1_200;
-      vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
-      try {
-        preview?.click();
-        await Promise.resolve();
-        await commitReplyLayout();
-        expect(open).not.toHaveBeenCalled();
-        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
-        if (!textless) {
-          sourceBubble.firstElementChild!.dispatchEvent(
-            new Event("animationend", { bubbles: true }),
-          );
-        }
-        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
-        vi.advanceTimersByTime(duration / 2);
-        preview?.click();
-        await Promise.resolve();
-        await commitReplyLayout();
-        vi.advanceTimersByTime(duration - 1);
-        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
-        vi.advanceTimersByTime(1);
-        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
-        preview?.click();
-        await Promise.resolve();
-        await commitReplyLayout();
-        transcript.hostDisconnected();
-        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
-      } finally {
-        transcript.hostDisconnected();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each([
-    ["assistant", null, false, "Molty"],
-    ["CLI", ["cli", "cli", "Release helper"], false, "via CLI (Release helper)"],
-    ["RPC", ["gateway-client", "backend", "Build helper"], false, "via RPC (Build helper)"],
-    ["named human via CLI", ["cli", "cli", "Release helper"], true, "Alice"],
-  ] as const)(
-    "hydrates an unloaded %s reply preview without inserting its source row",
-    async (_source, client, namedHuman, senderLabel) => {
-      const [sourceMessage, followUp] = replyMessages(client, namedHuman);
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      let resolvedMessage: unknown = undefined;
-      const open = vi.fn();
-      const props = {
-        ...threadProps("pane-reply-hydration", "agent:main:main", [followUp]),
-        userId: "profile-viewer",
-        userName: "Unrelated Viewer",
-        replyMessageAccess: {
-          revision: 0,
-          navigationId: null,
-          read: () => resolvedMessage,
-          open,
-        },
-      };
-      const rerender = () => {
-        render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
-      };
-      try {
-        rerender();
-        transcript.hostConnected();
-        await flushDeferredRowPrune();
-
-        expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
-
-        resolvedMessage = { ...sourceMessage, content: "The original message" };
-        props.replyMessageAccess.revision += 1;
-        rerender();
-
-        const preview = container.querySelector<HTMLButtonElement>(
-          ".chat-reply-attribution--inline button",
-        );
-        expect(preview?.querySelector(".chat-reply-attribution__name")?.textContent?.trim()).toBe(
-          senderLabel,
-        );
-        expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
-        preview?.click();
-        expect(open).toHaveBeenCalledWith("source-message");
-      } finally {
-        transcript.hostDisconnected();
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "opens folded work when a reply navigation loads its source (run frame: %s)",
-    async (framed) => {
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const [sourceMessage, followUp] = replyMessages();
-      const props = threadProps("pane-folded-history-reply", "agent:main:dashboard:reply", [
-        followUp,
-      ]);
-      const open = vi.fn();
-      props.replyMessageAccess = {
-        revision: 0,
-        navigationId: null,
-        read: () => sourceMessage,
-        open,
-      };
-      const rerender = () => {
-        render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
-      };
-      try {
-        rerender();
-        transcript.hostConnected();
-        await flushDeferredRowPrune();
-        requireElement(container, ".chat-reply-attribution--inline button").click();
-        expect(open).toHaveBeenCalledWith("source-message");
-        props.replyMessageAccess.navigationId = "source-message";
-        props.messages = [
-          {
-            role: "user",
-            content: "Prepare an answer",
-            timestamp: 0,
-            ...(framed ? { __openclaw: { idempotencyKey: "source-run:user" } } : {}),
-          },
-          { ...sourceMessage, ...(framed ? { runId: "source-run" } : {}) },
-          {
-            role: "assistant",
-            phase: "final_answer",
-            content: "Final answer",
-            timestamp: 1_500,
-            ...(framed ? { runId: "source-run" } : {}),
-          },
-          followUp,
-        ];
-        rerender();
-        await flushDeferredRowPrune();
-        expect(
-          requireElement(container, ".chat-work-group button").getAttribute("aria-expanded"),
-        ).toBe("true");
-        expect(requireElement(container, "[data-entry-id='source-message']").textContent).toContain(
-          "The original answer",
-        );
-      } finally {
-        transcript.hostDisconnected();
-      }
-    },
-  );
-
-  const alice = {
-    senderId: "alice",
-    senderName: "Alice",
-    senderIdentity: { type: "profile", id: "alice" },
-  };
-  const bob = {
-    senderId: "bob",
-    senderName: "Bob",
-    senderIdentity: { type: "profile", id: "bob" },
-  };
-  const turn = (id: string, role: string, content: string, openclaw: object = {}) => ({
-    role,
-    content,
-    timestamp: Number(id.replace(/\D/g, "")),
-    __openclaw: { id, ...openclaw },
-  });
-  async function renderedStrips(props: ReturnType<typeof threadProps>, searchQuery?: string) {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    if (searchQuery) {
-      Object.assign(getTranscriptState(props.paneId), { searchOpen: true, searchQuery });
-    }
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
+      { ...sourceMessage, ...(framed ? { runId: "source-run" } : {}) },
+      {
+        role: "assistant",
+        phase: "final_answer",
+        content: "Final answer",
+        timestamp: 1_500,
+        ...(framed ? { runId: "source-run" } : {}),
+      },
+      followUp,
+    ];
+    rerender();
+    expect(transcript.revealMessage("source")).toBe(true);
+    rerender();
     await flushDeferredRowPrune();
-    try {
-      const strips = [...container.querySelectorAll(".chat-reply-attribution--reply")].map(
-        (strip) => strip.querySelector(".chat-reply-attribution__name")?.textContent?.trim(),
-      );
-      // No reply cue renders beyond the named strips.
-      expect(container.textContent?.split("Replying to").length).toBe(strips.length + 1);
-      return strips;
-    } finally {
-      transcript.hostDisconnected();
-    }
-  }
-
-  const currentReplyCases = [
-    { linkage: "the prompt that owns its run", strips: ["Alice"] },
-    { linkage: "its own prompt in a 1:1 thread", latest: null, strips: [] },
-    { linkage: "an older prompt in a 1:1 thread", latest: alice, strips: ["Alice"] },
-    { linkage: "a legacy reply without a run", replyRun: null, strips: [] },
-    { linkage: "a prompt without a run key", promptRun: null, strips: [] },
-    { linkage: "another run's prompt", promptRun: "run-b", strips: [] },
-    { linkage: "duplicate run owners", duplicate: true, strips: [] },
-    {
-      linkage: "a channel-mirrored reply keyed only by its send",
-      reply: { mirrorOrigin: "discord", idempotencyKey: "run-a" },
-      strips: [],
-    },
-  ].map(
-    ({
-      linkage,
-      promptRun = "run-a",
-      replyRun = "run-a",
-      latest = bob,
-      duplicate,
-      reply,
-      strips,
-    }) => ({
-      case: linkage,
-      query: undefined,
-      session: undefined,
-      strips,
-      messages: [
-        ...(duplicate
-          ? [turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" })]
-          : []),
-        turn("p2", "user", "hey hey", {
-          ...alice,
-          ...(promptRun ? { idempotencyKey: `${promptRun}:user` } : {}),
-        }),
-        // The latest prompt never stands in for an unresolved origin.
-        ...(latest ? [turn("p3", "user", "Unrelated", latest)] : []),
-        {
-          ...turn("a4", "assistant", "Tô aqui", reply ?? (replyRun ? { runId: replyRun } : {})),
-          openclawDelivery: { replyToCurrent: true },
-        },
-      ],
-    }),
-  );
-
-  it.each([
-    ...currentReplyCases,
-    {
-      case: "search hides the other speaker",
-      messages: [
-        turn("p1", "user", "Deploy?", alice),
-        turn("a2", "assistant", "Deploying"),
-        turn("p3", "user", "Status?", bob),
-        turn("a4", "assistant", "Rollout done"),
-      ],
-      query: "Rollout",
-      strips: ["Bob"],
-    },
-    {
-      case: "search hides the prompt this turn answers",
-      messages: [
-        turn("p1", "user", "Rollout plan?", alice),
-        turn("a2", "assistant", "Drafted"),
-        turn("p3", "user", "Anything else?", alice),
-        turn("a4", "assistant", "Rollout finished", {
-          replyToId: "p3",
-          replyToPreview: { text: "Anything else?", senderLabel: "Alice" },
-        }),
-      ],
-      query: "Rollout",
-      strips: [],
-    },
-    {
-      case: "a system turn replies explicitly to an older human prompt",
-      messages: [
-        turn("p1", "user", "Please check this report", {
-          ...alice,
-          idempotencyKey: "run-a:user",
-        }),
-        {
-          ...turn("p2", "user", "[System] Scheduled report", { idempotencyKey: "run-b:user" }),
-          provenance: { kind: "internal_system", sourceTool: "cron" },
-        },
-        {
-          ...turn("a3", "assistant", "Answer to the older prompt", { replyToId: "p1" }),
-          runId: "run-b",
-        },
-      ],
-      strips: ["Alice"],
-    },
-    {
-      // An explicit reply to its own prompt stays visible once the thread is shared.
-      case: "the session has a participant outside the loaded page",
-      messages: [
-        turn("p1", "user", "Deploy?", alice),
-        turn("a2", "assistant", "Deploying", { replyToId: "p1" }),
-      ],
-      session: {
-        owner: {
-          actor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
-        },
-        participants: [{ identity: { type: "profile", id: "bob" }, label: "Bob" }],
-      },
-      strips: ["Alice"],
-    },
-    {
-      // The owner listed again as a participant, keys reordered, is still one person.
-      case: "the owner reappears as a participant with reordered identity keys",
-      messages: [
-        turn("p1", "user", "Deploy?", alice),
-        turn("a2", "assistant", "Deploying", { replyToId: "p1" }),
-      ],
-      session: {
-        owner: {
-          actor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
-        },
-        participants: [{ identity: { id: "alice", type: "profile" }, label: "Alice" }],
-      },
-      strips: [],
-    },
-  ])(
-    "keeps cached reply attribution from the full conversation when $case",
-    async ({ messages, query, session, strips }) => {
-      const props = threadProps("pane-reply-context", "agent:main:main", [...messages]);
-      if (session) {
-        props.selectedSession = {
-          key: props.sessionKey,
-          kind: "direct",
-          updatedAt: 1,
-          ...session,
-        } as GatewaySessionRow;
-      }
-      if (props.selectedSession) {
-        props.transcriptMetadata = projectChatTranscriptMetadata(props.selectedSession);
-        props.selectedSession = undefined;
-      }
-      expect(await renderedStrips(props, query)).toEqual(strips);
-    },
-  );
-
-  it.each([
-    { target: "loaded explicit", loaded: true, readOnly: false },
-    { target: "unloaded explicit", loaded: false, readOnly: false },
-    { target: "loaded automatic in a read-only archive", loaded: true, readOnly: true },
-  ])("clears search and navigates to a $target reply target", async ({ loaded, readOnly }) => {
-    vi.useFakeTimers();
-    const transcript = createTestTranscript();
-    const searchContainer = document.body.appendChild(document.createElement("div"));
-    const threadContainer = document.body.appendChild(document.createElement("div"));
-    const open = vi.fn();
-    const paneId = "pane-filtered-reply-navigation";
-    const [sourceMessage, followUp] = replyMessages();
-    const sourceId = readOnly ? "p2" : "source-message";
-    const sourceSelector = `[data-entry-id='${sourceId}']`;
-    const props = threadProps(
-      paneId,
-      "agent:main:main",
-      readOnly
-        ? [
-            turn("p1", "user", "Original for Alice", alice),
-            turn("p2", "user", "Original for Bob", bob),
-            turn("a3", "assistant", "Follow up for Bob"),
-          ]
-        : [
-            ...(loaded ? [sourceMessage] : []),
-            {
-              ...followUp,
-              __openclaw: {
-                ...followUp["__openclaw"],
-                replyToPreview: { text: "The original answer", senderLabel: "Molty" },
-              },
-            },
-          ],
+    expect(requireElement(container, ".chat-work-group button").getAttribute("aria-expanded")).toBe(
+      "true",
     );
-    if (readOnly) {
-      props.selectedSession = {
+    expect(requireElement(container, "[data-entry-id='source']").textContent).toContain(
+      "The original answer",
+    );
+  },
+);
+
+it.each([true, false])(
+  "keeps answers and independent automation deliveries visible (foreground run identity: %s)",
+  (keyed) => {
+    const runId = "approval-question-run";
+    const props = threadProps("pane-automation-replies", "agent:main:dashboard:approval", [
+      {
+        role: "user",
+        content: "How was that approved?",
+        timestamp: 1_000,
+        __openclaw: { id: "question", ...(keyed ? { idempotencyKey: `${runId}:user` } : {}) },
+      },
+      {
+        role: "assistant",
+        phase: "commentary",
+        content: "Checking the saved approval.",
+        timestamp: 2_000,
+        __openclaw: { id: "commentary", ...(keyed ? { runId } : {}) },
+      },
+      {
+        role: "assistant",
+        content: "An operator approved it. It keeps running until stopped.",
+        stopReason: "stop",
+        timestamp: 3_000,
+        __openclaw: { id: "answer", ...(keyed ? { runId } : {}) },
+      },
+    ]);
+    const { container, rerender } = threadView(props);
+    rerender(true);
+    expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
+      "An operator approved it.",
+    );
+    expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
+    for (const index of [1, 2]) {
+      props.messages = [
+        ...props.messages,
+        {
+          role: "assistant",
+          api: "openclaw-transcript",
+          provider: "openclaw",
+          model: "automation-result",
+          stopReason: "stop",
+          content: `New application error ${index}.`,
+          timestamp: (3 + index) * 1_000,
+          openclawAutomation: { kind: "cron", jobId: "saved-watcher", runId: `cron-${index}` },
+          __openclaw: { id: `alert-${index}` },
+        },
+      ];
+      rerender();
+      expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
+        "An operator approved it.",
+      );
+      for (let alert = 1; alert <= index; alert++) {
+        expect(requireElement(container, `[data-entry-id="alert-${alert}"]`).textContent).toContain(
+          `New application error ${alert}.`,
+        );
+      }
+      expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
+    }
+    props.messages = structuredClone(props.messages);
+    rerender();
+    expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
+      "An operator approved it.",
+    );
+    props.runId = "next-foreground-run";
+    props.runActive = true;
+    props.runWorking = true;
+    props.streamStartedAt = 6_000;
+    rerender();
+    const alert = requireElement(container, '[data-entry-id="alert-2"]');
+    const progress = requireElement(container, ".chat-working-indicator");
+    expect(alert.closest(".chat-group")?.contains(progress)).toBe(false);
+    expect(alert.closest(".chat-agent-run-frame")?.contains(progress) ?? false).toBe(false);
+  },
+);
+
+const person = (id: string, name: string) => ({
+  senderId: id,
+  senderName: name,
+  senderIdentity: { type: "profile", id },
+});
+const alice = person("alice", "Alice");
+const bob = person("bob", "Bob");
+const owner: NonNullable<GatewaySessionRow["owner"]> = {
+  actor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
+};
+const turn = (
+  id: string,
+  role: string,
+  content: string,
+  openclaw: object = {},
+  timestamp = Number(id.replace(/\D/g, "")),
+) => ({
+  role,
+  content,
+  timestamp,
+  __openclaw: { id, ...openclaw },
+});
+const ownPromptReply = [
+  turn("p1", "user", "Deploy?", alice),
+  turn("a2", "assistant", "Deploying", { replyToId: "p1" }),
+];
+const keyedPrompt = (run = "run-a") =>
+  turn("p2", "user", "hey hey", { ...alice, idempotencyKey: run + ":user" });
+const prompt = keyedPrompt();
+const unrelated = turn("p3", "user", "Unrelated", bob);
+const answer = (metadata: object = {}) => ({
+  ...turn("a4", "assistant", "Tô aqui", metadata),
+  openclawDelivery: { replyToCurrent: true },
+});
+const linkedAnswer = answer({ runId: "run-a" });
+const olderPrompt = turn("p3", "user", "Unrelated", alice);
+const unkeyedPrompt = turn("p2", "user", "hey hey", alice);
+const duplicatePrompt = turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" });
+const mirroredAnswer = answer({ mirrorOrigin: "discord", idempotencyKey: "run-a" });
+const searchedSpeakers = [
+  ownPromptReply[0],
+  turn("a2", "assistant", "Deploying"),
+  turn("p3", "user", "Status?", bob),
+  turn("a4", "assistant", "Rollout done"),
+];
+const searchedPrompt = [
+  turn("p1", "user", "Rollout plan?", alice),
+  turn("a2", "assistant", "Drafted"),
+  turn("p3", "user", "Anything else?", alice),
+  turn("a4", "assistant", "Rollout finished", {
+    replyToId: "p3",
+    replyToPreview: { text: "Anything else?", senderLabel: "Alice" },
+  }),
+];
+const systemReply = [
+  turn("p1", "user", "Report?", { ...alice, idempotencyKey: "run-a:user" }),
+  {
+    ...turn("p2", "user", "[System] Scheduled report", { idempotencyKey: "run-b:user" }),
+    provenance: { kind: "internal_system", sourceTool: "cron" },
+  },
+  { ...turn("a3", "assistant", "Report", { replyToId: "p1" }), runId: "run-b" },
+];
+type ContextSession = Pick<GatewaySessionRow, "owner" | "participants">;
+type ReplyContext = [string, ChatThreadProps["messages"], string[], string?, ContextSession?];
+const outsideParticipant: ContextSession = {
+  owner,
+  participants: [{ identity: { type: "profile", id: "bob" }, label: "Bob" }],
+};
+const ownerParticipant: ContextSession = {
+  owner,
+  participants: [{ identity: { id: "alice", type: "profile" }, label: "Alice" }],
+};
+it.each<ReplyContext>([
+  ["owned run", [prompt, unrelated, linkedAnswer], ["Alice"]],
+  ["1:1 current prompt", [prompt, linkedAnswer], []],
+  ["1:1 older prompt", [prompt, olderPrompt, linkedAnswer], ["Alice"]],
+  ["legacy reply", [prompt, unrelated, answer()], []],
+  ["unkeyed prompt", [unkeyedPrompt, unrelated, linkedAnswer], []],
+  ["another run", [keyedPrompt("run-b"), unrelated, linkedAnswer], []],
+  ["ambiguous owners", [duplicatePrompt, prompt, unrelated, linkedAnswer], []],
+  ["channel mirror", [prompt, unrelated, mirroredAnswer], []],
+  ["search hides speaker", searchedSpeakers, ["Bob"], "Rollout"],
+  ["search hides answered prompt", searchedPrompt, [], "Rollout"],
+  ["system turn answers older human", systemReply, ["Alice"]],
+  ["off-page participant", ownPromptReply, ["Alice"], undefined, outsideParticipant],
+  ["reordered owner identity", ownPromptReply, [], undefined, ownerParticipant],
+])(
+  "keeps cached reply attribution from the full conversation when %s",
+  async (_name, messages, strips, query, session) => {
+    const props = replyProps([...messages]);
+    if (session) {
+      props.transcriptMetadata = projectChatTranscriptMetadata({
         key: props.sessionKey,
         kind: "direct",
         updatedAt: 1,
-        archived: true,
-      };
-    } else {
-      props.replyMessageAccess = {
-        revision: 0,
-        navigationId: null,
-        read: () => undefined,
-        open,
-      };
+        ...session,
+      } as GatewaySessionRow);
     }
-    const requestUpdate = () => queueMicrotask(rerender);
-    const rerender = () => {
-      render(renderTranscriptSearch(paneId, requestUpdate), searchContainer);
-      render(
-        renderChatThread({ ...props, onRequestUpdate: requestUpdate }, transcript),
-        threadContainer,
-      );
-      transcript.hostUpdated();
-    };
-    try {
-      toggleTranscriptSearch(paneId, requestUpdate);
-      rerender();
-      transcript.hostConnected();
-      const input = requireElement(searchContainer, "input") as HTMLInputElement;
-      input.value = "Follow up";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(threadContainer.querySelector(sourceSelector)).toBeNull();
-      requireElement(threadContainer, ".chat-reply-attribution button").click();
-      await vi.advanceTimersByTimeAsync(0);
-      await commitLayout();
-
-      expect(searchContainer.querySelector("input")).toBeNull();
-      if (loaded) {
-        expect(open).not.toHaveBeenCalled();
-        expect(
-          requireElement(threadContainer, sourceSelector).classList.contains(
-            "chat-bubble--reply-target",
-          ),
-        ).toBe(true);
-      } else {
-        expect(open).toHaveBeenCalledWith(sourceId);
-      }
-    } finally {
-      transcript.hostDisconnected();
-      vi.useRealTimers();
+    const { container, rerender } = threadView(props);
+    if (query) {
+      const { search } = getTranscriptState(props.paneId);
+      search.toggle();
+      search.setQuery(query);
     }
-  });
+    rerender(true);
+    await flushDeferredRowPrune();
+    const names = [...container.querySelectorAll(".chat-reply-attribution--reply")].map((strip) =>
+      strip.querySelector(replyName)?.textContent?.trim(),
+    );
+    expect(container.textContent?.split("Replying to").length).toBe(names.length + 1);
+    expect(names).toEqual(strips);
+  },
+);
 
-  it.each(["group", "frame"] as const)(
-    "refreshes an unchanged reply %s when its older original loads or changes",
-    async (presentation) => {
-      vi.spyOn(Date, "now").mockReturnValue(60_000);
-      const history = [
-        {
-          role: "user",
-          content: "Alice's recent prompt",
-          timestamp: 1_000,
-          __openclaw: { id: "alice-prompt", senderId: "alice", senderName: "Alice" },
-        },
-        {
-          role: "assistant",
-          content: "Unrelated answer",
-          timestamp: 2_000,
-          __openclaw: { id: "unrelated-answer" },
-        },
-        {
-          role: "user",
-          content: "Bob's current prompt",
-          timestamp: 3_000,
-          __openclaw: {
-            id: "bob-prompt",
-            senderId: "bob",
-            senderName: "Bob",
-            idempotencyKey: "reply-run:user",
-          },
-        },
-        {
-          role: "assistant",
-          content: "Answer to the earlier question",
-          timestamp: 4_000,
-          phase: "final_answer",
-          stopReason: "stop",
-          ...(presentation === "frame" ? { runId: "reply-run" } : {}),
-          __openclaw: {
-            id: "reply-answer",
-            replyToId: "older-prompt",
-            replyToPreview: { senderLabel: "Old label", text: "Old snapshot" },
-          },
-        },
-      ];
-      const props = threadProps(
-        `pane-reply-source-${presentation}`,
-        "agent:main:dashboard:reply-source",
-        history,
-      );
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const rerender = () => {
-        render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
-      };
-      const attribution = () =>
-        expectDefined(
-          container
-            .querySelector('[data-entry-id="reply-answer"]')
-            ?.closest(".chat-group")
-            ?.querySelector(".chat-reply-attribution--reply"),
-          "reply attribution",
-        );
-      const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
-      try {
-        rerender();
-        transcript.hostConnected();
-        await flushDeferredRowPrune();
-        // The snapshot names an original outside the loaded history; it still navigates.
-        expect(
-          attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
-        ).toBe("Old label");
-        const unrelatedKey = expectDefined(
-          container
-            .querySelector('[data-entry-id="unrelated-answer"]')
-            ?.closest(".chat-group")
-            ?.getAttribute("data-chat-row-key"),
-          "unrelated group key",
-        );
-        expect(prepareFrame.mock.calls.some(([group]) => group.key === unrelatedKey)).toBe(true);
-        prepareFrame.mockClear();
-
-        for (const [name, text] of [
-          ["Carol", "Original question loaded"],
-          ["Caroline", "Original question corrected"],
-        ]) {
-          props.messages = [
-            {
-              role: "user",
-              content: text,
-              timestamp: 500,
-              __openclaw: { id: "older-prompt", senderId: "carol", senderName: name },
+it.each([
+  { target: "loaded explicit", loaded: true, readOnly: false },
+  { target: "unloaded explicit", loaded: false, readOnly: false },
+  { target: "loaded automatic in a read-only archive", loaded: true, readOnly: true },
+])("clears search and navigates to a $target reply target", async ({ loaded, readOnly }) => {
+  vi.useFakeTimers();
+  const transcript = createTestTranscript();
+  const searchContainer = document.body.appendChild(document.createElement("div"));
+  const threadContainer = document.body.appendChild(document.createElement("div"));
+  const access = replyAccess();
+  const [sourceMessage, followUp] = replyMessages();
+  const sourceId = readOnly ? "p2" : "source";
+  const sourceSelector = `[data-entry-id='${sourceId}']`;
+  const props = replyProps(
+    readOnly
+      ? [
+          turn("p1", "user", "Original for Alice", alice),
+          turn("p2", "user", "Original for Bob", bob),
+          turn("a3", "assistant", "Follow up for Bob"),
+        ]
+      : [
+          ...(loaded ? [sourceMessage] : []),
+          {
+            ...followUp,
+            __openclaw: {
+              ...followUp["__openclaw"],
+              replyToPreview: { text: "The original answer", senderLabel: "Molty" },
             },
-            ...history,
-          ];
-          rerender();
-          await flushDeferredRowPrune();
-          expect(
-            attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
-          ).toBe(name);
-          expect(prepareFrame.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
-            [],
-          );
-        }
-      } finally {
-        transcript.hostDisconnected();
-      }
-    },
+          },
+        ],
   );
+  if (readOnly) {
+    props.selectedSession = {
+      key: props.sessionKey,
+      kind: "direct",
+      updatedAt: 1,
+      archived: true,
+    };
+  } else {
+    props.replyMessageAccess = access;
+  }
+  const rerender = () => {
+    render(renderTranscriptSearch(props.paneId), searchContainer);
+    render(renderChatThread(props, transcript), threadContainer);
+    transcript.update();
+  };
+  toggleTranscriptSearch(props.paneId);
+  rerender();
+  transcript.start();
+  const input = requireElement(searchContainer, "input") as HTMLInputElement;
+  input.value = "Follow up";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(threadContainer.querySelector(sourceSelector)).toBeNull();
+  requireElement(threadContainer, ".chat-reply-attribution button").click();
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  await Promise.resolve();
+  vi.advanceTimersToNextFrame();
+  flush();
+  await Promise.resolve();
+
+  expect(searchContainer.querySelector("input")).toBeNull();
+  if (loaded) {
+    expect(access.open).not.toHaveBeenCalled();
+    expect(requireElement(threadContainer, sourceSelector).classList.contains(replyTarget)).toBe(
+      true,
+    );
+  } else {
+    expect(access.open).toHaveBeenCalledWith(sourceId);
+  }
 });
+
+it.each(["group", "frame"] as const)(
+  "refreshes an unchanged reply %s when its older original loads or changes",
+  async (presentation) => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const history = [
+      turn("p1000", "user", "Alice", { senderId: "alice", senderName: "Alice" }),
+      turn("a2000", "assistant", "Unrelated"),
+      turn("p3000", "user", "Bob", {
+        senderId: "bob",
+        senderName: "Bob",
+        idempotencyKey: "reply-run:user",
+      }),
+      {
+        ...turn("a4000", "assistant", "Answer", {
+          replyToId: "p500",
+          replyToPreview: { senderLabel: "Old label", text: "Old snapshot" },
+        }),
+        phase: "final_answer",
+        stopReason: "stop",
+        ...(presentation === "frame" ? { runId: "reply-run" } : {}),
+      },
+    ];
+    const props = replyProps(history, { sessionKey: "agent:main:dashboard:reply-source" });
+    const { container, rerender, start } = threadView(props);
+    const groupFor = (id: string) =>
+      container.querySelector(`[data-entry-id="${id}"]`)?.closest(".chat-group");
+    const attribution = () =>
+      expectDefined(
+        groupFor("a4000")?.querySelector(".chat-reply-attribution--reply"),
+        "reply attribution",
+      );
+    const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
+    await start();
+    expect(attribution().querySelector(`button ${replyName}`)?.textContent).toBe("Old label");
+    const unrelatedKey = expectDefined(
+      groupFor("a2000")?.getAttribute("data-chat-row-key"),
+      "unrelated group key",
+    );
+    expect(prepareFrame.mock.calls.some(([group]) => group.key === unrelatedKey)).toBe(true);
+    prepareFrame.mockClear();
+
+    for (const [name, text] of [
+      ["Carol", "Original question loaded"],
+      ["Caroline", "Original question corrected"],
+    ] as const) {
+      props.messages = [
+        turn("p500", "user", text, { senderId: "carol", senderName: name }),
+        ...history,
+      ];
+      rerender();
+      await flushDeferredRowPrune();
+      expect(attribution().querySelector(`button ${replyName}`)?.textContent).toBe(name);
+      expect(prepareFrame.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual([]);
+    }
+  },
+);

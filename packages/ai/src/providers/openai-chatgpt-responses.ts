@@ -84,9 +84,7 @@ import {
   type OpenAICodexResponsesOptions,
 } from "./openai-chatgpt-responses-request.js";
 import {
-  addCodexWebSocketSseFallback,
   buildCodexWebSocketHeaders,
-  hasCodexWebSocketSseFallback,
   matchesCodexWebSocketAuthority,
   resolveCodexWebSocketAuthority,
   type CodexWebSocketAuthority,
@@ -100,7 +98,6 @@ import {
   isWebSocketReusable,
   isWebSocketSessionExpired,
   scheduleSessionWebSocketExpiry,
-  setOwnedWebSocketSession,
   type CachedWebSocketConnection,
   type OpenAICodexWebSocketRuntimeState,
   type RequestBody,
@@ -369,7 +366,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       };
       const transport = options?.transport || "auto";
       let websocketAuthority: CodexWebSocketAuthority | undefined;
-      if (!transportHost.requiresManagedTransport(model)) {
+      if (!transportHost.requiresManagedTransport(model, "fetch")) {
         try {
           websocketAuthority = resolveCodexWebSocketAuthority({
             transport,
@@ -399,11 +396,8 @@ export const streamOpenAICodexResponses: StreamFunction<
       const websocketDisabledForSession =
         transport === "auto" &&
         websocketAuthority !== undefined &&
-        hasCodexWebSocketSseFallback(
-          websocketState.sseFallbacks,
-          options?.sessionId,
-          websocketAuthority,
-        );
+        options?.sessionId !== undefined &&
+        websocketState.sseFallbacks.get(options.sessionId) === websocketAuthority.url;
 
       if (websocketAuthority && !websocketDisabledForSession) {
         let websocketStarted = false;
@@ -495,11 +489,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               options?.sessionId &&
               !independentResponsesRequest.has(options)
             ) {
-              addCodexWebSocketSseFallback(
-                websocketState.sseFallbacks,
-                options.sessionId,
-                websocketAuthority,
-              );
+              websocketState.sseFallbacks.set(options.sessionId, websocketAuthority.url);
             }
             if (websocketStarted || transport !== "auto") {
               throw transportError;
@@ -861,10 +851,10 @@ function createWebSocketTransportError(message: string, cause?: Error): Error {
 }
 
 async function connectWebSocket(
-  url: string,
-  headers: Headers,
+  authority: CodexWebSocketAuthority,
   signal?: AbortSignal,
 ): Promise<WebSocketLike> {
+  const { url, headers, transportHost } = authority;
   const WebSocketCtor = await getWebSocketConstructor();
   if (!WebSocketCtor) {
     throw new Error("WebSocket transport is not available in this runtime");
@@ -878,7 +868,10 @@ async function connectWebSocket(
     let socket: WebSocketLike;
 
     try {
-      socket = new WebSocketCtor(url, { headers: wsHeaders });
+      // The cached socket outlives the turn; its native resources must not retain that turn.
+      socket = transportHost.runInDetachedAsyncContext(
+        () => new WebSocketCtor(url, { headers: wsHeaders }),
+      );
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
       return;
@@ -933,7 +926,6 @@ async function acquireWebSocket(
   entry?: CachedWebSocketConnection;
   release: (options?: { keep?: boolean }) => void;
 }> {
-  const { url, headers } = authority;
   const lease = (socket: WebSocketLike, entry?: CachedWebSocketConnection) => ({
     socket,
     entry,
@@ -953,12 +945,10 @@ async function acquireWebSocket(
     },
   });
   if (!sessionId) {
-    return lease(await connectWebSocket(url, headers, signal));
+    return lease(await connectWebSocket(authority, signal));
   }
 
   const cached = state.sessionCache.get(sessionId);
-  // Update the expected lease after our own cleanup before awaiting a new connection.
-  let expectedCacheValue: CachedWebSocketConnection | undefined = cached;
   if (cached) {
     if (cached.idleTimer) {
       clearTimeout(cached.idleTimer);
@@ -967,36 +957,36 @@ async function acquireWebSocket(
     if (!cached.busy && !matchesCodexWebSocketAuthority(cached.authority, authority)) {
       closeWebSocketSilently(cached.socket, 1000, "authority_changed");
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketSessionExpired(cached)) {
       closeWebSocketSilently(cached.socket, 1000, "connection_age_limit");
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketReusable(cached.socket)) {
       cached.busy = true;
       return lease(cached.socket, cached);
     }
     if (cached.busy) {
-      return lease(await connectWebSocket(url, headers, signal));
+      return lease(await connectWebSocket(authority, signal));
     }
 
     if (!isWebSocketReusable(cached.socket)) {
       closeWebSocketSilently(cached.socket);
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     }
   }
 
-  const socket = await connectWebSocket(url, headers, signal);
+  const socket = await connectWebSocket(authority, signal);
+  // A concurrent winner keeps the cache; this socket then remains transient.
+  if (state.sessionCache.has(sessionId)) {
+    return lease(socket);
+  }
   const entry: CachedWebSocketConnection = {
     socket,
     authority,
     busy: true,
     createdAt: Date.now(),
   };
-  // A concurrent winner keeps the cache; this socket then remains transient.
-  const ownsCache = setOwnedWebSocketSession(state, sessionId, entry, expectedCacheValue);
-  return lease(socket, ownsCache ? entry : undefined);
+  state.sessionCache.set(sessionId, entry);
+  return lease(socket, entry);
 }
 
 function extractWebSocketError(event: unknown): Error {
@@ -1333,7 +1323,7 @@ async function readChatGptResponsesErrorTextLimited(
     signal?.removeEventListener("abort", onAbort);
     if (!completed) {
       // This provider module is browser-safe, so keep error-body cleanup on Web APIs.
-      await cancel();
+      void cancel();
     }
     try {
       reader.releaseLock();

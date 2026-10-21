@@ -293,8 +293,12 @@ function stripToolCallXmlTagsInternal(
   ) {
     return text;
   }
-
   const codeRegions = resolveCodeRegions(text);
+  // A lone transport opener is scaffolding unless Markdown owns it as code.
+  if (/^\s*<tool_call>\s*$/i.test(text) && !isInsideCode(text.indexOf("<"), codeRegions)) {
+    return "";
+  }
+
   let result = "";
   let lastIndex = 0;
   let isInsidePayloadQuote: ((end: number) => boolean) | undefined;

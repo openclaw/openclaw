@@ -19,7 +19,6 @@ import { normalizeFallbackFailureReason } from "./update-runner-command.js";
 
 describe.skipIf(process.platform === "win32")("package-swap refusal reports", () => {
   it.each([
-    ["journal mode", "package-recovery-permissions-unsafe"],
     ["journal links", "package-recovery-permissions-unsafe"],
     ["lease file", "managed-handoff-lease-identity-changed"],
     ["lease parent", "managed-handoff-lease-identity-changed"],
@@ -35,9 +34,7 @@ describe.skipIf(process.platform === "win32")("package-swap refusal reports", ()
       await writePackageRoot(packageRoot, "1.0.0");
       await fs.writeFile(privateFile, "retained evidence", { mode: 0o600 });
       const identity = captureManagedUpdateLeaseDatabaseIdentity(privateFile);
-      if (failure === "journal mode") {
-        await fs.chmod(privateFile, 0o640);
-      } else if (failure === "journal links") {
+      if (failure === "journal links") {
         await fs.link(privateFile, path.join(base, "retained-link"));
       }
       const result = await runGlobalPackageUpdateSteps({

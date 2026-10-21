@@ -117,7 +117,7 @@ export async function stageWindowsRuntime(work, target, pin) {
   return true;
 }
 
-export async function stageRuntime(triple) {
+export async function stageRuntime(triple, { runtimeOnly = false } = {}) {
   const target = runtimeTarget(triple);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   const work = fs.mkdtempSync(`${destination}-`);
@@ -145,7 +145,8 @@ export async function stageRuntime(triple) {
     } else {
       fs.writeFileSync(path.join(work, "manifest.json"), "{}\n");
     }
-    if (target && JSON.parse(fs.readFileSync(path.join(work, "manifest.json"), "utf8")).files) {
+    // Native CI supplies its synthetic CLI next; real Tauri builds need the full package.
+    if (!runtimeOnly && target && JSON.parse(fs.readFileSync(path.join(work, "manifest.json"), "utf8")).files) {
       stagePackage(root, work, target);
     }
     fs.rmSync(destination, { recursive: true, force: true });
@@ -157,5 +158,5 @@ export async function stageRuntime(triple) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const host = `${process.arch === "arm64" ? "aarch64" : process.arch === "x64" ? "x86_64" : process.arch}-${process.platform === "darwin" ? "apple-darwin" : process.platform === "linux" ? "unknown-linux-gnu" : process.platform === "win32" ? "pc-windows-msvc" : `unknown-${process.platform}`}`;
-  await stageRuntime(process.env.TAURI_ENV_TARGET_TRIPLE || host);
+  await stageRuntime(process.env.TAURI_ENV_TARGET_TRIPLE || host, { runtimeOnly: process.argv.includes("--runtime-only") });
 }

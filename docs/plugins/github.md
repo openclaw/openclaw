@@ -49,10 +49,12 @@ the **+** button starts another tab. Up to ten tabs stay in memory. Closing the
 page discards the documents and history. The reader follows the session panel’s
 responsive layout; on a phone it can sit below chat or expand with the panel.
 
-The reader includes descriptions, discussion comments, published inline PR
-review comments with file and diff context, commit comments, and expandable
-file diffs. The header separates the item state, author, change counts, and PR
-branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
+The reader shows the title and description first, while checks and discussion
+load independently. A quiet skeleton keeps the layout recognizable on a cold
+open. File diffs load when you select **Files** or scroll near that section.
+The reader includes discussion comments, published inline PR review comments
+with file and diff context, commit comments, and expandable file diffs. The
+header separates the item state, author, change counts, and PR branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
 to the relevant section without leaving the reader.
 
 Pull requests show check runs and commit statuses for the exact head commit.
@@ -60,7 +62,11 @@ Expand the checks summary to inspect individual results and open their source
 logs. Failed checks expand by default. Pending, failed, passed, skipped, empty,
 and unavailable results remain distinct; a partial response never implies that
 all checks passed. These results describe CI, not approval or merge readiness.
-Use **Refresh** to fetch the current PR and its checks again.
+Use **Refresh** to fetch the current PR and its checks again. The previous
+document stays readable while refreshing, with previous results labeled until
+replaced. A changed head never inherits checks or diffs from the old head.
+Retryable section failures stay beside the affected content; access or identity
+failures clear the document.
 
 Descriptions and replies render named emoji shortcodes such as `:white_check_mark:`
 and `:rocket:` in prose, tables, link labels, and disclosure summaries. Code, URLs,
@@ -81,10 +87,21 @@ or app widgets.
 
 ## Ask the agent to read an item
 
-Give the agent a public GitHub issue, pull request, or commit URL. The
+Give the agent a public GitHub issue, pull request, commit, or Actions workflow-job URL. The
 `github_read` tool reads it through the Gateway and returns the title, description,
 applicable discussion and review comments, file changes, and pull request checks.
 It accepts `url` and optional `refresh: true` to fetch current content.
+
+For an Actions URL such as
+`https://github.com/OWNER/REPO/actions/runs/RUN_ID/job/JOB_ID`, the reader returns
+the completed job's name, run/job IDs, conclusion, commit SHA, and complete lines
+from the last 64 KiB of its log. Earlier output is explicitly marked omitted with
+`partial` and `bodyTruncated`. Logs are fetched fresh, redacted, and treated as
+untrusted content; they do not establish that omitted output was read. Running,
+expired, deleted, or inaccessible logs return an error. GitHub may require the
+selected identity to have Actions read access even for a public job. The Gateway
+keeps download URLs and credentials private. Job links in the UI continue to open
+on GitHub; this tool does not rerun jobs or download log archives.
 
 This tool works for permitted sandboxed agents without GitHub credentials or
 outbound network access inside the sandbox. The Gateway selects the invoking
@@ -171,13 +188,19 @@ hovercard, and GitHub links open externally.
 - Hover previews are shared for one minute across readers using the same GitHub
   identity. Concurrent requests share a fetch, but each reader must still have
   access when the result arrives. Expired previews can appear with a stale marker
-  while one background refresh runs. Cached delivery checks the current credential
+  while one background refresh runs. The hovercard displays that cached response
+  immediately; reopening or prefetching it after the 30-second stale-cache backoff
+  reads the refreshed metadata. An already-open card does not poll for updates.
+  Cached delivery checks the current credential
   once; each upstream dispatch also checks it. **Refresh** waits for current metadata.
   Refreshes use GitHub ETags for unchanged item and commit responses; identity
   changes, eviction, or a failed refresh retire those cached responses. Repository
   visibility is checked again for every authenticated refresh.
-  Refreshes reuse author and coauthor avatars for up to five minutes when the
-  corresponding item or commits are unchanged.
+  Anonymous author and coauthor avatars are shared across previews for five minutes,
+  including concurrent reads and previews of different items. Expired images remain
+  visible while one background refresh runs; updated images appear with a subsequent
+  preview load. Metadata and repository access checks remain scoped to the selected
+  GitHub identity.
 - Slow preview reads (500 ms or longer) log phase durations for identity preparation,
   cache/load wait, delivery credential checks, metadata rendering, optional decoration,
   and upstream authentication/network waits. Network timings cover response headers;
@@ -195,3 +218,18 @@ GitHub uses the generic docked link-reader contribution in the
 [Plugin SDK](/plugins/sdk-overview/host-hooks#docked-link-readers). The plugin owns URL matching, GitHub API
 requests, caching, and mapping source data into the passive reader model. The
 Control UI owns tabs, layout, safe rendering, and keyboard interaction.
+
+## Session-bound Enterprise previews
+
+When `gateway.github.host` selects an Enterprise host, the plugin also advertises
+an exact-host, session-scoped reader. It uses the foreground session's repository
+and the selected GitHub App identity. Factory requests require the current signed-in
+operator's `session-item-read` proof and existing repository admission; a pasted
+URL cannot select another repository or borrow a different person's credentials.
+
+Private previews finish under that request's authority. Their UI cache is scoped
+to the connection, agent, and session; document caches also include the host,
+repository, and prepared reader identity. Access denial stays an error, rather than
+falling back to anonymous page metadata. Repository redirects require reopening
+an updated session target. Public `github.preview`, `github_read`, and
+`github_search` retain their public-repository contracts.

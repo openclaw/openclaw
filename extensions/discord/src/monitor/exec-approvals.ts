@@ -1,15 +1,18 @@
-import { ButtonStyle } from "discord-api-types/v10";
+import { ComponentType } from "discord-api-types/v10";
 import {
   resolveApprovalOverGateway,
   type ApprovalResolveResult,
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { PendingApprovalView } from "openclaw/plugin-sdk/approval-handler-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  formatApprovalDecisionLabel,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { parseExecApprovalData } from "../approval-custom-id.js";
+import { DISCORD_APPROVAL_DECISIONS, parseExecApprovalData } from "../approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
@@ -19,14 +22,11 @@ import {
   hasDiscordApprovalControl,
 } from "../approval-message-updates.js";
 import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
-import {
-  Button,
-  Container,
-  Separator,
-  TextDisplay,
-  type ButtonInteraction,
-  type ComponentData,
-  type MessagePayloadObject,
+import type {
+  BaseMessageInteractiveComponent,
+  BaseComponentInteraction,
+  ComponentData,
+  MessagePayloadObject,
 } from "../internal/discord.js";
 import { replySilently } from "./agent-components-reply.js";
 
@@ -45,11 +45,8 @@ type ExecApprovalResolveResult =
   | { ok: false; reason: "error" | "not-found" };
 
 function resolveTerminalLabel(approval: ApprovalResolveResult["approval"]): string {
-  if (approval.status === "allowed") {
-    return approval.decision === "allow-always" ? "Allowed always" : "Allowed once";
-  }
-  if (approval.status === "denied") {
-    return "Denied";
+  if (approval.status === "allowed" || approval.status === "denied") {
+    return formatApprovalDecisionLabel(approval.decision);
   }
   return approval.status === "expired" ? "Expired" : "Cancelled";
 }
@@ -61,23 +58,26 @@ function buildTerminalPayload(params: {
   const { approval } = params;
   const label = resolveTerminalLabel(approval);
   const accentColor =
-    approval.status === "denied"
-      ? "#ED4245"
-      : approval.status === "allowed"
-        ? "#57F287"
-        : "#99AAB5";
+    approval.status === "denied" ? 0xed4245 : approval.status === "allowed" ? 0x57f287 : 0x99aab5;
   return {
     allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS,
     components: [
-      new Container(
-        [
-          new TextDisplay(params.applied ? "## Approval resolved" : "## Approval already resolved"),
-          new TextDisplay(`Recorded result: **${label}**`),
-          new Separator({ divider: false, spacing: "small" }),
-          new TextDisplay(`-# ID: ${formatDiscordApprovalDisplayValue(approval.id)}`),
+      {
+        type: ComponentType.Container,
+        accent_color: accentColor,
+        components: [
+          {
+            type: ComponentType.TextDisplay,
+            content: params.applied ? "## Approval resolved" : "## Approval already resolved",
+          },
+          { type: ComponentType.TextDisplay, content: `Recorded result: **${label}**` },
+          { type: ComponentType.Separator, divider: false, spacing: 1 },
+          {
+            type: ComponentType.TextDisplay,
+            content: `-# ID: ${formatDiscordApprovalDisplayValue(approval.id)}`,
+          },
         ],
-        { accentColor },
-      ),
+      },
     ],
   };
 }
@@ -98,109 +98,98 @@ function isStructuredApprovalNotFoundError(err: unknown): boolean {
   );
 }
 
-class ExecApprovalButton extends Button {
-  override label = "execapproval";
-  customId = "execapproval:seed=1";
-  override style = ButtonStyle.Primary;
-
-  constructor(private readonly ctx: ExecApprovalButtonContext) {
-    super();
-  }
-
-  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
-    const parsed = parseExecApprovalData(data);
-    if (!parsed) {
-      await replySilently(interaction, {
-        content: "This approval is no longer valid.",
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const approvers = this.ctx.getApprovers();
-    const userId = interaction.userId;
-    if (!approvers.some((id) => id === userId)) {
-      await replySilently(interaction, {
-        content: "⛔ You are not authorized to approve requests.",
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const decisionLabel =
-      parsed.action === "allow-once"
-        ? "Allowed (once)"
-        : parsed.action === "allow-always"
-          ? "Allowed (always)"
-          : "Denied";
-
-    try {
-      await interaction.acknowledge();
-    } catch {
-      // A failed Discord acknowledgement must not discard an approval decision.
-    }
-
-    const result = await this.ctx.resolveApproval(
-      parsed.approvalId,
-      parsed.approvalKind,
-      parsed.action,
-      userId,
-    );
-    if (!result.ok) {
-      try {
-        await interaction.followUp({
-          content:
-            result.reason === "not-found"
-              ? `That approval request is no longer pending. It may have expired or already been resolved.`
-              : `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
+export function createExecApprovalButton(
+  ctx: ExecApprovalButtonContext,
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.Button,
+    customId: "execapproval:seed=1",
+    async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
+      const parsed = parseExecApprovalData(data);
+      if (!parsed) {
+        await replySilently(interaction, {
+          content: "This approval is no longer valid.",
           ephemeral: true,
         });
-      } catch {
-        // The Gateway result is authoritative even if Discord feedback fails.
+        return;
       }
-      return;
-    }
-    const terminalLabel = resolveTerminalLabel(result.resolution.approval);
-    let terminalized = false;
-    try {
-      if (interaction.message) {
-        terminalized = await discordApprovalMessageUpdates.enqueue(
-          interaction.message.id,
-          async () => {
-            // A native application update may have finished while resolution was awaited.
-            if (!hasDiscordApprovalControl(await interaction.fetchReply(), parsed)) {
-              return false;
-            }
-            await interaction.editReply(
-              buildTerminalPayload({
-                approval: result.resolution.approval,
-                applied: result.resolution.applied,
-              }),
-            );
-            return true;
-          },
-        );
-      }
-    } catch {
-      // The approval is already resolved; fall back to a separate receipt below.
-    }
-    if (!terminalized || !result.resolution.applied) {
-      try {
-        await interaction.followUp({
-          content: result.resolution.applied
-            ? `Approval resolved: ${terminalLabel}.`
-            : `This approval was already resolved: ${terminalLabel}.`,
+
+      const approvers = ctx.getApprovers();
+      const userId = interaction.userId;
+      if (!approvers.some((id) => id === userId)) {
+        await replySilently(interaction, {
+          content: "⛔ You are not authorized to approve requests.",
           ephemeral: true,
         });
-      } catch {
-        // Resolving an approval does not depend on delivering its receipt.
+        return;
       }
-    }
-  }
-}
 
-export function createExecApprovalButton(ctx: ExecApprovalButtonContext): Button {
-  return new ExecApprovalButton(ctx);
+      const decisionLabel = DISCORD_APPROVAL_DECISIONS[parsed.action].label;
+
+      try {
+        await interaction.acknowledge();
+      } catch {
+        // A failed Discord acknowledgement must not discard an approval decision.
+      }
+
+      const result = await ctx.resolveApproval(
+        parsed.approvalId,
+        parsed.approvalKind,
+        parsed.action,
+        userId,
+      );
+      if (!result.ok) {
+        try {
+          await interaction.followUp({
+            content:
+              result.reason === "not-found"
+                ? `That approval request is no longer pending. It may have expired or already been resolved.`
+                : `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
+            ephemeral: true,
+          });
+        } catch {
+          // The Gateway result is authoritative even if Discord feedback fails.
+        }
+        return;
+      }
+      const terminalLabel = resolveTerminalLabel(result.resolution.approval);
+      let terminalized = false;
+      try {
+        if (interaction.message) {
+          terminalized = await discordApprovalMessageUpdates.enqueue(
+            interaction.message.id,
+            async () => {
+              // A native application update may have finished while resolution was awaited.
+              if (!hasDiscordApprovalControl(await interaction.fetchReply(), parsed)) {
+                return false;
+              }
+              await interaction.editReply(
+                buildTerminalPayload({
+                  approval: result.resolution.approval,
+                  applied: result.resolution.applied,
+                }),
+              );
+              return true;
+            },
+          );
+        }
+      } catch {
+        // The approval is already resolved; fall back to a separate receipt below.
+      }
+      if (!terminalized || !result.resolution.applied) {
+        try {
+          await interaction.followUp({
+            content: result.resolution.applied
+              ? `Approval resolved: ${terminalLabel}.`
+              : `This approval was already resolved: ${terminalLabel}.`,
+            ephemeral: true,
+          });
+        } catch {
+          // Resolving an approval does not depend on delivering its receipt.
+        }
+      }
+    },
+  };
 }
 
 export function createDiscordExecApprovalButtonContext(params: {

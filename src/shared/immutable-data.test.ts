@@ -1,69 +1,86 @@
 import { describe, expect, it, vi } from "vitest";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData } from "./immutable-data.js";
+import {
+  freezeJsonSnapshot as freezeJson,
+  freezeTrustedJsonSnapshot as freezeTrusted,
+  isDeeplyFrozenPlainData,
+  isPlainData,
+} from "./immutable-data.js";
+
+function expectClassification(frozen: boolean, ...values: unknown[]) {
+  values.forEach((value) => expect(isDeeplyFrozenPlainData(value)).toBe(frozen));
+}
 
 describe("immutable plain data", () => {
-  it("inspects mutable plain data without freezing or memoizing it", () => {
+  it("inspects mutable data without freezing or memoizing it", () => {
     const value = { child: { field: 1 } };
     expect(isPlainData(value)).toBe(true);
-    expect(isDeeplyFrozenPlainData(value)).toBe(false);
+    expectClassification(false, value);
     Object.defineProperty(value.child, "field", { get: () => 2 });
-    expect(isPlainData(value)).toBe(false);
-    expect(Object.isFrozen(value)).toBe(false);
+    expect([isPlainData(value), Object.isFrozen(value)]).toEqual([false, false]);
   });
 
-  it("freezes shared and cyclic snapshots without retaining mutable aliases", () => {
+  it.each(["inspected", "trusted", "shallow trusted"])("freezes %s shared cycles", (mode) => {
+    const freeze = mode === "inspected" ? freezeJson : freezeTrusted;
     const child = { value: 1 };
-    const snapshot = { child, children: [child], self: {} };
+    const known = freezeJson({ value: 1 });
+    const snapshot = { child, known, children: [child], self: {} };
     snapshot.self = snapshot;
-    expect(isDeeplyFrozenPlainData(snapshot)).toBe(false);
-    expect(freezeJsonSnapshot(snapshot)).toBe(snapshot);
-    expect(isDeeplyFrozenPlainData(snapshot)).toBe(true);
-    expect(isDeeplyFrozenPlainData(child)).toBe(true);
+    if (mode === "shallow trusted") {
+      Object.freeze(snapshot);
+    }
+    expectClassification(false, snapshot);
+    expect(freeze(snapshot)).toBe(snapshot);
+    expectClassification(true, snapshot, child);
     expect(isPlainData(snapshot.children)).toBe(true);
-    expect(Object.isFrozen(child)).toBe(true);
-    expect(Object.isFrozen(snapshot.children)).toBe(true);
+    expect([child, snapshot.children].map(Object.isFrozen)).toEqual([true, true]);
     expect(() => {
       child.value = 2;
     }).toThrow(TypeError);
-    expect(isDeeplyFrozenPlainData({ child })).toBe(false);
-    const republished = freezeJsonSnapshot({ child, children: snapshot.children });
+    expectClassification(false, { child });
+    const republished = freeze({ child, children: snapshot.children });
     expect(republished.child).toBe(child);
     expect(republished.children).toBe(snapshot.children);
-    expect(isDeeplyFrozenPlainData(republished)).toBe(true);
+    expectClassification(true, republished);
+    expect(snapshot.known).toBe(known);
+    expect(freezeJson({ snapshot }).snapshot).toBe(snapshot);
   });
 
-  it("freezes deeply nested snapshots without using the call stack", () => {
-    let snapshot: { child?: object } = {};
-    for (let depth = 0; depth < 12_000; depth++) {
-      snapshot = { child: snapshot };
-    }
-    freezeJsonSnapshot(snapshot);
-    expect(isDeeplyFrozenPlainData(snapshot)).toBe(true);
-  });
+  it.each([freezeJson, freezeTrusted])(
+    "%s freezes oversized cycles without recursion",
+    (freeze) => {
+      const leaf: { child?: object } = {};
+      let snapshot = leaf;
+      // Eviction must not discard cycle detection during a graph larger than the memo.
+      for (let depth = 0; depth < 300_000; depth++) {
+        snapshot = { child: snapshot };
+      }
+      leaf.child = snapshot;
+      freeze(snapshot);
+      expectClassification(true, snapshot, leaf);
+      expect(Object.isFrozen(leaf)).toBe(true);
+    },
+  );
 
-  it("never classifies opaque or accessor-bearing graphs as immutable plain data", () => {
+  it("rejects opaque/accessor graphs without invoking traps", () => {
     const getter = vi.fn(() => ({ mutable: true }));
     const proxyTrap = vi.fn(() => {
       throw new Error("opaque proxy visited");
     });
-    for (const opaque of [
-      new Date(),
-      new Map(),
-      () => 1,
-      new Proxy({}, { getPrototypeOf: proxyTrap, ownKeys: proxyTrap, isExtensible: proxyTrap }),
-    ]) {
-      expect(isDeeplyFrozenPlainData(opaque)).toBe(false);
+    const proxy = new Proxy(
+      {},
+      { getPrototypeOf: proxyTrap, ownKeys: proxyTrap, isExtensible: proxyTrap },
+    );
+    for (const opaque of [new Date(), new Map(), () => 1, proxy]) {
+      expectClassification(false, opaque);
       const snapshot = { child: { opaque }, valid: { value: 1 } };
-      freezeJsonSnapshot(snapshot);
+      freezeJson(snapshot);
       expect(Object.isFrozen(snapshot.valid)).toBe(true);
-      expect(isDeeplyFrozenPlainData(snapshot)).toBe(false);
-      expect(isDeeplyFrozenPlainData(snapshot.child)).toBe(false);
+      expectClassification(false, snapshot, snapshot.child);
     }
     const accessor = Object.defineProperty({}, "child", { get: getter });
-    freezeJsonSnapshot(accessor);
-    expect(isDeeplyFrozenPlainData(accessor)).toBe(false);
-    expect(getter).not.toHaveBeenCalled();
-    expect(proxyTrap).not.toHaveBeenCalled();
+    freezeJson(accessor);
+    expectClassification(false, accessor);
+    expect([getter.mock.calls.length, proxyTrap.mock.calls.length]).toEqual([0, 0]);
   });
 
   it("checks every member of a frozen cycle before accepting it", () => {
@@ -71,22 +88,20 @@ describe("immutable plain data", () => {
     const root = { child: {}, mutable };
     root.child = Object.freeze({ root });
     Object.freeze(root);
-    expect(isDeeplyFrozenPlainData(root)).toBe(false);
+    expectClassification(false, root);
     mutable.value = 2;
-    expect(isDeeplyFrozenPlainData(root.child)).toBe(false);
+    expectClassification(false, root.child);
     Object.freeze(mutable);
-    expect(isDeeplyFrozenPlainData(root)).toBe(true);
-    expect(isDeeplyFrozenPlainData(root.child)).toBe(true);
+    expectClassification(true, root, root.child);
   });
 
-  it("does not trust frozen descendants that lead back to an opaque member", () => {
+  it("rejects frozen descendants that cycle back to opaque members", () => {
     const root = { child: {}, opaque: new Map([["key", { mutable: true }]]) };
     root.child = { root };
-    freezeJsonSnapshot(root);
+    freezeJson(root);
     expect(Object.isFrozen(root.child)).toBe(true);
-    expect(isDeeplyFrozenPlainData(root)).toBe(false);
-    expect(isDeeplyFrozenPlainData(root.child)).toBe(false);
-    expect(isDeeplyFrozenPlainData(freezeJsonSnapshot({ child: root.child }))).toBe(false);
+    expectClassification(false, root, root.child);
+    expectClassification(false, freezeJson({ child: root.child }));
     root.opaque.get("key")!.mutable = false;
     expect(root.opaque.get("key")).toEqual({ mutable: false });
   });

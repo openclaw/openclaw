@@ -52,7 +52,7 @@ field map and defaults.
   <Tab title="CLI (one-liners)">
     ```bash
     openclaw config get agents.defaults.workspace
-    openclaw config set agents.defaults.heartbeat.every "2h"
+    openclaw config set agents.defaults.userTimezone "Europe/Vienna"
     openclaw config unset plugins.entries.brave.config.webSearch.apiKey
     ```
   </Tab>
@@ -87,6 +87,11 @@ child summaries for drill-down tooling. Field `title`/`description` docs metadat
 carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
+
+Use `config.get` to read a redacted config snapshot without building the form
+schema. Request `config.schema` or `config.schema.lookup` when you need field
+metadata. The Gateway shares these results across clients and refreshes them
+when the active config or plugin generation changes.
 
 Every config leaf has a common or advanced presentation tier in `uiHints`.
 `advanced: false` marks common settings and `advanced: true` marks advanced
@@ -145,7 +150,7 @@ the page that now holds the content.
 - <a id="configure-sessions-and-resets" />[Configure sessions and resets](/gateway/configuration/common-tasks#configure-sessions-and-resets)
 - <a id="enable-sandboxing" />[Enable sandboxing](/gateway/configuration/common-tasks#enable-sandboxing)
 - <a id="enable-relay-backed-push-for-official-ios-builds" />[Enable relay-backed push for official iOS builds](/gateway/configuration/common-tasks#enable-relay-backed-push-for-official-ios-builds)
-- <a id="set-up-heartbeat-periodic-check-ins" />[Set up heartbeat (periodic check-ins)](/gateway/configuration/common-tasks#set-up-heartbeat-periodic-check-ins)
+- <a id="set-up-heartbeat-periodic-check-ins" />[Set up periodic check-ins](/gateway/configuration/common-tasks#set-up-heartbeat-periodic-check-ins)
 - <a id="configure-cron-jobs" />[Configure cron jobs](/gateway/configuration/common-tasks#configure-cron-jobs)
 - <a id="set-up-webhooks-hooks" />[Set up webhooks (hooks)](/gateway/configuration/common-tasks#set-up-webhooks-hooks)
 - <a id="configure-multi-agent-routing" />[Configure multi-agent routing](/gateway/configuration/common-tasks#configure-multi-agent-routing)

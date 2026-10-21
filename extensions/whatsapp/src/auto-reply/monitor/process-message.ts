@@ -26,7 +26,6 @@ import {
 import type { WhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import {
   resolveWhatsAppDirectSystemPrompt,
@@ -46,7 +45,6 @@ import {
   createWhatsAppReplyPlan,
   prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
-  resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
@@ -59,6 +57,7 @@ import {
   normalizeE164,
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContextAsync,
+  resolveIdentityNamePrefix,
   resolvePinnedMainDmOwnerFromAllowlist,
   isControlCommandMessage,
   shouldComputeCommandAuthorized,
@@ -309,24 +308,9 @@ export async function processMessage(params: {
       agentId: params.route.agentId,
       sessionKey: params.route.sessionKey,
       verbose: params.verbose,
-      info: params.replyLogger.info.bind(params.replyLogger),
       warn: params.replyLogger.warn.bind(params.replyLogger),
     });
   }
-
-  const correlationId = params.msg.event.id ?? newConnectionId();
-  params.replyLogger.info(
-    {
-      connectionId: params.connectionId,
-      correlationId,
-      from: conversationId,
-      to: params.msg.platform.recipientJid,
-      bodyLength: combinedBody.length,
-      mediaType: params.msg.payload.media?.type ?? null,
-      mediaPath: params.msg.payload.media?.path ?? null,
-    },
-    "inbound web message",
-  );
 
   const kindLabel = params.msg.payload.media?.type ? `, ${params.msg.payload.media?.type}` : "";
   whatsappInboundLog.info(
@@ -356,12 +340,15 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const responsePrefix = resolveWhatsAppResponsePrefix({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    isSelfChat: conversationKind !== "group" && inboundPolicy.isSelfChat,
-    pipelineResponsePrefix: replyPipeline.responsePrefix,
-  });
+  const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
+  const responsePrefix =
+    replyPipeline.responsePrefix ??
+    (configuredResponsePrefix === "auto"
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : configuredResponsePrefix) ??
+    (conversationKind !== "group" && inboundPolicy.isSelfChat
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : undefined);
   const replyThreading = resolveBatchedReplyThreadingPolicy(
     account.replyToMode ?? "off",
     params.msg.event.isBatched === true,

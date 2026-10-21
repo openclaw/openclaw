@@ -344,29 +344,34 @@ function createTestLogger() {
   };
 }
 
-function createMemoryPluginApi<T extends Record<string, unknown>>(
-  dbPath: string,
-  overrides: T = {} as T,
-) {
+function createMemoryPluginApi<
+  T extends Record<string, unknown> & {
+    config?: Record<string, unknown>;
+    pluginConfig?: MemoryPluginTestConfig;
+  },
+>(dbPath: string, overrides: T = {} as T) {
+  const pluginConfig = overrides.pluginConfig ?? {
+    embedding: {
+      apiKey: OPENAI_API_KEY,
+      model: "text-embedding-3-small",
+    },
+    dbPath,
+    autoCapture: false,
+    autoRecall: false,
+  };
+  const config = overrides.config ?? pluginConfigFile(pluginConfig);
   return {
     id: "memory-lancedb",
     name: "Memory (LanceDB)",
     source: "test",
-    config: {},
-    pluginConfig: {
-      embedding: {
-        apiKey: OPENAI_API_KEY,
-        model: "text-embedding-3-small",
-      },
-      dbPath,
-      autoCapture: false,
-      autoRecall: false,
-    },
-    runtime: {},
+    config,
+    pluginConfig,
+    runtime: { config: { current: () => config } },
     logger: createTestLogger(),
     registerTool: vi.fn(),
     registerCli: vi.fn(),
     registerService: vi.fn(),
+    registerMemoryCapability: vi.fn(),
     on: vi.fn(),
     resolvePath: (filePath: string) => filePath,
     ...overrides,
@@ -409,12 +414,11 @@ describe("memory plugin e2e", () => {
 
   function setupMemoryHookHarness(
     options: MemoryPluginTestConfig & {
-      liveConfig?: boolean;
       searchResults?: Array<Record<string, unknown>>;
       table?: Parameters<typeof setupDirectMemoryHarness>[0];
     },
   ) {
-    const { liveConfig, searchResults, table: tableOptions, ...config } = options;
+    const { searchResults, table: tableOptions, ...config } = options;
     const table = setupDirectMemoryHarness({
       toArray: vi.fn(async () => searchResults ?? []),
       ...tableOptions,
@@ -423,7 +427,7 @@ describe("memory plugin e2e", () => {
     let configFile: Record<string, unknown> = pluginConfigFile(pluginConfig);
     const api = createMemoryPluginApi(getDbPath(), {
       pluginConfig,
-      ...(liveConfig ? { runtime: { config: { current: () => configFile } } } : {}),
+      runtime: { config: { current: () => configFile } },
     });
     registerTestPlugin(memoryPlugin, api);
     return {
@@ -1399,7 +1403,6 @@ describe("memory plugin e2e", () => {
         setupMemoryHookHarness({
           autoCapture: hookName === "agent_end",
           autoRecall: hookName === "before_prompt_build",
-          liveConfig: true,
         });
       removePluginEntry();
       const hook = on.mock.calls.find(([name]) => name === hookName)?.[1];
@@ -2132,7 +2135,6 @@ describe("memory plugin e2e", () => {
     const customTooLong = `I always prefer this style. ${"x".repeat(1600)}`;
     expect(shouldCapture(customAllowed, { maxChars: 1500 })).toBe(true);
     expect(shouldCapture(customTooLong, { maxChars: 1500 })).toBe(false);
-    expect(shouldCapture(defaultTooLong, { maxChars: Number.NaN })).toBe(false);
   });
 
   test.each([

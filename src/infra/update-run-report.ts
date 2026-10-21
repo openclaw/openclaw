@@ -120,7 +120,9 @@ export function resolveUpdateRunVerifiedServingVersion(
   const { recovery } = verification;
   return recovery?.serviceRestartSafe && recovery.service === "healthy"
     ? recovery.version
-    : verification.versionMatch && verification.readyz && verification.settled
+    : verification.versionMatch &&
+        (verification.coreReady ?? verification.readyz) &&
+        verification.settled
       ? verification.runningVersion
       : undefined;
 }
@@ -393,8 +395,13 @@ export function renderUpdateRunReport(
   )) {
     const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
     lines.push(bounded(failure, 300));
-    if (step.termination === "signal" && step.stderrTail) {
-      lines.push(`Stderr (${step.signal ?? "unknown signal"}):\n${step.stderrTail}`);
+    if (
+      step.stderrTail &&
+      (step.termination === "signal" || step.step === "candidate-state-snapshot")
+    ) {
+      lines.push(
+        `Stderr${step.termination === "signal" ? ` (${step.signal ?? "unknown signal"})` : ""}:\n${step.stderrTail}`,
+      );
     }
     lines.push(
       ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
@@ -432,6 +439,7 @@ export function renderUpdateRunReport(
         ? "channels ready"
         : "channels not ready",
     facts.readyz === undefined ? undefined : facts.readyz ? "HTTP ready" : "HTTP not ready",
+    facts.coreReady === undefined ? undefined : facts.coreReady ? "core ready" : "core not ready",
     facts.pluginErrors?.length
       ? `${facts.pluginErrors.length} plugin activation error(s)`
       : undefined,

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { customElement } from "lit/decorators.js";
+import { runInThisContext } from "node:vm";
+import { JSDOM } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
 import { isRepoOwnedRegistrationStack } from "./jsdom-compat.mts";
 import {
@@ -18,6 +19,28 @@ describe("jsdom custom element tracking", () => {
     expect(definitions?.some((entry) => entry.name === "openclaw-jsdom-contract-probe")).toBe(true);
   });
 
+  it("reports a rejected registration without hiding the native failure", () => {
+    const { window } = new JSDOM();
+    const registry = window.customElements;
+    trackCustomElementRegistry(registry);
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    const tag = "openclaw-duplicate-registration-probe";
+    try {
+      registry.define(tag, class extends window.HTMLElement {});
+      expect(report).not.toHaveBeenCalled();
+      expect(() => registry.define(tag, class extends window.HTMLElement {})).toThrow(
+        "This name has already been registered in the registry.",
+      );
+      expect(report).toHaveBeenCalledExactlyOnceWith(
+        "[jsdom-custom-elements:registration-failed]",
+        expect.objectContaining({ tag, alreadyDefined: true, trackedForCleanup: true }),
+      );
+    } finally {
+      report.mockRestore();
+      window.close();
+    }
+  });
+
   it.each(["direct", "spy", "forwarding-spy"] as const)(
     "drops repo-owned tags and keeps dependency-owned ones (%s define)",
     (wrapper) => {
@@ -26,7 +49,7 @@ describe("jsdom custom element tracking", () => {
         throw new Error("expected a jsdom registry");
       }
       const tag = `openclaw-repo-owned-probe-${wrapper}`;
-      const dependencyTag = `wa-dependency-probe-${crypto.randomUUID()}`;
+      const dependencyTag = `dependency-probe-${crypto.randomUUID()}`;
       const define = customElements.define.bind(customElements);
       const registration = wrapper === "direct" ? undefined : vi.spyOn(customElements, "define");
       if (wrapper === "forwarding-spy") {
@@ -41,7 +64,15 @@ describe("jsdom custom element tracking", () => {
         customElements.define(tag, class extends HTMLElement {});
         // Dependency packages are externalized and register once per worker, so their
         // definitions must survive a reset that the module graph cannot replay.
-        customElement(dependencyTag)(class extends HTMLElement {});
+        const registerDependency: (
+          registry: CustomElementRegistry,
+          name: string,
+          base: typeof HTMLElement,
+        ) => void = runInThisContext(
+          "(registry, name, base) => registry.define(name, class extends base {})",
+          { filename: "/repo/node_modules/custom-element-fixture/index.js" },
+        );
+        registerDependency(customElements, dependencyTag, HTMLElement);
       } finally {
         registration?.mockRestore();
       }
@@ -66,9 +97,7 @@ describe("jsdom custom element tracking", () => {
       ).toBe(true);
       expect(
         isRepoOwnedRegistrationStack(
-          stack(
-            "    at file:///repo/node_modules/@lit/reactive-element/decorators/custom-element.js:27:24",
-          ),
+          stack("    at file:///repo/node_modules/custom-element-fixture/index.js:27:24"),
         ),
       ).toBe(false);
       expect(isRepoOwnedRegistrationStack(undefined)).toBe(false);

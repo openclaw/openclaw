@@ -41,7 +41,6 @@ function visit(node, callback, owner) {
 /** Keep metadata reads on their existing owners; only immutable image bytes become build facts. */
 export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, parse }) {
   const doctor = {};
-  const sdk = {};
   const imageFiles = {};
   const imageDirectories = {};
   const secretEntrypoints = {};
@@ -99,25 +98,6 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
     }
     return false;
   };
-  const sdkOwner = fs
-    .readdirSync(path.join(runtimeRoot, "dist"))
-    .find((name) => /^sdk-alias-.*\.[cm]?js$/.test(name));
-  if (!sdkOwner) {
-    throw new Error("Missing standalone SDK dependency scanner");
-  }
-  const scannerSource = fs.readFileSync(path.join(runtimeRoot, "dist", sdkOwner), "utf8");
-  let dependencyPattern;
-  visit(parse(scannerSource, { ecmaVersion: "latest", sourceType: "module" }), (node) => {
-    if (
-      node.type === "VariableDeclarator" &&
-      node.id.name === "JS_STATIC_RELATIVE_DEPENDENCY_PATTERN"
-    ) {
-      dependencyPattern = node.init?.value;
-    }
-  });
-  if (!(dependencyPattern instanceof RegExp)) {
-    throw new Error("Unsupported SDK dependency scanner");
-  }
   // SDK aliases enumerate source filenames, then select an embedded built target.
   const extensionsRoot = path.join(runtimeRoot, "extensions");
   if (fs.existsSync(extensionsRoot)) {
@@ -171,36 +151,6 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
         bytes: bytes.toString("base64"),
       };
     }
-    if (!/^dist(?:-runtime)?\/plugin-sdk\/.+\.[cm]?js$/.test(entry)) {
-      continue;
-    }
-    const contents = fs.readFileSync(path.join(runtimeRoot, entry), "utf8");
-    const assets = [];
-    let complete = true;
-    for (const match of contents.matchAll(dependencyPattern)) {
-      const target = path.resolve(runtimeRoot, path.dirname(entry), match[1]);
-      if (!fs.existsSync(target)) {
-        complete = false;
-        continue;
-      }
-      const relative = path
-        .relative(runtimeRoot, fs.realpathSync(target))
-        .split(path.sep)
-        .join("/");
-      if (/\.[cm]?js$/.test(target)) {
-        if (!Object.hasOwn(embeddedPaths, relative)) {
-          throw new Error(`SDK dependency missing from image: ${entry} -> ${relative}`);
-        }
-      } else {
-        assets.push(relative);
-      }
-    }
-    sdk[entry] = {
-      complete,
-      assets: [...new Set(assets)].toSorted((left, right) =>
-        left < right ? -1 : left > right ? 1 : 0,
-      ),
-    };
   }
   for (const pluginRoot of pluginRoots) {
     const manifestPath = path.join(runtimeRoot, pluginRoot, "openclaw.plugin.json");
@@ -219,12 +169,11 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
       }
     }
   }
-  if (!Object.keys(doctor).length || !Object.keys(sdk).length) {
-    throw new Error("Missing standalone Doctor or SDK metadata facts");
+  if (!Object.keys(doctor).length) {
+    throw new Error("Missing standalone Doctor metadata facts");
   }
   const bootstrap = `(() => {
   const doctor = ${JSON.stringify(doctor)};
-  const sdk = ${JSON.stringify(sdk)};
   const imageFiles = ${JSON.stringify(imageFiles)};
   const imageDirectories = ${JSON.stringify(imageDirectories)};
   const secretEntrypoints = ${JSON.stringify(secretEntrypoints)};
@@ -359,21 +308,16 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
       hash: fact.hash, signature: { size: contents.length, mtimeMs: 0, ctimeMs: 0 } };
   };
   globalThis.__openclawStandaloneDoctorHash = (filename) => get(doctor, filename)?.hash;
-  globalThis.__openclawStandaloneSdkComplete = (filename, exists) => {
-    const fact = get(sdk, filename);
-    return fact ? fact.complete && fact.assets.every((asset) => exists(path.join(root, asset))) : undefined;
-  };
 })();\n`;
   return {
     bootstrap,
-    facts: { doctor, sdk },
     directories: Object.keys(imageDirectories)
       .filter((directory) => !directory.split("/").includes("node_modules"))
       .toSorted(),
     transform({ filename, contents }) {
       if (
         !moduleAdmissionPattern.test(contents) &&
-        !/checkDistPluginSdkArtifact|fileContentMatches|pluginCache(?:Exists|Stat|Lstat|Realpath)Sync|readPluginCache(?:File|Directory)|checkPluginCacheEntry|collectBundledPluginPublicSurfaceArtifacts|resolveBundledPluginGeneratedPath|resolveManagedToolsMcpServerConfig|candidateDirsFromArgv1|resolveHostPackageRoot|loadHookFromDir|prepareInternalHooks|resolveNodeEntrypointArg|resolveMxcLauncherPath|resolveResolverScriptPath|resolveSqliteWorkerModuleUrl|normalizePathCandidate|resolveOpenClawCliEntryPath|isContainedPluginPath|findDependencyPackageDir|hasStalePersistedPluginMetadataFiles/.test(
+        !/fileContentMatches|pluginCache(?:Exists|Stat|Lstat|Realpath)Sync|readPluginCache(?:File|Directory)|checkPluginCacheEntry|collectBundledPluginPublicSurfaceArtifacts|resolveBundledPluginGeneratedPath|resolveManagedToolsMcpServerConfig|candidateDirsFromArgv1|resolveHostPackageRoot|loadHookFromDir|prepareInternalHooks|resolveNodeEntrypointArg|resolveMxcLauncherPath|resolveResolverScriptPath|resolveSqliteWorkerModuleUrl|normalizePathCandidate|resolveOpenClawCliEntryPath|isContainedPluginPath|findDependencyPackageDir|hasStalePersistedPluginMetadataFiles/.test(
           contents,
         )
       ) {
@@ -743,29 +687,6 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
           ]);
           adaptedOwners.add(node);
         }
-        if (node.id?.name === "checkDistPluginSdkArtifact") {
-          const first = node.body.body[0];
-          const exists =
-            first.test?.type === "UnaryExpression" && first.test.operator === "!"
-              ? first.test.argument
-              : undefined;
-          if (
-            first.type !== "IfStatement" ||
-            node.params[0]?.type !== "Identifier" ||
-            exists?.type !== "CallExpression" ||
-            exists.arguments.length !== 1 ||
-            slice(exists.arguments[0]) !== slice(node.params[0]) ||
-            !resolvesTo(exists.callee, "pluginCacheExistsSync", ast, filename)
-          ) {
-            throw new Error("Unsupported SDK artifact existence check");
-          }
-          edits.push([
-            first.end,
-            first.end,
-            `\nconst __imageComplete = globalThis.__openclawStandaloneSdkComplete(${slice(node.params[0])}, ${slice(exists.callee)});\nif (__imageComplete !== undefined) return __imageComplete;\n`,
-          ]);
-          adaptedOwners.add(node);
-        }
         if (node.id?.name === "fileContentMatches") {
           const declaration = node.body.body.find(
             (statement) =>
@@ -807,7 +728,6 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
           [
             "readPluginCacheFile",
             "fileContentMatches",
-            "checkDistPluginSdkArtifact",
             "loadHookFromDir",
             "prepareInternalHooks",
             "resolveNodeEntrypointArg",

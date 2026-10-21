@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -32,7 +33,7 @@ async function collectSkillDirs(
   if (!dir) {
     return;
   }
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) {
       continue;
@@ -176,10 +177,16 @@ export async function applyGeneratedSkillItem(
         : path.basename(item.source);
     const skillName =
       typeof item.details?.skillName === "string" ? item.details.skillName : sanitizeName(item.id);
+    const bytes = await fs.readFile(item.source);
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        `Claude command file is not valid UTF-8: ${item.source}. Re-save or re-encode the file as UTF-8, then rerun the migration.`,
+      );
+    }
     const content = generatedCommandSkillContent({
       skillName,
       sourceLabel,
-      commandContent: await fs.readFile(item.source, "utf8"),
+      commandContent: bytes.toString("utf8"),
     });
     const backupPath = targetExists
       ? await backupMigrationItemTarget(item.target, reportDir, { dereference: true })

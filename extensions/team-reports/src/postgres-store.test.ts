@@ -6,6 +6,17 @@ import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-wo
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { bindReportFetch } from "./report-network.test-support.js";
+import { createGithubSource } from "./sources/github/index.js";
+import {
+  commit,
+  config,
+  emptyRoute,
+  json,
+  logger,
+  roster,
+  window,
+} from "./sources/github/responses.fixtures.js";
 import { exercise, report } from "./store-conformance.test-support.js";
 import { openTeamReportsDatabase, type createSqliteWorkerBackend } from "./store.worker.js";
 
@@ -36,8 +47,6 @@ function operations(database: ReturnType<typeof openTeamReportsDatabase>) {
           return database.latestSourceWarnings();
         case "latestPeople":
           return database.latestPeople();
-        case "getDayReports":
-          return database.getDayReports(command.input.sinceMs, command.input.untilMs);
         case "listPersonDays":
           return database.listPersonDays(command.input.login, command.input.options);
         case "listPersonDaysSince":
@@ -170,4 +179,52 @@ describe.skipIf(!connection)("Team Reports PostgreSQL runtime", () => {
       withEngineStoreAdmission(() => database.aggregateActivity(options)).totals.github.total,
     ).toBe(0);
   });
+
+  it.each(["sqlite", "postgres"] as const)(
+    "collects GitHub activity into %s and replaces duplicate events across batches",
+    async (engine) => {
+      const target =
+        engine === "postgres"
+          ? database
+          : openTeamReportsDatabase(path.join(directory, "github-source.sqlite"));
+      let title = "Original commit";
+      const source = bindReportFetch(createGithubSource({ logger }), async (request) => {
+        const url = new URL(request);
+        return url.pathname === "/repos/example/app/commits"
+          ? json([commit("first", title), commit("second", "Second commit")])
+          : emptyRoute(url);
+      });
+      try {
+        withEngineStoreAdmission(() => target.resetActivity());
+        const collect = () =>
+          source.collect(config, window, roster, async (entries) => {
+            withEngineStoreAdmission(() => target.appendActivity({ source: "github", entries }));
+          });
+        expect(await collect()).toMatchObject({ ok: true, warnings: [] });
+        title = "Updated commit";
+        const githubStatus = await collect();
+        expect(githubStatus).toMatchObject({ ok: true, warnings: [] });
+        const result = withEngineStoreAdmission(() =>
+          target.aggregateActivity({
+            period: report().period,
+            nowMs: report().generatedAtMs,
+            orgs: ["example"],
+            roster,
+            githubStatus,
+          }),
+        );
+        expect(result.totals.github.commits).toBe(2);
+        expect(result.members.find((member) => member.login === "builder")?.github.items).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ title: "Updated commit" }),
+            expect.objectContaining({ title: "Second commit" }),
+          ]),
+        );
+      } finally {
+        if (engine === "sqlite") {
+          target.close();
+        }
+      }
+    },
+  );
 });

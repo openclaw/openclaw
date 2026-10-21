@@ -5,13 +5,11 @@ import {
   createStyleSpan,
   mergeAnnotationSpans,
   mergeStyleSpans,
-  type MarkdownLinkSpan,
   type MarkdownStyle,
   type MarkdownStyleSpan,
+  type MarkdownTextEdit as TextEdit,
 } from "./ir-spans.js";
 import { appendMarkdownIR, type MarkdownIR } from "./ir.js";
-
-type TextEdit = { start: number; end: number; text: string };
 
 const STYLE_CONSTRUCTS: Partial<Record<MarkdownStyle, FormatConstruct>> = {
   bold: "bold",
@@ -54,29 +52,6 @@ function projectStyles(
     }
   }
   return synthesizedHeading ? mergeStyleSpans(projected) : projected;
-}
-
-function collectLinkFallbacks(
-  ir: MarkdownIR,
-  profile: FormatCapabilityProfile,
-): { links: MarkdownLinkSpan[]; edits: TextEdit[] } {
-  if (profile.constructs.linkLabel === "native") {
-    return { links: ir.links, edits: [] };
-  }
-  if (profile.constructs.linkLabel === "strip") {
-    return { links: [], edits: [] };
-  }
-  return {
-    links: [],
-    edits: ir.links.flatMap((link) => {
-      const href = link.href.trim();
-      const label = ir.text.slice(link.start, link.end).trim();
-      const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
-      return href && label && label !== href && label !== comparableHref
-        ? [{ start: link.end, end: link.end, text: ` (${href})` }]
-        : [];
-    }),
-  };
 }
 
 function collectListFallbacks(ir: MarkdownIR, profile: FormatCapabilityProfile): TextEdit[] {
@@ -147,9 +122,18 @@ export function applyConstructFallbacks(
     styles: projectStyles(ir.styles, profile),
   });
   const listProjected = applyTextEdits(styled, collectListFallbacks(styled, profile));
-  const linkProjection = collectLinkFallbacks(listProjected, profile);
-  return applyTextEdits(
-    copyHtmlTags(listProjected, { ...listProjected, links: linkProjection.links }),
-    linkProjection.edits,
-  );
+  const linkSupport = profile.constructs.linkLabel;
+  const links = linkSupport === "native" ? listProjected.links : [];
+  const linkEdits =
+    linkSupport === "native" || linkSupport === "strip"
+      ? []
+      : listProjected.links.flatMap((link) => {
+          const href = link.href.trim();
+          const label = listProjected.text.slice(link.start, link.end).trim();
+          const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
+          return href && label && label !== href && label !== comparableHref
+            ? [{ start: link.end, end: link.end, text: ` (${href})` }]
+            : [];
+        });
+  return applyTextEdits(copyHtmlTags(listProjected, { ...listProjected, links }), linkEdits);
 }

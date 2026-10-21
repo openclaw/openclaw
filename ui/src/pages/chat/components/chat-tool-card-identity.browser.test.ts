@@ -1,18 +1,13 @@
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { afterEach, expect, it } from "vitest";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
-const views = new Map<HTMLElement, () => void>();
 afterEach(() => {
-  for (const [container, unmount] of views) {
-    unmount();
-    container.remove();
-  }
-  views.clear();
+  cleanupSolid();
   window.getSelection()?.removeAllRanges();
 });
 
@@ -39,62 +34,53 @@ function fixture(mode: "inline" | "standalone") {
       },
     };
   });
-  const container = document.body.appendChild(document.createElement("div"));
-  let root: ReturnType<typeof mountSolid> | undefined;
   let refresh: () => void;
-  views.set(container, () => root?.unmount());
   const toggledKeys: string[] = [];
   const expansion = new Map<string, boolean>();
   for (const row of rows) {
     expansion.set(`${row.key}:toolcard:0`, true);
     expansion.set(`toolmsg:${row.key}`, true);
   }
-  const draw = () => {
-    if (root) {
-      refresh();
-      flush();
-    } else {
-      root = mountSolid(
-        () => {
-          const [revision, setRevision] = createSignal(0);
-          refresh = () => setRevision((value) => value + 1);
-          return rows.map((row) =>
-            createComponent(GroupedMessage, {
-              preparation: prepareChatMessageRender(row.message),
-              messageKey: row.key,
-              get options() {
-                revision();
-                return {
-                  isStreaming: false,
-                  showReasoning: false,
-                  showToolCalls: true,
-                  isToolExpanded: (key: string) => expansion.get(key) ?? false,
-                  isToolMessageExpanded: (key: string) => expansion.get(key),
-                  onToggleToolExpanded: toggle,
-                  onToggleToolMessageExpanded: toggle,
-                };
-              },
-            }),
-          );
+  const { container } = mountSolid(() => {
+    const [revision, setRevision] = createSignal(0);
+    refresh = () => setRevision((value) => value + 1);
+    return rows.map((row) =>
+      createComponent(GroupedMessage, {
+        preparation: prepareChatMessageRender(row.message),
+        messageKey: row.key,
+        get options() {
+          revision();
+          return {
+            isStreaming: false,
+            showReasoning: false,
+            showToolCalls: true,
+            isToolExpanded: (key: string) => expansion.get(key) ?? false,
+            isToolMessageExpanded: (key: string) => expansion.get(key),
+            onToggleToolExpanded: toggle,
+            onToggleToolMessageExpanded: toggle,
+          };
         },
-        { container },
-      );
-    }
-  };
+      }),
+    );
+  });
   function toggle(key: string) {
     toggledKeys.push(key);
     expansion.set(key, !expansion.get(key));
-    draw();
+    refresh();
+    flush();
   }
-  return { rows, container, draw, toggledKeys };
+  return { rows, container, toggledKeys };
 }
 
-describe
+const panel = (bubble: HTMLElement, name: string) =>
+  bubble.querySelector<HTMLElement>(`[role="tabpanel"][aria-labelledby$="-${name}-tab"]`)!;
+
+it
   .skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))
-  .each(["inline", "standalone"] as const)("%s tool message disclosures", (mode) => {
-  it("preserves message-scoped IDs and independent Raw tabs for reused call IDs", async () => {
-    const { rows, container, draw, toggledKeys } = fixture(mode);
-    draw();
+  .each(["inline", "standalone"] as const)(
+  "preserves %s message IDs and independent Raw tabs for reused call IDs",
+  async (mode) => {
+    const { rows, container, toggledKeys } = fixture(mode);
     await settleToolBridges(container);
     const bubbles = Array.from(container.querySelectorAll<HTMLElement>(".chat-bubble"));
     expect(bubbles.map((bubble) => bubble.dataset.messageId)).toEqual(rows.map((row) => row.key));
@@ -119,9 +105,9 @@ describe
       for (const bubble of bubbles) {
         for (const name of ["diff", "raw"]) {
           const tab = bubble.querySelector(`[role="tab"][data-tab-value="${name}"]`)!;
-          const panel = bubble.querySelector(`[role="tabpanel"][aria-labelledby$="-${name}-tab"]`)!;
-          expect(tab.getAttribute("aria-controls")).toBe(panel.id);
-          expect(panel.getAttribute("aria-labelledby")).toBe(tab.id);
+          const body = panel(bubble, name);
+          expect(tab.getAttribute("aria-controls")).toBe(body.id);
+          expect(body.getAttribute("aria-labelledby")).toBe(tab.id);
         }
       }
     });
@@ -141,27 +127,14 @@ describe
     bubbles[0]!.querySelector<HTMLButtonElement>('[role="tab"][data-tab-value="raw"]')!.click();
     await waitForSolid(() => {
       expect(
-        bubbles[0]!.querySelector<HTMLElement>('[role="tabpanel"][aria-labelledby$="-raw-tab"]')!
-          .hidden,
-      ).toBe(false);
-      expect(
-        bubbles[0]!.querySelector<HTMLElement>('[role="tabpanel"][aria-labelledby$="-diff-tab"]')!
-          .hidden,
-      ).toBe(true);
-      expect(
-        bubbles[1]!.querySelector<HTMLElement>('[role="tabpanel"][aria-labelledby$="-diff-tab"]')!
-          .hidden,
-      ).toBe(false);
-      expect(
-        bubbles[1]!.querySelector<HTMLElement>('[role="tabpanel"][aria-labelledby$="-raw-tab"]')!
-          .hidden,
-      ).toBe(true);
+        bubbles.map((bubble) => [panel(bubble, "diff").hidden, panel(bubble, "raw").hidden]),
+      ).toEqual([
+        [true, false],
+        [false, true],
+      ]);
     });
     expect(
-      bubbles.map(
-        (bubble) =>
-          bubble.querySelector('[role="tabpanel"][aria-labelledby$="-raw-tab"] code')!.textContent,
-      ),
+      bubbles.map((bubble) => panel(bubble, "raw").querySelector("code")!.textContent),
     ).toEqual(rows.map((row) => row.output));
-  });
-});
+  },
+);

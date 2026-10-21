@@ -1,6 +1,6 @@
 -- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-CREATE FUNCTION "openclaw_transcript_navigation_check"(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $navigation$
+CREATE FUNCTION "openclaw_transcript_navigation_check"(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog AS $navigation$
 WITH input AS (SELECT CASE WHEN navigation_json IS JSON THEN navigation_json::json END AS document),
 members AS (SELECT (SELECT member.value FROM json_each(CASE WHEN json_typeof(document) = 'object' THEN document ELSE '{}'::json END) WITH ORDINALITY AS member(key, value, position) WHERE member.key = 'version' ORDER BY member.position LIMIT 1) AS "j_version",
 (SELECT member.value FROM json_each(CASE WHEN json_typeof(document) = 'object' THEN document ELSE '{}'::json END) WITH ORDINALITY AS member(key, value, position) WHERE member.key = 'modelBytes' ORDER BY member.position LIMIT 1) AS "j_modelBytes",
@@ -607,6 +607,9 @@ CREATE TABLE "trajectory_runtime_events" (
   "run_id" text COLLATE "C",
   "event_json" text COLLATE "C" NOT NULL,
   "created_at" bigint NOT NULL,
+  "event_utf8_bytes" bigint,
+  "event_payload" bytea,
+  "event_codec" text COLLATE "C",
   PRIMARY KEY ("session_id", "seq")
 );
 
@@ -703,8 +706,6 @@ CREATE INDEX "idx_agent_session_nodes_entry_valid_pending" ON "session_nodes" ((
 
 CREATE INDEX "idx_agent_session_nodes_label" ON "session_nodes" (("label") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST) WHERE "label" IS NOT NULL;
 
-CREATE INDEX "idx_agent_session_nodes_last_interaction_at" ON "session_nodes" (("last_interaction_at") DESC NULLS LAST, ("session_key") ASC NULLS FIRST);
-
 CREATE INDEX "idx_agent_session_nodes_parent_session_key" ON "session_nodes" (("parent_session_key") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_session_nodes_spawned_by" ON "session_nodes" (("spawned_by") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
@@ -714,8 +715,6 @@ CREATE INDEX "idx_agent_session_nodes_status" ON "session_nodes" (("status") ASC
 CREATE INDEX "idx_agent_session_nodes_updated_at" ON "session_nodes" (("updated_at") DESC NULLS LAST, ("session_key") ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_session_pending_inputs_session" ON "session_pending_inputs" (("session_key") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("seq") DESC NULLS LAST);
-
-CREATE INDEX "idx_agent_session_reactions_message" ON "session_reactions" (("session_key") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("message_id") ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_session_suggestions_author_created" ON "session_suggestions" (("author_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("id") ASC NULLS FIRST);
 
@@ -733,7 +732,7 @@ CREATE INDEX "idx_agent_session_transcript_archives_retention" ON "session_trans
 
 CREATE INDEX "idx_session_transcript_fts_rows_session_message" ON "session_transcript_fts_rows" (("session_id") ASC NULLS FIRST, ("message_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_session_windows_conversation" ON "session_windows" (("primary_conversation_id") ASC NULLS FIRST, ("updated_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST) WHERE "primary_conversation_id" IS NOT NULL;
+CREATE INDEX "idx_agent_session_windows_conversation" ON "session_windows" (("primary_conversation_id") ASC NULLS FIRST) WHERE "primary_conversation_id" IS NOT NULL;
 
 CREATE INDEX "idx_agent_session_windows_created_at" ON "session_windows" (("created_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST);
 
@@ -745,11 +744,9 @@ CREATE INDEX "idx_standing_intents_lifecycle" ON "standing_intents" (("status") 
 
 CREATE INDEX "idx_standing_intents_scope" ON "standing_intents" (("status") ASC NULLS FIRST, ("channel_scope") ASC NULLS FIRST, ("sender_scope") ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_trajectory_runtime_run" ON "trajectory_runtime_events" (("session_id") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, (octet_length("event_json")) ASC NULLS FIRST);
+CREATE INDEX "idx_agent_trajectory_runtime_run" ON "trajectory_runtime_events" (("session_id") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, (coalesce("event_utf8_bytes", octet_length("event_json"))) ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_transcript_event_identity_sequence" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("seq") ASC NULLS FIRST);
-
-CREATE INDEX "idx_agent_transcript_event_parent" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("parent_id") ASC NULLS FIRST) WHERE "parent_id" IS NOT NULL;
 
 CREATE INDEX "idx_agent_transcript_event_sequence" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("event_type") ASC NULLS FIRST, ("seq") DESC NULLS LAST);
 
@@ -811,20 +808,6 @@ ALTER TABLE "transcript_events" ADD FOREIGN KEY ("session_id") REFERENCES "sessi
 
 ALTER TABLE "transcript_rewrite_watermarks" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
-CREATE FUNCTION "openclaw_memory_index_chunks_trigger"() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $trigger$
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-  RETURN NULL;
-END;
-$trigger$;
-
-CREATE FUNCTION "openclaw_memory_index_sources_trigger"() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $trigger$
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-  RETURN NULL;
-END;
-$trigger$;
-
 CREATE FUNCTION "openclaw_session_conversations_trigger"() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $trigger$
 BEGIN
   UPDATE session_conversations SET route_context_json = NULL WHERE session_id = NEW.session_id AND conversation_id = NEW.conversation_id AND role = NEW.role;
@@ -844,18 +827,6 @@ BEGIN
   RETURN NULL;
 END;
 $trigger$;
-
-CREATE TRIGGER "memory_index_chunks_revision_after_delete" AFTER DELETE ON "memory_index_chunks" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_chunks_trigger"();
-
-CREATE TRIGGER "memory_index_chunks_revision_after_insert" AFTER INSERT ON "memory_index_chunks" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_chunks_trigger"();
-
-CREATE TRIGGER "memory_index_chunks_revision_after_update" AFTER UPDATE ON "memory_index_chunks" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_chunks_trigger"();
-
-CREATE TRIGGER "memory_index_sources_revision_after_delete" AFTER DELETE ON "memory_index_sources" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_sources_trigger"();
-
-CREATE TRIGGER "memory_index_sources_revision_after_insert" AFTER INSERT ON "memory_index_sources" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_sources_trigger"();
-
-CREATE TRIGGER "memory_index_sources_revision_after_update" AFTER UPDATE ON "memory_index_sources" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_sources_trigger"();
 
 CREATE TRIGGER "session_conversations_route_context_invalidate_after_update" AFTER UPDATE OF "role", "last_seen_at" ON "session_conversations" FOR EACH ROW WHEN (NEW.route_context_json IS NOT DISTINCT FROM OLD.route_context_json) EXECUTE FUNCTION "openclaw_session_conversations_trigger"();
 

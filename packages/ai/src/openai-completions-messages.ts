@@ -10,7 +10,7 @@ import type {
 import { isImageWithMediaPayload } from "./media-payload.js";
 import { preparedRequestSuffix } from "./provider-options.js";
 import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
-import type { ProviderMessage } from "./provider-types.js";
+import type { ProviderContext, ProviderMessage, ProviderModel } from "./provider-types.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
@@ -20,8 +20,6 @@ import {
   hasRuntimeContextMarker,
   isRuntimeContextMessage,
   runtimeContextContentToText,
-  type Context,
-  type Model,
   type ThinkingContent,
   type ToolCall,
 } from "./types.js";
@@ -38,7 +36,7 @@ type ChatCompletionContentPartVideo = {
 };
 
 /** Whether replayed messages require a tools marker for proxy compatibility. */
-export function hasToolCallHistory(messages: Context["messages"]): boolean {
+export function hasToolCallHistory(messages: ProviderContext["messages"]): boolean {
   return messages.some(
     (message) =>
       message.role === "toolResult" ||
@@ -50,17 +48,21 @@ export function hasToolCallHistory(messages: Context["messages"]): boolean {
 
 /** Convert a normalized transcript to OpenAI Chat Completions messages. */
 export function convertMessages(
-  model: Model<"openai-completions">,
-  context: Context,
+  model: ProviderModel,
+  context: ProviderContext,
   compat: ResolvedOpenAICompletionsCompat,
   options: {
     cacheOptOutIndexes?: Set<number>;
     preserveSystemPromptCacheBoundary?: boolean;
     supportsTools?: boolean;
+    declaredToolNames?: ReadonlySet<string>;
   } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
   const supportsTools = options.supportsTools !== false;
+  const declaredToolNames =
+    options.declaredToolNames ?? new Set(context.tools?.map((tool) => tool.name));
+  const toolNamesByCallId = new Map<string, string>();
 
   const normalizeToolCallId = (id: string): string => {
     // Responses ids can contain a pipe plus a long provider item id. Chat
@@ -176,7 +178,8 @@ export function convertMessages(
         } else if (block.type === "thinking" && block.thinking.trim().length > 0) {
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
-          if (supportsTools) {
+          toolNamesByCallId.set(block.id, block.name);
+          if (supportsTools && declaredToolNames.has(block.name)) {
             toolCalls.push(block);
           } else {
             assistantTexts.push(
@@ -260,6 +263,7 @@ export function convertMessages(
       const imageContentParts: Array<
         ChatCompletionContentPartText | { type: "image_url"; image_url: { url: string } }
       > = [];
+      const textResults: string[] = [];
       let j = i;
 
       while (j < transformedMessages.length) {
@@ -272,16 +276,20 @@ export function convertMessages(
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
-        if (supportsTools) {
+        const normalizedId = normalizeToolCallId(toolMsg.toolCallId);
+        const pairedToolName =
+          toolNamesByCallId.get(toolMsg.toolCallId) ?? toolNamesByCallId.get(normalizedId);
+        const isNativeResult =
+          pairedToolName !== undefined
+            ? declaredToolNames.has(pairedToolName)
+            : preparedRequestSuffix.hasToolCall(context, toolMsg.toolCallId) ||
+              preparedRequestSuffix.hasToolCall(context, normalizedId);
+        if (supportsTools && isNativeResult) {
           const toolResultMsg: ChatCompletionToolMessageParam = {
             role: "tool",
             content,
             tool_call_id: preparedRequestSuffix.has(context)
-              ? preparedRequestSuffix.toolCallId(
-                  context,
-                  toolMsg.toolCallId,
-                  normalizeToolCallId(toolMsg.toolCallId),
-                )
+              ? preparedRequestSuffix.toolCallId(context, toolMsg.toolCallId, normalizedId)
               : toolMsg.toolCallId,
           };
           if (compat.requiresToolResultName && toolMsg.toolName) {
@@ -289,18 +297,11 @@ export function convertMessages(
           }
           params.push(toolResultMsg);
         } else {
-          const text = sanitizeSurrogates(
-            `[tool result id=${toolMsg.toolCallId} name=${toolMsg.toolName}] ${content}`,
+          textResults.push(
+            sanitizeSurrogates(
+              `[tool result id=${toolMsg.toolCallId} name=${toolMsg.toolName}] ${content}`,
+            ),
           );
-          // Collapse before recording later cache exclusions and strict-key shaping.
-          const previous = params.at(-1);
-          if (previous?.role !== "assistant") {
-            params.push({ role: "assistant", content: text });
-          } else if (Array.isArray(previous.content)) {
-            previous.content.push({ type: "text", text });
-          } else {
-            previous.content = previous.content ? `${previous.content}\n${text}` : text;
-          }
         }
 
         if (images.length > 0 && model.input.includes("image")) {
@@ -321,9 +322,26 @@ export function convertMessages(
       }
 
       i = j - 1;
+      if (textResults.length > 0) {
+        // Native results must stay contiguous; collapse text before later cache indexes are recorded.
+        const previous = params.at(-1);
+        const text = textResults.join("\n");
+        if (previous?.role !== "assistant") {
+          params.push({ role: "assistant", content: text });
+        } else if (Array.isArray(previous.content)) {
+          previous.content.push(
+            ...textResults.map((result): ChatCompletionContentPartText => ({
+              type: "text",
+              text: result,
+            })),
+          );
+        } else {
+          previous.content = previous.content ? `${previous.content}\n${text}` : text;
+        }
+      }
 
       if (imageContentParts.length > 0) {
-        if (supportsTools && compat.requiresAssistantAfterToolResult) {
+        if (supportsTools && textResults.length === 0 && compat.requiresAssistantAfterToolResult) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
         params.push({
@@ -332,7 +350,7 @@ export function convertMessages(
         });
         lastRole = "user";
       } else {
-        lastRole = supportsTools ? "toolResult" : "assistant";
+        lastRole = supportsTools && textResults.length === 0 ? "toolResult" : "assistant";
       }
       continue;
     }

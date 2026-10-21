@@ -1,7 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
-import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  createCliHistoryOwnerProbe,
+  runWithCliHistoryWriter,
+} from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
+import { readStagedConversationPublications } from "../../config/sessions/session-accessor.sqlite-conversation-publication.js";
 import { ensureSessionEntryInTransaction } from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
 import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
 import {
@@ -23,6 +27,7 @@ import {
   parseTranscriptAppendRefusal,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/session-transcript-writer-claim-error.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -68,25 +73,59 @@ export function bindSqliteWorkerBackend(
   _input: undefined,
   nativeContext: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
   },
 ): Omit<SqliteWorkerBackend<SessionMetadataWorkerOperations>, "close"> & { close(): undefined } {
   let entryChanges: readonly SessionRowChange[] = [];
+  // The current command's owner probe. It rides on the single transaction admission, so the
+  // host answers before the transaction writes; an unanswered probe never confirms the owner.
+  let ownerProbe: ReturnType<typeof createCliHistoryOwnerProbe> | undefined;
+  const withOwnerProbe = (
+    stage: "transaction" | "commit",
+    restriction: AgentDatabaseAdmissionRestriction | undefined,
+  ): AgentDatabaseAdmissionRestriction | undefined => {
+    const probe = stage === "transaction" ? ownerProbe : undefined;
+    if (!probe) {
+      return restriction;
+    }
+    return (request, dispatch) => {
+      const attach = (restricted: typeof request) =>
+        dispatch({
+          ...restricted,
+          facts: {
+            ...(isRecord(restricted.facts) ? restricted.facts : {}),
+            cliHistoryOwnerProbe: probe.fact,
+          },
+        });
+      if (restriction) {
+        restriction(request, attach);
+      } else {
+        attach(request);
+      }
+    };
+  };
   const context = {
     ...nativeContext,
     checkMessage: (facts: unknown) =>
       withoutSqliteDatabaseWriteScope(nativeContext.database, () =>
         requestSqliteWorkerOperationAdmission({ stage: "prepare", facts }),
       ),
-    admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction) {
+    admit(stage: "transaction" | "commit", domainRestriction?: AgentDatabaseAdmissionRestriction) {
+      const restriction = withOwnerProbe(stage, domainRestriction);
       const transcriptPublication =
         stage === "commit"
           ? (readStagedSessionTranscriptAuthority({ db: context.database }) ?? [])
           : [];
       const entryPublication =
         stage === "commit" ? captureSessionEntryMetadataReceipts(entryChanges) : [];
-      if (!transcriptPublication.length && !entryPublication.length) {
+      const conversationPublication =
+        stage === "commit" ? readStagedConversationPublications({ db: context.database }) : [];
+      if (
+        !transcriptPublication.length &&
+        !entryPublication.length &&
+        !conversationPublication.length
+      ) {
         withoutSqliteDatabaseWriteScope(context.database, () =>
           nativeContext.admit(stage, restriction),
         );
@@ -96,6 +135,7 @@ export function bindSqliteWorkerBackend(
         kind: "session-manager-authority",
         transcriptPublication,
         entryPublication,
+        conversationPublication,
       };
       boundSessionEntryMetadataReceipts(entryPublication, publication);
       deferSqliteWorkerCommitReceipt(context.database, publication);
@@ -170,9 +210,6 @@ export function bindSqliteWorkerBackend(
           SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session message lost its borrowed canonical connection");
-            }
             admit("transaction");
             const value = applySessionDirectMessageInTransaction(database, {
               ...command.input,
@@ -207,9 +244,6 @@ export function bindSqliteWorkerBackend(
             | "session.metadata.append"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session metadata lost its borrowed canonical connection");
-            }
             admit("transaction");
             if (command.type === "session.metadata.initialize") {
               const initialized = ensureSessionEntryInTransaction(
@@ -282,10 +316,14 @@ export function bindSqliteWorkerBackend(
             command.type === "session.metadata.append"
               ? command.input.cliWriter
               : undefined;
+          // Coverage takes the host's live owner check from this command's transaction admission.
+          ownerProbe = cliWriter?.confirmOwner ? createCliHistoryOwnerProbe() : undefined;
+          const probe = ownerProbe;
           return runWithCliHistoryWriter(
             cliWriter
               ? {
                   ...cliWriter,
+                  ...(probe ? { confirmsOwner: probe.holds } : {}),
                   target: { ...command.input.scope, storePath: context.databasePath },
                   // Host liveness is composed into both transaction and commit grants.
                   assertCurrent: backend.assertOpen,
@@ -318,6 +356,8 @@ export function bindSqliteWorkerBackend(
             return { ok: false, refusal };
           }
           throw error;
+        } finally {
+          ownerProbe = undefined;
         }
       },
     });

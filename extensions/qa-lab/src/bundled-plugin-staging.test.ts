@@ -26,9 +26,18 @@ async function fixture() {
     await writeFile(file, typeof value === "string" ? value : JSON.stringify(value), "utf8");
   };
   await write("package.json", { name: "openclaw", type: "module" });
-  return { repoRoot, tempRoot, write };
+  return {
+    repoRoot,
+    tempRoot,
+    write,
+    files: (entries: Record<string, unknown>) =>
+      Promise.all(Object.entries(entries).map(([file, value]) => write(file, value))),
+    stage: (allowedPluginIds: string[]) =>
+      createQaBundledPluginsDir({ repoRoot, tempRoot, allowedPluginIds }),
+  };
 }
 
+const modulePackage = { type: "module" };
 const providerConfig = {
   baseUrl: "https://api.example.test/v1",
   api: "openai-responses" as const,
@@ -38,50 +47,35 @@ const providerConfig = {
 describe("qa bundled plugin dir", () => {
   it("stages a scoped mixed-source tree with working SDK, chunks, and dependency links", async () => {
     const f = await fixture();
-    await f.write("package.json", {
-      name: "openclaw",
-      type: "module",
-      exports: { "./plugin-sdk/account-id": { default: "./dist/plugin-sdk/account-id.js" } },
-    });
-    await f.write(
-      "dist/plugin-sdk/account-id.js",
-      "export const normalizeAccountId = (v) => v.toLowerCase();",
-    );
-    for (const id of ["qa-channel", "memory-core", "image-generation-core", "unused-plugin"]) {
-      await f.write(`dist/extensions/${id}/package.json`, {
-        name: `@openclaw/${id}`,
+    const selected = ["qa-channel", "memory-core", "runtime-only", "source-only"];
+    const sdkImport = 'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";';
+    await f.files({
+      "package.json": {
+        name: "openclaw",
         type: "module",
-      });
-    }
-    await f.write(
-      "dist/extensions/qa-channel/index.js",
-      [
-        'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";',
-        'export const accountId = normalizeAccountId("QA");',
-      ].join("\n"),
-    );
-    await f.write("extensions/qa-channel/openclaw.plugin.json", {
-      id: "qa-channel",
-      toolMetadata: { qa_read: { replaySafe: true } },
+        exports: { "./plugin-sdk/account-id": { default: "./dist/plugin-sdk/account-id.js" } },
+      },
+      "dist/plugin-sdk/account-id.js": "export const normalizeAccountId = (v) => v.toLowerCase();",
+      "dist/extensions/qa-channel/index.js": `${sdkImport}\nexport const accountId = normalizeAccountId("QA");`,
+      "extensions/qa-channel/openclaw.plugin.json": {
+        id: "qa-channel",
+        toolMetadata: { qa_read: { replaySafe: true } },
+      },
+      "dist/shared-chunk.js": "export {};",
+      "dist-runtime/runtime-chunk.js": 'export const marker = "runtime";',
+      "dist-runtime/extensions/runtime-only/package.json": modulePackage,
+      "dist-runtime/extensions/runtime-only/index.js":
+        'export { marker } from "../../runtime-chunk.js";',
+      "extensions/source-only/package.json": modulePackage,
+      "extensions/source-only/index.ts":
+        `${sdkImport}\n` +
+        'import { marker } from "fake-dep";\nexport const accountId = `${normalizeAccountId("QA")}:${marker}`;',
+      "store/fake-dep/package.json": { name: "fake-dep", ...modulePackage },
+      "store/fake-dep/index.js": 'export const marker = "ok";',
     });
-    await f.write("dist/shared-chunk.js", "export {};");
-    await f.write("dist-runtime/runtime-chunk.js", 'export const marker = "runtime";');
-    await f.write("dist-runtime/extensions/runtime-only/package.json", { type: "module" });
-    await f.write(
-      "dist-runtime/extensions/runtime-only/index.js",
-      'export { marker } from "../../runtime-chunk.js";',
-    );
-    await f.write("extensions/source-only/package.json", { type: "module" });
-    await f.write(
-      "extensions/source-only/index.ts",
-      [
-        'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";',
-        'import { marker } from "fake-dep";',
-        'export const accountId = `${normalizeAccountId("QA")}:${marker}`;',
-      ].join("\n"),
-    );
-    await f.write("store/fake-dep/package.json", { name: "fake-dep", type: "module" });
-    await f.write("store/fake-dep/index.js", 'export const marker = "ok";');
+    for (const id of ["qa-channel", "memory-core", "image-generation-core", "unused-plugin"]) {
+      await f.write(`dist/extensions/${id}/package.json`, modulePackage);
+    }
     await mkdir(path.join(f.repoRoot, "node_modules"));
     await symlink(
       path.join(f.repoRoot, "store/fake-dep"),
@@ -89,65 +83,43 @@ describe("qa bundled plugin dir", () => {
       "dir",
     );
 
-    const { bundledPluginsDir, stagedRoot } = await createQaBundledPluginsDir({
-      ...f,
-      allowedPluginIds: [
-        "qa-channel",
-        "memory-core",
-        "runtime-only",
-        "source-only",
-        "external-fixture",
-      ],
-    });
-    expect(stagedRoot).toBe(
-      path.join(f.repoRoot, ".artifacts/qa-runtime", path.basename(f.tempRoot)),
+    const { bundledPluginsDir: plugins } = await f.stage([...selected, "external-fixture"]);
+    const root = path.join(f.repoRoot, ".artifacts/qa-runtime", path.basename(f.tempRoot));
+    const staged = (...parts: string[]) => path.join(root, ...parts);
+    const plugin = (file: string) => path.join(plugins, file);
+    const read = (file: string) => readFile(file, "utf8");
+    expect(plugins).toBe(staged("dist/extensions"));
+    expect((await readdir(plugins)).toSorted()).toEqual(
+      [...selected, "image-generation-core"].toSorted(),
     );
-    expect(bundledPluginsDir).toBe(path.join(stagedRoot, "dist/extensions"));
-    expect((await readdir(bundledPluginsDir)).toSorted()).toEqual([
-      "image-generation-core",
-      "memory-core",
-      "qa-channel",
-      "runtime-only",
-      "source-only",
-    ]);
-    await expect(readFile(path.join(stagedRoot, "package.json"), "utf8")).resolves.toContain(
-      '"name":"openclaw"',
-    );
-    await expect(
-      readFile(path.join(bundledPluginsDir, "qa-channel/openclaw.plugin.json"), "utf8"),
-    ).resolves.toContain('"replaySafe":true');
-    for (const id of ["qa-channel", "memory-core", "image-generation-core"]) {
-      expect((await lstat(path.join(bundledPluginsDir, id))).isDirectory()).toBe(true);
+    for (const [file, text] of [
+      [staged("package.json"), '"name":"openclaw"'],
+      [plugin("qa-channel/openclaw.plugin.json"), '"replaySafe":true'],
+      [staged("node_modules/fake-dep/index.js"), 'marker = "ok"'],
+    ] as const) {
+      await expect(read(file)).resolves.toContain(text);
     }
-    const compiled: { accountId: string } = await import(
-      pathToFileURL(path.join(bundledPluginsDir, "qa-channel/index.js")).href
-    );
-    const runtime: { marker: string } = await import(
-      pathToFileURL(path.join(bundledPluginsDir, "runtime-only/index.js")).href
-    );
-    const source: { accountId: string } = await import(
-      pathToFileURL(path.join(bundledPluginsDir, "source-only/index.ts")).href
-    );
-    expect(compiled.accountId).toBe("qa");
-    expect(runtime.marker).toBe("runtime");
-    expect(source.accountId).toBe("qa:ok");
+    for (const id of ["qa-channel", "memory-core", "image-generation-core"]) {
+      expect((await lstat(plugin(id))).isDirectory()).toBe(true);
+    }
+    for (const [file, key, expected] of [
+      ["qa-channel/index.js", "accountId", "qa"],
+      ["runtime-only/index.js", "marker", "runtime"],
+      ["source-only/index.ts", "accountId", "qa:ok"],
+    ] as const) {
+      const loaded: Record<string, unknown> = await import(pathToFileURL(plugin(file)).href);
+      expect(loaded[key]).toBe(expected);
+    }
     for (const file of ["shared-chunk.js", "runtime-chunk.js"]) {
-      const stat = await lstat(path.join(stagedRoot, "dist", file));
+      const stat = await lstat(staged("dist", file));
       expect(stat.isFile() || stat.isSymbolicLink()).toBe(true);
     }
-    expect((await lstat(path.join(stagedRoot, "node_modules/fake-dep"))).isSymbolicLink()).toBe(
-      true,
-    );
-    await expect(
-      readFile(path.join(stagedRoot, "node_modules/fake-dep/index.js"), "utf8"),
-    ).resolves.toContain('marker = "ok"');
+    expect((await lstat(staged("node_modules/fake-dep"))).isSymbolicLink()).toBe(true);
   });
 
   it("rejects invalid bundled plugin ids before staging paths are built", async () => {
     const f = await fixture();
-    await expect(
-      createQaBundledPluginsDir({ ...f, allowedPluginIds: ["../escape"] }),
-    ).rejects.toThrow("invalid QA bundled plugin id: ../escape");
+    await expect(f.stage(["../escape"])).rejects.toThrow("invalid QA bundled plugin id: ../escape");
   });
 
   it("resolves CLI and configured Responses aliases to their shared plugin owner", async () => {
@@ -191,28 +163,20 @@ describe("qa bundled plugin dir", () => {
   });
 
   it.each([
-    { facadeFloor: "2026.4.7", expected: "2026.4.8" },
-    { facadeFloor: "2026.4.9", expected: "2026.4.9" },
-  ])(
-    "raises host version to the highest floor including runtime facade $facadeFloor",
-    async ({ facadeFloor, expected }) => {
-      const f = await fixture();
-      await f.write("package.json", { version: "2026.4.7-1" });
-      for (const [id, floor] of [
-        ["memory-core", "2026.4.7"],
-        ["qa-channel", "2026.4.8"],
-        ["image-generation-core", facadeFloor],
-      ]) {
-        await f.write(`extensions/${id}/package.json`, {
-          openclaw: { install: { minHostVersion: `>=${floor}` } },
-        });
-      }
-      await expect(
-        createQaBundledPluginsDir({
-          ...f,
-          allowedPluginIds: ["memory-core", "qa-channel"],
-        }),
-      ).resolves.toMatchObject({ runtimeHostVersion: expected });
-    },
-  );
+    ["2026.4.7", "2026.4.8"],
+    ["2026.4.9", "2026.4.9"],
+  ])("uses highest host/plugin/facade floor (%s)", async (facadeFloor, expected) => {
+    const f = await fixture();
+    await f.write("package.json", { version: "2026.4.7-1" });
+    for (const [id, floor] of [
+      ["memory-core", "2026.4.7"],
+      ["qa-channel", "2026.4.8"],
+      ["image-generation-core", facadeFloor],
+    ]) {
+      await f.write(`extensions/${id}/package.json`, {
+        openclaw: { install: { minHostVersion: `>=${floor}` } },
+      });
+    }
+    expect((await f.stage(["memory-core", "qa-channel"])).runtimeHostVersion).toBe(expected);
+  });
 });

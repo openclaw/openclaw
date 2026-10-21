@@ -1,4 +1,3 @@
-/** Doctor warning for missing command owners on privileged channel commands. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -78,7 +77,6 @@ function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   );
 }
 
-/** Returns true when at least one owner sender id is configured. */
 export function hasConfiguredCommandOwners(cfg: OpenClawConfig): boolean {
   return resolveConfiguredCommandOwners(cfg).length > 0;
 }
@@ -128,7 +126,6 @@ export function formatCommandOwnerHint(params: {
   return `Ask the operator to run \`${command} '${owners}'\` in a terminal to make this sender a command owner.`;
 }
 
-/** Emits setup guidance when privileged command ownership is not configured. */
 export function noteCommandOwnerHealth(cfg: OpenClawConfig): void {
   if (hasConfiguredCommandOwners(cfg)) {
     return;

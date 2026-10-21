@@ -5,7 +5,7 @@ import {
   type AiProviderRequestCapabilities,
   type AiProviderRequestPolicyInput,
 } from "../host.js";
-import type { AssistantMessage, Context, Model } from "../types.js";
+import type { Context, Model } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
   chunks: [] as unknown[],
@@ -45,12 +45,10 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
-import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -281,7 +279,10 @@ describe("OpenAI-compatible completions compatibility", () => {
     let replayPayload: unknown;
     await streamOpenAICompletions(
       model,
-      { messages: [result] },
+      {
+        messages: [result],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      },
       {
         apiKey: "test",
         onPayload(payload) {
@@ -359,58 +360,26 @@ describe("OpenAI-compatible completions compatibility", () => {
     },
   );
 
-  it("retains replayed Z.AI thinking when reasoning is enabled", async () => {
-    let payload: unknown;
-    const model = createModel({
-      id: "glm-test",
-      provider: "zai",
-      baseUrl: "https://api.z.ai/api/paas/v4",
-      reasoning: true,
+  it("uses host-normalized provider attribution for session-affinity headers", async () => {
+    configureAiTransportHost({
+      resolveProviderRequestCapabilities: (input) => ({
+        ...resolveTestCapabilities(input),
+        provider: "openrouter",
+      }),
     });
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      content: [
-        {
-          type: "thinking",
-          thinking: "prior reasoning",
-          thinkingSignature: "reasoning_content",
-        },
-        { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-      ],
-      usage: createZeroUsage(),
-      stopReason: "toolUse",
-      timestamp: 2,
-    };
 
     await streamOpenAICompletions(
-      model,
-      {
-        messages: [
-          userMessage,
-          assistant,
-          makeTextToolResult("call_1", "lookup", "done", false, 3),
-        ],
-      },
-      {
-        apiKey: "test",
-        reasoningEffort: "high",
-        onPayload(nextPayload) {
-          payload = nextPayload;
-          throw new Error("payload captured");
-        },
-      },
+      createModel({
+        provider: "OPENROUTER",
+        compat: { sendSessionAffinityHeaders: true },
+      }),
+      context,
+      { apiKey: "test", sessionId: "session-123" },
     ).result();
 
-    const request = payload as {
-      thinking?: unknown;
-      messages?: Array<Record<string, unknown>>;
-    };
-    expect(request.thinking).toEqual({ type: "enabled", clear_thinking: false });
-    expect(request.messages?.find((message) => message.role === "assistant")).toMatchObject({
-      reasoning_content: "prior reasoning",
+    expect(mockOpenAI.clientOptions).toHaveLength(1);
+    expect(mockOpenAI.clientOptions[0]).toMatchObject({
+      defaultHeaders: { "x-session-id": "session-123" },
     });
   });
 

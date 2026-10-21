@@ -17,6 +17,13 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createCronHarness,
+  type CronAddInput,
+  type CronHarnessOptions,
+  type CronJobLike,
+  type CronPatch,
+} from "./dreaming-cron.test-support.js";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness, shortTermTestState } from "./test-helpers.js";
@@ -50,46 +57,9 @@ afterEach(async () => {
   resetSystemEventsForTest();
 });
 
-type CronSchedule = { kind: "cron"; expr: string; tz?: string };
-type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | { kind: "agentTurn"; message: string; lightContext?: boolean };
-type CronAddInput = {
-  declarationKey: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  schedule: CronSchedule;
-  sessionTarget: "main" | "isolated";
-  wakeMode: "now";
-  payload: CronPayload;
-  delivery?: { mode: "none" };
-};
-type CronPatch = Partial<CronAddInput>;
-type CronJobLike = {
-  id: string;
-  declarationKey?: string;
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-  schedule?: { kind?: string; expr?: string; tz?: string };
-  sessionTarget?: string;
-  wakeMode?: string;
-  payload?: { kind?: string; text?: string; message?: string; lightContext?: boolean };
-  delivery?: { mode?: string };
-  createdAtMs?: number;
-};
-type CronParam = {
-  list: (opts?: { includeDisabled?: boolean }) => Promise<CronJobLike[]>;
-  add: (input: CronAddInput) => Promise<unknown>;
-  update: (id: string, patch: CronPatch) => Promise<unknown>;
-  remove: (id: string) => Promise<{ removed?: boolean }>;
-};
-type CronHarnessOptions = {
-  listThrowsForFirstCalls?: number;
-};
 type DreamingPluginApi = Parameters<typeof registerShortTermPromotionDreaming>[0];
 type DreamingPluginApiTestDouble = DreamingPluginApi & {
+  backgroundTasks: Promise<unknown>[];
   scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
   logger: ReturnType<typeof createLogger>;
   on: ReturnType<typeof vi.fn>;
@@ -102,85 +72,6 @@ function createLogger() {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
-  };
-}
-
-function createCronHarness(initialJobs: CronJobLike[] = [], opts?: CronHarnessOptions) {
-  const jobs: CronJobLike[] = [...initialJobs];
-  let listCalls = 0;
-  const addCalls: CronAddInput[] = [];
-  const updateCalls: Array<{ id: string; patch: CronPatch }> = [];
-  const removeCalls: string[] = [];
-  const mutationCalls: string[] = [];
-
-  const cron: CronParam = {
-    async list() {
-      listCalls += 1;
-      if (opts?.listThrowsForFirstCalls && listCalls <= opts.listThrowsForFirstCalls) {
-        throw new Error(`list failed on call ${listCalls}`);
-      }
-      return jobs.map((job) => ({
-        ...job,
-        ...(job.schedule ? { schedule: { ...job.schedule } } : {}),
-        ...(job.payload ? { payload: { ...job.payload } } : {}),
-        ...(job.delivery ? { delivery: { ...job.delivery } } : {}),
-      }));
-    },
-    async add(input) {
-      mutationCalls.push("add");
-      addCalls.push(input);
-      jobs.push({
-        ...input,
-        id: `job-${jobs.length + 1}`,
-        schedule: { ...input.schedule },
-        payload: { ...input.payload },
-        ...(input.delivery ? { delivery: { ...input.delivery } } : {}),
-        createdAtMs: Date.now(),
-      });
-      return {};
-    },
-    async update(id, patch) {
-      mutationCalls.push(`update:${id}`);
-      updateCalls.push({ id, patch });
-      const index = jobs.findIndex((entry) => entry.id === id);
-      if (index < 0) {
-        return {};
-      }
-      const current = expectDefined(jobs[index], `managed cron job ${id}`);
-      jobs[index] = {
-        ...current,
-        ...(patch.name ? { name: patch.name } : {}),
-        ...(patch.description ? { description: patch.description } : {}),
-        ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}),
-        ...(patch.schedule ? { schedule: { ...patch.schedule } } : {}),
-        ...(patch.sessionTarget ? { sessionTarget: patch.sessionTarget } : {}),
-        ...(patch.wakeMode ? { wakeMode: patch.wakeMode } : {}),
-        ...(patch.payload ? { payload: { ...patch.payload } } : {}),
-        ...(patch.delivery ? { delivery: { ...patch.delivery } } : {}),
-      };
-      return {};
-    },
-    async remove(id) {
-      mutationCalls.push(`remove:${id}`);
-      removeCalls.push(id);
-      const index = jobs.findIndex((entry) => entry.id === id);
-      if (index >= 0) {
-        jobs.splice(index, 1);
-      }
-      return { removed: index >= 0 };
-    },
-  };
-
-  return {
-    cron,
-    jobs,
-    addCalls,
-    updateCalls,
-    removeCalls,
-    mutationCalls,
-    get listCalls() {
-      return listCalls;
-    },
   };
 }
 
@@ -212,6 +103,7 @@ function createDreamingTestContext(
 ) {
   const logger = createLogger();
   const harness = createCronHarness(params.initialJobs, params.cronOptions);
+  const backgroundTasks: Promise<unknown>[] = [];
   const api: DreamingPluginApiTestDouble = {
     ...createTestPluginApi({
       config: params.config ?? createDreamingConfig(),
@@ -219,9 +111,17 @@ function createDreamingTestContext(
       logger,
     }),
     logger,
+    backgroundTasks,
     on: vi.fn<DreamingPluginApi["on"]>(),
     scheduler: createTestPluginServiceScheduler(),
     registerService: vi.fn<DreamingPluginApi["registerService"]>(),
+  };
+  api.lifecycle.runInBackgroundContext = (run) => {
+    const result = run();
+    if (result instanceof Promise) {
+      backgroundTasks.push(result);
+    }
+    return result;
   };
   Object.assign(api.runtime, { agent: createPluginRuntimeMock().agent }, params.runtime);
   return { api, harness, logger };
@@ -292,6 +192,7 @@ async function triggerDreamingServiceStart(
     logger: api.logger,
   } as OpenClawPluginServiceContext;
   await getDreamingService(api).start({ ...context, scheduler: api.scheduler });
+  await Promise.all(api.backgroundTasks);
 }
 
 async function triggerDreamingServiceStop(api: DreamingPluginApiTestDouble): Promise<void> {
@@ -314,15 +215,92 @@ function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDou
 }
 
 describe("dreaming service reconciliation", () => {
-  it("drains pending reconciliation on service stop without arming runtime recovery", async () => {
+  it("warns once without an ambient owner and resumes when the explicit fleet selects one", async () => {
+    vi.useFakeTimers();
+    const ownerlessConfig: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, opus: {} } },
+    };
+    const { api, harness, logger } = createDreamingTestContext({ config: ownerlessConfig });
+    const ownerRequired = Object.assign(new Error("No cron owner"), {
+      code: "AGENT_SELECTION_REQUIRED",
+    });
+    const add = vi.spyOn(harness.cron, "add").mockRejectedValue(ownerRequired);
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 3);
+
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expectLogContains(logger.warn, "agents.defaults.systemAgent.agentId");
+    expect(add).toHaveBeenCalledTimes(4);
+    expect(harness.jobs).toEqual([]);
+
+    add.mockRestore();
+    api.config = {
+      agents: {
+        ...ownerlessConfig.agents,
+        defaults: { systemAgent: { agentId: "opus" } },
+      },
+    };
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
+    expect(harness.jobs).toHaveLength(1);
+    expect(harness.addCalls).toHaveLength(1);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+
+    await harness.cron.remove(expectDefined(harness.jobs[0], "managed dreaming job").id);
+    api.config = ownerlessConfig;
+    const ownerlessAdd = vi.spyOn(harness.cron, "add").mockRejectedValue(ownerRequired);
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(harness.addCalls).toHaveLength(1);
+    expect(harness.jobs).toEqual([]);
+
+    ownerlessAdd.mockRejectedValue(new Error("scheduler unavailable"));
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expectLogContains(logger.error, "scheduler unavailable");
+  });
+
+  it("creates the system agent's dreaming job and keeps reconciling it without an ambient owner", async () => {
+    vi.useFakeTimers();
+    const { api, harness, logger } = createDreamingTestContext({
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "opus" } },
+          entries: { main: {}, opus: {} },
+        },
+      },
+    });
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+    expect(harness.jobs).toHaveLength(1);
+    expect(harness.addCalls).toHaveLength(1);
+    const jobId = expectDefined(harness.jobs[0], "managed dreaming job").id;
+
+    api.config = createDreamingConfig(
+      { frequency: "0 5 * * *" },
+      { agents: { ownership: "explicit", entries: { main: {}, opus: {} } } },
+    );
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
+    expect(harness.jobs).toHaveLength(1);
+    expect(harness.jobs[0]).toMatchObject({ id: jobId, schedule: { expr: "0 5 * * *" } });
+    expect(harness.updateCalls).toHaveLength(1);
+    expect(harness.addCalls).toHaveLength(1);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("starts before reconciliation settles and drains it on stop without arming runtime recovery", async () => {
     vi.useFakeTimers();
     let rejectStartupList: (reason?: unknown) => void = () => undefined;
-    const startupListPromise = new Promise<CronJobLike[]>((_resolve, reject) => {
+    const startupListPromise = new Promise<never>((_resolve, reject) => {
       rejectStartupList = reject;
     });
     let listCalls = 0;
-    const addCalls: CronAddInput[] = [];
-    const cron: CronParam = {
+    const add = vi.fn(async () => ({}));
+    const cron = {
       async list() {
         listCalls += 1;
         if (listCalls === 1) {
@@ -330,23 +308,26 @@ describe("dreaming service reconciliation", () => {
         }
         return [];
       },
-      async add(input) {
-        addCalls.push(input);
-        return {};
-      },
+      add,
       async update() {
         return {};
       },
       async remove() {
         return { removed: false };
       },
-    };
+      async removeStaleJobFamily() {
+        return 0;
+      },
+    } satisfies NonNullable<ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>>;
     const { api, logger } = createDreamingTestContext();
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      const startup = triggerDreamingServiceStart(api, {
+      await getDreamingService(api).start({
         config: api.config,
+        stateDir: ".",
+        logger,
+        scheduler: api.scheduler,
         getCron: () => cron,
       });
 
@@ -357,11 +338,11 @@ describe("dreaming service reconciliation", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(stopped).toBe(false);
       rejectStartupList(new Error("startup list failed"));
-      await Promise.all([startup, stopping]);
+      await stopping;
       await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
       expect(listCalls).toBe(1);
-      expect(addCalls).toHaveLength(0);
+      expect(add).not.toHaveBeenCalled();
       expectLogContains(logger.error, "dreaming startup reconciliation failed");
     } finally {
       rejectStartupList(new Error("test cleanup"));

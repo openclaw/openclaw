@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import type { Transport, JSONRPCMessage } from "@modelcontextprotocol/client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -8,6 +7,7 @@ import { VERSION } from "../version.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
+import { MCP_ENTERPRISE_AUTH_CLIENT_EXTENSION } from "./mcp-metadata.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
@@ -20,10 +20,7 @@ export type McpEventRequestMethod =
 
 /** Preserve protocol dispositions without exposing remote diagnostic bodies or credentials. */
 class McpEventRequestError extends Error {
-  constructor(
-    readonly code: number,
-    readonly reason?: string,
-  ) {
+  constructor(code: number, reason?: string) {
     super("MCP Events request failed (code " + code + (reason ? ", reason " + reason : "") + ")");
     this.name = "McpEventRequestError";
   }
@@ -119,7 +116,10 @@ export async function requestMcpEvent(params: {
         _meta: {
           "io.modelcontextprotocol/protocolVersion": MCP_EVENTS_PROTOCOL_VERSION,
           "io.modelcontextprotocol/clientInfo": { name: "openclaw", version: VERSION },
-          "io.modelcontextprotocol/clientCapabilities": {},
+          "io.modelcontextprotocol/clientCapabilities":
+            config.auth === "enterprise"
+              ? { extensions: { [MCP_ENTERPRISE_AUTH_CLIENT_EXTENSION]: {} } }
+              : {},
         },
       },
     });

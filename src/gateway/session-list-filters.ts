@@ -12,6 +12,7 @@ import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
   MAX_SESSION_PARTICIPANTS,
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
 } from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
@@ -21,7 +22,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
-import { isSessionRunActive } from "../shared/session-run-state.js";
+import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
@@ -328,7 +329,7 @@ export function* filterSessionEntries(
           matchesSessionListSearch(
             [
               state.status,
-              isSessionRunActive(state)
+              isSessionRunStateActive(state)
                 ? "live running"
                 : state.hasActiveRun === false
                   ? "idle"
@@ -491,7 +492,7 @@ export function* filterSessionEntries(
     if (effectiveOwner) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }
-    if (creatorId && entry.createdActor?.id !== creatorId) {
+    if (creatorId && resolveSessionCreatorActor(entry.createdActor)?.id !== creatorId) {
       continue;
     }
     if (ownerId && effectiveOwner?.id !== ownerId) {

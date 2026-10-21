@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
@@ -10,6 +11,8 @@ import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
+
+const USAGE_NOTIFICATION_INTERVAL_MS = 500;
 
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
@@ -31,6 +34,7 @@ export function broadcastChatMetadataChanged(
 export async function createGatewayChatMetadataLifecycle(params: {
   getConfig: () => OpenClawConfig;
   log: GatewayLogger;
+  getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
 }) {
   let context: GatewayRequestContext | undefined;
   let preparedModelRuntimeState: "unobserved" | "available" | "unavailable" = "unobserved";
@@ -161,18 +165,47 @@ export async function createGatewayChatMetadataLifecycle(params: {
       context = next;
       let selectionConfig = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
       const unregister = await registerRefreshListeners();
-      const unregisterUsage = onSessionCostUsageUpdated((publication) => {
+      const pendingUsage = new Map<string, SessionCostUsagePublication>();
+      let usageTimer: ReturnType<typeof setTimeout> | undefined;
+      const broadcastUsage = (publication: SessionCostUsagePublication) => {
         broadcastChatMetadataChanged(next, {
           ...publication,
           modelCatalogChanged: false,
           authChanged: false,
           commandsChanged: false,
         });
-      });
+      };
+      const flushUsage = () => {
+        clearTimeout(usageTimer);
+        usageTimer = undefined;
+        for (const publication of pendingUsage.values()) {
+          broadcastUsage(publication);
+        }
+        pendingUsage.clear();
+      };
+      sessionCostUsageNotifications.onUpdated = (publication) => {
+        if (publication.usageRefreshFailed) {
+          // Clients retain the last successful commit separately from the latest failure.
+          const pending = pendingUsage.get(publication.agentId);
+          if (pending) {
+            pendingUsage.delete(publication.agentId);
+            broadcastUsage(pending);
+          }
+          broadcastUsage(publication);
+          return;
+        }
+        pendingUsage.set(publication.agentId, publication);
+        // Worker batches settle on different ticks. Keep one bounded window, never a debounce.
+        usageTimer ??= setTimeout(flushUsage, USAGE_NOTIFICATION_INTERVAL_MS).unref();
+      };
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {
           const config = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
-          const unchanged = modelSelectionPoliciesMatch(selectionConfig, config);
+          const unchanged = modelSelectionPoliciesMatch(
+            selectionConfig,
+            config,
+            params.getPluginMetadataSnapshot?.(),
+          );
           selectionConfig = config;
           if (!unchanged) {
             broadcastChatMetadataChanged(next, {
@@ -184,7 +217,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
       });
       publishSidecars({
         stop: async () => {
-          unregisterUsage();
+          sessionCostUsageNotifications.onUpdated = () => {};
+          clearTimeout(usageTimer);
+          pendingUsage.clear();
           unregisterRolePolicy();
           unregister();
           await runtime.stop();

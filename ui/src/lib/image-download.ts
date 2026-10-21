@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { downloadBlobFile } from "./download.ts";
 
 function imageDownloadFileName(title: string, mimeType: string): string {
   const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/", 2)[1] || "img";
@@ -13,10 +14,5 @@ function imageDownloadFileName(title: string, mimeType: string): string {
 }
 
 export function downloadImageBlob(blob: Blob, title: string): void {
-  const blobUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = blobUrl;
-  anchor.download = imageDownloadFileName(title, blob.type);
-  anchor.click();
-  globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+  downloadBlobFile(imageDownloadFileName(title, blob.type), blob, 30_000);
 }

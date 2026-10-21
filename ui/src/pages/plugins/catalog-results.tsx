@@ -3,18 +3,14 @@ import { createMemo, For, onSettled } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type {
-  PluginDiscoveryCategory,
-  PluginDiscoveryEntry,
-  PluginDiscoveryResult,
-  PluginInstallRequest,
-} from "../../lib/plugins/index.ts";
+import type { PluginDiscoveryEntry, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginAuthor,
@@ -22,29 +18,16 @@ import {
   renderPluginOfficialBadge,
   renderPluginStateStatus,
 } from "./plugin-card.tsx";
+import type { PluginDiscoveryIntent, PluginDiscoveryState } from "./plugin-discovery.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { resolvePluginCatalogIconUrl } from "./presentation.ts";
 
-export type PluginDiscoveryIntent = "all" | "bundled" | "trending" | "official" | "featured";
-
-export type PluginCatalogResultsProps = {
+export type PluginCatalogResultsProps = PluginDiscoveryState & {
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
+  registerIcon?: (readId: () => string) => () => void;
   connected: boolean;
-  loading: boolean;
-  result: PluginDiscoveryResult | null;
-  error: string | null;
-  remoteError: string | null;
-  categories: readonly PluginDiscoveryCategory[];
-  categoriesLoading: boolean;
-  categoriesError: string | null;
   onRetryCategories: () => void;
-  featured: readonly PluginDiscoveryEntry[];
-  trending: readonly PluginDiscoveryEntry[];
-  loadingMore: boolean;
-  loadMoreError: string | null;
-  intent: PluginDiscoveryIntent;
-  category: string | null;
-  query: string;
   iconUrls: Readonly<Record<string, string>>;
   pluginIconUrls: Readonly<Record<string, string>>;
   iconLoading?: (url: string) => boolean;
@@ -74,19 +57,7 @@ const PROMOTED_SECTIONS = [
 ] as const;
 
 function CategoryStrokeIcon(props: { children: JSX.Element }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      {" "}
-      {props.children}
-    </svg>
-  );
+  return <StrokeIcon> {props.children}</StrokeIcon>;
 }
 
 // Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
@@ -209,6 +180,7 @@ function CatalogIcon(props: {
   );
   return (
     <PluginArtTile
+      registerIcon={props.state.registerIcon}
       slug={props.plugin.local.pluginId ?? props.plugin.id}
       name={props.plugin.catalog.name}
       iconUrl={iconUrl() ?? undefined}
@@ -279,7 +251,7 @@ function CatalogCard(props: {
               <h3>{props.plugin.catalog.name}</h3>
               {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
             </div>
-            {renderPluginAuthor(props.plugin.catalog.author, { linked: true })}
+            {renderPluginAuthor(props.plugin.catalog.author)}
           </div>
         </div>
         <div class="plugin-catalog-card__action">
@@ -287,6 +259,7 @@ function CatalogCard(props: {
             renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
           ) : (
             <PluginInstallAction
+              registerInstallAction={props.state.registerInstallAction}
               buttonClass={"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
               pluginName={props.plugin.catalog.name}
               busy={busy()}
@@ -314,7 +287,12 @@ function CatalogCard(props: {
 function renderError(error: string, onRetry: () => void, warning = false): JSX.Element {
   return (
     <div
-      class={warning ? "callout warning oc-banner" : "callout danger oc-banner oc-banner-error"}
+      class={[
+        "callout",
+        warning ? "warning" : "danger",
+        "oc-banner",
+        { "oc-banner-error": !warning },
+      ]}
       role={warning ? "status" : "alert"}
     >
       <span>{formatUiExternalText(error)}</span>
@@ -353,7 +331,7 @@ function CatalogSection(params: {
               <button
                 type="button"
                 class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
-                onClick={params.onViewAll}
+                onClick={() => params.onViewAll?.()}
               >
                 {t("pluginsPage.viewAllInstalledPlugins")}
               </button>
@@ -493,7 +471,7 @@ function RawResults(props: PluginCatalogResultsProps): JSX.Element {
                 type="button"
                 class="btn btn--sm oc-action oc-action-secondary"
                 disabled={props.loadingMore}
-                onClick={props.onLoadMore}
+                onClick={() => props.onLoadMore()}
               >
                 {t(props.loadingMore ? "pluginsPage.loadingMore" : "pluginsPage.loadMore")}
               </button>

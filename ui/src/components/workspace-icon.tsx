@@ -1,6 +1,6 @@
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 
 type WorkspaceIconProps = {

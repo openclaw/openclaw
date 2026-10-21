@@ -47,11 +47,17 @@ export function createSessionHistoryWorkerReaders(
     return async (input, signal) =>
       runRequest(
         () => {
-          if (prepare) {
-            return prepare(input);
+          const request =
+            prepare?.(input) ??
+            // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
+            ({ kind, ...input } as Extract<SessionHistoryWorkerPreparedInput, { kind: K }>);
+          // Windows environments can be Proxies; only plain snapshots cross the worker boundary.
+          if ("scope" in request && request.scope.env) {
+            return { ...request, scope: { ...request.scope, env: { ...request.scope.env } } };
           }
-          // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
-          return { kind, ...input } as Extract<SessionHistoryWorkerPreparedInput, { kind: K }>;
+          return "env" in request && request.env
+            ? { ...request, env: { ...request.env } }
+            : request;
         },
         JSON.stringify(input).length * 2,
         project,
@@ -88,6 +94,7 @@ export function createSessionHistoryWorkerReaders(
     readAnchors: reader("transcript-anchors", (value) => value.facts),
     readRuntimeTarget: reader("session-runtime-target", (value) => value.target),
     readConversations: reader("conversation-rows", (value) => value.rows),
+    readConversationBindings: reader("conversation-bindings", (value) => value.snapshot),
     prewarm: reader("prewarm", () => undefined),
     readRetirement: reader("session-retirement-read", (value) => value.result),
     readPendingArchives: reader("session-pending-archives", (value) => value.pending),
@@ -226,6 +233,7 @@ export function createSessionHistoryWorkerReaders(
           }
           return {
             kind: "full",
+            ...(value.compaction ? { compaction: value.compaction } : {}),
             snapshot: {
               events,
               version: value.version,
@@ -260,7 +268,7 @@ export function createSessionHistoryWorkerReaders(
         throw new Error(`Session row facts support at most ${MAX_SESSION_ROW_FACTS_KEYS} keys`);
       }
       const captured = {
-        env: { ...input.env },
+        env: captureSessionTranscriptStorageEnvironment(input.env),
         sessionKeys: [...input.sessionKeys],
         continuation: input.continuation ? { ...input.continuation } : undefined,
       };

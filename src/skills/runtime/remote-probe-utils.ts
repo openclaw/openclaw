@@ -45,7 +45,7 @@ export function isMacPlatform(platform?: string, deviceFamily?: string): boolean
 }
 
 export function supportsSystemRun(commands?: string[]): boolean {
-  return Array.isArray(commands) && commands.includes("system.run");
+  return commands?.includes("system.run") ?? false;
 }
 
 export function isRemoteSkillEligibilityNode(

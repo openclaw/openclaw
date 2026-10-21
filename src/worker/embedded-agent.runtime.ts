@@ -12,7 +12,7 @@ import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
 import { classifyAssistantTurn } from "../agents/embedded-agent-runner/run/incomplete-turn-classification.js";
-import { resolveSettledToolTerminalContinuationInstruction } from "../agents/embedded-agent-runner/run/incomplete-turn-recovery.js";
+import { resolveSettledToolTerminalContinuation } from "../agents/embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { buildRuntimeContextCustomMessage } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { readSubscriptionCompletionEvidence } from "../agents/embedded-agent-runner/run/subscription-completion-evidence.js";
 import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
@@ -372,7 +372,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       return params.inference.stream({
         modelRef: params.modelRef,
         context: projected.context,
-        options: structuredClone(params.inferenceOptions),
+        options: params.inferenceOptions,
         ...(options?.signal ? { signal: options.signal } : {}),
       });
     };
@@ -436,10 +436,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         terminal: { kind: "ok" as const },
       };
       const answer = classifyAssistantTurn({ attempt, payloadCount: 0 });
-      const instruction = resolveSettledToolTerminalContinuationInstruction({
+      const continuation = resolveSettledToolTerminalContinuation({
         provider: model.provider,
         modelId: model.id,
         modelApi: model.api,
+        terminalReplyExpectation: "result-required",
         replyDeliveryState: completion.getSourceReplyDeliveryState() ?? "missing",
         aborted: false,
         timedOut: false,
@@ -447,12 +448,14 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         allowEmptyStopContinuation: !answer.silent,
         payloadCount: answer.visibleText || running.length ? 1 : 0,
       });
-      if (instruction && terminalAssistant?.stopReason === "stop") {
-        session.agent.state.tools = [];
+      if (continuation && terminalAssistant?.stopReason === "stop") {
+        if (continuation.disableTools) {
+          session.agent.state.tools = [];
+        }
         await session.sendCustomMessage(
           {
             customType: "openclaw.settled-tool-finalization",
-            content: instruction,
+            content: continuation.instruction,
             display: false,
           },
           { triggerTurn: true },

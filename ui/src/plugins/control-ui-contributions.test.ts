@@ -26,7 +26,7 @@ type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
-it("renders customization inline and retains pending reload state", async () => {
+it("renders customization inline and recovers reload controls after failure or success", async () => {
   const listeners = new Set<() => void>();
   const replacement = {
     key: "fixture/composer",
@@ -35,6 +35,7 @@ it("renders customization inline and retains pending reload state", async () => 
   };
   let selected: typeof replacement | undefined;
   const pendingReload = createDeferred();
+  const retryReload = createDeferred();
   const diagnostics: PluginControlUiDiagnostic[] = [
     {
       pluginId: "custom-review",
@@ -129,11 +130,21 @@ it("renders customization inline and retains pending reload state", async () => 
       ),
     );
     expect(button(t("pluginUi.reload")).disabled).toBe(false);
+
+    plugins.reload.mockReturnValueOnce(retryReload.promise);
+    button(t("pluginUi.reload")).click();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(true));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+    retryReload.resolve();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(false));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+
     button(t("common.retry")).click();
     expect(plugins.refresh).toHaveBeenCalledOnce();
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
   } finally {
     pendingReload.resolve();
+    retryReload.resolve();
   }
 });
 
@@ -256,6 +267,23 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
+  it("replaces placement subscriptions and resumes current session presentation", async () => {
+    const { element, sessions } = await mountActions();
+    expect(element.querySelector("button")?.textContent).toBe("Review Ready");
+
+    element.kind = "composer";
+    await element.updateComplete;
+    expect(element.querySelector("button")).toBeNull();
+    sessions.patchRowLocal(sessionKey, { label: "Updated while hidden" });
+
+    element.kind = "header";
+    await element.updateComplete;
+    expect(element.querySelector("button")?.textContent).toBe("Review Updated while hidden");
+    sessions.patchRowLocal(sessionKey, { label: "Live again" });
+    await element.updateComplete;
+    expect(element.querySelector("button")?.textContent).toBe("Review Live again");
+  });
+
   it("keeps header metadata scoped to its pane agent when the global key is shared", async () => {
     const { element, sessions, run, resolve, request } = await mountActions({
       placement: "header",

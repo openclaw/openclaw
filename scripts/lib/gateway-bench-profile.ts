@@ -3,10 +3,13 @@ import { existsSync, readFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { HeapSpaceInfo } from "node:v8";
+import type { sampleTrackedWorkerMemory } from "../../src/infra/worker-cpu.ts";
 import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 
 export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
+export const GATEWAY_GC_TRACE_MARKER = "OPENCLAW_GATEWAY_BENCH_GC ";
 export const GATEWAY_HEAP_SAMPLE_INTERVAL = 32 * 1024;
 export const GATEWAY_CPU_SAMPLE_INTERVAL_MICROS = 1_000;
 
@@ -16,6 +19,8 @@ export type GatewayProfileCommand = {
   action: "start" | "stop";
   profilePath: string;
   includeWorkers?: boolean;
+  includeCollectedObjects?: boolean;
+  samplingIntervalBytes?: number;
 };
 
 export type GatewayCpuUsageSnapshot = {
@@ -28,18 +33,37 @@ export type GatewayCpuUsageSnapshot = {
 
 export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
   memory: NodeJS.MemoryUsage;
+  heapSpaces: HeapSpaceInfo[];
+  workers?: ReturnType<typeof sampleTrackedWorkerMemory>;
   activeResources: Record<string, number>;
   runtime: { node: string; platform: string; arch: string };
+  sessionCensus?: {
+    scope: "source-main-isolate";
+    SessionManager: number;
+    AgentSession: number;
+    Agent: number;
+  };
 };
 
 export type GatewayBenchCommand =
   | GatewayProfileCommand
+  | {
+      channel: typeof GATEWAY_PROFILE_CHANNEL;
+      kind: "diagnostics";
+      action: "start" | "stop";
+      captureId?: string;
+    }
   | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" }
   | {
       channel: typeof GATEWAY_PROFILE_CHANNEL;
       kind: "resource-usage";
       action: "sample";
       initial?: boolean;
+      includeWorkers?: boolean;
+      collectGarbage?: boolean;
+      sessionCensus?: boolean;
+      clearPromptCacheObservations?: boolean;
+      snapshotPath?: string;
     };
 
 type GatewayProfileReply = {
@@ -49,6 +73,8 @@ type GatewayProfileReply = {
   error?: string;
   cpuUsage?: GatewayCpuUsageSnapshot;
   resources?: GatewayResourceSnapshot;
+  diagnostics?: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>>;
+  captureId?: string;
 };
 
 export type GatewayCpuUsage = Omit<ReturnType<typeof measureGatewayCpuUsage>, "cpuEnvironment"> &
@@ -75,12 +101,119 @@ function readProfileArtifacts(profilePath: string): GatewayProfileArtifacts {
   };
 }
 
+/** Read promoted bytes from V8, excluding worker isolates and GC outside this capture. */
+export function readGatewayGcTrace(
+  logPath: string,
+  profilePath: string,
+  captureKind: "heap" | "diagnostics" = "heap",
+) {
+  let identifying = false;
+  let identified = false;
+  let pid: number | undefined;
+  const isolates = new Set<string>();
+  let capturing = false;
+  let completed = false;
+  let promotedBytes = 0;
+  let gcCount = 0;
+  let excludedWorkerGcCount = 0;
+  for (const line of readFileSync(logPath, "utf8").split("\n")) {
+    if (line.startsWith(GATEWAY_GC_TRACE_MARKER)) {
+      const marker: { phase: string; pid: number; profilePath?: string } = JSON.parse(
+        line.slice(GATEWAY_GC_TRACE_MARKER.length),
+      );
+      if (marker.phase === "identify-start") {
+        if (identifying || identified) {
+          throw new Error("GC trace contains multiple Gateway identification windows");
+        }
+        pid = marker.pid;
+        identifying = true;
+      } else if (marker.phase === "identify-stop") {
+        if (!identifying || marker.pid !== pid || isolates.size !== 1) {
+          throw new Error("GC trace did not identify exactly one main isolate");
+        }
+        identifying = false;
+        identified = true;
+      } else if (marker.profilePath === profilePath) {
+        if (marker.phase === `${captureKind}-start`) {
+          if (!identified || marker.pid !== pid || capturing || completed) {
+            throw new Error(`GC trace has an invalid ${captureKind} capture start`);
+          }
+          capturing = true;
+        } else if (marker.phase === `${captureKind}-stop`) {
+          if (!capturing || marker.pid !== pid) {
+            throw new Error(`GC trace has an invalid ${captureKind} capture stop`);
+          }
+          capturing = false;
+          completed = true;
+        }
+      }
+      continue;
+    }
+    const trace = /^\[(\d+):(0x[\da-f]+)(?::\d+)?\]\s+\d+\s+ms:\s+(.*)$/i.exec(line);
+    if (!trace || Number(trace[1]) !== pid) {
+      continue;
+    }
+    const isolate = trace[2];
+    const fields = trace[3];
+    if (!isolate || !fields) {
+      continue;
+    }
+    if (!identifying && !capturing) {
+      continue;
+    }
+    if (capturing && !isolates.has(isolate)) {
+      excludedWorkerGcCount += 1;
+      continue;
+    }
+    // Recent V8 versions retain the flag but emit JSON instead of name=value pairs.
+    const collection: { gc?: string; promoted?: number } = fields.startsWith("GC: ")
+      ? JSON.parse(fields.slice(4))
+      : {
+          gc: /(?:^|\s)gc=(\S+)/.exec(fields)?.[1],
+          promoted: Number(/(?:^|\s)promoted=(\S+)/.exec(fields)?.[1]),
+        };
+    if (!collection.gc) {
+      continue;
+    }
+    if (identifying) {
+      isolates.add(isolate);
+    } else if (capturing) {
+      const bytes = collection.promoted;
+      if (typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) {
+        throw new Error("Main-isolate GC trace is missing a valid promoted byte count");
+      }
+      promotedBytes += bytes;
+      gcCount += 1;
+    }
+  }
+  if (!identified || !completed || capturing) {
+    throw new Error(
+      `GC trace is missing identification or the complete ${captureKind} capture window`,
+    );
+  }
+  return {
+    scope: "main-isolate" as const,
+    source: "v8-trace-gc-nvp" as const,
+    logPath,
+    profilePath,
+    pid,
+    isolate: [...isolates][0],
+    promotedBytes,
+    gcCount,
+    excludedWorkerGcCount,
+  };
+}
+
 export async function controlGatewayProfile(
   child: ChildProcess,
   kind: GatewayProfileCommand["kind"],
   action: GatewayProfileCommand["action"],
   profilePath: string,
-  options: { includeWorkers?: boolean } = {},
+  options: {
+    includeWorkers?: boolean;
+    includeCollectedObjects?: boolean;
+    samplingIntervalBytes?: number;
+  } = {},
 ): Promise<void> {
   await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -89,6 +222,28 @@ export async function controlGatewayProfile(
     profilePath,
     ...options,
   });
+}
+
+/** Lightweight main-isolate diagnostics, without CPU or allocation sampling. */
+export async function startGatewayDiagnostics(child: ChildProcess, captureId?: string) {
+  await sendGatewayBenchCommand(child, {
+    channel: GATEWAY_PROFILE_CHANNEL,
+    kind: "diagnostics",
+    action: "start",
+    captureId,
+  });
+  return async () => {
+    const reply = await sendGatewayBenchCommand(child, {
+      channel: GATEWAY_PROFILE_CHANNEL,
+      kind: "diagnostics",
+      action: "stop",
+      captureId,
+    });
+    if (!reply.diagnostics) {
+      throw new Error("Gateway did not report diagnostics");
+    }
+    return reply.diagnostics;
+  };
 }
 
 export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayCpuUsageSnapshot> {
@@ -106,7 +261,14 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
 /** Samples the Gateway itself, not the controller or its descendants. */
 export async function readGatewayResources(
   child: ChildProcess,
-  options: { initial?: boolean } = {},
+  options: {
+    initial?: boolean;
+    includeWorkers?: boolean;
+    collectGarbage?: boolean;
+    sessionCensus?: boolean;
+    clearPromptCacheObservations?: boolean;
+    snapshotPath?: string;
+  } = {},
 ): Promise<GatewayResourceSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -157,6 +319,8 @@ async function sendGatewayBenchCommand(
   command: GatewayBenchCommand,
 ): Promise<GatewayProfileReply> {
   const { kind, action } = command;
+  // Constructor census scans the full heap three times, unlike a resource sample.
+  const timeoutMs = command.kind === "resource-usage" && command.sessionCensus ? 120_000 : 30_000;
   return await new Promise<GatewayProfileReply>((resolve, reject) => {
     const finish = (result: Error | GatewayProfileReply) => {
       clearTimeout(timer);
@@ -174,7 +338,8 @@ async function sendGatewayBenchCommand(
       if (
         message?.channel !== GATEWAY_PROFILE_CHANNEL ||
         message.kind !== kind ||
-        message.action !== action
+        message.action !== action ||
+        (command.kind === "diagnostics" && message.captureId !== command.captureId)
       ) {
         return;
       }
@@ -184,8 +349,8 @@ async function sendGatewayBenchCommand(
     const onDisconnect = () =>
       finish(new Error(`Gateway disconnected during ${kind} profile ${action}`));
     const timer = setTimeout(
-      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after 30000ms`)),
-      30_000,
+      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
     );
     child.on("message", onMessage);
     child.once("exit", onExit);
@@ -214,7 +379,10 @@ export function readGatewayCpuProfile(profilePath: string) {
   };
 }
 
-export function readGatewayHeapProfile(profilePath: string) {
+export function readGatewayHeapProfile(
+  profilePath: string,
+  options: { includeCollectedObjects?: boolean; samplingIntervalBytes?: number } = {},
+) {
   const profile: HeapProfiler.SamplingHeapProfile = JSON.parse(readFileSync(profilePath, "utf8"));
   const sites: Array<{ sampledBytes: number; stack: string[] }> = [];
   let sampledAllocatedBytes = 0;
@@ -237,8 +405,8 @@ export function readGatewayHeapProfile(profilePath: string) {
   return {
     ...readProfileArtifacts(profilePath),
     profilePath,
-    samplingIntervalBytes: GATEWAY_HEAP_SAMPLE_INTERVAL,
-    includesCollectedObjects: true as const,
+    samplingIntervalBytes: options.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
+    includesCollectedObjects: options.includeCollectedObjects ?? true,
     sampledAllocatedBytes,
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),
   };

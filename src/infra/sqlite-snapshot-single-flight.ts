@@ -177,6 +177,7 @@ function leaseFlight(flight: SnapshotFlight, base: PreparedSnapshot): PreparedSn
   return {
     location: base.location,
     cleanupRoot: base.cleanupRoot,
+    privateFamily: base.privateFamily,
     cleanup() {
       if (released) {
         const outcome = cleanup?.read();

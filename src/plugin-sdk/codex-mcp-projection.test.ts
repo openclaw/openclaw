@@ -38,7 +38,7 @@ describe("codex MCP projection", () => {
       nativeToolSurfaceEnabled: true,
     });
 
-    expect(tools).toEqual([{ name: "read" }, { name: "exec" }]);
+    expect(tools).toEqual([{ name: "read" }, { name: "exec", execOrigin: "native" }]);
   });
 
   it("captures apply_patch and process only when the bridged tool surface carries them", async () => {

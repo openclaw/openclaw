@@ -3,7 +3,7 @@ import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   account,

@@ -241,6 +241,7 @@ export function createService(
       | "closeNodeBootstrapArtifacts"
       | "createGatewayTools"
       | "executeComputer"
+      | "closeEnvironmentComputers"
       | "providerCallTimeoutMs"
       | "projectNamespace"
       | "resolveSshIdentity"

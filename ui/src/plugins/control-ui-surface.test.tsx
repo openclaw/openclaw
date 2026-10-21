@@ -1,69 +1,26 @@
 import { createSignal, onCleanup } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ControlUiHost,
-  ControlUiReplacement,
-  ControlUiSurfaceProps,
-  ControlUiViewContext,
-} from "../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { PluginSurface } from "./control-ui-view.solid.tsx";
+import {
+  composerProps,
+  createViewRuntime,
+  recordReplacement,
+  replacement,
+} from "./control-ui-view.test-support.ts";
 
 function runtime(initial?: ControlUiReplacement) {
-  let selected = initial;
-  const listeners = new Set<() => void>();
-  const abort = new AbortController();
-  // SAFETY: these tests exercise only the view mount and scoped host request boundary.
-  const host = {
-    signal: abort.signal,
+  return createViewRuntime(initial, {
+    pluginId: "example",
+    key: "example/view",
     request: vi.fn(),
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
-  const reportError = vi.fn();
-  // SAFETY: PluginSurface reads only the plugin capability supplied by this fixture.
-  const context = {
-    plugins: {
-      selectedReplacement: () =>
-        selected
-          ? {
-              key: "example/view",
-              pluginId: "example",
-              value: selected,
-              host,
-              signal: abort.signal,
-            }
-          : undefined,
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      reportError,
-    },
-  } as unknown as ApplicationContext;
-  return {
-    context,
-    listeners,
-    reportError,
-    select(value?: ControlUiReplacement) {
-      selected = value;
-      for (const listener of listeners) {
-        listener();
-      }
-    },
-    invalidate() {
-      for (const listener of listeners) {
-        listener();
-      }
-    },
-  };
+    hostInvalidation: false,
+  });
 }
 
 describe("native plugin surface", () => {
@@ -73,6 +30,10 @@ describe("native plugin surface", () => {
     const [label, setLabel] = createSignal("First");
     const click = vi.fn();
     const disposed = vi.fn();
+    const releaseReplacement = vi.fn();
+    const replacementRef = vi.fn(() => releaseReplacement);
+    const [readReplacementRef] = createSignal(() => replacementRef);
+    const warnings = vi.spyOn(console, "warn");
     const contexts: ApplicationContext[] = [];
     let fail = false;
     function DefaultView() {
@@ -87,6 +48,7 @@ describe("native plugin surface", () => {
           props={{ sessionKey: "main", agentId: "main", routeId: "chat" }}
           renderDefault={() => <DefaultView />}
           renderCompanion={() => <span>Companion</span>}
+          replacementRef={readReplacementRef()}
         />
       ),
       { wrapper: provider.wrapper },
@@ -94,11 +56,8 @@ describe("native plugin surface", () => {
     expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
     view.getByRole("button", { name: "First" }).click();
     expect(click).toHaveBeenCalledOnce();
-    source.select({
-      id: "delegate",
-      label: "Delegate",
-      surface: "workspace",
-      mount(container, context) {
+    source.select(
+      replacement("workspace", (container, context) => {
         context.mountDefault(container);
         return {
           update() {
@@ -107,9 +66,11 @@ describe("native plugin surface", () => {
             }
           },
         };
-      },
-    });
+      }),
+    );
     await waitForSolid(() => expect(view.getAllByRole("button")).toHaveLength(1));
+    expect(replacementRef).toHaveBeenCalledOnce();
+    expect(releaseReplacement).not.toHaveBeenCalled();
     const delegated = view.getByRole("button", { name: "First" });
     expect(view.queryByText("Companion")).toBeNull();
     setLabel("Second");
@@ -130,46 +91,31 @@ describe("native plugin surface", () => {
     await waitForSolid(() =>
       expect(view.container.querySelector("openclaw-plugin-view")).toBeNull(),
     );
+    expect(releaseReplacement).toHaveBeenCalledOnce();
     view.getByRole("button", { name: "Second" }).click();
     expect(click).toHaveBeenCalledTimes(3);
     view.unmount();
+    expect(releaseReplacement).toHaveBeenCalledOnce();
     expect(disposed).toHaveBeenCalledTimes(contexts.length);
     expect(source.listeners.size).toBe(0);
+    expect(
+      warnings.mock.calls.some(([message]) => String(message).includes("STRICT_READ_UNTRACKED")),
+    ).toBe(false);
+    warnings.mockRestore();
   });
 
   it("revokes deselected composer operations before rendering and retires replaced contexts", async () => {
-    const mounted: ControlUiViewContext<ControlUiSurfaceProps["composer"]>[] = [];
-    const roots: HTMLElement[] = [];
-    const dispose = vi.fn();
-    const replacement: ControlUiReplacement<"composer"> = {
-      id: "composer",
-      label: "Composer",
-      surface: "composer",
-      mount(container, context) {
-        roots.push(container);
-        mounted.push(context);
-        container.textContent = "Plugin composer";
-        return { dispose };
-      },
-    };
-    const source = runtime(replacement);
-    const next = runtime(replacement);
+    const record = recordReplacement("composer", "Plugin composer");
+    const { contexts: mounted, roots, dispose } = record;
+    const source = runtime(record.view);
+    const next = runtime(record.view);
     const provider = createSolidApplicationContextProvider(source.context);
     const setDraft = vi.fn();
     const view = mountSolid(
       () => (
         <PluginSurface
           surface="composer"
-          props={{
-            sessionKey: "main",
-            agentId: "main",
-            draft: "",
-            canSend: true,
-            sending: false,
-            disabledReason: null,
-            setDraft,
-            send: async () => true,
-          }}
+          props={composerProps({ setDraft })}
           renderDefault={() => <textarea aria-label="Built-in composer" />}
           renderCompanion={() => <span>Companion</span>}
         />
@@ -177,11 +123,14 @@ describe("native plugin surface", () => {
       { wrapper: provider.wrapper },
     );
     await waitForSolid(() => expect(mounted).toHaveLength(1));
+    expect(
+      view.container.querySelector("openclaw-plugin-view[data-plugin-composer]"),
+    ).not.toBeNull();
     expect(view.getByText("Companion")).toBeDefined();
     const first = mounted[0]!;
     first.props.setDraft("Current");
     source.select();
-    source.select(replacement);
+    source.select(record.view);
     expect(() => first.props.setDraft("Retired")).toThrow("view has ended");
     expect(first.signal.aborted).toBe(true);
     expect(dispose).not.toHaveBeenCalled();

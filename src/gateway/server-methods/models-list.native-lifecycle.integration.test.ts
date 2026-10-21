@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ModelsListParams } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
@@ -17,6 +18,33 @@ async function closeEndpoint(endpoint: ReturnType<typeof createServer>) {
 }
 
 const modelRow = (provider: string, id: string) => expect.objectContaining({ provider, id });
+const gatewayEnv = {
+  OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+  OPENCLAW_SKIP_CHANNELS: "1",
+  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_SKIP_CRON: "1",
+  OPENCLAW_SKIP_CANVAS_HOST: "1",
+  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+};
+const catalogModel = (id: string, name: string) => ({
+  id,
+  name,
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 32768,
+  maxTokens: 4096,
+});
+async function listen(endpoint: ReturnType<typeof createServer>) {
+  endpoint.listen(0, "127.0.0.1");
+  await once(endpoint, "listening");
+  const address = endpoint.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Catalog endpoint has no TCP address");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
 
 const coordinatorRoots = createSuiteTempRootTracker({ prefix: "native-catalog-coordinator-" });
 beforeAll(() => coordinatorRoots.setup());
@@ -39,19 +67,18 @@ it.for([false, true])(
       label: "native-catalog-lifecycle",
       layout: "state-only",
       env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        ...gatewayEnv,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: withProviderCredentials ? "1" : undefined,
         OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       },
     });
     const provider = "native-lifecycle-fixture";
+    const otherProvider = "unrelated-native-fixture";
+    const model = (id: string, owner = provider) => modelRow(owner, id);
     const harness = "native-lifecycle-runtime";
     const requests: string[] = [];
+    const nativeRequests = (from = 0) =>
+      requests.slice(from).filter((path) => path === "/native/models");
     let nativeModelId = "native-account-only";
     let emptyNativeCatalog = false;
     let failedNativeCatalog = false;
@@ -61,6 +88,37 @@ it.for([false, true])(
     const otherRequested = createDeferred();
     const otherReleased = createDeferred();
     let nativeReleased = createDeferred();
+    const nativeRow = (id: string, name: string, rowProvider = provider) => ({
+      provider: rowProvider,
+      id,
+      name,
+      nativeRuntime: harness,
+    });
+    const nativeRows = () => {
+      if (emptyNativeCatalog) {
+        return [];
+      }
+      const rows = [
+        nativeRow(nativeModelId, "Native account model"),
+        nativeRow("configured-native", "Configured native model"),
+        { provider, id: "harness-host-row", name: "Harness host model" },
+      ];
+      if (withProviderCredentials) {
+        rows.push(
+          nativeRow(
+            "unrelated-native-model",
+            nativeModelId === "native-account-only"
+              ? "Unrelated native model"
+              : "Outside-scope replacement",
+            otherProvider,
+          ),
+        );
+        if (nativeModelId !== "native-account-only") {
+          rows.push(nativeRow("outside-scope-new", "Outside-scope new model", otherProvider));
+        }
+      }
+      return rows;
+    };
     const endpoint = createServer((request, response) => {
       requests.push(request.url ?? "");
       response.setHeader("Content-Type", "application/json");
@@ -74,56 +132,7 @@ it.for([false, true])(
           return;
         }
         nativeRequested.resolve();
-        void nativeReleased.promise.then(() =>
-          response.end(
-            JSON.stringify(
-              emptyNativeCatalog
-                ? []
-                : [
-                    {
-                      provider,
-                      id: nativeModelId,
-                      name: "Native account model",
-                      nativeRuntime: harness,
-                    },
-                    {
-                      provider,
-                      id: "configured-native",
-                      name: "Configured native model",
-                      nativeRuntime: harness,
-                    },
-                    {
-                      provider,
-                      id: "harness-host-row",
-                      name: "Harness host model",
-                    },
-                    ...(withProviderCredentials
-                      ? [
-                          {
-                            provider: "unrelated-native-fixture",
-                            id: "unrelated-native-model",
-                            name:
-                              nativeModelId === "native-account-only"
-                                ? "Unrelated native model"
-                                : "Outside-scope replacement",
-                            nativeRuntime: harness,
-                          },
-                          ...(nativeModelId === "native-account-only"
-                            ? []
-                            : [
-                                {
-                                  provider: "unrelated-native-fixture",
-                                  id: "outside-scope-new",
-                                  name: "Outside-scope new model",
-                                  nativeRuntime: harness,
-                                },
-                              ]),
-                        ]
-                      : []),
-                  ],
-            ),
-          ),
-        );
+        void nativeReleased.promise.then(() => response.end(JSON.stringify(nativeRows())));
       } else if (request.url === "/provider/models" || request.url === "/other/models") {
         if (failedProviderCatalog && request.url === "/provider/models") {
           response.writeHead(503).end();
@@ -158,17 +167,11 @@ it.for([false, true])(
         },
       });
     try {
-      endpoint.listen(0, "127.0.0.1");
-      await once(endpoint, "listening");
-      const address = endpoint.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Native endpoint has no TCP address");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const baseUrl = await listen(endpoint);
       const pluginRoot = withProviderCredentials ? "native-plugin" : "bundled/native-plugin";
       await state.writeJson(`${pluginRoot}/openclaw.plugin.json`, {
         id: provider,
-        providers: [provider, "unrelated-native-fixture"],
+        providers: [provider, otherProvider],
         cliBackends: [harness],
         modelCatalog: {
           discovery: { [provider]: "refreshable" },
@@ -176,17 +179,7 @@ it.for([false, true])(
             [provider]: {
               baseUrl,
               api: "openai-completions",
-              models: [
-                {
-                  id: "unconfigured-starter",
-                  name: "Provider starter",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 32768,
-                  maxTokens: 4096,
-                },
-              ],
+              models: [catalogModel("unconfigured-starter", "Provider starter")],
             },
           },
         },
@@ -256,7 +249,7 @@ it.for([false, true])(
             },
             ...(withProviderCredentials
               ? {
-                  "unrelated-native-fixture": {
+                  [otherProvider]: {
                     baseUrl,
                     api: "openai-completions",
                     apiKey: "unrelated-native-key",
@@ -286,35 +279,46 @@ it.for([false, true])(
       });
       try {
         await server.startupSettled;
-        const list = () =>
-          client.request<ModelsListResult>("models.list", { agentId: "main", view: "all" });
-        const preparedList = () =>
-          client.request<ModelsListResult>("models.list", {
-            agentId: "main",
-            view: "all",
-            preparedOnly: true,
-          });
-        expect(requests.filter((path) => path === "/native/models")).toHaveLength(0);
+        const request = (params: ModelsListParams) =>
+          client.request<ModelsListResult>("models.list", { agentId: "main", ...params });
+        const list = () => request({ view: "all" });
+        const preparedList = () => request({ view: "all", preparedOnly: true });
+        const available = (result: ModelsListResult) =>
+          result.models.find((row) => row.id === nativeModelId)?.available;
+        const published = (ready: (result: ModelsListResult) => boolean) =>
+          waitForCatalogPublication({ signal, read: list, ready });
+        const contains = (result: ModelsListResult, ids: string[], rowProvider = provider) =>
+          expect(result.models).toEqual(
+            expect.arrayContaining(ids.map((id) => modelRow(rowProvider, id))),
+          );
+        const cachedReads = async (check: (result: ModelsListResult) => void) => {
+          const before = requests.length;
+          const results = await Promise.all([list(), list()]);
+          expect(requests).toHaveLength(before);
+          results.forEach(check);
+        };
+        const refreshProvider = async () => {
+          const before = requests.length;
+          await request({ provider, refresh: true });
+          expect(requests.slice(before)).toEqual(["/provider/models", "/native/models"]);
+          return list();
+        };
+        expect(nativeRequests()).toHaveLength(0);
         const firstReads = await Promise.all([list(), list()]);
         await withinTest(nativeRequested.promise, signal);
         const beforeReads = requests.length;
         // Ordinary and prepared-only reads return saved rows while discovery is held.
         const pending = [...firstReads, ...(await Promise.all([preparedList(), preparedList()]))];
-        expect.soft(requests.filter((path) => path === "/native/models")).toHaveLength(1);
+        expect.soft(nativeRequests()).toHaveLength(1);
         expect(requests).toHaveLength(beforeReads);
         for (const result of pending) {
           expect(result.models.some((row) => row.id === "static-model")).toBe(true);
           expect(result.pendingProviders).toContain(provider);
-          expect(result.models).not.toContainEqual(modelRow(provider, nativeModelId));
+          expect(result.models).not.toContainEqual(model(nativeModelId));
         }
         nativeReleased.resolve();
-        await waitForCatalogPublication({
-          signal,
-          read: list,
-          ready: (result) =>
-            result.models.find((row) => row.id === nativeModelId)?.available === true,
-        });
-        expect((await list()).models).toContainEqual(modelRow(provider, "harness-host-row"));
+        await published((result) => available(result) === true);
+        expect((await list()).models).toContainEqual(model("harness-host-row"));
         if (!withProviderCredentials) {
           // Cold startup discovers the full catalog, as an explicit refresh would.
           expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
@@ -322,24 +326,17 @@ it.for([false, true])(
           const refresh = () =>
             waitForCatalogPublication({
               signal,
-              start: () =>
-                client.request<ModelsListResult>("models.list", {
-                  agentId: "main",
-                  view: "all",
-                  refresh: true,
-                }),
+              start: () => request({ view: "all", refresh: true }),
               read: list,
               ready: (result) => !result.pendingProviders?.includes(provider),
             });
           const unavailable = await refresh();
           expect(unavailable.refreshFailed).toBe(true);
-          expect
-            .soft(unavailable.models)
-            .toContainEqual(modelRow(provider, "unconfigured-starter"));
-          expect(unavailable.models).toContainEqual(modelRow(provider, nativeModelId));
+          expect.soft(unavailable.models).toContainEqual(model("unconfigured-starter"));
+          expect(unavailable.models).toContainEqual(model(nativeModelId));
           failedProviderCatalog = false;
           await refresh();
-          expect((await list()).models).toContainEqual(modelRow(provider, "provider-account"));
+          expect((await list()).models).toContainEqual(model("provider-account"));
           const beforeOpaqueReload = requests.length;
           nativeReleased = createDeferred();
           nativeRequested = createDeferred();
@@ -355,116 +352,70 @@ it.for([false, true])(
           expect(requests).toHaveLength(beforeOpaqueReads);
           for (const result of opaquePending) {
             expect(result.pendingProviders).toContain(provider);
-            expect.soft(result.models).not.toContainEqual(modelRow(provider, nativeModelId));
-            expect(result.models).toContainEqual(modelRow(provider, "provider-account"));
+            expect.soft(result.models).not.toContainEqual(model(nativeModelId));
+            expect(result.models).toContainEqual(model("provider-account"));
           }
           nativeReleased.resolve();
-          await waitForCatalogPublication({
-            signal,
-            read: list,
-            ready: (result) => !result.pendingProviders?.includes(provider),
-          });
-        }
-        if (withProviderCredentials) {
+          await published((result) => !result.pendingProviders?.includes(provider));
+        } else {
           const beforeUnrelated = requests.length;
           holdOther = true;
-          const firstRefresh = client.request<ModelsListResult>("models.list", {
-            agentId: "main",
-            provider: "unrelated-native-fixture",
-            view: "all",
-            refresh: true,
-          });
+          const refreshUnrelated = () =>
+            request({ provider: otherProvider, view: "all", refresh: true });
+          const firstRefresh = refreshUnrelated();
           await otherRequested.promise;
-          const secondRefresh = client.request<ModelsListResult>("models.list", {
-            agentId: "main",
-            provider: "unrelated-native-fixture",
-            view: "all",
-            refresh: true,
-          });
+          const secondRefresh = refreshUnrelated();
           const concurrentRead = await list();
-          expect(concurrentRead.pendingProviders).toContain("unrelated-native-fixture");
-          expect(concurrentRead.models.find((row) => row.id === nativeModelId)?.available).toBe(
-            true,
-          );
+          expect(concurrentRead.pendingProviders).toContain(otherProvider);
+          expect(available(concurrentRead)).toBe(true);
           const foregroundResults = await Promise.all([firstRefresh, secondRefresh]);
           for (const result of foregroundResults) {
-            expect(result.pendingProviders).toContain("unrelated-native-fixture");
+            expect(result.pendingProviders).toContain(otherProvider);
           }
           otherReleased.resolve();
           await expect
             .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
-            .not.toContain("unrelated-native-fixture");
+            .not.toContain(otherProvider);
           expect(requests.slice(beforeUnrelated)).toEqual(["/other/models"]);
-          expect((await list()).models.find((row) => row.id === nativeModelId)?.available).toBe(
-            true,
-          );
-          expect((await list()).models).toContainEqual(
-            modelRow("unrelated-native-fixture", "unrelated-native-model"),
-          );
+          expect(available(await list())).toBe(true);
+          contains(await list(), ["unrelated-native-model"], otherProvider);
           failedNativeCatalog = true;
           const beforeFailure = requests.length;
           await expect
-            .soft(client.request("models.list", { agentId: "main", provider, refresh: true }))
+            .soft(request({ provider, refresh: true }))
             .rejects.toThrow("Native catalog fixture unavailable");
           expect(requests.slice(beforeFailure)).toEqual(["/provider/models", "/native/models"]);
-          const beforeFailureReads = requests.length;
-          const failedReads = await Promise.all([list(), list()]);
-          expect(requests).toHaveLength(beforeFailureReads);
-          for (const failed of failedReads) {
+          await cachedReads((failed) => {
             expect.soft(failed.refreshFailed).toBe(true);
             expect(failed.pendingProviders ?? []).not.toContain(provider);
-            expect(failed.models).toContainEqual(modelRow(provider, "native-account-only"));
-            expect(failed.models).toContainEqual(modelRow(provider, "configured-native"));
-            expect(failed.models).toContainEqual(
-              modelRow("unrelated-native-fixture", "unrelated-native-model"),
-            );
-          }
+            contains(failed, ["native-account-only", "configured-native"]);
+            contains(failed, ["unrelated-native-model"], otherProvider);
+          });
           failedNativeCatalog = false;
-          const beforeRecovery = requests.length;
-          await client.request("models.list", { agentId: "main", provider, refresh: true });
-          expect(requests.slice(beforeRecovery)).toEqual(["/provider/models", "/native/models"]);
-          const recovered = await list();
+          const recovered = await refreshProvider();
           expect(recovered.refreshFailed).not.toBe(true);
-          expect(recovered.models).toContainEqual(modelRow(provider, "native-account-only"));
+          expect(recovered.models).toContainEqual(model("native-account-only"));
           nativeModelId = "native-new-release";
-          const beforeScoped = requests.length;
-          await client.request("models.list", { agentId: "main", provider, refresh: true });
-          expect(requests.slice(beforeScoped)).toEqual(["/provider/models", "/native/models"]);
-          expect((await list()).models.find((row) => row.id === nativeModelId)?.available).toBe(
-            true,
-          );
+          expect(available(await refreshProvider())).toBe(true);
           const withdrawn = await list();
-          expect
-            .soft(withdrawn.models)
-            .not.toContainEqual(modelRow(provider, "native-account-only"));
+          expect.soft(withdrawn.models).not.toContainEqual(model("native-account-only"));
           expect(withdrawn.models).toContainEqual(
             expect.objectContaining({
-              provider: "unrelated-native-fixture",
+              provider: otherProvider,
               id: "unrelated-native-model",
               name: "Unrelated native model",
             }),
           );
-          expect(withdrawn.models).not.toContainEqual(
-            modelRow("unrelated-native-fixture", "outside-scope-new"),
-          );
+          expect(withdrawn.models).not.toContainEqual(model("outside-scope-new", otherProvider));
           emptyNativeCatalog = true;
-          const beforeEmpty = requests.length;
-          await client.request("models.list", { agentId: "main", provider, refresh: true });
-          expect(requests.slice(beforeEmpty)).toEqual(["/provider/models", "/native/models"]);
-          const emptied = await list();
-          expect.soft(emptied.models).not.toContainEqual(modelRow(provider, "native-new-release"));
-          expect.soft(emptied.models).not.toContainEqual(modelRow(provider, "native-account-only"));
-          expect(emptied.models).toContainEqual(modelRow(provider, "static-model"));
-          expect(emptied.models).toContainEqual(modelRow(provider, "configured-native"));
-          expect(emptied.models).toContainEqual(
-            modelRow("unrelated-native-fixture", "unrelated-native-model"),
-          );
-          expect(emptied.models).toContainEqual(
-            modelRow("unrelated-native-fixture", "provider-account"),
-          );
+          const emptied = await refreshProvider();
+          expect.soft(emptied.models).not.toContainEqual(model("native-new-release"));
+          expect.soft(emptied.models).not.toContainEqual(model("native-account-only"));
+          contains(emptied, ["static-model", "configured-native"]);
+          contains(emptied, ["unrelated-native-model", "provider-account"], otherProvider);
           emptyNativeCatalog = false;
-          await client.request("models.list", { agentId: "main", provider, refresh: true });
-          const beforeReloadNative = requests.filter((path) => path === "/native/models").length;
+          await request({ provider, refresh: true });
+          const beforeReloadNative = nativeRequests().length;
           const config = await client.request<{ hash: string }>("config.get", {});
           await client.request("config.patch", {
             baseHash: config.hash,
@@ -472,87 +423,53 @@ it.for([false, true])(
               agents: { defaults: { modelPolicy: { allow: [`${provider}/*`, "unused/*"] } } },
             }),
           });
-          await waitForCatalogPublication({
-            signal,
-            read: list,
-            ready: (result) =>
-              result.models.find((row) => row.id === nativeModelId)?.available === true,
-          });
-          expect(requests.filter((path) => path === "/native/models")).toHaveLength(
-            beforeReloadNative + 1,
-          );
+          await published((result) => available(result) === true);
+          expect(nativeRequests()).toHaveLength(beforeReloadNative + 1);
           const beforeFullFailure = requests.length;
           nativeReleased = createDeferred();
           failedNativeCatalog = true;
           const fullFailure = expect
-            .soft(client.request("models.list", { agentId: "main", refresh: true }))
+            .soft(request({ refresh: true }))
             .rejects.toThrow("Native catalog fixture unavailable");
           await expect
-            .poll(
-              () =>
-                requests.slice(beforeFullFailure).filter((path) => path === "/native/models")
-                  .length,
-              { timeout: 15_000 },
-            )
+            .poll(() => nativeRequests(beforeFullFailure).length, { timeout: 15_000 })
             .toBe(1);
-          const beforeFullReads = requests.length;
-          const fullPending = await Promise.all([list(), list()]);
-          expect(requests).toHaveLength(beforeFullReads);
-          for (const fullResult of fullPending) {
+          await cachedReads((fullResult) => {
             expect(fullResult.pendingProviders).toContain(provider);
-            expect.soft(fullResult.models).toContainEqual(modelRow(provider, nativeModelId));
-          }
+            expect.soft(fullResult.models).toContainEqual(model(nativeModelId));
+          });
           nativeReleased.resolve();
           await fullFailure;
-          const beforeFullFailedReads = requests.length;
-          const fullFailed = await Promise.all([list(), list()]);
-          expect(requests).toHaveLength(beforeFullFailedReads);
-          for (const failed of fullFailed) {
+          await cachedReads((failed) => {
             expect(failed.refreshFailed).toBe(true);
             expect(failed.pendingProviders ?? []).not.toContain(provider);
-            expect.soft(failed.models).toContainEqual(modelRow(provider, nativeModelId));
-          }
+            expect.soft(failed.models).toContainEqual(model(nativeModelId));
+          });
           failedNativeCatalog = false;
-          await client.request("models.list", { agentId: "main", refresh: true });
+          await request({ refresh: true });
           const fullRecovered = await list();
           expect(fullRecovered.refreshFailed).not.toBe(true);
-          expect(fullRecovered.models).toContainEqual(modelRow(provider, nativeModelId));
-          expect(
-            requests.slice(beforeFullFailure).filter((path) => path === "/native/models"),
-          ).toHaveLength(2);
+          expect(fullRecovered.models).toContainEqual(model(nativeModelId));
+          expect(nativeRequests(beforeFullFailure)).toHaveLength(2);
           const beforeRenewal = requests.length;
           nativeReleased = createDeferred();
           await saveAccount("native-renewed");
           await client.request("models.authRefresh", { agentId: "main", operation: "update" });
           expect((await list()).models.some((row) => row.id === "provider-account")).toBe(true);
           await expect
-            .poll(
-              () =>
-                requests.slice(beforeRenewal).filter((path) => path === "/native/models").length,
-              { timeout: 15_000 },
-            )
+            .poll(() => nativeRequests(beforeRenewal).length, { timeout: 15_000 })
             .toBe(1);
-          const beforeRenewalReads = requests.length;
-          const renewalPending = await Promise.all([list(), list()]);
-          expect(requests).toHaveLength(beforeRenewalReads);
-          for (const result of renewalPending) {
+          await cachedReads((result) => {
             expect(result.pendingProviders).toContain(provider);
-            expect.soft(result.models).toContainEqual(modelRow(provider, "native-new-release"));
-            expect(result.models).not.toContainEqual(modelRow(provider, "harness-host-row"));
-          }
+            expect.soft(result.models).toContainEqual(model("native-new-release"));
+            expect(result.models).not.toContainEqual(model("harness-host-row"));
+          });
           nativeReleased.resolve();
           await expect
             .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
             .not.toContain(provider);
-          await expect
-            .poll(
-              async () => (await list()).models.find((row) => row.id === nativeModelId)?.available,
-              { timeout: 15_000 },
-            )
-            .toBe(true);
-          expect(
-            requests.slice(beforeRenewal).filter((path) => path === "/native/models"),
-          ).toHaveLength(1);
+          await expect.poll(async () => available(await list()), { timeout: 15_000 }).toBe(true);
+          expect(nativeRequests(beforeRenewal)).toHaveLength(1);
         }
         const settledRequests = requests.length;
         await Promise.all([list(), list(), list()]);
@@ -578,15 +495,7 @@ it("models.list discovers credential-free providers at startup and explicitly re
   const state = await createOpenClawTestState({
     label: "credential-free-catalog",
     layout: "state-only",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
+    env: gatewayEnv,
   });
   const provider = "credential-free-fixture";
   let requests = 0;
@@ -595,27 +504,13 @@ it("models.list discovers credential-free providers at startup and explicitly re
     response.setHeader("Content-Type", "application/json");
     response.end(
       JSON.stringify([
-        {
-          // Each response names its request so a publication proves which discovery produced it.
-          id: `public-model-${requests}`,
-          name: "Public model",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 32768,
-          maxTokens: 4096,
-        },
+        // Each response identifies the discovery that published it.
+        catalogModel(`public-model-${requests}`, "Public model"),
       ]),
     );
   });
   try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
-    const address = endpoint.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Catalog endpoint has no TCP address");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const baseUrl = await listen(endpoint);
     await state.writeJson("catalog-plugin/openclaw.plugin.json", {
       id: provider,
       providers: [provider],

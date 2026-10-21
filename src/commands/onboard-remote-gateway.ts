@@ -7,7 +7,6 @@ import type {
   SystemAgentSetupVerifyResult,
   WizardNextResult,
   WizardStartResult,
-  WizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDeviceIdentityForGatewayCall } from "../gateway/call-device-auth.js";
@@ -24,6 +23,7 @@ import type {
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
+import { answerGatewayWizardStep } from "./gateway-wizard-step.js";
 
 const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 40_000;
 const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
@@ -56,49 +56,6 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
     recommendedInstalls: result.recommendedInstalls ?? [],
     unavailableCandidates: result.unavailableCandidates ?? [],
   };
-}
-
-async function answerSetupStep(step: WizardStep, prompter: WizardPrompter): Promise<unknown> {
-  const message = step.message ?? step.title ?? "Continue";
-  if (step.externalUrl) {
-    await prompter.note(step.externalUrl, "Open this URL to continue");
-  }
-  switch (step.type) {
-    case "note":
-      await prompter.note(message, step.title);
-      return undefined;
-    case "text":
-      return await prompter.text({
-        message,
-        sensitive: step.sensitive,
-        placeholder: step.placeholder,
-        initialValue: typeof step.initialValue === "string" ? step.initialValue : undefined,
-      });
-    case "select":
-      return await prompter.select({
-        message,
-        options: step.options ?? [],
-        initialValue: step.initialValue,
-      });
-    case "multiselect":
-      return await prompter.multiselect({
-        message,
-        options: step.options ?? [],
-        initialValues: Array.isArray(step.initialValue) ? step.initialValue : undefined,
-      });
-    case "confirm":
-    case "action":
-      if (step.executor === "gateway") {
-        return undefined;
-      }
-      return await prompter.confirm({
-        message,
-        initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
-      });
-    case "progress":
-      break;
-  }
-  return undefined;
 }
 
 function activationTimeoutMs(kind: ActivateSetupInferenceParams["kind"]): number {
@@ -230,7 +187,13 @@ export async function runRemoteGatewayInferenceOnboarding(
           if (result.error) {
             await prompter.note(result.error);
           }
-          const value = await answerSetupStep(step, prompter);
+          if (step.externalUrl) {
+            await prompter.note(step.externalUrl, "Open this URL to continue");
+          }
+          const value: unknown =
+            (step.type === "confirm" || step.type === "action") && step.executor === "gateway"
+              ? undefined
+              : await answerGatewayWizardStep(step, prompter);
           if (step.type !== "progress" && step.executor !== "gateway") {
             answer = { stepId: step.id, value };
           }

@@ -10,20 +10,13 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
-import { extractWikiLinks } from "./markdown-links.js";
+import { extractWikiLinks, maskMarkdownCode } from "./markdown-links.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
 
-export const WIKI_PAGE_GROUPS = [
-  { kind: "source", dir: "sources", heading: "Sources" },
-  { kind: "entity", dir: "entities", heading: "Entities" },
-  { kind: "concept", dir: "concepts", heading: "Concepts" },
-  { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
-  { kind: "report", dir: "reports", heading: "Reports" },
-] as const;
 export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 
-export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
 export type ParsedWikiMarkdown = {
@@ -32,7 +25,6 @@ export type ParsedWikiMarkdown = {
   body: string;
 };
 
-export type WikiClaimEvidence = NonNullable<ReturnType<typeof normalizeWikiClaimEvidence>>;
 export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
 type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
 export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];
@@ -94,8 +86,8 @@ const MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES =
   Buffer.byteLength(".");
 const WIKI_SEGMENT_HASH_BYTES = 12;
 const WIKI_RESERVED_PAGE_STEMS = new Set(["index"]);
-const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
-const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
+export const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
+export const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 
 function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): string {
   if (Buffer.byteLength(raw) <= maxBytes) {
@@ -321,11 +313,20 @@ function afterSourceContentFence(page: string): number {
   return fenceLineStart + fence.length + close.index + close[0].length;
 }
 
-function findNotesHumanBlock(page: string): { start: number; end: number } | null {
-  const searchFrom = afterSourceContentFence(page);
-  const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
-  const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
+function findNotesHumanBlock(
+  page: string,
+  producerMarkdown = false,
+): { start: number; end: number } | null {
+  const bodyOffset = producerMarkdown ? (page.match(FRONTMATTER_PATTERN)?.[0].length ?? 0) : 0;
+  const searchable = producerMarkdown ? maskMarkdownCode(page.slice(bodyOffset), true) : page;
+  const searchFrom = producerMarkdown ? 0 : afterSourceContentFence(page);
+  const start = searchable.indexOf(HUMAN_START_MARKER, searchFrom);
+  const endMarker = searchable.lastIndexOf(HUMAN_END_MARKER);
   if (start === -1 && endMarker < searchFrom) {
+    // Raw producer documents can have their own unmarked Notes heading.
+    if (producerMarkdown) {
+      return null;
+    }
     const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
       page.slice(searchFrom),
     );
@@ -339,7 +340,7 @@ function findNotesHumanBlock(page: string): { start: number; end: number } | nul
       `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`,
     );
   }
-  return { start, end: endMarker + HUMAN_END_MARKER.length };
+  return { start: bodyOffset + start, end: bodyOffset + endMarker + HUMAN_END_MARKER.length };
 }
 
 export function extractHumanNotesBlock(page: string): string | null {
@@ -354,9 +355,13 @@ export function extractHumanNotesBlock(page: string): string | null {
   return notes.trim() ? page.slice(block.start, block.end) : null;
 }
 
-export function preserveHumanNotesBlock(rendered: string, existing: string): string {
-  const existingBlock = findNotesHumanBlock(existing);
-  const renderedBlock = findNotesHumanBlock(rendered);
+export function preserveHumanNotesBlock(
+  rendered: string,
+  existing: string,
+  options?: { producerMarkdown?: boolean },
+): string {
+  const existingBlock = findNotesHumanBlock(existing, options?.producerMarkdown);
+  const renderedBlock = findNotesHumanBlock(rendered, options?.producerMarkdown);
   if (!existingBlock || !renderedBlock) {
     return rendered;
   }

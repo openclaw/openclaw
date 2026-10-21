@@ -1,4 +1,3 @@
-// Nextcloud Talk tests cover accounts plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,23 +9,23 @@ import {
 } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
+function talkConfig(config: NonNullable<CoreConfig["channels"]>["nextcloud-talk"]): CoreConfig {
+  return {
+    channels: {
+      "nextcloud-talk": {
+        baseUrl: "https://cloud.example.com",
+        botSecret: "shared-secret",
+        ...config,
+      },
+    },
+  };
+}
+
 describe("Nextcloud Talk account resolution", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("preserves top-level default account when named accounts are configured", () => {
-    const cfg = {
-      channels: {
-        "nextcloud-talk": {
-          baseUrl: "https://cloud.example.com",
-          botSecret: "shared-secret",
-          accounts: {
-            work: { enabled: false },
-          },
-        },
-      },
-    } satisfies CoreConfig;
+    const cfg = talkConfig({ accounts: { work: { enabled: false } } });
 
     expect(listNextcloudTalkAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultNextcloudTalkAccountId(cfg)).toBe("default");
@@ -37,6 +36,27 @@ describe("Nextcloud Talk account resolution", () => {
     });
   });
 
+  it("inherits and overrides inbound media config through normal account resolution", () => {
+    const cfg = talkConfig({
+      mediaAllowFrom: ["nextcloud-talk:alice"],
+      mediaMaxMb: 20,
+      accounts: {
+        inherited: {},
+        restricted: { mediaAllowFrom: ["*"], mediaMaxMb: 5 },
+      },
+    });
+    for (const accountId of ["default", "inherited"]) {
+      expect(resolveNextcloudTalkAccount({ cfg, accountId }).config).toMatchObject({
+        mediaAllowFrom: ["nextcloud-talk:alice"],
+        mediaMaxMb: 20,
+      });
+    }
+    expect(resolveNextcloudTalkAccount({ cfg, accountId: "restricted" }).config).toMatchObject({
+      mediaAllowFrom: ["*"],
+      mediaMaxMb: 5,
+    });
+  });
+
   it("isolates unavailable default and named account SecretRefs from ambient credentials", () => {
     vi.stubEnv("NEXTCLOUD_TALK_BOT_SECRET", "ambient-secret");
     const unavailableSecret = {
@@ -44,18 +64,13 @@ describe("Nextcloud Talk account resolution", () => {
       provider: "default",
       id: "MISSING_NEXTCLOUD_TALK_SECRET",
     } as const;
-    const cfg = {
-      channels: {
-        "nextcloud-talk": {
-          baseUrl: "https://cloud.example.com",
-          botSecret: unavailableSecret,
-          accounts: {
-            work: { botSecret: unavailableSecret },
-            healthy: { botSecret: "healthy-secret" },
-          },
-        },
+    const cfg = talkConfig({
+      botSecret: unavailableSecret,
+      accounts: {
+        work: { botSecret: unavailableSecret },
+        healthy: { botSecret: "healthy-secret" },
       },
-    } satisfies CoreConfig;
+    });
 
     for (const accountId of ["default", "work"]) {
       expect(resolveNextcloudTalkAccount({ cfg, accountId })).toMatchObject({
@@ -77,37 +92,19 @@ describe("Nextcloud Talk account resolution", () => {
     fs.writeFileSync(secretFile, "file-secret\n", "utf8");
 
     try {
-      const cfg = {
-        channels: {
-          "nextcloud-talk": {
-            baseUrl: "https://cloud.example.com",
-            botSecret: "plaintext-secret",
-            botSecretFile: secretFile,
-          },
-        },
-      } satisfies CoreConfig;
-
-      vi.stubEnv("NEXTCLOUD_TALK_BOT_SECRET", "ambient-secret");
-      expect(resolveNextcloudTalkAccount({ cfg })).toMatchObject({
-        secret: "ambient-secret",
-        secretSource: "env",
-      });
-
-      vi.stubEnv("NEXTCLOUD_TALK_BOT_SECRET", "");
-      expect(resolveNextcloudTalkAccount({ cfg })).toMatchObject({
-        secret: "file-secret",
-        secretSource: "secretFile",
-      });
-
-      const withoutSecretFile = {
-        channels: {
-          "nextcloud-talk": { ...cfg.channels["nextcloud-talk"], botSecretFile: undefined },
-        },
-      } satisfies CoreConfig;
-      expect(resolveNextcloudTalkAccount({ cfg: withoutSecretFile })).toMatchObject({
-        secret: "plaintext-secret",
-        secretSource: "config",
-      });
+      const config = {
+        botSecret: "plaintext-secret",
+        botSecretFile: secretFile,
+      };
+      for (const [env, file, secret, secretSource] of [
+        ["ambient-secret", secretFile, "ambient-secret", "env"],
+        ["", secretFile, "file-secret", "secretFile"],
+        ["", undefined, "plaintext-secret", "config"],
+      ] as const) {
+        vi.stubEnv("NEXTCLOUD_TALK_BOT_SECRET", env);
+        const cfg = talkConfig({ ...config, botSecretFile: file });
+        expect(resolveNextcloudTalkAccount({ cfg })).toMatchObject({ secret, secretSource });
+      }
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }

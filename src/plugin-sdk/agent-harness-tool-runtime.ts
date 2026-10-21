@@ -31,6 +31,10 @@ export {
   type AgentHarnessMessagingDeliveryFacts,
   type AgentHarnessToolMediaFacts,
 } from "../agents/harness/tool-result-facts.js";
+export {
+  applyGatewayToolPolicy,
+  createGatewayToolPolicyAssertion,
+} from "../agents/gateway-tool-policy.js";
 export { runAgentHarnessToolInvocation } from "../agents/harness/tool-invocation.js";
 export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
 export {
@@ -59,7 +63,7 @@ export type AgentHarnessToolSurfaceRuntimeParams = Omit<
   executeTool: NonNullable<OpenClawCodingToolsOptions["toolSearchCatalogExecutor"]>;
 };
 
-/** @deprecated Await createAgentHarnessToolSurfaceRuntimeAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await createAgentHarnessToolSurfaceRuntimeAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createAgentHarnessToolSurfaceRuntime(params: AgentHarnessToolSurfaceRuntimeParams) {
   warnPluginSdkDeprecation({
     family: "agent-harness-tool-surface",

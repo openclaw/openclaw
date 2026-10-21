@@ -50,6 +50,8 @@ const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+const READ_ONLY_TOOL_CONTINUATION_INSTRUCTION =
+  "Your turn ended before completing the task. Continue from the current transcript, using tools for any remaining work, then produce the final reply. Do not repeat completed tool calls or restart from scratch.";
 
 type IncompleteTurnRecoveryParams = {
   provider?: string;
@@ -170,9 +172,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
  * Builds the retry instruction for reasoning-only turns that consumed provider
  * output budget but produced no visible assistant text.
  */
-export function resolveReasoningOnlyRetryInstruction(
-  params: IncompleteTurnRecoveryParams,
-): string | null {
+function resolveReasoningOnlyRetryInstruction(params: IncompleteTurnRecoveryParams): string | null {
   if (shouldSkipNonVisibleTurnRetry(params) || !shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
@@ -321,15 +321,15 @@ export function resolveSettledToolBatchEvidence(
   };
 }
 
-/** Builds one fresh continuation after settled tools ended without a visible final answer. */
-export function resolveSettledToolTerminalContinuationInstruction(
+/** Selects the instruction and tool policy for one continuation after settled tools. */
+export function resolveSettledToolTerminalContinuation(
   params: IncompleteTurnRecoveryParams & {
     allowEmptyStopContinuation?: boolean;
     replyDeliveryState: ReplyDeliveryState;
     payloadCount: number;
     hasTerminalToolPresentation?: boolean;
   },
-): string | null {
+): { instruction: string; disableTools: boolean } | null {
   const { attempt } = params;
   const {
     assistant: toolBatchAssistant,
@@ -346,16 +346,17 @@ export function resolveSettledToolTerminalContinuationInstruction(
     terminal.source === "idle" &&
     attempt.currentAttemptReplayMetadata?.hadPotentialSideEffects === true;
   const assistantState = classifyAssistantTurn(params);
-  const emptyStopAfterSettledTools = Boolean(
+  // Signed reasoning may have no visible answer without being an empty response.
+  const nonVisibleStopAfterSettledTools = Boolean(
     params.allowEmptyStopContinuation &&
-    attempt.currentAttemptAssistant?.stopReason === "stop" &&
+    (assistantState.assistant?.stopReason === "stop" ||
+      assistantState.assistant?.stopReason === "length") &&
     attempt.toolMetas.length > 0 &&
     attempt.toolMetas.every((tool) => tool.isError !== true && tool.asyncStarted !== true) &&
     attempt.itemLifecycle.startedCount > 0 &&
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0 &&
-    !hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) &&
-    assistantState.emptyResponse,
+    assistantState.visibleText.length === 0,
   );
   if (
     params.payloadCount !== 0 ||
@@ -370,7 +371,7 @@ export function resolveSettledToolTerminalContinuationInstruction(
     (terminal.kind === "failed" && !attempt.settledTurnFinalizationContext) ||
     (toolBatchAssistant?.stopReason === "toolUse"
       ? !allToolsProvenSettled
-      : !emptyStopAfterSettledTools) ||
+      : !nonVisibleStopAfterSettledTools) ||
     intentionalTermination ||
     parkedCodeModeRun ||
     hasUnsettledToolError ||
@@ -385,20 +386,33 @@ export function resolveSettledToolTerminalContinuationInstruction(
   ) {
     return null;
   }
-  const instruction =
-    params.terminalReplyExpectation === "result-required"
+  // Only explicit current-attempt evidence permits extending the work. The
+  // isolated finalizer remains text-only after possible effects or missing evidence.
+  const keepTools =
+    (assistantState.assistant?.stopReason === "stop" ||
+      assistantState.assistant?.stopReason === "length") &&
+    assistantState.visibleText.length === 0 &&
+    attempt.currentAttemptReplayMetadata?.hadPotentialSideEffects === false;
+  const resultRequired = params.terminalReplyExpectation === "result-required";
+  const instruction = keepTools
+    ? `${READ_ONLY_TOOL_CONTINUATION_INSTRUCTION}${resultRequired ? " NO_REPLY is not allowed." : ""}`
+    : resultRequired
       ? REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION
       : SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
-  return allToolsProvenSettled && failedToolNames.size > 0
-    ? `${instruction} ${TOOL_FAILURE_INSTRUCTION}`
-    : instruction;
+  return {
+    instruction:
+      allToolsProvenSettled && failedToolNames.size > 0
+        ? `${instruction} ${TOOL_FAILURE_INSTRUCTION}`
+        : instruction,
+    disableTools: !keepTools,
+  };
 }
 
 /**
  * Builds the retry instruction for empty assistant turns when the provider/model
  * is eligible for non-visible turn recovery.
  */
-export function resolveEmptyResponseRetryInstruction(
+function resolveEmptyResponseRetryInstruction(
   params: IncompleteTurnRecoveryParams & {
     payloadCount: number;
     replyDeliveryState: ReplyDeliveryState;
@@ -490,4 +504,22 @@ export function resolveEmptyResponseRetryInstruction(
   }
 
   return null;
+}
+
+export function resolveNonVisibleTurnRetryInstructions(
+  params: IncompleteTurnRecoveryParams & {
+    payloadCount: number;
+    replyDeliveryState: ReplyDeliveryState;
+    settledToolPayloadCount: number;
+    hasTerminalToolPresentation?: boolean;
+  },
+): [reasoningOnly: string | null, emptyResponse: string | null] {
+  const settled = resolveSettledToolTerminalContinuation({
+    ...params,
+    payloadCount: params.settledToolPayloadCount,
+    allowEmptyStopContinuation: true,
+  });
+  return settled?.disableTools === false
+    ? [null, settled.instruction]
+    : [resolveReasoningOnlyRetryInstruction(params), resolveEmptyResponseRetryInstruction(params)];
 }

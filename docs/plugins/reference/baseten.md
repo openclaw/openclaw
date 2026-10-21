@@ -15,7 +15,7 @@ OpenClaw Baseten provider plugin.
 ## Distribution
 
 - Package: `@openclaw/baseten-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/baseten-provider`
+- Install route: npm or ClawHub: `@openclaw/baseten-provider`
 
 ## Surface
 

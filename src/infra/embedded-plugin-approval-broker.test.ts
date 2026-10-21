@@ -18,9 +18,8 @@ afterEach(() => {
 
 describe("EmbeddedPluginApprovalBroker", () => {
   it("lists, emits, and resolves pending approvals", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
     const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       events.push(event);
     });
 
@@ -81,9 +80,8 @@ describe("EmbeddedPluginApprovalBroker", () => {
 
   it("times out pending approvals", async () => {
     vi.useFakeTimers();
-    const broker = new EmbeddedPluginApprovalBroker();
     const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       events.push(event);
     });
     const resultPromise = broker.request({
@@ -102,9 +100,8 @@ describe("EmbeddedPluginApprovalBroker", () => {
   });
 
   it("removes approvals when the embedded run is aborted", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
     const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       events.push(event);
     });
     const controller = new AbortController();
@@ -124,18 +121,13 @@ describe("EmbeddedPluginApprovalBroker", () => {
     });
   });
 
-  it("isolates failed listeners while stopping every pending request", async () => {
+  it("isolates presentation failure while stopping every pending request", async () => {
     vi.useFakeTimers();
-    const broker = new EmbeddedPluginApprovalBroker();
     const removedIds: string[] = [];
-    broker.subscribe((event) => {
-      if (event.event === "plugin.approval.removed") {
-        throw new Error("removal listener failed");
-      }
-    });
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       if (event.event === "plugin.approval.removed") {
         removedIds.push(event.payload.id);
+        throw new Error("removal listener failed");
       }
     });
     const first = broker.request({

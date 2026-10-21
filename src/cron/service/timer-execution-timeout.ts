@@ -19,7 +19,7 @@ import type {
   CronRunDeliveryResult,
   CronRunTelemetry,
 } from "../types.js";
-import type { CronServiceState } from "./state.js";
+import type { CronIdleAdmissionSource, CronIdleAdmissionWait, CronServiceState } from "./state.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 
@@ -82,6 +82,10 @@ export type IsolatedAgentSetupTimeoutResult = {
 };
 
 export type ExecuteJobCoreOptions = {
+  /** Queue admission supplies this fact so receipt I/O cannot reorder payload starts. */
+  migrationPending?: boolean;
+  idleAdmission?: CronIdleAdmissionSource;
+  waitForIdle?: CronIdleAdmissionWait;
   deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
   onPayloadExecutionStarted?: () => void;

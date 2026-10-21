@@ -10,6 +10,7 @@ import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-acces
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { describeAdmittedDatabaseStores } from "../infra/database-engine/admitted-diagnostics.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { resetFileLockStateForTest } from "../plugin-sdk/file-lock.js";
 import {
@@ -120,7 +121,9 @@ describe("cleanupSessionStateForTest", () => {
 
   it("closes memory owners and pooled auth readers only within the requested state root", async () => {
     // openclaw-temp-dir: allow verifies state-root removal after scoped database cleanup
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-cleanup-auth-"));
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-cleanup-auth-")),
+    );
     const targets = ["state", "state-sibling"].map((name) => {
       const stateDir = path.join(root, name);
       const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -169,6 +172,10 @@ describe("cleanupSessionStateForTest", () => {
         expect(() => owner.assertCurrent()).not.toThrow();
       }
 
+      expect(describeAdmittedDatabaseStores({}).map(({ path: storePath }) => storePath)).toEqual(
+        expect.arrayContaining(targets.map(({ databasePath }) => databasePath)),
+      );
+
       await cleanupSessionStateForTest({ stateDir: targets[0]!.stateDir });
       expect(selected.isOpen).toBe(false);
       expect(unrelated.isOpen).toBe(true);
@@ -176,6 +183,11 @@ describe("cleanupSessionStateForTest", () => {
       expect(() => memoryOwners[0]!.assertCurrent()).toThrow("closed");
       expect(memorySessionActorOwners.read(memoryOwners[1]!)).toBe(memoryOwners[1]);
       expect(() => memoryOwners[1]!.assertCurrent()).not.toThrow();
+      const retainedStorePaths = describeAdmittedDatabaseStores({}).map(
+        ({ path: storePath }) => storePath,
+      );
+      expect(retainedStorePaths).not.toContain(targets[0]!.databasePath);
+      expect(retainedStorePaths).toContain(targets[1]!.databasePath);
       await fs.rm(targets[0]!.stateDir, { recursive: true, force: true });
       await expect(fs.stat(targets[0]!.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {

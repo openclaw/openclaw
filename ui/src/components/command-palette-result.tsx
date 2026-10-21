@@ -112,6 +112,7 @@ export function CommandPaletteResult(props: {
   identity?: AgentIdentityResult | null;
   pluginIconUrls?: Readonly<Record<string, string>>;
   onPluginIconError?: (pluginId: string) => void;
+  registerPluginIcon?: (readId: () => string) => () => void;
 }) {
   const session = () => props.item.session;
   const owner = () => session()?.owner?.actor;
@@ -161,6 +162,7 @@ export function CommandPaletteResult(props: {
         <Match when={props.item.pluginId} keyed>
           {(pluginId) => (
             <PluginArtTile
+              registerIcon={props.registerPluginIcon}
               slug={pluginId}
               name={props.item.label}
               iconUrl={props.pluginIconUrls?.[pluginId]}
