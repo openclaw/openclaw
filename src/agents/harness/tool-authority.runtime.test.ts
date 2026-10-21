@@ -53,11 +53,13 @@ import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.j
 import {
   admitted,
   attempt,
+  expectOutcome,
   interceptMessages,
   published,
   publishPreparedHandle,
   sessionId,
   sessionKey,
+  withAuthority,
 } from "./tool-authority.runtime.test-support.js";
 
 const own: ReplyToolAuthorityOverlay = {
@@ -68,30 +70,12 @@ const own: ReplyToolAuthorityOverlay = {
   senderId: "authority-requester",
 };
 type AdmittedContext = Awaited<ReturnType<ReturnType<typeof prepareAgentRunAdmission>["admit"]>>;
-function withAuthority<T>(
-  admittedRunContext: AdmittedContext,
-  run: (prepared: typeof attempt & { toolAuthorityFingerprint?: string }) => Promise<T>,
-) {
-  return withPreparedEmbeddedRunToolAuthority({ admittedRunContext }, attempt, undefined, run);
-}
-
 function currentTarget() {
   const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
   if (!target) {
     throw new Error("Expected the direct admitted owner to be injectable");
   }
   return target;
-}
-
-async function expectBlocked(outcome: ReturnType<typeof steer>) {
-  await expect(outcome).resolves.toMatchObject({
-    status: "rejected",
-    reason: "tool_authority_mismatch",
-  });
-}
-
-async function expectQueued(outcome: ReturnType<typeof steer>) {
-  await expect(outcome).resolves.toMatchObject({ status: "accepted" });
 }
 
 function pendingQuestion(
@@ -201,11 +185,7 @@ describe("host-prepared embedded tool authority", () => {
       expect(getSessionControllerOperation(sessionKey)).toBeDefined();
 
       const injection = await inject(
-        {
-          ...own,
-          traceAuthorized: true,
-          disableTools: change === "permissions",
-        },
+        { ...own, traceAuthorized: true, disableTools: change === "permissions" },
         {
           inboundAudio: change === "audio",
           media: change === "audio-media" ? [{ contentType: "audio/ogg" }] : undefined,
@@ -239,17 +219,14 @@ describe("host-prepared embedded tool authority", () => {
               "Apply the correction",
               { isInboundUserMessage: true, toolAuthorityOverlay: own },
             );
-            await expect(injection.outcome).resolves.toMatchObject({ status: "accepted" });
+            await expectOutcome(injection.outcome, "accepted");
             detachActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
             const detached = await beginReplyMessageInjectionTarget(
               target,
               "Do not send to the detached attempt",
               { isInboundUserMessage: true, toolAuthorityOverlay: own },
             );
-            await expect(detached.outcome).resolves.toMatchObject({
-              status: "rejected",
-              reason: "no_active_run",
-            });
+            await expectOutcome(detached.outcome, "rejected", "no_active_run");
             expect(queue).toHaveBeenCalledOnce();
           } else {
             const dispatch = vi.fn<AgentQuestionDispatcher["call"]>(async ({ authority }) => {
@@ -345,7 +322,7 @@ describe("host-prepared embedded tool authority", () => {
           setActiveEmbeddedRun(sessionId, { ...handle }, sessionKey, attempt.sessionFile);
         }
         release.resolve();
-        await expect(pending.outcome).resolves.toMatchObject({ status: "failed" });
+        await expectOutcome(pending.outcome, "failed");
         expect(queue).not.toHaveBeenCalled();
       });
     },
@@ -498,7 +475,7 @@ describe("host-prepared embedded tool authority", () => {
             expect(dispatch).toHaveBeenCalledOnce();
             expect(source).toHaveBeenCalled();
           } else {
-            await expect(pending).resolves.toMatchObject({ status: "answered" });
+            await expectOutcome(pending, "answered");
           }
         } finally {
           question?.dispose();
@@ -635,9 +612,7 @@ describe("host-prepared embedded tool authority", () => {
           publishActiveEmbeddedRun(sessionId, { ...handle }, sessionKey),
         ),
       ).toThrow(SessionControllerAdmissionRequiredError);
-      await expect(steer(own, handle.toolAuthorityFingerprint)).resolves.toMatchObject({
-        status: "accepted",
-      });
+      await expectOutcome(steer(own, handle.toolAuthorityFingerprint), "accepted");
       expect(queue).toHaveBeenCalledOnce();
     });
   });
@@ -724,14 +699,17 @@ describe("host-prepared embedded tool authority", () => {
     await published(
       async ({ queue }) => {
         toolsAllow.push("message");
-        await expectQueued(
+        await expectOutcome(
           steer({ ...own, toolsAllow: attachToolAllowlistIntersection(["exec"], [["exec"]]) }),
+          "accepted",
         );
-        await expectBlocked(
+        await expectOutcome(
           steer({
             ...own,
             toolsAllow: attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]),
           }),
+          "rejected",
+          "tool_authority_mismatch",
         );
         expect(queue).toHaveBeenCalledOnce();
       },
@@ -809,13 +787,8 @@ describe("host-prepared embedded tool authority", () => {
           async (prepared) => {
             const queue = vi.fn(async () => {});
             publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
-            await expect(steer(own)).resolves.toMatchObject({
-              status: "rejected",
-              reason: "tool_authority_mismatch",
-            });
-            await expect(steer({ ...own, toolsAllow: [] })).resolves.toMatchObject({
-              status: "accepted",
-            });
+            await expectOutcome(steer(own), "rejected", "tool_authority_mismatch");
+            await expectOutcome(steer({ ...own, toolsAllow: [] }), "accepted");
             close();
             await expect(
               steerTestSessionTurn(sessionId, "Use the release branch", {
@@ -901,12 +874,13 @@ describe("host-prepared embedded tool authority", () => {
               clientCaps: ["normal-client"],
               approvalReviewerDeviceId: "review-device",
             };
-            await expect(steer({ ...incoming, traceAuthorized: false })).resolves.toMatchObject({
-              status: "rejected",
-              reason: "tool_authority_mismatch",
-            });
+            await expectOutcome(
+              steer({ ...incoming, traceAuthorized: false }),
+              "rejected",
+              "tool_authority_mismatch",
+            );
             expect(queue).not.toHaveBeenCalled();
-            await expect(steer(incoming)).resolves.toMatchObject({ status: "accepted" });
+            await expectOutcome(steer(incoming), "accepted");
             expect(prepared.toolAuthorityFingerprint).toBe(fingerprint);
             await expect(
               steer({
@@ -919,16 +893,18 @@ describe("host-prepared embedded tool authority", () => {
             ).resolves.toMatchObject({ status: "rejected", reason: "no_active_run" });
             setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
             failProjection = true;
-            await expect(steer(incoming, fingerprint)).resolves.toMatchObject({
-              status: "rejected",
-              reason: "tool_authority_mismatch",
-            });
+            await expectOutcome(
+              steer(incoming, fingerprint),
+              "rejected",
+              "tool_authority_mismatch",
+            );
             failProjection = false;
             operation.bindToolAuthorityRoute({ provider: "openai", model: "replacement-route" });
-            await expect(steer(incoming, fingerprint)).resolves.toMatchObject({
-              status: "rejected",
-              reason: "tool_authority_mismatch",
-            });
+            await expectOutcome(
+              steer(incoming, fingerprint),
+              "rejected",
+              "tool_authority_mismatch",
+            );
             operation.bindToolAuthorityRoute(route);
             const target = currentTarget();
             operation.attachBackend({ ...handle });
@@ -936,15 +912,9 @@ describe("host-prepared embedded tool authority", () => {
             const injection = await beginReplyMessageInjectionTarget(
               target,
               "Use the release branch",
-              {
-                isInboundUserMessage: true,
-                toolAuthorityOverlay: incoming,
-              },
+              { isInboundUserMessage: true, toolAuthorityOverlay: incoming },
             );
-            await expect(injection.outcome).resolves.toMatchObject({
-              status: "rejected",
-              reason: "no_active_run",
-            });
+            await expectOutcome(injection.outcome, "rejected", "no_active_run");
             expect(queue).toHaveBeenCalledOnce();
           },
         );
