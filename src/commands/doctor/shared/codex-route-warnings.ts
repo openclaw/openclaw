@@ -443,7 +443,6 @@ export function collectCodexRouteWarnings(params: {
 export function maybeRepairCodexRoutes(params: {
   cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
-  shouldRepair: boolean;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): { cfg: OpenClawConfigWithLegacyRoster; warnings: string[]; changes: string[] } {
   const env = params.env ?? process.env;
@@ -460,13 +459,12 @@ export function maybeRepairCodexRoutes(params: {
     (hit) => hit.removable,
   );
   if (
-    !params.shouldRepair ||
-    (hits.length === 0 &&
-      disabledCodexPluginHits.length === 0 &&
-      unsupportedCompactionOverrides.length === 0 &&
-      legacyLosslessCompactionConfigs.length === 0 &&
-      !hasRemovableServiceTier &&
-      !blockedProviderPlan.warning)
+    hits.length === 0 &&
+    disabledCodexPluginHits.length === 0 &&
+    unsupportedCompactionOverrides.length === 0 &&
+    legacyLosslessCompactionConfigs.length === 0 &&
+    !hasRemovableServiceTier &&
+    !blockedProviderPlan.warning
   ) {
     return {
       cfg: params.cfg,

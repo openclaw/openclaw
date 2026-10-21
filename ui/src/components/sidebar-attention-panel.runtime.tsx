@@ -1,4 +1,4 @@
-import { createMemo, For, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
+import { createMemo, For, Match, onSettled, Show, Switch } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -235,13 +235,13 @@ export function SidebarAttentionPanel(
   context: ApplicationContext = useApplication(),
   mentionSource: MentionsCapability = context.sidebarAttention.activate(SidebarAttentionStoreOwner),
 ) {
-  onCleanup(() => props.listRef?.(null));
   let panel!: HTMLElement;
   const focus = createSidebarAttentionFocus(() => panel);
   onSettled(() => {
     const releaseModal = registerModalSurface(panel);
     props.focusRef?.(focus);
     return () => {
+      props.listRef?.(null);
       props.focusRef?.(null);
       releaseModal();
     };

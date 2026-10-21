@@ -46,6 +46,10 @@ vi.mock("../infra/sqlite-readonly-worker.js", async (importOriginal) => {
 
 const readJournal = vi.mocked(readAgentDeletionJournalStatusInWorker);
 const overload = () => new WorkerTaskError("worker task capacity reached", "overloaded");
+function expectAdmission(prepared: string[], failed: string[], reads: number) {
+  expect(admissionState).toEqual({ prepared, failed });
+  expect(readJournal).toHaveBeenCalledTimes(reads);
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -124,62 +128,40 @@ it("prepares more than 128 agents without overflowing state-read admission", asy
 it("retries shared-pool capacity rejections and prepares the agent", async () => {
   readJournal.mockRejectedValueOnce(overload()).mockRejectedValueOnce(overload());
   await prepareAgents(1);
-  expect(admissionState.prepared).toEqual(["agent-0"]);
-  expect(admissionState.failed).toEqual([]);
-  expect(readJournal).toHaveBeenCalledTimes(4);
+  expectAdmission(["agent-0"], [], 4);
 });
 
-it("exhausts the bounded publication retry on persistent schema admission changes", async () => {
-  const publish = vi.fn(async () => {
-    throw new AgentDatabaseSchemaAdmissionChangedError();
-  });
+it.each([
+  [new AgentDatabaseSchemaAdmissionChangedError(), 4],
+  [new AgentDatabaseSchemaAdmissionInvalidError(), 1],
+] as const)("fails publication for %s after %i attempts", async (error, attempts) => {
+  const publish = vi.fn().mockRejectedValue(error);
   await prepareAgents(1, { publishAgent: publish });
-  expect(publish).toHaveBeenCalledTimes(4);
-  expect(admissionState.prepared).toEqual([]);
-  expect(admissionState.failed).toEqual(["agent-0"]);
-});
-
-it("does not retry a malformed schema admission receipt", async () => {
-  const publish = vi.fn(async () => {
-    throw new AgentDatabaseSchemaAdmissionInvalidError();
-  });
-  await prepareAgents(1, { publishAgent: publish });
-  expect(publish).toHaveBeenCalledOnce();
-  expect(admissionState.prepared).toEqual([]);
-  expect(admissionState.failed).toEqual(["agent-0"]);
+  expect(publish).toHaveBeenCalledTimes(attempts);
+  expect(admissionState).toEqual({ prepared: [], failed: ["agent-0"] });
 });
 
 it("does not republish after the agent is deleted during an admission retry", async () => {
   readJournal.mockResolvedValueOnce("absent").mockResolvedValue("pending");
-  const publish = vi.fn(async () => {
-    throw new AgentDatabaseSchemaAdmissionChangedError();
-  });
+  const publish = vi.fn().mockRejectedValue(new AgentDatabaseSchemaAdmissionChangedError());
   await prepareAgents(1, { publishAgent: publish });
   expect(publish).toHaveBeenCalledOnce();
-  expect(admissionState.prepared).toEqual([]);
-  expect(admissionState.failed).toEqual(["agent-0"]);
+  expect(admissionState).toEqual({ prepared: [], failed: ["agent-0"] });
 });
 
-it.each(["pending", "complete"] as const)(
-  "does not retry a %s deletion tombstone",
-  async (status) => {
-    readJournal.mockResolvedValue(status);
-    await prepareAgents(1);
-    expect(admissionState.prepared).toEqual([]);
-    expect(admissionState.failed).toEqual(["agent-0"]);
-    expect(readJournal).toHaveBeenCalledTimes(1);
-  },
-);
-
 it.each([
-  { name: "a genuine read failure", error: new Error("journal unreadable"), attempts: 1 },
-  { name: "exhausted capacity retries", error: overload(), attempts: 4 },
-])("records $name as degraded", async ({ error, attempts }) => {
-  readJournal.mockRejectedValue(error);
+  ["pending", 1],
+  ["complete", 1],
+  [new Error("journal unreadable"), 1],
+  [overload(), 4],
+] as const)("refuses startup for %s after %i reads", async (outcome, attempts) => {
+  if (outcome instanceof Error) {
+    readJournal.mockRejectedValue(outcome);
+  } else {
+    readJournal.mockResolvedValue(outcome);
+  }
   await prepareAgents(1);
-  expect(admissionState.prepared).toEqual([]);
-  expect(admissionState.failed).toEqual(["agent-0"]);
-  expect(readJournal).toHaveBeenCalledTimes(attempts);
+  expectAdmission([], ["agent-0"], attempts);
 });
 
 it("does not start queued journal reads after Gateway ownership changes", async () => {

@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
 beforeAll(async () => {
@@ -7,12 +8,6 @@ beforeAll(async () => {
     expect(toSanitizedMarkdownHtml("```ts\nconst ready = true;\n```")).toContain("hljs-keyword"),
   );
 });
-
-function htmlFragment(html: string): HTMLElement {
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  return container;
-}
 
 describe("toStreamingMarkdownParts code fences", () => {
   it.each([

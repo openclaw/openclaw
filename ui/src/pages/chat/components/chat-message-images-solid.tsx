@@ -39,6 +39,7 @@ import {
   releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
+  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
@@ -487,10 +488,8 @@ function createMessageImagePresentation(props: MessageImageProps) {
     active = false;
     previewEvents?.stop();
     previewEvents = undefined;
-    if (previewElement) {
-      // Do not retain the removed row through the image's parent or listeners.
-      previewElement.remove();
-    }
+    // Do not retain the removed row through the image's parent or listeners.
+    previewElement?.remove();
     if (loadedElement && currentImage?.url) {
       retainAssistantImage(
         currentImage.url,
@@ -703,5 +702,44 @@ function ImageFrame(props: {
         <ChatImageActions title={title()} readOriginalBlob={loadOriginal} />
       </Show>
     </span>
+  );
+}
+
+/** Catalogs consume the same admitted image resource and viewer as transcript tiles. */
+type MessageImageActionProps = MessageImageProps & {
+  render: (action: () => MessageMediaAction) => JSX.Element;
+};
+export function MessageImageAction(props: MessageImageActionProps): JSX.Element {
+  // Match the transcript slot's retirement when its scope or policy changes.
+  const scope = () =>
+    JSON.stringify([
+      props.options.sessionKey,
+      props.options.agentId,
+      props.options.connectionEpoch,
+      props.options.resourceBasePath,
+      props.options.authToken,
+      props.options.policyKey,
+      props.options.canonicalMessageKey,
+    ]);
+  return (
+    <Show when={scope()} keyed>
+      {(_scope) => {
+        const presentation = createMessageImagePresentation(props);
+        const action = createMemo<MessageMediaAction>(() => {
+          const { actions, state, reason, previewUrl } = presentation.model();
+          return {
+            ...actions,
+            pending: state === "loading",
+            reason,
+            observeElement: presentation.observeFrame,
+            onFocus: state === "unavailable" ? undefined : presentation.admit,
+            onOpen: previewUrl
+              ? () => openMessageImage(props.image, previewUrl, props.options)
+              : undefined,
+          };
+        });
+        return props.render(action);
+      }}
+    </Show>
   );
 }

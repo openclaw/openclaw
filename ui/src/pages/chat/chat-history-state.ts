@@ -13,6 +13,16 @@ import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 
+export type ChatBranchesQueryState =
+  | { readonly status: "idle" }
+  | { readonly status: "loading" | "ready" }
+  | { readonly status: "error"; readonly message: string };
+
+type ChatBranchesQueryReceipt = {
+  readonly isCurrent: () => boolean;
+  readonly query: ChatBranchesQueryState;
+};
+
 type ChatHistoryLoadRequest = {
   sessionKey: string;
   requestAgentId: string | undefined;
@@ -51,6 +61,7 @@ type ChatHistoryLoadState =
 type ChatHistoryPaneRequests = {
   historyVersion: number;
   branchVersion: number;
+  branchQuery: ChatBranchesQueryReceipt | undefined;
   subscriptionGeneration: number;
   pendingApprovalReplay?: { generation: number; events: Map<string, SessionApprovalEvent> };
   subscriptionReady?: Promise<boolean>;
@@ -72,6 +83,7 @@ type ChatHistoryPaneRequests = {
 };
 
 export type InitialChatSnapshotHydration = {
+  titlePending?: boolean;
   sessionKey: string;
   connected: boolean;
   promise: Promise<void>;
@@ -90,6 +102,7 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
     requests = {
       historyVersion: 0,
       branchVersion: 0,
+      branchQuery: undefined,
       subscriptionGeneration: 0,
       syncRetries: new Map(),
       historyLoad: { phase: "idle" },
@@ -364,4 +377,30 @@ export function setChatError(
   const message = error === null ? null : formatUiError(error);
   state.lastError = message;
   state.chatError = message;
+}
+
+/** Read-only catalog input from the adopted transcript; never starts a history read. */
+export function readChatTranscriptAttachmentSource(state: ChatState) {
+  const load = getChatHistoryLoadState(state);
+  const accepted = chatHistoryRequests(state).acceptedHistory;
+  const known = Boolean(
+    accepted &&
+    accepted.sessionKey === state.sessionKey &&
+    accepted.sessions === state.sessions &&
+    accepted.client === state.client &&
+    accepted.connectionEpoch === state.connectionEpoch &&
+    (accepted.sessionInfo?.sessionId ?? accepted.sessionId) === state.currentSessionId &&
+    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      accepted.requestAgentId === resolveUiSelectedSessionAgentId(state)),
+  );
+  return {
+    sessionKey: state.sessionKey,
+    sessionId: state.currentSessionId,
+    connectionEpoch: state.connectionEpoch,
+    messages: state.chatMessages,
+    pagination: state.chatHistoryPagination,
+    coverage: known ? (state.chatHistoryPagination.hasMore ? "partial" : "complete") : "unknown",
+    loading: load.phase === "in-flight" || load.phase === "pending-connection",
+    error: load.phase === "failed" ? load.message : undefined,
+  } as const;
 }

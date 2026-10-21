@@ -374,12 +374,15 @@ function findLatestResetMessageWindow(
           )
           .select([
             "active.message_position",
-            /* kysely-allow-raw: preserve JS-readable overdepth rows for existing tool-pairing validation. */
-            sql<string>`CASE WHEN ${jsonValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
-              THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
-              ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`.as(
-              "event_json",
-            ),
+            // Compaction keeps the entire tail and needs no tool-pairing metadata.
+            (includesBoundary
+              ? transcriptEventResetNavigationSql(projection.database.db, "event")
+              : // Preserve JS-readable overdepth rows for reset tool-pairing validation.
+                /* kysely-allow-raw: guarded model-navigation projection. */
+                sql<string>`CASE WHEN ${jsonValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
+                  THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
+                  ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`
+            ).as("event_json"),
             /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
             sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])
@@ -666,7 +669,7 @@ export function readVisibleTranscriptStats(
         .onRef("event.seq", "=", "active.event_seq"),
     )
     .select((eb) => [
-      eb.fn.count<number>("active.event_seq").as("event_count"),
+      eb.fn.countAll<number>().as("event_count"),
       /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
       sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql("event")} ), 0)
         + COUNT(*) AS BIGINT)`.as("size_bytes"),

@@ -225,8 +225,6 @@ function createFleet(
 const recoveredMessage = "agent database recovered after background inspection and preparation";
 const progressMessage = "agent database startup preparation still running";
 const supersededRetryMessage = "agent database startup preparation was superseded; retrying";
-const schemaAdmissionRetryMessage =
-  "agent database startup publication lost its schema admission; retrying";
 
 function expectLog(log: typeof mocks.info, message: string, fields: Record<string, unknown>) {
   expect(log).toHaveBeenCalledWith(message, expect.objectContaining(fields));
@@ -541,6 +539,7 @@ it.for([
   "secrets preparation",
   "model runtime",
   "queued model runtime",
+  "schema admission",
 ] as const)(
   "retries a superseded publication after %s replacement",
   async (replacement, { signal }) => {
@@ -570,6 +569,9 @@ it.for([
         if (replacement === "model runtime") {
           throw new PreparedModelRuntimePublicationSupersededError("publication was superseded");
         }
+        if (replacement === "schema admission") {
+          throw new AgentDatabaseSchemaAdmissionChangedError();
+        }
       });
     }
     await fleet.run(async (admission) => {
@@ -597,24 +599,6 @@ it.for([
     });
   },
 );
-
-it("retries a publication whose schema admission changed", async ({ signal }) => {
-  const fleet = createFleet(["large"]);
-  mocks.refreshSecrets.mockImplementationOnce(async () => {
-    throw new AgentDatabaseSchemaAdmissionChangedError();
-  });
-  await fleet.run(async (admission) => {
-    fleet.inspect(0);
-    await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
-    expectAdmission(fleet, "large");
-    expectLog(mocks.warn, schemaAdmissionRetryMessage, { agentId: "large", attempt: 1 });
-    expectLog(mocks.info, recoveredMessage, { agentId: "large" });
-    // Opening and migration stay outside the publication retry.
-    expect(mocks.opened).toHaveBeenCalledTimes(1);
-    expect(mocks.migrate).toHaveBeenCalledTimes(1);
-    expect(mocks.refreshSecrets).toHaveBeenCalledTimes(2);
-  });
-});
 
 it.for(["secrets", "model runtime"] as const)(
   "fails admission after four continuously superseded %s publications",

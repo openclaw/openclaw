@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
+  runOpenClawAgentWriteTransaction as write,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -11,59 +11,48 @@ import {
   readTrajectoryPayload,
 } from "../../trajectory/runtime-payload.js";
 import {
-  copySqliteSessionGenerationRows,
-  readSqliteSessionGenerationComparison,
-  readSqliteSessionGenerationWindows,
+  copySqliteSessionGenerationRows as copyRows,
+  readSqliteSessionGenerationComparison as readComparison,
+  readSqliteSessionGenerationWindows as readWindows,
 } from "./session-accessor.sqlite-generation-copy.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 
-it("treats a streaming copy onto its source as a no-op without deleting any rows", async () => {
-  await withOpenClawTestState({ label: "generation-self-copy" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionKey: "agent:main:copy",
-      sessionId: "copy",
-    };
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        appendTranscriptEventsInTransaction(database, scope, [
-          { type: "session", version: 3, id: scope.sessionId },
-          {
-            type: "message",
-            id: "message",
-            parentId: null,
-            message: { role: "user", content: "Preserve these exact bytes." },
-          },
-        ]);
-        const snapshot = () => ({
-          events: database.db.prepare("SELECT * FROM transcript_events ORDER BY seq").all(),
-          identities: database.db
-            .prepare("SELECT * FROM transcript_event_identities ORDER BY event_id")
-            .all(),
-        });
-        const before = snapshot();
-        expect(before.events).toHaveLength(2);
-        expect(() =>
-          copySqliteSessionGenerationRows({
-            destination: database,
-            source: database,
-            sessionId: scope.sessionId,
-            sourceWindowPresent: true,
-          }),
-        ).not.toThrow();
-        expect(snapshot()).toEqual(before);
-      },
-      { agentId: scope.agentId, env: scope.env },
-    );
-  });
-});
+it("treats a streaming copy onto its source as a no-op without deleting any rows", () =>
+  withOpenClawTestState({ label: "generation-self-copy" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const scope = { ...options, sessionKey: "agent:main:copy", sessionId: "copy" };
+    write((database) => {
+      appendTranscriptEventsInTransaction(database, scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        {
+          type: "message",
+          id: "message",
+          parentId: null,
+          message: { role: "user", content: "kept" },
+        },
+      ]);
+      const rows = (sql: string) => database.db.prepare(sql).all();
+      const snapshot = () => ({
+        events: rows("SELECT * FROM transcript_events ORDER BY seq"),
+        identities: rows("SELECT * FROM transcript_event_identities ORDER BY event_id"),
+      });
+      const before = snapshot();
+      expect(before.events).toHaveLength(2);
+      copyRows({
+        destination: database,
+        source: database,
+        sessionId: scope.sessionId,
+        sourceWindowPresent: true,
+      });
+      expect(snapshot()).toEqual(before);
+    }, options);
+  }));
 
 it.each(["UTF-8", "UTF-16le"])(
   "preserves mixed trajectory bytes and logical fingerprints when copying to %s",
-  async (encoding) => {
-    await withOpenClawTestState({ label: "generation-trajectory-copy" }, async (state) => {
+  (encoding) =>
+    withOpenClawTestState({ label: "generation-trajectory-copy" }, async (state) => {
       const sessionId = "trajectory-copy";
       const sourceOptions = { agentId: "main", env: state.env };
       const destinationOptions = {
@@ -80,18 +69,18 @@ it.each(["UTF-8", "UTF-16le"])(
       const source = openOpenClawAgentDatabase(sourceOptions);
       const destination = openOpenClawAgentDatabase(destinationOptions);
       const legacyJson = '{ "type": "legacy", "value": "retained exact whitespace" }';
-      const compressedJson = JSON.stringify({
-        type: "model.completed",
-        data: { messagesSnapshot: [{ role: "user", content: "retained 🦞 bytes ".repeat(256) }] },
-      });
-      const rowQuery = (database: typeof source) =>
-        getSessionKysely(database.db)
-          .selectFrom("trajectory_runtime_events")
-          .selectAll()
-          .where("session_id", "=", sessionId)
-          .orderBy("seq");
+      const compressedJson = JSON.stringify({ text: "retained 🦞 bytes ".repeat(256) });
+      const readRows = (database: typeof source) =>
+        executeSqliteQuerySync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("trajectory_runtime_events")
+            .selectAll()
+            .where("session_id", "=", sessionId)
+            .orderBy("seq"),
+        ).rows;
       for (const options of [sourceOptions, destinationOptions]) {
-        runOpenClawAgentWriteTransaction((database) => {
+        write((database) => {
           appendTranscriptEventsInTransaction(
             database,
             { ...options, sessionId, sessionKey: `agent:${options.agentId}:trajectory-copy` },
@@ -99,39 +88,40 @@ it.each(["UTF-8", "UTF-16le"])(
           );
         }, options);
       }
-      runOpenClawAgentWriteTransaction((database) => {
+      write((database) => {
         const payload = prepareTrajectoryPayload(database.db, compressedJson);
         expect(payload.event_codec).not.toBeNull();
-        database.db
-          .prepare(
-            "INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at) VALUES(?,0,'run',?,1)",
-          )
-          .run(sessionId, legacyJson);
+        const legacy = {
+          event_json: legacyJson,
+          event_payload: null,
+          event_codec: null,
+          event_utf8_bytes: null,
+        };
+        const metadata = { session_id: sessionId, run_id: "run" };
         executeSqliteQuerySync(
           database.db,
           getSessionKysely(database.db)
             .insertInto("trajectory_runtime_events")
-            .values({
-              session_id: sessionId,
-              seq: 1,
-              run_id: "run",
-              created_at: 2,
-              ...payload,
-            }),
+            .values([
+              { ...metadata, seq: 0, created_at: 1, ...legacy },
+              { ...metadata, seq: 1, created_at: 2, ...payload },
+            ]),
         );
       }, sourceOptions);
-      const before = executeSqliteQuerySync(source.db, rowQuery(source)).rows;
-      runOpenClawAgentWriteTransaction((database) => {
-        copySqliteSessionGenerationRows({
-          destination: database,
-          sessionId,
-          source,
-          sourceWindowPresent: true,
-        });
-      }, destinationOptions);
-      const copied = executeSqliteQuerySync(destination.db, rowQuery(destination)).rows;
+      const before = readRows(source);
+      write(
+        (database) =>
+          copyRows({
+            destination: database,
+            sessionId,
+            source,
+            sourceWindowPresent: true,
+          }),
+        destinationOptions,
+      );
+      const copied = readRows(destination);
       expect(copied.map(readTrajectoryPayload)).toEqual([legacyJson, compressedJson]);
-      expect(executeSqliteQuerySync(source.db, rowQuery(source)).rows).toEqual(before);
+      expect(readRows(source)).toEqual(before);
       if (encoding === "UTF-8") {
         expect(copied).toEqual(before);
       } else {
@@ -143,13 +133,12 @@ it.each(["UTF-8", "UTF-16le"])(
         ]);
       }
       const comparison = (database: typeof source) => {
-        const [window] = readSqliteSessionGenerationWindows(database, [], [sessionId]);
+        const [window] = readWindows(database, [], [sessionId]);
         if (!window) {
           throw new Error("Fixture session window is missing");
         }
-        return readSqliteSessionGenerationComparison(database, window).contentFingerprint;
+        return readComparison(database, window).contentFingerprint;
       };
       expect(comparison(destination)).toBe(comparison(source));
-    });
-  },
+    }),
 );

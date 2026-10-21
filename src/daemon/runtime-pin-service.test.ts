@@ -1,10 +1,13 @@
 import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it as base, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as sqliteSnapshots from "../infra/sqlite-snapshot-source.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { readLaunchAgentProgramArguments } from "./launchd.js";
 import { resolveNodeService } from "./node-service.js";
 import {
@@ -14,15 +17,12 @@ import {
   withDaemonRuntimePinMigration,
 } from "./runtime-pin-state.js";
 import { withDaemonRuntimePinStore } from "./runtime-pin-store.js";
+import type { DaemonRuntimePinSnapshot, DaemonRuntimePinUpdate } from "./runtime-pin-types.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceControlArgs,
-  GatewayServiceInstallArgs,
-} from "./service-types.js";
+import type * as Service from "./service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 const native = vi.hoisted(() => ({
-  command: null as GatewayServiceCommandConfig | null,
+  command: null as Service.GatewayServiceCommandConfig | null,
   install: vi.fn(),
   stage: vi.fn(),
   uninstall: vi.fn(),
@@ -61,17 +61,15 @@ beforeEach(() => {
   native.command = null;
   native.loaded.mockReset().mockResolvedValue(true);
   native.runtime.mockReset().mockResolvedValue({ status: "running" });
-  native.stop.mockReset().mockImplementation(async (args: GatewayServiceControlArgs) => {
+  native.stop.mockReset().mockImplementation(async (args: Service.GatewayServiceControlArgs) => {
     native.runtime.mockResolvedValue({ status: "stopped" });
     if (args.disable) {
       native.loaded.mockResolvedValue(false);
     }
   });
-  const write = async (args: GatewayServiceInstallArgs) => {
-    native.command = {
-      programArguments: args.programArguments,
-      workingDirectory: args.workingDirectory,
-    };
+  const write = async (args: Service.GatewayServiceInstallArgs) => {
+    const { programArguments, workingDirectory } = args;
+    native.command = { programArguments, workingDirectory };
   };
   native.install.mockReset().mockImplementation(write);
   native.stage.mockReset().mockImplementation(write);
@@ -83,402 +81,283 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
-const withDarwinRuntimePinState: typeof withOpenClawTestState = (options, run) =>
-  withOpenClawTestState(options, async (state) => {
-    // Create private files on the real host; an empty schema still requires migration.
-    withDaemonRuntimePinStore(state.env, true, () => undefined);
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    try {
-      return await run(state);
-    } finally {
-      platform.mockRestore();
+
+function pinFixture(env: NodeJS.ProcessEnv, kind: "gateway" | "node") {
+  const scope = { kind, env };
+  const pin = { runtime: "node" as const, path: "/runtime/node" };
+  const readPin = (command = native.command) => readDaemonRuntimePin(scope, command);
+  return {
+    readPin,
+    scope,
+    pin,
+    service: kind === "gateway" ? resolveGatewayService() : resolveNodeService(),
+    args: {
+      env,
+      stdout: process.stdout,
+      programArguments: [pin.path, "/app/openclaw.mjs", kind],
+      runtimePinUpdate: { expected: readDaemonRuntimePin(scope, null), pin },
+    },
+  };
+}
+
+const bundledPin = { runtime: "bun", path: "/bundled/bun" } as const;
+const pausedService = /Start it before choosing Use bundled runtime/;
+function bundledArgs(
+  args: Service.GatewayServiceInstallArgs,
+  expected: DaemonRuntimePinSnapshot,
+  overrides: Partial<DaemonRuntimePinUpdate> = {},
+): Service.GatewayServiceInstallArgs {
+  return {
+    ...args,
+    programArguments: [bundledPin.path, "/app/openclaw.mjs", "gateway"],
+    runtimePinUpdate: { expected, pin: bundledPin, ...overrides },
+  };
+}
+
+const it = base.extend<{ state: OpenClawTestState; pins: ReturnType<typeof pinFixture> }>({
+  state: async ({ task }, use) =>
+    withOpenClawTestState({ label: task.name }, async (state) => {
+      // Create private files on the real host before spoofing Darwin.
+      withDaemonRuntimePinStore(state.env, true, () => undefined);
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      try {
+        await use(state);
+      } finally {
+        platform.mockRestore();
+      }
+    }),
+  pins: async ({ state }, use) => {
+    await withDaemonRuntimePinMigration(state.env, () => undefined);
+    await use(pinFixture(state.env, "gateway"));
+  },
+});
+
+async function withoutSnapshots(run: () => Promise<void>) {
+  await closeStateDatabaseForTest();
+  const snapshots = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync");
+  try {
+    await run();
+    expect(snapshots).not.toHaveBeenCalled();
+  } finally {
+    snapshots.mockRestore();
+  }
+}
+it.for(["gateway", "node"] as const)(
+  "admits pending migration before %s uninstall",
+  async (kind, { state }) => {
+    const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
+    expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
+    native.uninstall.mockImplementationOnce(async () => {
+      expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(false);
+    });
+    await service.uninstall({ env: state.env, stdout: process.stdout });
+    expect(native.uninstall).toHaveBeenCalledOnce();
+  },
+);
+
+it.for(["before-native-write", "before-persistence"] as const)(
+  "rejects a pin changed %s without overwriting the newer intent",
+  async (phase, { pins: { scope, service, pin, args, readPin } }) => {
+    commitDaemonRuntimePin(scope, args.runtimePinUpdate, args);
+    native.command = args;
+    const expected = readPin(args);
+    const newerPin = { runtime: "bun" as const, path: "/operator/bun" };
+    const changePin = async () => {
+      commitDaemonRuntimePin(scope, { expected, pin: newerPin }, args);
+      return native.command;
+    };
+    const read = vi.mocked(readLaunchAgentProgramArguments);
+    if (phase === "before-persistence") {
+      read.mockImplementationOnce(async () => native.command);
     }
-  });
-describe("native service runtime pin persistence", () => {
-  it.each(["gateway", "node"] as const)(
-    "admits pending migration before %s uninstall",
-    async (kind) => {
-      await withDarwinRuntimePinState({ label: "pin-uninstall-migration" }, async (state) => {
-        const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
-        expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
-        native.uninstall.mockImplementationOnce(async () => {
-          expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(false);
-        });
-        await service.uninstall({ env: state.env, stdout: process.stdout });
-        expect(native.uninstall).toHaveBeenCalledOnce();
-      });
-    },
-  );
+    read.mockImplementationOnce(changePin);
+    await expect(service.install({ ...args, runtimePinUpdate: { expected, pin } })).rejects.toThrow(
+      /Runtime pin changed/,
+    );
+    expect(native.install).toHaveBeenCalledTimes(phase === "before-native-write" ? 0 : 1);
+    expect(readPin(args).pin).toEqual(newerPin);
+  },
+);
 
-  it.each(["before-native-write", "before-persistence"] as const)(
-    "rejects a pin changed %s without overwriting the newer intent",
-    async (phase) => {
-      await withDarwinRuntimePinState({ label: "pin-native-late-change" }, async (state) => {
-        const scope = { kind: "gateway" as const, env: state.env };
-        await withDaemonRuntimePinMigration(state.env, () => undefined);
-        const service = resolveGatewayService();
-        const pin = { runtime: "node" as const, path: "/runtime/node" };
-        const command = { programArguments: [pin.path, "/app/openclaw.mjs", "gateway"] };
-        commitDaemonRuntimePin(
-          scope,
-          { expected: readDaemonRuntimePin(scope, null), pin },
-          command,
-        );
-        native.command = command;
-        const expected = readDaemonRuntimePin(scope, command);
-        const newerPin = { runtime: "bun" as const, path: "/operator/bun" };
-        const changePin = async () => {
-          commitDaemonRuntimePin(scope, { expected, pin: newerPin }, command);
-          return native.command;
-        };
-        const read = vi.mocked(readLaunchAgentProgramArguments);
-        if (phase === "before-persistence") {
-          read.mockImplementationOnce(async () => native.command);
-        }
-        read.mockImplementationOnce(changePin);
-        await expect(
-          service.install({
-            env: state.env,
-            stdout: process.stdout,
-            ...command,
-            runtimePinUpdate: { expected, pin },
-          }),
-        ).rejects.toThrow(/Runtime pin changed/);
-        expect(native.install).toHaveBeenCalledTimes(phase === "before-native-write" ? 0 : 1);
-        expect(readDaemonRuntimePin(scope, command).pin).toEqual(newerPin);
-      });
-    },
+it("keeps pin-unaware writes read-only", async ({ state }) => {
+  const service = resolveGatewayService();
+  const args = {
+    env: state.env,
+    stdout: process.stdout,
+    programArguments: ["/runtime/node", "/app/openclaw.mjs", "gateway"],
+  };
+  await service.stage(args);
+  await service.install(args);
+  expect(native.stage).toHaveBeenCalledOnce();
+  expect(native.install).toHaveBeenCalledOnce();
+  expect(readDaemonRuntimePin({ kind: "gateway", env: state.env }, native.command).stored).toBe(
+    false,
   );
-
-  it("keeps pin-unaware default writes read-only for runtime metadata", async () => {
-    await withDarwinRuntimePinState({ label: "pin-native-default" }, async (state) => {
-      const service = resolveGatewayService();
-      const args = {
-        env: state.env,
-        stdout: process.stdout,
-        programArguments: ["/runtime/node", "/app/openclaw.mjs", "gateway"],
-      };
-      await service.stage(args);
-      await service.install(args);
-      expect(native.stage).toHaveBeenCalledOnce();
-      expect(native.install).toHaveBeenCalledOnce();
-      expect(readDaemonRuntimePin({ kind: "gateway", env: state.env }, native.command).stored).toBe(
-        false,
-      );
-      expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
+  expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
+});
+it.for(["gateway", "node"] as const)(
+  "requires explicit %s runtime intent for rewrites and removes the pin on uninstall",
+  async (kind, { state }) => {
+    await withDaemonRuntimePinMigration(state.env, () => undefined);
+    const { service, pin, args, readPin } = pinFixture(state.env, kind);
+    await service.stage(args);
+    const { runtimePinUpdate, ...replacement } = args;
+    replacement.programArguments = [pin.path, "/updated/openclaw.mjs", kind];
+    await withoutSnapshots(async () => {
+      await expect(service.install(replacement)).rejects.toThrow(/explicit runtime intent/);
+      await expect(service.stage(replacement)).rejects.toThrow(/explicit runtime intent/);
     });
-  });
-  it.each(["gateway", "node"] as const)(
-    "requires explicit %s runtime intent for rewrites and removes the pin on uninstall",
-    async (kind) => {
-      await withDarwinRuntimePinState({ label: "pin-native" }, async (state) => {
-        const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
-        const scope = { kind, env: state.env };
-        await withDaemonRuntimePinMigration(state.env, () => undefined);
-        const pin = { runtime: "node" as const, path: "/runtime/node" };
-        const args = {
-          env: state.env,
-          stdout: process.stdout,
-          programArguments: [pin.path, "/app/openclaw.mjs", kind],
-          runtimePinUpdate: { expected: readDaemonRuntimePin(scope, null), pin },
-        };
-        await service.stage(args);
-        const previous = native.command;
-        const replacement = {
-          env: state.env,
-          stdout: process.stdout,
-          programArguments: [pin.path, "/updated/openclaw.mjs", kind],
-        };
-        await closeStateDatabaseForTest();
-        const snapshots = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync");
-        try {
-          await expect(service.install(replacement)).rejects.toThrow(/explicit runtime intent/);
-          await expect(service.stage(replacement)).rejects.toThrow(/explicit runtime intent/);
-          expect(snapshots).not.toHaveBeenCalled();
-        } finally {
-          snapshots.mockRestore();
-        }
-        expect(native.install).not.toHaveBeenCalled();
-        expect(native.stage).toHaveBeenCalledOnce();
-        expect(native.command).toBe(previous);
-        expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
-        const expected = readDaemonRuntimePin(scope, native.command);
-        await service.install({
-          ...args,
-          programArguments: [pin.path, "/updated/openclaw.mjs", kind],
-          runtimePinUpdate: { expected, pin },
-        });
-        expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
-        await closeStateDatabaseForTest();
-        const uninstallSnapshots = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync");
-        try {
-          await service.uninstall({ env: state.env, stdout: process.stdout });
-          expect(uninstallSnapshots).not.toHaveBeenCalled();
-        } finally {
-          uninstallSnapshots.mockRestore();
-        }
-        expect(readDaemonRuntimePin(scope, null).stored).toBe(false);
-      });
-    },
-  );
-  it("does not commit on failed native write or mismatched readback", async () => {
-    await withDarwinRuntimePinState({ label: "pin-native-failure" }, async (state) => {
-      const scope = { kind: "gateway" as const, env: state.env };
-      await withDaemonRuntimePinMigration(state.env, () => undefined);
-      const service = resolveGatewayService();
-      const pin = { runtime: "node" as const, path: "/runtime/node" };
-      const args = {
-        env: state.env,
-        stdout: process.stdout,
-        programArguments: [pin.path, "gateway"],
-        runtimePinUpdate: { expected: readDaemonRuntimePin(scope, null), pin },
-      };
-      native.install.mockRejectedValueOnce(new Error("native failure"));
-      await expect(service.install(args)).rejects.toThrow(/native failure/);
-      expect(readDaemonRuntimePin(scope, null).stored).toBe(false);
-      native.install.mockImplementationOnce(async () => {
-        native.command = { programArguments: ["/other/node"] };
-      });
-      await expect(service.install(args)).rejects.toThrow(/readback differs/);
-      expect(readDaemonRuntimePin(scope, null).stored).toBe(false);
+    expect(native.install).not.toHaveBeenCalled();
+    expect(native.stage).toHaveBeenCalledOnce();
+    expect(readPin().pin).toEqual(pin);
+    const expected = readPin();
+    await service.install({
+      ...replacement,
+      runtimePinUpdate: { ...runtimePinUpdate, expected },
     });
+    expect(readPin().pin).toEqual(pin);
+    await withoutSnapshots(() => service.uninstall(args));
+    expect(readPin(null).stored).toBe(false);
+  },
+);
+it("keeps pins after failed writes", async ({ pins: { service, args, readPin } }) => {
+  args.programArguments = ["/runtime/node", "gateway"];
+  native.install.mockRejectedValueOnce(new Error("native failure"));
+  await expect(service.install(args)).rejects.toThrow(/native failure/);
+  expect(readPin(null).stored).toBe(false);
+  native.install.mockImplementationOnce(async () => {
+    native.command = { programArguments: ["/other/node"] };
   });
-  it("does not claim an unchanged definition when custody is lost during installed pin readback", async () => {
-    await withDarwinRuntimePinState({ label: "pin-native-custody" }, async (state) => {
-      const scope = { kind: "gateway" as const, env: state.env };
-      await withDaemonRuntimePinMigration(state.env, () => undefined);
-      const service = resolveGatewayService();
-      const pin = { runtime: "node" as const, path: "/runtime/node" };
-      const args = {
-        env: state.env,
-        stdout: process.stdout,
-        programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
-      };
-      await service.stage({
-        ...args,
-        runtimePinUpdate: { expected: readDaemonRuntimePin(scope, null), pin },
-      });
-      const previous = native.command;
-      const expected = readDaemonRuntimePin(scope, previous);
-      let current = true;
-      vi.mocked(readLaunchAgentProgramArguments)
-        .mockImplementationOnce(async () => native.command)
-        .mockImplementationOnce(async () => {
-          current = false;
-          return native.command;
-        });
-      const programArguments = [pin.path, "/updated/openclaw.mjs", "gateway"];
-      await expect(
-        service.install({
-          ...args,
-          programArguments,
-          runtimePinUpdate: { expected, pin },
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("Custody released during native readback");
-            }
-          },
-        }),
-      ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: undefined });
-      expect(native.command?.programArguments).toEqual(programArguments);
-      expect(readDaemonRuntimePin(scope, previous)).toEqual(expected);
+  await expect(service.install(args)).rejects.toThrow(/readback differs/);
+  expect(readPin(null).stored).toBe(false);
+});
+it("rejects custody loss during readback", async ({ pins: { service, pin, args, readPin } }) => {
+  await service.stage(args);
+  const previous = native.command;
+  const expected = readPin(previous);
+  let current = true;
+  vi.mocked(readLaunchAgentProgramArguments)
+    .mockImplementationOnce(async () => native.command)
+    .mockImplementationOnce(async () => {
+      current = false;
+      return native.command;
     });
-  });
-  it("refuses a definition changed after planning without writing or clearing prior metadata", async () => {
-    await withDarwinRuntimePinState({ label: "pin-native-drift" }, async (state) => {
-      const scope = { kind: "gateway" as const, env: state.env };
-      await withDaemonRuntimePinMigration(state.env, () => undefined);
-      const service = resolveGatewayService();
-      const expected = readDaemonRuntimePin(scope, null);
-      native.command = { programArguments: ["/external/node", "gateway"] };
-      await expect(
-        service.install({
-          env: state.env,
-          stdout: process.stdout,
-          programArguments: ["/runtime/node", "gateway"],
-          runtimePinUpdate: { expected, pin: { runtime: "node", path: "/runtime/node" } },
-        }),
-      ).rejects.toThrow(/changed during/);
-      expect(native.install).not.toHaveBeenCalled();
-      expect(readDaemonRuntimePin(scope, null).stored).toBe(false);
+  const programArguments = [pin.path, "/updated/openclaw.mjs", "gateway"];
+  await expect(
+    service.install({
+      ...args,
+      programArguments,
+      runtimePinUpdate: { expected, pin },
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Custody released during native readback");
+        }
+      },
+    }),
+  ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: undefined });
+  expect(native.command?.programArguments).toEqual(programArguments);
+  expect(readPin(previous)).toEqual(expected);
+});
+it("serializes competing pin writes", async ({ pins: { service, pin, args, readPin } }) => {
+  args.programArguments = [pin.path, "gateway"];
+  const outcomes = await Promise.allSettled([service.install(args), service.install(args)]);
+  expect(outcomes.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+  expect(native.install).toHaveBeenCalledOnce();
+  expect(readPin().pin).toEqual(pin);
+});
+
+it.for([false, true])(
+  "preserves a stop before the guarded runtime writer acquires its lock (disable=%s)",
+  async (disable, { pins: { service, args, readPin } }) => {
+    native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
+    const original = native.command;
+    const observed = await readGatewayServiceState(service, args);
+    expect(observed.running).toBe(true);
+    const expected = readPin(observed.command);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const stopping = withGatewayServiceOperationLock(args.env, async () => {
+      entered.resolve();
+      await release.promise;
+      await service.stop({ ...args, disable });
     });
-  });
-  it("serializes concurrent pin plans and refuses the stale writer before native mutation", async () => {
-    await withDarwinRuntimePinState({ label: "pin-native-concurrent" }, async (state) => {
-      const scope = { kind: "gateway" as const, env: state.env };
-      await withDaemonRuntimePinMigration(state.env, () => undefined);
-      const service = resolveGatewayService();
-      const pin = { runtime: "node" as const, path: "/runtime/node" };
-      const args = {
-        env: state.env,
-        stdout: process.stdout,
-        programArguments: [pin.path, "gateway"],
-        runtimePinUpdate: { expected: readDaemonRuntimePin(scope, null), pin },
-      };
-      const outcomes = await Promise.allSettled([service.install(args), service.install(args)]);
-      expect(outcomes.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-      expect(outcomes.filter((r) => r.status === "rejected")).toHaveLength(1);
-      expect(native.install).toHaveBeenCalledOnce();
-      expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
-    });
-  });
+    await entered.promise;
+    const install = service.install(
+      bundledArgs(args, expected, { requireDefinitionMatch: true, requireRunning: true }),
+    );
+    const refused = expect(install).rejects.toThrow(pausedService);
+    release.resolve();
+    await Promise.all([stopping, refused]);
+    expect(native.stop).toHaveBeenCalledOnce();
+    expect(native.install).not.toHaveBeenCalled();
+    expect(readPin(original)).toEqual(expected);
+  },
+);
 
-  it.each([false, true])(
-    "checks an unpinned guarded definition under the native lock (changed=%s)",
-    async (changed) => {
-      await withDarwinRuntimePinState({ label: "pin-native-guarded-unpinned" }, async (state) => {
-        const scope = { kind: "gateway" as const, env: state.env };
-        await withDaemonRuntimePinMigration(state.env, () => undefined);
-        const service = resolveGatewayService();
-        native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
-        const expected = readDaemonRuntimePin(scope, native.command);
-        if (changed) {
-          native.command = { programArguments: ["/operator/node", "/app/openclaw.mjs", "gateway"] };
-        }
-        const previous = native.command;
-        const programArguments = ["/retained/node", "/app/openclaw.mjs", "gateway"];
-        const install = service.install({
-          env: state.env,
-          stdout: process.stdout,
-          programArguments,
-          runtimePinUpdate: { expected, requireDefinitionMatch: true },
-        });
-        if (changed) {
-          await expect(install).rejects.toThrow(/changed during runtime pin planning/);
-          expect(native.install).not.toHaveBeenCalled();
-          expect(native.command).toBe(previous);
-        } else {
-          await install;
-          expect(native.install).toHaveBeenCalledOnce();
-          expect(native.command?.programArguments).toEqual(programArguments);
-        }
-        expect(readDaemonRuntimePin(scope, native.command).stored).toBe(false);
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "preserves a stop before the guarded runtime writer acquires its lock (disable=%s)",
-    async (disable) => {
-      await withDarwinRuntimePinState({ label: "pin-native-intervening-stop" }, async (state) => {
-        const scope = { kind: "gateway" as const, env: state.env };
-        await withDaemonRuntimePinMigration(state.env, () => undefined);
-        const service = resolveGatewayService();
-        native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
-        const original = native.command;
-        const observed = await readGatewayServiceState(service, { env: state.env });
-        expect(observed.running).toBe(true);
-        const expected = readDaemonRuntimePin(scope, observed.command);
-        const entered = createDeferred();
-        const release = createDeferred();
-        const stopping = withGatewayServiceOperationLock(state.env, async () => {
-          entered.resolve();
-          await release.promise;
-          await service.stop({ env: state.env, stdout: process.stdout, disable });
-        });
-        await entered.promise;
-        const install = service.install({
-          env: state.env,
-          stdout: process.stdout,
-          programArguments: ["/bundled/bun", "/app/openclaw.mjs", "gateway"],
-          runtimePinUpdate: {
-            expected,
-            pin: { runtime: "bun", path: "/bundled/bun" },
-            requireDefinitionMatch: true,
-            requireRunning: true,
-          },
-        });
-        const refused = expect(install).rejects.toThrow(
-          /Start it before choosing Use bundled runtime/,
-        );
-        release.resolve();
-        await Promise.all([stopping, refused]);
-        expect(native.stop).toHaveBeenCalledOnce();
-        expect(native.install).not.toHaveBeenCalled();
-        expect(native.command).toBe(original);
-        expect(readDaemonRuntimePin(scope, original)).toEqual(expected);
-      });
-    },
-  );
-
-  it.each(["stage", "install"] as const)(
-    "admits a running service to a guarded %s",
-    async (action) => {
-      await withDarwinRuntimePinState({ label: "pin-native-running" }, async (state) => {
-        const scope = { kind: "gateway" as const, env: state.env };
-        await withDaemonRuntimePinMigration(state.env, () => undefined);
-        const service = resolveGatewayService();
-        native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
-        const pin = { runtime: "bun" as const, path: "/bundled/bun" };
-        await service[action]({
-          env: state.env,
-          stdout: process.stdout,
-          programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
-          runtimePinUpdate: {
-            expected: readDaemonRuntimePin(scope, native.command),
-            pin,
-            requireRunning: true,
-          },
-        });
-        expect(native[action]).toHaveBeenCalledOnce();
-        expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
-      });
-    },
-  );
-
-  it.each(["unknown", "inspection-failed", "disabled"])(
-    "refuses a guarded runtime switch when native state is %s",
-    async (reason) => {
-      await withDarwinRuntimePinState({ label: "pin-native-unknown-running" }, async (state) => {
-        const scope = { kind: "gateway" as const, env: state.env };
-        await withDaemonRuntimePinMigration(state.env, () => undefined);
-        const service = resolveGatewayService();
-        native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
-        const original = native.command;
-        const expected = readDaemonRuntimePin(scope, original);
-        if (reason === "inspection-failed") {
-          native.runtime.mockRejectedValue(new Error("native inspection failed"));
-        } else if (reason === "disabled") {
-          native.loaded.mockResolvedValue(false);
-        } else {
-          native.runtime.mockResolvedValue({ status: "unknown" });
-        }
-        await expect(
-          service.install({
-            env: state.env,
-            stdout: process.stdout,
-            programArguments: ["/bundled/bun", "/app/openclaw.mjs", "gateway"],
-            runtimePinUpdate: { expected, requireDefinitionMatch: true, requireRunning: true },
-          }),
-        ).rejects.toThrow(/Start it before choosing Use bundled runtime/);
-        expect(native.install).not.toHaveBeenCalled();
-        expect(native.command).toBe(original);
-        expect(readDaemonRuntimePin(scope, original)).toEqual(expected);
-      });
-    },
-  );
-
-  it("admits a guarded fresh install without requiring an existing running service", async () => {
-    await withDarwinRuntimePinState({ label: "pin-native-fresh" }, async (state) => {
-      const scope = { kind: "gateway" as const, env: state.env };
-      await withDaemonRuntimePinMigration(state.env, () => undefined);
-      const service = resolveGatewayService();
+it.for([
+  ["unpinned", "install"],
+  ["drift", "install"],
+  ["fresh-drift", "install"],
+  ["running", "stage"],
+  ["running", "install"],
+  ["unknown", "install"],
+  ["inspection-failed", "install"],
+  ["disabled", "install"],
+] as const)(
+  "guards a %s runtime %s under the native lock",
+  async ([mode, action], { pins: { service, args, readPin } }) => {
+    native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
+    const fresh = mode === "fresh-drift";
+    const drift = mode === "drift" || fresh;
+    const expected = readPin(fresh ? null : native.command);
+    const requiresRunning = mode !== "unpinned" && !drift;
+    const pinned = mode === "running" || fresh;
+    if (drift) {
+      native.command = { programArguments: ["/operator/node", "/app/openclaw.mjs", "gateway"] };
+    } else if (mode === "inspection-failed") {
+      native.runtime.mockRejectedValue(new Error("native inspection failed"));
+    } else if (mode === "disabled") {
       native.loaded.mockResolvedValue(false);
-      native.runtime.mockResolvedValue({ status: "stopped" });
-      const pin = { runtime: "bun" as const, path: "/bundled/bun" };
-      await service.install({
-        env: state.env,
-        stdout: process.stdout,
-        programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
-        runtimePinUpdate: {
-          expected: readDaemonRuntimePin(scope, null),
-          pin,
-          requireDefinitionMatch: true,
-        },
-      });
-      expect(native.install).toHaveBeenCalledOnce();
-      expect(native.runtime).not.toHaveBeenCalled();
-      expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
+    } else if (mode === "unknown") {
+      native.runtime.mockResolvedValue({ status: "unknown" });
+    }
+    const previous = native.command;
+    const runtime = requiresRunning ? bundledPin.path : "/retained/node";
+    const programArguments = [runtime, "/app/openclaw.mjs", "gateway"];
+    const runtimePinUpdate: DaemonRuntimePinUpdate = {
+      expected,
+      ...(pinned
+        ? { pin: fresh ? args.runtimePinUpdate.pin : bundledPin }
+        : { requireDefinitionMatch: true }),
+      ...(requiresRunning ? { requireRunning: true } : {}),
+    };
+    const write = service[action]({
+      ...args,
+      programArguments,
+      runtimePinUpdate,
     });
-  });
+    if (drift || (requiresRunning && !pinned)) {
+      await expect(write).rejects.toThrow(
+        drift ? /changed during runtime pin planning/ : pausedService,
+      );
+      expect(native[action]).not.toHaveBeenCalled();
+      if (!drift) {
+        expect(readPin(previous)).toEqual(expected);
+      }
+    } else {
+      await write;
+      expect(native[action]).toHaveBeenCalledOnce();
+      expect(native.command?.programArguments).toEqual(programArguments);
+    }
+    expect(readPin()).toMatchObject(pinned && !drift ? { pin: bundledPin } : { stored: false });
+  },
+);
+
+it("allows first runtime install", async ({ pins: { service, args, readPin } }) => {
+  native.loaded.mockResolvedValue(false);
+  native.runtime.mockResolvedValue({ status: "stopped" });
+  await service.install(bundledArgs(args, readPin(null), { requireDefinitionMatch: true }));
+  expect(native.install).toHaveBeenCalledOnce();
+  expect(native.runtime).not.toHaveBeenCalled();
+  expect(readPin().pin).toEqual(bundledPin);
 });

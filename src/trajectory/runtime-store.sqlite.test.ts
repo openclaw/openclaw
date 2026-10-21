@@ -172,14 +172,12 @@ describe("SQLite trajectory runtime store", () => {
         facts: {
           kind: "trajectory-runtime-append",
           sessionId: "session-1",
-          appendedRange: { firstSeq: 0, lastSeq: 0 },
-          removedThroughSeq: undefined,
           windowFacts: first.window,
         },
       });
       input.windowFacts = first.window;
       expect(append().owner.committed).toMatchObject({
-        facts: { appendedRange: { firstSeq: 1, lastSeq: 1 } },
+        facts: { windowFacts: { nextSeq: 2 } },
       });
       expect(counter.counts.insert).toBe(2);
       expect(controls).not.toHaveBeenCalled();
@@ -426,15 +424,12 @@ describe("SQLite trajectory runtime store", () => {
       const expectReceipt = (
         types: string[],
         firstSeq: number,
-        removedThroughSeq?: number,
         discardPrevious?: boolean,
         maxRuntimeBytes?: number,
       ) => {
         expect(append(types, discardPrevious, maxRuntimeBytes)).toEqual({
           kind: "trajectory-runtime-append",
           sessionId,
-          appendedRange: { firstSeq, lastSeq: firstSeq + types.length - 1 },
-          removedThroughSeq,
           windowFacts: {
             nextSeq: firstSeq + types.length,
             retainedBytes: eventBytes(
@@ -444,9 +439,9 @@ describe("SQLite trajectory runtime store", () => {
         });
       };
       expectReceipt(["first", "second"], 0);
-      expectReceipt(["third", "fourth"], 2, 1, true);
+      expectReceipt(["third", "fourth"], 2, true);
       const last = createTrajectoryEvent({ sessionId, type: "last" });
-      expectReceipt(["last"], 4, 3, false, Buffer.byteLength(JSON.stringify(last), "utf8") + 1);
+      expectReceipt(["last"], 4, false, Buffer.byteLength(JSON.stringify(last), "utf8") + 1);
       expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
       expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId, storePath })).toEqual([
         { seq: 4, event: last },

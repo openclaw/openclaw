@@ -36,7 +36,6 @@ export function createMemoryOverviewController(
     active = false;
     invalidate();
   };
-  context.signal.addEventListener("abort", dispose, { once: true });
   const read = () => ({ snapshot, status, probingEmbeddings });
   const load = async (force = false, probe = false) => {
     if (!active || context.signal.aborted) {
@@ -120,9 +119,6 @@ export function createMemoryOverviewController(
     probe() {
       void load(true, true);
     },
-    dispose() {
-      dispose();
-      context.signal.removeEventListener("abort", dispose);
-    },
+    dispose,
   };
 }

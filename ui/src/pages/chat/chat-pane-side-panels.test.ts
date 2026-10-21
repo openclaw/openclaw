@@ -1,12 +1,19 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-side-panels.test/"} */
 
-import { afterEach, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { closeSlot, isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
+import { createDashboardHarness } from "./dashboard-presentation-defaults.test-support.ts";
+import {
+  closeSlot,
+  isSidebarSlotVisible,
+  openSlot,
+  promoteSidebarPanel,
+} from "./sidebar-layout.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -73,4 +80,41 @@ it("preserves a manually opened panel and never reopens it after dismissal", () 
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
   run(true);
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+});
+
+it("persists tab selection without changing the chosen main content", () => {
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  const stored = promoteSidebarPanel(
+    openSlot(openSlot({ columns: [] }, "terminal"), "dashboard"),
+    "dashboard",
+  );
+  const h = createDashboardHarness({ savedLayout: stored });
+  onTestFinished(() => h.mount.remove());
+  h.sync();
+
+  const layout = expectDefined(h.pane.render().layout, "Dashboard pane layout");
+  layout.region.callbacks.activatePanel("terminal");
+
+  expect(h.state.sidebarLayout.mainPanelId).toBe("dashboard");
+  expect(h.state.sidebarLayout.columns[0]?.activePanelId).toBe("terminal");
+  expect(h.saved()?.mainPanelId).toBe("dashboard");
+  expect(h.saved()?.columns[0]?.activePanelId).toBe("terminal");
+});
+
+it("closes dashboard presentation through its owner without minimizing unrelated tabs", () => {
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  const h = createDashboardHarness({
+    savedLayout: openSlot(openSlot({ columns: [] }, "dashboard"), "terminal"),
+  });
+  onTestFinished(() => h.mount.remove());
+  h.sync();
+
+  const layout = expectDefined(h.pane.render().layout, "Dashboard pane layout");
+  layout.region.callbacks.closeSlot("dashboard");
+
+  expect(h.state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
+  expect(isSidebarSlotVisible(h.state.sidebarLayout, "terminal")).toBe(true);
+  expect(h.state.sidebarLayout.open).toBe(true);
 });

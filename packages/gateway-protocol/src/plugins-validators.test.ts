@@ -10,6 +10,7 @@ import {
   validatePluginsReloadParams,
   validatePluginsCatalogGetParams,
   validatePluginsSetEnabledParams,
+  validatePluginsControlUiReportParams,
   type InstallPolicyWarningErrorDetails,
 } from "./index.js";
 
@@ -20,6 +21,27 @@ const enable = { pluginId: "workboard", enabled: true };
 const consent = { reviewToken: "surface-sha256" };
 
 describe("plugin lifecycle protocol validators", () => {
+  it("accepts bounded activation report batches while retaining per-plugin receipts", () => {
+    const report = { pluginId: "review", revision: "one", status: "activated" };
+    expect(validatePluginsControlUiReportParams({ reports: [report] })).toBe(true);
+    expect(
+      validatePluginsControlUiReportParams({
+        reports: Array.from({ length: 64 }, () => ({ ...report })),
+      }),
+    ).toBe(true);
+    for (const params of [
+      report,
+      { reports: [] },
+      { reports: Array.from({ length: 65 }, () => ({ ...report })) },
+      { reports: [{ ...report, status: "pending" }] },
+      { reports: [{ ...report, error: "x".repeat(513) }] },
+      { reports: [{ ...report, extra: true }] },
+      { reports: [report], extra: true },
+    ]) {
+      expect(validatePluginsControlUiReportParams(params)).toBe(false);
+    }
+  });
+
   it("accepts one bounded batch of exact installed owners for reload", () => {
     const target = { pluginId: "alpha", installHash: "a".repeat(64) };
     const batch = (length: number) =>

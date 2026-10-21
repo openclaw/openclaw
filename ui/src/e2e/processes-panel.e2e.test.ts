@@ -1,6 +1,5 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -19,6 +18,14 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
+        const screenshot = async (name: string) => {
+          if (capture) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, name),
+            });
+          }
+        };
         const key = "agent:main:process-review";
         const process = {
           processId: "build-process",
@@ -70,15 +77,16 @@ suite.define(() => {
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const draft = pane.locator(".agent-chat__composer-combobox textarea");
         await draft.fill("Keep my next instruction");
-        await selectChatLayoutAction(pane, "Side panel");
-        const choices = pane.locator(".side-panel-empty__type");
-        await choices.first().waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "processes-before.png"),
-          });
+        const panels = pane.locator(".sidebar-region__panels-toggle").getByRole("button", {
+          name: "Panels",
+          exact: true,
+        });
+        if ((await panels.getAttribute("aria-expanded")) !== "true") {
+          await panels.click();
         }
+        const choices = pane.locator(".side-panel-launcher").getByRole("button");
+        await choices.first().waitFor();
+        await screenshot("processes-before.png");
         expect(await choices.allTextContents()).toEqual(
           expect.arrayContaining([expect.stringContaining("Processes")]),
         );
@@ -87,15 +95,10 @@ suite.define(() => {
         await panel.getByText(process.name, { exact: true }).waitFor();
         const request = await gateway.waitForRequest("sessions.processes.list");
         expect(request.params).toMatchObject({ key });
-        const finishedToggle = panel.getByRole("button", { name: "Finished (1)", exact: true });
+        const finishedToggle = panel.getByRole("button", { name: /^Finished\s*1$/ });
         const finishedRow = panel.getByRole("button", { name: finishedProcess.name, exact: true });
         await finishedToggle.waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "finished-default.png"),
-          });
-        }
+        await screenshot("finished-default.png");
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         expect(await finishedRow.count()).toBe(0);
         await finishedToggle.click();
@@ -121,12 +124,7 @@ suite.define(() => {
           pane.locator(".side-panel__header .tabstrip-tab").filter({ hasText: label }).click();
         await selectTab("Processes");
         await panel.getByText(updatedTail, { exact: true }).waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "processes-after.png"),
-          });
-        }
+        await screenshot("processes-after.png");
         await gateway.deferNext("sessions.processes.stop");
         await panel.getByRole("button", { name: "Stop " + process.name, exact: true }).click();
         const stop = await gateway.waitForRequest("sessions.processes.stop");

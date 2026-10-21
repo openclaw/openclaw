@@ -22,13 +22,13 @@ export function registerListener<T>(
   return () => listeners.delete(listener);
 }
 
-/** Synchronous owner changes preserve live Set iteration and propagate listener errors. */
-export function createChangeListeners() {
+/** Synchronous changes propagate errors; iteration is live unless a snapshot is requested. */
+export function createChangeListeners(options?: { snapshot?: boolean }) {
   const listeners = new Set<() => void>();
   return {
     subscribe: (listener: () => void) => registerListener(listeners, listener),
     publish: () => {
-      for (const listener of listeners) {
+      for (const listener of options?.snapshot ? [...listeners] : listeners) {
         listener();
       }
     },

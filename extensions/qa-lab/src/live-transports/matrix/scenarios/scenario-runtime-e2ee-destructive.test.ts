@@ -185,6 +185,9 @@ it("awaits target room sync before sending", async () => {
     restartGatewayAfterStateMutation: async (mutate) => {
       await mutate({ stateDir: "/tmp/unused-gateway-state" });
     },
+    waitGatewayAccountReady: async () => {
+      order.push("ready");
+    },
   });
 
   await expect(runMatrixQaE2eeSyncStateLossCryptoIntactScenario(context)).rejects.toThrow(
@@ -195,7 +198,7 @@ it("awaits target room sync before sending", async () => {
     timeoutMs: context.timeoutMs,
     userId: replacement.userId,
   });
-  expect(order).toEqual(["wait", "synced", "send"]);
+  expect(order).toEqual(["ready", "wait", "synced", "send"]);
   expect(driver.stop).toHaveBeenCalledOnce();
   expect(mocks.replaceMatrixQaGatewayMatrixAccount).toHaveBeenLastCalledWith(
     expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),
@@ -221,16 +224,19 @@ it.each(["deviceId", "userId"] as const)(
         "matrix",
         storageMetadataRuntime.openMatrixStorageMetaStoreOptions(otherRoot),
       ).register("current", otherMetadata);
+      createPluginStateSyncKeyedStoreForTests("matrix", {
+        ...storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
+        namespace: "recovery-key",
+      }).register("current", { retained: true });
       resetPluginStateStoreForTests();
 
       await expect(
         mutateMatrixQaCliStateLoss({
           deviceId: "DEVICE",
-          preserveRecoveryKey: false,
           runtime: { stateDir },
           userId: "@owner:matrix-qa.test",
         }),
-      ).resolves.toMatchObject({ accountRoot });
+      ).resolves.toBe(accountRoot);
       expect(
         createPluginStateSyncKeyedStoreForTests(
           "matrix",

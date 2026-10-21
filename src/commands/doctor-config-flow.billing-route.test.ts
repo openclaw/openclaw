@@ -113,12 +113,9 @@ it("does not compare Decision selectors through conversational billing routes", 
   });
 });
 
-it.each([
-  [false, "gpt-5.6-luna"],
-  [true, "gpt-5.4-mini"],
-] as const)(
-  "records inherited billing changes once (multiagent: %s)",
-  async (multiagent, successor) => {
+it.each([false, true])(
+  "preserves served utility models without changing billing (multiagent: %s)",
+  async (multiagent) => {
     await withDoctorConfigPreflightHome(async (home) => {
       const { configPath } = await writeBillingFixture(home, "gpt-4o-mini", {
         defaults: {
@@ -140,16 +137,16 @@ it.each([
       {
         await using ctx = await prepareDoctorContext(configPath);
         await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
-        const expectedRoute = `openai/gpt-4o-mini via metered API-key profile openai:default -> openai/${successor} via subscription/OAuth profile openai:chatgpt-default.`;
-        expect(ctx.updateWarnings).toEqual(
-          ["heartbeat", "subagents"].map((owner) =>
-            expect.stringContaining(
-              `Billing route changed for agents.defaults.${owner}.model (agent main): ${expectedRoute}`,
-            ),
-          ),
-        );
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
-        expect(ctx.updateWarnings).toHaveLength(2);
+        expect(ctx.updateWarnings ?? []).toEqual([]);
+        const saved: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));
+        expect(saved).toMatchObject({
+          agents: {
+            defaults: {
+              heartbeat: { model: "openai/gpt-4o-mini" },
+              subagents: { model: "openai/gpt-4o-mini" },
+            },
+          },
+        });
       }
       await using repeated = await prepareDoctorContext(configPath);
       await runWriteConfigHealth(repeated, { runPostWriteRepairs: false });

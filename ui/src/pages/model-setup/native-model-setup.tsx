@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, createStore, onCleanup, reconcile } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -28,7 +28,7 @@ type NativeModelSetupOptions = {
 export type NativeModelSetup = ReturnType<typeof createNativeModelSetup>;
 
 export function createNativeModelSetup(options: NativeModelSetupOptions) {
-  const [nativeModels, setNativeModels] = createSignal<ModelCatalogEntry[]>([]);
+  const [nativeModels, setNativeModels] = createStore<ModelCatalogEntry[]>([]);
   const [nativeModel, setNativeModel] = createSignal("");
   const [nativeModelError, setNativeModelError] = createSignal<string | null>(null);
   const [nativeCatalogError, setNativeCatalogError] = createSignal<string | null>(null);
@@ -43,7 +43,9 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
 
   function reset() {
     generation += 1;
-    setNativeModels([]);
+    setNativeModels((models) => {
+      models.length = 0;
+    });
     setNativeModel("");
     setNativeModelError(null);
     setNativeCatalogError(null);
@@ -64,7 +66,7 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
     const client = context.gateway.snapshot.client;
     const agentId =
       connection?.agentId ?? readSessionDefaults(context.gateway.snapshot)?.defaultAgentId;
-    const model = nativeModels().find((entry) => `${entry.provider}/${entry.id}` === nativeModel());
+    const model = nativeModels.find((entry) => `${entry.provider}/${entry.id}` === nativeModel());
     if (
       !options.canUseSetup(client) ||
       !agentId ||
@@ -116,7 +118,9 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
     const models = catalog.models.filter(
       (model) => model.agentRuntime && model.agentRuntime.id !== "openclaw",
     );
-    setNativeModels(models);
+    setNativeModels(
+      reconcile(models, (model: ModelCatalogEntry) => `${model.provider}/${model.id}`),
+    );
     setNativeModelsStatus(catalog.pendingProviders?.length ? "loading" : "ready");
     setNativeCatalogError(modelCatalogRefreshError(catalog));
     if (!models.some((model) => `${model.provider}/${model.id}` === nativeModel())) {
@@ -182,7 +186,7 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
   });
   return {
     reset,
-    models: nativeModels,
+    models: () => nativeModels,
     selected: nativeModel,
     modelError: nativeModelError,
     catalogError: nativeCatalogError,
@@ -198,7 +202,7 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
     },
     loading: requestPending,
     get count() {
-      return nativeModels().length;
+      return nativeModels.length;
     },
     get saving() {
       return saving();

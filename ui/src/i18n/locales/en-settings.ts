@@ -1627,6 +1627,10 @@ const enSettings = {
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
+      gatewayAccess: "Gateway access",
+      gatewayAccessRequired: "Your Gateway access does not allow managing browser notifications.",
+      gatewayDisconnected: "Connect to the Gateway to manage browser notifications.",
+      localSubscription: "Browser subscription only",
       unavailableHint: "Browser unsupported.",
       unavailable: "Unavailable",
       checking: "Checking...",

@@ -14,43 +14,47 @@ import {
   SESSION_MUTATION_TEST_METHODS,
 } from "../test-helpers/gateway-methods.ts";
 
+const reply = () => [
+  session("main", 30, {
+    lastMessagePreview: "A newer user question",
+    lastAssistantMessage: { text: "The assistant's latest answer", timestamp: 20 },
+  }),
+];
+const pinned = (sidebar: Element) => sidebar.querySelector('[data-pinned-agent="main"]');
+const menuItem = (sidebar: Element, value: string) =>
+  sidebar.querySelector<HTMLElement>(`[data-value="${value}"]`)!;
+async function openMenu(sidebar: Element, value = "sessions") {
+  sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
+  await vi.waitFor(() => expect(menuItem(sidebar, value)).not.toBeNull());
+  return menuItem(sidebar, value);
+}
+const modalButton = (text: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
+    (button) => button.textContent === text,
+  )!;
+
 it("pins an agent into a menu-less gallery above the roster and preserves the other agents", async () => {
-  const { sidebar, context, provider } = await mountRoster(roster, [
-    session("main", 30, {
-      lastMessagePreview: "A newer user question",
-      lastAssistantMessage: { text: "The assistant's latest answer", timestamp: 20 },
-    }),
-  ]);
+  const { sidebar, context, provider } = await mountRoster(roster, reply());
   sidebar.sidebarAgentsMode = "roster";
   await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
   await settleRoster(sidebar);
-  sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
-  await vi.waitFor(() => expect(sidebar.querySelector('[data-value="pin"]')).not.toBeNull());
-  sidebar.querySelector<HTMLElement>('[data-value="pin"]')!.click();
+  (await openMenu(sidebar, "pin")).click();
   await vi.waitFor(() => {
-    expect(sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull();
+    expect(pinned(sidebar)).not.toBeNull();
     expect(agentIds(sidebar)).toEqual(["recent", "working"]);
   });
   expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
   expect(loadSettings().pinnedAgentIds).toEqual(["main"]);
   expect(document.activeElement?.getAttribute("data-agent-id")).toBe("main");
   provider.remove();
-  const remounted = await mountRoster(roster, [
-    session("main", 30, {
-      lastMessagePreview: "A newer user question",
-      lastAssistantMessage: { text: "The assistant's latest answer", timestamp: 20 },
-    }),
-  ]);
+  const remounted = await mountRoster(roster, reply());
   remounted.sidebar.sidebarAgentsMode = "roster";
-  await vi.waitFor(() =>
-    expect(remounted.sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull(),
-  );
+  await vi.waitFor(() => expect(pinned(remounted.sidebar)).not.toBeNull());
   await settleRoster(remounted.sidebar);
-  const pin = remounted.sidebar.querySelector('[data-pinned-agent="main"]')!;
-  expect(pin.querySelector('[slot="content"]')?.textContent).toContain(
-    "The assistant's latest answer",
-  );
-  expect(pin.querySelector('[slot="content"]')?.textContent).not.toContain("A newer user question");
+  const pin = pinned(remounted.sidebar)!;
+  const content = pin.querySelector('[slot="content"]')?.textContent;
+  expect(content).toContain("The assistant's latest answer");
+  expect(content).not.toContain("A newer user question");
   expect(pin.querySelector(".sidebar-agent-roster__preview")).toBeNull();
   const link = pin.querySelector<HTMLAnchorElement>("a")!;
   link.focus();
@@ -99,8 +103,6 @@ it("keeps every configured pin available and ignores unavailable saved agents", 
   expect(context.navigation.snapshot.pinnedAgentIds).toContain("missing");
 });
 
-// The agent-only roster has no row for an admitted new session, so a provisional
-// row would appear under the agent and vanish on admission.
 it.each(["main", "recent"])(
   "renders no provisional session row for a %s-agent create in the agent roster",
   async (agentId) => {
@@ -110,9 +112,7 @@ it.each(["main", "recent"])(
     sidebar.activeRouteId = "chat";
     const sessionKey = `agent:${agentId}:creating`;
     sidebar.sessionKey = sessionKey;
-    await vi.waitFor(() =>
-      expect(sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull(),
-    );
+    await vi.waitFor(() => expect(pinned(sidebar)).not.toBeNull());
     const release = context.chatSubmissions.beginCreate({
       creation: { sessionKey, admitted: false },
       displayName: "Preparing new conversation",
@@ -144,37 +144,27 @@ it("offers agent sessions and settings without a create action, and confirms age
   await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
   await settleRoster(sidebar);
 
-  const openMenu = async () => {
-    sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
-    await vi.waitFor(() => expect(sidebar.querySelector('[data-value="sessions"]')).not.toBeNull());
-  };
-  await openMenu();
-  expect(sidebar.querySelector('[data-value="new-session"]')).toBeNull();
-  expect(sidebar.querySelector('[data-value="sessions"]')?.textContent).toContain("Sessions");
-  expect(sidebar.querySelector('[data-value="settings"]')?.textContent).toContain("Settings");
-  expect(sidebar.querySelector('[data-value="delete"]')?.textContent).toContain("Delete");
-  sidebar.querySelector<HTMLElement>('[data-value="sessions"]')!.click();
+  await openMenu(sidebar);
+  expect(menuItem(sidebar, "new-session")).toBeNull();
+  expect(menuItem(sidebar, "sessions").textContent).toContain("Sessions");
+  expect(menuItem(sidebar, "settings").textContent).toContain("Settings");
+  expect(menuItem(sidebar, "delete").textContent).toContain("Delete");
+  menuItem(sidebar, "sessions").click();
   expect(context.agentSelection.state.selectedId).toBe("main");
   expect(onNavigate).toHaveBeenCalledWith("sessions");
 
-  await openMenu();
-  sidebar.querySelector<HTMLElement>('[data-value="settings"]')!.click();
+  (await openMenu(sidebar, "settings")).click();
   expect(navigate).toHaveBeenCalledWith("agents", {
     pathname: "/settings/agents/main",
   });
 
-  await openMenu();
-  sidebar.querySelector<HTMLElement>('[data-value="delete"]')!.click();
+  (await openMenu(sidebar, "delete")).click();
   await vi.waitFor(() =>
     expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
       "Delete Harbor?",
     ),
   );
-  const modal = document.querySelector("openclaw-modal-dialog")!;
-  const cancel = [...modal.querySelectorAll("button")].find(
-    (button) => button.textContent === "Cancel",
-  )!;
-  cancel.click();
+  modalButton("Cancel").click();
   expect(request).not.toHaveBeenCalledWith("agents.delete", expect.anything());
 
   const previousRequest = request.getMockImplementation()!;
@@ -183,13 +173,9 @@ it("offers agent sessions and settings without a create action, and confirms age
       ? Promise.resolve({ ok: true, agentId: "main", removedBindings: 0 })
       : previousRequest(...args),
   );
-  await openMenu();
-  sidebar.querySelector<HTMLElement>('[data-value="delete"]')!.click();
+  (await openMenu(sidebar, "delete")).click();
   await vi.waitFor(() => expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull());
-  const confirm = [
-    ...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
-  ].find((button) => button.textContent === "Delete")!;
-  confirm.click();
+  modalButton("Delete").click();
   await vi.waitFor(() => {
     expect(request).toHaveBeenCalledWith("agents.delete", {
       agentId: "main",
@@ -197,4 +183,81 @@ it("offers agent sessions and settings without a create action, and confirms age
     });
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
+});
+
+it("offers Create Claw from the agent-row menu when the Gateway supports creation", async () => {
+  const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
+  context.runtimeConfig.state.configForm = {
+    gateway: { controlUi: { experimental: { claws: true } } },
+  };
+  gatewayHarness.publish({
+    hello: gatewayHelloForMethods([
+      ...SESSION_MUTATION_TEST_METHODS,
+      "claws.drafts.create",
+      "chat.send",
+    ]),
+  });
+  sidebar.sidebarAgentsMode = "roster";
+  await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+  await settleRoster(sidebar);
+
+  const previousRequest = request.getMockImplementation()!;
+  request.mockImplementation((...args) =>
+    args[0] === "claws.drafts.create"
+      ? Promise.reject(new Error("The agent workspace is unavailable."))
+      : previousRequest(...args),
+  );
+  sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
+  await vi.waitFor(() =>
+    expect(sidebar.querySelector('[data-value="create-claw"]')).not.toBeNull(),
+  );
+  sidebar.querySelector<HTMLElement>('[data-value="create-claw"]')!.click();
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
+  );
+});
+
+it("keeps Create Claw available for pinned agents without restoring their full menu", async () => {
+  const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
+  context.runtimeConfig.state.configForm = {
+    gateway: { controlUi: { experimental: { claws: true } } },
+  };
+  context.navigation.update({ pinnedAgentIds: ["main"] });
+  gatewayHarness.publish({
+    hello: gatewayHelloForMethods([
+      ...SESSION_MUTATION_TEST_METHODS,
+      "claws.drafts.create",
+      "chat.send",
+    ]),
+  });
+  sidebar.sidebarAgentsMode = "roster";
+  await vi.waitFor(() =>
+    expect(sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull(),
+  );
+  await settleRoster(sidebar);
+
+  const previousRequest = request.getMockImplementation()!;
+  request.mockImplementation((...args) =>
+    args[0] === "claws.drafts.create"
+      ? Promise.reject(new Error("The agent workspace is unavailable."))
+      : previousRequest(...args),
+  );
+  const pinnedAgent = sidebar.querySelector('[data-pinned-agent="main"]')!;
+  const trigger = pinnedAgent.querySelector<HTMLButtonElement>(
+    'button[aria-label="Options for Harbor"]',
+  );
+  expect(trigger).not.toBeNull();
+  trigger!.click();
+  await vi.waitFor(() =>
+    expect(pinnedAgent.querySelector('[data-value="create-claw"]')).not.toBeNull(),
+  );
+  expect(pinnedAgent.querySelector('[data-value="pin"]')).toBeNull();
+  expect(pinnedAgent.querySelector('[data-value="sessions"]')).toBeNull();
+  expect(pinnedAgent.querySelector('[data-value="settings"]')).toBeNull();
+  expect(pinnedAgent.querySelector('[data-value="delete"]')).toBeNull();
+  pinnedAgent.querySelector<HTMLElement>('[data-value="create-claw"]')!.click();
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
+  );
+  expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
 });

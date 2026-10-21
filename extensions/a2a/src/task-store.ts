@@ -100,11 +100,11 @@ export class A2aTaskStore {
     return this.#finishWithMessage(taskId, "TASK_STATE_REJECTED", reason);
   }
 
-  wait(taskId: string, timeoutMs: number): Promise<A2aTaskRecord | undefined> {
-    const task = this.get(taskId);
-    if (!task || isTerminalTask(task)) {
+  wait(task: A2aTaskRecord, timeoutMs: number): Promise<A2aTaskRecord> {
+    if (isTerminalTask(task)) {
       return Promise.resolve(task);
     }
+    const taskId = task.id;
     const completed = createDeferred<A2aTaskRecord>();
     const waiters = this.#waiters.get(taskId) ?? new Set<A2aTaskWaiter>();
     waiters.add(completed.resolve);

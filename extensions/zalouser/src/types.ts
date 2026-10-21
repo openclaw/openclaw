@@ -49,7 +49,6 @@ export type ZaloInboundMessage = {
   canResolveExplicitMention?: boolean;
   implicitMention?: boolean;
   quotedGlobalMsgId?: string;
-  quotedOwnerId?: string;
   quotedBody?: string;
   eventMessage?: ZaloEventMessage;
   raw: unknown;

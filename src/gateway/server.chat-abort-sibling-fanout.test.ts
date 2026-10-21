@@ -19,7 +19,6 @@ import { resetSubagentRegistryForTests } from "../agents/subagents/registry/suba
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import * as swarm from "../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import {
   beginSessionEffect,
@@ -49,7 +48,6 @@ fixture.installGatewayTestHooks({
       async () => {
         await settleSubagentRegistryPersistenceWork();
         await resetSubagentRegistryForTests({ persist: false });
-        schedulerTesting.reset();
       },
     );
   },

@@ -19,6 +19,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { HealthSummary } from "./health/types.js";
 import { NodeRegistry } from "./node-registry.js";
+import * as nodeEventSource from "./server-node-event-source.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
@@ -394,6 +395,66 @@ describe("node exec events", () => {
 });
 
 describe("voice transcript events", () => {
+  it.each(["reservation", "dispatch"] as const)(
+    "releases later voice transcripts after a failed %s check",
+    async (phase) => {
+      const sessionKey = `voice-authority-${phase}`;
+      const entered = createDeferred();
+      const checked = createDeferred<boolean>();
+      let current = phase !== "reservation";
+      let checks = 0;
+      const firstConnection = {
+        isConnectionCurrent: () => {
+          if (++checks === 3) {
+            entered.resolve();
+            return checked.promise;
+          }
+          return true;
+        },
+      };
+      using _ = vi
+        .spyOn(nodeEventSource, "withNodeEventSessionSource")
+        .mockImplementation(async (_evt, opts, consume) => {
+          const pending: Promise<unknown>[] = [];
+          try {
+            return await consume(opts, {
+              loaded: buildSessionLookup(sessionKey),
+              assertCurrent: () => {
+                if (opts === firstConnection && !current) {
+                  throw new Error("Node event session authority changed");
+                }
+              },
+              pending,
+            });
+          } finally {
+            await Promise.allSettled(pending);
+          }
+        });
+      const { emit } = nodeFixture();
+      const first = emit(
+        "voice.transcript",
+        { sessionKey, text: "rejected transcript" },
+        firstConnection,
+      );
+      if (phase === "reservation") {
+        await expect(first).rejects.toThrow("Node event session authority changed");
+      } else {
+        await entered.promise;
+      }
+      const later = emit("voice.transcript", { sessionKey, text: "accepted transcript" });
+      current = false;
+      checked.resolve(true);
+      await later;
+      if (phase !== "reservation") {
+        await first;
+      }
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ message: "accepted transcript" });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
+
   it("persists only the accepted replay session ID when identical new-session events race", async () => {
     const addChatRun = vi.fn();
     const { emit } = nodeFixture("node-new-session-replay", { addChatRun });

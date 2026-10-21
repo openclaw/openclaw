@@ -5,7 +5,9 @@ import { claimCompletedAgentDeletion } from "../agents/agent-lifecycle-registry.
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { pruneAgentConfig } from "../commands/agents.config.js";
 import { readConfigFileSnapshotForWrite, transformConfigFileWithRetry } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
+import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -65,6 +67,7 @@ export type StatelessClawAddOptions = {
   cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable"> &
     Partial<Pick<ClawCronGateway, "get" | "remove">>;
   commitConfig?: ConfigCommit;
+  configWriteOptions?: ConfigWriteOptions;
   rollbackNewAgent?: (plan: ClawAddPlan, cronJobs: PersistedClawCronRef[]) => Promise<void>;
 };
 
@@ -91,7 +94,20 @@ export type StatelessClawAddStage =
   | {
       kind: "ready";
       continue: (options?: StatelessClawAddOptions) => Promise<StatelessClawAddResult>;
+      stageAgent: (options?: StatelessClawAddOptions) => Promise<StatelessClawAddAgentStage>;
       failBeforeContinue: (error: unknown, code: string) => Promise<StatelessClawAddResult>;
+    };
+
+type StatelessClawAddAgentStage =
+  | { kind: "partial"; result: StatelessClawAddResult }
+  | {
+      kind: "ready";
+      finish: (options?: StatelessClawAddOptions) => Promise<StatelessClawAddResult>;
+      fail: (
+        error: unknown,
+        code: string,
+        options?: StatelessClawAddOptions,
+      ) => Promise<StatelessClawAddResult>;
     };
 
 function assertWorkspacePathUnchanged(workspace: string): void {
@@ -137,7 +153,9 @@ async function commitConfig(
   }
   await transformConfigFileWithRetry({
     afterWrite: { mode: "auto" },
-    writeOptions: { assertCurrent: options.assertCurrent },
+    writeOptions: copyRuntimeConfigWriteApplication(options.configWriteOptions, {
+      assertCurrent: options.assertCurrent,
+    }),
     transform: (config, context) => ({
       nextConfig: transform(config, context.snapshot.runtimeConfig),
     }),
@@ -314,123 +332,162 @@ export async function stageClawAddHostRequirementsStateless(
     }
     return { kind: "partial", result: await fail(error, "package_install_failed") };
   }
-  return {
-    kind: "ready",
-    continue: async (nextOptions = options) => {
-      if (continued) {
-        throw new Error("Claw Add was already continued");
-      }
-      continued = true;
-      options = nextOptions;
-      try {
-        assertForwardCurrent();
-        assertWorkspacePathUnchanged(workspace);
-        const existing = await lstat(workspace).catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return undefined;
-          }
-          throw error;
-        });
-        if (existing) {
-          throw new ClawAddMutationError(
-            "workspace_collision",
-            `Workspace ${JSON.stringify(workspace)} was created after planning.`,
-          );
+  const stageAgent = async (agentOptions = options): Promise<StatelessClawAddAgentStage> => {
+    if (continued) {
+      throw new Error("Claw Add was already continued");
+    }
+    continued = true;
+    options = agentOptions;
+    try {
+      assertForwardCurrent();
+      assertWorkspacePathUnchanged(workspace);
+      const existing = await lstat(workspace).catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return undefined;
         }
-        await mkdir(dirname(workspace), { recursive: true });
-        assertForwardCurrent();
-        assertWorkspacePathUnchanged(workspace);
-        await mkdir(workspace);
-        workspaceCreated = true;
-        await seedClawPackageBootstrap(plan, stageOptions());
-        workspaceFiles = await createClawWorkspaceFiles(plan, stageOptions());
-        const workspacePlan = planWithPackageActions(
-          plan,
-          (action) => action.details?.kind !== "plugin",
+        throw error;
+      });
+      if (existing) {
+        throw new ClawAddMutationError(
+          "workspace_collision",
+          `Workspace ${JSON.stringify(workspace)} was created after planning.`,
         );
-        if (workspacePlan.actions.some((action) => action.kind === "package")) {
-          packages = [...packages, ...(await installClawPackages(workspacePlan, stageOptions()))];
-        }
-        mcpServers = await installClawMcpServersStateless(plan, stageOptions());
-        workspaceBeforeExposure = await workspaceIdentity(workspace);
-        const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
-        if (deletion && !deletion.cleanupCompleted) {
-          throw new ClawAddMutationError(
-            "agent_deletion_pending",
-            `Agent ${JSON.stringify(plan.agent.finalId)} deletion cleanup is still pending.`,
-          );
-        }
-        configCommitAttempted = true;
-        await commitConfig((config, runtimeConfig) => {
-          options.assertCurrent?.();
-          options.assertForwardCurrent?.();
-          options.assertReviewedConfig?.(applyConfigOverrides(runtimeConfig ?? config));
-          if (
-            listAgentEntries(config).some(
-              (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
-            )
-          ) {
-            throw new ClawAddMutationError(
-              "agent_id_collision",
-              `Agent ${JSON.stringify(plan.agent.finalId)} was created after planning.`,
-            );
-          }
-          return addClawAgentToConfig(config, plan, workspace);
-        }, options);
-        configCommitted = true;
-        workspaceExposed = true;
+      }
+      await mkdir(dirname(workspace), { recursive: true });
+      assertForwardCurrent();
+      assertWorkspacePathUnchanged(workspace);
+      await mkdir(workspace);
+      workspaceCreated = true;
+      await seedClawPackageBootstrap(plan, stageOptions());
+      workspaceFiles = await createClawWorkspaceFiles(plan, stageOptions());
+      const workspacePlan = planWithPackageActions(
+        plan,
+        (action) => action.details?.kind !== "plugin",
+      );
+      if (workspacePlan.actions.some((action) => action.kind === "package")) {
+        packages = [...packages, ...(await installClawPackages(workspacePlan, stageOptions()))];
+      }
+      mcpServers = await installClawMcpServersStateless(plan, stageOptions());
+      workspaceBeforeExposure = await workspaceIdentity(workspace);
+      const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
+      if (deletion && !deletion.cleanupCompleted) {
+        throw new ClawAddMutationError(
+          "agent_deletion_pending",
+          `Agent ${JSON.stringify(plan.agent.finalId)} deletion cleanup is still pending.`,
+        );
+      }
+      configCommitAttempted = true;
+      await commitConfig((config, runtimeConfig) => {
+        options.assertCurrent?.();
+        options.assertForwardCurrent?.();
+        options.assertReviewedConfig?.(applyConfigOverrides(runtimeConfig ?? config));
         if (
-          deletion?.cleanupCompleted &&
-          !(await claimCompletedAgentDeletion(plan.agent.finalId, deletion.operationId))
+          listAgentEntries(config).some(
+            (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
+          )
         ) {
           throw new ClawAddMutationError(
-            "agent_deletion_changed",
-            `Agent ${JSON.stringify(plan.agent.finalId)} deletion changed during Add.`,
+            "agent_id_collision",
+            `Agent ${JSON.stringify(plan.agent.finalId)} was created after planning.`,
           );
         }
-        assertForwardCurrent("after-agent-commit");
-        cronJobs = await installClawCronJobsStateless(plan, {
-          ...stageOptions("after-agent-commit"),
-          gateway: options.cronGateway,
-        });
-        return result("complete");
-      } catch (error) {
-        if (configCommitAttempted && !configCommitted) {
+        return addClawAgentToConfig(config, plan, workspace);
+      }, options);
+      configCommitted = true;
+      workspaceExposed = true;
+      if (
+        deletion?.cleanupCompleted &&
+        !(await claimCompletedAgentDeletion(plan.agent.finalId, deletion.operationId))
+      ) {
+        throw new ClawAddMutationError(
+          "agent_deletion_changed",
+          `Agent ${JSON.stringify(plan.agent.finalId)} deletion changed during Add.`,
+        );
+      }
+      let finished = false;
+      const finishOnce = (nextOptions: StatelessClawAddOptions) => {
+        if (finished) {
+          throw new Error("Claw Add was already finished");
+        }
+        finished = true;
+        options = nextOptions;
+      };
+      return {
+        kind: "ready",
+        finish: async (nextOptions = options) => {
+          finishOnce(nextOptions);
           try {
-            const current = options.commitConfig
-              ? options.getCurrentConfig?.()
-              : (await readConfigFileSnapshotForWrite({ observe: false })).snapshot.sourceConfig;
-            if (!current) {
-              throw new Error("Current config is unavailable", { cause: error });
+            assertForwardCurrent("after-agent-commit");
+            cronJobs = await installClawCronJobsStateless(plan, {
+              ...stageOptions("after-agent-commit"),
+              gateway: options.cronGateway,
+            });
+            return result("complete");
+          } catch (error) {
+            if (error instanceof ClawCronInstallError) {
+              cronJobs = error.cronJobs;
             }
-            const agent = listAgentEntries(current).find(
-              (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
+            return await fail(
+              error,
+              error instanceof ClawAddMutationError ? error.code : "add_failed",
             );
-            if (agent) {
-              if (!sameCommittedAgent(agent, plan)) {
-                throw new Error("Agent config changed during Add", { cause: error });
-              }
-              configCommitted = true;
-              workspaceExposed = true;
+          }
+        },
+        fail: async (error, code, nextOptions = options) => {
+          finishOnce(nextOptions);
+          return await fail(error, code);
+        },
+      };
+    } catch (error) {
+      if (configCommitAttempted && !configCommitted) {
+        try {
+          const current = options.commitConfig
+            ? options.getCurrentConfig?.()
+            : (await readConfigFileSnapshotForWrite({ observe: false })).snapshot.sourceConfig;
+          if (!current) {
+            throw new Error("Current config is unavailable", { cause: error });
+          }
+          const agent = listAgentEntries(current).find(
+            (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
+          );
+          if (agent) {
+            if (!sameCommittedAgent(agent, plan)) {
+              throw new Error("Agent config changed during Add", { cause: error });
             }
-          } catch (reconcileError) {
-            return result("partial", {
+            configCommitted = true;
+            workspaceExposed = true;
+          }
+        } catch (reconcileError) {
+          return {
+            kind: "partial",
+            result: result("partial", {
               code: "config_commit_uncertain",
               message: `${coerceErrorMessage(error)} Could not verify whether the new agent was committed: ${coerceErrorMessage(reconcileError)}. Workspace retained for inspection.`,
-            });
-          }
+            }),
+          };
         }
-        if (error instanceof ClawPackageInstallError) {
-          packages = [...packages, ...error.installedPackages];
-        }
-        if (error instanceof ClawMcpInstallError) {
-          mcpServers = error.mcpServers;
-        }
-        if (error instanceof ClawCronInstallError) {
-          cronJobs = error.cronJobs;
-        }
-        return await fail(error, error instanceof ClawAddMutationError ? error.code : "add_failed");
       }
+      if (error instanceof ClawPackageInstallError) {
+        packages = [...packages, ...error.installedPackages];
+      }
+      if (error instanceof ClawMcpInstallError) {
+        mcpServers = error.mcpServers;
+      }
+      return {
+        kind: "partial",
+        result: await fail(
+          error,
+          error instanceof ClawAddMutationError ? error.code : "add_failed",
+        ),
+      };
+    }
+  };
+  return {
+    kind: "ready",
+    stageAgent,
+    continue: async (nextOptions = options) => {
+      const staged = await stageAgent(nextOptions);
+      return staged.kind === "partial" ? staged.result : await staged.finish();
     },
     failBeforeContinue: async (error, code) => {
       if (continued) {

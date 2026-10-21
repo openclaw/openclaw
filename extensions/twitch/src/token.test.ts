@@ -27,7 +27,7 @@ describe("token", () => {
     it("should prioritize config token over env var (simplified config)", () => {
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:env-token";
 
-      const result = resolveTwitchToken(mockSimplifiedConfig, { accountId: "default" });
+      const result = resolveTwitchToken(mockSimplifiedConfig, "default");
 
       // Config token should be used even if env var exists
       expect(result.token).toBe("oauth:config-token");
@@ -45,7 +45,7 @@ describe("token", () => {
         },
       } as unknown as OpenClawConfig;
 
-      const result = resolveTwitchToken(configWithEmptyToken, { accountId: "default" });
+      const result = resolveTwitchToken(configWithEmptyToken, "default");
 
       expect(result.token).toBe("oauth:env-token");
     });
@@ -66,7 +66,7 @@ describe("token", () => {
         },
       } as unknown as OpenClawConfig;
 
-      const result = resolveTwitchToken(configWithoutToken, { accountId: "secondary" });
+      const result = resolveTwitchToken(configWithoutToken, "secondary");
 
       // Non-default accounts shouldn't use env var
       expect(result.token).toBe("");

@@ -53,13 +53,13 @@ const TASK_VERBS = new Set([
   "write",
 ]);
 
-function truncateTitle(text: string, maxLen: number): string {
-  if (text.length <= maxLen) {
+function truncateTitle(text: string): string {
+  if (text.length <= DERIVED_GOAL_TITLE_MAX_LEN) {
     return text;
   }
-  const cut = truncateUtf16Safe(text, maxLen - 1);
+  const cut = truncateUtf16Safe(text, DERIVED_GOAL_TITLE_MAX_LEN - 1);
   const lastSpace = cut.lastIndexOf(" ");
-  if (lastSpace > maxLen * 0.6) {
+  if (lastSpace > DERIVED_GOAL_TITLE_MAX_LEN * 0.6) {
     return `${cut.slice(0, lastSpace)}…`;
   }
   return `${cut}…`;
@@ -97,10 +97,7 @@ function pickGoalSentence(normalized: string): string {
  * Build a compact topic label from a first user message without calling a model.
  * Returns undefined when no usable user task remains after stripping envelopes.
  */
-export function deriveGoalSessionTitle(
-  firstUserMessage?: string | null,
-  maxLen = DERIVED_GOAL_TITLE_MAX_LEN,
-): string | undefined {
+export function deriveGoalSessionTitle(firstUserMessage?: string | null): string | undefined {
   if (!firstUserMessage) {
     return undefined;
   }
@@ -112,5 +109,5 @@ export function deriveGoalSessionTitle(
   if (!goal) {
     return undefined;
   }
-  return truncateTitle(toSentenceCase(goal), maxLen);
+  return truncateTitle(toSentenceCase(goal));
 }

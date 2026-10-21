@@ -82,11 +82,19 @@ it.each([
     diagnostics: { flags: ["timeline"] },
   });
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-  openOpenClawStateDatabase({ path: databasePath });
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    OPENCLAW_HOME: root,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
+  openOpenClawStateDatabase({ path: databasePath, env });
   closeOpenClawStateDatabaseForTest();
   const lock = await acquireGatewayLock({
     allowInTests: true,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+    env,
     port,
   });
   expect(lock).not.toBeNull();

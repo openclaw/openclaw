@@ -1,6 +1,7 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { createMemo, createStore } from "solid-js";
 import type { CronStatus } from "../../../api/types.ts";
+import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -21,7 +22,11 @@ import { ChatCiAutomationView, type ChatCiAutomationProps } from "./chat-ci-auto
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 
 /** Cron owns durable settings and execution; this element retains only the visible projection. */
-type Props = ChatCiDisclosureProps & { sessionId: string };
+type Props = ChatCiDisclosureProps & {
+  sessionId: string;
+  menuPresentation?: boolean;
+  controls?: MenuControls;
+};
 const inputHandlers = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 
 type AutomationState = {
@@ -115,7 +120,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   function handleInputsChanged(key: keyof Props) {
     if (key === "gateway") {
       bindGateway();
-    } else if (key === "presented" || syncTarget()) {
+    } else if (key === "presented" || key === "inline" || syncTarget()) {
       handleVisibility();
     }
   }
@@ -385,7 +390,13 @@ export type ChatCiAutomationElement = SolidBridgeElement<Props>;
 
 function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) {
   const read = createCiAutomation(props, host);
-  return <ChatCiAutomationView {...read()} />;
+  return (
+    <ChatCiAutomationView
+      {...read()}
+      menuPresentation={props.menuPresentation}
+      controls={props.controls}
+    />
+  );
 }
 
 defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {
@@ -396,5 +407,8 @@ defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent,
     sessionKey: { default: "", attribute: false },
     sessionId: { default: "", attribute: false },
     presented: { default: true, type: Boolean },
+    inline: { default: false, attribute: false },
+    menuPresentation: { default: false, attribute: false },
+    controls: { default: undefined, attribute: false },
   },
 });

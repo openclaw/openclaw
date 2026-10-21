@@ -15,18 +15,12 @@ import { sessionAbortHandlers } from "./sessions-abort.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 export function revocableAuthority(message: string) {
-  let current = true;
+  const controller = new AbortController();
   const error = new Error(message);
   return {
     error,
-    revoke: () => {
-      current = false;
-    },
-    assertCurrent: () => {
-      if (!current) {
-        throw error;
-      }
-    },
+    revoke: () => controller.abort(error),
+    assertCurrent: () => controller.signal.throwIfAborted(),
   };
 }
 
@@ -120,40 +114,37 @@ export async function registerYieldedChild(params: {
   sessionEntry: Parameters<typeof registerSubagentRun>[0]["sessionEntry"];
 }) {
   const { parentKey, parentRunId, childKey, childRunId, startedAt, sessionEntry } = params;
+  const child = { runId: childRunId, childSessionKey: childKey, expectsCompletionMessage: true };
   const requester = {
     requesterSessionKey: parentKey,
     requesterAgentId: "main",
     requesterTurnRunId: parentRunId,
   };
   await registerSubagentRun({
-    runId: childRunId,
-    childSessionKey: childKey,
+    ...child,
     childAgentId: "main",
     sessionEntry,
     ...requester,
     requesterDisplayKey: parentKey,
     task: "Cancellation proof",
     cleanup: "keep",
-    expectsCompletionMessage: true,
   });
   expect(await markRequesterTurnYielded(requester)).toBe(1);
   expect(
     await settleRequesterAfterSessionSpawns({
       ...requester,
       requesterYielded: true,
-      acceptedSessionSpawns: [
-        { runId: childRunId, childSessionKey: childKey, expectsCompletionMessage: true },
-      ],
+      acceptedSessionSpawns: [child],
     }),
   ).toBe(true);
   const target = { agentId: "main", sessionKey: parentKey };
-  expect(loadSessionEntry(target)).toMatchObject({
+  const entry = loadSessionEntry(target);
+  expect(entry).toMatchObject({
     lifecycleRunId: parentRunId,
     endedAt: startedAt + 50,
     abortedLastRun: false,
   });
-  expect(loadSessionEntry(target)?.status).toBeUndefined();
-  expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toMatchObject({
-    requesterYieldBatch: true,
-  });
+  expect(entry?.status).toBeUndefined();
+  const childRun = await getSubagentRunByChildSessionKey(childKey);
+  expect(childRun?.requesterSettleWake).toMatchObject({ requesterYieldBatch: true });
 }

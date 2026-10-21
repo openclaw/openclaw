@@ -21,9 +21,9 @@ type XaiRealtimeVoiceProviderConfig = Partial<
 >;
 
 export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
-  Omit<XaiRealtimeVoiceProviderConfig, "interruptResponseOnInputAudio"> & {
+  Omit<XaiRealtimeVoiceProviderConfig, "interruptResponseOnInputAudio" | "apiKey"> & {
     baseUrl: string;
-    resolveApiKey?: () => Promise<string>;
+    resolveApiKey: () => Promise<string>;
   };
 
 type XaiRealtimeResponseItem = {

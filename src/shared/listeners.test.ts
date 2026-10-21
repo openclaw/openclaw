@@ -1,30 +1,36 @@
 import { expect, it } from "vitest";
 import { createChangeListeners } from "./listeners.js";
 
-it("publishes live subscriptions once per callback identity and supports clearing", () => {
-  const changes = createChangeListeners();
-  const calls: string[] = [];
-  const added = () => calls.push("added");
-  const first = () => {
-    calls.push("first");
-    stopSecond();
-    changes.subscribe(added);
-  };
-  const stopFirst = changes.subscribe(first);
-  changes.subscribe(first);
-  const stopSecond = changes.subscribe(() => calls.push("removed"));
-  changes.publish();
-  expect(calls).toEqual(["first", "added"]);
-  stopFirst();
-  stopFirst();
-  changes.clear();
-  changes.subscribe(() => calls.push("after clear"));
-  changes.publish();
-  expect(calls).toEqual(["first", "added", "after clear"]);
-});
+it.each([
+  { snapshot: undefined, expected: ["first", "added"] },
+  { snapshot: true, expected: ["first", "removed"] },
+])(
+  "publishes each callback identity and supports clearing (snapshot=$snapshot)",
+  ({ snapshot, expected }) => {
+    const changes = createChangeListeners(snapshot === undefined ? undefined : { snapshot });
+    const calls: string[] = [];
+    const added = () => calls.push("added");
+    const first = () => {
+      calls.push("first");
+      stopSecond();
+      changes.subscribe(added);
+    };
+    const stopFirst = changes.subscribe(first);
+    changes.subscribe(first);
+    const stopSecond = changes.subscribe(() => calls.push("removed"));
+    changes.publish();
+    expect(calls).toEqual(expected);
+    stopFirst();
+    stopFirst();
+    changes.clear();
+    changes.subscribe(() => calls.push("after clear"));
+    changes.publish();
+    expect(calls).toEqual([...expected, "after clear"]);
+  },
+);
 
-it("propagates the first listener error without delivering later listeners", () => {
-  const changes = createChangeListeners();
+it.each([undefined, true])("propagates the first listener error (snapshot=%s)", (snapshot) => {
+  const changes = createChangeListeners(snapshot === undefined ? undefined : { snapshot });
   const failure = new Error("listener failed");
   let delivered = false;
   changes.subscribe(() => {

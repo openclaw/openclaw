@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, Show } from "solid-js";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import type { AgentsAvatarGenerateResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
@@ -44,7 +44,7 @@ export function AvatarPicker(props: AvatarPickerProps) {
   const [error, setError] = createSignal<string | null>(null);
   let operation = 0;
   let fileInput: HTMLInputElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     operation += 1;
   });
 

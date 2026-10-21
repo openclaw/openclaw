@@ -101,9 +101,7 @@ export async function listenModelsEndpoint(server: Server) {
 }
 
 export async function closeModelsEndpoint(server: Server) {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  await promisify(server.close.bind(server))();
 }
 
 // A separate writer supplies no in-process Gateway receipt; refresh must load the durable change.

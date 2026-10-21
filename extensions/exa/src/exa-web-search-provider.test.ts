@@ -308,3 +308,25 @@ it("bounds Exa API error bodies without using response.text()", async () => {
   expect(textSpy).not.toHaveBeenCalled();
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
+
+it.each(["body", "statusText"])("redacts the active credential reflected in %s", async (source) => {
+  const apiKey = "fixture-exa-opaque-credential";
+  const detail = `upstream rejected ${apiKey}`;
+  fetchMock.mockResolvedValue(
+    new Response(source === "body" ? detail : "", {
+      status: 503,
+      statusText: source === "statusText" ? detail : "Unavailable",
+    }),
+  );
+  const failure = requireExaTool({ apiKey }, { cacheTtlMinutes: 0 }).execute({
+    query: `reflected credential ${source}`,
+  });
+
+  await expect(failure).rejects.toMatchObject({
+    status: 503,
+    statusCode: 503,
+    message: expect.stringContaining("upstream rejected"),
+  });
+  await expect(failure).rejects.not.toThrow(apiKey);
+  expect(fetchMock).toHaveBeenCalledOnce();
+});

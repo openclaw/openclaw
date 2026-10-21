@@ -54,19 +54,14 @@ export async function takeControlUiViewportScreenshot(
 }
 
 async function captureControlUiViewport(page: Page): Promise<Buffer> {
-  // CDP repaints the current viewport but does not settle semantic presentation.
-  // Keep capture independent of unrelated dashboard RPCs and descendant motion.
-  const session = await page.context().newCDPSession(page);
-  try {
-    const result = await session.send("Page.captureScreenshot", {
-      captureBeyondViewport: false,
-      format: "png",
-      fromSurface: true,
-    });
-    return Buffer.from(result.data, "base64");
-  } finally {
-    await session.detach();
-  }
+  // Playwright retains its viewport emulation while capturing the full frame.
+  // Element crops stay outside the browser so recording geometry does not change.
+  return page.screenshot({
+    fullPage: false,
+    animations: "allow",
+    caret: "initial",
+    scale: "device",
+  });
 }
 
 export async function takeControlUiElementScreenshot(
@@ -507,6 +502,7 @@ async function captureControlUiFrame(
     return rect;
   });
   // Keep the prepared presentation in place while taking one unclipped frame.
+  const deviceScale = await page.evaluate(() => window.devicePixelRatio);
   const png = await captureControlUiViewport(page);
   expect(
     await Promise.all(elements.map((element) => element.boundingBox())),
@@ -514,9 +510,18 @@ async function captureControlUiFrame(
   ).toEqual(rectangles);
   const image = photon.PhotonImage.new_from_byteslice(png);
   try {
+    const width = image.get_width();
+    const height = image.get_height();
     // Backing dimensions can round independently at fractional device scales.
-    const scaleX = image.get_width() / viewport.width;
-    const scaleY = image.get_height() / viewport.height;
+    expect(Math.abs(width - viewport.width * deviceScale), "Proof frame width").toBeLessThanOrEqual(
+      1,
+    );
+    expect(
+      Math.abs(height - viewport.height * deviceScale),
+      "Proof frame height",
+    ).toBeLessThanOrEqual(1);
+    const scaleX = width / viewport.width;
+    const scaleY = height / viewport.height;
     expect(scaleX, "Proof frame horizontal scale").toBeGreaterThan(0);
     expect(scaleY, "Proof frame vertical scale").toBeGreaterThan(0);
     return {
@@ -524,8 +529,8 @@ async function captureControlUiFrame(
       elements: rectangles.map((rect) => {
         const x = Math.floor(rect.x * scaleX);
         const y = Math.floor(rect.y * scaleY);
-        const right = Math.ceil((rect.x + rect.width) * scaleX);
-        const bottom = Math.ceil((rect.y + rect.height) * scaleY);
+        const right = Math.min(width, Math.ceil((rect.x + rect.width) * scaleX));
+        const bottom = Math.min(height, Math.ceil((rect.y + rect.height) * scaleY));
         const crop = photon.crop(image, x, y, right, bottom);
         try {
           expect([crop.get_width(), crop.get_height()]).toEqual([right - x, bottom - y]);

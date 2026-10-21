@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
 const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
-const runRuntimeToolFixture = vi.hoisted(() => vi.fn());
 const { webOpenPage, createWebPageOpener } = vi.hoisted(() => {
   const openPageMock = vi.fn(async (_params: { url: string; repoRoot?: string }) => ({
     pageId: "page-1",
@@ -36,11 +35,6 @@ vi.mock("./web-runtime.js", async (importOriginal) => ({
   createQaWebPageOpener: createWebPageOpener,
 }));
 
-vi.mock("./runtime-tool-fixture.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./runtime-tool-fixture.js")>()),
-  runRuntimeToolFixture,
-}));
-
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import * as browserRuntime from "./browser-runtime.js";
 import { createQaBusState } from "./bus-state.js";
@@ -51,6 +45,7 @@ import { inspectQaExecutionIdentityStorage } from "./execution-identity-storage-
 import * as modelSwitchEval from "./model-switch-eval.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { runQaCli } from "./qa-cli-process.js";
+import * as runtimeToolFixture from "./runtime-tool-fixture.js";
 import * as suiteRuntimeAgentMedia from "./suite-runtime-agent-media.js";
 import * as suiteRuntimeAgentProcess from "./suite-runtime-agent-process.js";
 import * as suiteRuntimeAgentSession from "./suite-runtime-agent-session.js";
@@ -115,12 +110,10 @@ function mockStepFlow(name: string, steps: QaSuiteStep[] | ((api: FlowApi) => Qa
 function runDefinition(
   env: ReturnType<typeof createQaSuiteRuntimeFlowTestEnv>,
   scenario = makeQaSuiteTestScenario("test-flow", { config: {} }),
-  runScenario = runQaSuiteScenarioSteps,
 ) {
   return runQaSuiteScenarioDefinition({
     env,
     scenario,
-    runScenario,
     constants: qaSuiteRuntimeFlowTestConstants,
   });
 }
@@ -146,7 +139,7 @@ async function captureQaGatewayLogDeps(
   const scenario = makeQaSuiteTestScenario("gateway-log-deps", { config: {} });
   createQaScenarioRuntimeApi.mockReturnValueOnce({ api: "ok" });
 
-  await runDefinition(env, scenario, vi.fn());
+  await runDefinition(env, scenario);
 
   const call = createQaScenarioRuntimeApi.mock.calls.at(-1)?.[0] as
     | { deps: QaGatewayLogDeps }
@@ -159,6 +152,7 @@ async function captureQaGatewayLogDeps(
 
 describe("qa suite runtime flow", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     if (vi.isFakeTimers()) {
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -166,6 +160,7 @@ describe("qa suite runtime flow", () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(runtimeToolFixture, "runRuntimeToolFixture").mockResolvedValue("");
   });
 
   it("keeps the latest structured RTT measurement when the scenario ends in skip", async () => {
@@ -206,10 +201,9 @@ describe("qa suite runtime flow", () => {
     const scenario = makeQaSuiteTestScenario("session-memory-ranking", {
       config: { expected: "value" },
     });
-    const runScenario = vi.fn();
     createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
-    const result = await runDefinition(env, scenario, runScenario);
+    const result = await runDefinition(env, scenario);
 
     expect(result).toMatchObject({ api: "ok", signal: expect.any(AbortSignal) });
     expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);
@@ -289,17 +283,9 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.markGatewayLogCursor()).toBe(-1);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
     await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
-    expect(runRuntimeToolFixture).toHaveBeenCalledWith(
-      env,
-      { toolName: "read" },
-      {
-        createSession: suiteRuntimeAgentSession.createSession,
-        readEffectiveTools: suiteRuntimeAgentSession.readEffectiveTools,
-        runAgentPrompt: suiteRuntimeAgentProcess.runAgentPrompt,
-        fetchJson: suiteRuntimeGateway.fetchJson,
-        ensureImageGenerationConfigured: suiteRuntimeAgentMedia.ensureImageGenerationConfigured,
-      },
-    );
+    expect(runtimeToolFixture.runRuntimeToolFixture).toHaveBeenCalledWith(env, {
+      toolName: "read",
+    });
     expect(call.constants).toEqual({
       imageUnderstandingPngBase64: "small",
       imageUnderstandingLargePngBase64: "large",

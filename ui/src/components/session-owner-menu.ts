@@ -78,12 +78,8 @@ export function createSessionOwnerMenu(
     };
   };
   const snapshot = createParkedProjection(readSnapshot, presented, prepare);
-  const rows = createProjection(
-    snapshot,
-    {},
-    {
-      key: (row: { type?: string; id?: string }) => `${row.type}:${row.id}`,
-    },
-  );
+  const rows = createProjection(snapshot, snapshot(), {
+    key: (row: { type?: string; id?: string }) => `${row.type}:${row.id}`,
+  });
   return { load, snapshot: () => rows, multipleOwners: () => rows.owners.length > 1 };
 }

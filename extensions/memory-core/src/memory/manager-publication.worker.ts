@@ -31,7 +31,6 @@ import {
   readSqliteDatabaseScopedWriteToken,
   runSqliteImmediateTransactionSync,
   runSqliteSingleStatementSync,
-  setSqliteBusyTimeout,
   stageOpenClawAgentDatabaseSchemaExtension,
   supportsNodeSqliteExtensionLoading,
   tableExists,
@@ -46,6 +45,7 @@ import {
   countMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
+  type MemoryEmbeddingCacheSize,
 } from "./manager-embedding-cache.js";
 import {
   upgradeMemoryIndexProviderKey,
@@ -89,10 +89,13 @@ type PublicationConnection =
       pragmas: MemoryShadowConnection["pragmas"];
     };
 
-// The agent owner configures these once; temporary transaction settings restore them.
+// Schema admission restores the foreign-key policy captured from the agent owner.
 const agentConnectionPragmas = new WeakMap<DatabaseSync, MemoryShadowConnection["pragmas"]>();
 const loadedExtensions = new WeakMap<DatabaseSync, string>();
-const embeddingCacheSizes = new WeakMap<DatabaseSync, { size: number; token?: string }>();
+const embeddingCacheSizes = new WeakMap<
+  DatabaseSync,
+  MemoryEmbeddingCacheSize & { token?: string }
+>();
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -236,21 +239,10 @@ function createPublicationBackend(
     let entered = false;
     let committed = false;
     let writeToken: string | undefined;
-    let restoredBusyTimeout = false;
-    const restoreBusyTimeout = () => {
-      if (!restoredBusyTimeout) {
-        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
-        restoredBusyTimeout = true;
-      }
-    };
     try {
-      // Failed BEGIN is returned to the preparing host without sleeping here.
-      // It revalidates memory-file input before every retry, as before.
-      setSqliteBusyTimeout(db, 0);
       const value = run({
         onBegin: () => {
           entered = true;
-          restoreBusyTimeout();
           admit("transaction");
         },
         withCommit: (commit) => {
@@ -263,10 +255,6 @@ function createPublicationBackend(
       return { ok: true, value, writeToken };
     } catch (error) {
       return { ok: false, error: failure(error), entered, committed };
-    } finally {
-      if (db.isOpen) {
-        restoreBusyTimeout();
-      }
     }
   };
   const write = <T>(
@@ -285,14 +273,11 @@ function createPublicationBackend(
       ),
     );
   const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
-    let statementStarted = false;
     let committed = false;
     try {
       admit("transaction");
       // Autocommit makes the statement the effect boundary.
       admit("commit");
-      setSqliteBusyTimeout(db, 0);
-      statementStarted = true;
       const value = withSqliteDatabaseWriteScope(db, [MEMORY_INDEX_WRITE_SCOPE], () =>
         runSqliteSingleStatementSync(db, statement),
       );
@@ -300,18 +285,7 @@ function createPublicationBackend(
       const writeToken = readSqliteDatabaseScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
       return { ok: true, value, writeToken };
     } catch (error) {
-      const detail = failure(error);
-      // Only a native lock refusal proves that the autocommit statement did not enter.
-      const lockRefused =
-        statementStarted &&
-        !committed &&
-        detail.errcode !== undefined &&
-        [5, 6].includes(detail.errcode & 0xff);
-      return { ok: false, error: detail, entered: !lockRefused, committed };
-    } finally {
-      if (statementStarted && db.isOpen) {
-        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
-      }
+      return { ok: false, error: failure(error), entered: true, committed };
     }
   };
   const withFacts = <T>(
@@ -342,19 +316,21 @@ function createPublicationBackend(
     const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
     let retained = embeddingCacheSizes.get(db);
     if (!retained || retained.token !== token) {
-      retained = { size: countMemoryEmbeddingCache(db), token };
+      retained = { size: countMemoryEmbeddingCache(db), exact: true, token };
       embeddingCacheSizes.set(db, retained);
     }
-    return retained.size;
+    return retained;
   };
-  const writeCache = (run: (size: number) => number): MemoryPublicationResult<boolean> => {
+  const writeCache = (
+    run: (size: MemoryEmbeddingCacheSize) => MemoryEmbeddingCacheSize,
+  ): MemoryPublicationResult<boolean> => {
     const size = cacheSize();
     const result = write(() => run(size), [MEMORY_EMBEDDING_CACHE_WRITE_SCOPE]);
     if (!result.ok) {
       return result;
     }
     embeddingCacheSizes.set(db, {
-      size: result.value,
+      ...result.value,
       token: readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE),
     });
     return { ...result, value: true };
@@ -404,8 +380,7 @@ function createPublicationBackend(
         command.type === "source.state" ||
         command.type === "source.hash" ||
         command.type === "source.chunks" ||
-        command.type === "cache.read" ||
-        command.type === "session.current"
+        command.type === "cache.read"
       ) {
         return readMemoryIndex(db, command).value;
       }
@@ -483,7 +458,7 @@ function createPublicationBackend(
         return undefined;
       }
       if (command.type === "cache.prune") {
-        if (cacheSize() <= command.input.maxEntries) {
+        if (cacheSize().size <= command.input.maxEntries) {
           return { ok: true, value: false };
         }
         return writeCache((size) =>
@@ -496,9 +471,10 @@ function createPublicationBackend(
         );
       }
       if (command.type === "cache.clear") {
-        return writeCache(
-          (size) => size - clearMemoryEmbeddingCacheIdentities(db, command.input.identities),
-        );
+        return writeCache((size) => ({
+          ...size,
+          size: size.size - clearMemoryEmbeddingCacheIdentities(db, command.input.identities),
+        }));
       }
       if (command.type === "cache.write" || command.type === "cache.write.inline") {
         let header: MemoryEmbeddingCacheHeader;

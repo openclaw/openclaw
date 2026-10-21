@@ -6,12 +6,10 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { decodeResumeHandoff } from "../shared/resume-handoff.js";
-import type { TuiSessionList } from "../tui/tui-backend.js";
 import {
   buildSessionChoices,
   loadRecentSessions,
   resolveResumeSession,
-  type ResumeResolution,
   type SessionPickerChoice,
 } from "../tui/tui-session-picker.js";
 import type { ResumeCliOptions } from "./resume-cli.js";
@@ -114,48 +112,6 @@ async function fetchResumeSessions(
   }
 }
 
-async function promptResumeSession(
-  sessions: readonly TuiSessionList["sessions"][number][],
-): Promise<string | null> {
-  const choices = buildSessionChoices(sessions);
-  if (choices.length === 0) {
-    throw new Error(
-      "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",
-    );
-  }
-  const selected = await selectStyled({
-    message: "Resume a session",
-    options: choices.map((choice) => ({
-      value: choice.value,
-      label: formatResumeCandidate(choice),
-      hint: choice.description ? sanitizeTerminalText(choice.description) : undefined,
-    })),
-  });
-  if (typeof selected === "symbol") {
-    cancel("Cancelled.");
-    return null;
-  }
-  return selected;
-}
-
-function reportResumeFailure(
-  query: string,
-  resolution: Exclude<ResumeResolution, { kind: "match" }>,
-) {
-  if (resolution.kind === "ambiguous") {
-    defaultRuntime.error(`Session query ${JSON.stringify(query)} is ambiguous. Candidates:`);
-    for (const candidate of resolution.candidates) {
-      defaultRuntime.error(`  ${formatResumeCandidate(candidate)}`);
-    }
-    defaultRuntime.error("Use a longer name or the exact session key.");
-    return;
-  }
-  defaultRuntime.error(`No recent session matched ${JSON.stringify(query)}.`);
-  defaultRuntime.error(
-    "Run `openclaw resume` to choose from recent sessions or `openclaw sessions` to inspect all sessions.",
-  );
-}
-
 function formatResumeCandidate(candidate: SessionPickerChoice): string {
   const label = sanitizeTerminalText(candidate.label);
   const key = sanitizeTerminalText(candidate.value);
@@ -208,13 +164,44 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
     } else if (resolvedQuery) {
       const resolution = resolveResumeSession(discovery.sessions, resolvedQuery);
       if (resolution.kind !== "match") {
-        reportResumeFailure(resolvedQuery, resolution);
+        if (resolution.kind === "ambiguous") {
+          defaultRuntime.error(
+            `Session query ${JSON.stringify(resolvedQuery)} is ambiguous. Candidates:`,
+          );
+          for (const candidate of resolution.candidates) {
+            defaultRuntime.error(`  ${formatResumeCandidate(candidate)}`);
+          }
+          defaultRuntime.error("Use a longer name or the exact session key.");
+        } else {
+          defaultRuntime.error(`No recent session matched ${JSON.stringify(resolvedQuery)}.`);
+          defaultRuntime.error(
+            "Run `openclaw resume` to choose from recent sessions or `openclaw sessions` to inspect all sessions.",
+          );
+        }
         defaultRuntime.exit(1);
         return;
       }
       sessionKey = resolution.session.value;
     } else {
-      sessionKey = await promptResumeSession(discovery.sessions);
+      const choices = buildSessionChoices(discovery.sessions);
+      if (choices.length === 0) {
+        throw new Error(
+          "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",
+        );
+      }
+      const selected = await selectStyled({
+        message: "Resume a session",
+        options: choices.map((choice) => ({
+          value: choice.value,
+          label: formatResumeCandidate(choice),
+          hint: choice.description ? sanitizeTerminalText(choice.description) : undefined,
+        })),
+      });
+      if (typeof selected === "symbol") {
+        cancel("Cancelled.");
+        return;
+      }
+      sessionKey = selected;
     }
   }
   if (!sessionKey) {

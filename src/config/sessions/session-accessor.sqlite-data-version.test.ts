@@ -19,7 +19,7 @@ import {
   listSessionEntriesCore,
   listSessionTranscriptInstances,
   loadSessionEntry,
-  openSessionEntryReadView,
+  loadExactSessionEntryReadOnly,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
@@ -147,7 +147,7 @@ it("reopens pre-device-folder entries through the codec, full accessor, and list
   expect([listed?.deviceFolder, listed?.skillsSnapshot]).toEqual([undefined, undefined]);
   expect(parseSessionEntryCalls).toHaveBeenCalled();
   expectCached(() => listingEntries(scope).get(scope.sessionKey), listed);
-  expect(openSessionEntryReadView(scope).get(scope.sessionKey)).toEqual(listed);
+  expect(loadExactSessionEntryReadOnly({ ...scope, clone: false })?.entry).toEqual(listed);
 
   await upsertSessionEntryCore(scope, { ...full!, label: "Continued after upgrade" });
   await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);

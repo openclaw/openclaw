@@ -541,10 +541,7 @@ class AgentDatabaseStartupAdmission {
                 await previous;
                 assertCurrent();
                 this.publishingAgentId = agentId;
-                // Retry only publication; opening and migration have already completed. A
-                // schema-admission change means the receipt lost its publication race: the
-                // next attempt re-enters the publication owner, which re-reads current config,
-                // secrets, and database admission instead of replaying the stale receipt.
+                // Retry only publication; opening and migration have already completed.
                 for (let attempt = 1; ; attempt++) {
                   try {
                     await activation.publishAgent(input);
@@ -556,12 +553,10 @@ class AgentDatabaseStartupAdmission {
                     if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
                       throw error;
                     }
-                    log.warn(
-                      error instanceof AgentDatabaseSchemaAdmissionChangedError
-                        ? "agent database startup publication lost its schema admission; retrying"
-                        : "agent database startup preparation was superseded; retrying",
-                      { agentId, attempt },
-                    );
+                    log.warn("agent database startup preparation was superseded; retrying", {
+                      agentId,
+                      attempt,
+                    });
                     await assertNotDeleted();
                   }
                 }

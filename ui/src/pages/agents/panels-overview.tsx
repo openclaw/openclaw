@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createUniqueId, For, onSettled, Show } from "solid-js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
@@ -15,6 +15,7 @@ import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx"
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/solid/overlay.css";
 import {
@@ -62,7 +63,7 @@ export function AgentOverview(
     : undefined;
   const uploadsEnabled = () => configProjection?.read().uploadsEnabled !== false;
   const avatarLoader = createIdentityAvatars();
-  onCleanup(avatarLoader.connect());
+  onSettled(() => avatarLoader.connect());
   const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
   const catalogOwnsChoices = createMemo(
     () => params.modelCatalogRetired || params.modelSelectionPolicy?.restricted,
@@ -258,16 +259,9 @@ export function AgentOverview(
             >
               {renderIdentityAvatar()}
               <span class="agent-identity-editor__avatar-edit" aria-hidden="true">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
+                <StrokeIcon>
                   <path d="m16 5 3 3M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" />
-                </svg>
+                </StrokeIcon>
               </span>
             </button>
             <div class="agent-identity-editor__content">

@@ -4,7 +4,11 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import {
+  openChatDetails,
+  openChatPublication,
+  openDetailsPullRequests,
+} from "./chat-details.test-support.ts";
 import {
   publicationMethods,
   publicationOptions,
@@ -103,11 +107,12 @@ suite.define(() => {
         .poll(() => page.locator(".link-reader-hovercard").textContent())
         .toContain("Merged");
       await page.keyboard.press("Escape");
-      await openChatDetails(page);
+      await openDetailsPullRequests(page);
       expect(await chip.getAttribute("data-link-reader-tone")).toBe("accent");
       expect(await page.locator(".chat-prs").textContent()).not.toContain("Publishing");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       await gateway.resolveDeferred(githubOptions);
+      await openChatPublication(page);
       await page.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
       expect(await page.locator(".chat-prs").textContent()).toContain("openclaw/review-request");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
@@ -128,18 +133,23 @@ suite.define(() => {
           status,
         });
       const row = page.locator(".chat-prs");
-      const warning = row.locator(".chat-pr__warning");
+      const menu = row.locator(".chat-pr-menu");
+      const warning = menu.locator(".chat-pr__stale");
       await emit("ready");
-      await expect.poll(() => row.textContent()).toContain("#43");
+      await openDetailsPullRequests(page);
+      await row.locator(".chat-pr__actions-trigger").click();
+      await expect.poll(() => menu.textContent()).toContain("#43");
       expect(await warning.count()).toBe(0);
       await emit("unavailable", "merged");
-      await expect.poll(() => warning.getAttribute("aria-label")).toContain("last known state");
-      expect(await warning.getAttribute("aria-label")).not.toContain("rate limit");
-      expect(await row.textContent()).toContain("#43");
+      await expect
+        .poll(() => warning.textContent())
+        .toContain("Couldn’t update PR info. It may be outdated.");
+      expect(await warning.textContent()).not.toContain("rate limit");
+      expect(await menu.textContent()).toContain("#43");
       expect(await row.locator("article").getAttribute("data-state")).toBe("merged");
       await emit("ready", "merged");
       await expect.poll(() => warning.count()).toBe(0);
-      expect(await row.textContent()).toContain("#43");
+      expect(await menu.textContent()).toContain("#43");
       await emitPrs(gateway, key, {
         repository,
         branch: { ...repository, branch: "feature/next-task", additions: 9 },
@@ -172,6 +182,7 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "chat");
       await openChatDetails(page);
       const key = await waitForWatchedSessionKey(gateway);
+      await openDetailsPullRequests(page);
       await page.getByText(failure.nextAction, { exact: true }).waitFor({ state: "attached" });
       await emitPrs(gateway, key, {
         pullRequests: [pullRequest(45, "feature/finished-task", "Completed task")],
@@ -189,7 +200,7 @@ suite.define(() => {
       expect((await summary.textContent())?.trim()).toBe("Publication attempt failed");
       const guidance = history.getByText(failure.nextAction, { exact: true });
       expect(await guidance.isVisible()).toBe(false);
-      await summary.click();
+      await openChatPublication(page);
       await guidance.waitFor();
       const account = history.locator("[data-publication-account]");
       expect(await account.textContent()).toContain("Publish as @agent-bot");
@@ -222,7 +233,7 @@ suite.define(() => {
       await refresh.click();
       await gateway.waitForRequest(githubOptions, { after: readsBefore });
       await refresh.waitFor();
-      expect(await merged.textContent()).toContain("Merged");
+      expect(await merged.getAttribute("data-state")).toBe("merged");
       const target = (await gateway.waitForRequest(githubOptions)).params;
       if (target === null || typeof target !== "object" || Array.isArray(target)) {
         throw new Error("Expected publication request parameters");
@@ -253,6 +264,7 @@ suite.define(() => {
       const reloadedKey = await waitForWatchedSessionKey(gateway);
       await gateway.waitForRequest(githubOptions);
       await emitPrs(gateway, reloadedKey, published);
+      await openDetailsPullRequests(page);
       await merged.waitFor();
       expect(await history.count()).toBe(0);
       await emitPrs(gateway, reloadedKey, {
@@ -327,6 +339,7 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "chat");
       await openChatDetails(page);
       const key = await showBranch();
+      await openChatPublication(page);
       const optionsRequest = await gateway.waitForRequest(githubOptions);
       const target = optionsRequest.params as { sessionKey: string; agentId?: string };
       expect(target.sessionKey).toBe(key);
@@ -357,7 +370,7 @@ suite.define(() => {
         after: watchedBefore,
       });
       await showBranch();
-      await openChatDetails(page);
+      await openChatPublication(page);
       await gateway.waitForRequest(githubOptions, { after: beforeReconnect });
       await page.getByRole("link", { name: "Open PR", exact: true }).waitFor();
       await emitPrs(gateway, key, {
@@ -371,11 +384,12 @@ suite.define(() => {
       expect(await page.getByRole("button", { name: "Choose a new publication" }).count()).toBe(0);
       const prName = "pull request synthetic/publication-demo#44";
       const actions = { name: `Actions for ${prName}`, exact: true };
-      const dismiss = { name: `Dismiss ${prName}`, exact: true };
+      const dismiss = { name: "Hide from this session", exact: true };
       await rows.getByRole("button", actions).click();
       await page.getByRole("menuitem", dismiss).click();
       await expect.poll(() => rows.count()).toBe(0);
       await showBranch();
+      await openChatPublication(page);
       await page.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);

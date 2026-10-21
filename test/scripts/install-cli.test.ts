@@ -383,6 +383,43 @@ fi
     ]);
   });
 
+  it.each([false, true])(
+    "rejects unknown arguments with preserved status and JSON bytes (json=%s)",
+    (json) => {
+      const result = runInstallCliShell(`main ${json ? "--json " : ""}--synthetic-invalid`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(
+        json
+          ? '{"event":"error","message":"Unknown option: --synthetic-invalid"}\n'
+          : "ERROR: Unknown option: --synthetic-invalid\nSupport: https://community.openclaw.ai/\n",
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "surfaces captured npm-version support without changing JSON output (json=%s)",
+    (json) => {
+      const root = tempDirs.make("openclaw-install-cli-version-failure-");
+      const npm = join(root, "npm"),
+        args = join(root, "args");
+      writeNpmLifecycleFixture(npm);
+      const result = runInstallCliShell(
+        `
+        npm_bin() { printf '%s\\n' "$FIXTURE_NPM"; }
+        npm_config_has_raw_key() { return 1; }
+        JSON=${json ? 1 : 0}
+        install_openclaw
+      `,
+        { FIXTURE_NPM: npm, NPM_FAKE_VERSION_STATUS: "1", NPM_FAKE_ARGS: args },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(json ? "" : "Support: https://community.openclaw.ai/\n");
+      expect(existsSync(args)).toBe(false);
+    },
+  );
+
   it("round-trips dynamic installer values through independent NDJSON records", () => {
     const root = tempDirs.make("openclaw-install-cli-json-events-");
     const dynamicValue = `quote"\\café项目lobster🦞${String.fromCharCode(
@@ -1555,12 +1592,14 @@ fi
   });
 
   it.each([
-    { requested: "beta", outcome: "transient", produced: true, status: 0 },
-    { requested: "latest", outcome: "persistent", produced: true, status: 1 },
-    { requested: "latest", outcome: "success", produced: false, status: 1 },
+    { requested: "beta", outcome: "transient", produced: true, status: 0, json: true },
+    { requested: "latest", outcome: "persistent", produced: true, status: 1, json: true },
+    { requested: "latest", outcome: "success", produced: false, status: 1, json: true },
+    { requested: "latest", outcome: "persistent", produced: true, status: 1, json: false },
+    { requested: "latest", outcome: "success", produced: false, status: 1, json: false },
   ])(
-    "keeps the requested npm spec across $outcome installs (package: $produced)",
-    ({ requested, outcome, produced, status }) => {
+    "keeps the requested npm spec across $outcome installs (package: $produced, json: $json)",
+    ({ requested, outcome, produced, status, json }) => {
       const root = tempDirs.make("openclaw-install-npm-retry-");
       const prefix = join(root, "prefix"),
         nodeDir = join(root, "node"),
@@ -1575,7 +1614,7 @@ fi
       node_dir() { printf '%s\\n' "$FIXTURE_NODE_DIR"; }
       npm_config_has_raw_key() { return 1; }
       PREFIX="$FIXTURE_PREFIX"
-      JSON=1
+      JSON=${json ? 1 : 0}
       OPENCLAW_VERSION=${requested}
       install_openclaw
     `,
@@ -1598,6 +1637,11 @@ fi
       ]);
       expect(result.stdout + result.stderr).not.toContain("openclaw@next");
       if (status !== 0) {
+        expect(result.stdout).toBe(
+          json
+            ? `{"event":"step","name":"openclaw","status":"start","version":"${requested}"}\n{"event":"error","message":"npm install did not produce a usable OpenClaw package"}\n`
+            : `Installing OpenClaw (${requested})...\nnpm install openclaw@${requested} did not produce a usable package; retrying once\nERROR: npm install did not produce a usable OpenClaw package\nSupport: https://community.openclaw.ai/\n`,
+        );
         expect(result.stdout).not.toContain('"status":"ok"');
         expect(existsSync(join(prefix, "bin", "openclaw"))).toBe(false);
         if (produced) {

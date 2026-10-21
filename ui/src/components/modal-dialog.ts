@@ -562,9 +562,6 @@ export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogM
 export const OpenClawModalDialog = ModalDialog.Element;
 
 declare global {
-  interface Document {
-    openClawModalLayers?: Set<HTMLElement>;
-  }
   interface HTMLElementTagNameMap {
     "openclaw-modal-dialog": OpenClawModalDialog;
   }

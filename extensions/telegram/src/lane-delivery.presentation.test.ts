@@ -5,28 +5,23 @@ import {
   resolveFinalTelegramPresentationText,
 } from "./interactive-fallback.js";
 import { createHarness, expectPreviewFinalized } from "./lane-delivery.test-support.js";
-const statusPresentation = () => ({
-  blocks: [
-    {
-      type: "table" as const,
-      caption: "Status",
-      headers: ["Key", "Value"],
-      rows: [["Gateway", "running"]],
-      rowHeaderColumnIndex: 0,
-    },
-  ],
-});
+const statusTable = {
+  type: "table" as const,
+  caption: "Status",
+  headers: ["Key"],
+  rows: [["Gateway"]],
+};
 const statusPayload = (text: string) => ({
   text,
   presentationTextMode: "fallback" as const,
-  presentation: statusPresentation(),
+  presentation: { blocks: [statusTable] },
 });
 const canonicalPayload = (presentationTextMode?: "fallback") => ({
   text: "Summary",
   presentationTextMode,
   presentation: {
     blocks: [
-      { type: "table" as const, caption: "Status", headers: ["Key"], rows: [["Gateway"]] },
+      statusTable,
       { type: "buttons" as const, buttons: [{ label: "Unavailable", value: "x", disabled: true }] },
     ],
   },
@@ -72,63 +67,44 @@ describe("createLaneTextDeliverer streamed presentation finals", () => {
   );
 });
 describe("streamed final canonical presentation text", () => {
-  it.each<{
-    name: string;
-    payload: ReplyPayload;
-    contains?: string[];
-    unique?: string;
-    exact?: string;
-    marker?: string;
-  }>([
-    ...([undefined, "fallback"] as const).map((presentationTextMode) => ({
-      name: `capability-degraded controls ${presentationTextMode ?? "unset"}`,
-      payload: canonicalPayload(presentationTextMode),
-      contains: ["<table>", "Unavailable", ...(presentationTextMode ? [] : ["Summary"])],
-    })),
-    {
-      name: "does not duplicate a dropped-control label",
-      payload: {
-        text: "Status summary\n\n- Copy manually",
-        presentation: {
-          blocks: [
-            { type: "table" as const, caption: "Status", headers: ["Key"], rows: [["Gateway"]] },
-            {
-              type: "buttons" as const,
-              buttons: [{ label: "Copy manually", value: "x".repeat(65) }],
-            },
-          ],
-        },
-      },
-      marker: "Status summary",
-      contains: ["<table>"],
-      unique: "Copy manually",
-    },
-    {
-      name: "preserves authored text overlapping presentation",
-      payload: {
-        text: "Please read: Status",
-        presentation: { blocks: [{ type: "text" as const, text: "Status" }] },
-      },
-      exact: "Please read: Status\n\nStatus",
-    },
-    {
-      name: "renders title-only presentations",
-      payload: { text: "Summary", presentation: { title: "Status", blocks: [] } },
-      contains: ["Status"],
-    },
-  ])("$name", ({ payload, contains = [], unique, exact, marker }) => {
-    if (marker) {
-      markTelegramDroppedControlFallback(payload, marker, payload.text ?? "");
-    }
-    const rendered = renderFinal(payload);
-    for (const text of contains) {
+  it.each([undefined, "fallback"] as const)("renders capability-degraded controls (%s)", (mode) => {
+    const rendered = renderFinal(canonicalPayload(mode));
+    for (const text of ["<table>", "Unavailable", ...(mode ? [] : ["Summary"])]) {
       expect(rendered).toContain(text);
     }
-    if (unique) {
-      expect(rendered?.match(new RegExp(unique, "g"))).toHaveLength(1);
-    }
-    if (exact) {
-      expect(rendered).toBe(exact);
-    }
+  });
+
+  it("does not duplicate a dropped-control label", () => {
+    const payload: ReplyPayload = {
+      text: "Status summary\n\n- Copy manually",
+      presentation: {
+        blocks: [
+          statusTable,
+          {
+            type: "buttons",
+            buttons: [{ label: "Copy manually", value: "x".repeat(65) }],
+          },
+        ],
+      },
+    };
+    markTelegramDroppedControlFallback(payload, "Status summary", payload.text ?? "");
+    const rendered = renderFinal(payload);
+    expect(rendered).toContain("<table>");
+    expect(rendered?.match(/Copy manually/g)).toHaveLength(1);
+  });
+
+  it("preserves authored text overlapping presentation", () => {
+    expect(
+      renderFinal({
+        text: "Please read: Status",
+        presentation: { blocks: [{ type: "text", text: "Status" }] },
+      }),
+    ).toBe("Please read: Status\n\nStatus");
+  });
+
+  it("renders title-only presentations", () => {
+    expect(
+      renderFinal({ text: "Summary", presentation: { title: "Status", blocks: [] } }),
+    ).toContain("Status");
   });
 });

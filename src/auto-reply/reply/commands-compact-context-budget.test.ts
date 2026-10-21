@@ -1,5 +1,4 @@
-// Tests compact command context-budget resolution separately from command lifecycle behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionAgentIdMock } from "./commands-agent-scope.test-support.js";
 import {
@@ -10,16 +9,23 @@ import {
   requireCompactEmbeddedAgentSessionCall,
   resetCompactCommandMocks,
 } from "./commands-compact.test-support.js";
-import type { HandleCommandsParams } from "./commands-types.js";
 
-describe("handleCompactCommand context budget", () => {
-  beforeEach(() => {
-    resetCompactCommandMocks();
-    resolveSessionAgentIdMock.mockReturnValue("main");
-  });
+beforeEach(() => {
+  resetCompactCommandMocks();
+  resolveSessionAgentIdMock.mockReturnValue("main");
+});
 
-  it("resolves the active Codex runtime config instead of stale session metadata", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+it.each([
+  {
+    name: "active Codex runtime config instead of stale session metadata",
+    cfg: {
+      agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+      models: { providers: { openai: { models: [{ id: "gpt-5.5", contextWindow: 258_000 }] } } },
+    } as unknown as OpenClawConfig,
+    provider: "openai",
+    model: "openai/gpt-5.5",
+    session: { sessionId: "live-session", contextTokens: 400_000 },
+    result: {
       ok: true,
       compacted: true,
       result: {
@@ -28,79 +34,44 @@ describe("handleCompactCommand context budget", () => {
         tokensBefore: 199_000,
         tokensAfter: 56_000,
       },
-    });
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-5.5": {
-                  agentRuntime: { id: "codex" },
-                },
-              },
-            },
-          },
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          models: {
-            providers: {
-              openai: {
-                models: [{ id: "gpt-5.5", contextWindow: 258_000 }],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig),
-        provider: "openai",
-        model: "openai/gpt-5.5",
-        contextTokens: 0,
-        sessionEntry: {
-          sessionId: "live-session",
-          updatedAt: Date.now(),
-          contextTokens: 400_000,
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(258_000);
+    },
+    budget: 258_000,
+  },
+  {
+    name: "persisted context for an unknown custom model with a legacy alias",
+    cfg: {
+      agents: { defaults: { models: { "custom/actual-model": { alias: "legacy-fast-model" } } } },
+    },
+    provider: "custom",
+    model: "actual-model",
+    session: {
+      sessionId: "legacy-model-session",
+      contextTokens: 777_777,
+      providerOverride: "custom",
+      modelOverride: "legacy-fast-model",
+      modelOverrideSource: "user",
+    },
+    result: { ok: true, compacted: false, reason: "already compacted" },
+    budget: 777_777,
+  },
+] as const)("resolves $name", async ({ cfg, provider, model, session, result, budget }) => {
+  vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce(result);
+  await handleCompactCommand(
+    {
+      ...buildCompactParams("/compact", {
+        ...cfg,
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      }),
+      provider,
+      model,
+      contextTokens: 0,
+      sessionEntry: { ...session, updatedAt: Date.now() },
+    },
+    true,
+  );
+  expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(budget);
+  if (result.compacted) {
     expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(56_000, 258_000);
-  });
-
-  it("retains persisted context when an unknown custom model uses a legacy alias", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-      reason: "already compacted",
-    });
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          agents: {
-            defaults: {
-              models: { "custom/actual-model": { alias: "legacy-fast-model" } },
-            },
-          },
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        provider: "custom",
-        model: "actual-model",
-        contextTokens: 0,
-        sessionEntry: {
-          sessionId: "legacy-model-session",
-          updatedAt: Date.now(),
-          providerOverride: "custom",
-          modelOverride: "legacy-fast-model",
-          modelOverrideSource: "user",
-          contextTokens: 777_777,
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(777_777);
-  });
+  }
 });

@@ -304,12 +304,18 @@ describe("Codex app-server binding store", () => {
   });
 
   it("fails closed on malformed pending supervision state", async () => {
-    const base = { threadId: "thread-source", cwd: "/repo" };
+    const base = {
+      ...nativeBinding("thread-source", true),
+      supervisionSourceThreadId: "thread-source",
+    };
     const pending = { sourceThreadId: "thread-source" };
+    expect(decodeBinding({ ...base, pendingSupervisionBranch: pending })).toMatchObject({
+      ...base,
+      pendingSupervisionBranch: pending,
+    });
     for (const binding of [
       {
         ...base,
-        preserveNativeModel: true,
         pendingSupervisionBranch: {
           ...pending,
           cleanupThreadIds: ["thread-probe", "thread-probe"],
@@ -318,7 +324,6 @@ describe("Codex app-server binding store", () => {
       {
         ...base,
         threadId: "thread-other",
-        preserveNativeModel: true,
         pendingSupervisionBranch: pending,
       },
       { ...base, pendingSupervisionBranch: { ...pending, unknown: true } },
@@ -332,9 +337,7 @@ describe("Codex app-server binding store", () => {
       version: 1,
       state: "active",
       binding: {
-        threadId: "thread-source",
-        cwd: "/repo",
-        preserveNativeModel: true,
+        ...base,
         pendingSupervisionBranch: {
           sourceThreadId: "thread-source",
           cleanupThreadIds: ["thread-source"],
