@@ -948,8 +948,9 @@ extension ApplicationRelocator {
                 try FileManager().copyItem(at: source, to: staging)
             }.value
         } catch {
-            // Await the partial-copy delete. The failure path quits shortly after
-            // the alert, which would abandon a fire-and-forget multi-GB cleanup.
+            // Await the partial-copy delete before the failure alert returns.
+            // Resume keeps this process alive, so a detached multi-GB cleanup
+            // would still be running.
             try? await Task.detached { try? FileManager().removeItem(at: staging) }.value
             throw error
         }
