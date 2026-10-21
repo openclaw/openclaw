@@ -249,38 +249,20 @@ describe("Goal continuation eligibility", () => {
       expect(enqueueFollowupRun).not.toHaveBeenCalled();
     }
   });
-  it("does not resume paused goals", () => {
-    const current = entry();
-    current.goal!.status = "paused";
-    expect(isGoalContinuationCurrent(identity, current)).toBe(false);
-  });
-  it("rejects replaced, cleared, reset, stopped and external-runtime sessions", () => {
-    const current = entry();
-    expect(isGoalContinuationCurrent(identity, current)).toBe(true);
-    expect(isGoalContinuationCurrent(identity, undefined)).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, goal: undefined })).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, sessionId: "replacement" })).toBe(
-      false,
-    );
-    expect(
-      isGoalContinuationCurrent(identity, { ...current, lifecycleRevision: "revision-3" }),
-    ).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, abortedLastRun: true })).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, agentHarnessId: "codex" })).toBe(
-      false,
-    );
-    expect(
-      isGoalContinuationCurrent(identity, {
-        ...current,
-        goal: { ...current.goal!, id: "new-goal" },
-      }),
-    ).toBe(false);
-    expect(
-      isGoalContinuationCurrent(identity, {
-        ...current,
-        goal: { ...current.goal!, updatedAt: 3000 },
-      }),
-    ).toBe(true);
+  it.each<[string, Partial<SessionEntry> | undefined, boolean]>([
+    ["active", {}, true],
+    ["missing session", undefined, false],
+    ["cleared", { goal: undefined }, false],
+    ["replaced session", { sessionId: "replacement" }, false],
+    ["reset", { lifecycleRevision: "revision-3" }, false],
+    ["stopped", { abortedLastRun: true }, false],
+    ["external runtime", { agentHarnessId: "codex" }, false],
+    ["paused", { goal: { ...entry().goal!, status: "paused" } }, false],
+    ["replaced goal", { goal: { ...entry().goal!, id: "new-goal" } }, false],
+    ["updated goal", { goal: { ...entry().goal!, updatedAt: 3000 } }, true],
+  ])("checks %s eligibility", (_name, overrides, expected) => {
+    const current = overrides && { ...entry(), ...overrides };
+    expect(isGoalContinuationCurrent(identity, current)).toBe(expected);
   });
   it("observes fresh token exhaustion before scheduling another turn", () => {
     const current = entry();

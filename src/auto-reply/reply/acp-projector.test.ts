@@ -63,10 +63,6 @@ function emitStatus(
   return projector.onEvent({ type: "status", text, tag, ...overrides });
 }
 
-function emitUsage(projector: Projector, used: number) {
-  return emitStatus(projector, `usage updated: ${used}/100`, "usage_update", { used, size: 100 });
-}
-
 function emitTool(projector: Projector, event: Partial<Omit<EventOf<"tool_call">, "type">> = {}) {
   const {
     tag = "tool_call",
@@ -199,23 +195,31 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
-  it("suppresses usage_update by default and allows deduped usage when tag-visible", async () => {
-    const { deliveries: hidden, projector: hiddenProjector } = createStreamHarness();
-    await emitUsage(hiddenProjector, 10);
-    expect(hidden).toStrictEqual([]);
-
-    const { deliveries: shown, projector: shownProjector } = createStreamHarness("live", {
-      tagVisibility: { usage_update: true },
+  it.each([
+    ["usage_update", 10, "usage updated: 10/100", "usage updated: 11/100"],
+    [
+      "available_commands_update",
+      7,
+      "available commands updated (7)",
+      "available commands updated (8)",
+    ],
+  ] as const)("suppresses repeated %s updates", async (tag, value, first, next) => {
+    const emit = (projector: Projector, text: string, used: number) =>
+      emitStatus(projector, text, tag, tag === "usage_update" ? { used, size: 100 } : {});
+    if (tag === "usage_update") {
+      const { deliveries, projector } = createStreamHarness();
+      await emit(projector, first, value);
+      expect(deliveries).toStrictEqual([]);
+    }
+    const { deliveries, projector } = createStreamHarness("live", {
+      tagVisibility: { [tag]: true },
     });
-
-    await emitUsage(shownProjector, 10);
-    await emitUsage(shownProjector, 10);
-    await emitUsage(shownProjector, 11);
-
-    expect(shown).toEqual([
-      { kind: "tool", text: prefixSystemMessage("usage updated: 10/100") },
-      { kind: "tool", text: prefixSystemMessage("usage updated: 11/100") },
-    ]);
+    await emit(projector, first, value);
+    await emit(projector, first, value);
+    await emit(projector, next, value + 1);
+    expect(deliveries).toEqual(
+      [first, next].map((text) => ({ kind: "tool", text: prefixSystemMessage(text) })),
+    );
   });
 
   it.each([
@@ -242,21 +246,6 @@ describe("createAcpReplyProjector", () => {
       ]);
     },
   );
-
-  it("suppresses exact duplicate status updates when repeatSuppression is enabled", async () => {
-    const { deliveries, projector } = createStreamHarness("live", {
-      tagVisibility: { available_commands_update: true },
-    });
-
-    await emitStatus(projector, "available commands updated (7)", "available_commands_update");
-    await emitStatus(projector, "available commands updated (7)", "available_commands_update");
-    await emitStatus(projector, "available commands updated (8)", "available_commands_update");
-
-    expect(deliveries).toEqual([
-      { kind: "tool", text: prefixSystemMessage("available commands updated (7)") },
-      { kind: "tool", text: prefixSystemMessage("available commands updated (8)") },
-    ]);
-  });
 
   it("supports tagVisibility overrides for tool updates", async () => {
     const { deliveries, projector } = createStreamHarness("live", {
