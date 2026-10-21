@@ -15,7 +15,10 @@ import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
 import { captureGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { convertToLlm, runAgentLoop } from "../../../plugin-sdk/agent-core.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import {
   applyAgentAutoCompactionGuard,
@@ -59,6 +62,48 @@ afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+async function createOwnedTranscript(
+  testState: OpenClawTestState,
+  sessionKey: string,
+  entry: { sessionId: string; lifecycleRevision?: string },
+) {
+  setRuntimeConfigSnapshot({});
+  const fixture = await createFixture({ exerciseTerminalMerges: false });
+  const target = {
+    agentId: "main",
+    sessionKey,
+    sessionId: entry.sessionId,
+    storePath: path.join(testState.agentDir(), "openclaw-agent.sqlite"),
+  };
+  const original = { ...entry, updatedAt: 1 };
+  replaceSessionEntrySync(target, original);
+  Object.assign(fixture.input.attempt, {
+    ...target,
+    sessionTarget: target,
+    sessionFile: sessionKey,
+  });
+  const writer = await claimAgentSessionWriter({
+    ...target,
+    sessionTarget: target,
+    runId: fixture.input.attempt.runId,
+    workspaceDir: testState.workspaceDir,
+    prompt: "reply",
+    timeoutMs: 30_000,
+  });
+  const selected = {
+    ...target,
+    expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+    expectedWriterRunId: writer?.expectedWriterRunId,
+  };
+  fixture.input.attempt.sessionTarget = selected;
+  const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
+    attempt: fixture.input.attempt,
+    externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
+  });
+  fixture.input.sessionLock = transcript;
+  return { fixture, target, original, selected, transcript };
+}
 
 describe("runEmbeddedAttemptExecutionPhase", () => {
   it.each([
@@ -132,44 +177,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     "scopes the provider generation guard after writer admission ($kind, $change)",
     async ({ key, change, guarded }) => {
       await withOpenClawTestState({ label: "cron-root-provider-fence" }, async (testState) => {
-        setRuntimeConfigSnapshot({});
-        const fixture = await createFixture({ exerciseTerminalMerges: false });
-        const target = {
-          agentId: "main",
-          sessionKey: key,
-          sessionId: "cron-run-1",
-          storePath: path.join(testState.agentDir(), "openclaw-agent.sqlite"),
-        };
-        const original = {
-          sessionId: target.sessionId,
-          lifecycleRevision: "generation-1",
-          updatedAt: 1,
-        };
-        replaceSessionEntrySync(target, original);
-        Object.assign(fixture.input.attempt, {
-          ...target,
-          sessionTarget: target,
-          sessionFile: target.sessionKey,
-        });
-        const writer = await claimAgentSessionWriter({
-          ...target,
-          sessionTarget: target,
-          runId: fixture.input.attempt.runId,
-          workspaceDir: testState.workspaceDir,
-          prompt: "reply",
-          timeoutMs: 30_000,
-        });
-        const selected = {
-          ...target,
-          expectedLifecycleRevision: writer?.expectedLifecycleRevision,
-          expectedWriterRunId: writer?.expectedWriterRunId,
-        };
-        fixture.input.attempt.sessionTarget = selected;
-        const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
-          attempt: fixture.input.attempt,
-          externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
-        });
-        fixture.input.sessionLock = transcript;
+        const { fixture, target, original, selected, transcript } = await createOwnedTranscript(
+          testState,
+          key,
+          { sessionId: "cron-run-1", lifecycleRevision: "generation-1" },
+        );
         const manager = SessionManager.open(selected);
         const fetchImpl = vi.fn(async () => new Response("ok"));
         fixture.activeSession.prompt.mockImplementation(async () => {
@@ -232,39 +244,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
 
   it("keeps history metadata and subsequent messages in the resident transcript actor", async () => {
     await withOpenClawTestState({ label: "history-metadata-owner" }, async (testState) => {
-      setRuntimeConfigSnapshot({});
-      const fixture = await createFixture({ exerciseTerminalMerges: false });
-      const target = {
-        agentId: "main",
-        sessionKey: "agent:main:history-metadata-owner",
-        sessionId: "history-metadata-owner",
-        storePath: path.join(testState.agentDir(), "openclaw-agent.sqlite"),
-      };
-      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
-      Object.assign(fixture.input.attempt, {
-        ...target,
-        sessionTarget: target,
-        sessionFile: target.sessionKey,
-      });
-      const writer = await claimAgentSessionWriter({
-        ...target,
-        sessionTarget: target,
-        runId: fixture.input.attempt.runId,
-        workspaceDir: testState.workspaceDir,
-        prompt: "reply",
-        timeoutMs: 30_000,
-      });
-      const selected = {
-        ...target,
-        expectedLifecycleRevision: writer?.expectedLifecycleRevision,
-        expectedWriterRunId: writer?.expectedWriterRunId,
-      };
-      fixture.input.attempt.sessionTarget = selected;
-      const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
-        attempt: fixture.input.attempt,
-        externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
-      });
-      fixture.input.sessionLock = transcript;
+      const { fixture, selected, transcript } = await createOwnedTranscript(
+        testState,
+        "agent:main:history-metadata-owner",
+        { sessionId: "history-metadata-owner" },
+      );
       try {
         const manager = await transcript.withOwnedTranscriptWrite(() =>
           SessionManager.openAsync(selected, testState.workspaceDir),

@@ -59,110 +59,38 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
   }
 
   it.each([
-    {
-      mode: "always",
-      pending: false,
-      canonical: true,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "none",
-      completion: false,
-      injected: true,
-    },
-    {
-      mode: "always",
-      pending: true,
-      canonical: true,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "full",
-      completion: true,
-      injected: true,
-    },
-    {
-      mode: "continuation-skip",
-      pending: false,
-      canonical: true,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "none",
-      completion: true,
-      injected: true,
-    },
-    {
-      mode: "continuation-skip",
-      pending: false,
-      canonical: true,
-      runKind: "cron",
-      contextMode: "full",
-      bootstrapMode: "none",
-      completion: false,
-      injected: true,
-    },
-    {
-      mode: "continuation-skip",
-      pending: false,
-      canonical: true,
-      runKind: "heartbeat",
-      contextMode: "full",
-      bootstrapMode: "none",
-      completion: false,
-      injected: true,
-    },
-    {
-      mode: "continuation-skip",
-      pending: false,
-      canonical: true,
-      runKind: "default",
-      contextMode: "lightweight",
-      bootstrapMode: "none",
-      completion: false,
-      injected: false,
-    },
-    {
-      mode: "continuation-skip",
-      pending: true,
-      canonical: false,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "limited",
-      completion: false,
-      injected: true,
-    },
-    {
-      mode: "never",
-      pending: true,
-      canonical: true,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "full",
-      completion: false,
-      injected: false,
-    },
+    ["always", false, true, "default", "full", "none", false, true],
+    ["always", true, true, "default", "full", "full", true, true],
+    ["continuation-skip", false, true, "default", "full", "none", true, true],
+    ["continuation-skip", false, true, "cron", "full", "none", false, true],
+    ["continuation-skip", false, true, "heartbeat", "full", "none", false, true],
+    ["continuation-skip", false, true, "default", "lightweight", "none", false, false],
+    ["continuation-skip", true, false, "default", "full", "limited", false, true],
+    ["never", true, true, "default", "full", "full", false, false],
   ] as const)(
-    "completion follows delivered context: $mode / pending=$pending / $runKind / $contextMode",
-    async (testCase) => {
+    "completion follows delivered context: %s / pending=%s / canonical=%s / %s / %s",
+    async (mode, pending, canonical, runKind, contextMode, bootstrapMode, completion, injected) => {
       const workspace = await makeWorkspace("completion-workspace", {
         "AGENTS.md": "Workspace instructions",
-        ...(testCase.pending ? { "BOOTSTRAP.md": "Finish the workspace setup." } : {}),
+        ...(pending ? { "BOOTSTRAP.md": "Finish the workspace setup." } : {}),
       });
       const result = await prepare(workspace, workspace, {
-        contextInjection: testCase.mode,
+        contextInjection: mode,
         attempt: {
-          isCanonicalWorkspace: testCase.canonical,
-          bootstrapContextRunKind: testCase.runKind,
-          bootstrapContextMode: testCase.contextMode,
+          isCanonicalWorkspace: canonical,
+          bootstrapContextRunKind: runKind,
+          bootstrapContextMode: contextMode,
         },
       });
 
       expect(result).toMatchObject({
-        bootstrapMode: testCase.bootstrapMode,
-        shouldRecordCompletedBootstrapTurn: testCase.completion,
+        bootstrapMode,
+        shouldRecordCompletedBootstrapTurn: completion,
       });
       expect(result.contextFiles.some((file) => file.content === "Workspace instructions")).toBe(
-        testCase.injected,
+        injected,
       );
-      if (!testCase.injected) {
+      if (!injected) {
         expect(result.contextFiles).toEqual([]);
         expect(result.bootstrapInjectionStats).toEqual([]);
       }
