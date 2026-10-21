@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import { renderWikiMarkdown, toWikiPageSummary } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault: createTestVault } = createMemoryWikiTestHarness();
@@ -185,51 +185,79 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
-    const { config, page: writePage, read } = await createVault();
-
+    const { rootDir, config, page: writePage, read } = await createVault();
+    const relationships = [
+      {
+        targetId: "entity.alice",
+        targetTitle: "Alice",
+        kind: "collaborates-with",
+        weight: 0.7,
+        confidence: 0.6,
+        evidenceKind: "discrawl-stat",
+        privacyTier: "local-private",
+      },
+    ];
+    const evidence = [
+      {
+        kind: "maintainer-whois",
+        sourceId: "source.maintainers",
+        confidence: 0.8,
+        privacyTier: "local-private",
+      },
+    ];
+    const metadata = {
+      entityType: "person",
+      canonicalId: "maintainer.brad-groux",
+      aliases: ["brad", "bgroux"],
+      privacyTier: "local-private",
+      bestUsedFor: ["Microsoft ecosystem routing"],
+      notEnoughFor: ["legal approval"],
+      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+      relationships,
+    };
     await writePage("entities/brad.md", {
+      ...metadata,
       pageType: "entity",
       id: "entity.brad",
       title: "Brad Groux",
-      entityType: "person",
-      canonicalId: "maintainer.brad-groux",
-      aliases: ["brad"],
-      privacyTier: "local-private",
-      bestUsedFor: ["Microsoft routing"],
-      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
       personCard: {
         handles: ["@bgroux"],
+        email: "brad@example.com",
         lane: "Microsoft Teams",
         askFor: ["Teams and Azure questions"],
+        confidence: 0.8,
         privacyTier: "confirm-before-use",
       },
-      relationships: [
-        {
-          targetId: "entity.alice",
-          targetTitle: "Alice",
-          kind: "collaborates-with",
-          evidenceKind: "discrawl-stat",
-          privacyTier: "local-private",
-        },
-      ],
       claims: [
         {
           id: "claim.brad.teams",
           text: "Brad is useful for Microsoft Teams routing.",
           status: "supported",
           confidence: 0.9,
-          evidence: [
-            {
-              kind: "maintainer-whois",
-              sourceId: "source.maintainers",
-              privacyTier: "local-private",
-            },
-          ],
+          evidence,
         },
       ],
     });
 
     await compileMemoryWikiVault(config);
+
+    const summary = toWikiPageSummary({
+      absolutePath: path.join(rootDir, "entities/brad.md"),
+      relativePath: "entities/brad.md",
+      raw: await read("entities/brad.md"),
+    });
+    expect(summary).toMatchObject({
+      ...metadata,
+      personCard: {
+        handles: ["@bgroux"],
+        emails: ["brad@example.com"],
+        lane: "Microsoft Teams",
+        privacyTier: "confirm-before-use",
+      },
+    });
+    expect(summary?.relationships).toEqual(relationships);
+    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
+    expect(summary?.claims[0]?.evidence).toEqual(evidence);
 
     const expectReport = async (name: string, content: string) =>
       expect(read(`reports/${name}.md`)).resolves.toContain(content);
@@ -248,7 +276,7 @@ describe("compileMemoryWikiVault", () => {
     );
     expect(bradPage).toMatchObject({
       canonicalId: "maintainer.brad-groux",
-      aliases: ["brad"],
+      aliases: ["brad", "bgroux"],
       personCard: { lane: "Microsoft Teams" },
       relationshipCount: 1,
     });

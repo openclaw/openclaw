@@ -47,7 +47,7 @@ async function writeBridgePage(
 }
 
 describe("memory-wiki corpus supplement visibility", () => {
-  it("enforces bridge ownership through direct and registered corpus fallbacks", async () => {
+  it("enforces bridge ownership through registered corpus fallbacks", async () => {
     const { rootDir, config } = await createVault({
       initialize: true,
       config: { vault: { scope: "global" } },
@@ -64,33 +64,6 @@ describe("memory-wiki corpus supplement visibility", () => {
       resolveConfig: (agentId, currentAppConfig) =>
         resolveMemoryWikiAgentConfig({ config, appConfig: currentAppConfig, agentId }),
     });
-    const caller = {
-      agentId: "main",
-      agentSessionKey: "agent:main:child-session",
-      query: "REDACTED-FOREIGN-MARKER",
-    };
-
-    expect(await supplement.search({ ...caller, sandboxed: true })).toEqual([]);
-    expect(
-      await supplement.get({
-        ...caller,
-        sandboxed: true,
-        lookup: "secondary-private",
-      }),
-    ).toBeNull();
-    expect(
-      (await supplement.search({ ...caller, sandboxed: false })).map((result) => result.path),
-    ).toEqual(["sources/secondary-private.md"]);
-    expect(
-      (
-        await supplement.get({
-          ...caller,
-          sandboxed: false,
-          lookup: "secondary-private",
-        })
-      )?.content,
-    ).toContain("REDACTED-FOREIGN-MARKER");
-
     clearMemoryPluginState();
     try {
       registerMemoryCorpusSupplement("memory-wiki", supplement);

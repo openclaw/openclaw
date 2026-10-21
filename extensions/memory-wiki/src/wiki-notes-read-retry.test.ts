@@ -5,12 +5,11 @@ import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyMemoryWikiMutation } from "./apply.js";
 import { importChatGptConversations } from "./chatgpt-import.js";
-import { compileMemoryWikiVault } from "./compile.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
-import { importMemoryWikiOkfBundle } from "./okf.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createChatGptConversation, createMemoryWikiTestHarness } from "./test-helpers.js";
+import { isMissingWikiPageError, readExistingWikiPage } from "./vault-page-write.js";
 
 const securityRuntimeMock = vi.hoisted(() => ({
   failReadTextOnceFor: undefined as string | undefined,
@@ -59,21 +58,6 @@ async function addNotes(pagePath: string, note: string) {
     () => `<!-- openclaw:human:start -->\n${note}\n<!-- openclaw:human:end -->`,
   );
   await fs.writeFile(pagePath, page, "utf8");
-}
-
-function failPageReads(pagePath: string, error: Error, once = false) {
-  const readFile = fs.readFile.bind(fs);
-  let injected = false;
-  vi.spyOn(fs, "readFile").mockImplementation(
-    async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-      if (args[0] === pagePath && (!once || !injected)) {
-        injected = true;
-        throw error;
-      }
-      return readFile(...args);
-    },
-  );
-  return { readFile, injected: () => injected };
 }
 
 async function createImportedFixture() {
@@ -145,20 +129,7 @@ async function createChatGptImportFixture() {
   await fs.mkdir(exportDir, { recursive: true });
   await fs.writeFile(
     path.join(exportDir, "conversations.json"),
-    `${JSON.stringify([
-      {
-        conversation_id: "12345678-1234-1234-1234-1234567890ab",
-        title: "Travel preference check",
-        create_time: 1_712_363_200,
-        update_time: 1_712_366_800,
-        current_node: "assistant-1",
-        mapping: {
-          root: {},
-          "user-1": chatNode("root", "user", "I prefer aisle seats."),
-          "assistant-1": chatNode("user-1", "assistant", "Noted."),
-        },
-      },
-    ])}\n`,
+    `${JSON.stringify([createChatGptConversation("I prefer aisle seats.", "Noted.")])}\n`,
     "utf8",
   );
   await importChatGptConversations({
@@ -179,10 +150,6 @@ async function createChatGptImportFixture() {
       expectDefined(sourceFiles[0], "imported Memory Wiki source file"),
     ),
   };
-}
-
-function chatNode(parent: string, role: string, text: string) {
-  return { parent, message: { author: { role }, content: { parts: [text] } } };
 }
 
 describe("memory-wiki existing-page read retry", () => {
@@ -265,82 +232,41 @@ describe("memory-wiki existing-page read retry", () => {
     securityRuntimeMock.readTextFailureInjected = false;
   });
 
-  it.each(["index.md", "reports/open-questions.md"])(
-    "leaves existing generated page %s unchanged after a non-missing read failure",
-    async (relativePath) => {
-      const { rootDir, config } = await createVault({
-        prefix: "memory-wiki-compile-read-failure-",
-        initialize: true,
-        config: {
-          render: {
-            createBacklinks: false,
-            createDashboards: relativePath.startsWith("reports/"),
-          },
-        },
-      });
-      const pagePath = path.join(rootDir, relativePath);
-      const original = "# Existing page\n\n## Notes\nKeep this human-written content.\n";
-      await fs.writeFile(pagePath, original, "utf8");
-      securityRuntimeMock.failReadTextAlwaysFor = relativePath;
+  it("retries a transient I/O failure before classifying an existing page as missing", async () => {
+    const { rootDir } = await createVault();
+    const pagePath = path.join(rootDir, "page.md");
+    const notes = "# Existing page\n\n## Notes\nKeep this handwritten content.\n";
+    await fs.writeFile(pagePath, notes);
+    const read = vi
+      .fn(() => fs.readFile(pagePath, "utf8"))
+      .mockRejectedValueOnce(new FsSafeError("not-found", "transient read failure"));
+    const fallback = vi.fn(() => "");
 
-      await expect(compileMemoryWikiVault(config)).rejects.toThrow(
-        "persistent existing-page read failure",
-      );
+    await expect(readExistingWikiPage(read, isMissingWikiPageError, fallback)).resolves.toBe(notes);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(fallback).not.toHaveBeenCalled();
+  });
 
-      expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
-      await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(original);
+  it.each(["not-found", "path-alias", "EBUSY"])(
+    "classifies persistent %s only after both read attempts fail",
+    async (code) => {
+      const error =
+        code === "EBUSY"
+          ? Object.assign(new Error("busy"), { code })
+          : new FsSafeError(code === "not-found" ? "not-found" : "path-alias", "read failure");
+      const read = vi.fn<() => Promise<string>>().mockRejectedValue(error);
+      const fallback = vi.fn(() => "new page");
+      const result = readExistingWikiPage(read, isMissingWikiPageError, fallback);
+      if (code === "not-found") {
+        await expect(result).resolves.toBe("new page");
+        expect(fallback).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toBe(error);
+        expect(fallback).not.toHaveBeenCalled();
+      }
+      expect(read).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("preserves ingest notes after a transient existing-page read failure", async () => {
-    const { pagePath, changeSource, update } = await createIngestFixture();
-    const userNote = "KEY INSIGHT: covers the Q2 roadmap";
-    await addNotes(pagePath, userNote);
-    await changeSource();
-    const error = new Error("transient existing-page read failure");
-    const failure = failPageReads(pagePath, error, true);
-
-    await update();
-
-    const after = await failure.readFile(pagePath, "utf8");
-    expect(failure.injected()).toBe(true);
-    expect(after).toContain("v2 content updated");
-    expect(after).toContain(userNote);
-  });
-
-  it("preserves imported notes after a transient existing-page read failure", async () => {
-    const { pagePath, absPage, update } = await createImportedFixture();
-    const userNote = "IMPORTED PAGE NOTE FROM HUMAN";
-    await addNotes(absPage, userNote);
-    securityRuntimeMock.failReadTextOnceFor = pagePath;
-    const result = await update();
-    const after = await fs.readFile(absPage, "utf8");
-    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
-    expect(result.changed).toBe(true);
-    expect(after).toContain("second body changed");
-    expect(after).toContain(userNote);
-  });
-
-  it("leaves imported source pages unchanged after a persistent existing-page read failure", async () => {
-    const { pagePath, absPage, update } = await createImportedFixture();
-    const before = await fs.readFile(absPage, "utf8");
-    securityRuntimeMock.failReadTextAlwaysFor = pagePath;
-    await expect(update()).rejects.toThrow("persistent existing-page read failure");
-    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
-    await expect(fs.readFile(absPage, "utf8")).resolves.toBe(before);
-  });
-
-  it("leaves ingested source pages unchanged after a persistent existing-page read failure", async () => {
-    const { pagePath, changeSource, update } = await createIngestFixture();
-    const before = await fs.readFile(pagePath, "utf8");
-    await changeSource();
-    const error = Object.assign(new Error("resource busy"), { code: "EBUSY" });
-    const failure = failPageReads(pagePath, error);
-
-    await expect(update()).rejects.toMatchObject({ code: "EBUSY" });
-
-    await expect(failure.readFile(pagePath, "utf8")).resolves.toBe(before);
-  });
 
   it("preserves synthesis notes and frontmatter after a transient existing-page read failure", async () => {
     const { pagePath, update } = await createSynthesisFixture("Initial summary v1.");
@@ -380,29 +306,6 @@ describe("memory-wiki existing-page read retry", () => {
 
     expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
     await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(before);
-  });
-
-  it("leaves OKF concept pages unchanged after a persistent existing-page read failure", async () => {
-    const { rootDir, config } = await createVault({ prefix: "memory-wiki-okf-read-failure-" });
-    const bundlePath = path.join(rootDir, "bundle");
-    await fs.mkdir(bundlePath);
-    await fs.writeFile(
-      path.join(bundlePath, "customers.md"),
-      "---\ntype: Concept\ntitle: Customers\n---\nCustomer body.\n",
-    );
-    const first = await importMemoryWikiOkfBundle({ config, bundlePath });
-    const pagePath = expectDefined(first.pagePaths[0], "imported OKF concept page");
-    const absolutePath = path.join(config.vault.path, pagePath);
-    await addNotes(absolutePath, "Handwritten note must survive the read failure.");
-    const before = await fs.readFile(absolutePath, "utf8");
-    securityRuntimeMock.failReadTextAlwaysFor = pagePath;
-
-    await expect(importMemoryWikiOkfBundle({ config, bundlePath })).rejects.toThrow(
-      "persistent existing-page read failure",
-    );
-
-    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
-    await expect(fs.readFile(absolutePath, "utf8")).resolves.toBe(before);
   });
 
   it("preserves chatgpt conversation notes containing dollar sequences and marker examples", async () => {

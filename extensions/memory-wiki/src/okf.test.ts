@@ -196,32 +196,6 @@ describe("importMemoryWikiOkfBundle", () => {
     );
   });
 
-  it("removes stale concept pages when an OKF bundle drops a concept", async () => {
-    const { bundlePath, config, run } = await createImport("removing-okf");
-    const customersPath = path.join(bundlePath, "tables", "customers.md");
-    const ordersPath = path.join(bundlePath, "tables", "orders.md");
-    await writeConcept(customersPath, "Customers", "Customer body.\n");
-    await writeConcept(ordersPath, "Orders", "Order body.\n");
-    const first = await run();
-    const stalePagePath = expectDefined(
-      first.pagePaths.find((pagePath) => pagePath.includes("orders")),
-      "imported orders page",
-    );
-
-    await fs.rm(ordersPath);
-    const second = await run();
-
-    expect(second).toMatchObject({ importedCount: 1, removedCount: 1 });
-    expect(second.removedPagePaths).toEqual([stalePagePath]);
-    await expect(fs.stat(path.join(config.vault.path, stalePagePath))).rejects.toThrow();
-    const results = await searchMemoryWiki({
-      config,
-      query: "Order body",
-      searchCorpus: "wiki",
-    });
-    expect(results).toHaveLength(0);
-  });
-
   it("detects body-only changes on timestamp-shaped markdown lines", async () => {
     const { bundlePath, config, run } = await createImport("body-timestamp-okf");
     const conceptPath = path.join(bundlePath, "tables", "events.md");

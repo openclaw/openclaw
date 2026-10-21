@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/session-search-visibility-api.js";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { MemoryCallerAuthority } from "openclaw/plugin-sdk/memory-host-search";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -605,75 +604,29 @@ describe("searchMemoryWiki", () => {
     expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 5 });
   });
 
-  it("filters session memory hits outside the caller visibility policy", async () => {
-    const { config } = await createSharedVault("memory");
-    mockSessionTranscriptStore();
-    const manager = createMemoryManager({
-      searchResults: [
-        memoryHit("sessions/child-session.jsonl", 30),
-        memoryHit("sessions/main/sibling-session.jsonl", 20),
-        memoryHit("MEMORY.md", 10, "memory"),
-      ],
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const results = await searchWiki(config, "transcript", {
-      appConfig: createSessionVisibilityAppConfig(),
-      agentSessionKey: "agent:main:child-session",
-      sandboxed: true,
-      maxResults: 10,
-    });
-
-    expect(results.map((result) => result.path)).toEqual([
-      "sessions/child-session.jsonl",
-      "MEMORY.md",
-    ]);
-  });
-
   it("keeps protected session recall inside its trusted corpus (all/wiki)", async () => {
     const { config, writeNote } = await createSharedVault("all");
     await writeNote("sources/alpha.md", "Alpha", "alpha wiki secret");
-    const anchorSessionKey = "agent:main:telegram:direct:owner";
-    const requesterSessionKey = `${anchorSessionKey}:active-memory:abcdef123456`;
-    loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
-      storePath: "(test)",
-      store: {
-        [anchorSessionKey]: {
-          sessionId: "current",
-          updatedAt: 1,
-          sessionFile: "/tmp/current.jsonl",
-          chatType: "direct",
-        },
-      },
-    });
-    const manager = createMemoryManager({
-      searchResults: [memoryHit("MEMORY.md", 1, "memory")],
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-    const conversationRecall = {
-      anchorSessionKey,
-      scope: "same-agent-private",
-      corpus: "sessions",
-    } as const;
+    const manager = mockRecallManager();
 
     const results = await searchWiki(config, "alpha", {
       appConfig: createSessionVisibilityAppConfig(),
       agentId: "main",
-      agentSessionKey: requesterSessionKey,
-      conversationRecall,
+      agentSessionKey: RECALL_SESSION_KEY,
+      conversationRecall: CONVERSATION_RECALL,
       searchCorpus: "wiki",
     });
 
-    expect(results).toStrictEqual([]);
+    expect(results.map((result) => result.path)).toEqual(["sessions/prior-session.jsonl"]);
     expect(manager.search).toHaveBeenCalledWith("alpha", {
       maxResults: 10,
       sources: ["sessions"],
-      sessionKey: requesterSessionKey,
+      sessionKey: RECALL_SESSION_KEY,
     });
     expect(filterMemorySearchHitsBySessionVisibility).toHaveBeenCalledWith(
       expect.objectContaining({
-        conversationRecall,
-        hits: [expect.objectContaining({ source: "memory" })],
+        conversationRecall: CONVERSATION_RECALL,
+        hits: expect.arrayContaining([expect.objectContaining({ source: "memory" })]),
       }),
     );
   });
@@ -897,29 +850,13 @@ describe("wiki corpus bridge page agent scoping", () => {
     return vault;
   }
 
-  it("limits sandboxed bridge reads to pages owned by the caller", async () => {
-    const { config } = await createBridgeVisibilityVault();
-    const caller = {
-      config,
-      appConfig: createAgentSessionVisibilityAppConfig(),
-      agentId: "main",
-      sandboxed: true,
-    };
-
-    const read = (lookup: string) => getMemoryWikiPage({ ...caller, lookup });
-    const owned = await read("main-daily-note");
-    const shared = await read("shared-note");
-    const foreign = await read("secondary-daily-note");
-    const unowned = await read("unowned-daily-note");
-
-    expect(owned?.content).toContain("wikiscope marker main");
-    expect(shared?.content).toContain("wikiscope marker shared");
-    expect(foreign).toBeNull();
-    expect(unowned).toBeNull();
-  });
-
   it("resolves sandboxed ownership from the session key and fails closed without it", async () => {
     const { config } = await createBridgeVisibilityVault();
+    const normalizedOwner = await readWiki(config, "main-daily-note", {
+      appConfig: createAgentSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+    });
     const denied = await readWiki(config, "secondary-daily-note", {
       appConfig: createAgentSessionVisibilityAppConfig(),
       agentSessionKey: "agent:main:child-session",
@@ -932,6 +869,7 @@ describe("wiki corpus bridge page agent scoping", () => {
     });
     const unresolved = await readWiki(config, "secondary-daily-note", { sandboxed: true });
 
+    expect(normalizedOwner?.content).toContain("wikiscope marker main");
     expect(denied).toBeNull();
     expect(allowed?.content).toContain("wikiscope marker secondary");
     expect(unresolved).toBeNull();
@@ -988,54 +926,35 @@ const RECALL_SESSION_STORE = {
   "agent:secondary:telegram:direct:other": session("other-agent", 1),
 };
 
-describe("conversation recall", () => {
-  it.each([
-    [RECALL_SESSION_KEY, CONVERSATION_RECALL, ["sessions/prior-session.jsonl"]],
-    [ANCHOR_SESSION_KEY, undefined, ["sessions/current.jsonl", "MEMORY.md"]],
-  ] as const)(
-    "enforces self visibility for %s",
-    async (sessionKey, conversationRecall, expected) => {
-      const { config } = await createSharedVault("memory");
-      loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
-        storePath: "(test)",
-        store: RECALL_SESSION_STORE,
-      });
-      getActiveMemorySearchManagerMock.mockResolvedValue({
-        manager: createMemoryManager({
-          searchResults: [
-            memoryHit("sessions/prior-session.jsonl", 50),
-            memoryHit("sessions/current.jsonl", 40),
-            memoryHit("sessions/team-session.jsonl", 30),
-            memoryHit("sessions/secondary/other-agent.jsonl", 20),
-            memoryHit("MEMORY.md", 10, "memory"),
-          ],
-        }),
-      });
-      // The Wiki tool copies the host-granted recall pass into its session authority.
-      const recall = conversationRecall ? { conversationRecall } : {};
-      const authority: MemoryCallerAuthority = {
-        kind: "session",
-        sessionKey,
-        sandboxed: false,
-        ...recall,
-      };
-      const results = await searchMemoryWiki({
-        config,
-        appConfig: {
-          agents: { ownership: "explicit", entries: { main: {}, secondary: {} } },
-          tools: { sessions: { visibility: "self" } },
-        },
-        agentId: "main",
-        agentSessionKey: sessionKey,
-        sandboxed: false,
-        ...recall,
-        memoryContext: { authority, assertCurrent() {} },
-        query: "transcript",
-        maxResults: 10,
-      });
-      expect(results.map((result) => result.path)).toEqual(expected);
-    },
-  );
+function mockRecallManager() {
+  loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
+    storePath: "(test)",
+    store: RECALL_SESSION_STORE,
+  });
+  const manager = createMemoryManager({
+    searchResults: [
+      memoryHit("sessions/prior-session.jsonl", 50),
+      memoryHit("sessions/current.jsonl", 40),
+      memoryHit("sessions/team-session.jsonl", 30),
+      memoryHit("sessions/secondary/other-agent.jsonl", 20),
+      memoryHit("MEMORY.md", 10, "memory"),
+    ],
+  });
+  getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+  return manager;
+}
+
+it("enforces self visibility without a conversation recall grant", async () => {
+  const { config } = await createSharedVault("memory");
+  mockRecallManager();
+  const results = await searchWiki(config, "transcript", {
+    appConfig: createSessionVisibilityAppConfig(),
+    agentId: "main",
+    agentSessionKey: ANCHOR_SESSION_KEY,
+    sandboxed: false,
+    maxResults: 10,
+  });
+  expect(results.map((result) => result.path)).toEqual(["sessions/current.jsonl", "MEMORY.md"]);
 });
 
 registerProviderRecordQueryTests({

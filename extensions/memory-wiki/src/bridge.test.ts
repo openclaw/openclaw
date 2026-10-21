@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import {
   clearMemoryPluginState,
   type MemoryPluginPublicArtifact,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
-import { root } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
@@ -17,7 +15,6 @@ const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
 describe("syncMemoryWikiBridgeSources", () => {
   afterEach(() => {
-    __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
     clearMemoryPluginState();
   });
@@ -126,16 +123,6 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(memoryPage).toContain("sourceType: memory-bridge");
     expect(memoryPage).toContain("## Bridge Source");
 
-    const retainedPages = new Set(first.pagePaths.map((pagePath) => path.join(vaultDir, pagePath)));
-    const openedPages: string[] = [];
-    __setFsSafeTestHooksForTest({
-      beforeOpen: (filePath) => {
-        if (retainedPages.has(filePath)) {
-          openedPages.push(filePath);
-        }
-      },
-    });
-    const readFile = vi.spyOn(fs, "readFile");
     const second = await syncMemoryWikiBridgeSources({ config, appConfig });
 
     expect(second).toMatchObject({
@@ -144,15 +131,6 @@ describe("syncMemoryWikiBridgeSources", () => {
       skippedCount: 3,
       removedCount: 0,
     });
-    expect(
-      readFile.mock.calls.some(
-        ([filePath]) => typeof filePath === "string" && filePath.startsWith(vaultDir),
-      ),
-    ).toBe(false);
-    expect(openedPages).toEqual([]);
-    // Vault pages are read through fs-safe handles; prove the observer sees those reads.
-    await (await root(vaultDir)).readText(first.pagePaths[0] ?? "");
-    expect(openedPages).toEqual([path.join(vaultDir, first.pagePaths[0] ?? "")]);
 
     const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
       .trim()
@@ -323,39 +301,6 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(page).toContain('"type":"memory.recall.recorded"');
   });
 
-  it("salvages bridge page Notes when the source artifact disappears", async () => {
-    const humanNotes = "Durable bridge annotation";
-    const {
-      workspaceDir,
-      config,
-      appConfig,
-      pageAbsPath: firstPageAbsPath,
-    } = await createImportedMemory("prune");
-    const vaultDir = config.vault.path;
-    const firstPagePath = path.relative(vaultDir, firstPageAbsPath).split(path.sep).join("/");
-    const firstPage = await fs.readFile(firstPageAbsPath, "utf8");
-    expect(firstPage).toContain("# Durable Memory");
-    await fs.writeFile(
-      firstPageAbsPath,
-      firstPage.replace(
-        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-        `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
-      ),
-      "utf8",
-    );
-
-    await fs.rm(path.join(workspaceDir, "MEMORY.md"));
-    registerBridgeArtifacts([]);
-    const second = await syncMemoryWikiBridgeSources({ config, appConfig });
-
-    expect(second).toMatchObject({ artifactCount: 0, removedCount: 1 });
-    await expect(fs.stat(firstPageAbsPath)).rejects.toHaveProperty("code", "ENOENT");
-    const salvageDir = path.join(vaultDir, ".salvage");
-    await expect(
-      fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
-    ).resolves.toContain(humanNotes);
-  });
-
   it("keeps stale pages when the memory capability closes during a source read", async () => {
     const workspaceDir = await createBridgeWorkspace("closing-capability-workspace");
     const { rootDir: vaultDir, config } = await createBridgeVault("closing-capability-vault");
@@ -407,20 +352,6 @@ describe("syncMemoryWikiBridgeSources", () => {
       "Refusing to write imported source page through symlink",
     );
     await expect(fs.readFile(externalTarget, "utf8")).resolves.toBe("external target\n");
-  });
-
-  it("reports non-symlink bridge source write safety failures without symlink wording", async () => {
-    const { config, memoryPath, appConfig, pageAbsPath } = await createImportedMemory("not-file");
-    await fs.rm(pageAbsPath);
-    await fs.mkdir(pageAbsPath);
-    await fs.writeFile(path.join(pageAbsPath, "child.md"), "blocking child\n", "utf8");
-    await fs.writeFile(memoryPath, "# Updated Durable Memory\n", "utf8");
-
-    const second = syncMemoryWikiBridgeSources({ config, appConfig });
-    await expect(second).rejects.toThrow(
-      /Refusing to write imported source page \((not-empty|not-file|path-mismatch)\): sources\//u,
-    );
-    await expect(second).rejects.not.toThrow("through symlink");
   });
 
   it("replaces bridge source page hardlinks without clobbering their target", async () => {

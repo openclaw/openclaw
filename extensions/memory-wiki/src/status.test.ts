@@ -130,9 +130,9 @@ describe("memory wiki status and doctor", () => {
     );
   });
 
-  it("excludes malformed pages from status counts (#96125)", async () => {
+  it("counts source provenance while excluding malformed pages (#96125)", async () => {
     const { config, page, write } = await createVault({
-      prefix: "memory-wiki-status-invalid-frontmatter-",
+      prefix: "memory-wiki-status-",
       initialize: true,
     });
     await write(
@@ -148,19 +148,6 @@ describe("memory wiki status and doctor", () => {
         "# Broken",
       ].join("\n"),
     );
-    await writeSource(page, "healthy", "Healthy");
-
-    const status = await resolveMemoryWikiStatus(config);
-
-    expect(status.pageCounts.source).toBe(1);
-    expect(status.sourceCounts.native).toBe(1);
-  });
-
-  it("counts source provenance from the vault", async () => {
-    const { config, page } = await createVault({
-      prefix: "memory-wiki-status-",
-      initialize: true,
-    });
     await writeSource(page, "native", "Native Source");
     await writeSource(page, "bridge", "Bridge Source", { sourceType: "memory-bridge" });
     await writeSource(page, "events", "Event Source", { sourceType: "memory-bridge-events" });

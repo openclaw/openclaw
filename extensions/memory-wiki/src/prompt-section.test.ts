@@ -23,6 +23,7 @@ import {
   createWikiPromptSectionPreparer,
 } from "./prompt-section.js";
 import {
+  createCompiledDigestPage,
   createCompiledSnapshot,
   createMemoryWikiTestHarness,
   publishCompiledSnapshot,
@@ -72,21 +73,15 @@ async function seedCompiledDigest(params: {
     createCompiledSnapshot({
       claimCount: params.claimCount,
       contradictionCount: params.contradictionCount ?? 0,
-      pages: params.pages.map((page, index) => ({
-        ...page,
-        path: page.path ?? `entities/page-${index}.md`,
-        aliases: page.aliases ?? [],
-        sourceIds: page.sourceIds ?? [],
-        questions: page.questions ?? [],
-        contradictions: page.contradictions ?? [],
-        bestUsedFor: page.bestUsedFor ?? [],
-        notEnoughFor: page.notEnoughFor ?? [],
-        relationshipCount: page.relationshipCount ?? 0,
-        topRelationships: page.topRelationships ?? [],
-        topClaims: (page.topClaims ?? []).map((claim) =>
-          Object.assign({ status: "supported", freshnessLevel: "unknown" }, claim),
-        ),
-      })),
+      pages: params.pages.map((page, index) =>
+        createCompiledDigestPage({
+          ...page,
+          path: page.path ?? `entities/page-${index}.md`,
+          topClaims: (page.topClaims ?? []).map((claim) =>
+            Object.assign({ status: "supported", freshnessLevel: "unknown" }, claim),
+          ),
+        }),
+      ),
     }),
   );
 }

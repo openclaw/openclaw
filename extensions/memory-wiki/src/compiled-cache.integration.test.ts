@@ -36,6 +36,7 @@ import { createWikiPromptSectionPreparer } from "./prompt-section.js";
 import { getMemoryWikiPage } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import {
+  createCompiledDigestPage,
   createCompiledSnapshot,
   createMemoryWikiTestHarness,
   publishCompiledSnapshot as publishSnapshot,
@@ -71,21 +72,10 @@ function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
       claimCount: 1,
       contradictionCount: 0,
       pages: [
-        {
-          title: "Snapshot",
-          kind: "entity",
-          path: "entities/snapshot.md",
-          aliases: [],
-          sourceIds: [],
-          questions: [],
-          contradictions: [],
-          bestUsedFor: [],
-          notEnoughFor: [],
-          relationshipCount: 0,
-          topRelationships: [],
+        createCompiledDigestPage({
           claimCount: 1,
           topClaims: [{ text, status: "supported", freshnessLevel: "fresh" }],
-        },
+        }),
       ],
     }),
     claims: [
@@ -126,6 +116,24 @@ function publication(
 function restartCache(store = createCacheStore()) {
   configureMemoryWikiCompiledCacheStore(undefined);
   configureMemoryWikiCompiledCacheStore(store);
+}
+
+function candidate(
+  config: Config,
+  value: MemoryWikiCompiledCacheSnapshot,
+  parentId: string | null,
+) {
+  const id = randomUUID();
+  const reservationId = randomUUID();
+  const details = publication(id, parentId, reservationId);
+  return {
+    reservation: { compiledCacheReservationId: reservationId },
+    commit: () => recordCompile(config.vault.path, details),
+    write: (commit = async () => {}) =>
+      writeMemoryWikiCompiledCache(config, value, id, parentId, commit, () =>
+        loadMemoryWikiValidatedVaultIdentity(config.vault.path),
+      ),
+  };
 }
 
 async function preparePrompt(config: Config): Promise<string> {
@@ -440,22 +448,9 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await createCacheStore().write(config, delayedSnapshot, randomUUID());
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
 
-    const republishedId = randomUUID();
-    const staleReservationId = randomUUID();
-    await recordCompile(
-      config.vault.path,
-      publication(republishedId, preRestorePublicationId, staleReservationId),
-    );
-    await expect(
-      writeMemoryWikiCompiledCache(
-        config,
-        newerSnapshot,
-        republishedId,
-        preRestorePublicationId,
-        async () => {},
-        () => loadMemoryWikiValidatedVaultIdentity(config.vault.path),
-      ),
-    ).rejects.toThrow("vault changed");
+    const republished = candidate(config, newerSnapshot, preRestorePublicationId);
+    await republished.commit();
+    await expect(republished.write()).rejects.toThrow("vault changed");
 
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
     await activateExistingMemoryWikiVault(config);
@@ -469,30 +464,18 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     const backupLog = await fs.readFile(logPath, "utf8");
     const parentPublicationId = (await loadMemoryWikiVaultIdentity(rootDir))
       .compiledCachePublicationId;
-    const reservedPublicationId = randomUUID();
-    const reservationId = randomUUID();
+    const reserved = candidate(
+      config,
+      snapshot("Private content scanned after backup."),
+      parentPublicationId,
+    );
     await recordCompile(rootDir, {
-      compiledCacheReservationId: reservationId,
+      ...reserved.reservation,
       compiledCacheParentPublicationId: parentPublicationId,
     });
-    const compiledAfterBackup = snapshot("Private content scanned after backup.");
     await fs.writeFile(logPath, backupLog, "utf8");
 
-    await expect(
-      writeMemoryWikiCompiledCache(
-        config,
-        compiledAfterBackup,
-        reservedPublicationId,
-        parentPublicationId,
-        async () => {
-          await recordCompile(
-            rootDir,
-            publication(reservedPublicationId, parentPublicationId, reservationId),
-          );
-        },
-        () => loadMemoryWikiValidatedVaultIdentity(rootDir),
-      ),
-    ).rejects.toThrow("vault changed");
+    await expect(reserved.write(reserved.commit)).rejects.toThrow("vault changed");
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
     await activateExistingMemoryWikiVault(config);
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("backup");
@@ -501,27 +484,15 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   it("keeps a committed publication when an older writer is rejected", async () => {
     const { config } = await createPersistentVault();
     const parentPublicationId = await publishSnapshot(config, snapshot("parent"));
-    const stalePublicationId = randomUUID();
-    const staleReservationId = randomUUID();
-    await recordCompile(config.vault.path, { compiledCacheReservationId: staleReservationId });
-    const staleSnapshot = snapshot("stale candidate");
+    const stale = candidate(config, snapshot("stale candidate"), parentPublicationId);
+    await recordCompile(config.vault.path, stale.reservation);
     const callbackEntered = createDeferred<void>();
     const releaseCallback = createDeferred<void>();
-    const staleWrite = writeMemoryWikiCompiledCache(
-      config,
-      staleSnapshot,
-      stalePublicationId,
-      parentPublicationId,
-      async () => {
-        callbackEntered.resolve();
-        await releaseCallback.promise;
-        await recordCompile(
-          config.vault.path,
-          publication(stalePublicationId, parentPublicationId, staleReservationId),
-        );
-      },
-      () => loadMemoryWikiValidatedVaultIdentity(config.vault.path),
-    );
+    const staleWrite = stale.write(async () => {
+      callbackEntered.resolve();
+      await releaseCallback.promise;
+      await stale.commit();
+    });
     await callbackEntered.promise;
     await publishSnapshot(config, snapshot("accepted successor"));
     releaseCallback.resolve();

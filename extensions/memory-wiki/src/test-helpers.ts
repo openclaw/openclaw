@@ -15,6 +15,7 @@ import {
   createMemoryWikiCompiledCacheStore,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
 import {
   resolveMemoryWikiConfig,
@@ -37,6 +38,46 @@ import {
   createMemoryWikiSourceSyncStateStore,
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+
+export function createCompiledDigestPage(
+  overrides: Partial<MemoryWikiCompiledDigestPage> = {},
+): MemoryWikiCompiledDigestPage {
+  return {
+    title: "Snapshot",
+    kind: "entity",
+    path: "entities/snapshot.md",
+    aliases: [],
+    sourceIds: [],
+    questions: [],
+    contradictions: [],
+    bestUsedFor: [],
+    notEnoughFor: [],
+    relationshipCount: 0,
+    topRelationships: [],
+    claimCount: 0,
+    topClaims: [],
+    ...overrides,
+  };
+}
+
+export function createChatGptConversation(user: string, assistant: string) {
+  const message = (parent: string, role: string, text: string) => ({
+    parent,
+    message: { author: { role }, content: { parts: [text] } },
+  });
+  return {
+    conversation_id: "12345678-1234-1234-1234-1234567890ab",
+    title: "Travel preference check",
+    create_time: 1_712_363_200,
+    update_time: 1_712_366_800,
+    current_node: "assistant-1",
+    mapping: {
+      root: {},
+      "user-1": message("root", "user", user),
+      "assistant-1": message("user-1", "assistant", assistant),
+    },
+  };
+}
 
 export function createCompiledSnapshot(
   digest: MemoryWikiCompiledCacheSnapshot["digest"],
