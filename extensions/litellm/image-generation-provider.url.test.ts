@@ -2,6 +2,8 @@
 import "openclaw/plugin-sdk/image-generation";
 import "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -16,40 +18,52 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP4sAAAAASUVORK5CYII=",
   "base64",
 );
-const config: OpenClawConfig = {
-  models: {
-    providers: {
-      litellm: {
-        baseUrl: `${origin}/v1`,
-        models: [],
-        request: { headers: { Cookie: "fixture-session=synthetic" } },
-      },
-    },
-  },
-};
+function proxyConfig(
+  baseUrl = `${origin}/v1`,
+  request: ModelProviderConfig["request"] = { headers: { Cookie: "fixture-session=synthetic" } },
+): OpenClawConfig {
+  return { models: { providers: { litellm: { baseUrl, models: [], request } } } };
+}
+const config = proxyConfig();
 const provider = buildLitellmImageGenerationProvider();
 let payload: unknown;
 let redirect: string | undefined;
+let downloadBytes: Buffer;
+let downloadElapsedMs: number;
 const fetchMock = vi.fn<typeof fetch>();
-const generate = (cfg = config) =>
+const generate = (cfg = config, overrides: Partial<ImageGenerationRequest> = {}) =>
   provider.generateImage({
     provider: "litellm",
     model: "dall-e-3",
     prompt: "Synthetic square",
     cfg,
+    ...overrides,
   });
+const imageResponse = (bytes: Uint8Array) =>
+  new Response(new Uint8Array(bytes), { headers: { "Content-Type": "image/png" } });
+const headersAt = (index: number) => new Headers(fetchMock.mock.calls[index]?.[1]?.headers);
+function expectDownload(url: string) {
+  expect(fetchMock.mock.calls[1]?.[0]).toBe(url);
+  expect(headersAt(1).has("Authorization")).toBe(false);
+  expect(headersAt(1).has("Cookie")).toBe(false);
+}
 
 beforeEach(() => {
   payload = { data: [{ url: imageUrl, revised_prompt: "Synthetic square" }] };
   redirect = undefined;
+  downloadBytes = png;
+  downloadElapsedMs = 0;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url, init) => {
     if (init?.method === "POST") {
       return Response.json(payload);
     }
+    if (downloadElapsedMs) {
+      vi.setSystemTime(Date.now() + downloadElapsedMs);
+    }
     return redirect
       ? new Response(null, { status: 302, headers: { Location: redirect } })
-      : new Response(new Uint8Array(png), { headers: { "Content-Type": "image/png" } });
+      : imageResponse(downloadBytes);
   });
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -60,48 +74,32 @@ afterEach(() => {
 });
 
 describe("LiteLLM image URL responses", () => {
-  it.each([false, true])(
-    "downloads same-origin URLs without credentials (edit=%s)",
-    async (edit) => {
-      const result = await provider.generateImage({
-        provider: "litellm",
-        model: "dall-e-3",
-        prompt: "Synthetic square",
-        cfg: config,
-        inputImages: edit ? [{ buffer: png, mimeType: "image/png" }] : undefined,
-      });
-      expect(result.images).toEqual([
-        {
-          buffer: png,
-          mimeType: "image/png",
-          fileName: "image-1.png",
-          revisedPrompt: "Synthetic square",
-        },
-      ]);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-        "Bearer fixture-provider-key",
-      );
-      expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Cookie")).toBe(
-        "fixture-session=synthetic",
-      );
-      expect(fetchMock.mock.calls[1]?.[0]).toBe(imageUrl);
-      const headers = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
-      expect(headers.has("Authorization")).toBe(false);
-      expect(headers.has("Cookie")).toBe(false);
+  it.each([
+    { name: "same-origin generation", cfg: config, url: imageUrl, edit: false },
+    { name: "same-origin edit", cfg: config, url: imageUrl, edit: true },
+    {
+      name: "public CDN",
+      cfg: proxyConfig("https://api.example.com/v1"),
+      url: "https://cdn.example.com/image.png",
+      edit: false,
     },
-  );
-
-  it("downloads public CDN images returned by a DNS provider", async () => {
-    const url = "https://cdn.example.com/image.png";
-    payload = { data: [{ url }] };
-    const result = await generate({
-      models: { providers: { litellm: { baseUrl: "https://api.example.com/v1", models: [] } } },
+  ])("downloads $name URLs without credentials", async ({ cfg, url, edit }) => {
+    payload = { data: [{ url, revised_prompt: "Synthetic square" }] };
+    const result = await generate(cfg, {
+      inputImages: edit ? [{ buffer: png, mimeType: "image/png" }] : undefined,
     });
-    expect(result.images[0]?.buffer).toEqual(png);
+    expect(result.images).toEqual([
+      {
+        buffer: png,
+        mimeType: "image/png",
+        fileName: "image-1.png",
+        revisedPrompt: "Synthetic square",
+      },
+    ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]?.[0]).toBe(url);
-    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has("Authorization")).toBe(false);
+    expect(headersAt(0).get("Authorization")).toBe("Bearer fixture-provider-key");
+    expect(headersAt(0).get("Cookie")).toBe("fixture-session=synthetic");
+    expectDownload(url);
   });
 
   it.each(["http://127.0.0.2:19781/image.png", "http://127.0.0.1:19782/image.png"])(
@@ -122,16 +120,9 @@ describe("LiteLLM image URL responses", () => {
   it("allows another private origin only with explicit provider opt-in", async () => {
     const url = "http://127.0.0.1:19782/image.png";
     payload = { data: [{ url }] };
-    const result = await generate({
-      models: {
-        providers: {
-          litellm: { baseUrl: `${origin}/v1`, models: [], request: { allowPrivateNetwork: true } },
-        },
-      },
-    });
+    const result = await generate(proxyConfig(`${origin}/v1`, { allowPrivateNetwork: true }));
     expect(result.images[0]?.buffer).toEqual(png);
-    expect(fetchMock.mock.calls[1]?.[0]).toBe(url);
-    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has("Authorization")).toBe(false);
+    expectDownload(url);
   });
 
   it("preserves inline bytes and response order", async () => {
@@ -163,13 +154,7 @@ describe("LiteLLM image URL responses", () => {
   });
 
   it("rejects downloads above the generated image download ceiling", async () => {
-    fetchMock.mockImplementation(async (_url, init) =>
-      init?.method === "POST"
-        ? Response.json(payload)
-        : new Response(new Uint8Array(65 * 1024 * 1024), {
-            headers: { "Content-Type": "image/png" },
-          }),
-    );
+    downloadBytes = Buffer.alloc(65 * 1024 * 1024);
     await expect(generate()).rejects.toThrow(/exceeds|too large/i);
   });
 
@@ -177,13 +162,7 @@ describe("LiteLLM image URL responses", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(0);
     payload = { data: [{ url: imageUrl }, { url: imageUrl }] };
-    fetchMock.mockImplementation(async (_url, init) => {
-      if (init?.method === "POST") {
-        return Response.json(payload);
-      }
-      vi.setSystemTime(Date.now() + 35_000);
-      return new Response(new Uint8Array(png), { headers: { "Content-Type": "image/png" } });
-    });
+    downloadElapsedMs = 35_000;
     await expect(generate()).rejects.toThrow(/timed out/i);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });

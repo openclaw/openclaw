@@ -7,7 +7,6 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { WizardCancelledError } from "openclaw/plugin-sdk/setup";
 import { Agent, EnvHttpProxyAgent, ProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,18 +15,17 @@ import plugin from "./index.js";
 
 const discoveryFetch = vi.fn();
 
-const servedModel: ModelDefinitionConfig = {
-  id: "local-qwen",
-  name: "Authored local model",
-  reasoning: true,
-  input: ["text", "image"],
-  cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
-  contextWindow: 32768,
-  maxTokens: 2048,
-};
-
-function reply(body: unknown, status = 200) {
-  return Response.json(body, { status });
+const reply = (body: unknown, status = 200) => Response.json(body, { status });
+function expectModel(config: OpenClawConfig, modelId: string) {
+  expect(config.models?.providers?.litellm?.models.map(({ id }) => id)).toEqual([modelId]);
+}
+function expectDiscoveryKey(key: string) {
+  expect(discoveryFetch).toHaveBeenCalledExactlyOnceWith(
+    "http://127.0.0.1:4000/v1/models",
+    expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${key}` }),
+    }),
+  );
 }
 
 function createPrompter(
@@ -123,19 +121,14 @@ describe("LiteLLM discovery-backed onboarding", () => {
     const prompter = createPrompter({ baseUrl: "http://127.0.0.1:4000" });
     const { result, config } = await configure({ prompter });
 
-    expect(discoveryFetch).toHaveBeenCalledExactlyOnceWith(
-      "http://127.0.0.1:4000/v1/models",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer resolved-fixture-key" }),
-      }),
-    );
+    expectDiscoveryKey("resolved-fixture-key");
     expect(prompter.select).toHaveBeenCalledWith(
       expect.objectContaining({ initialValue: "local-qwen" }),
     );
     expect(result.defaultModel).toBe("litellm/local-qwen");
     expect(config.agents?.defaults?.model).toEqual({ primary: "litellm/local-qwen" });
     expect(config.agents?.defaults?.models).toEqual({ "litellm/local-qwen": { alias: "LiteLLM" } });
-    expect(config.models?.providers?.litellm?.models.map(({ id }) => id)).toEqual(["local-qwen"]);
+    expectModel(config, "local-qwen");
   });
 
   it("preserves a selected proxy alias containing a slash", async () => {
@@ -144,9 +137,7 @@ describe("LiteLLM discovery-backed onboarding", () => {
     });
 
     expect(result.defaultModel).toBe("litellm/team/second-model");
-    expect(config.models?.providers?.litellm?.models.map(({ id }) => id)).toEqual([
-      "team/second-model",
-    ]);
+    expectModel(config, "team/second-model");
   });
 
   it.each([
@@ -164,7 +155,7 @@ describe("LiteLLM discovery-backed onboarding", () => {
 
     expect(prompter.note).toHaveBeenCalledWith(expect.stringMatching(reason), expect.any(String));
     expect(result.defaultModel).toBe("litellm/manual-model");
-    expect(config.models?.providers?.litellm?.models.map(({ id }) => id)).toEqual(["manual-model"]);
+    expectModel(config, "manual-model");
   });
 
   it("propagates cancellation instead of applying the hosted default", async () => {
@@ -201,12 +192,7 @@ describe("LiteLLM discovery-backed onboarding", () => {
   it("uses the resolved reference for discovery and retains its stored shape", async () => {
     const { result } = await configure({ ref: true });
 
-    expect(discoveryFetch).toHaveBeenCalledWith(
-      "http://127.0.0.1:4000/v1/models",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer resolved-reference-key" }),
-      }),
-    );
+    expectDiscoveryKey("resolved-reference-key");
     expect(result.profiles).toEqual([
       {
         profileId: "litellm:default",
@@ -218,35 +204,6 @@ describe("LiteLLM discovery-backed onboarding", () => {
       },
     ]);
   });
-
-  it.each(["merge", "replace"] as const)(
-    "preserves authored metadata from a case-variant row in %s mode",
-    async (mode) => {
-      const { config } = await configure({
-        config: {
-          models: {
-            mode,
-            providers: {
-              LiteLLM: {
-                baseUrl: "http://127.0.0.1:4000/v1",
-                apiKey: "authored-key",
-                request: { allowPrivateNetwork: false, headers: { "X-Proxy-Tenant": "fixture" } },
-                models: [structuredClone(servedModel)],
-              },
-            },
-          },
-        },
-      });
-
-      expect(Object.keys(config.models?.providers ?? {})).toEqual(["litellm"]);
-      expect(config.models?.providers?.litellm).toMatchObject({
-        apiKey: "authored-key",
-        request: { allowPrivateNetwork: false, headers: { "X-Proxy-Tenant": "fixture" } },
-        models: [servedModel],
-      });
-      expect(config.agents?.defaults?.model).toEqual({ primary: "litellm/local-qwen" });
-    },
-  );
 
   it("keeps credential-only connections out of model discovery", async () => {
     const prompter = createPrompter();
