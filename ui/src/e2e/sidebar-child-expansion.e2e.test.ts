@@ -11,6 +11,7 @@ import {
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 import { expectAttribute } from "./sidebar-assertions.test-support.ts";
+import { style } from "./sidebar-contract.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -67,10 +68,8 @@ suite.define(() => {
               elements: [surface],
             });
           }
-          expect(await toggle.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
-          expect(
-            await toggle.evaluate((element) => getComputedStyle(element).pointerEvents),
-          ).not.toBe("none");
+          expect(await style(toggle, "opacity")).toBe("1");
+          expect(await style(toggle, "pointer-events")).not.toBe("none");
           const toggleBox = await toggle.boundingBox();
           const titleBox = await row.locator(".sidebar-recent-session__title-row").boundingBox();
           expect(toggleBox!.x).toBeGreaterThanOrEqual(titleBox!.x + titleBox!.width);

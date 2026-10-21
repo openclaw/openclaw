@@ -12,6 +12,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Cron loading mocked Gateway E2E",
@@ -21,15 +22,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
 });
 
-const emptyList = {
-  jobs: [],
-  snapshotRevision: "cron-loading-empty",
-  total: 0,
-  offset: 0,
-  limit: 50,
-  hasMore: false,
-  nextOffset: null,
-};
+const emptyList = cronList([], "cron-loading-empty");
 
 const contextOptions = createControlUiE2eContextOptions();
 const emptyRuns = { entries: [], total: 0, offset: 0, limit: 50, hasMore: false };
@@ -96,19 +89,12 @@ suite.define(() => {
     ]),
   )("settles a held automation save after $navigation ($outcome)", async ({ goBack, outcome }) => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      const job = (id: string, name: string): CronJob => ({
-        id,
-        name,
-        enabled: true,
-        createdAtMs: 0,
-        updatedAtMs: 0,
-        configRevision: `revision-${id}`,
-        schedule: { kind: "cron", expr: "0 9 * * *" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Synthetic garden inventory reminder" },
-        state: {},
-      });
+      const job = (id: string, name: string) =>
+        cronJob(id, name, {
+          configRevision: `revision-${id}`,
+          schedule: { kind: "cron", expr: "0 9 * * *" },
+          payload: { kind: "systemEvent", text: "Synthetic garden inventory reminder" },
+        });
       const a = job("garden-a", "Garden A");
       const b = job("garden-b", "Garden B");
       const saved = { ...a, name: "Garden A saved", configRevision: "revision-a-saved" };

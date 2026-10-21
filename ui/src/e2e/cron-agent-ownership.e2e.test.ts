@@ -11,7 +11,11 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { openPicker } from "../test-helpers/select-picker-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron agent ownership E2E",
@@ -24,23 +28,8 @@ const requireRecord = createRequireRecord("record", "expected-object-value");
 
 const requestParams = (request: MockGatewayRequest) => requireRecord(request.params);
 
-function cronListResponse(jobs: CronJob[]) {
-  return {
-    jobs,
-    snapshotRevision: "cron-agent-ownership-fixture",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
-}
-
-const pageOptions = {
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 900, width: 1_280 },
-} as const;
+const cronListResponse = (jobs: CronJob[]) => cronList(jobs, "cron-agent-ownership-fixture");
+const pageOptions = createControlUiE2eContextOptions();
 const cronResponses = {
   "cron.list": cronListResponse([]),
   "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
@@ -265,19 +254,16 @@ suite.define(() => {
   });
 
   it("keeps the selected agent as owner while browsing all agents", async () => {
-    const createdJob = {
-      id: "weekday-report",
+    const payload = { kind: "agentTurn", message: "Prepare the weekday report" } as const;
+    const createdJob = cronJob("weekday-report", "Weekday report", {
       agentId: "main",
-      name: "Weekday report",
-      enabled: true,
       createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
       updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
       schedule: { kind: "every", everyMs: 1_800_000 },
       sessionTarget: "isolated",
       wakeMode: "now",
-      payload: { kind: "agentTurn", message: "Prepare the weekday report" },
-      state: {},
-    } satisfies CronJob;
+      payload,
+    });
     await withPage(false, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         assistantName: "Assistant",
@@ -311,7 +297,7 @@ suite.define(() => {
 
       await page.locator('[data-test-id="cron-new-task"]').click();
       await page.locator("#cron-name").fill(createdJob.name);
-      await page.locator("#cron-payload-text").fill(createdJob.payload.message);
+      await page.locator("#cron-payload-text").fill(payload.message);
       await gateway.setMethodResponse(
         "cron.list",
         cronListResponseFixture([

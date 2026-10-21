@@ -32,56 +32,37 @@ const avatarUrl =
 
 async function observeShape(sidebar: Locator) {
   return sidebar.evaluateHandle((element, key) => {
-    const samples: Array<{
-      navigation: Array<string | null>;
-      rail: Array<string | null>;
-      sessions: Array<string | null>;
-      view: string | null;
-      agents: Array<string | null>;
-      agentNames: string[];
-      avatarText: string[];
-      brand: string;
-      footer: string;
-      online: string[];
-      selectedBounds: { x: number; y: number; width: number; height: number } | null;
-    }> = [];
-    const sample = () => {
+    const all = (selector: string) => [...element.querySelectorAll(selector)];
+    const attributes = (selector: string, name: string) =>
+      all(selector).map((row) => row.getAttribute(name));
+    const texts = (selector: string) => all(selector).map((row) => row.textContent?.trim() ?? "");
+    const read = () => {
       const selected = element.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"]`);
       const bounds = selected?.getBoundingClientRect();
-      const next = {
-        navigation: [...element.querySelectorAll("[data-sidebar-entry]")].map((row) =>
-          row.getAttribute("data-sidebar-entry"),
-        ),
-        sessions: [...element.querySelectorAll(".sidebar-session-content [data-session-key]")].map(
-          (row) => row.getAttribute("data-session-key"),
-        ),
-        rail: [...element.querySelectorAll(".sidebar-rail [data-sidebar-entry]")].map((row) =>
-          row.getAttribute("data-sidebar-entry"),
-        ),
+      return {
+        navigation: attributes("[data-sidebar-entry]", "data-sidebar-entry"),
+        sessions: attributes(".sidebar-session-content [data-session-key]", "data-session-key"),
+        rail: attributes(".sidebar-rail [data-sidebar-entry]", "data-sidebar-entry"),
         view:
           element
             .querySelector('[data-navigation-view][aria-pressed="true"]')
             ?.getAttribute("data-navigation-view") ?? null,
-        agents: [...element.querySelectorAll("[data-agent-group]")].map((row) =>
-          row.getAttribute("data-agent-group"),
-        ),
-        agentNames: [
-          ...element.querySelectorAll("[data-agent-group] .sidebar-agent-roster__copy"),
-        ].map((row) => row.textContent?.trim() ?? ""),
-        avatarText: [
-          ...element.querySelectorAll(
-            "[data-agent-group] .sidebar-agent-roster__header .sidebar-agent-roster__avatar",
-          ),
-        ].map((row) => row.querySelector("[data-avatar]")?.getAttribute("data-avatar") ?? ""),
+        agents: attributes("[data-agent-group]", "data-agent-group"),
+        agentNames: texts("[data-agent-group] .sidebar-agent-roster__copy"),
+        avatarText: all(
+          "[data-agent-group] .sidebar-agent-roster__header .sidebar-agent-roster__avatar",
+        ).map((row) => row.querySelector("[data-avatar]")?.getAttribute("data-avatar") ?? ""),
         brand: element.querySelector(".sidebar-workspace-header__main")?.textContent?.trim() ?? "",
         footer: element.querySelector(".sidebar-identity-card__name")?.textContent?.trim() ?? "",
-        online: [...element.querySelectorAll(".sidebar-online__person-name")].map(
-          (row) => row.textContent?.trim() ?? "",
-        ),
+        online: texts(".sidebar-online__person-name"),
         selectedBounds: bounds
           ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
           : null,
       };
+    };
+    const samples: Array<ReturnType<typeof read>> = [];
+    const sample = () => {
+      const next = read();
       if (JSON.stringify(samples.at(-1)) !== JSON.stringify(next)) {
         samples.push(next);
       }
@@ -121,56 +102,48 @@ async function capture(page: Page, sidebar: Locator, filename: string) {
 }
 
 async function waitForSavedSidebar(page: Page, view: "sessions" | "pages") {
-  try {
-    await page
-      .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
-      .waitFor();
-    // A previously saved view can remain painted while the new catalog loads.
-    await expect
-      .poll(() =>
-        page.evaluate(
-          ({ databaseName, storeName, view: expectedView }) =>
-            new Promise<boolean>((resolve, reject) => {
-              const open = indexedDB.open(databaseName);
-              open.addEventListener("error", () =>
-                reject(open.error ?? new Error("Sidebar snapshot open failed")),
-              );
-              open.addEventListener("success", () => {
-                const database = open.result;
-                const transaction = database.transaction(storeName, "readonly");
-                const request = transaction.objectStore(storeName).getAll();
-                transaction.addEventListener("complete", () => {
-                  database.close();
-                  resolve(
-                    request.result.some((record) => record.model.navigationView === expectedView),
-                  );
-                });
-                transaction.addEventListener("abort", () => {
-                  database.close();
-                  reject(transaction.error ?? new Error("Sidebar snapshot read failed"));
-                });
+  await page
+    .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+    .waitFor();
+  // A previously saved view can remain painted while the new catalog loads.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ databaseName, storeName, view: expectedView }) =>
+          new Promise<boolean>((resolve, reject) => {
+            const open = indexedDB.open(databaseName);
+            open.addEventListener("error", () =>
+              reject(open.error ?? new Error("Sidebar snapshot open failed")),
+            );
+            open.addEventListener("success", () => {
+              const database = open.result;
+              const transaction = database.transaction(storeName, "readonly");
+              const request = transaction.objectStore(storeName).getAll();
+              transaction.addEventListener("complete", () => {
+                database.close();
+                resolve(
+                  request.result.some((record) => record.model.navigationView === expectedView),
+                );
               });
-            }),
-          { databaseName: CHAT_SNAPSHOT_DB_NAME, storeName: SIDEBAR_SNAPSHOT_STORE_NAME, view },
-        ),
-      )
-      .toBe(true);
-  } catch (error) {
-    const diagnosis = await page.evaluate(() => {
-      const sidebar = document.querySelector<HTMLElement>("aside.sidebar");
-      return {
-        state: sidebar?.dataset.snapshotState,
-        saved: sidebar?.dataset.snapshotSaved,
-        text: sidebar?.textContent,
-      };
-    });
-    await writeFile(
-      path.join(suite.artifactDir, "sidebar-persistence-failure.json"),
-      JSON.stringify(diagnosis, null, 2),
-    );
-    throw error;
-  }
+              transaction.addEventListener("abort", () => {
+                database.close();
+                reject(transaction.error ?? new Error("Sidebar snapshot read failed"));
+              });
+            });
+          }),
+        { databaseName: CHAT_SNAPSHOT_DB_NAME, storeName: SIDEBAR_SNAPSHOT_STORE_NAME, view },
+      ),
+    )
+    .toBe(true);
 }
+
+const settleFrames = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
 
 suite.define(() => {
   it.each(baselineMode ? (["sessions"] as const) : (["sessions", "pages"] as const))(
@@ -265,33 +238,19 @@ suite.define(() => {
             ],
             sessionKey: selectedKey,
             sessions: rosterSessions,
-            presenceUsers: [
-              {
-                self: true,
-                id: "riley",
-                identity: { type: "profile", id: "riley" },
-                name: "Riley",
-                email: "riley@example.test",
-                avatarUrl,
-                lastInputSeconds: 0,
-              },
-              {
-                id: "ada",
-                identity: { type: "profile", id: "ada" },
-                name: "Ada",
-                email: "ada@example.test",
-                avatarUrl,
-                lastInputSeconds: 0,
-              },
-              {
-                id: "zoe",
-                identity: { type: "profile", id: "zoe" },
-                name: "Zoe",
-                email: "zoe@example.test",
-                avatarUrl,
-                lastInputSeconds: 0,
-              },
-            ],
+            presenceUsers: ["Riley", "Ada", "Zoe"].map((name) =>
+              Object.assign(
+                {
+                  id: name.toLowerCase(),
+                  identity: { type: "profile", id: name.toLowerCase() },
+                  name,
+                  email: `${name.toLowerCase()}@example.test`,
+                  avatarUrl,
+                  lastInputSeconds: 0,
+                },
+                name === "Riley" ? { self: true } : {},
+              ),
+            ),
             methodResponses: {
               "users.prefs.get": { status: "ok", entries: { "ui.railShortcuts": railPins } },
               "agents.list": agents,
@@ -339,6 +298,17 @@ suite.define(() => {
           await gateway.waitForRequest("connect");
           await gateway.resolveDeferred("connect");
           const sidebar = page.locator("aside.sidebar");
+          const reloadCached = async () => {
+            await page.reload();
+            await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+            await gateway.waitForRequest("connect");
+          };
+          const waitForLive = () =>
+            page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
+          const waitForNewSession = () =>
+            sidebar
+              .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
+              .waitFor();
           await sidebar.waitFor({ state: "visible" });
           await page.evaluate(() => document.fonts.ready.then(() => undefined));
           await sidebar.locator('[data-sidebar-entry="plugin:reports/overview"]').waitFor();
@@ -373,12 +343,7 @@ suite.define(() => {
           if (!baselineMode) {
             await waitForSavedSidebar(page, view);
           }
-          await page.evaluate(
-            () =>
-              new Promise<void>((resolve) => {
-                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-              }),
-          );
+          await settleFrames(page);
           const reference = await observeShape(sidebar);
           const settled = await reference.evaluate((observer) => observer.current());
           await reference.evaluate((observer) => observer.stop());
@@ -386,15 +351,17 @@ suite.define(() => {
           expect(settled.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(
             view === "pages" ? 12 : 1,
           );
-          expect(settled.sessions).toEqual([]);
-          expect(settled.rail).toEqual(railPins);
-          expect(settled.view).toBe(view);
-          expect(settled.agents).toEqual(view === "pages" ? [] : ["main", "forge", "scout"]);
-          expect(settled.agentNames).toEqual(view === "pages" ? [] : ["Harbor", "Forge", "Scout"]);
-          expect(settled.avatarText).toEqual(view === "pages" ? [] : ["⚓", "🔧", "🔭"]);
-          expect(settled.brand).toBe("OpenClaw");
-          expect(settled.footer).toBe("Riley");
-          expect(settled.online).toEqual([]);
+          expect(settled).toMatchObject({
+            sessions: [],
+            rail: railPins,
+            view,
+            agents: view === "pages" ? [] : ["main", "forge", "scout"],
+            agentNames: view === "pages" ? [] : ["Harbor", "Forge", "Scout"],
+            avatarText: view === "pages" ? [] : ["⚓", "🔧", "🔭"],
+            brand: "OpenClaw",
+            footer: "Riley",
+            online: [],
+          });
           expect(settled.selectedBounds).not.toBeNull();
 
           if (baselineMode) {
@@ -412,12 +379,7 @@ suite.define(() => {
                 sidebar.locator("[data-agent-group] .sidebar-agent-roster__copy").allTextContents(),
               )
               .toEqual(["Harbor", "Forge", "Scout"]);
-            await page.evaluate(
-              () =>
-                new Promise<void>((resolve) => {
-                  requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-                }),
-            );
+            await settleFrames(page);
             const reloaded = await baseline.evaluate((observer) => observer.current());
             const baselineSamples = await baseline.evaluate((observer) => observer.stop());
             await baseline.dispose();
@@ -446,9 +408,7 @@ suite.define(() => {
             return;
           }
 
-          await page.reload();
-          await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-          await gateway.waitForRequest("connect");
+          await reloadCached();
           const restored = await observeShape(sidebar);
           expect(await restored.evaluate((observer) => observer.current())).toEqual(settled);
           expect(await gateway.getRequests()).toHaveLength(1);
@@ -495,9 +455,7 @@ suite.define(() => {
           );
 
           if (view === "pages") {
-            await page.reload();
-            await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-            await gateway.waitForRequest("connect");
+            await reloadCached();
             // A queued refresh must not recover before the failed-catalog snapshot check.
             await gateway.setMethodResponse("sessions.list", {
               cases: [
@@ -518,7 +476,7 @@ suite.define(() => {
             });
             await gateway.resolveDeferred("connect");
             await gateway.waitForRequest("sessions.list", { match: { hasBoard: true } });
-            await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
+            await waitForLive();
             await sidebar
               .getByRole("alert")
               .filter({ hasText: "Synthetic dashboard catalog unavailable" })
@@ -526,9 +484,7 @@ suite.define(() => {
             await expect.poll(() => sidebar.getAttribute("data-snapshot-saved")).toBe("false");
             return;
           }
-          await page.reload();
-          await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-          await gateway.waitForRequest("connect");
+          await reloadCached();
           await gateway.deferNext("plugins.controlUi.list");
           await gateway.resolveDeferred("connect");
           await gateway.waitForRequest("plugins.controlUi.list");
@@ -536,10 +492,8 @@ suite.define(() => {
             code: "UNAVAILABLE",
             message: "Synthetic plugin catalog temporarily unavailable",
           });
-          await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar
-            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
-            .waitFor();
+          await waitForLive();
+          await waitForNewSession();
           const pluginPin = sidebar.locator(
             '.sidebar-rail [data-sidebar-entry="plugin:reports/overview"]',
           );
@@ -559,9 +513,7 @@ suite.define(() => {
           expect(savedPins).toContain("plugin:reports/overview");
           await waitForSavedSidebar(page, view);
 
-          await page.reload();
-          await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-          await gateway.waitForRequest("connect");
+          await reloadCached();
           await gateway.setMethodResponse("sessions.list", {
             __mockError: {
               code: "UNAVAILABLE",
@@ -569,10 +521,8 @@ suite.define(() => {
             },
           });
           await gateway.resolveDeferred("connect");
-          await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar
-            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
-            .waitFor();
+          await waitForLive();
+          await waitForNewSession();
           expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
         },
       );

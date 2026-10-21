@@ -1,4 +1,4 @@
-import type { BrowserContextOptions, Locator, Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
@@ -12,6 +12,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { cronJob as makeCronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron mocked Gateway E2E",
@@ -20,11 +21,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const contextOptions: BrowserContextOptions = {
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 900, width: 1_280 },
-};
+const contextOptions = createControlUiE2eContextOptions();
 
 type GatewayScenario = NonNullable<Parameters<typeof installMockGateway>[1]>;
 
@@ -50,25 +47,20 @@ function cronJob(
   schedule: CronJob["schedule"],
   state: CronJob["state"] = {},
 ): CronJob {
-  return {
-    id,
+  return makeCronJob(id, name, {
     configRevision: `config-revision-${id}`,
-    name,
-    enabled: true,
     createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
     updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
     schedule,
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: `${name} fired` },
     state,
-  };
+  });
 }
 
 const pageDefaults = { offset: 0, limit: 50, hasMore: false, nextOffset: null };
 
 function cronListResponse(jobs: CronJob[], total = jobs.length) {
-  return { jobs, snapshotRevision: "cron-filters-fixture", total, ...pageDefaults };
+  return cronList(jobs, "cron-filters-fixture", { total });
 }
 
 function cronRunsResponse(entries: unknown[], total = entries.length) {

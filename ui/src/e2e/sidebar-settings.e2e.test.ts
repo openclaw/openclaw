@@ -8,7 +8,16 @@ import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
-import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
+import {
+  expectAttribute,
+  expectCount,
+  expectExactText,
+  expectPath,
+} from "./sidebar-assertions.test-support.ts";
+import {
+  createSidebarCustomizationSuite,
+  sidebarCronJob,
+} from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocked Gateway E2E");
 
@@ -42,18 +51,12 @@ async function setVisibility(target: Page, visibility: "hidden" | "visible", foc
 
 const FAILED_CRON_RESPONSE = {
   jobs: [
-    compactCronJobFixture({
-      id: "failed-settings-transition",
-      name: "Failed settings transition",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "test" },
-      state: { lastRunStatus: "error", lastError: "Provider request failed" },
-    }),
+    compactCronJobFixture(
+      sidebarCronJob({
+        id: "failed-settings-transition",
+        name: "Failed settings transition",
+      }),
+    ),
   ],
   snapshotRevision: "settings-transition-attention",
   total: 1,
@@ -93,7 +96,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}new`);
     const badge = page.locator(INBOX_COUNT);
-    await expect.poll(() => badge.textContent()).toBe("2");
+    await expectExactText(badge, "2");
     await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
     await page.getByText("Failed settings transition", { exact: true }).waitFor();
 
@@ -149,7 +152,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}new`);
     const badge = page.locator(INBOX_COUNT);
-    await expect.poll(() => badge.textContent()).toBe("1");
+    await expectExactText(badge, "1");
     await gateway.waitForRequest("models.authStatus");
     await page.clock.setFixedTime(now + 60_001);
     await page.evaluate(() => {
@@ -165,13 +168,13 @@ suite.define(() => {
     await gateway.deferNext("models.authStatus");
     await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
     await gateway.waitForRequest("models.authStatus", { after: 1 });
-    await expect.poll(() => badge.textContent()).toBe("2");
+    await expectExactText(badge, "2");
     await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
     const authWarning = page.locator('[data-attention-kind="modelAuthExpired"]');
     await authWarning.waitFor({ state: "visible" });
     await gateway.resolveDeferred("models.authStatus", { ts: now + 60_001, providers: [] });
     await authWarning.waitFor({ state: "hidden" });
-    await expect.poll(() => badge.textContent()).toBe("1");
+    await expectExactText(badge, "1");
     expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
     for (const index of [1, 2]) {
       await page.clock.setFixedTime(now + 60_001 + 30_001 * index);
@@ -210,13 +213,13 @@ suite.define(() => {
 
     await gateway.resolveDeferred("models.authStatus");
     const badge = page.locator(INBOX_COUNT);
-    await expect.poll(() => badge.textContent()).toBe("1");
+    await expectExactText(badge, "1");
     await gateway.resolveDeferred("cron.list");
     expect(await gateway.getRequests("cron.list")).toHaveLength(1);
     await gateway.deferNext("cron.list");
     await gateway.resolveDeferred("cron.status");
     await gateway.waitForRequest("cron.list", { after: 1 });
-    await expect.poll(() => badge.textContent()).toBe("2");
+    await expectExactText(badge, "2");
     for (const method of ["cron.list", "cron.status"]) {
       expect(await gateway.getRequests(method)).toHaveLength(2);
     }
@@ -245,15 +248,15 @@ suite.define(() => {
     const selectedLabel = await trigger.textContent();
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Escape");
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expectPath(page, "/settings/appearance");
+    await expectAttribute(trigger, "aria-expanded", "false");
     expect(await trigger.textContent()).toBe(selectedLabel);
     await trigger.click();
     expect(await selected.getAttribute("data-value")).toBe(selectedValue);
     await page.keyboard.press("Escape");
     expect(await trigger.evaluate((input) => input.matches(":focus"))).toBe(true);
     await page.keyboard.press("Escape");
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    await expectPath(page, "/new");
   });
 
   it.each([
@@ -288,19 +291,15 @@ suite.define(() => {
 
     await openNewSession();
     await page.locator('[data-navigation-view][aria-pressed="true"]').click();
-    const railInbox = page.locator(RAIL_INBOX);
-    await expect
-      .poll(() => railInbox.locator(".sidebar-issues-button__count").textContent())
-      .toBe("2");
+    await expectExactText(railCount(), "2");
 
     await openSettings();
     expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
 
     await page.keyboard.press("Escape");
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    const restoredInbox = page.locator(RAIL_INBOX);
-    await restoredInbox.locator(".sidebar-issues-button").waitFor({ state: "visible" });
-    expect(await restoredInbox.locator(".sidebar-issues-button__count").textContent()).toBe("2");
+    await expectPath(page, "/new");
+    await railButton().waitFor({ state: "visible" });
+    expect(await railCount().textContent()).toBe("2");
 
     await gateway.setMethodResponse("cron.list", {
       ...FAILED_CRON_RESPONSE,
@@ -319,7 +318,7 @@ suite.define(() => {
       .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
       .toBe("connected");
     await page.keyboard.press("Escape");
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    await expectPath(page, "/new");
     await railButton().waitFor();
     expect(await railCount().count()).toBe(0);
   });
@@ -334,7 +333,7 @@ suite.define(() => {
 
     await page.goto(`${suite.server.baseUrl}new`);
     await gateway.waitForRequest("cron.list");
-    await expect.poll(() => page.locator(INBOX_COUNT).count()).toBe(0);
+    await expectCount(page.locator(INBOX_COUNT), 0);
 
     await page.locator('[data-navigation-view][aria-pressed="true"]').click();
     await railButton().waitFor();
@@ -351,19 +350,13 @@ suite.define(() => {
       jobId: "failed-settings-transition",
       status: "error",
     });
-    await expect.poll(() => page.locator(INBOX_COUNT).textContent()).toBe("1");
+    await expectExactText(page.locator(INBOX_COUNT), "1");
 
-    await gateway.deferNext("cron.list");
-    await gateway.deferNext("cron.status");
-    await gateway.deferNext("models.authStatus");
+    for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
+      await gateway.deferNext(method);
+    }
     await page.locator('[data-navigation-view][aria-pressed="true"]').click();
-    await expect
-      .poll(() =>
-        page
-          .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button__count")
-          .textContent(),
-      )
-      .toBe("1");
+    await expectExactText(railCount(), "1");
   });
 
   it("keeps Gateway connection fields editable by their visible labels", async () => {
@@ -415,7 +408,7 @@ suite.define(() => {
     await gateway.deferNext("connect");
     await gateway.closeLatest(1012, "synthetic reconnect");
     const notice = page.locator('.connection-action-block[role="status"]');
-    await expect.poll(() => credential.getAttribute("type")).toBe("password");
+    await expectAttribute(credential, "type", "password");
     expect(await notice.count()).toBe(0);
     for (const { input } of fields) {
       expect(await input.isEditable()).toBe(true);
