@@ -95,20 +95,19 @@ packageExtensions:
 });
 
 it("rejects floating dependency specs in tracked package manifests", () => {
+  const floating: [string, string][] = [
+    ["caret", "^1.2.3"],
+    ["tilde", "~1.2.3"],
+    ["wildcard", "*"],
+    ["tag", "latest"],
+    ["broad", ">=1 <2"],
+    ["malformedSemver", "01.2.3"],
+    ["gitFloating", "github:owner/repo#main"],
+    ["fragmentlessGitPath", `git+https://github.com/owner/repo/commit/${revision}`],
+    ["invalidRemoval", "-"],
+  ];
   const dir = makeRepo({
-    "package.json": {
-      dependencies: {
-        caret: "^1.2.3",
-        tilde: "~1.2.3",
-        wildcard: "*",
-        tag: "latest",
-        broad: ">=1 <2",
-        malformedSemver: "01.2.3",
-        gitFloating: "github:owner/repo#main",
-        fragmentlessGitPath: `git+https://github.com/owner/repo/commit/${revision}`,
-        invalidRemoval: "-",
-      },
-    },
+    "package.json": { dependencies: Object.fromEntries(floating) },
     "extensions/demo/package.json": {
       devDependencies: { devCaret: "^4.5.6" },
       optionalDependencies: { optionalTilde: "~7.8.9" },
@@ -121,17 +120,7 @@ it("rejects floating dependency specs in tracked package manifests", () => {
     ...violations("extensions/demo/package.json", "optionalDependencies", [
       ["optionalTilde", "~7.8.9"],
     ]),
-    ...violations("package.json", "dependencies", [
-      ["caret", "^1.2.3"],
-      ["tilde", "~1.2.3"],
-      ["wildcard", "*"],
-      ["tag", "latest"],
-      ["broad", ">=1 <2"],
-      ["malformedSemver", "01.2.3"],
-      ["gitFloating", "github:owner/repo#main"],
-      ["fragmentlessGitPath", `git+https://github.com/owner/repo/commit/${revision}`],
-      ["invalidRemoval", "-"],
-    ]),
+    ...violations("package.json", "dependencies", floating),
   ]);
 });
 

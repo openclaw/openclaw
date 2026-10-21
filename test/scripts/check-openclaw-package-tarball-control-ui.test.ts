@@ -7,6 +7,7 @@ import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.tes
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const spawnOptions = { encoding: "utf8", timeout: 30_000 } as const;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -31,11 +32,7 @@ function chmodTreeWorldReadable(dir: string): void {
 function pack(inventory: readonly string[], postinstall = true) {
   const root = tempDirs.make("openclaw-control-ui-package-inventory-");
   const packageRoot = join(root, "package");
-  const write = (file: string, content: string) => {
-    const target = join(packageRoot, file);
-    fs.mkdirSync(dirname(target), { recursive: true });
-    fs.writeFileSync(target, content);
-  };
+  const { write } = fixtureFiles(packageRoot);
   write(
     "package.json",
     JSON.stringify({
