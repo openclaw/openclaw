@@ -76,6 +76,12 @@ function createPresenceFixture(
     cooldownStore,
     getPresence,
     advancePoll: () => Promise.resolve(clock.wake()),
+    pollAt: async (...times: number[]) => {
+      for (const time of times) {
+        clock.setTime(time);
+        await clock.wake();
+      }
+    },
   };
 }
 
@@ -111,7 +117,16 @@ function createCooldownStore() {
   } satisfies PluginStateKeyedStore<number>;
 }
 
-function createPrepared(params: {
+function createPrepared({
+  userId,
+  teamId,
+  channelId = "D123",
+  channelType = "im",
+  threadId,
+  mode,
+  prompt,
+  sessionKey = `agent:main:slack:channel:${channelId}`,
+}: {
   userId: string;
   teamId?: string;
   channelId?: string;
@@ -121,31 +136,16 @@ function createPrepared(params: {
   prompt?: string;
   sessionKey?: string;
 }): PreparedSlackMessage {
-  const channelId = params.channelId ?? "D123";
-  const channelType = params.channelType ?? "im";
   return {
     ctx: { isRuntimePolicyCurrent: () => true },
-    message: {
-      type: "message",
-      user: params.userId,
-      channel: channelId,
-      channel_type: channelType,
-    },
-    ...(params.teamId ? { eventScope: { teamId: params.teamId, client: {} as never } } : {}),
-    route: {
-      agentId: "main",
-      accountId: "default",
-      sessionKey: params.sessionKey ?? `agent:main:slack:channel:${channelId}`,
-    },
+    message: { type: "message", user: userId, channel: channelId, channel_type: channelType },
+    ...(teamId ? { eventScope: { teamId, client: {} as never } } : {}),
+    route: { agentId: "main", accountId: "default", sessionKey },
     channelConfig:
-      params.mode || params.prompt !== undefined
-        ? {
-            allowed: true,
-            requireMention: false,
-            presenceEvents: { mode: params.mode, prompt: params.prompt },
-          }
+      mode || prompt !== undefined
+        ? { allowed: true, requireMention: false, presenceEvents: { mode, prompt } }
         : null,
-    ctxPayload: { MessageThreadId: params.threadId },
+    ctxPayload: { MessageThreadId: threadId },
     isDirectMessage: channelType === "im",
   } as PreparedSlackMessage;
 }
@@ -230,8 +230,7 @@ describe("Slack presence monitor", () => {
       });
       monitor.observe(createPrepared({ userId: "U123", mode: "auto", prompt }));
       await monitor.advancePoll();
-      clock.setTime(7_500);
-      await monitor.advancePoll();
+      await monitor.pollAt(7_500);
       expect(monitor.enqueue.mock.calls[0]?.[0]).toBe(
         [
           "Slack presence event:",
@@ -251,16 +250,13 @@ describe("Slack presence monitor", () => {
     monitor.observe(createPrepared({ userId: "U123" }));
 
     await monitor.advancePoll();
-    clock.setTime(2_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(2_000);
     expect(enqueue).not.toHaveBeenCalled();
 
-    clock.setTime(4_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(4_000);
     expect(enqueue).not.toHaveBeenCalled();
 
-    clock.setTime(7_500);
-    await monitor.advancePoll();
+    await monitor.pollAt(7_500);
     expect(enqueue).toHaveBeenCalledExactlyOnceWith(
       [
         "Slack presence event:",
@@ -277,10 +273,7 @@ describe("Slack presence monitor", () => {
     );
     expect(monitor.captureTarget).toHaveBeenCalledOnce();
 
-    clock.setTime(8_000);
-    await monitor.advancePoll();
-    clock.setTime(9_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(8_000, 9_000);
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
@@ -416,12 +409,10 @@ describe("Slack presence monitor", () => {
     await monitor.advancePoll();
     expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "U0001" });
 
-    clock.setTime(120_999);
-    await monitor.advancePoll();
+    await monitor.pollAt(120_999);
     expect(getPresence).toHaveBeenCalledTimes(1);
 
-    clock.setTime(121_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(121_000);
     expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U0001" });
     expect(getPresence).toHaveBeenNthCalledWith(3, { user: "U0002" });
     expect(getPresence).toHaveBeenCalledTimes(46);

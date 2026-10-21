@@ -26,6 +26,31 @@ function closeServer(server: http.Server | https.Server | WebSocketServer) {
   });
 }
 
+async function listenRelay() {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => {
+    server.once("listening", resolve);
+  });
+  return { server, url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/gateway/ws` };
+}
+
+async function closeRelay(server: WebSocketServer) {
+  for (const client of server.clients) {
+    client.terminate();
+  }
+  await closeServer(server);
+}
+
+async function stopProxy(
+  monitor: ReturnType<typeof startRelayMonitor>,
+  fixture: Awaited<ReturnType<typeof createRelayProxyFixture>>,
+  expected?: { name: string },
+) {
+  const stopped = await monitor.stop();
+  await fixture.close();
+  expect(stopped).toEqual(expected ? expect.objectContaining(expected) : undefined);
+}
+
 const relayUpgrade = (via: "direct" | "proxy") => ({
   via,
   authorization: "Bearer relay-secret",
@@ -70,11 +95,7 @@ describe("Slack relay source", () => {
   });
 
   it("applies hello identity and acks a routed event only after durable accept", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const port = (server.address() as AddressInfo).port;
+    const { server, url } = await listenRelay();
     const ack = deferred<Record<string, unknown>>();
     const acceptStarted = deferred<void>();
     const acceptDone = deferred<void>();
@@ -128,16 +149,12 @@ describe("Slack relay source", () => {
     const runtimeError = vi.fn();
     const identities: Array<SlackSendIdentity | undefined> = [];
     const statuses: Array<Record<string, unknown>> = [];
-    const monitor = startRelayMonitor(
-      { url: `ws://127.0.0.1:${port}/gateway/ws` },
-      (status) => statuses.push(status),
-      {
-        acceptRelayEvent,
-        runtime: { error: runtimeError, log: vi.fn(), exit: vi.fn() },
-        identityHealth: { lifecycle: "blocked", lastError: "request_timeout" },
-        setIdentity: (identity) => identities.push(identity),
-      },
-    );
+    const monitor = startRelayMonitor({ url }, (status) => statuses.push(status), {
+      acceptRelayEvent,
+      runtime: { error: runtimeError, log: vi.fn(), exit: vi.fn() },
+      identityHealth: { lifecycle: "blocked", lastError: "request_timeout" },
+      setIdentity: (identity) => identities.push(identity),
+    });
 
     await expect(requestHeaders.promise).resolves.toEqual({
       authorization: "Bearer relay-secret",
@@ -170,17 +187,11 @@ describe("Slack relay source", () => {
     monitor.abortController.abort();
     await monitor.monitor;
     expect(identities.at(-1)).toBeUndefined();
-    for (const client of server.clients) {
-      client.terminate();
-    }
-    await closeServer(server);
+    await closeRelay(server);
   });
 
   it("settles durable acceptance before recovering from a websocket error", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
+    const { server, url } = await listenRelay();
     const connected = deferred<WebSocket>();
     const socketClosed = deferred<void>();
     server.once("connection", (socket) => {
@@ -192,7 +203,7 @@ describe("Slack relay source", () => {
     const acceptDone = deferred<void>();
     const statuses: Array<Record<string, unknown>> = [];
     const { abortController, stopped } = startRelayMonitor(
-      { url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/gateway/ws` },
+      { url },
       (status) => statuses.push(status),
       {
         acceptRelayEvent: async () => {
@@ -214,10 +225,7 @@ describe("Slack relay source", () => {
       abortController.abort();
       acceptDone.resolve();
       await stopped;
-      for (const client of server.clients) {
-        client.terminate();
-      }
-      await closeServer(server);
+      await closeRelay(server);
     }
   });
 
@@ -413,10 +421,7 @@ async function createRelayProxyFixture(
       for (const socket of sockets) {
         socket.destroy();
       }
-      for (const client of relay.clients) {
-        client.terminate();
-      }
-      await closeServer(relay);
+      await closeRelay(relay);
       await closeServer(relayHttps);
       await closeServer(proxy);
     },
@@ -557,9 +562,7 @@ describe("Slack relay proxy environment", () => {
       expect(fixture.upgrades).toEqual([relayUpgrade("proxy")]);
       expect(monitor.acceptRelayEvent).toHaveBeenCalledTimes(1);
     } finally {
-      const stopped = await monitor.stop();
-      await fixture.close();
-      expect(stopped).toBeUndefined();
+      await stopProxy(monitor, fixture);
     }
   });
 
@@ -599,9 +602,7 @@ describe("Slack relay proxy environment", () => {
         expect(fixture.upgrades).toEqual([]);
         expect(monitor.acceptRelayEvent).not.toHaveBeenCalled();
       } finally {
-        const stopped = await monitor.stop();
-        await fixture.close();
-        expect(stopped).toMatchObject({ name: "AbortError" });
+        await stopProxy(monitor, fixture, { name: "AbortError" });
       }
     },
   );
@@ -624,9 +625,7 @@ describe("Slack relay proxy environment", () => {
       ]);
       expect(fixture.upgrades).toEqual([relayUpgrade("proxy")]);
     } finally {
-      const stopped = await monitor.stop();
-      await fixture.close();
-      expect(stopped).toBeUndefined();
+      await stopProxy(monitor, fixture);
     }
   });
 
@@ -650,9 +649,7 @@ describe("Slack relay proxy environment", () => {
       expect(fixture.relayConnections()).toBe(0);
       expect(fixture.upgrades).toEqual([]);
     } finally {
-      const stopped = await monitor.stop();
-      await fixture.close();
-      expect(stopped).toMatchObject({ name: "AbortError" });
+      await stopProxy(monitor, fixture, { name: "AbortError" });
     }
   });
 });

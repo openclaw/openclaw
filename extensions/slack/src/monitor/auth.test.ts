@@ -90,6 +90,8 @@ type AuthorizeContextOptions = Parameters<typeof makeAuthorizeCtx>[0];
 type AuthorizeRequest = Omit<Parameters<typeof authorizeSlackSystemEventSender>[0], "ctx">;
 type AuthorizeExpected = Awaited<ReturnType<typeof authorizeSlackSystemEventSender>>;
 type AuthorizeCase = [string, AuthorizeContextOptions, AuthorizeRequest, AuthorizeExpected];
+const authorizeSystemEvent = (ctx: AuthorizeContextOptions, request: AuthorizeRequest) =>
+  authorizeSlackSystemEventSender({ ctx: makeAuthorizeCtx(ctx), ...request });
 
 const allowedChannel: AuthorizeExpected = {
   allowed: true,
@@ -212,16 +214,14 @@ describe("authorizeSlackSystemEventSender", () => {
 
   it("retries only transient direct-name lookup failures", async () => {
     const authorize = (error: unknown) =>
-      authorizeSlackSystemEventSender({
-        ctx: makeAuthorizeCtx({
+      authorizeSystemEvent(
+        {
           allowNameMatching: true,
           channelsConfig: { C1: { users: ["alice"] } },
           resolveUserName: async () => ({ error }),
-        }),
-        senderId: "U_PENDING",
-        channelId: "C1",
-        retryNameLookup: true,
-      });
+        },
+        { senderId: "U_PENDING", channelId: "C1", retryNameLookup: true },
+      );
     for (const error of [
       new WebAPIRequestError(Object.assign(new Error("socket reset"), { code: "ECONNRESET" })),
       new WebAPIPlatformError({ ok: false, error: "service_unavailable" }),
@@ -311,22 +311,19 @@ describe("authorizeSlackSystemEventSender", () => {
       deniedChannel,
     ],
   ] satisfies AuthorizeCase[])("%s", async (_name, ctx, request, expected) => {
-    await expect(
-      authorizeSlackSystemEventSender({ ctx: makeAuthorizeCtx(ctx), ...request }),
-    ).resolves.toEqual(expected);
+    await expect(authorizeSystemEvent(ctx, request)).resolves.toEqual(expected);
   });
 
   it("does not use pairing-store allowFrom for MPIM system events", async () => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["U_ATTACKER"]);
-    const result = await authorizeSlackSystemEventSender({
-      ctx: makeAuthorizeCtx({
+    const result = await authorizeSystemEvent(
+      {
         allowFrom: [],
         dmPolicy: "pairing",
         resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
-      }),
-      senderId: "U_ATTACKER",
-      channelId: "G_MPIM",
-    });
+      },
+      { senderId: "U_ATTACKER", channelId: "G_MPIM" },
+    );
 
     expect(result).toEqual({
       allowed: false,
@@ -489,9 +486,7 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
       { allowed: true, channelType: "group", channelName: "mystery" },
     ],
   ] satisfies AuthorizeCase[])("%s", async (_name, ctx, request, expected) => {
-    await expect(
-      authorizeSlackSystemEventSender({ ctx: makeAuthorizeCtx(ctx), ...request }),
-    ).resolves.toEqual(expected);
+    await expect(authorizeSystemEvent(ctx, request)).resolves.toEqual(expected);
   });
 });
 

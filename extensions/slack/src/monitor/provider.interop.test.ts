@@ -364,16 +364,12 @@ describe("slack socket reconnect helpers", () => {
 
     publishSlackDisconnectedStatus(setStatus);
 
-    expect(setStatus.mock.calls).toEqual([
-      [
-        {
-          connected: false,
-          lifecycle: "recovering",
-          lastDisconnect: { at: 1_711_406_402_000 },
-          lastError: null,
-        },
-      ],
-    ]);
+    expect(setStatus).toHaveBeenCalledExactlyOnceWith({
+      connected: false,
+      lifecycle: "recovering",
+      lastDisconnect: { at: 1_711_406_402_000 },
+      lastError: null,
+    });
   });
 
   it("warns once when Slack reports a shared Socket Mode app token", () => {

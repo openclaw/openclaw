@@ -27,90 +27,41 @@ function responseTexts(mock: ReturnType<typeof vi.fn>): unknown[] {
   );
 }
 
-function createPolicyHarness(overrides?: {
-  channelId?: string;
-  channelName?: string;
-  allowFrom?: string[];
-  useAccessGroups?: boolean;
-  channelAllowed?: boolean;
-  slashEphemeral?: boolean;
-  slashCommandEnabled?: boolean;
-  teamId?: string;
-  installationIdentity?:
-    | { kind: "workspace"; teamId: string }
-    | { kind: "enterprise"; enterpriseId: string };
-  shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
-  resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
-}) {
-  const commands = new Map<unknown, (args: unknown) => Promise<void>>();
+function createPolicyHarness(
+  overrides: Parameters<typeof createArgMenusHarness>[1] & {
+    channelId?: string;
+    channelName?: string;
+    allowFrom?: string[];
+    useAccessGroups?: boolean;
+    channelAllowed?: boolean;
+    slashEphemeral?: boolean;
+    slashCommandEnabled?: boolean;
+    shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
+    resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
+  } = {},
+) {
+  const harness = createArgMenusHarness({ commands: { native: false } }, overrides);
   const postMessage = vi.fn().mockResolvedValue({ ok: true, ts: "123.456" });
-  const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
-  const listenerClient = { chat: { postMessage, postEphemeral } };
   const runtimeError = vi.fn();
-  const installationIdentity = overrides?.installationIdentity ?? {
-    kind: "workspace" as const,
-    teamId: overrides?.teamId ?? "T1",
-  };
-  const boltContext =
-    installationIdentity.kind === "enterprise"
-      ? {
-          teamId: overrides?.teamId,
-          enterpriseId: installationIdentity.enterpriseId,
-          isEnterpriseInstall: true,
-        }
-      : { teamId: installationIdentity.teamId, isEnterpriseInstall: false };
-  const app = {
-    client: listenerClient,
-    command: (name: unknown, handler: (args: unknown) => Promise<void>) => {
-      commands.set(name, async (args) => {
-        const typed = args as { context?: Record<string, unknown>; client?: unknown };
-        await handler({
-          ...typed,
-          context: { ...boltContext, ...typed.context },
-          client: typed.client ?? listenerClient,
-        });
-      });
-    },
-  };
-
-  const channelId = overrides?.channelId ?? "C_UNLISTED";
-  const channelName = overrides?.channelName ?? "unlisted";
-
-  const ctx = {
-    cfg: { commands: { native: false } },
+  const channelId = overrides.channelId ?? "C_UNLISTED";
+  const channelName = overrides.channelName ?? "unlisted";
+  Object.assign(harness.app.client.chat, { postMessage });
+  const ctx = Object.assign(harness.ctx, {
     runtime: { error: runtimeError },
-    botToken: "bot-token",
-    botUserId: "bot",
-    teamId: installationIdentity.kind === "enterprise" ? "" : installationIdentity.teamId,
-    installationIdentity,
-    allowFrom: overrides?.allowFrom ?? ["*"],
-    dmEnabled: true,
-    dmPolicy: "open",
-    groupDmEnabled: false,
-    groupDmChannels: [],
-    defaultRequireMention: true,
-    groupPolicy: "open",
-    useAccessGroups: overrides?.useAccessGroups ?? true,
-    slashCommand: {
-      enabled: overrides?.slashCommandEnabled ?? true,
-      name: "openclaw",
-      ephemeral: overrides?.slashEphemeral ?? true,
-      sessionPrefix: "slack:slash",
-    },
-    textLimit: 4000,
-    app,
-    isChannelAllowed: vi.fn(() => overrides?.channelAllowed ?? true),
+    allowFrom: overrides.allowFrom ?? ["*"],
+    useAccessGroups: overrides.useAccessGroups ?? true,
+    isChannelAllowed: vi.fn(() => overrides.channelAllowed ?? true),
     shouldDropMismatchedSlackEvent: (body: unknown) =>
-      overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
+      overrides.shouldDropMismatchedSlackEvent?.(body) ?? false,
     resolveChannelName:
-      overrides?.resolveChannelName ?? (async () => ({ name: channelName, type: "channel" })),
-    resolveUserName: async () => ({ name: "Ada" }),
-  };
-
-  Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
+      overrides.resolveChannelName ?? (async () => ({ name: channelName, type: "channel" })),
+  });
+  Object.assign(ctx.slashCommand, {
+    enabled: overrides.slashCommandEnabled ?? true,
+    ephemeral: overrides.slashEphemeral ?? true,
+  });
   const account = { accountId: "acct", config: { commands: { native: false } } } as unknown;
-
-  return { commands, ctx, account, postMessage, runtimeError, channelId, channelName };
+  return { ...harness, ctx, account, postMessage, runtimeError, channelId, channelName };
 }
 
 async function runSlashHandler(
