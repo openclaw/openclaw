@@ -2787,101 +2787,117 @@ describe("subagent registry lifecycle hardening", () => {
     waitForLifecycleState,
   });
 
-  it("persists collector completion and skips announce delivery", async () => {
+  it.each([
+    { name: "kept collector", collect: true, cleanup: "keep" },
+    { name: "deleted collector", collect: true, cleanup: "delete" },
+    { name: "deleted session", collect: false, cleanup: "delete" },
+  ] as const)("cleans up a $name without announcing", async ({ collect, cleanup }) => {
     const entry = createRunEntry({
       childSessionIdentity: { ...childSessionIdentity },
       expectsCompletionMessage: false,
-      retainAttachmentsOnKeep: true,
-      collect: true,
-      groupId: "swarm:test",
-    });
-    const runSubagentAnnounceFlow = deliveredAnnounce();
-
-    const controller = createLifecycleController({
-      entry,
-      runSubagentAnnounceFlow,
-      captureSubagentCompletionReply: vi.fn(async () => "raw collector result"),
-    });
-
-    await expect(
-      completeRun(controller, entry, { triggerCleanup: true, terminalReply: undefined }),
-    ).resolves.toBeUndefined();
-
-    expect(browserCleanupMocks.cleanup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKeys: [entry.childSessionKey],
-        onWarn: expect.any(Function),
-      }),
-    );
-    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(readLifecycleRun(entry).delivery?.status === "delivered").toBe(false);
-    await waitForCleanup(entry);
-    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
-      "raw collector result",
-    );
-    expect(readLifecycleRun(entry).collectorCompletion).toEqual({ status: "done" });
-    expect(readLifecycleRun(entry).delivery?.status).toBe("not_required");
-    expect(readLifecycleRun(entry).delivery?.announcedAt).toBeUndefined();
-  });
-
-  it("deletes collector session resources while retaining the waitable record", async () => {
-    const entry = createRunEntry({
-      childSessionIdentity: { ...childSessionIdentity },
-      requesterTurnRunId: "run-requester",
-      cleanup: "delete",
-      expectsCompletionMessage: false,
-      collect: true,
-      groupId: "swarm:test",
+      cleanup,
+      ...(collect
+        ? {
+            collect,
+            groupId: "swarm:test",
+            ...(cleanup === "delete"
+              ? { requesterTurnRunId: "run-requester" }
+              : { retainAttachmentsOnKeep: true }),
+          }
+        : { spawnMode: "session" }),
     });
     const runs = runsById(entry);
+    let finalPostimage: SubagentRunRecord | undefined;
+    const runSubagentAnnounceFlow = deliveredAnnounce();
     const notifyContextEngineSubagentEnded = vi.fn(async () => {});
     const controller = createLifecycleController({
       entry,
       runs,
+      runSubagentAnnounceFlow,
       notifyContextEngineSubagentEnded,
-      captureSubagentCompletionReply: vi.fn(async () => "raw collector result"),
+      beforeWrite: ({ postimages }) => {
+        for (const row of postimages.values()) {
+          if (row) {
+            finalPostimage = row;
+          }
+        }
+      },
+      ...(collect
+        ? { captureSubagentCompletionReply: vi.fn(async () => "raw collector result") }
+        : {}),
     });
 
-    await completeRun(controller, entry, { triggerCleanup: true, terminalReply: undefined });
-
-    await waitForCleanup(entry);
-    await waitForLifecycleState(() =>
-      expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
-        method: "sessions.delete",
-        params: {
-          key: entry.childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-          agentId: "main",
-          expectedSessionId: "child-session-id",
-          expectedLifecycleRevision: "child-lifecycle-revision",
-        },
-        timeoutMs: 10_000,
-        prepareDispatchCurrent: expect.any(Function),
-        assertDispatchCurrent: expect.any(Function),
+    await expect(
+      completeRun(controller, entry, {
+        triggerCleanup: true,
+        ...(collect ? { terminalReply: undefined } : {}),
       }),
+    ).resolves.toBeUndefined();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    if (cleanup === "delete") {
+      await waitForLifecycleState(() =>
+        expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+          method: "sessions.delete",
+          params: {
+            key: entry.childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: !collect,
+            agentId: "main",
+            expectedSessionId: "child-session-id",
+            expectedLifecycleRevision: "child-lifecycle-revision",
+          },
+          timeoutMs: 10_000,
+          prepareDispatchCurrent: expect.any(Function),
+          assertDispatchCurrent: expect.any(Function),
+        }),
+      );
+    }
+    if (!collect) {
+      expect(finalPostimage?.delivery?.status === "delivered").toBe(false);
+      await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+      expect(finalPostimage?.delivery?.announcedAt).toBeUndefined();
+      return;
+    }
+
+    if (cleanup === "keep") {
+      expect(readLifecycleRun(entry).delivery?.status === "delivered").toBe(false);
+    }
+    await waitForCleanup(entry);
+    const current = readLifecycleRun(entry);
+    expect(current.collectorCompletion).toEqual({ status: "done" });
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
+      "raw collector result",
     );
-    await waitForLifecycleState(() =>
-      expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith(
-        {
-          childSessionKey: entry.childSessionKey,
-          reason: "deleted",
-          agentDir: entry.agentDir,
-          workspaceDir: entry.workspaceDir,
-        },
-        { isCurrent: expect.any(Function), prepareCurrent: expect.any(Function) },
-      ),
-    );
-    expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
-      expect.any(Function),
-    );
-    const retained = loadSubagentRegistryFromSqlite().get(entry.runId);
-    expect(readLifecycleRun(entry).collectorCompletion).toEqual({ status: "done" });
-    expect(retained?.completion?.resultText).toBe("raw collector result");
-    expect(readLifecycleRun(entry).completion?.required).toBe(false);
-    expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
-    expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
+    if (cleanup === "keep") {
+      expect(browserCleanupMocks.cleanup).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKeys: [entry.childSessionKey],
+          onWarn: expect.any(Function),
+        }),
+      );
+      expect(current.delivery?.status).toBe("not_required");
+      expect(current.delivery?.announcedAt).toBeUndefined();
+    } else {
+      await waitForLifecycleState(() =>
+        expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith(
+          {
+            childSessionKey: entry.childSessionKey,
+            reason: "deleted",
+            agentDir: entry.agentDir,
+            workspaceDir: entry.workspaceDir,
+          },
+          { isCurrent: expect.any(Function), prepareCurrent: expect.any(Function) },
+        ),
+      );
+      expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
+        expect.any(Function),
+      );
+      const settled = readLifecycleRun(entry);
+      expect(settled.completion?.required).toBe(false);
+      expect(settled.requesterSettleWake).toBeUndefined();
+      expect(settled.retireAfterRequesterTurn).toBeUndefined();
+    }
   });
 
   it.each(["tool-only success", "provider failure", "missing output"] as const)(
@@ -2946,55 +2962,6 @@ describe("subagent registry lifecycle hardening", () => {
       }
     },
   );
-
-  it("archives delete-mode sessions when completion messages are disabled", async () => {
-    let finalPostimage: SubagentRunRecord | undefined;
-    const persist = vi.fn(({ postimages }: LifecycleFixtureWrite) => {
-      for (const row of postimages.values()) {
-        if (row) {
-          finalPostimage = row;
-        }
-      }
-    });
-    const entry = createRunEntry({
-      cleanup: "delete",
-      expectsCompletionMessage: false,
-      spawnMode: "session",
-      childSessionIdentity: { ...childSessionIdentity },
-    });
-    const runs = runsById(entry);
-    const runSubagentAnnounceFlow = deliveredAnnounce();
-
-    const controller = createLifecycleController({
-      entry,
-      runs,
-      beforeWrite: persist,
-      runSubagentAnnounceFlow,
-    });
-
-    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
-
-    await waitForLifecycleState(() =>
-      expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
-        method: "sessions.delete",
-        params: {
-          key: entry.childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: true,
-          agentId: "main",
-          expectedSessionId: "child-session-id",
-          expectedLifecycleRevision: "child-lifecycle-revision",
-        },
-        timeoutMs: 10_000,
-        prepareDispatchCurrent: expect.any(Function),
-        assertDispatchCurrent: expect.any(Function),
-      }),
-    );
-    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(finalPostimage?.delivery?.status === "delivered").toBe(false);
-    await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
-    expect(finalPostimage?.delivery?.announcedAt).toBeUndefined();
-  });
 
   it("finishes old cleanup without deleting a newer session generation", async () => {
     const entry = createRunEntry({
