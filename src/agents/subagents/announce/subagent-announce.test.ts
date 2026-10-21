@@ -49,17 +49,16 @@ vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
   resolveSessionStorePathCore: () => "/tmp/sessions.json",
 }));
 
-vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-announce-delivery.runtime.js")>()),
-  ...(await createSubagentAnnounceDeliveryRuntimeMock({
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
     callGateway: (request: unknown) => callGatewayMock(request),
     getRuntimeConfig: () => mockConfig,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
     resolveMainSessionKey: () => "agent:main:main",
     resolveSessionStorePathCore: () => "/tmp/sessions.json",
     isSessionRunActive: () => false,
-  })),
-}));
+  }),
+);
 
 // mock-isolation: Announce orchestration uses scripted Gateway outcomes and requester records instead of the delivery runtime.
 vi.mock("./subagent-announce-delivery.js", () => ({
@@ -203,7 +202,6 @@ describe("subagent announce seam flow", () => {
 
   it.each([
     { roundOneReply: "  child result  ", spawnMode: undefined },
-    { roundOneReply: "child result", spawnMode: undefined },
     { roundOneReply: "completed", spawnMode: "session" as const },
   ])(
     "delivers the result and deletes the encoded child owner: %j",

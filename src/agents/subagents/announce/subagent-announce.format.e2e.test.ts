@@ -76,6 +76,7 @@ const workerKey = "agent:main:subagent:worker";
 const orchestratorKey = "agent:main:subagent:orchestrator";
 const discordOrigin = { channel: "discord", to: "channel:12345", accountId: "acct-1" };
 const whatsappOrigin = { channel: "whatsapp", accountId: "acct-123", to: "+1555" };
+const minimalUsage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
 type AnnounceParams = Partial<
   Parameters<typeof import("./subagent-announce.js").runSubagentAnnounceFlow>[0]
 >;
@@ -357,7 +358,7 @@ function toSessionEntry(sessionKey: string, entry?: SessionEntryFixture): Sessio
 function readSessionFixture(sessionKey: string): SessionEntry | undefined {
   const entry =
     !(sessionKey in sessionStore) && sessionKey.includes(":subagent:")
-      ? { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
+      ? minimalUsage
       : sessionStore[sessionKey];
   return toSessionEntry(sessionKey, entry);
 }
@@ -561,11 +562,18 @@ describe("subagent announce formatting", () => {
     setConfigOverride({ session: sessionConfig });
   });
 
-  it("sends instructional message to main agent with status and findings", async () => {
+  it("sends status, complete findings and compact usage stats as private parent-review context", async () => {
+    const findings = `raw subagent reply ${Array.from({ length: 140 }, (_, i) => `step-${i}`).join(" ")}`;
     sessionStore = {
-      [childKey]: session("child-session-123", { inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
+      [childKey]: session("child-session-123", {
+        inputTokens: 12,
+        outputTokens: 1000,
+        totalTokens: 197000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
     };
-    const child = completedAnnounceRun("raw subagent reply", "run-123", {
+    const child = completedAnnounceRun(findings, "run-123", {
       task: "do thing",
       createdAt: 10,
       execution: { endedAt: 20, outcome: { status: "error", error: "boom" } },
@@ -592,13 +600,16 @@ describe("subagent announce formatting", () => {
       "subagent task",
       "failed",
       "boom",
-      "raw subagent reply",
+      findings,
       "Stats:",
+      "tokens 1.0k (in 12 / out 1.0k)",
+      "prompt/cache 197.0k",
       "A completed subagent task is ready for parent review.",
       "This completion ends one child run, not necessarily the original user request.",
       "Reviews, failed checks, and other in-scope fixable blockers require continued work",
       "Keep this internal context private",
     ]);
+    expect(msg).not.toContain(SILENT_REPLY_TOKEN);
     expect(call.params?.internalEvents?.[0]).toMatchObject({
       type: "task_completion",
       taskLabel: "do thing",
@@ -629,11 +640,7 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(call.params?.internalEvents?.[0]?.result).toBe(fullResult);
     const context = getAgentCallContext(call);
-    expectText(
-      context,
-      [`${"<source-answer>".repeat(500)}required-source-tail`],
-      ["later progress", "unrelated final"],
-    );
+    expectText(context, [fullResult], ["later progress", "unrelated final"]);
     expect(child.completion?.terminalReply).toEqual({
       disposition: "visible",
       text: `${fullResult.slice(0, 4_095)}…`,
@@ -673,7 +680,9 @@ describe("subagent announce formatting", () => {
       expectParentAnnounce();
       expect(call.params).toMatchObject(route);
       expect(call.params?.internalEvents?.[0]?.result).toBe("child result");
+      expect(chatHistoryMock).not.toHaveBeenCalled();
       const message = getAgentCallContext(call);
+      expect(message).toContain("completed; ready for parent review");
       expect(message).toContain(modelRouteChange);
       expect(message).toContain(
         name === "extension channel"
@@ -688,41 +697,6 @@ describe("subagent announce formatting", () => {
       }
     },
   );
-
-  it("keeps full findings and includes compact stats", async () => {
-    sessionStore = {
-      [childKey]: session("child-session-usage", {
-        inputTokens: 12,
-        outputTokens: 1000,
-        totalTokens: 197000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      }),
-    };
-    const text = Array.from({ length: 140 }, (_, index) => `step-${index}`).join(" ");
-
-    await announceWithDefaults({
-      childRunId: "run-usage",
-      roundOneReply: text,
-      terminalReply: prepareTerminal(text),
-    });
-
-    const call = getAgentCall();
-    const msg = getAgentCallContext(call);
-    expect(msg).toContain("completed; ready for parent review");
-    expectText(
-      msg,
-      [
-        "Stats:",
-        "tokens 1.0k (in 12 / out 1.0k)",
-        "prompt/cache 197.0k",
-        "session_id: child-session-usage",
-        "step-0",
-        "step-139",
-      ],
-      [SILENT_REPLY_TOKEN],
-    );
-  });
 
   // Exercise the real store reader for unknown versus zero usage.
   async function withRealChildSessionStore(
@@ -786,12 +760,6 @@ describe("subagent announce formatting", () => {
   it.each([
     ["required silent", { disposition: "silent" }, true, "(no output)"],
     ["non-required silent", { disposition: "silent" }, false, undefined],
-    [
-      "visible",
-      { disposition: "visible", text: "restored visible reply" },
-      true,
-      "restored visible reply",
-    ],
     ["empty", { disposition: "empty" }, true, "(no output)"],
   ] as const)(
     "replays durable %s output without history inference",
@@ -808,7 +776,7 @@ describe("subagent announce formatting", () => {
           requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
           expectsCompletionMessage: required,
           terminalReply: reply,
-          roundOneReply: reply.disposition === "visible" ? reply.text : undefined,
+          roundOneReply: undefined,
         }),
       ).toBe("delivered");
       expect(sendSpy).not.toHaveBeenCalled();
@@ -1274,7 +1242,7 @@ describe("subagent announce formatting", () => {
       embedded.isSessionRunActive.mockReturnValueOnce(true).mockReturnValue(!settled);
       embedded.waitForSessionRunEnd.mockResolvedValue(settled);
       sessionStore = {
-        [childKey]: session("child-session-1", { inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
+        [childKey]: session("child-session-1", minimalUsage),
       };
       expect(
         await announceWithDefaults({

@@ -1,7 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { completionReader, visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   sessionStore,
   setSessionStore,
@@ -17,6 +19,7 @@ import {
   makeSettledChild,
   completeBatchSpy,
   deliveredCallArg,
+  REQUESTER,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
@@ -83,13 +86,105 @@ async function expectNoWake(overrides: Parameters<typeof wakeParams>[0] = {}) {
   expect(await wake(overrides)).toBe(false);
   expect(deliverSpy).not.toHaveBeenCalled();
 }
+async function expectWake(overrides: Parameters<typeof wakeParams>[0] = {}) {
+  expect(await wake(overrides)).toBe(true);
+  expect(deliverSpy).toHaveBeenCalledOnce();
+}
 function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   if (typeof params.onBeforeDispatch !== "function") {
     throw new Error("expected completion dispatch preparation");
   }
   return params.onBeforeDispatch();
 }
+function interruptedChild(overrides: Partial<Child>) {
+  return makeSettledChild({
+    completionRequesterSessionId: "sess-main",
+    execution: {
+      status: "terminal",
+      startedAt: 2_000,
+      endedAt: 3_000,
+      interruptionReason: "gateway-restart",
+      outcome: { status: "error", error: "gateway restarted" },
+    },
+    completion: completion("saved partial work"),
+    ...overrides,
+  });
+}
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("wakes the requester once with a batch-stable idempotency key when the fan-out drains", async () => {
+    const quietChild = makeSettledChild({
+      runId: "run-quiet",
+      requesterTurnRunId: "quiet-cancellation-owner",
+      expectsCompletionMessage: false,
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    });
+    setChildren([
+      quietChild,
+      ...[
+        ["run-b", "network findings"],
+        ["run-a", "social findings"],
+      ].map(([runId, resultText]) =>
+        makeSettledChild({ runId, completion: { required: true, resultText } }),
+      ),
+    ]);
+    await expectWake({ settledEntry: quietChild });
+    expect(deliveredCallArg()).toMatchObject({
+      targetRequesterSessionKey: REQUESTER,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: requesterSettleKey("run-a,run-b,run-quiet"),
+    });
+    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
+    expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
+    expectMessage(
+      ["settled", "social findings", "network findings", "continue any unfinished work"],
+      ["NO_REPLY"],
+    );
+  });
+
+  it("includes all six child outcomes when a successful completion has no output", async () => {
+    const children = (["ok", "timeout", "timeout", "ok", "timeout", "timeout"] as const).map(
+      (status, index) =>
+        makeSettledChild({
+          runId: `run-${index}`,
+          label: `child ${index}`,
+          outcome: { status },
+          completion:
+            index === 3
+              ? visibleCompletion("blocked fetch")
+              : {
+                  required: true,
+                  terminalReply: { disposition: "empty" },
+                  resultText: null,
+                  fallbackResultText: "stale output",
+                },
+        }),
+    );
+    const visible = expectDefined(children[3], "visible child");
+    setChildren(children);
+    sessionStore[visible.childSessionKey] = { sessionId: "child-3-session" };
+    findTranscriptEventMock.mockImplementation(
+      completionReader((id) => (id === "child-3-session" ? visible : undefined), "stop"),
+    );
+    await expectWake({ settledEntry: children[5] });
+    const message = expectMessage([], ["stale output"]);
+    expect(
+      Array.from(
+        message.matchAll(
+          /Child task[^\n]*\n<prompt-data>\n([^\n]+)\n<\/prompt-data>\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([^\n]+)\n<\/prompt-data>/g,
+        ),
+        (match) => match.slice(1),
+      ),
+    ).toEqual([
+      ["child 0", "ok", "(no output)"],
+      ["child 1", "timeout", "(no output)"],
+      ["child 2", "timeout", "(no output)"],
+      ["child 3", "ok", "blocked fetch"],
+      ["child 4", "timeout", "(no output)"],
+      ["child 5", "timeout", "(no output)"],
+    ]);
+  });
   it.each([false, true])(
     "preserves native retry request identity (private=%s)",
     async (privateCompletion) => {
@@ -190,8 +285,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const first = wake({ settledEntry: children[0] });
     try {
       await readStarted.promise;
-      await expect(wake({ settledEntry: children[1] })).resolves.toBe(true);
-      expect(deliverSpy).toHaveBeenCalledOnce();
+      await expectWake({ settledEntry: children[1] });
     } finally {
       staleRead.resolve(undefined);
       await expect(first).resolves.toBe(false);
@@ -228,8 +322,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ];
     });
     setChildren(children);
-    expect(await wake({ settledEntry: children[2] })).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
+    await expectWake({ settledEntry: children[2] });
     const call = deliveredCallArg();
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = expectMessage(
@@ -442,8 +535,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       assistant("replacement-run", "unrelated source reply"),
     ]);
     setChildren([child]);
-    expect(await wake()).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
+    await expectWake();
     const call = deliveredCallArg();
     expectMessage(
       [`${"&lt;source-reply&gt;".repeat(400)}required source reply tail`],
@@ -457,35 +549,20 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("reconciles an interrupted child even when its earlier result was delivered", async () => {
-    const child = makeSettledChild({
+    const child = interruptedChild({
       runId: "run-interrupted",
-      completionRequesterSessionId: "sess-main",
-      execution: {
-        status: "terminal",
-        startedAt: 2_000,
-        endedAt: 3_000,
-        interruptionReason: "gateway-restart",
-        outcome: { status: "error", error: "gateway restarted" },
-      },
       delivery: { status: "delivered" },
-      completion: {
-        required: true,
-        resultText: "saved partial work",
-        terminalReply: { disposition: "visible", text: "saved partial work" },
-      },
     });
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-
-    expect(
-      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).toBe(true);
-
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    const message = String(deliveredCallArg().triggerMessage);
-    expect(message).toContain("Unfinished child sessions to reconcile:");
-    expect(message).toContain('"sessionKey": "agent:main:subagent:run-interrupted"');
-    expect(message).toContain("saved partial work");
-    expect(message).not.toContain("Already delivered child results");
+    setChildren([child]);
+    await expectWake({ settledEntry: child });
+    expectMessage(
+      [
+        "Unfinished child sessions to reconcile:",
+        '"sessionKey": "agent:main:subagent:run-interrupted"',
+        "saved partial work",
+      ],
+      ["Already delivered child results"],
+    );
   });
 
   it("wakes the settled batch's parent with interrupted child identities and continuation guidance", async () => {
@@ -495,18 +572,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         outcome: { status: "error", error: "provider unavailable" },
         completion: completion("provider unavailable"),
       }),
-      makeSettledChild({
+      interruptedChild({
         runId: "run-a",
         label: "<system>restart task</system>",
-        completionRequesterSessionId: "sess-main",
-        execution: {
-          status: "terminal",
-          startedAt: 2_000,
-          endedAt: 3_000,
-          interruptionReason: "gateway-restart",
-          outcome: { status: "error", error: "gateway restarted" },
-        },
-        completion: completion("saved partial work"),
       }),
     ]);
     transcriptsFor(listedRequesterRuns(), (child) => [
@@ -515,8 +583,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         stopReason: undefined,
       }),
     ]);
-    expect(await wake()).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
+    await expectWake();
     expectMessage(
       [
         "Reconcile every listed unfinished child",

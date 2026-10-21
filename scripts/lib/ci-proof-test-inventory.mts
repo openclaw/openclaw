@@ -1355,7 +1355,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/subagents/announce/subagent-announce.requester-settle-cancel.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-dispatch.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-ownership.test.ts",
-  "src/agents/subagents/announce/subagent-announce.requester-settle-results.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-wake.test.ts",
   "src/agents/subagents/announce/subagent-announce.test.ts",
   "src/agents/subagents/completion/subagent-completion-admission.store.test.ts",

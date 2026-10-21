@@ -31,18 +31,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     );
   });
 
-  const settledPrivateChildren = ({
-    mixed,
-    yielded,
-    single,
-    marked = true,
-  }: {
-    mixed: boolean;
-    yielded: boolean;
-    single: boolean;
-    marked?: boolean;
-  }) =>
-    (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) =>
+  type PrivateOptions = Partial<Record<"mixed" | "yielded" | "single" | "marked", boolean>>;
+  const settledPrivateChildren = ({ mixed, yielded, single, marked = true }: PrivateOptions) => {
+    const children = (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) =>
       makeSettledChild({
         runId,
         ...(!mixed || index === 0
@@ -61,6 +52,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
           : { status: "pending", attemptCount: 0 },
       }),
     );
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    return children;
+  };
 
   it.each([
     { name: "pending private pair", mixed: false, single: false, yielded: false },
@@ -68,16 +62,16 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     { name: "yielded private child", mixed: false, single: true, yielded: true },
     { name: "yielded mixed pair", mixed: true, single: false, yielded: true },
   ])("preserves the admitted reply policy: $name", async ({ mixed, single, yielded }) => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(
-      settledPrivateChildren({ mixed, yielded, single }),
-    );
+    settledPrivateChildren({ mixed, yielded, single });
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
     expect(call.completionRequesterSessionId).toBe("sess-main");
-    // The conversation's reply policy decides whether a visible update is owed.
     expect(call.requireVisibleReply).toBeUndefined();
     expect(call.completionTarget).toBe(yielded ? undefined : "parent");
+    if (yielded && single) {
+      expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
+    }
     const trigger = String(call.triggerMessage);
     expect(trigger).toContain("private marker");
     if (yielded) {
@@ -98,17 +92,20 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
 
   // The released yield writer stored private batches without the marker; after an
   // upgrade they keep their admitted private policy under the same stable identity.
-  it.each([false, true])("preserves a batch's policy and identity (marked=%s)", async (marked) => {
-    const children = settledPrivateChildren({ mixed: false, yielded: true, single: true, marked });
+  it("preserves an unmarked batch's private policy and identity across upgrades", async () => {
+    const children = settledPrivateChildren({
+      yielded: true,
+      single: true,
+      marked: false,
+    });
     children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
     const call = deliveredCallArg();
-    expect(call.completionTarget).toBe(marked ? undefined : "parent");
+    expect(call).toMatchObject({
+      completionTarget: "parent",
+      completionRequesterSessionId: "sess-main",
+    });
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
-    if (!marked) {
-      expect(call.completionRequesterSessionId).toBe("sess-main");
-    }
   });
 
   // `/new` keeps the session id and rotates its lifecycle revision. A deliverable
@@ -120,9 +117,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     "does not pass private findings to a replacement requester incarnation: $name",
     async ({ current }) => {
       setSessionStore({ [REQUESTER]: current });
-      const children = settledPrivateChildren({ mixed: false, yielded: true, single: true });
+      const children = settledPrivateChildren({ yielded: true, single: true });
       children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
-      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
       expect(deliverSpy).not.toHaveBeenCalled();
       expect(completeBatchSpy).toHaveBeenCalledWith(

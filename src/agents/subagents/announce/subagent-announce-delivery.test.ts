@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { InternalAgentTurnDispatchOptions } from "../../../gateway/agent-turn/internal-facade.types.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
@@ -282,6 +283,9 @@ const missingVisibleCompletion = {
 };
 const identifiedCompletion = (overrides: Parameters<typeof taskCompletionEvents>[0] = {}) =>
   taskCompletionEvents({ childSessionId: "child-session-id", ...overrides });
+const messageToolConfig = { messages: { groupChat: { visibleReplies: "message_tool" as const } } };
+const silentResult = { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
+const responseWithResult = (result: Record<string, unknown>) => ({ result });
 
 function expectSentMessage(
   sendMessage: typeof runtimeSendMessage,
@@ -414,6 +418,7 @@ type DeliveryFixtureParams = Partial<AnnouncementInput> & {
   sessionId?: string;
   currentRequesterSessionId?: string | null;
   requesterAbandonment?: "timeout" | "recovering_timeout";
+  requesterEntry?: SessionEntry;
   origin?: AnnouncementInput["directOrigin"];
   requesterOrigin?: AnnouncementInput["directOrigin"];
 };
@@ -442,6 +447,12 @@ const deliveryRoutes = {
     origin: { channel: "telegram", to: "123456789", accountId: "bot-1" },
     id: "announce-telegram-dm-fallback",
   },
+  private: {
+    key: "agent:worker:subagent:parent",
+    sessionId: "requester-subagent-session",
+    origin: undefined,
+    id: "announce-private-media-payload",
+  },
 };
 async function deliverFixture(
   routeName: keyof typeof deliveryRoutes,
@@ -455,6 +466,7 @@ async function deliverFixture(
     sessionId,
     currentRequesterSessionId,
     requesterAbandonment,
+    requesterEntry,
     origin: explicitOrigin,
     requesterOrigin,
     ...delivery
@@ -466,6 +478,15 @@ async function deliverFixture(
     callGateway,
     sendMessage,
     getRuntimeConfig: () => cfg,
+    ...(requesterEntry
+      ? {
+          loadRequesterSessionEntry: (key: string) => ({
+            cfg: {},
+            canonicalKey: key,
+            entry: requesterEntry,
+          }),
+        }
+      : {}),
     getRequesterSessionActivity: requesterActivity(
       currentRequesterSessionId === null
         ? undefined
@@ -603,9 +624,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   const deliveredPayload = (text: string) => ({
     result: { payloads: [{ text }], deliveryStatus: sentDeliveryStatus },
   });
-  const messageToolConfig = {
-    messages: { groupChat: { visibleReplies: "message_tool" as const } },
-  };
   const missingResult = { delivered: false, path: "direct", reason: "visible_reply_missing" };
   it.each<DeliveryCase>([
     {
@@ -686,30 +704,26 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "reports requester-agent delivery failure even when output stayed visible",
       route: "thread",
-      response: {
-        result: {
-          payloads: [{ text: "Tests passed and the PR is ready for review." }],
-          deliveryStatus: {
-            status: "failed",
-            errorMessage: "Slack send failed: channel not found",
-          },
+      response: responseWithResult({
+        payloads: [{ text: "Tests passed and the PR is ready for review." }],
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "Slack send failed: channel not found",
         },
-      },
+      }),
       expected: { delivered: false, path: "direct", error: "Slack send failed: channel not found" },
     },
     {
       name: "does not credit stale thread completions after no-visible-payload suppression",
       route: "thread",
-      response: {
-        result: {
-          payloads: [],
-          deliveryStatus: {
-            status: "suppressed",
-            reason: "no_visible_payload",
-            resultCount: 0,
-          },
+      response: responseWithResult({
+        payloads: [],
+        deliveryStatus: {
+          status: "suppressed",
+          reason: "no_visible_payload",
+          resultCount: 0,
         },
-      },
+      }),
       params: { isActive: true },
       expected: missingResult,
       gatewayCalls: 1,
@@ -787,23 +801,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "records a committed direct completion when the announce turn ends incomplete",
       route: "discord",
-      response: {
-        result: {
-          payloads: [],
-          deliveryStatus: { status: "failed", errorMessage: "Agent couldn't generate a response." },
-          didSendViaMessagingTool: true,
-          messagingToolSentTargets: [
-            {
-              tool: "message",
-              provider: "discord",
-              accountId: "acct-1",
-              to: "dm:U123",
-              text: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
-              sourceReplyFinal: true,
-            },
-          ],
-        },
-      },
+      response: responseWithResult({
+        payloads: [],
+        deliveryStatus: { status: "failed", errorMessage: "Agent couldn't generate a response." },
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            text: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
+            sourceReplyFinal: true,
+          },
+        ],
+      }),
       params: {
         sourceTool: "subagent_announce",
         internalEvents: identifiedCompletion({ result: "(no output)", noVisibleResult: true }),
@@ -817,10 +829,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   ])("$name", async ({ route, response, params, expected, sent, gateway, gatewayCalls, setup }) => {
     setup?.();
-    const callOrder: string[] = [];
-    const callGateway = createGatewayMock(response ?? { result: { payloads: [] } }, () => {
-      callOrder.push("gateway");
-    });
+    const callGateway = createGatewayMock(response ?? { result: { payloads: [] } });
     const sendMessage = createSendMessageMock();
     const result = await deliverFixture(route, {
       callGateway,
@@ -839,7 +848,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
     if (gatewayCalls !== undefined) {
       expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
-      expect(callOrder).toEqual(Array.from({ length: gatewayCalls }, () => "gateway"));
     }
   });
 
@@ -1141,11 +1149,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
   it.each<[string, Record<string, unknown>, string?]>([
     ["an attachment without usable media", { payloads: [{ attachments: [{}] }] }],
-    [
-      "non-subagent NO_REPLY",
-      { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
-      "agent_harness_task",
-    ],
+    ["non-subagent NO_REPLY", silentResult, "agent_harness_task"],
     ["committed session spawn", { payloads: [], ...committedSessionSpawnEvidence }],
     ["committed cron add", { payloads: [], successfulCronAdds: 1 }],
   ])(
@@ -1267,6 +1271,30 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     noAttachments?: boolean;
   }>([
     {
+      name: "private generated media on the owning session agent loop",
+      route: "private",
+      sourceTool: "image_generate",
+      options: {
+        requesterIsSubagent: true,
+        requesterEntry: {
+          sessionId: "requester-subagent-session",
+          updatedAt: 1,
+          chatType: "channel",
+        },
+        runtimeConfig: messageToolConfig,
+      },
+      events: imageCompletionEvents({
+        taskLabel: "private proof image",
+        result: "Generated 1 image.\nMEDIA:/tmp/generated-private.png",
+        mediaUrls: ["/tmp/generated-private.png"],
+        replyInstruction: "Tell the user the image is ready and include the generated media.",
+      }),
+      expected: {
+        route: { channel: "webchat", to: "agent:worker:subagent:parent", chatType: "direct" },
+        sourceReplyDeliveryMode: "automatic",
+      },
+    },
+    {
       name: "video completion without opt-in or direct delivery",
       route: "discord",
       sourceTool: "video_generate",
@@ -1344,7 +1372,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       options: {
         isActive: true,
         directIdempotencyKey: "announce-channel-media-handoff-locked",
-        runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+        runtimeConfig: messageToolConfig,
       },
       events: imageCompletionEvents({
         childSessionKey: "image_generate:task-locked",
@@ -1437,67 +1465,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
-  it("keeps private generated media on the owning session agent loop", async () => {
-    const callGateway = createGatewayMock();
-    const sendMessage = createSendMessageMock();
-    testing.setDepsForTest({
-      callGateway,
-      getRequesterSessionActivity: requesterActivity("requester-subagent-session", false),
-      getRuntimeConfig: () => ({ messages: { groupChat: { visibleReplies: "message_tool" } } }),
-      loadRequesterSessionEntry: (sessionKey) => ({
-        cfg: {},
-        entry: {
-          sessionId: "requester-subagent-session",
-          updatedAt: 1,
-          chatType: "channel",
-        },
-        canonicalKey: sessionKey,
-      }),
-      sendMessage,
-    });
-
-    const result = await deliverSubagentAnnouncement({
-      requesterSessionKey: "agent:worker:subagent:parent",
-      targetRequesterSessionKey: "agent:worker:subagent:parent",
-      triggerMessage: "child done",
-      requesterIsSubagent: true,
-      expectsCompletionMessage: true,
-      bestEffortDeliver: true,
-      directIdempotencyKey: "announce-private-media-payload",
-      sourceTool: "image_generate",
-      internalEvents: imageCompletionEvents({
-        taskLabel: "private proof image",
-        result: "Generated 1 image.\nMEDIA:/tmp/generated-private.png",
-        mediaUrls: ["/tmp/generated-private.png"],
-        replyInstruction: "Tell the user the image is ready and include the generated media.",
-      }),
-      sourceRunId: "run-generated-media",
-    });
-
-    expectDeliveryPath(result, "queued");
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        route: {
-          channel: "webchat",
-          to: "agent:worker:subagent:parent",
-          chatType: "direct",
-        },
-        sourceReplyDeliveryMode: "automatic",
-      }),
-      expect.any(Number),
-      expectQueueContext(),
-    );
-    expect(sessionDeliveryQueueMocks.scheduleSessionDelivery).toHaveBeenCalledWith(
-      "session-delivery-media",
-      expectQueueContext(),
-    );
-  });
-
   const silentGatewayResult = {
-    payloads: [],
-    meta: { terminalReply: { disposition: "silent" } },
+    ...silentResult,
     deliveryStatus: sentDeliveryStatus,
   };
   type NoOutputCompletionCase = [
@@ -1510,7 +1479,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   it.each<NoOutputCompletionCase>([
     [
       "rejects missing automatic visible delivery",
-      { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
+      silentResult,
       missingVisibleCompletion,
       "automatic",
     ],
@@ -1575,8 +1544,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       directIdempotencyKey: "announce-channel-no-output",
       sourceTool: "subagent_announce",
       sourceSessionKey: childSessionKey,
-      runtimeConfig:
-        mode === "automatic" ? {} : { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      runtimeConfig: mode === "automatic" ? {} : messageToolConfig,
       internalEvents: taskCompletionEvents({
         childSessionKey,
         childSessionId: "child-session-id",
@@ -1606,7 +1574,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         callGateway,
         directIdempotencyKey: `announce-pending-message-tool-${state}`,
         sourceTool: "subagent_announce",
-        runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+        runtimeConfig: messageToolConfig,
         internalEvents: identifiedCompletion(),
       });
       expectRecordFields(

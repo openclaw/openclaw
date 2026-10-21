@@ -37,9 +37,6 @@ const findingsFor = (overrides: Partial<ChildCompletionRow>) =>
   buildChildCompletionFindings([makeChild(overrides)]);
 
 type OutputDeps = NonNullable<Parameters<typeof testing.setDepsForTest>[0]>;
-type ReadSessionEntry = (
-  ...args: Parameters<NonNullable<OutputDeps["readSubagentSessionEntry"]>>
-) => Awaited<ReturnType<NonNullable<OutputDeps["readSubagentSessionEntry"]>>>;
 
 function installOutputDeps(params: {
   messages: Array<unknown>;
@@ -114,34 +111,25 @@ describe("dedupeLatestChildCompletionRows", () => {
 
 describe("buildCompactAnnounceStatsLine", () => {
   it.each([
-    {
-      name: "rolls thousand-token stats over to the million unit",
-      usage: { inputTokens: 999_999, outputTokens: 0, totalTokens: 999_999 },
-      expected: "Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)",
-    },
-    {
-      name: "reports missing usage as unknown",
-      usage: {},
-      expected: "Stats: runtime n/a • tokens unknown",
-    },
-    {
-      name: "reports a fresh total without inventing directional counts",
-      usage: { totalTokens: 500, totalTokensFresh: true, totalTokensVersion: 1 },
-      expected: "Stats: runtime n/a • tokens 500 prompt/cache",
-    },
-  ])("$name", async ({ usage, expected }) => {
+    [
+      { inputTokens: 999_999, outputTokens: 0, totalTokens: 999_999 },
+      "Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)",
+    ],
+    [{}, "Stats: runtime n/a • tokens unknown"],
+    [
+      { totalTokens: 500, totalTokensFresh: true, totalTokensVersion: 1 },
+      "Stats: runtime n/a • tokens 500 prompt/cache",
+    ],
+  ] as const)("formats usage %j as %s", async (usage, expected) => {
     const readEntry = vi.fn(() => ({
       sessionId: "child-session",
       updatedAt: 0,
       ...usage,
     }));
     testing.setDepsForTest({
-      getRuntimeConfig: (() => ({
-        session: { store: "memory" },
-      })) as OutputDeps["getRuntimeConfig"],
-      readSubagentSessionEntry: readEntry as ReadSessionEntry,
-      resolveSessionStorePathCore: (() =>
-        "/tmp/openclaw-session-store") as OutputDeps["resolveSessionStorePathCore"],
+      getRuntimeConfig: () => ({ session: { store: "memory" } }),
+      readSubagentSessionEntry: readEntry,
+      resolveSessionStorePathCore: () => "/tmp/openclaw-session-store",
     });
     await expect(buildCompactAnnounceStatsLine({ sessionKey: childKey })).resolves.toBe(expected);
     expect(readEntry).toHaveBeenCalledOnce();
