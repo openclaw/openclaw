@@ -116,11 +116,14 @@ describe("Control UI build chunking", () => {
             codeSplitting: {
               ...controlUiCodeSplitting,
               // A stale capture must not pull a lazy page into the shared boot chunk.
-              groups: controlUiCodeSplitting.groups.map((group) =>
-                group.name === "control-ui-boot-shared"
-                  ? { ...group, test: (id: string) => id === devices || group.test(id) }
-                  : group,
-              ),
+              groups: controlUiCodeSplitting.groups.map((group) => ({
+                ...group,
+                // Exercise grouping below the production chunk-size floor.
+                minSize: 0,
+                ...(group.name === "control-ui-boot-shared"
+                  ? { test: (id: string) => id === devices || group.test(id) }
+                  : {}),
+              })),
             },
             strictExecutionOrder: true,
           },
@@ -152,6 +155,8 @@ describe("Control UI build chunking", () => {
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
     const pluginChunk = chunks.find((chunk) => pluginLoader in chunk.modules)!;
     const actionChunk = chunks.find((chunk) => pluginActions in chunk.modules)!;
+    const sharedChunk = chunks.find((chunk) => sharedUi in chunk.modules)!;
+    expect(actionChunk.fileName).toBe(sharedChunk.fileName);
     expect(staticImports(pluginChunk.fileName)).toContain(actionChunk.fileName);
     expect(staticImports(pluginChunk.fileName)).not.toContain(chatChunk.fileName);
     const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
