@@ -1,8 +1,26 @@
 import { createSignal, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import type { ConfirmDialogChoice, ConfirmDialogOptions } from "./confirm-dialog-types.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 
-export function ConfirmDialogView(props: {
+let confirmationActive = false;
+
+export function presentConfirmDialog(
+  options: ConfirmDialogOptions & { alternativeLabel?: string },
+): Promise<ConfirmDialogChoice> {
+  if (confirmationActive) {
+    return Promise.resolve(null);
+  }
+  confirmationActive = true;
+  return withPromiseModalHost<ConfirmDialogChoice>(
+    { signal: options.signal, value: null },
+    ({ render, finish }) => render(() => <ConfirmDialogView options={options} finish={finish} />),
+  ).finally(() => {
+    confirmationActive = false;
+  });
+}
+
+function ConfirmDialogView(props: {
   options: ConfirmDialogOptions & { alternativeLabel?: string };
   finish(value: ConfirmDialogChoice): void;
 }) {

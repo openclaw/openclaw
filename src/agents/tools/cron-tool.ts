@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
@@ -14,7 +13,6 @@ import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
-import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -36,6 +34,7 @@ import {
   readPositiveIntegerParam,
   readToolStringParam,
 } from "./common.js";
+import { createCronAutomationActions } from "./cron-tool-automation.js";
 import {
   isEmptyRecoveredCronPatch,
   readCronToolJob,
@@ -55,7 +54,10 @@ import {
 import { buildCronToolDescription } from "./cron-tool-description.js";
 import { createCronToolGatewayCaller } from "./cron-tool-gateway.js";
 import { CronToolOutputSchema } from "./cron-tool-output-schema.js";
-import { formatCronTerminalPresentation } from "./cron-tool-presentation.js";
+import {
+  buildCronSelfDescription,
+  formatCronTerminalPresentation,
+} from "./cron-tool-presentation.js";
 import {
   assertCronPacingInput,
   createCronToolSchema,
@@ -114,9 +116,12 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || action === "status" || action === "list") {
     return;
   }
-  if (["next_check", "get", "remove", "runs"].includes(action)) {
+  const invocationAction = ["next_check", "scratch_get", "scratch_set", "record_result"].includes(
+    action,
+  );
+  if (invocationAction || ["get", "remove", "runs"].includes(action)) {
     const id = readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
-    if (id === selfRemoveOnlyJobId || (action === "next_check" && !id)) {
+    if (id === selfRemoveOnlyJobId || (invocationAction && !id)) {
       return;
     }
   }
@@ -137,6 +142,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const assertStreamConfigCurrent = captureCronStreamPolicyConfigCurrentness(opts);
   const managementAuthority = bindCronManagementGrant(opts?.runId);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
+  const automation = createCronAutomationActions(opts);
+  const { activeRun, nextCheckEnabled, assertCurrent: assertCurrentRun } = automation;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
   const selfRemoveOnly = Boolean(readCronSelfRemoveOnlyJobId(opts));
@@ -149,7 +156,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       : selfRemoveOnly
         ? managementAuthority?.managementOnly
           ? "Inspect or remove only the current automation. Actions: list [includeDisabled] (enabled only by default), get jobId (saved state), remove jobId. Use the current job ID; other jobs and management actions are unavailable."
-          : 'Inspect or remove only the current automation. Actions: status; list [includeDisabled] (enabled only by default); get/runs/remove jobId; next_check in:"15m" for this paced run or at + agentTurn + explicit session:<key> continuation. A successful one-shot proposal rearms the same job from run end (minimum 2s); without one it completes normally. Use get with the current job ID to inspect its saved state. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.'
+          : buildCronSelfDescription({ activeRun, nextCheckEnabled })
         : managementAuthority?.managementOnly
           ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (enabled-only compact summaries by default; follow nextOffset); get jobId (full saved state, including streamStatus for a known watcher); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s; unfinished runs return runId); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true). To stop a saved watcher, use update with job:{enabled:false}, or open it on the Automations page and turn off its Active switch. This pauses the watcher without deleting its saved record. The enabled flag alone does not prove source termination; use get jobId to inspect state.streamStatus. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
           : buildCronToolDescription({ triggersEnabled }),
@@ -159,6 +166,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
       selfRemoveOnly,
+      activeRun,
+      nextCheckEnabled,
       management: managementAuthority
         ? managementAuthority.managementOnly
           ? "only"
@@ -167,6 +176,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     }),
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
+      assertCurrentRun?.();
       let streamExecPolicy: CronStreamExecPolicy | undefined;
       let streamExecutionApproval: CronStreamExecApprovalReceipt | undefined;
       const mutationResult = (result: unknown) =>
@@ -226,6 +236,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               agentId: callerAgentId,
               sessionKey: opts.agentSessionKey.trim(),
               turnSourceAccountId: opts.agentAccountId,
+              ...(assertCurrentRun ? { receiptAuthority: assertCurrentRun } : {}),
               ...(readCronSelfRemoveOnlyJobId(opts)
                 ? { cronSelfManagementJobId: readCronSelfRemoveOnlyJobId(opts) }
                 : {}),
@@ -283,6 +294,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
           requesterAuthority,
           operationSignal,
           readStreamExecPolicy: () => streamExecPolicy,
+          assertCurrent: assertCurrentRun,
           onEffectsStart,
         });
         const readTargetRevision = async (id: string) => {
@@ -492,7 +504,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 const shouldInfer =
                   (deliveryValue == null || delivery) &&
                   (mode === "" || mode === "announce") &&
-                  !hasTarget;
+                  !hasTarget &&
+                  delivery?.target !== "owner";
                 if (shouldInfer) {
                   const inferred = await resolveCronCreationDelivery({
                     cfg: runtimeConfig,
@@ -647,25 +660,11 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                   : `Not finished yet: it is still running, or it runs in this session and starts after this turn. Its delivery follows the job settings; ${followUp}. Do not schedule a verification job.`,
               });
             }
-            case "next_check": {
-              const jobId = readCronSelfRemoveOnlyJobId(opts);
-              const runId = opts?.runId?.trim();
-              if (!jobId || !runId) {
-                throw new Error("cron next_check is only available to the currently running job");
-              }
-              const rawDuration = readToolStringParam(params, "in", { required: true });
-              let delayMs: number;
-              try {
-                delayMs = parseDurationMs(rawDuration);
-              } catch {
-                throw new Error("cron next_check in must be a positive duration");
-              }
-              if (delayMs <= 0) {
-                throw new Error("cron next_check in must be a positive duration");
-              }
-              recordCronNextCheckProposal(runId, jobId, delayMs);
-              return jsonResult({ ok: true, delayMs });
-            }
+            case "scratch_get":
+            case "scratch_set":
+            case "record_result":
+            case "next_check":
+              return await automation.execute(action, params, callGateway, gatewayOpts);
             case "wake": {
               const text = readToolStringParam(params, "text", { required: true });
               const mode =

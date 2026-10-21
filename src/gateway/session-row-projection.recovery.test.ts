@@ -17,6 +17,10 @@ import * as reads from "./server-methods/sessions-read-cache.test-support.js";
 import * as backfill from "./session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import * as rows from "./session-row-projection.read-fixture.test-support.js";
+import {
+  appendProjectionMessages,
+  seedProjectionRow,
+} from "./session-row-projection.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 import { readSessionMessagesPageWithStatsAsync } from "./session-transcript-readers.js";
 
@@ -40,10 +44,7 @@ it.for(["cold storage", "index reconciliation"] as const)(
         visibility: "shared",
         updatedAt: Date.now(),
       });
-      await sessions.persistSessionTranscriptTurn(scope, {
-        messages: messages.map((message) => ({ message })),
-        touchSessionEntry: false,
-      });
+      await appendProjectionMessages(scope, ...messages);
       await indexes.waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
       if (cold) {
         using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60 * 86_400_000);
@@ -169,10 +170,8 @@ it("keeps projection reads outside borrowed startup admission and admits complet
         defaults: { sessionStore: { agentId: "main" } },
       },
     };
-    const query = { agentId: "worker", key: "agent:worker:recovering" };
-    const unaffected = { agentId: "main", key: "agent:main:unchanged" };
-    rows.seedRow(unaffected, { sessionId: "unchanged", updatedAt: 1 });
-    rows.seedRow(query, { sessionId: "recovering", updatedAt: 1 });
+    const { query } = seedProjectionRow("recovering", {}, "worker");
+    const { query: unaffected } = seedProjectionRow("unchanged");
     const path = agentDb.resolveOpenClawAgentSqlitePath({ agentId: query.agentId });
     agentDb.closeOpenClawAgentDatabaseByPath(path, query.agentId);
     const refusal = admission.createAgentDatabaseInspectionRefusal({

@@ -145,7 +145,7 @@ try {
   applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
   cfg.agents = {
     ...cfg.agents,
-    defaults: { ...cfg.agents?.defaults, heartbeat: { every: "0m" }, skipBootstrap: true },
+    defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
   };
   cfg.agents.entries = { main: { workspace: path.join(fixture, "workspace") } };
   mkdirSync(path.join(fixture, "workspace"));

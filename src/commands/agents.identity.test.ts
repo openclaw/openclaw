@@ -278,7 +278,6 @@ describe("agents helpers", () => {
       agents: {
         defaults: {
           workspace: "/srv/fleet",
-          heartbeat: { agentId: "work", every: "5m" },
           systemAgent: { agentId: "WORK" },
           subagents: { allowAgents: ["work", "home"] },
         },
@@ -315,7 +314,6 @@ describe("agents helpers", () => {
     expect(cfg.agents?.entries?.home?.tools?.agentToAgent?.send).toEqual(["WORK"]);
     expect(result).toMatchObject({ removedBindings: 1, removedAllow: 1 });
     expect(result.clearedOwnerRefs).toEqual([
-      "agents.defaults.heartbeat.agentId",
       "agents.defaults.systemAgent.agentId",
       "talk.agentId",
     ]);
@@ -325,7 +323,6 @@ describe("agents helpers", () => {
       "agents.entries.home.subagents.allowAgents": ["home"],
       "agents.entries.home.tools": { profile: "coding", agentToAgent: { send: [] } },
       "agents.defaults.subagents.allowAgents": ["home"],
-      "agents.defaults.heartbeat": { every: "5m" },
       broadcast: {
         strategy: "parallel",
         "peer-1": ["home"],
@@ -344,18 +341,20 @@ describe("agents helpers", () => {
       expect(result.config).toHaveProperty(field, value);
     }
   });
-  it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {
+  it("preserves ordinary defaults without reintroducing retired heartbeat config", () => {
     const result = pruneAgentConfig(
       {
         agents: {
           ownership: "explicit",
-          defaults: { heartbeat: { agentId: "ops", every: "5m" } },
+          defaults: { skipBootstrap: true, systemAgent: { agentId: "ops" } },
           entries: { ops: {}, research: {}, writer: {} },
         },
       },
       "ops",
     );
-    expect(result.config.agents?.defaults?.heartbeat).toBeUndefined();
-    expect(result.clearedOwnerRefs).toContain("agents.defaults.heartbeat");
+    expect(result.config.agents?.defaults).not.toHaveProperty("heartbeat");
+    expect(result.config.agents?.defaults?.skipBootstrap).toBe(true);
+    expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
+    expect(result.clearedOwnerRefs).toEqual(["agents.defaults.systemAgent.agentId"]);
   });
 });

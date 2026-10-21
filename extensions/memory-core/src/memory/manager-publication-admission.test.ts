@@ -149,7 +149,8 @@ it.each(["clean", "unclean"])(
       ]);
       expect(JSON.parse(stdout)).toEqual({
         integrityChecked: shutdown === "unclean",
-        schemaRebuilt: shutdown === "unclean",
+        // A missing seal requires integrity verification, but the published schema is still valid.
+        schemaRebuilt: false,
         ftsAvailable: true,
       });
     });

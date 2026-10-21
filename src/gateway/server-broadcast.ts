@@ -157,6 +157,7 @@ type PreparedFrames = {
   fields?: FrameFields;
   snapshot?: FrameBase;
   healthSummary?: FrameBase;
+  toolNarration?: FrameBase;
   delta?: FrameBase;
   reservedBytes?: number;
 };
@@ -303,6 +304,7 @@ export function createGatewayBroadcaster(params: {
       isPlainEventPayload(payload) &&
       payload.state === "status" &&
       payload.phase === "waiting_for_model";
+    const toolNarrationPayload = narration.prepareToolPayload(event, payload);
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
@@ -415,14 +417,7 @@ export function createGatewayBroadcaster(params: {
       }
       // Narration consumes producer snapshots before the per-socket wire
       // projection below removes cumulative text from foreground appends.
-      if (
-        (event === "session.narration" && !narration.isNarration(c.connId, sessionKeys)) ||
-        ((event === "chat" ||
-          event === "agent" ||
-          event === "session.tool" ||
-          event === "session.observer") &&
-          narration.consume(c, event, payload, sessionKeys, opts))
-      ) {
+      if (narration.consume(c, event, payload, sessionKeys, opts)) {
         continue;
       }
       if (!outboundEventLogged) {
@@ -569,11 +564,16 @@ export function createGatewayBroadcaster(params: {
       const useDelta = delivery.canSendDelta(state, live, publication);
       const projection = live?.projection;
       const getDeliveryFrameBase = () =>
-        event === "health" && c.connect.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
-          ? (frames.healthSummary ??= frameBaseFor(projectHealthSummary(payload as HealthSummary))) // SAFETY: Only internal health producers can publish this reserved event.
-          : useDelta && projection
-            ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
-            : (frames.snapshot ??= frameBaseFor(payload));
+        toolNarrationPayload && narration.isNarration(c.connId, sessionKeys)
+          ? (frames.toolNarration ??= frameBaseFor(toolNarrationPayload()))
+          : event === "health" && c.connect.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
+            ? (frames.healthSummary ??= frameBaseFor(
+                // SAFETY: Only internal health producers can publish this reserved event.
+                projectHealthSummary(payload as HealthSummary),
+              ))
+            : useDelta && projection
+              ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
+              : (frames.snapshot ??= frameBaseFor(payload));
       let frame: Buffer | undefined;
       let delivered: (() => void) | undefined;
       let presenceDelivery: ReturnType<typeof preparePresenceDelivery> | undefined;

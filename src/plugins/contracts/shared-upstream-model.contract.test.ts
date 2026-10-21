@@ -1,4 +1,3 @@
-// Shared upstream model contract tests keep capability flags aligned across bundled catalogs.
 import fs from "node:fs";
 import path from "node:path";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
@@ -6,20 +5,15 @@ import { describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
-const MANIFEST_BASENAME = "openclaw.plugin.json";
 const CODE_MODE_TIER_LITERAL = /codeMode:\s*"(?:preferred|capable)"/;
 // Minimax resolves cost per provider surface, so its rows cannot live in one
 // manifest catalog and remain invisible to the manifest scan below.
 const UNCONVERTED_SOURCE_CATALOG_PLUGINS = ["minimax"];
 
 type CatalogEntry = {
-  /** `provider/model` ref used in failure output. */
   ref: string;
-  /** Shared-model group: the normalized upstream model id, else the row's own. */
   groupKey: string;
-  /** Declared upstream ref, present only on non-canonical rows. */
   upstreamModel?: string;
-  /** Declared code-mode tier; absent rows fall back to the implicit `capable` tier. */
   codeMode?: string;
 };
 
@@ -33,26 +27,16 @@ function listBundledPluginFiles(): string[] {
 
 function readBundledManifests(): Array<Record<string, unknown>> {
   return listBundledPluginFiles()
-    .filter((file) => {
-      const segments = file.split("/");
-      return segments.length === 3 && segments[2] === MANIFEST_BASENAME;
-    })
+    .filter((file) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/.test(file))
     .map(
       (file) =>
         JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")) as Record<string, unknown>,
     );
 }
 
-/**
- * Reduces a catalog model id to the vendor's own name for the weights.
- * Aggregators republish first-party models under a namespaced id and varying
- * case (`moonshotai/kimi-k3`, `zai-org/GLM-5.2`), so dropping one leading
- * namespace segment groups those with the first-party row automatically instead
- * of waiting for someone to declare `upstreamModel` on each one.
- */
+// Group aggregator aliases with first-party rows, ignoring namespace and case.
 function normalizeSharedModelId(modelId: string): string {
-  const separator = modelId.indexOf("/");
-  return (separator === -1 ? modelId : modelId.slice(separator + 1)).toLowerCase();
+  return modelId.slice(modelId.indexOf("/") + 1).toLowerCase();
 }
 
 function collectCatalogEntries(): CatalogEntry[] {
@@ -97,12 +81,9 @@ function collectCatalogEntries(): CatalogEntry[] {
 function groupBySharedModel(entries: CatalogEntry[]): Map<string, CatalogEntry[]> {
   const groups = new Map<string, CatalogEntry[]>();
   for (const entry of entries) {
-    const group = groups.get(entry.groupKey);
-    if (group) {
-      group.push(entry);
-      continue;
-    }
-    groups.set(entry.groupKey, [entry]);
+    const group = groups.get(entry.groupKey) ?? [];
+    group.push(entry);
+    groups.set(entry.groupKey, group);
   }
   return groups;
 }
@@ -117,18 +98,18 @@ describe("bundled shared upstream model catalogs", () => {
     const entries = readEntries();
     const refs = new Set(entries.map((entry) => entry.ref));
     const unresolved = entries
-      .filter((entry) => entry.upstreamModel)
-      .filter((entry) => entry.upstreamModel === entry.ref || !refs.has(entry.upstreamModel ?? ""))
-      .map((entry) => `${entry.ref} -> ${entry.upstreamModel}`)
+      .filter(
+        ({ upstreamModel, ref }) =>
+          upstreamModel && (upstreamModel === ref || !refs.has(upstreamModel)),
+      )
+      .map(({ ref, upstreamModel }) => `${ref} -> ${upstreamModel}`)
       .toSorted();
 
     expect(unresolved).toEqual([]);
   });
 
   it("declares the code-mode tier on every catalog row that ships a shared model", () => {
-    // `compat.codeMode` gates `tools.codeMode: "auto"` per model, so one catalog
-    // flagging a model `preferred` while a sibling catalog for the same upstream
-    // model stays silent makes the identical model behave differently by provider.
+    // A silent sibling would change tools.codeMode: "auto" for the same model.
     const silent: string[] = [];
     for (const [groupKey, group] of groupBySharedModel(readEntries())) {
       if (group.length < 2 || !group.some((entry) => entry.codeMode)) {

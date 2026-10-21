@@ -7,6 +7,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -57,16 +58,20 @@ export async function withUpdatePreviewSignals<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const admission = opts.dryRun === true && opts.run ? previewAdmissions.get(opts.run) : undefined;
-  if (!admission || !opts.run || admission.active) {
+  if (opts.dryRun !== true || admission?.active) {
     return await withMutableUpdateSignals(opts, operation);
   }
-  admission.active = true;
-  const { env } = admission;
+  if (admission) {
+    admission.active = true;
+  }
+  const env = admission?.env;
   let interrupted = false;
+  let stopCommands: (() => void) | undefined;
   let shutdown: Promise<void> | undefined;
   let cleanup: Promise<void> | undefined;
   const settlePreview = async () => {
     if (
+      !admission ||
       !interrupted ||
       process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
       process.env[POST_CORE_UPDATE_ENV] === "1"
@@ -89,6 +94,7 @@ export async function withUpdatePreviewSignals<T>(
   const unregister = registerSignalExitBarrier(finishOwnedCleanup);
   const onSignal = (code: number) => {
     interrupted = true;
+    stopCommands?.();
     shutdown ??= waitForSignalExitBarriers(code === 143 ? "SIGTERM" : "SIGINT")
       .catch(() => {
         defaultRuntime.error(
@@ -104,14 +110,19 @@ export async function withUpdatePreviewSignals<T>(
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
   try {
-    return await operation();
+    return await withCommandProcessScope(async (stop) => {
+      stopCommands = stop;
+      return await operation();
+    });
   } finally {
     try {
       // The global drain includes this command's own completion gate. Settle only
       // our preview here; the outer CLI finalizer joins the global drain afterward.
       await finishOwnedCleanup();
     } finally {
-      previewAdmissions.delete(opts.run);
+      if (opts.run) {
+        previewAdmissions.delete(opts.run);
+      }
       const removeSignalHandlers = () => {
         process.off("SIGINT", onSigint);
         process.off("SIGTERM", onSigterm);

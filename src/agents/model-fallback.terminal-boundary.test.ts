@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
   AgentRunTerminalOutcomeError,
@@ -102,6 +103,22 @@ it.each([
     false,
   ],
   ["transcript conflict", transcriptConflict, false],
+  [
+    "session reader invalidation",
+    () =>
+      new SessionWorkStartChangedError(
+        "Session reader operation is no longer current. Retry the turn.",
+      ),
+    false,
+  ],
+  [
+    "wrapped serialized session invalidation",
+    () =>
+      new Error("503 overloaded", {
+        cause: { code: "SESSION_WORK_START_INVALIDATED", message: "Session work invalidated" },
+      }),
+    false,
+  ],
   [
     "wrapped transcript conflict",
     () => new Error("worker operation failed", { cause: transcriptConflict() }),

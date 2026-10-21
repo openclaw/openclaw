@@ -5,8 +5,9 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { useScrollState } from "../../components/solid/scroll-state.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "./chat-pane-header-view.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
@@ -24,6 +25,8 @@ import {
   type ChatSubagentMobileStop,
 } from "./components/chat-subagents-mobile.tsx";
 import { SubagentDesktopAvatar } from "./components/chat-subagents-panel-desktop.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 function PaneSubagentHeader(props: {
   sessionKey: string;

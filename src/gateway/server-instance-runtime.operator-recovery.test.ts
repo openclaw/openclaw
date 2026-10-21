@@ -227,15 +227,20 @@ describe("typed restart recovery operator admission", () => {
             expect(skipped).toEqual([]);
             expect(outcome).toEqual({
               started: denied ? 0 : 1,
-              settled: 0,
-              failed: denied ? 1 : 0,
+              settled: denied ? 1 : 0,
+              failed: 0,
               skipped: 0,
             });
             expect(startTurn).toHaveBeenCalledTimes(denied ? 1 : attempt + 1);
             const retained = loadSessionEntry(target);
             expect(retained?.restartRecoveryOperatorSource).toEqual(source);
             expect(retained?.restartRecoveryDeliverySourceRunId).toBe(target.sourceRunId);
-            expect(retained?.mainRestartRecovery?.tombstone).toBeUndefined();
+            if (denied) {
+              expect(retained?.mainRestartRecovery?.tombstone?.reason).toContain("operator");
+              expect(retained?.status).toBe("failed");
+            } else {
+              expect(retained?.mainRestartRecovery?.tombstone).toBeUndefined();
+            }
           } finally {
             runtime.close();
             finish.resolve();

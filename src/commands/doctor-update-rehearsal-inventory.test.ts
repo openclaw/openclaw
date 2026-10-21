@@ -73,7 +73,7 @@ function prepareFixture(source: OpenClawTestState) {
   writePrivate(
     configPath,
     `{
-    "agents": {"defaults": {"workspace": ${JSON.stringify(workspace)}, "cwd": ${JSON.stringify(workspace)}, "heartbeat": {"every": "0m"}}, "entries": {}},
+    "agents": {"defaults": {"workspace": ${JSON.stringify(workspace)}, "cwd": ${JSON.stringify(workspace)}}, "entries": {}},
     "logging": {"file": ${JSON.stringify(path.join(root, "canary.log"))}},
     "gateway": {"mode": "local", "bind": "loopback", "port": 12345,
       "auth": {"mode": "token", "token": "00000000-0000-4000-8000-000000000000"},

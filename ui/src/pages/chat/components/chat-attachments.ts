@@ -114,7 +114,6 @@ export function appendChatAttachmentFiles(
     {
       resizeImages: true,
       compressVideos: true,
-      onRejected: (file, message) => reads.reject(file, message),
     },
   );
   if (files.length === 0) {

@@ -195,6 +195,11 @@ export function assertGitHubPublicationWorktreeSource(
   worktree: { id: string; repoFingerprint: string; branch: string },
 ): void {
   const { entry, worktree: current, ownerWorktree } = source.expected;
+  if (entry?.worktree?.githubPullRequest) {
+    throw new Error(
+      "This workspace continues an existing PR; its original publication target must be handled explicitly.",
+    );
+  }
   if (
     source.selector.worktreeId !== worktree.id ||
     current?.id !== worktree.id ||

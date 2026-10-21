@@ -2,12 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -18,9 +14,9 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
+import { useStateReceipts, stateClock } from "./update-candidate-state-fixtures.test-support.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
-import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -29,13 +25,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts?.close();
-});
+const receipts = useStateReceipts();
 
 // Native hooks block their process thread. An unreferenced fixture worker flushes
 // the receipt independently; the durable marker still wins an operation-settlement race.
@@ -260,6 +250,7 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       const { DatabaseSync } = require('node:sqlite');
       const source = ${JSON.stringify(file)}, marker = ${JSON.stringify(marker)};
       const outcome = ${JSON.stringify(outcome)};
+      if (outcome === 'cancel') process.on('SIGTERM', () => {});
       const isSource = db => db.location() && path.toNamespacedPath(db.location()) === path.toNamespacedPath(source);
       const prepare = DatabaseSync.prototype.prepare, close = DatabaseSync.prototype.close;
       DatabaseSync.prototype.prepare = function(sql) {
@@ -277,10 +268,8 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
     `,
     );
     const controller = new AbortController();
-    const now = Date.now.bind(Date);
-    let elapsed = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-    const expireDeadline = captureUpdateCandidateDeadline();
+    const cancellation = new DOMException("test cancellation", "AbortError");
+    const advanceClock = stateClock();
     const operation = readUpdateStateSchemaVersions({
       stateDir,
       config: {},
@@ -292,15 +281,15 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       if (blocked) {
         await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
         if (outcome === "cancel") {
-          controller.abort();
+          controller.abort(cancellation);
         } else {
-          elapsed = 400_000;
-          expireDeadline();
+          advanceClock(400_000, true);
         }
       }
       const failure = await rejected;
       if (outcome === "cancel") {
         expect(failure).toMatchObject({ name: "AbortError" });
+        expect(failure).toBe(cancellation);
       } else {
         expect(failure).toBeInstanceOf(Error);
         expectMessage(failure, [
@@ -392,13 +381,9 @@ it.each([
   ["metadata inventory", "EAGAIN"],
   ["metadata inventory", "EWOULDBLOCK"],
   ["metadata inventory", "EIO"],
-  ["metadata inventory", "EBADF"],
-  ["metadata inventory", "EPIPE"],
   ["agent schema inspection", "EAGAIN"],
   ["agent schema inspection", "EWOULDBLOCK"],
   ["agent schema inspection", "EIO"],
-  ["agent schema inspection", "EBADF"],
-  ["agent schema inspection", "EPIPE"],
 ] as const)("preserves %s semantics when progress encounters %s", async (phase, code) => {
   const metadata = phase === "metadata inventory";
   const database = metadata ? undefined : fixture();

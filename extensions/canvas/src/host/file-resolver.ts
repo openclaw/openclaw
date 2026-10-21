@@ -45,9 +45,6 @@ export async function resolveFileWithinRoot(
     return null;
   }
   const rel = normalized.replace(/^\/+/, "");
-  if (rel.split("/").some((p) => p === "..")) {
-    return null;
-  }
   const root = await fsRoot(rootReal);
 
   try {

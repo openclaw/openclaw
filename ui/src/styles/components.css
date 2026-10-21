@@ -1355,6 +1355,14 @@ openclaw-toast-host[data-toast-placement="shell"]
   }
 }
 
+.app-toast--top-center {
+  left: 50%;
+  right: auto;
+  width: max-content;
+  max-width: min(370px, calc(100vw - 32px));
+  transform: translateX(-50%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-toast--bottom,
   .app-toast--anchored,
@@ -1369,6 +1377,22 @@ openclaw-toast-host[data-toast-placement="shell"]
 .app-toast__dismiss:hover,
 .app-toast__dismiss:focus-visible {
   color: var(--text-strong);
+}
+
+.app-toast--error {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, var(--popover));
+  color: var(--danger);
+}
+
+.app-toast--error :is(.app-toast__icon, .app-toast__action, .app-toast__dismiss) {
+  color: inherit;
+}
+
+.app-toast--error .app-toast__action,
+.app-toast--error :is(.app-toast__action, .app-toast__dismiss):is(:hover, :focus-visible) {
+  background: var(--danger-subtle);
+  color: inherit;
 }
 
 .btn--icon {

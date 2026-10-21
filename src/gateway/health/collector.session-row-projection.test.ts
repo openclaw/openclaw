@@ -1,12 +1,12 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it as baseIt, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as combinedStore from "../../config/sessions/combined-store-gateway-read.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
+import { createDefaultProactiveJob } from "../../cron/default-proactive-job.js";
+import { saveProactiveJobsForTest } from "../../cron/proactive-job.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -77,25 +77,19 @@ function fleetConfig(
   };
 }
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-it("resolves heartbeat enrollment for the whole fleet without re-walking the roster per agent", async () => {
+it("projects receipt-owned jobs for the whole fleet without re-walking the roster per agent", async ({
+  state,
+}) => {
   const agentCount = 200;
-  const entries: Record<string, { heartbeat?: { every?: string } }> = Object.fromEntries(
+  const entries = Object.fromEntries(
     Array.from({ length: agentCount }, (_, index) => [`agent-${index}`, {}]),
   );
-  entries["agent-7"] = { heartbeat: { every: "45m" } };
-  // An absent store isolates enrollment from session storage.
   const plain = {
-    agents: {
-      ownership: "explicit",
-      defaults: { heartbeat: { every: "30m", target: "owner" } },
-      entries,
-    },
-    session: {
-      store: path.join(tempDirs.make("openclaw-health-heartbeat-roster-"), "sessions.json"),
-    },
+    agents: { ownership: "explicit", entries },
+    session: { store: state.statePath("health-sessions.sqlite") },
   } satisfies OpenClawConfig;
+  const job = createDefaultProactiveJob(plain, "agent-7", 1, 45 * 60 * 1000);
+  await saveProactiveJobsForTest(state.statePath("cron", "jobs.json"), [job]);
   let rosterReads = 0;
   const agents = new Proxy(plain.agents, {
     get(target, property, receiver) {
@@ -112,15 +106,10 @@ it("resolves heartbeat enrollment for the whole fleet without re-walking the ros
   );
 
   expect(summaries).toHaveLength(agentCount);
-  // Per-agent resolution used to re-walk the whole roster for each summary.
   expect(rosterReads).toBeLessThan(agentCount);
-  expect(summaries.map((summary) => summary.heartbeat)).toEqual(
-    summaries.map((summary) => resolveHeartbeatSummaryForAgent(plain, summary.agentId)),
-  );
-  expect(summaries.find((summary) => summary.agentId === "agent-7")?.heartbeat).toMatchObject({
-    enabled: true,
-    every: "45m",
-  });
+  expect(summaries.filter((summary) => summary.heartbeat.enabled)).toMatchObject([
+    { agentId: "agent-7", heartbeat: { enabled: true, everyMs: 2_700_000, target: "owner" } },
+  ]);
 });
 it.for(["before-read", "during-topology"])(
   "reads surviving health summaries when an unrelated agent closes %s",

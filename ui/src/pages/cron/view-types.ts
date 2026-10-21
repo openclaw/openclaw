@@ -9,7 +9,9 @@ type OptionalViewProp =
   | "onViewRunTranscript"
   | "onRunMount";
 
-export type CronProps = Omit<CronViewProps, OptionalViewProp> &
-  Partial<Pick<CronViewProps, OptionalViewProp>>;
+export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
+  Partial<Pick<CronViewProps, OptionalViewProp>> & {
+    gateway: CronViewProps["gateway"] | null;
+  };
 
 export type CronPanelMode = "overview" | "create" | "job";

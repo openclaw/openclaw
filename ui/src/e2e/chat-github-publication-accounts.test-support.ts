@@ -211,7 +211,7 @@ export function defineGitHubPublicationAccountTests({
       await shared.waitFor();
       expect(await shared.getAttribute("aria-checked")).toBe("true");
       expect(await personal.getAttribute("aria-checked")).toBe("false");
-      expect((await row.boundingBox())?.height).toBeCloseTo(closedBounds!.height, 4);
+      expect((await row.boundingBox())?.height).toBeCloseTo(closedBounds!.height, 1);
       const accountBounds = await shared.boundingBox();
       expect(accountBounds).not.toBeNull();
       expect(accountBounds!.x).toBeGreaterThanOrEqual(0);

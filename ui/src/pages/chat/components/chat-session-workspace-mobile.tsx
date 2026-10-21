@@ -5,13 +5,16 @@ import { fileKindForPath } from "../../../components/file-kind.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatByteSize } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
-import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import "./chat-session-workspace-mobile.css";
+import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type SessionFile = SessionWorkspaceListResult["files"][number];
 type Artifact = NonNullable<SessionWorkspaceListResult["artifacts"]>[number];

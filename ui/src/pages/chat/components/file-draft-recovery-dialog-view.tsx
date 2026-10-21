@@ -1,4 +1,5 @@
-import { For, createSignal, untrack } from "solid-js";
+import { For, createSignal, createStore, untrack } from "solid-js";
+import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadTextFile } from "../../../lib/download.ts";
@@ -7,7 +8,7 @@ import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
 
 registerFilePreviewEnglish();
 
-export type FileDraft = {
+type FileDraft = {
   name: string;
   path: string;
   context: FileSidebarContent["draftContext"];
@@ -16,7 +17,19 @@ export type FileDraft = {
   discard: () => boolean;
 };
 
-export function FileDraftRecoveryDialog(props: {
+export function reviewFileDrafts(drafts: readonly FileDraft[]): Promise<void> {
+  return withPromiseModalHost<void>(undefined, (modal) => {
+    modal.render(() => (
+      <FileDraftRecoveryDialog
+        drafts={drafts}
+        settled={() => modal.settled}
+        finish={modal.finish}
+      />
+    ));
+  });
+}
+
+function FileDraftRecoveryDialog(props: {
   drafts: readonly FileDraft[];
   settled: () => boolean;
   finish: () => void;
@@ -24,14 +37,14 @@ export function FileDraftRecoveryDialog(props: {
   // Review the opening batch; successful discards remove entries from this dialog.
   const initialDrafts = untrack(() => [...props.drafts]);
   let keepButton!: HTMLButtonElement;
-  const [remaining, setRemaining] = createSignal(initialDrafts);
+  const [remaining, setRemaining] = createStore(initialDrafts, { shallow: true });
   const [error, setError] = createSignal("");
   const [copied, setCopied] = createSignal<FileDraft>();
   const current = (draft: FileDraft) => {
     if (props.settled()) {
       return false;
     }
-    if (!remaining().includes(draft) || !draft.isCurrent()) {
+    if (!remaining.includes(draft) || !draft.isCurrent()) {
       setError(t("chat.detailPanel.draftRecovery.changed"));
       return false;
     }
@@ -61,7 +74,7 @@ export function FileDraftRecoveryDialog(props: {
             <div class="exec-approval-sub">{t("chat.detailPanel.draftRecovery.description")}</div>
           </div>
         </div>
-        <For each={remaining()}>
+        <For each={remaining}>
           {(entry) => (
             <section
               role="group"
@@ -110,10 +123,12 @@ export function FileDraftRecoveryDialog(props: {
                     if (!current(entry) || !entry.discard()) {
                       return;
                     }
-                    const next = remaining().filter((item) => item !== entry);
-                    setRemaining(next);
+                    const last = remaining.length === 1;
+                    setRemaining((drafts) => {
+                      drafts.splice(drafts.indexOf(entry), 1);
+                    });
                     setError("");
-                    if (!next.length) {
+                    if (last) {
                       props.finish();
                     }
                   }}

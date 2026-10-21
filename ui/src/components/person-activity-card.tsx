@@ -1,6 +1,7 @@
 import { render, spread } from "@solidjs/web";
 import { createMemo, createSignal, For, onCleanup, runWithOwner, Show } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
@@ -10,7 +11,7 @@ import {
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import { getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../lib/reactive/observers.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -33,6 +34,8 @@ import {
 } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./viewer-facepile.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
 type PersonCardInput = {

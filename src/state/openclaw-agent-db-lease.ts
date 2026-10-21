@@ -506,6 +506,7 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
 export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
   database: EngineConnection,
   receipt: OpenClawAgentDatabaseWorkerLeaseReceipt,
+  outcome: "refused-before-open" | "unknown",
   onInvalidation?: () => void,
 ): void {
   const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
@@ -521,8 +522,10 @@ export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
   ) {
     throw new Error("SQLite reclamation Worker lease cleanup receipt no longer matches");
   }
-  onInvalidation?.();
-  clearAgentDatabaseLeaseVerifications(database, receipt.path);
+  if (outcome !== "refused-before-open") {
+    onInvalidation?.();
+    clearAgentDatabaseLeaseVerifications(database, receipt.path);
+  }
   executeSqliteQuerySync(
     database,
     db.deleteFrom("agent_database_leases").where("lease_id", "=", receipt.leaseId),

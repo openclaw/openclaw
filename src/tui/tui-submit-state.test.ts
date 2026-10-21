@@ -13,51 +13,39 @@ import {
 } from "./tui-submit-state.js";
 
 type State = { pendingSubmit: TuiPendingSubmit | null };
+const sending = { phase: "sending", runId: "run-local", draftText: "hello" } as const;
+const accepted = { ...sending, phase: "accepted", runId: "run-accepted" } as const;
+const registered = { ...accepted, draftText: null };
+const accept = (state: State) =>
+  acceptPendingSubmit({
+    state,
+    provisionalRunId: "run-local",
+    acceptedRunId: "run-accepted",
+    preserveDraft: true,
+  });
 
 describe("resolveTuiChatSubmitAdmission", () => {
   it.each([
-    {
-      name: "idle",
-      isConnected: true,
-      activeChatRunId: null,
-      pendingSubmit: null,
-      message: "hello",
-      expected: { status: "allowed" },
+    ["idle", true, null, "hello", { status: "allowed" }],
+    ["disconnected", false, null, "hello", { status: "blocked", reason: "disconnected" }],
+    ["sending", true, sending, "another", { status: "blocked", reason: "pending" }],
+    ["stop accepted run", true, registered, "please stop", { status: "allowed" }],
+  ] as const)(
+    "resolves admission while %s",
+    (_name, isConnected, pendingSubmit, message, expected) => {
+      expect(
+        resolveTuiChatSubmitAdmission({
+          isConnected,
+          pendingSubmit,
+          message,
+          activeChatRunId: null,
+          historyLoaded: true,
+          transition: { active: null, boundary: null, epoch: 0 },
+          allowDuringPending: false,
+        }),
+      ).toEqual(expected);
     },
-    {
-      name: "disconnected",
-      isConnected: false,
-      activeChatRunId: null,
-      pendingSubmit: null,
-      message: "send after reconnect",
-      expected: { status: "blocked", reason: "disconnected" },
-    },
-    {
-      name: "sending",
-      isConnected: true,
-      activeChatRunId: null,
-      pendingSubmit: { phase: "sending", runId: "run-send", draftText: "hello" },
-      message: "another",
-      expected: { status: "blocked", reason: "pending" },
-    },
-    {
-      name: "stop accepted run",
-      isConnected: true,
-      activeChatRunId: null,
-      pendingSubmit: { phase: "accepted", runId: "run-pending", draftText: null },
-      message: "please stop",
-      expected: { status: "allowed" },
-    },
-  ] as const)("resolves admission while $name", ({ expected, ...params }) => {
-    expect(
-      resolveTuiChatSubmitAdmission({
-        ...params,
-        historyLoaded: true,
-        transition: { active: null, boundary: null, epoch: 0 },
-        allowDuringPending: false,
-      }),
-    ).toEqual(expected);
-  });
+  );
 });
 
 describe("pending submit transitions", () => {
@@ -65,35 +53,16 @@ describe("pending submit transitions", () => {
     const state: State = { pendingSubmit: null };
 
     beginPendingSubmit(state, "run-local", "hello");
-    expect(state.pendingSubmit).toEqual({
-      phase: "sending",
-      runId: "run-local",
-      draftText: "hello",
-    });
+    expect(state.pendingSubmit).toEqual(sending);
     expect(getPendingSubmitAcceptedRunId(state)).toBeNull();
     expect(getPendingSubmitDraft(state)).toEqual({ runId: "run-local", text: "hello" });
 
-    expect(
-      acceptPendingSubmit({
-        state,
-        provisionalRunId: "run-local",
-        acceptedRunId: "run-accepted",
-        preserveDraft: true,
-      }),
-    ).toBe(true);
-    expect(state.pendingSubmit).toEqual({
-      phase: "accepted",
-      runId: "run-accepted",
-      draftText: "hello",
-    });
+    expect(accept(state)).toBe(true);
+    expect(state.pendingSubmit).toEqual(accepted);
     expect(getPendingSubmitAcceptedRunId(state)).toBe("run-accepted");
 
     expect(clearPendingSubmitDraft(state, "run-accepted")).toBe(true);
-    expect(state.pendingSubmit).toEqual({
-      phase: "accepted",
-      runId: "run-accepted",
-      draftText: null,
-    });
+    expect(state.pendingSubmit).toEqual(registered);
     expect(reconcilePendingSubmitHistory(state, ["other-run"])).toBe(false);
     expect(reconcilePendingSubmitHistory(state, ["run-accepted"])).toBe(true);
     expect(state.pendingSubmit).toBeNull();
@@ -104,14 +73,7 @@ describe("pending submit transitions", () => {
     beginPendingSubmit(state, "run-local", "hello");
     expect(clearPendingSubmit(state, "run-local")).toBe(true);
 
-    expect(
-      acceptPendingSubmit({
-        state,
-        provisionalRunId: "run-local",
-        acceptedRunId: "run-accepted",
-        preserveDraft: true,
-      }),
-    ).toBe(false);
+    expect(accept(state)).toBe(false);
     expect(state.pendingSubmit).toBeNull();
   });
 

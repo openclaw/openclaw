@@ -2,6 +2,7 @@ import { merge, type Element } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import { detailsOutputsIcons } from "./chat-details-output-icons.tsx";
 import { chatGoalPresentation } from "./chat-goals.ts";
@@ -33,6 +34,8 @@ import {
   isSidebarNewTabActive,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 export type PaneDetailsActions = Pick<
   ChatDetailsProps,
@@ -258,6 +261,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           }
         : undefined;
     const detailsProgress = this.detailsProgressCardPresentation;
+    const conversationMain =
+      (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") === "conversation";
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
@@ -275,6 +280,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                     });
                   },
                   onViewAll: () => {
+                    if (this.sessionPresentation === "desktop") {
+                      this.headerDetailsRef.value?.close();
+                    }
                     detailsOutputs.outputs?.onViewAll();
                     this.navigateMobileHost({
                       area: "panels",
@@ -367,8 +375,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           presentation:
             this.sessionPresentation === "desktop" ? headerPresentation : panePresentation,
           conversationVisible,
-          externalTrigger:
-            (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") !== "conversation",
+          conversationMain,
+          externalTrigger: !conversationMain,
           setRef: (details) => {
             this.headerDetailsRef.value = details;
           },

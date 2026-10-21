@@ -147,23 +147,26 @@ describe("memory_search unavailable payloads", () => {
     expectUnavailableMemorySearchDetails(result.details, expected);
   });
 
-  it("treats a provider error worded like the deadline as a provider failure", async () => {
-    const searchImpl = mockSearch(async () => {
-      throw new Error("memory_search timed out after 30s");
-    });
+  it.each(["memory_search timed out after 30s", "SQLite read-only worker scope closed"])(
+    "does not classify provider errors by wording: %s",
+    async (error) => {
+      const searchImpl = mockSearch(async () => {
+        throw new Error(error);
+      });
 
-    const tool = createMemorySearchToolOrThrow();
-    const result = await executeSearch(tool);
-    expect(result.details).not.toHaveProperty("timedOut");
-    expectUnavailableMemorySearchDetails(result.details, {
-      error: "memory_search timed out after 30s",
-      warning: "Memory search is unavailable due to an embedding/provider error.",
-      action: "Check embedding provider configuration and retry memory_search.",
-    });
-    const cooldownResult = await executeSearch(tool, { query: "hello again" });
-    expect(cooldownResult.details).toEqual(result.details);
-    expect(searchImpl).toHaveBeenCalledTimes(1);
-  });
+      const tool = createMemorySearchToolOrThrow();
+      const result = await executeSearch(tool);
+      expect(result.details).not.toHaveProperty("timedOut");
+      expectUnavailableMemorySearchDetails(result.details, {
+        error,
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      const cooldownResult = await executeSearch(tool, { query: "hello again" });
+      expect(cooldownResult.details).toEqual(result.details);
+      expect(searchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(["initialization", "search"] as const)(
     "classifies a closed storage scope by code during %s",
@@ -188,18 +191,6 @@ describe("memory_search unavailable payloads", () => {
       });
     },
   );
-
-  it("does not classify a provider error by storage-scope wording", async () => {
-    const error = "SQLite read-only worker scope closed";
-    mockSearch(async () => {
-      throw new Error(error);
-    });
-    expectUnavailableMemorySearchDetails((await executeSearch()).details, {
-      error,
-      warning: "Memory search is unavailable due to an embedding/provider error.",
-      action: "Check embedding provider configuration and retry memory_search.",
-    });
-  });
 
   it("returns unavailable metadata when memory search does not settle", async () => {
     vi.useFakeTimers();

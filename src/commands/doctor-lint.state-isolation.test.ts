@@ -15,6 +15,7 @@ import {
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
@@ -43,6 +44,7 @@ import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 import { collectDoctorFindings, runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { verifyDoctorLintOAuthStateIsolation } from "./doctor-lint.oauth-isolation.test-support.js";
@@ -204,15 +206,23 @@ describe("doctor lint state isolation", () => {
     "inspects heartbeat source state and restores private inspection state (%s)",
     async (mode) => {
       await withOpenClawTestState({ prefix: "doctor-lint-heartbeat-source-" }, async (state) => {
-        await state.writeConfig({
+        const config: OpenClawConfig = {
           agents: {
             ownership: "explicit",
-            defaults: { heartbeat: { every: "15m" } },
             entries: { main: {} },
           },
           plugins: { enabled: false },
           memory: { search: { enabled: false } },
-        });
+        };
+        await state.writeConfig(config);
+        const storePath = resolveCronJobsStorePathFromConfig(config, state.env);
+        // Lint requires current config. Keep the pending migration in source state
+        // through the real Doctor owner, rather than persisting the retired key.
+        await ensureHeartbeatMonitorJobs(
+          { ...config, agents: { ...config.agents, defaults: { heartbeat: { every: "15m" } } } },
+          storePath,
+          state.env,
+        );
         writeConfigMachineState("doctorLint.source", "unchanged");
         await closeOpenClawStateDatabaseAsync();
         const sourcePath = resolveOpenClawStateSqlitePath(state.env);
@@ -260,8 +270,8 @@ describe("doctor lint state isolation", () => {
                 expect.objectContaining({
                   checkId: heartbeat.id,
                   severity: "warning",
-                  requirement: "heartbeat-monitor-create",
-                  target: "main",
+                  requirement: "heartbeat-retirement",
+                  path: storePath,
                 }),
               ]);
               expect(exitCode).toBe(1);

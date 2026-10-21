@@ -46,7 +46,7 @@ const IDENTITY_MENU_LINKS: ReadonlyArray<{
 export const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsScope"> & {
-  position: { x: number; top: number };
+  position: { x: number; top: number; placement?: "right-start" };
   anchor?: HTMLElement;
   tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   basePath: string;
@@ -112,7 +112,6 @@ export function selectSidebarHelpLink(value: string): boolean {
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Element {
   const controls = createMenuControls();
   const pinButtons = new Map<string, HTMLButtonElement>();
-  const position = params.position;
   const activeId = () => params.activeId;
   const activeName = () => params.activeName;
   const menuLabel = createMemo(() =>
@@ -121,7 +120,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
   const agentsTitle = <div class="sidebar-customize-menu__title">{t("agentChip.agents")}</div>;
   const agentsSeparator = <div class="sidebar-customize-menu__separator" role="separator" />;
   const settingsSeparator = <div class="sidebar-customize-menu__separator" role="separator" />;
-  const items = (): MenuEntry[] => [
+  const items = createMemo<MenuEntry[]>(() => [
     ...(params.agents.length > 0
       ? [
           {
@@ -175,12 +174,12 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       "settings",
       { disabled: !activeId() },
     ),
-  ];
+  ]);
   return (
     <SidebarDropdown
       controls={controls}
       class="sidebar-customize-menu sidebar-agent-menu"
-      position={position}
+      position={params.position}
       anchor={params.anchor}
       tabFocusTarget={params.tabFocusTarget}
       label={menuLabel()}

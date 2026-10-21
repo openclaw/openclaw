@@ -3,8 +3,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { gunzipSync } from "node:zlib";
-import { sha256Hex as sha256 } from "@openclaw/normalization-core/node-crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
@@ -53,7 +51,10 @@ import {
   readDanglingSkillWorkshopReviewIndex,
 } from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
-import { markStateDatabaseVersion } from "./openclaw-state-db-historical-fixtures.test-support.js";
+import {
+  markStateDatabaseVersion,
+  materializeV2026_7_1_2StateDatabase,
+} from "./openclaw-state-db-historical-fixtures.test-support.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
@@ -125,10 +126,6 @@ const materializeCorruptionRefusalStateDatabase = createCorruptionRefusalStateDa
   materializeCurrentStateDatabase(createTempStateDir()),
 );
 
-const V2026_7_1_2_STATE_FIXTURE_URL = new URL(
-  "../../test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz",
-  import.meta.url,
-);
 const V2026_7_1_2_STATE_FIXTURE_GZIP_SHA256 =
   "c775499d9a46462ae2368090a0c4ec75877784c40694046dd3af63df77b8737c";
 const V2026_7_1_2_STATE_FIXTURE_RAW_SHA256 =
@@ -262,19 +259,6 @@ function createStateFixture(
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
-}
-
-function materializeV2026_7_1_2StateDatabase(stateDir: string) {
-  const compressed = fs.readFileSync(V2026_7_1_2_STATE_FIXTURE_URL);
-  const raw = gunzipSync(compressed);
-  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  fs.writeFileSync(databasePath, raw);
-  return {
-    compressedSha256: sha256(compressed),
-    databasePath,
-    rawSha256: sha256(raw),
-  };
 }
 
 function captureFailure(run: () => unknown) {
@@ -1656,6 +1640,7 @@ describe("openclaw state database", () => {
       { kind: "state-write-indexes-v27", path: fixture.databasePath },
       { kind: "github-publication-draft-v28", path: fixture.databasePath },
       { kind: "local-client-credentials-v29", path: fixture.databasePath },
+      { kind: "automation-policy-fence-v30", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1888,6 +1873,7 @@ describe("openclaw state database", () => {
       { kind: "state-write-indexes-v27", path: seeded.databasePath },
       { kind: "github-publication-draft-v28", path: seeded.databasePath },
       { kind: "local-client-credentials-v29", path: seeded.databasePath },
+      { kind: "automation-policy-fence-v30", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     await expectRepair(options, [
@@ -2124,6 +2110,7 @@ describe("openclaw state database", () => {
       { kind: "state-write-indexes-v27", path: databasePath },
       { kind: "github-publication-draft-v28", path: databasePath },
       { kind: "local-client-credentials-v29", path: databasePath },
+      { kind: "automation-policy-fence-v30", path: databasePath },
     ]);
 
     await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));

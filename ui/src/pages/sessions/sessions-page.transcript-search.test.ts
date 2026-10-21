@@ -192,6 +192,61 @@ describe("Sessions transcript search", () => {
     expect(find("notice")).toBeNull();
   });
 
+  it("keeps the search input while edits retire a rejected request", async () => {
+    const response = createDeferred<SearchResponse>();
+    const replacement = createDeferred<SearchResponse>();
+    const request = vi
+      .fn<GatewayBrowserClient["request"]>()
+      .mockReturnValueOnce(response.promise)
+      .mockResolvedValueOnce(matches("updated needle"))
+      .mockReturnValueOnce(replacement.promise);
+    const { page, find } = await mount(request);
+    const trigger = page.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger")!;
+    trigger.click();
+    await page.updateComplete;
+    const form = find("form");
+    const input = page.querySelector<HTMLInputElement>(".sessions-transcript-search__input input")!;
+    page.updateTranscriptSearchQuery("needle");
+    const pending = page.runTranscriptSearch();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+    expect(find("form")).toBe(form);
+    expect(find("status")?.getAttribute("aria-busy")).toBe("true");
+
+    input.value = "updated needle";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.updateComplete;
+    response.reject(new Error("retired request failed"));
+    await pending;
+    await page.updateComplete;
+    expect(find("status")).toBeNull();
+    expect(find("form")).toBe(form);
+    expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
+    expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+    expect(input.value).toBe("updated needle");
+
+    await page.runTranscriptSearch();
+    await vi.waitFor(() => expect(find("snippet")?.textContent).toBe("updated needle"));
+    expect(find("form")).toBe(form);
+    expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
+    expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+
+    const repeated = page.runTranscriptSearch();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await page.updateComplete;
+    expect(find("status")?.getAttribute("aria-busy")).toBe("true");
+    expect(find("snippet")).toBeNull();
+    expect(find("form")).toBe(form);
+    expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
+    expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+    replacement.resolve(matches("replacement needle"));
+    await repeated;
+    await vi.waitFor(() => expect(find("snippet")?.textContent).toBe("replacement needle"));
+    expect(find("form")).toBe(form);
+    expect(page.querySelector(".sessions-transcript-search__trigger")).toBe(trigger);
+    expect(page.querySelector(".sessions-transcript-search__input input")).toBe(input);
+  });
+
   it("searches changed membership without waiting for the metadata list", async () => {
     const refresh = createDeferred();
     const request = emptySearch();

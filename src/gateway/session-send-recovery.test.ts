@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -12,7 +13,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -29,6 +29,7 @@ import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test
 import type { SessionSendDelivery } from "./session-send-delivery.js";
 import { readSessionSendDeliveryAdmission } from "./session-send-delivery.js";
 import { recoverSessionSendDeliveries } from "./session-send-recovery.js";
+import { config, delivery, input, sourceSnapshot } from "./session-send-recovery.test-support.js";
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 
 const io = vi.hoisted(() => ({
@@ -92,42 +93,6 @@ vi.mock(import("./session-utils-store-worker.js"), async (importOriginal) => ({
   resolveGatewaySessionStoreTargetInWorker: io.load,
 }));
 
-const delivery: SessionSendDelivery = {
-  version: 1,
-  runId: "saved-delivery",
-  source: {
-    agentId: "main",
-    sessionKey: "agent:main:source",
-    sessionId: "source-id",
-    lifecycleRevision: "source-before-reset",
-  },
-  target: { agentId: "main", sessionKey: "agent:main:target", sessionId: "target-id" },
-  sandboxed: false,
-  message: "Saved peer update",
-};
-const input: SessionPendingInput = {
-  id: "saved-input",
-  runId: delivery.runId,
-  acceptedAt: 1,
-  state: "interrupted",
-  message: {
-    role: "user",
-    content: delivery.message,
-    timestamp: 1,
-    idempotencyKey: `${delivery.runId}:user`,
-    provenance: {
-      kind: "inter_session",
-      sourceTool: "sessions_send",
-      sourceSessionKey: delivery.source.sessionKey,
-    },
-    __openclaw: { sessionSendDelivery: { ...delivery, operatorSource: null } },
-  },
-};
-const config: OpenClawConfig = {
-  agents: { entries: { main: {} } },
-  tools: { sessions: { visibility: "all" } },
-  session: { communication: { send: "always", receive: "always" } },
-};
 let sourceEntry: {
   sessionId: string;
   updatedAt: number;
@@ -154,24 +119,6 @@ const context = createDirectChatContext({
   }),
 });
 context.logGateway.warn = warn;
-const sourceSnapshot = (
-  pending = input,
-  state = "interrupted",
-  consumed_event_id: string | null = null,
-) => ({
-  snapshot: {
-    current: true,
-    pending: {
-      input_id: pending.id,
-      run_id: pending.runId,
-      request_hash: "request:original-request-fingerprint",
-      state,
-      consumed_event_id,
-      message_json: JSON.stringify(pending.message),
-    },
-  },
-  assertCurrent() {},
-});
 const storeTarget = (key: string) => ({
   agentId: key.split(":")[1]!,
   canonicalKey: key,
@@ -223,6 +170,7 @@ afterEach(() => {
 });
 
 it("retains queued peers when the interrupted predecessor is paused", async () => {
+  const debug = vi.spyOn(context.logGateway, "debug");
   io.entries.mockResolvedValue([
     {
       sessionKey: delivery.target.sessionKey,
@@ -235,6 +183,15 @@ it("retains queued peers when the interrupted predecessor is paused", async () =
 
   expect(io.resumeMain).toHaveBeenCalledOnce();
   expectNoCalls(dispatch, resumeChat, io.withdraw, io.report);
+  expect(debug).toHaveBeenCalledWith(
+    `Pending input replay: ${JSON.stringify({
+      inputHash: createHash("sha256").update(input.id).digest("hex").slice(0, 16),
+      kind: "peer",
+      outcome: "skipped",
+      state: "interrupted",
+      skipReason: "predecessor-not-ready",
+    })}`,
+  );
 });
 
 it("recovers a logical agent's saved input from its shared physical store", async () => {
@@ -424,6 +381,8 @@ it.each([
 );
 
 it("resumes chat inputs in acceptance order across pages, excluding expired and withdrawn inputs", async () => {
+  const debug = vi.spyOn(context.logGateway, "debug");
+  const info = vi.spyOn(context.logGateway, "info");
   const chat = (id: string, ageMs = 0, state: SessionPendingInput["state"] = "interrupted") => ({
     ...input,
     id,
@@ -475,6 +434,30 @@ it("resumes chat inputs in acceptance order across pages, excluding expired and 
   await recovering;
   expect(resumeChat.mock.calls.map(([target]) => target.runId)).toEqual(["first", "second"]);
   expectNoCalls(dispatch, io.report, io.withdraw);
+  const decisions = [...debug.mock.calls, ...info.mock.calls]
+    .map(([message]) => JSON.parse(message.slice("Pending input replay: ".length)))
+    .map(({ inputHash, outcome, skipReason, staleReason }) => ({
+      inputHash,
+      outcome,
+      skipReason,
+      staleReason,
+    }));
+  expect(decisions).toEqual(
+    [
+      ["expired", "skipped", "expired", undefined],
+      ["cancelled", "skipped", "state-not-interrupted", undefined],
+      ["live", "skipped", "state-not-interrupted", undefined],
+      ["withdrawn", "stale", undefined, "state-not-interrupted"],
+      ["consumed", "stale", undefined, "consumed"],
+      ["first", "accepted", undefined, undefined],
+      ["second", "accepted", undefined, undefined],
+    ].map(([id, outcome, skipReason, staleReason]) => ({
+      inputHash: createHash("sha256").update(id!).digest("hex").slice(0, 16),
+      outcome,
+      skipReason,
+      staleReason,
+    })),
+  );
 });
 
 it.each(["replaced", "archived-source", "archived-target"] as const)(
@@ -633,7 +616,7 @@ it("replays sessions across stores concurrently while preserving each saved inpu
   }
 });
 
-it("reports each input replay phase and retry backoff without input identity", async () => {
+it("reports each input replay phase and retry backoff without raw input identity", async () => {
   const startedAt = Date.now();
   vi.spyOn(performance, "now").mockImplementation(() => Date.now() - startedAt);
   const info = vi.spyOn(context.logGateway, "info").mockImplementation(() => {});
@@ -661,6 +644,7 @@ it("reports each input replay phase and retry backoff without input identity", a
     message.startsWith("Pending input replay: "),
   )?.[0];
   expect(JSON.parse(replay!.slice("Pending input replay: ".length))).toMatchObject({
+    inputHash: createHash("sha256").update(input.id).digest("hex").slice(0, 16),
     kind: "peer",
     outcome: "blocked",
     waitReason: "endpoint-replaced",

@@ -1,9 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
@@ -22,40 +24,27 @@ import {
   type WorkspaceCatalogFile,
   type WorkspaceCatalogRow,
 } from "./chat-session-workspace-catalog.ts";
-import { FolderDisclosure } from "./chat-session-workspace-disclosure.tsx";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-session-workspace-desktop.css";
+import { FileDisclosure } from "./file-disclosure.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 function WorkspaceFilename(props: { name: string }) {
   const parts = createMemo(() => splitWorkspaceFilename(props.name));
   const [overflow, setOverflow] = createSignal(false);
   let stem: HTMLSpanElement | undefined;
-  const schedule = createLayoutMeasurement(
+  createLayoutMeasurement(
     () => props.name,
     () => {
       const overflowing = Boolean(stem && stem.scrollWidth > stem.clientWidth);
       return () => setOverflow(overflowing);
     },
-    { targets: () => (stem ? [stem] : []) },
+    { targets: () => (stem ? [stem] : []), fonts: true },
   );
-  onSettled(() => {
-    if (!stem) {
-      return undefined;
-    }
-    let active = true;
-    const update = () => {
-      if (active) {
-        schedule();
-      }
-    };
-    void document.fonts.ready.then(update);
-    return () => {
-      active = false;
-    };
-  });
   return (
     <span class="workspace-desktop__filename">
       <span
@@ -142,17 +131,9 @@ function RailRow(props: {
           <span class="workspace-desktop__folder-icon">
             <Show when={props.expanded} fallback={<Icon name="folder" />}>
               {/* Lucide folder-open, the approved Files glyph (ISC). */}
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
+              <StrokeIcon aria-hidden="true">
                 <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-              </svg>
+              </StrokeIcon>
             </Show>
           </span>
         </Show>
@@ -214,7 +195,7 @@ function DirectoryBranch(props: {
         }}
       />
       <Show when={props.row.directory}>
-        <FolderDisclosure open={expanded()} active={active()} instant={instant()}>
+        <FileDisclosure variant="folder" open={expanded()} active={active()} instant={instant()}>
           <Show when={directory()?.loading}>
             <div class="workspace-desktop__notice" role="status">
               {t("chat.workspaceFiles.loading")}
@@ -242,7 +223,7 @@ function DirectoryBranch(props: {
               )}
             </For>
           </div>
-        </FolderDisclosure>
+        </FileDisclosure>
       </Show>
     </div>
   );
@@ -282,9 +263,14 @@ function WorkspaceGroup(props: {
           </div>
         }
       >
-        <FolderDisclosure open={props.expanded} active={props.active !== false} instant={instant()}>
+        <FileDisclosure
+          variant="folder"
+          open={props.expanded}
+          active={props.active !== false}
+          instant={instant()}
+        >
           {props.children}
-        </FolderDisclosure>
+        </FileDisclosure>
       </Show>
     </section>
   );
@@ -325,19 +311,11 @@ function ActivityMenu(props: {
             icon:
               filter === "all" ? (
                 // Lucide files, the approved activity glyph (ISC).
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
+                <StrokeIcon aria-hidden="true">
                   <path d="M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8" />
                   <path d="M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706z" />
                   <path d="M5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1" />
-                </svg>
+                </StrokeIcon>
               ) : (
                 <Icon
                   name={

@@ -67,7 +67,6 @@ it.each(
     });
     const result = await runIsolatedGatewayCli({
       args,
-      root,
       ...fixture,
       env: { OPENCLAW_SHELL: shell, OPENCLAW_SUBAGENT_EXEC: undefined },
     });

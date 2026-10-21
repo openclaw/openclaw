@@ -17,6 +17,7 @@ import {
 } from "./application-plan.js";
 import { digestClawBytes, digestClawValue } from "./digest.js";
 import { digestClawMcpServer } from "./mcp.js";
+import { planClawPortableAutomation } from "./portable-automation.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -185,7 +186,8 @@ export async function buildClawAddPlan(params: {
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
   const openClawAgentSettings = params.openClawProfile?.agent ?? {};
-  const persistedOpenClawAgentSettings = materializeClawToolProfile(openClawAgentSettings);
+  const { heartbeat: _heartbeat, ...agentSettings } = openClawAgentSettings;
+  const persistedOpenClawAgentSettings = materializeClawToolProfile(agentSettings);
   const agentConfig: ClawAddPlan["agent"]["config"] = clawOwnedAgentConfig({
     ...params.manifest.agent,
     ...persistedOpenClawAgentSettings,
@@ -393,6 +395,9 @@ export async function buildClawAddPlan(params: {
         });
         pending.action.source = planSourcePath(pending.sourcePath, read.realPath);
         pending.action.digest = digestClawBytes(read.buffer);
+        if (pending.action.id === "HEARTBEAT.md") {
+          pending.content = read.buffer;
+        }
       } catch (error) {
         const { code, message } = clawWorkspaceSourceFailure(error, pending.sourcePath, "package");
         const diagnostic = blocker(code, pending.manifestPath, message);
@@ -578,6 +583,14 @@ export async function buildClawAddPlan(params: {
       }),
     );
   }
+
+  planClawPortableAutomation({
+    actions,
+    heartbeat: openClawAgentSettings.heartbeat,
+    content: pendingWorkspaceFiles.find((pending) => pending.action.id === "HEARTBEAT.md")?.content,
+    config: context.config ?? {},
+    agentId: finalId,
+  });
 
   // Strict v1 validation permits only deterministic main or isolated targets.
   for (const job of params.manifest.cronJobs) {

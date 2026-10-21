@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import * as questionDispatch from "../../agents/harness/gateway-question-dispatch.js";
-import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
 import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-lifecycle.js";
 import * as gatewayTransport from "../../agents/tools/gateway.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
@@ -20,7 +19,6 @@ import type { GatewayClient, RespondFn } from "./types.js";
 
 afterEach(() => {
   secretRuntime.clearSecretsRuntimeSnapshot();
-  resetPendingAskUserQuestionsForTest();
   vi.restoreAllMocks();
 });
 
@@ -217,6 +215,8 @@ describe("secret store mutation lifecycle", () => {
         expect(methods).toEqual(["question.request", "question.waitAnswer", "secrets.store.list"]);
       } finally {
         manager.close();
+        await manager.drain();
+        await scheduler.stop();
         run.close();
       }
     });

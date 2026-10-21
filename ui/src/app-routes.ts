@@ -23,7 +23,7 @@ import {
   sameRouteLocation,
   type RouteId,
 } from "./app-route-paths.ts";
-import type { SolidRouteProps } from "./app-route-types.ts";
+import type { SolidRouteProps } from "./app-route-types.tsx";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { retryControlUiImport } from "./app/stale-chunk-reload.ts";

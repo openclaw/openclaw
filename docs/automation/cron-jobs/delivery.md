@@ -110,6 +110,35 @@ When an agent creates an isolated reminder from an active chat, OpenClaw stores 
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
 
+### Owner delivery and direct messages
+
+Set `delivery.target: "owner"` (`--delivery-target owner`) when a job should
+resolve a positively identified owner DM at delivery time. This does not follow
+the last group conversation or guess a recipient when owner identity is
+ambiguous. `delivery.directPolicy: "block"` (`--direct-policy block`) blocks
+direct/DM delivery for that job; the default is `allow`.
+
+A missing owner route does not skip execution. The job still runs, and ordinary
+delivery settlement records the unavailable destination without falling back to
+the last conversation. An explicit DM block remains intentional non-delivery.
+
+```bash
+openclaw automations edit <job-id> \
+  --announce --channel telegram --delivery-target owner
+```
+
+These policies support agent-turn jobs in any supported session, including `main`, and
+non-main command or script jobs with chat delivery. Owner targeting cannot
+be combined with `--to`, `--thread-id`, or `--webhook`. Setting it on an existing
+job clears the previous explicit recipient and thread. Selecting a new explicit
+recipient replaces owner targeting. Use `--clear-delivery-target` or
+`--clear-direct-policy` to remove the stored policy.
+
+Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
+job only when reasoning returned by the agent should accompany a meaningful result.
+Reasoning alone does not create a notification; omitting this setting keeps ordinary
+final-output delivery.
+
 ### Failure notifications
 
 Failure-alert webhooks stay **Unknown** when the request may have reached the

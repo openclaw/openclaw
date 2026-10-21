@@ -38,14 +38,11 @@ const mocks = await vi.hoisted(async () => {
     maxTokens: 8_192,
   });
 
+  const emptyMetadata = createEmptyPluginMetadataSnapshot();
   const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
+    ...emptyMetadata.index,
     policyHash: "test-policy",
     generatedAtMs: 0,
-    installRecords: {},
     plugins: [
       {
         pluginId: "openai",
@@ -58,9 +55,7 @@ const mocks = await vi.hoisted(async () => {
         compat: [],
       },
     ],
-    diagnostics: [],
   };
-  const emptyMetadata = createEmptyPluginMetadataSnapshot();
   const metadataSnapshot = {
     ...emptyMetadata,
     policyHash: index.policyHash,
@@ -68,10 +63,7 @@ const mocks = await vi.hoisted(async () => {
     index,
     registryIndex: index,
     normalizePluginId: (pluginId) => pluginId.trim().toLowerCase(),
-    metrics: {
-      ...emptyMetadata.metrics,
-      indexPluginCount: index.plugins.length,
-    },
+    metrics: { ...emptyMetadata.metrics, indexPluginCount: index.plugins.length },
     owners: {
       ...emptyMetadata.owners,
       providers: new Map([["openai", ["openai"]]]),
@@ -132,18 +124,12 @@ const mocks = await vi.hoisted(async () => {
         api: "openai-responses",
         models: [{ ...model(), thinkingLevelMap: { off: null, max: "max" } }],
       };
+      const provider = { id: "openai", label: "OpenAI", auth: [] };
       return {
-        providers: [
-          {
-            id: "openai",
-            label: "OpenAI",
-            auth: [],
-            resolveSyntheticAuth,
-          },
-        ],
+        providers: [{ ...provider, resolveSyntheticAuth }],
         entries: [
           {
-            provider: { id: "openai", label: "OpenAI", auth: [] },
+            provider,
             result: { provider: providerConfig },
             providerConfigs: { openai: providerConfig },
           },
@@ -292,13 +278,16 @@ const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
 const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
 
+const inputFor = (config: OpenClawConfig) => ({
+  agentId: "default",
+  config,
+  agentDir: "/tmp/prepared-static-agent",
+  workspaceDir: "/tmp/prepared-static-workspace",
+});
 const snapshotFor = (config: OpenClawConfig) =>
   getPreparedModelRuntimeSnapshot({
-    agentId: "default",
-    config,
-    agentDir: "/tmp/prepared-static-agent",
+    ...inputFor(config),
     inheritedAuthDir: "/tmp/prepared-static-agent",
-    workspaceDir: "/tmp/prepared-static-workspace",
   });
 const refresh = (config: OpenClawConfig) =>
   refreshPreparedModelRuntimeSnapshots(config, {
@@ -362,14 +351,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(turnAliases).toEqual([{ alias: "Current", provider: "openai", model: "gpt-5.5" }]);
     expect(snapshot!.pluginRegistry?.providers).toEqual([]);
     const configuredCatalog = snapshot!.modelCatalog;
-    expect(
-      getPreparedModelCatalogSnapshot({
-        agentId: "default",
-        config,
-        agentDir: "/tmp/prepared-static-agent",
-        workspaceDir: "/tmp/prepared-static-workspace",
-      })?.entries,
-    ).toEqual(configuredCatalog.entries);
+    expect(getPreparedModelCatalogSnapshot(inputFor(config))?.entries).toEqual(
+      configuredCatalog.entries,
+    );
     expect(configuredCatalog.entries).toHaveLength(1);
     const project = (
       catalog: ModelCatalogSnapshot,
@@ -396,9 +380,10 @@ describe("prepared model runtime Gateway catalog mode", () => {
       ],
       defaultLevel: profile.defaultLevel,
     };
-    mocks.resolveProviderPolicySurface.mockImplementation(() => {
+    const rejectArtifactLoad = () => {
       throw new Error("lightweight projection must not load provider artifacts");
-    });
+    };
+    mocks.resolveProviderPolicySurface.mockImplementation(rejectArtifactLoad);
     expect(project(configuredCatalog)).toEqual(expected);
     expect(project(configuredCatalog, snapshot!.pluginRegistry)).toEqual(expected);
 
@@ -409,9 +394,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(workerCatalog);
     const fullCatalog = await snapshot!.loadFullModelCatalog!();
     expect(snapshot!.configuredModelAliases).toBe(turnAliases);
-    mocks.resolveProviderPolicySurface.mockImplementation(() => {
-      throw new Error("lightweight projection must not load provider artifacts");
-    });
+    mocks.resolveProviderPolicySurface.mockImplementation(rejectArtifactLoad);
     expect(project(fullCatalog)).toEqual(expected);
     expect(project(fullCatalog, snapshot!.pluginRegistry)).toEqual(expected);
   });
@@ -422,10 +405,13 @@ describe("prepared model runtime Gateway catalog mode", () => {
   ] as const)(
     "projects current static rows in scoped $mode catalogs (live=$live)",
     async ({ live, mode }) => {
-      mocks.resolveStaticCatalogModel.mockReturnValue({
-        ...mocks.model("openai", "gpt-5.5", "Configured model"),
+      const configuredModel = {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "Configured model",
         baseUrl: "https://configured.example.test/v1",
-      });
+      };
+      mocks.resolveStaticCatalogModel.mockReturnValue({ ...mocks.model(), ...configuredModel });
       const catalog = await withScopedCatalogCache(() =>
         prepareScopedReadOnlyModelCatalog(
           {
@@ -442,16 +428,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
         ),
       );
       expect(catalog.staticEntries).toEqual(
-        mode === "replace"
-          ? []
-          : [
-              expect.objectContaining({
-                provider: "openai",
-                id: "gpt-5.5",
-                name: "Configured model",
-                baseUrl: "https://configured.example.test/v1",
-              }),
-            ],
+        mode === "replace" ? [] : [expect.objectContaining(configuredModel)],
       );
       expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     },

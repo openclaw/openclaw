@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onSettled, Show } from "solid-js";
 import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
@@ -65,7 +65,7 @@ export function BoardMcpAppContent(props: {
       }
     },
   );
-  onCleanup(() => {
+  onSettled(() => () => {
     generation += 1;
     props.viewRef(undefined);
   });

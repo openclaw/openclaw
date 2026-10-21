@@ -6,10 +6,7 @@ import { describeControlFailure } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
 import { reconcileCodexComputerUseStartArtifacts } from "./computer-use-artifacts.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
-import {
-  resolveBundledComputerUseMarketplacePath,
-  resolveClientManagedBundledMarketplacePath,
-} from "./computer-use-marketplace.js";
+import { resolveClientManagedBundledMarketplacePath } from "./computer-use-marketplace.js";
 import {
   createComputerUseRequest,
   runCodexComputerUseLiveTest,
@@ -81,8 +78,6 @@ export type CodexComputerUseSetupParams = {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   forceEnable?: boolean;
-  defaultBundledMarketplacePath?: string;
-  defaultBundledMarketplacePathCandidates?: readonly string[];
 };
 
 type CodexComputerUseInspectionParams = Omit<
@@ -355,8 +350,7 @@ async function inspectCodexComputerUseWithoutFence(
     config: computerUseConfig,
     allowAdd: params.installMode !== "none",
     signal: params.signal,
-    defaultBundledMarketplacePath: params.defaultBundledMarketplacePath ?? managedMarketplacePath,
-    defaultBundledMarketplacePathCandidates: params.defaultBundledMarketplacePathCandidates,
+    managedMarketplacePath,
     managedCodexHome,
   });
   if (!marketplace.marketplace) {
@@ -583,8 +577,7 @@ async function resolveMarketplaceRef(params: {
   config: ResolvedCodexComputerUseConfig;
   allowAdd: boolean;
   signal?: AbortSignal;
-  defaultBundledMarketplacePath?: string;
-  defaultBundledMarketplacePathCandidates?: readonly string[];
+  managedMarketplacePath?: string;
   managedCodexHome?: string;
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
@@ -603,7 +596,7 @@ async function resolveMarketplaceRef(params: {
   }
 
   let candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
-  const bundledMarketplacePath = resolveBundledComputerUseMarketplacePath(params);
+  const bundledMarketplacePath = params.managedMarketplacePath;
   const discoverDefaultMarketplace =
     params.allowAdd &&
     !params.config.marketplaceSource &&
@@ -614,7 +607,6 @@ async function resolveMarketplaceRef(params: {
       await migrateLegacyBundledMarketplaceSource({
         request: params.request,
         bundledMarketplacePath,
-        legacySources: params.defaultBundledMarketplacePathCandidates,
         userConfigPath: path.join(params.managedCodexHome, "config.toml"),
       });
     }
@@ -680,7 +672,6 @@ async function resolveMarketplaceRef(params: {
 async function migrateLegacyBundledMarketplaceSource(params: {
   request: CodexComputerUseRequest;
   bundledMarketplacePath: string;
-  legacySources?: readonly string[];
   userConfigPath: string;
 }): Promise<void> {
   const response = await params.request<
@@ -706,8 +697,7 @@ async function migrateLegacyBundledMarketplaceSource(params: {
   if (configuredSource === path.resolve(params.bundledMarketplacePath)) {
     return;
   }
-  const legacySources =
-    params.legacySources ?? resolveMacOSDesktopCodexBundledMarketplaceCandidates();
+  const legacySources = resolveMacOSDesktopCodexBundledMarketplaceCandidates();
   if (!legacySources.some((source) => path.resolve(source) === configuredSource)) {
     return;
   }

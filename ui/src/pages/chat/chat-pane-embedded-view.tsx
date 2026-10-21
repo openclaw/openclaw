@@ -6,8 +6,9 @@ import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
@@ -32,6 +33,8 @@ import type {
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type PanelHostProps = { registerPanelHost?: SidebarPanelHostRegistration };
 type Props = SidebarPanelDefinitionParams & PanelHostProps;

@@ -1,10 +1,13 @@
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { closeSlot, openSlot } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
   // Probe once per session activation; transient failures stay uncached so the

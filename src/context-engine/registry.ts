@@ -287,15 +287,11 @@ export async function registerContextEngineForOwner(
   id: string,
   factory: ContextEngineFactory,
   owner: string,
-  opts?: RegisterContextEngineForOwnerOptions,
+  opts?: Omit<RegisterContextEngineForOwnerOptions, "lifecycle">,
 ): Promise<ContextEngineRegistrationResult> {
   const targetRegistry = requireActivePluginRegistry();
   const result = registerContextEngineInRegistry(targetRegistry, id, factory, owner, opts);
-  if (
-    result.ok &&
-    (opts?.lifecycle ?? "runtime") === "runtime" &&
-    getActivePluginRegistry() === targetRegistry
-  ) {
+  if (result.ok && getActivePluginRegistry() === targetRegistry) {
     const assertCurrent = () => {
       if (getActivePluginRegistry() !== targetRegistry) {
         throw new Error("Context engine registration was superseded");

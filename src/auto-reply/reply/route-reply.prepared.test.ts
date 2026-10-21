@@ -84,6 +84,15 @@ describe("prepared reply routing", () => {
     },
   );
 
+  it("delivers admitted final reasoning through the prepared transport", async () => {
+    const result = await routePreparedReply({
+      ...destination,
+      plan: prepare({ text: "Reasoning for the report.", isReasoning: true }),
+    });
+    expect(result).toMatchObject({ ok: true, delivered: true, messageId: "text-sent" });
+    expect(visible).toEqual([{ text: "Reasoning for the report. transformed" }]);
+  });
+
   it("rejects a producer retired during its final delivery preparation", async () => {
     let current = true;
     const beforeDeliver = vi.fn(async () => {

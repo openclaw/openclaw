@@ -1,22 +1,26 @@
-import { createSignal, Show } from "solid-js";
+import { action, createOptimistic, createSignal, Show } from "solid-js";
 import { ModalDialog } from "../../components/modal-dialog.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import "./chatgpt-usage-limit.css";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 /** Presentation for one failed run; the parent keys its lifetime by session and run. */
 export function ChatGPTUsageLimit(props: { presented: boolean; kind: "business" | "consumer" }) {
   const [open, setOpen] = createSignal(true);
-  const [copyState, setCopyState] = createSignal<"idle" | "copying" | "copied" | "failed">("idle");
+  const [copyState, setCopyState] = createSignal<"idle" | "copied" | "failed">("idle");
+  const [copying, setCopying] = createOptimistic(false);
   const body = () =>
     t(props.kind === "business" ? "chat.usageLimit.businessBody" : "chat.usageLimit.consumerBody");
-  const copy = async () => {
-    setCopyState("copying");
-    const copied = await copyToClipboard(t("chat.usageLimit.request"));
+  const copy = action(function* () {
+    setCopying(true);
+    const copied: boolean = yield copyToClipboard(t("chat.usageLimit.request"));
     setCopyState(copied ? "copied" : "failed");
-  };
+  });
   return (
     <>
       <div class="chat-composer-neighbor-card chat-composer-neighbor-card--warn" role="status">
@@ -51,10 +55,10 @@ export function ChatGPTUsageLimit(props: { presented: boolean; kind: "business" 
           <ProviderBrandIcon provider="openai" class="chatgpt-usage-limit__logo" />
           <h2>{t("chat.usageLimit.title")}</h2>
           <p>{body()}</p>
-          <Show when={copyState() === "copied"}>
+          <Show when={!copying() && copyState() === "copied"}>
             <p role="status">{t("chat.usageLimit.copied")}</p>
           </Show>
-          <Show when={copyState() === "failed"}>
+          <Show when={!copying() && copyState() === "failed"}>
             <p role="alert">{t("chat.usageLimit.copyFailed")}</p>
             <blockquote>{t("chat.usageLimit.request")}</blockquote>
           </Show>
@@ -76,7 +80,7 @@ export function ChatGPTUsageLimit(props: { presented: boolean; kind: "business" 
               <button
                 class="btn primary chatgpt-usage-limit__action"
                 type="button"
-                disabled={copyState() === "copying"}
+                disabled={copying()}
                 onClick={() => void copy()}
               >
                 {t("chat.usageLimit.copy")}

@@ -5,11 +5,13 @@ import type { SettingsMediaDeviceState } from "./view-state.ts";
 import type { TabIconViewProps } from "./view-tab-icon.tsx";
 
 type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configProps"]>;
-// Rendering does not consume the completion values returned by owner callbacks.
+// Most callbacks ignore completion values; custom-theme import tracks its admitted request.
 type ConfigData = {
-  [Key in keyof ConfigPageProps]: ConfigPageProps[Key] extends (...args: infer Args) => unknown
-    ? (...args: Args) => void
-    : ConfigPageProps[Key];
+  [Key in keyof ConfigPageProps]: Key extends "onImportCustomTheme"
+    ? ConfigPageProps[Key]
+    : ConfigPageProps[Key] extends (...args: infer Args) => unknown
+      ? (...args: Args) => void
+      : ConfigPageProps[Key];
 };
 
 type ConfigViewOptions = Partial<
@@ -33,6 +35,7 @@ type ConfigViewOptions = Partial<
     | "sessionObserverEnabled"
     | "sessionObserverUtilityModel"
     | "sessionObserverResolvedModel"
+    | "sessionObserverModelsScope"
     | "sessionObserverModelsUnavailable"
     | "sessionObserverDisabled"
     | "setSessionObserverEnabled"
@@ -44,7 +47,6 @@ type ConfigViewOptions = Partial<
     | "onCameraRefresh"
     | "onCameraSelect"
     | "pluginsHref"
-    | "sessionSourcePluginsLoading"
     | "configPath"
     | "navRootLabel"
     | "showRootTab"
@@ -64,8 +66,15 @@ type ConfigViewOptions = Partial<
 > & {
   textScale: number;
   hiddenSessionCatalogIds: ReadonlySet<string>;
+  hiddenSessionCatalogLabels: {
+    read: () => ReadonlyMap<string, string>;
+    scope: object | null;
+  };
+  sessionSourcePlugins?: {
+    read: () => ReadonlySet<string> | null;
+    scope: object | null;
+  };
   sessionObserverModels?: readonly ConfigPageProps["sessionObserverModels"][number][];
-  installedSessionSourcePluginIds?: ReadonlySet<string> | null;
   microphone?: SettingsMediaDeviceState;
   camera?: SettingsMediaDeviceState;
   onOpenFile?: () => void;

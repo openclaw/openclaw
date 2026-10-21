@@ -11,10 +11,16 @@ import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-
 import * as cronInference from "../../cron/run-inference.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+import {
+  consumeCronNextCheckProposal,
+  createAutomationResultRecorder,
+} from "../../infra/agent-run-registry.automation.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
+  createMockReplyOperation,
   getRawExecuteAgentTurnForTest,
   runInitialFallbackAttempt,
   type FallbackRunnerParams,
@@ -81,6 +87,48 @@ function expectedCompletionEvidence(runtime: "embedded" | "cli") {
 }
 
 describe("ordinary session event execution", () => {
+  it("captures a structured result before event settlement consumes the invocation", async () => {
+    const runId = "automation-result-capture";
+    const automation = createScheduledAutomation();
+    automation.job.payload = {
+      kind: "agentTurn",
+      message: "Check quietly",
+      includeReasoning: true,
+    };
+    const followupRun = createFollowupRun();
+    const event = createEventExecution();
+    followupRun.run.scheduledAutomation = automation;
+    followupRun.run.internalEventExecution = event;
+    let recordResult: ReturnType<typeof createAutomationResultRecorder> | undefined;
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      recordResult = createAutomationResultRecorder(runId, automation.job.id);
+      recordResult({ outcome: "no_change", summary: "Nothing new." });
+      return { payloads: [{ text: "No updates." }], meta: {} };
+    });
+    event.onTerminal = vi.fn(() => {
+      expect(() => recordResult?.({ outcome: "done", summary: "Too late." })).toThrow(
+        "Automation invocation is no longer active",
+      );
+      consumeCronNextCheckProposal(runId, automation.job.id);
+      expect(getAgentRunContext(runId)?.cronRunsByJobId).toBeUndefined();
+    });
+    const { replyOperation } = createMockReplyOperation();
+
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ followupRun, replyOperation, opts: { runId } }),
+    );
+
+    expect(event.onTerminal).toHaveBeenCalledOnce();
+    expect(result.outcome).toMatchObject({
+      kind: "settled",
+      status: "ok",
+      automation: {
+        result: { outcome: "no_change", summary: "Nothing new." },
+        includeReasoning: true,
+      },
+    });
+  });
+
   it.each(["embedded", "cli"] as const)(
     "retains scheduled destination guidance in the %s turn without changing the system prefix",
     async (runtime) => {

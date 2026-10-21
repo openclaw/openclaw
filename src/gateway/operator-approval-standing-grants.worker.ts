@@ -18,11 +18,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -76,6 +77,10 @@ const installStandingGrantSchema = createSqliteSchemaEnsurer(() => STANDING_GRAN
 });
 
 function ensureStandingGrantSchema(db: EngineConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    ensureStatePostgresFragment(db, STANDING_GRANT_TABLE);
+    return;
+  }
   const ddl = getAdmittedSqliteSchemaFacts(db)?.tableSql.get(STANDING_GRANT_TABLE);
   // This retired, unshipped shape is recognized from admission's existing DDL facts.
   if (ddl && /\bexpires_at_ms\s+INTEGER\s+NOT\s+NULL\b/iu.test(ddl)) {

@@ -75,6 +75,11 @@ trigger model fallback. The transcript owner rereads the current revision and
 retries an eligible append once. A repeated conflict is reported as a local
 error; an older reply cannot overwrite or bypass a newer user turn.
 
+Session-state changes before prompt admission also stop model fallback. If the
+persisted user turn changes or the session reader is no longer current, OpenClaw
+preserves the session-state error for the session's retry owner or reports it to
+the caller. These errors do not produce an `unknown` provider-failure notice.
+
 Thinking-level recovery applies only when the provider identifies a reasoning or
 thinking parameter. Model/account restrictions and unrelated unsupported options
 keep their original failure classification and follow the configured fallback
