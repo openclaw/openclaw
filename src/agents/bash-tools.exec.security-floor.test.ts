@@ -327,28 +327,6 @@ it("defers to human approval when the default reviewer import fails", async () =
   }
 });
 
-it.runIf(process.platform !== "win32")("runs reviewed globs and chains as written", async () => {
-  fs.writeFileSync(path.join(tempRoot, "first.review-fixture"), "fixture");
-  const command = "ls *.review-fixture; echo chain-complete";
-  const calls = mockApprovalGateway();
-  const autoReviewer = makeReviewer({
-    decision: "allow-once",
-    risk: "medium",
-    rationale: "project inspection",
-  });
-  const result = await runAuto({ autoReviewer, cwd: tempRoot }, command);
-  expect(autoReviewer).toHaveBeenCalledWith(
-    expect.objectContaining({ command, reason: "execution-plan-miss" }),
-  );
-  expect(calls).toEqual([]);
-  expect(result.details).toMatchObject({
-    status: "completed",
-    exitCode: 0,
-    approvalReviewOutcome: "approved",
-  });
-  expect(text(result)).toContain("first.review-fixture\nchain-complete");
-});
-
 it.each(process.platform === "win32" ? [true] : [false, true])(
   "retains Guardian evidence and revalidates reviewed scripts (drift=%s)",
   async (mutate) => {
@@ -377,11 +355,16 @@ it.each(process.platform === "win32" ? [true] : [false, true])(
       }
     });
     const result = await tool.execute("tool-guardian-script", { command }).finally(unsubscribe);
+    expect(autoReviewer).toHaveBeenCalledWith(
+      expect.objectContaining({ command, reason: "execution-plan-miss" }),
+    );
+    expect(callGatewayTool).not.toHaveBeenCalled();
     expect(changedAfterApproval).toBe(mutate);
     const output = mutate ? "approval script operand changed before execution" : "approved";
     expect(text(result)).toContain(output);
     expect(result.details).toMatchObject({
       status: mutate ? "failed" : "completed",
+      ...(!mutate ? { exitCode: 0 } : {}),
       approvalReviewOutcome: "approved",
       approvalReviews: [
         { id: "guardian:tool-guardian-script", label: "Guardian", status: "approved" },

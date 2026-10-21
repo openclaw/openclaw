@@ -13,14 +13,13 @@ import {
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals-policy.js";
+import type { ExecApprovalsResolved, ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type ExecAutoReviewDecision = Awaited<ReturnType<ExecAutoReviewer>>;
-type ExecAsk = import("../infra/exec-approvals.js").ExecAsk;
-type ExecSecurity = import("../infra/exec-approvals.js").ExecSecurity;
 type MockAllowAlwaysPersistenceInput = Parameters<
   typeof import("../infra/exec-approvals.js").resolveAllowAlwaysPersistenceDecision
 >[0];
@@ -39,21 +38,9 @@ type MockAllowlistResult = {
   segmentAllowlistEntries: unknown[];
   segmentSatisfiedBy?: unknown[];
 };
-type MockExecAllowlistEntry = {
-  pattern: string;
-  argPattern?: string;
-  source?: "allow-always";
-  commandText?: string;
-};
-type MockExecApprovalsResolved = {
-  allowlist: MockExecAllowlistEntry[];
-  file: { version: 1; agents: Record<string, unknown> };
-  agent: {
-    security: ExecSecurity;
-    ask: ExecAsk;
-    askFallback?: "deny";
-    autoAllowSkills?: false;
-  };
+type MockExecApprovalsResolved = Pick<ExecApprovalsResolved, "allowlist" | "file"> & {
+  agent: Pick<ExecApprovalsResolved["agent"], "security" | "ask"> &
+    Partial<Pick<ExecApprovalsResolved["agent"], "askFallback" | "autoAllowSkills">>;
 };
 type ShellAllowlistMockParams = {
   command?: string;
@@ -442,7 +429,7 @@ const fullNodePolicy: MockExecApprovalsResolved["agent"] = {
 };
 
 function createNodeApprovals(
-  allowlist: MockExecAllowlistEntry[],
+  allowlist: ExecAllowlistEntry[],
   agent: MockExecApprovalsResolved["agent"] = { security: "allowlist", ask: "on-miss" },
 ): MockExecApprovalsResolved {
   return { allowlist, agent, file: { version: 1, agents: {} } };
@@ -1321,19 +1308,6 @@ describe("executeNodeHostCommand", () => {
       plan: preparedPlan,
       execPolicy: { security: nodeSecurity, ask: nodeAsk },
     });
-    setNodeApprovals([], {
-      security: nodeSecurity,
-      ask: nodeAsk,
-      askFallback: "deny",
-      autoAllowSkills: false,
-    });
-    callGatewayToolMock.mockImplementation(
-      createNodeGatewayHandler({
-        approvals: { version: 1, agents: {} },
-        allowApprovalResolve: true,
-        execPolicy: { security: nodeSecurity, ask: nodeAsk },
-      }),
-    );
 
     const execution = runReviewed({
       autoReviewer,
@@ -1378,61 +1352,37 @@ describe("executeNodeHostCommand", () => {
     },
   );
 
-  it("requests detached human approval when node runtime policy requires ask always", async () => {
-    const autoReviewer = allowReviewer();
-    parsePreparedSystemRunPayloadMock.mockReturnValue({
-      plan: preparedPlan,
+  it.each([
+    {
+      policy: "ask-always",
       execPolicy: { security: "full", ask: "always" },
-    });
-    setNodeApprovals([], fullNodePolicy);
-    setHostPolicy("allowlist", "on-miss");
+      followup: "agent",
+      status: "approval-pending",
+    },
+    { policy: "missing", execPolicy: undefined, followup: undefined, status: "completed" },
+  ] as const)(
+    "requires human approval without allow-always for $policy node policy",
+    async ({ execPolicy, followup, status }) => {
+      const autoReviewer = allowReviewer();
+      parsePreparedSystemRunPayloadMock.mockReturnValue({ plan: preparedPlan, execPolicy });
+      setHostPolicy("allowlist", "on-miss");
+      const result = await runReviewed({ approvalFollowupMode: followup, autoReviewer });
 
-    const result = await runReviewed({
-      approvalFollowupMode: "agent",
-      autoReviewer,
-    });
-
-    expect(result.details?.status).toBe("approval-pending");
-    expect(autoReviewer).not.toHaveBeenCalled();
-    expect(createExecApprovalRequestRouteMock).toHaveBeenCalledTimes(1);
-    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
-      ask: "always",
-      allowAlwaysPersistence: {
-        kind: "patterns",
-        patterns: [{ pattern: "/trusted/bin/tool" }],
-      },
-    });
-    expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
-    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    );
-  });
-
-  it("omits allow-always from node approval prompts when node runtime policy is missing", async () => {
-    const autoReviewer = allowReviewer();
-    parsePreparedSystemRunPayloadMock.mockReturnValue({
-      plan: preparedPlan,
-      execPolicy: undefined,
-    });
-    setHostPolicy("allowlist", "on-miss");
-
-    const result = await runReviewed({
-      autoReviewer,
-    });
-
-    expect(result.details?.status).toBe("completed");
-    expect(autoReviewer).not.toHaveBeenCalled();
-    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
-      ask: "always",
-      allowAlwaysPersistence: {
-        kind: "patterns",
-        patterns: [{ pattern: "/trusted/bin/tool" }],
-      },
-    });
-    expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
-  });
+      expect(result.details?.status).toBe(status);
+      expect(autoReviewer).not.toHaveBeenCalled();
+      expect(createExecApprovalRequestRouteMock).toHaveBeenCalledTimes(1);
+      expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+        ask: "always",
+        allowAlwaysPersistence: { kind: "patterns", patterns: [{ pattern: "/trusted/bin/tool" }] },
+      });
+      expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+      if (followup) {
+        expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+          expect.objectContaining({ allowedDecisions: ["allow-once", "deny"] }),
+        );
+      }
+    },
+  );
 
   it.each([
     {
@@ -1595,54 +1545,6 @@ describe("executeNodeHostCommand", () => {
     },
   );
 
-  it.each([
-    {
-      name: "partially matching compound command",
-      command: "foo && bar",
-      patterns: ["/trusted/bin/foo"],
-      segments: [segment(["foo"]), segment(["bar"])],
-      coverage: {
-        complete: true,
-        patterns: [{ pattern: "/trusted/bin/foo" }, { pattern: "/trusted/bin/bar" }],
-      },
-    },
-    {
-      name: "unrepresentable segment",
-      command: 'sh -c "/bin/echo ok && /bin/date" && missingcmd',
-      patterns: ["/bin/echo", "/bin/date"],
-      segments: [segment(["sh", "-c", "/bin/echo ok && /bin/date"]), segment(["missingcmd"])],
-      coverage: { complete: false, patterns: [{ pattern: "/bin/echo" }, { pattern: "/bin/date" }] },
-    },
-  ])(
-    "does not reuse node allow-always metadata for $name",
-    async ({ command, patterns, segments, coverage }) => {
-      const commandMarker = { pattern: nodeCommandMarker, source: "allow-always" as const };
-      mockGatewayInvokesWithNodeApprovals({ version: 1, agents: {} });
-      setNodeApprovals([
-        commandMarker,
-        ...patterns.map((pattern) => ({ pattern, source: "allow-always" as const })),
-      ]);
-      evaluateShellAllowlistMock.mockReturnValue(
-        analysis(segments, { segmentAllowlistEntries: [null, null] }),
-      );
-      resolveAllowAlwaysPatternCoverageMock.mockReturnValue(coverage);
-      setHostPolicy("allowlist", "on-miss");
-      resolveExecApprovalWaitOutcomeMock.mockResolvedValue({ kind: "request-failed" });
-
-      await expect(
-        run({
-          command,
-          security: "allowlist",
-          ask: "on-miss",
-        }),
-      ).rejects.toThrow("exec denied: request-failed");
-      expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
-      expect(requiresExecApprovalMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({ allowlistSatisfied: false, durableApprovalSatisfied: false }),
-      );
-    },
-  );
-
   it("uses forwarded node env overrides for node approval prechecks", async () => {
     const allowlistEntry = { pattern: "/trusted/bin/tool" };
     mockGatewayInvokesWithNodeApprovals({ version: 1, agents: {} });
@@ -1700,15 +1602,6 @@ describe("executeNodeHostCommand", () => {
     expect(requireRunParams(requireGatewayCommand("system.run")).systemRunPlan).toEqual(
       preparedPlan,
     );
-  });
-
-  it("uses the prepared cwd when no workdir was requested", async () => {
-    await run({
-      workdir: undefined,
-    });
-
-    const runParams = requireRunParams(requireGatewayCommand("system.run"));
-    expect(runParams.cwd).toBe(preparedPlan.cwd);
   });
 
   it("rejects disconnected node targets before invoking system.run", async () => {

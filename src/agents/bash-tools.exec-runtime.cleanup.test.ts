@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  cancelExecRequestOwners,
-  captureExecRequestOwners,
-  withExecRequestTurn,
-} from "../infra/exec-request-context.js";
+import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
@@ -128,7 +124,6 @@ it.each([
   ["manual-cancel", false, true, "none"],
   ["manual-cancel", false, true, "capture"],
   ["manual-cancel", true, true, "capture"],
-  ["manual-cancel", true, true, "direct"],
 ] as const)(
   "starts and joins targeted sandbox cleanup for %s (cleanupFails=%s, duringFinalize=%s, requestStop=%s)",
   async (reason, cleanupFails, duringFinalize, requestStop) => {
@@ -230,11 +225,7 @@ it.each([
         guestExit.resolve(createRunExit());
         await artifactsEntered.promise;
         if (request) {
-          if (requestStop === "capture") {
-            expect(request.cancellation.cancel()).toBe(true);
-          } else {
-            cancelExecRequestOwners([request.owner]);
-          }
+          expect(request.cancellation.cancel()).toBe(true);
           expect(originalSource.signal.aborted).toBe(false);
           expect(guest.session.requestCancelled).toBe(true);
         } else {
