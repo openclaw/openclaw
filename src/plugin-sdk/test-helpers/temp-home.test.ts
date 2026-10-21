@@ -13,6 +13,9 @@ import * as sessionCleanup from "../../test-utils/session-state-cleanup.js";
 import { withTempHomeCore } from "./temp-home.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const read = (file: string) => fs.readFile(file, "utf8");
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
 describe("temporary home cleanup", () => {
   it.each(["joined", "kill-error", "exit-timeout"])(
@@ -27,8 +30,7 @@ describe("temporary home cleanup", () => {
       const runtimeSource =
         "require('node:fs').writeFileSync(require('node:path').join(process.env.OPENCLAW_STATE_DIR, 'child.txt'), 'child state'); process.stdout.write('ready'); setInterval(() => {}, 1_000);";
       await fs.writeFile(runtimePath, runtimeSource);
-      const cleanupRuntime = () => runtime.cleanup();
-      onTestFinished(cleanupRuntime);
+      onTestFinished(() => runtime.cleanup());
       const originalHome = process.env.HOME;
       const originalStateDir = process.env.OPENCLAW_STATE_DIR;
       const inputFailure = new Error("CLI interaction failed");
@@ -76,33 +78,28 @@ describe("temporary home cleanup", () => {
             ...(unjoined ? { env: { TMPDIR: ownerRoot, TMP: ownerRoot, TEMP: ownerRoot } } : {}),
           },
         ).catch((error: unknown) => error);
-        const runtimeCleanupFailure = await cleanupRuntime().catch((error: unknown) => error);
+        const runtimeCleanupFailure = await runtime.cleanup().catch((error: unknown) => error);
 
         expect(hasUnjoinedWork(failure)).toBe(unjoined);
         expect(process.env.HOME).toBe(originalHome);
         expect(process.env.OPENCLAW_STATE_DIR).toBe(originalStateDir);
         if (unjoined) {
           expect(failure).toMatchObject({ cause: inputFailure });
-          expect(child?.exitCode).toBeNull();
-          expect(child?.signalCode).toBeNull();
+          expect(child).toMatchObject({ exitCode: null, signalCode: null });
           expect(cleanup).not.toHaveBeenCalled();
           expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
           if (cleanupMode === "exit-timeout") {
             expect(String(failure)).toContain("did not exit within 5000ms after SIGKILL");
           }
-          expect(await fs.readFile(path.join(home!, "owned.txt"), "utf8")).toBe(
-            "retain while live",
-          );
-          expect(await fs.readFile(path.join(home!, ".openclaw", "child.txt"), "utf8")).toBe(
-            "child state",
-          );
-          expect(await fs.readFile(runtimePath, "utf8")).toBe(runtimeSource);
+          expect(await read(path.join(home!, "owned.txt"))).toBe("retain while live");
+          expect(await read(path.join(home!, ".openclaw", "child.txt"))).toBe("child state");
+          expect(await read(runtimePath)).toBe(runtimeSource);
         } else {
           expect(failure).toBe(inputFailure);
           expect(cleanupSignals).toEqual(["SIGKILL"]);
           expect(() => owner.assertReleased()).not.toThrow();
-          await expect(fs.stat(home!)).rejects.toMatchObject({ code: "ENOENT" });
-          await expect(fs.stat(runtimeRoot)).rejects.toMatchObject({ code: "ENOENT" });
+          await expectMissing(home!);
+          await expectMissing(runtimeRoot);
         }
         expect(hasUnjoinedWork(runtimeCleanupFailure)).toBe(unjoined);
       } finally {
@@ -115,7 +112,7 @@ describe("temporary home cleanup", () => {
           await cleanupSessionState({ stateDir: path.join(home, ".openclaw") });
           await fs.rm(home, { recursive: true, force: true });
         }
-        await cleanupRuntime();
+        await runtime.cleanup();
       }
     },
   );
@@ -128,11 +125,9 @@ describe("temporary home cleanup", () => {
     const unexpectedCallback = async () => {
       throw new Error("callback must not run when root acquisition fails");
     };
-    const failures = await Promise.allSettled([
-      withTempHomeCore(unexpectedCallback, options),
-      withTempHomeCore(unexpectedCallback, options),
-      withTempHomeCore(unexpectedCallback, options),
-    ]);
+    const failures = await Promise.allSettled(
+      Array.from({ length: 3 }, () => withTempHomeCore(unexpectedCallback, options)),
+    );
     for (const result of failures) {
       expect(result).toMatchObject({ status: "rejected", reason: { code: "ENOENT" } });
     }
@@ -150,12 +145,12 @@ describe("temporary home cleanup", () => {
     const third = await withTempHomeCore(async (home) => home, options);
     expect(new Set([first, second, third]).size).toBe(3);
     expect(await fs.readdir(missingParent)).toEqual([path.basename(first)]);
-    expect(await fs.readFile(path.join(first, "retained.txt"), "utf8")).toBe("keep");
+    expect(await read(path.join(first, "retained.txt"))).toBe("keep");
     const independent = await withTempHomeCore(async (home) => home, {
       prefix: path.join(path.basename(parent), "independent-"),
       skipSessionCleanup: true,
     });
-    await expect(fs.stat(independent)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(independent);
     expect(await fs.readdir(parent)).toEqual(["missing"]);
     await fs.rm(first, { recursive: true });
     expect(await fs.readdir(missingParent)).toEqual([]);
