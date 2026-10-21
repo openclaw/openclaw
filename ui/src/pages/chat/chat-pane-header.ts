@@ -68,7 +68,12 @@ import type {
 } from "./components/chat-pane-header.types.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing.solid.tsx";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
-import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
+import {
+  isSidebarSlotVisible,
+  sidebarMainPanel,
+  type SidebarLayout,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
 
 type PaneControls = Pick<
   ReturnType<typeof createChatPaneRails>,
@@ -550,15 +555,18 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onToggleSidePanel: toggleSidePanel,
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       // Desktop retains the native Details trigger even when a panel occupies main.
-      // Keep the layout's external-trigger signal below for the Show chat action.
+      // Other main panels retain their separate Show chat action below.
       detailsControl:
         detailsControl && this.sessionPresentation === "desktop"
           ? { ...detailsControl, externalTrigger: false }
           : detailsControl,
       onOpenDetails: detailsControl ? this.onHeaderDetails : undefined,
       conversationVisible: detailsControl?.conversationVisible,
+      // Dashboard reveals its retained conversation through the frame's Panels control.
       onToggleConversation:
-        currentLayout && detailsControl?.externalTrigger
+        currentLayout &&
+        detailsControl?.externalTrigger &&
+        sidebarMainPanel(currentLayout)?.slot !== "dashboard"
           ? () => this.toggleConversationPanel(currentLayout)
           : undefined,
       runAction: subagentStop,

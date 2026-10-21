@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -196,7 +196,7 @@ export function renderSessionSection(params: {
     ) : undefined,
   );
   let personHeader: HTMLElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     if (host().presencePeople?.get(section().id) === personHeader) {
       host().presencePeople?.delete(section().id);
     }

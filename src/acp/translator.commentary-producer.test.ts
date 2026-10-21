@@ -13,27 +13,12 @@ import {
 vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
 it.each([
-  {
-    name: "no preview",
-    batchedPreview: false,
-    separator: "",
-    expected: "Checking files.\nReading config.\nChecking files.Done.",
-  },
-  {
-    name: "preview without line breaks",
-    batchedPreview: true,
-    separator: "",
-    expected: "Checking files.Reading config.Checking files.Done.",
-  },
-  {
-    name: "preview with line breaks",
-    batchedPreview: true,
-    separator: "\n",
-    expected: "Checking files.\nReading config.\nChecking files.Done.",
-  },
-])(
-  "delivers explicit commentary once through Gateway and ACP ($name)",
-  async ({ batchedPreview, separator, expected }) => {
+  [false, "", "Checking files.\nReading config.\nChecking files.Done."],
+  [true, "", "Checking files.Reading config.Checking files.Done."],
+  [true, "\n", "Checking files.\nReading config.\nChecking files.Done."],
+] as const)(
+  "delivers explicit commentary once through Gateway and ACP (preview: %s, separator: %j)",
+  async (batchedPreview, separator, expected) => {
     const sent = createDeferred<string>();
     const request = vi.fn().mockImplementation(async (method, params) => {
       if (method === "chat.send") {
@@ -54,6 +39,18 @@ it.each([
     });
     const source = createSubscribedSessionHarness({ runId });
     const message = makeAgentAssistantMessage({ api: "openai-completions", content: [] });
+    const signature = (index: number) =>
+      JSON.stringify({ v: 1, id: `commentary-${index}`, phase: "commentary" });
+    const emitText = (contentIndex: number, text: string, final = false) => {
+      const partial = { contentIndex, partial: message };
+      source.emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: final
+          ? { type: "text_end", content: text, ...partial }
+          : { type: "text_delta", delta: text, ...partial },
+      });
+    };
     const deliver = async () => {
       await source.subscription.waitForPendingEvents();
       await unsubscribe.drain();
@@ -73,25 +70,12 @@ it.each([
       if (batchedPreview) {
         for (const [contentIndex, text] of narrations.entries()) {
           message.content.push({ type: "text", text });
-          source.emit({
-            type: "message_update",
-            message,
-            assistantMessageEvent: {
-              type: "text_delta",
-              contentIndex,
-              delta: text,
-              partial: message,
-            },
-          });
+          emitText(contentIndex, text);
           await deliver();
         }
         for (const [index, block] of message.content.entries()) {
           if (block.type === "text") {
-            block.textSignature = JSON.stringify({
-              v: 1,
-              id: `commentary-${index}`,
-              phase: "commentary",
-            });
+            block.textSignature = signature(index);
           }
         }
       }
@@ -100,19 +84,10 @@ it.each([
           message.content.push({
             type: "text",
             text,
-            textSignature: JSON.stringify({ v: 1, id: `commentary-${index}`, phase: "commentary" }),
+            textSignature: signature(index),
           });
         }
-        source.emit({
-          type: "message_update",
-          message,
-          assistantMessageEvent: {
-            type: "text_end",
-            contentIndex: batchedPreview ? index : message.content.length - 1,
-            content: text,
-            partial: message,
-          },
-        });
+        emitText(batchedPreview ? index : message.content.length - 1, text, true);
         await deliver();
         message.content.push({
           type: "toolCall",

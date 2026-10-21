@@ -11,7 +11,9 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import * as historyPrewarm from "./server-history-prewarm.js";
 import { scheduleGatewayIdleTask } from "./server-idle-task.js";
+import * as lazyCoreHandlers from "./server-methods/lazy-core-handlers.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 
@@ -20,11 +22,15 @@ let scheduler: GatewayScheduler;
 beforeEach(() => {
   clock = createGatewaySchedulerClock();
   scheduler = createTestGatewayScheduler(clock.clock);
+  vi.spyOn(lazyCoreHandlers, "prepareGatewayRequestHandler").mockImplementation(
+    async (handler) => handler,
+  );
 });
 
 afterEach(async () => {
   await scheduler.stop();
   resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
 });
 
 function scheduleIdle(run: () => Promise<void>, log = { warn: vi.fn() }, retryDelayMs = 1) {
@@ -41,19 +47,12 @@ function scheduleIdle(run: () => Promise<void>, log = { warn: vi.fn() }, retryDe
   });
 }
 
-function scheduleHandler(
-  load: () => Promise<void>,
-  later: () => Promise<void>,
-  log: { warn: (message: string) => void },
-) {
+function scheduleHandler(load: () => Promise<void>, log: { warn: (message: string) => void }) {
+  vi.spyOn(historyPrewarm, "prewarmGatewaySessionHistory").mockImplementation(load);
   return scheduleGatewayHandlerPrewarm({
     scheduler,
     getConfig: () => ({}),
     log,
-    items: [
-      { name: "first", load },
-      { name: "later", load: later },
-    ],
   });
 }
 
@@ -70,8 +69,7 @@ it.each(["idle", "handler"] as const)(
       events.push("finished");
     };
     const log = { warn: vi.fn() };
-    const later = vi.fn(async () => {});
-    const handle = kind === "idle" ? scheduleIdle(run, log) : scheduleHandler(run, later, log);
+    const handle = kind === "idle" ? scheduleIdle(run, log) : scheduleHandler(run, log);
     const owner = createGatewaySidecarStopOwner();
     owner.publish(handle);
     let stopping: Promise<void> | undefined;
@@ -93,7 +91,10 @@ it.each(["idle", "handler"] as const)(
       await stopping;
     }
     expect(events).toEqual(["started", "finished", "closed"]);
-    expect(later).not.toHaveBeenCalled();
+    if (kind === "handler") {
+      expect(historyPrewarm.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+      expect(lazyCoreHandlers.prepareGatewayRequestHandler).not.toHaveBeenCalled();
+    }
     expect(log.warn).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   },
@@ -125,7 +126,6 @@ it.each(["suspension", "restart signal"] as const)(
 
 it("joins the outgoing handler when shutdown begins in its warning callback", async () => {
   const events: string[] = [];
-  const later = vi.fn(async () => {});
   let rootsAfterStop: number | undefined;
   let stopping: Promise<void> | undefined;
   const warn = vi.fn(() => {
@@ -140,7 +140,6 @@ it("joins the outgoing handler when shutdown begins in its warning callback", as
       events.push("started");
       throw new Error("cold load failed");
     },
-    later,
     { warn },
   );
   await Promise.resolve();
@@ -149,5 +148,6 @@ it("joins the outgoing handler when shutdown begins in its warning callback", as
   expect(warn).toHaveBeenCalledOnce();
   expect(events).toEqual(["started", "warning", "closed"]);
   expect(rootsAfterStop).toBe(0);
-  expect(later).not.toHaveBeenCalled();
+  expect(historyPrewarm.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  expect(lazyCoreHandlers.prepareGatewayRequestHandler).not.toHaveBeenCalled();
 });

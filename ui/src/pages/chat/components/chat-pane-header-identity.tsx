@@ -1,4 +1,4 @@
-import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
+import { Show, createMemo, onSettled } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -9,7 +9,6 @@ import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
-import { Popover } from "../../../components/solid/popover.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import "../../../components/workspace-icon.ts";
@@ -25,7 +24,6 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
-import { usePanePresentation } from "../chat-pane-presentation.ts";
 import type { ChatPaneHeaderProps, ChatPaneParentSession } from "./chat-pane-header.types.ts";
 
 function revealLabel(platform: string | null): string {
@@ -117,53 +115,25 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
   );
 }
 
+// Roster mode keeps the session crumbs off the agent pill: it is one settings target.
 export function AgentCrumb(
   props: ChatPaneHeaderProps & { agent: NonNullable<ChatPaneHeaderProps["agent"]> },
 ) {
-  const id = createUniqueId();
-  const presented = usePanePresentation(() => props.presented);
-  // Rename opens the context and hidden panes close it; otherwise the user controls it.
-  const requestedOpen = createMemo(() => (!presented() ? false : props.editing ? true : undefined));
   return (
-    <div class="chat-pane__agent-identity">
-      {/* Conversation changes retire the open panel and its rename input together. */}
-      <Show when={`${props.agent.id}\0${props.session?.key ?? ""}`} keyed>
-        {(_scope) => (
-          <Popover
-            id={id}
-            lazy
-            sameRoot
-            class="chat-pane__agent-context"
-            label={t("chat.sessionHeader.agentContext", { agent: props.agent.name })}
-            placement="bottom-start"
-            open={requestedOpen()}
-            onOpenChange={(open) => {
-              if (!open && props.editing) {
-                props.onCancelRename();
-              }
-            }}
-            trigger={
-              <>
-                <span class="chat-pane__agent-avatar" aria-hidden="true">
-                  <AgentIdentityAvatar agent={props.agent} />
-                </span>
-                <span class="chat-pane__agent-name">{props.agent.name}</span>
-              </>
-            }
-          >
-            <IdentityCrumbs {...props} />
-          </Popover>
-        )}
-      </Show>
-      <button
-        class="chat-pane__agent-settings"
-        type="button"
-        aria-label={t("agentChip.namedSettings", { name: props.agent.name })}
-        onClick={() => props.onOpenAgentSettings?.(props.agent.id)}
-      >
+    <button
+      class="chat-pane__agent-identity"
+      type="button"
+      aria-label={t("agentChip.namedSettings", { name: props.agent.name })}
+      onClick={() => props.onOpenAgentSettings?.(props.agent.id)}
+    >
+      <span class="chat-pane__agent-avatar" aria-hidden="true">
+        <AgentIdentityAvatar agent={props.agent} />
+      </span>
+      <span class="chat-pane__agent-name">{props.agent.name}</span>
+      <span class="chat-pane__agent-settings" aria-hidden="true">
         <Icon name="settings" />
-      </button>
-    </div>
+      </span>
+    </button>
   );
 }
 

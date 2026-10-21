@@ -20,7 +20,7 @@ import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
 type Props = {
   details: ChatDetailsProps;
   presented: boolean;
-  /** Desktop Details omits Processes; other consumers retain the native summary. */
+  /** Desktop renders its own process list; other consumers retain the native summary. */
   showProcesses?: boolean;
   /** Supplied only by the native desktop composition; mobile keeps its own body. */
   desktopSubagents?: {

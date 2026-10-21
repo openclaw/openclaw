@@ -66,7 +66,6 @@ export function createRealtimePlaybackFixture(
     sessionLifecycle: { status: "active" },
     guildId: "guild",
     channelId: "voice",
-    sessionChannelId: "voice",
     voiceSessionKey: "agent:main:discord:voice",
     route: {
       agentId: "main",

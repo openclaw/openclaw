@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionProcessSummary } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -81,7 +82,7 @@ const processes: SessionProcessSummary[] = [
   {
     processId: "dev-server",
     instanceId: "dev-server-1",
-    name: "pnpm ui:dev --port 5173",
+    name: "Background terminal",
     status: "running",
     startedAt: now - 1_380_000,
     tail: "ready in 412 ms",
@@ -91,7 +92,7 @@ const processes: SessionProcessSummary[] = [
   {
     processId: "watch-tests",
     instanceId: "watch-tests-1",
-    name: "node scripts/run-vitest.mjs run ui/src/pages/chat",
+    name: "/workspace/openclaw/projects/desktop-details/background-process-verification",
     status: "running",
     startedAt: now - 74_000,
     tail: "",
@@ -151,6 +152,7 @@ suite.define(() => {
           };
           const gateway = await installMockGateway(page, {
             sessionKey: parentKey,
+            deferredMethods: ["sessions.processes.list"],
             sessions: [parent, ...children],
             historyMessages: [
               {
@@ -160,7 +162,11 @@ suite.define(() => {
                 __openclaw: { id: "delegating", seq: 1 },
               },
             ],
-            featureMethods: [...defaultControlUiFeatureMethods, "sessions.processes.list"],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "sessions.processes.list",
+              "sessions.processes.stop",
+            ],
             methodResponses: {
               "cron.list": cronListResponseFixture({
                 jobs: [],
@@ -180,6 +186,20 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
           const pane = page.locator(".chat-pane-cache__pane--active");
+          const capture = async (name: string, details: Locator, content: Locator[]) => {
+            if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+              return;
+            }
+            const frame = await takeControlUiScreenshotFrame(page, details, content, {
+              animations: "disabled",
+              elements: [details],
+            });
+            await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
+            await writeFile(
+              path.join(suite.artifactDir, `${name}-details.png`),
+              frame.elements[0]!.png,
+            );
+          };
           for (const width of [1728, 1100, 390]) {
             await page.setViewportSize({ width, height: 1100 });
             await pane
@@ -191,6 +211,16 @@ suite.define(() => {
                 .toBe(width === 1728 ? "complementary" : "dialog");
             }
             const details = await openChatDetails(pane);
+            if (width === 1728) {
+              const loading = details.locator('[data-details-group="processes"]');
+              await loading.locator("openclaw-panel-loading-skeleton").waitFor();
+              await capture(`processes-loading-${colorScheme}`, details, [loading]);
+              await gateway.resolveDeferred("sessions.processes.list", {
+                sessionId: "details-background",
+                processes,
+                truncated: false,
+              });
+            }
             if (width === 390) {
               await details
                 .locator(".chat-mobile-host__header")
@@ -236,16 +266,191 @@ suite.define(() => {
               ).toEqual(["dev-server", "watch-tests"]);
               await processGroup.getByRole("button", { name: "Show all", exact: true }).waitFor();
             } else {
-              expect(await processGroup.count()).toBe(0);
+              await processGroup.locator("[data-process-id]").first().waitFor();
+              expect(await processGroup.locator("[data-process-id]").count()).toBe(4);
+              expect(
+                await processGroup.evaluate((element) =>
+                  element.previousElementSibling?.getAttribute("data-details-group"),
+                ),
+              ).toBe("subagents");
+              const first = processGroup.locator('[data-process-id="dev-server"]');
+              const stop = first.getByRole("button", {
+                name: "Stop Background terminal",
+                exact: true,
+              });
+              await page.mouse.move(0, 0);
+              await expect
+                .poll(() => stop.evaluate((element) => getComputedStyle(element).opacity))
+                .toBe("0");
+              await first.hover();
+              await expect
+                .poll(() => stop.evaluate((element) => getComputedStyle(element).opacity))
+                .toBe("1");
+              const badge = first.locator(".chat-details-processes__badge");
+              expect(await badge.isVisible()).toBe(true);
+              const bounds = await first.locator(".chat-details-processes__icon").boundingBox();
+              const statusBounds = await badge.boundingBox();
+              expect(statusBounds!.x).toBeGreaterThan(bounds!.x + bounds!.width / 2);
+              expect(statusBounds!.y).toBeGreaterThan(bounds!.y + bounds!.height / 2);
+              await capture(`processes-hover-${colorScheme}-${width}`, details, [first]);
+              await page.mouse.move(0, 0);
+              await first.locator(".chat-details-processes__open").focus();
+              await page.keyboard.press("Tab");
+              expect(await stop.evaluate((element) => element === document.activeElement)).toBe(
+                true,
+              );
+              expect(await stop.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+              await capture(`processes-focus-${colorScheme}-${width}`, details, [first]);
+              const longName = processGroup.locator(
+                '[data-process-id="watch-tests"] .chat-details-processes__name',
+              );
+              expect(
+                await longName.evaluate((element) => element.scrollWidth > element.clientWidth),
+              ).toBe(true);
+              expect(await longName.textContent()).toBe(processes[1]!.name);
+              await expect
+                .poll(() => longName.evaluate((element) => getComputedStyle(element).maskImage))
+                .not.toBe("none");
+              const restBounds = (await longName.boundingBox())!;
+              const rowBounds = (await longName.locator("..").boundingBox())!;
+              expect(restBounds.x + restBounds.width).toBe(rowBounds.x + rowBounds.width - 4);
+              const restFade = await longName.evaluate(
+                (element) => getComputedStyle(element).maskImage,
+              );
+              await longName.hover();
+              expect(await longName.boundingBox()).toEqual(restBounds);
+              expect(
+                await longName.evaluate((element) => getComputedStyle(element).maskImage),
+              ).not.toBe(restFade);
+              expect(await longName.locator("..").getAttribute("aria-label")).toContain(
+                processes[1]!.name,
+              );
+              expect(
+                await processGroup
+                  .locator('[data-status="completed"] .chat-details-processes__stop')
+                  .count(),
+              ).toBe(0);
+              expect(
+                await processGroup
+                  .locator('[data-status="failed"] .chat-details-processes__stop')
+                  .count(),
+              ).toBe(0);
+              if (width === 1728) {
+                await gateway.deferNext("sessions.processes.stop");
+                await stop.press("Enter");
+                const request = await gateway.waitForRequest("sessions.processes.stop");
+                expect(request.params).toMatchObject({
+                  key: parentKey,
+                  sessionId: "details-background",
+                  processId: "dev-server",
+                  instanceId: "dev-server-1",
+                });
+                await expect.poll(() => stop.isDisabled()).toBe(true);
+                expect(await first.getByRole("status").textContent()).toBe("Stopping…");
+                expect(await badge.isVisible()).toBe(true);
+                expect(await pane.locator("openclaw-chat-processes-panel").count()).toBe(0);
+                await capture(`processes-stopping-${colorScheme}`, details, [first]);
+                await gateway.resolveDeferred("sessions.processes.stop", { requested: false });
+                await processGroup.getByRole("alert").waitFor();
+                await capture(`processes-error-${colorScheme}`, details, [
+                  processGroup.getByRole("alert"),
+                ]);
+                await processGroup.getByRole("button", { name: "Retry", exact: true }).click();
+                await processGroup.getByRole("alert").waitFor({ state: "detached" });
+                const unavailable = processes.map((row) =>
+                  row.processId === "watch-tests" ? { ...row, canStop: false } : row,
+                );
+                await gateway.setMethodResponse("sessions.processes.list", {
+                  sessionId: "details-background",
+                  processes: unavailable,
+                  truncated: false,
+                });
+                await gateway.emitGatewayEvent("sessions.processes.changed", {
+                  sessionKey: parentKey,
+                  agentId: "main",
+                });
+                await expect
+                  .poll(() =>
+                    processGroup
+                      .locator('[data-process-id="watch-tests"] .chat-details-processes__stop')
+                      .count(),
+                  )
+                  .toBe(0);
+                await capture(`processes-unavailable-${colorScheme}`, details, [processGroup]);
+                const stopped = processes.map((row) =>
+                  row.processId === "dev-server"
+                    ? { ...row, status: "killed", canStop: false, endedAt: now }
+                    : row,
+                );
+                await gateway.deferNext("sessions.processes.stop");
+                await stop.click();
+                await expect
+                  .poll(async () => (await gateway.getRequests("sessions.processes.stop")).length)
+                  .toBe(2);
+                await gateway.setMethodResponse("sessions.processes.list", {
+                  sessionId: "details-background",
+                  processes: stopped,
+                  truncated: false,
+                });
+                await gateway.resolveDeferred("sessions.processes.stop", { requested: true });
+                await expect.poll(() => first.getAttribute("data-status")).toBe("killed");
+                expect(await first.locator(".chat-details-processes__stop").count()).toBe(0);
+                await page.mouse.move(0, 0);
+                await subagents.locator(":scope > summary").scrollIntoViewIfNeeded();
+                await capture(`processes-stopped-${colorScheme}`, details, [first]);
+                await gateway.setMethodResponse("sessions.processes.list", {
+                  sessionId: "details-background",
+                  processes: [],
+                  truncated: false,
+                });
+                await gateway.emitGatewayEvent("sessions.processes.changed", {
+                  sessionKey: parentKey,
+                  agentId: "main",
+                });
+                await processGroup
+                  .getByText("No background processes in this conversation.", { exact: true })
+                  .waitFor();
+                await capture(`processes-empty-${colorScheme}`, details, [processGroup]);
+                await gateway.setMethodResponse("sessions.processes.list", {
+                  sessionId: "details-background",
+                  processes,
+                  truncated: false,
+                });
+                await gateway.emitGatewayEvent("sessions.processes.changed", {
+                  sessionKey: parentKey,
+                  agentId: "main",
+                });
+                await expect.poll(() => processGroup.locator("[data-process-id]").count()).toBe(4);
+              }
+              await first
+                .locator(".chat-details-processes__open")
+                .evaluate((element) => (element as HTMLElement).blur());
+              await page.mouse.move(0, 0);
             }
             const frame = await takeControlUiScreenshotFrame(page, details, [summary], {
               animations: "disabled",
-              elements: [subagents, ...(width === 390 ? [processGroup] : [])],
+              elements: [details, subagents, processGroup],
             });
             await writeFile(
               path.join(suite.artifactDir, `details-background-${colorScheme}-${width}.png`),
               frame.png,
             );
+            await writeFile(
+              path.join(
+                suite.artifactDir,
+                `details-background-${colorScheme}-${width}-details.png`,
+              ),
+              frame.elements[0]!.png,
+            );
+            if (width === 1728) {
+              await processGroup
+                .locator('[data-process-id="dev-server"] .chat-details-processes__open')
+                .click();
+              const panel = pane.locator("openclaw-chat-processes-panel");
+              await panel.getByRole("button", { name: processes[0]!.name, exact: true }).waitFor();
+              await pane.getByRole("button", { name: "Close Processes", exact: true }).click();
+              await panel.waitFor({ state: "hidden" });
+            }
             if (width === 390) {
               await processGroup.getByRole("button", { name: "Show all", exact: true }).click();
               const panel = pane.locator("openclaw-chat-processes-panel");

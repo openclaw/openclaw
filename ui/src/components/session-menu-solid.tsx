@@ -1,4 +1,4 @@
-import { createMemo, createSignal, merge, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, merge, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
@@ -119,7 +119,7 @@ function SessionMenuContent(
   };
   let stopShortcut: (() => void) | undefined;
   let stopAfterHide: (() => void) | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     stopShortcut?.();
     stopAfterHide?.();
   });

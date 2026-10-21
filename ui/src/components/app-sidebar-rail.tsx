@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, onCleanup, untrack } from "solid-js";
+import { createMemo, For, Show, onSettled, untrack } from "solid-js";
 import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
@@ -45,7 +45,6 @@ import {
   renderSessionUnreadBadge,
   renderSessionOwnerAvatar,
 } from "./solid/session-presentation.tsx";
-import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 type RailPinTouchPress = {
@@ -201,17 +200,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
           }}
         </For>
       </div>
-      <div class="sidebar-rail__bottom">
-        <Show
-          when={
-            host.sessionDataContext?.theme.branding.communityLinks &&
-            host.sessionDataContext.config.current.communityInvite
-          }
-        >
-          <SidebarCommunityInvite />
-        </Show>
-        {renderAppSidebarFooterBar(host)}
-      </div>
+      <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
     </nav>
   );
 }
@@ -361,7 +350,7 @@ function renderRailPin(
       );
     }
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     clearTimeout(press?.timer);
     if (host.sidebarMenus.railPins.get(serialized) === pin) {
       host.sidebarMenus.railPins.delete(serialized);

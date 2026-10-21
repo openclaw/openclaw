@@ -13,12 +13,16 @@ suite.define(() => {
       await suite.withPage(
         { hasTouch, viewport: { width: 1280, height: 800 } },
         async ({ page }) => {
-          const sessions = ["Sidebar alignment review", "Release notes"].map((label, index) => ({
-            key: `agent:main:${index === 0 ? "current" : "notes"}`,
-            kind: "direct",
-            label,
-            updatedAt: Date.now(),
-          }));
+          const sessions = [
+            ...["Sidebar alignment review", "Release notes"].map((label, index) => ({
+              key: `agent:main:${index === 0 ? "current" : "notes"}`,
+              kind: "direct",
+              label,
+              updatedAt: Date.now(),
+            })),
+            // Home renders its session glyph only when the main session row exists.
+            { key: "agent:main:main", kind: "direct", label: "Home", updatedAt: Date.now() },
+          ];
           await installMockGateway(page, {
             sessionKey: "agent:main:current",
             presenceUsers: [{ id: "riley", name: "Riley", self: true }],
@@ -73,6 +77,19 @@ suite.define(() => {
           expect(
             Math.abs(agentBox!.y + agentBox!.height / 2 - ownerBox!.y - ownerBox!.height / 2),
           ).toBeLessThanOrEqual(0.5);
+          await rail.locator(".sidebar-footer-bar__home .session-glyph svg").waitFor();
+          const iconInk = await rail.evaluate((element) =>
+            [".sidebar-footer-bar__home svg", ".sidebar-issues-button svg"].map((selector) => {
+              const icon = element.querySelector<SVGElement>(selector)!;
+              let opacity = 1;
+              for (let node: Element | null = icon; node && node !== element;) {
+                opacity *= Number(getComputedStyle(node).opacity);
+                node = node.parentElement;
+              }
+              return { color: getComputedStyle(icon).color, opacity };
+            }),
+          );
+          expect(iconInk[0]).toEqual(iconInk[1]);
         },
       );
     },

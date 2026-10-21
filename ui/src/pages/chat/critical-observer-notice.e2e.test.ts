@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
@@ -14,6 +13,7 @@ const selectedSessionKey = "agent:main:main";
 const backgroundSessionKey = "agent:main:verification";
 const runId = "verification-run";
 const baseTime = Date.parse("2026-09-18T05:00:00.000Z");
+const conversation = "Your current conversation stays uninterrupted.";
 
 suite.define(() => {
   it("keeps background observer assessments in the sidebar without interrupting chat or replacing Undo", async () => {
@@ -21,37 +21,24 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
       async ({ page }) => {
         await seedStorage(page, { "openclaw:sidebar:sessions:show-preview": "true" });
-        const main = sessionRow(selectedSessionKey, "Main", baseTime);
-        const background = sessionRow(
-          backgroundSessionKey,
-          "Background verification",
-          baseTime - 1,
-          {
-            hasActiveRun: true,
-            activeRunIds: [runId],
-            status: "running",
-          },
-        );
+        const background = sessionRow(backgroundSessionKey, "Verification", baseTime - 1, {
+          hasActiveRun: true,
+          activeRunIds: [runId],
+          status: "running",
+        });
         const archived = sessionRow("agent:main:completed", "Completed work", baseTime - 2);
-        // Default rows show observer headlines only when session previews are on.
-        await seedStorage(page, { "openclaw:sidebar:sessions:show-preview": "true" });
         const gateway = await installMockGateway(page, {
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Your current conversation stays uninterrupted." }],
-            },
-          ],
-          sessions: [main, background, archived],
+          historyMessages: [{ role: "assistant", content: [{ type: "text", text: conversation }] }],
+          sessions: [sessionRow(selectedSessionKey, "Main", baseTime), background, archived],
           sessionArchiveFiltering: true,
           sessionKey: selectedSessionKey,
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
-        await page.getByText("Your current conversation stays uninterrupted.").waitFor();
+        await page.getByText(conversation).waitFor();
         const currentUrl = page.url();
-        const row = page.locator(
-          `.sidebar-recent-session[data-session-key="${backgroundSessionKey}"]`,
-        );
+        const session = (key: string) =>
+          page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+        const row = session(backgroundSessionKey);
         await row.waitFor({ state: "visible" });
         await gateway.waitForRequest("sessions.messages.subscribe", {
           match: { key: backgroundSessionKey },
@@ -75,7 +62,7 @@ suite.define(() => {
         });
 
         const emit = async (
-          health: "stuck" | "waiting-on-user" | "on-track",
+          health: "stuck" | "waiting-on-user",
           revision: number,
           headline: string,
         ) => {
@@ -94,38 +81,33 @@ suite.define(() => {
           await page.waitForLoadState("networkidle");
         };
 
-        await emit("stuck", 1, "Verification is waiting for a repair");
-        await page.screenshot({ path: path.join(suite.artifactDir, "observer-assessment.png") });
+        await emit("stuck", 1, "Needs repair");
         expect(await page.locator(".app-toast").count()).toBe(0);
-        await emit("waiting-on-user", 2, "A decision is needed in the background session");
+        await emit("waiting-on-user", 2, "Needs a decision");
         expect(await page.locator(".app-toast").count()).toBe(0);
         expect(await observerNotices.jsonValue()).toEqual([]);
         expect(page.url()).toBe(currentUrl);
 
-        const archiveRow = page.locator(
-          `.sidebar-recent-session[data-session-key="${archived.key}"]`,
-        );
+        const archiveRow = session(archived.key);
+        const waitArchived = (value: boolean) =>
+          waitForPatch(
+            gateway,
+            (params) => params.key === archived.key && params.archived === value,
+          );
         await archiveRow.hover();
         await archiveRow.click({ button: "right" });
         await activateSelfRemovingControl(
           page.getByRole("menuitem", { name: "Archive session", exact: true }),
         );
-        await waitForPatch(
-          gateway,
-          (params) => params.key === archived.key && params.archived === true,
-        );
+        await waitArchived(true);
         const toast = page.locator(".app-toast");
         const undo = toast.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
         await undo.focus();
-        await emit("stuck", 3, "Background verification still needs a repair");
+        await emit("stuck", 3, "Still needs repair");
         expect(await toast.textContent()).toContain("Session archived");
-        await page.screenshot({ path: path.join(suite.artifactDir, "undo-preserved.png") });
         await undo.click();
-        await waitForPatch(
-          gateway,
-          (params) => params.key === archived.key && params.archived === false,
-        );
+        await waitArchived(false);
         await archiveRow.waitFor({ state: "visible" });
         expect(page.url()).toBe(currentUrl);
       },

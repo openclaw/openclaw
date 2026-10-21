@@ -455,7 +455,9 @@ def checkout_selected_ref():
                   depth=2, blobless=True, retry_failures=True)
         except (FetchTimeout, GitFailure):
             raise GitFailure(1)
-    run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
+    # Materialize the full planner input tree with bounded checkout parallelism.
+    checkout_options = ("-c", "checkout.workers=2") if kind == "preflight" else ()
+    run_git(workspace, *checkout_options, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
 def checkout_harness(sha):

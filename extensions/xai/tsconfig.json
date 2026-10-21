@@ -986,6 +986,9 @@
       ],
       "openclaw/plugin-sdk/terminal-safe-text": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/terminal-safe-text.d.ts"
+      ],
+      "openclaw/plugin-sdk/mcp-enterprise-test-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/mcp-enterprise-test-runtime.d.ts"
       ]
     }
   }
