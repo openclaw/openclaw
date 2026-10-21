@@ -421,6 +421,27 @@ describe("background completion notifications", () => {
     ).toBeUndefined();
   });
 
+  it("routes an auto-threaded completion to the thread, not the channel it arrived in", async () => {
+    const id = await startAndFinish(
+      notifyTool({
+        messageProvider: "discord",
+        currentChannelId: "channel:111",
+        currentMessagingTarget: "channel:222",
+        accountId: "default",
+      }),
+      shellEcho("notify"),
+    );
+    const receipt = expectDefined(receipts[0], "completion receipt");
+    await expect(receipt.accepted).resolves.toEqual({ ok: true });
+    expect(peekSystemEventEntries(sessionKey)).toContainEqual(
+      expect.objectContaining({
+        id: receipt.id,
+        contextKey: `exec:${id}`,
+        deliveryContext: expect.objectContaining({ channel: "discord", to: "channel:222" }),
+      }),
+    );
+  });
+
   it.each([
     {
       name: "defaults to notifying chat providers",

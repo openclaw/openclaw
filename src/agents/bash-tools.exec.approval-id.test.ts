@@ -492,6 +492,29 @@ it.each(["allow-once", "deny"] as const)(
   },
 );
 
+it("routes an auto-threaded agent follow-up to the thread, not the channel it arrived in", async () => {
+  const followup = mockFollowup("allow-once");
+  const tool = approvalTool({
+    ...agentFollowup,
+    sessionKey: "agent:main:discord:channel:222",
+    elevated,
+    messageProvider: "discord",
+    currentChannelId: "channel:111",
+    currentMessagingTarget: "channel:222",
+    accountId: "default",
+  });
+  const result = await tool.execute("followup-auto-thread", {
+    command: "echo ok",
+    workdir: process.cwd(),
+  });
+  pendingDetails(result);
+  expect(await followup).toMatchObject({
+    channel: "discord",
+    to: "channel:222",
+    accountId: "default",
+  });
+});
+
 it("waits inline for native Discord approval and resumes the same session without a second user turn", async () => {
   const decision = createDeferredCore<{ decision: string }>();
   mockApproval("allow-once", {
