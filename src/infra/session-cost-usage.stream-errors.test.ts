@@ -1,5 +1,3 @@
-// Regression test: session-cost readline stream errors are swallowed instead of
-// crashing the caller's async iteration.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +8,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requestCostUsageCacheRefresh } from "./session-cost-usage-cache-runtime.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import { createUsageTranscriptEntry } from "./session-cost-usage-fixtures.test-support.js";
 import {
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
@@ -34,18 +33,7 @@ describe("session cost usage stream errors", () => {
   });
 
   it("does not crash when the transcript stream emits an error mid-read", async () => {
-    const { sessionFile } = await createSession(
-      "sess-stream-error",
-      [
-        sessionHeader,
-        JSON.stringify({
-          type: "message",
-          timestamp: new Date().toISOString(),
-          message: { role: "user", content: "hello" },
-        }),
-        "",
-      ].join("\n"),
-    );
+    const { sessionFile } = await createSession("sess-stream-error", `${sessionHeader}\n`);
 
     vi.spyOn(nodeFs, "createReadStream").mockImplementationOnce(() => {
       const stream = new PassThrough();
@@ -61,14 +49,7 @@ describe("session cost usage stream errors", () => {
 
   it("keeps readable usage and complete checkpoints after background and report stream errors", async () => {
     const usageEntry = (timestamp: string, input: number) =>
-      JSON.stringify({
-        type: "message",
-        timestamp,
-        message: {
-          role: "assistant",
-          usage: { input, output: 0, totalTokens: input, cost: { total: input / 1000 } },
-        },
-      });
+      JSON.stringify(createUsageTranscriptEntry(input, { timestamp, cost: input / 1000 }));
     const { tempDir, sessionsDir, sessionFile } = await createSession(
       "sess-cache-stream-error",
       `${usageEntry("2026-07-06T12:00:00.000Z", 10)}\n`,
@@ -134,10 +115,7 @@ if (!isMainThread) {
           await work.drain();
         }
         const readSummary = () =>
-          loadCostUsageSummaryFromCache({
-            ...query,
-            requestRefresh: false,
-          });
+          loadCostUsageSummaryFromCache({ ...query, requestRefresh: false });
         const afterRefresh = await readSummary();
         expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
         expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);

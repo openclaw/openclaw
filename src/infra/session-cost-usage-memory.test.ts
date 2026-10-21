@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type {
@@ -81,13 +82,13 @@ async function fixture(
 ) {
   const { sessionKey: fixtureSessionKey, sessionId: fixtureSessionId } = target;
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-  const binding = await acquireSessionActorStorage(
-    { agentId: "main", storePath, sessionKey: fixtureSessionKey, env },
-    { lifetime: { assertCurrent() {}, assertReadable() {} }, authority, create: true },
+  const binding = expectDefined(
+    await acquireSessionActorStorage(
+      { agentId: "main", storePath, sessionKey: fixtureSessionKey, env },
+      { lifetime: { assertCurrent() {}, assertReadable() {} }, authority, create: true },
+    ),
+    "Production acquisition did not select memory storage",
   );
-  if (!binding) {
-    throw new Error("Production acquisition did not select memory storage");
-  }
   const { actor } = binding;
   const scope = {
     agentId: "main",
@@ -156,10 +157,7 @@ async function cachedFixture(target = { sessionKey, sessionId }) {
   const entry =
     snapshot?.rollup &&
     decodeUsageCostRollup(snapshot.rollup.valueJson, "fixture", snapshot.rollup.blob ?? null);
-  if (!entry) {
-    throw new Error("Expected a production-generated usage rollup");
-  }
-  return { ...cached, entry, sessionId: target.sessionId };
+  return { ...cached, entry: expectDefined(entry, "Expected a production-generated usage rollup") };
 }
 
 function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = false) {
@@ -170,10 +168,10 @@ function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = f
     return encoded;
   }
   const raw = Buffer.from(JSON.stringify(rollup.rollup));
-  const envelope = decodeUsageCostRollupEnvelope(encoded.valueJson);
-  if (!envelope) {
-    throw new Error("Expected generated usage envelope");
-  }
+  const envelope = expectDefined(
+    decodeUsageCostRollupEnvelope(encoded.valueJson),
+    "Expected generated usage envelope",
+  );
   return {
     valueJson: JSON.stringify({
       ...envelope,
@@ -488,9 +486,7 @@ describe("actor memory usage", () => {
   });
 
   it("keeps captured corpus and usage bytes detached while later writes update new reads", async () => {
-    const { binding, append, refresh, snapshot, corpus: readCorpus } = await fixture();
-    await append(5);
-    await refresh();
+    const { binding, append, refresh, snapshot, corpus: readCorpus } = await cachedFixture();
     const snapshotInput = {
       includeEvents: true,
       includeRollupBodies: true,

@@ -77,19 +77,32 @@ afterEach(() => {
   }
 });
 
-function usageLine(id: string): string {
+function usageLine(id?: string, priced = true): string {
   return `${JSON.stringify({
     type: "message",
-    id,
-    parentId: null,
+    ...(id ? { id, parentId: null } : {}),
     timestamp: "2026-09-18T00:00:00Z",
     message: {
       role: "assistant",
       provider: "test",
       model: "test",
-      usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+      usage: { input: 7, output: 3, totalTokens: 10, ...(priced ? { cost: { total: 1 } } : {}) },
     },
   })}\n`;
+}
+
+function readSession(
+  agentId: string,
+  sessionFile: string,
+  extra: Partial<Parameters<typeof loadSessionCostSummariesFromCache>[0]> = {},
+) {
+  return loadSessionCostSummariesFromCache({
+    config,
+    agentId,
+    sessions: [{ sessionFile }],
+    requestRefresh: false,
+    ...extra,
+  });
 }
 
 it("batches full-refresh snapshots within payload bounds and preserves targeted refreshes and later writes", async () => {
@@ -196,11 +209,7 @@ it("batches full-refresh snapshots within payload bounds and preserves targeted 
       [10, 10],
     ] as const) {
       expect(
-        await loadSessionCostSummariesFromCache({
-          config,
-          agentId,
-          sessions: [{ sessionFile }],
-          requestRefresh: false,
+        await readSession(agentId, sessionFile, {
           startMs: Date.UTC(2026, month, 1),
           endMs: Date.UTC(2026, month + 1, 1) - 1,
         }),
@@ -295,19 +304,7 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
     const agentId = "usage-worker";
     const sessionFile = state.path("usage.jsonl");
     const otherFile = state.path("other-usage.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      JSON.stringify({
-        type: "message",
-        timestamp: "2026-09-18T00:00:00Z",
-        message: {
-          role: "assistant",
-          provider: "test",
-          model: "test",
-          usage: { input: 7, output: 3, totalTokens: 10 },
-        },
-      }) + "\n",
-    );
+    await fs.writeFile(sessionFile, usageLine(undefined, false));
     await fs.writeFile(otherFile, usageLine("other-1") + usageLine("other-2"));
     openOpenClawAgentDatabase({ agentId });
     const hostSql = observeHostDataSql();
@@ -359,14 +356,11 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
         .mockRejectedValue(new Error("Refresh status is unavailable"));
       try {
         for (let round = 0; round < 2; round++) {
-          const result = await loadSessionCostSummariesFromCache({
-            config,
-            agentId,
-            sessions: [{ sessionFile }],
-            requestRefresh: false,
+          const result = await readSession(agentId, sessionFile);
+          expect(result).toMatchObject({
+            cacheStatus: { status: "fresh" },
+            summaries: [{ totalTokens: 10 }],
           });
-          expect(result.cacheStatus.status).toBe("fresh");
-          expect(result.summaries[0]).toMatchObject({ totalTokens: 10 });
         }
       } finally {
         refreshStatus.mockRestore();
@@ -437,14 +431,10 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
     await fs.mkdir(sessionsDir, { recursive: true });
     await fs.writeFile(sessionFile, usageLine("recorded"));
     expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
-    expect(
-      await loadSessionCostSummariesFromCache({
-        config,
-        agentId,
-        sessions: [{ sessionFile }],
-        requestRefresh: false,
-      }),
-    ).toMatchObject({ summaries: [{ totalTokens: 10 }], cacheStatus: { status: "fresh" } });
+    expect(await readSession(agentId, sessionFile)).toMatchObject({
+      summaries: [{ totalTokens: 10 }],
+      cacheStatus: { status: "fresh" },
+    });
   });
   // A cache-miss worker retains no database; runtime shutdown owns its retirement.
   await closeStateDatabaseForTest();
@@ -531,19 +521,9 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
         10_000,
         "Refresh did not reach its host write",
       );
-      const fresh = loadSessionCostSummariesFromCache({
-        config,
-        agentId,
-        sessions: [{ sessionFile: steadyFile }],
-        requestRefresh: false,
-      });
+      const fresh = readSession(agentId, steadyFile);
       const partial = loadCostUsageSummaryFromCache(summaryParams);
-      const stale = loadSessionCostSummariesFromCache({
-        config,
-        agentId,
-        sessions: [{ sessionFile: growingFile }],
-        requestRefresh: false,
-      });
+      const stale = readSession(agentId, growingFile);
       const evidence = createWorkerPlacementSessionEvidenceResolver([placement]).then((resolve) =>
         resolve(placement),
       );
@@ -560,24 +540,24 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
       for (const worker of observed.refreshWorkers) {
         expect(worker.threadId).not.toBe(-1);
       }
-      expect(freshResult.cacheStatus).toMatchObject({ status: "fresh", cachedFiles: 1 });
-      expect(freshResult.summaries[0]).toMatchObject({ totalTokens: 10 });
-      expect(partialResult.totals.totalTokens).toBe(20);
-      expect(partialResult.cacheStatus).toMatchObject({
-        status: "refreshing",
-        cachedFiles: 2,
-        staleFiles: 1,
+      expect(freshResult).toMatchObject({
+        cacheStatus: { status: "fresh", cachedFiles: 1 },
+        summaries: [{ totalTokens: 10 }],
       });
-      expect(staleResult.summaries[0]).toMatchObject({
-        totalTokens: 10,
-        refreshing: true,
-        computedAt: expect.any(Number),
-        staleSince: expect.any(Number),
+      expect(partialResult).toMatchObject({
+        totals: { totalTokens: 20 },
+        cacheStatus: { status: "refreshing", cachedFiles: 2, staleFiles: 1 },
       });
-      expect(staleResult.cacheStatus).toMatchObject({
-        status: "refreshing",
-        cachedFiles: 1,
-        staleFiles: 1,
+      expect(staleResult).toMatchObject({
+        summaries: [
+          {
+            totalTokens: 10,
+            refreshing: true,
+            computedAt: expect.any(Number),
+            staleSince: expect.any(Number),
+          },
+        ],
+        cacheStatus: { status: "refreshing", cachedFiles: 1, staleFiles: 1 },
       });
     } finally {
       releaseWrite.resolve();
@@ -601,9 +581,10 @@ it("prunes a cached transcript after its queued selection disappears", async () 
     const sessions = [{ sessionFile }];
     await fs.writeFile(sessionFile, usageLine("selected"));
     await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    expect(
-      await loadSessionCostSummariesFromCache({ config, agentId, sessions, requestRefresh: false }),
-    ).toMatchObject({ summaries: [{ totalTokens: 10 }], cacheStatus: { status: "fresh" } });
+    expect(await readSession(agentId, sessionFile)).toMatchObject({
+      summaries: [{ totalTokens: 10 }],
+      cacheStatus: { status: "fresh" },
+    });
     await fs.rm(sessionFile);
     const work = new AsyncWorkScope();
     const published = vi.fn();
@@ -640,19 +621,7 @@ it("propagates an original host pricing error through exact report replay", asyn
     const agentId = "usage-host-pricing-failure";
     const sessionFile = state.path("unpriced.jsonl");
     const timestamp = Date.UTC(2026, 8, 18);
-    await fs.writeFile(
-      sessionFile,
-      JSON.stringify({
-        type: "message",
-        timestamp: new Date(timestamp).toISOString(),
-        message: {
-          role: "assistant",
-          provider: "test",
-          model: "test",
-          usage: { input: 7, output: 3, totalTokens: 10 },
-        },
-      }) + "\n",
-    );
+    await fs.writeFile(sessionFile, usageLine(undefined, false));
     await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
     const prepared = prepareUsageCostWorker({ config, agentId, sessionFiles: [sessionFile] });
     const request = {
@@ -860,14 +829,11 @@ it("retains a late host write failure after cancellation and releases the lock o
       observer.mockRestore();
     }
     expect(await usageCacheSqlite.isSessionCostUsageRefreshRunning(agentId)).toBe(false);
-    const persisted = await loadSessionCostSummariesFromCache({
-      config,
-      agentId,
-      sessions: [{ sessionFile }],
-      requestRefresh: false,
+    const persisted = await readSession(agentId, sessionFile);
+    expect(persisted).toMatchObject({
+      cacheStatus: { status: "fresh" },
+      summaries: [{ totalTokens: 20 }],
     });
-    expect(persisted.cacheStatus.status).toBe("fresh");
-    expect(persisted.summaries[0]).toMatchObject({ totalTokens: 20 });
   });
 }, 40_000);
 
@@ -1013,13 +979,10 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
     }
     expect(await refreshB).toBe("refreshed");
     expect(successorWrites).toBe(1);
-    const result = await loadSessionCostSummariesFromCache({
-      config,
-      agentId: agentB,
-      sessions: [{ sessionFile: fileB }],
-      requestRefresh: false,
+    const result = await readSession(agentB, fileB);
+    expect(result).toMatchObject({
+      cacheStatus: { status: "fresh" },
+      summaries: [{ totalTokens: 20 }],
     });
-    expect(result.cacheStatus.status).toBe("fresh");
-    expect(result.summaries[0]).toMatchObject({ totalTokens: 20 });
   });
 }, 40_000);
