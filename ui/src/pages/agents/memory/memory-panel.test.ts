@@ -1,20 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createRouter, definePage } from "@openclaw/uirouter";
 import { getByRole } from "@solidjs/testing-library";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { registerListener } from "../../../../../src/shared/listeners.ts";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
-import type { RouteId } from "../../../app-route-paths.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
 import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
-import { RouterOutlet } from "../../../app/router-outlet.tsx";
 import { ShellLayoutOwner } from "../../../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../../../app/shell-layout-traits-solid.tsx";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
-import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -22,6 +16,15 @@ import { createSolidApplicationContextProvider } from "../../../test-helpers/sol
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createAgentMemory, type AgentMemoryState } from "./memory-panel-state.ts";
 import { AgentMemoryView } from "./memory-panel-view.tsx";
+import {
+  click,
+  contextWithRequest,
+  createAgentTarget,
+  DIARY,
+  diary,
+  emptyReply,
+  STATUS,
+} from "./memory-panel.test-support.ts";
 import { AgentMemoryPanel } from "./memory-panel.tsx";
 import { installDreamingViewTestTranslations } from "./view.test-helpers.ts";
 
@@ -35,55 +38,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[0]) {
-  const { gateway, publish } = createApplicationGateway();
-  publish({
-    ...gateway.snapshot,
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    hello: gatewayHelloForMethods(["config.patch"]),
-    sessionKey: "main",
-  });
-  const configListeners = new Set<() => void>();
-  const router = createRouter({
-    routes: [
-      definePage({ id: "agents", path: "/settings/agents/:agentId/:panel", component: () => null }),
-      definePage({ id: "systems", path: "/systems", component: () => null }),
-    ],
-  });
-  const context = {
-    router,
-    gateway,
-    agents: { state: { agentsList: null }, subscribe: () => () => {} },
-    runtimeConfig: {
-      state: {
-        configForm: null,
-        configSnapshot: null,
-        client: gateway.snapshot.client,
-        connected: true,
-      },
-      ensureLoaded: vi.fn(async () => undefined),
-      refresh: vi.fn(async () => undefined),
-      patch: vi.fn(async () => true),
-      lookupSchemaPath: vi.fn(async () => ({ children: [{ key: "dreaming" }] })),
-      subscribe: (listener: () => void) => registerListener(configListeners, listener),
-    },
-  } as unknown as ApplicationContext;
-  return Object.assign(context, {
-    router,
-    emit(patch: Partial<ApplicationGatewaySnapshot>) {
-      publish({ ...gateway.snapshot, ...patch });
-    },
-    setConfig(config: Record<string, unknown>) {
-      context.runtimeConfig.state.configForm = config;
-      context.runtimeConfig.state.configSnapshot = { config, hash: "synthetic-config-hash" };
-      configListeners.forEach((listener) => listener());
-    },
-  });
-}
-
-const STATUS = "doctor.memory.status";
-const DIARY = "doctor.memory.dreamDiary";
 const REPAIR = "doctor.memory.repairDreamingArtifacts";
 const PREVIEW = ".dreams-diary__preview-panel";
 const PREVIEW_TEXT = ".dreams-diary__preview-pre";
@@ -99,27 +53,7 @@ function memoryStatus(promotedToday: number, extra: Record<string, unknown> = {}
   return { dreaming: { enabled: true, promotedToday, ...extra } };
 }
 
-function diary(content: string) {
-  return { found: true, path: "DREAMS.md", content };
-}
-
 const emptyClient = () => createTestGatewayClient(vi.fn(emptyReply));
-
-const emptyReply = (method: string) =>
-  method === STATUS ? { dreaming: null } : { found: false, path: "DREAMS.md" };
-function createAgentTarget(initialAgentId: string | null) {
-  let agentId = initialAgentId;
-  const listeners = new Set<() => void>();
-  return {
-    read: () => agentId,
-    subscribe: (notify: () => void) => registerListener(listeners, notify),
-    set: (next: string | null) => {
-      agentId = next;
-      listeners.forEach((notify) => notify());
-    },
-    subscriberCount: () => listeners.size,
-  };
-}
 
 async function createPage(
   replies:
@@ -165,13 +99,6 @@ async function createPage(
     setAgentId: agentTarget.set,
     unmount,
   };
-}
-
-function click(container: HTMLElement, selector: string) {
-  const button = container.querySelector<HTMLButtonElement>(selector);
-  expect(button).not.toBeNull();
-  button!.click();
-  flush();
 }
 
 it.each([true, false])(
@@ -596,127 +523,6 @@ it("shows the replacement agent's diary while the retired action is pending", as
     await pending.promise;
   }
 });
-
-it.each(["maintenance", "confirmation"] as const)(
-  "leaves Dreaming through RouterOutlet while %s is pending",
-  async (operation) => {
-    const pathname = "/systems";
-    const pending = deferred<unknown>();
-    const method = "doctor.memory.backfillDreamDiary";
-    const request = vi.fn((name: string) =>
-      name === method
-        ? pending.promise
-        : name === DIARY
-          ? diary("Sample main diary")
-          : emptyReply(name),
-    );
-    const context = contextWithRequest(request);
-    context.emit({
-      hello: gatewayHelloForMethods(
-        [STATUS, DIARY, method, "config.patch"],
-        ["operator.read", "operator.write", "operator.admin"],
-      ),
-    });
-    context.setConfig({});
-    vi.mocked(context.runtimeConfig.patch).mockImplementation(async () => {
-      await pending.promise;
-      return true;
-    });
-    const memoryModule = {
-      renderSolid: () =>
-        createComponent(AgentMemoryPanel, { initialAgentTarget: createAgentTarget("main") }),
-    };
-    const destinationModule = {
-      renderSolid: () => {
-        const body = document.createElement("p");
-        body.textContent = `Dreaming destination: ${pathname}`;
-        return body;
-      },
-    };
-    const router = createRouter<RouteId, ApplicationContext, typeof memoryModule>({
-      routes: [
-        definePage({
-          id: "agents",
-          path: "/settings/agents/:agentId/:panel",
-          component: () => memoryModule,
-        }),
-        definePage({ id: "systems", path: "/systems", component: () => destinationModule }),
-      ],
-    });
-    Object.assign(context, { router });
-    const provider = createSolidApplicationContextProvider(context);
-    const page = mountSolid(
-      () => createComponent(RouterOutlet, { router, retryContext: context }),
-      {
-        wrapper: provider.wrapper,
-      },
-    );
-    let navigation: Promise<unknown> | undefined;
-    try {
-      await router.navigate(
-        "agents",
-        context,
-        {},
-        {
-          pathname: "/settings/agents/main/memory",
-          search: "",
-          hash: "",
-        },
-      );
-      await waitForSolid(() =>
-        expect(
-          page.container.querySelector<HTMLButtonElement>(".dreams__phase-toggle")?.disabled,
-        ).toBe(false),
-      );
-      const oldHost = page.container.querySelector("openclaw-agent-memory-panel")!;
-      if (operation === "maintenance") {
-        click(page.container, "#dreams-tab-advanced");
-        const backfill = [...page.container.querySelectorAll("button")].find(
-          (button) => button.textContent?.trim() === "Backfill",
-        );
-        expect(backfill).toBeDefined();
-        await waitForSolid(() => expect(backfill!.disabled).toBe(false));
-        backfill!.click();
-        await waitForSolid(() => expect(request).toHaveBeenCalledWith(method, { agentId: "main" }));
-        await waitForSolid(() => expect(page.container.textContent).toContain("Working…"));
-      } else {
-        click(page.container, ".dreams__phase-toggle");
-        click(page.container, ".exec-approval-actions button");
-        await waitForSolid(() => expect(page.container.textContent).toContain("Saving…"));
-        await waitForSolid(() => expect(context.runtimeConfig.patch).toHaveBeenCalledOnce());
-      }
-      navigation = router.navigate(
-        "systems",
-        context,
-        {},
-        {
-          pathname,
-          search: "",
-          hash: "",
-        },
-      );
-      await waitForSolid(() => {
-        expect(page.container.textContent).toContain(`Dreaming destination: ${pathname}`);
-        expect(oldHost.isConnected).toBe(false);
-        expect(page.container.querySelector("openclaw-agent-memory-panel")).toBeNull();
-        expect(page.container.querySelector(".exec-approval-actions")).toBeNull();
-      });
-      pending.reject(new Error("Late Dreaming failure"));
-      await Promise.allSettled([pending.promise, navigation]);
-      await waitForSolid(() => {
-        expect(page.container.textContent).toContain(`Dreaming destination: ${pathname}`);
-        expect(page.container.querySelector("openclaw-agent-memory-panel")).toBeNull();
-        expect(page.container.querySelector('[role="alert"]')).toBeNull();
-        expect(page.container.textContent).not.toContain("Late Dreaming failure");
-      });
-    } finally {
-      pending.resolve({ written: 1 });
-      await Promise.allSettled([pending.promise, navigation]);
-      page.unmount();
-      router.stop();
-    }
-  },
-);
 
 it("keeps a replacement agent's diary action busy after the old action settles", async () => {
   const oldAction = deferred<unknown>();
