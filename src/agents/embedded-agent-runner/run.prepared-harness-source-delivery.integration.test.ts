@@ -570,66 +570,84 @@ describe("prepared harness source delivery", () => {
     }
   });
 
-  it("prepares a Codex primary without pinning a plugin-owned fallback", async () => {
-    const { runEmbeddedAgent, registerPreparedAgentHarness } =
-      await loadSourceDeliveryHarness("worker");
-    registerPreparedAgentHarness({
-      id: "fallback-owner",
-      label: "Fallback owner",
-      supports: ({ provider }) =>
-        provider === "custom" ? { supported: true } : { supported: false },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
-    mockCompletedAttempt("primary");
+  it.each(["preparation hint", "runtime override"] as const)(
+    "prepares primary and fallback runtimes with %s",
+    async (selection) => {
+      const override = selection === "runtime override";
+      const { runEmbeddedAgent, registerPreparedAgentHarness } =
+        await loadSourceDeliveryHarness("worker");
+      if (!override) {
+        registerPreparedAgentHarness({
+          id: "fallback-owner",
+          label: "Fallback owner",
+          supports: ({ provider }) =>
+            provider === "custom" ? { supported: true } : { supported: false },
+          runAttempt: vi.fn(async () => ({}) as never),
+        });
+      }
+      mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+      mockCompletedAttempt("primary");
 
-    const runParams = {
-      agentId: "worker",
-      sessionId: "runtime-preparation-hint",
-      workspaceDir: state.workspaceDir,
-      prompt: "hello",
-      runId: "runtime-preparation-hint",
-      timeoutMs: 30_000,
-      provider: "openai",
-      model: "gpt-5.4",
-      agentHarnessRuntimePreparationHint: "codex",
-      modelFallbacksOverride: ["fast"],
-      config: {
-        agents: {
-          entries: {
-            main: {},
-            worker: {
-              models: {
-                "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
-                "custom/plugin-fallback": {
-                  alias: "fast",
-                  agentRuntime: { id: "fallback-owner" },
+      const runId = override ? "authoritative-runtime-override" : "runtime-preparation-hint";
+      const runParams = {
+        agentId: "worker",
+        sessionId: runId,
+        runId,
+        workspaceDir: state.workspaceDir,
+        prompt: "hello",
+        timeoutMs: 30_000,
+        provider: "openai",
+        model: "gpt-5.4",
+        ...(override
+          ? { agentHarnessRuntimeOverride: "codex" }
+          : { agentHarnessRuntimePreparationHint: "codex" }),
+        modelFallbacksOverride: [override ? "custom/plugin-fallback" : "fast"],
+        config: override
+          ? undefined
+          : {
+              agents: {
+                entries: {
+                  main: {},
+                  worker: {
+                    models: {
+                      "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+                      "custom/plugin-fallback": {
+                        alias: "fast",
+                        agentRuntime: { id: "fallback-owner" },
+                      },
+                    },
+                  },
+                },
+                defaults: {
+                  models: {
+                    "custom/global-fallback": { alias: "fast" },
+                  },
                 },
               },
             },
-          },
-          defaults: {
-            models: {
-              "custom/global-fallback": { alias: "fast" },
-            },
-          },
-        },
-      },
-    } satisfies RunEmbeddedAgentInternalParams;
-    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot(runParams.config);
-    await runEmbeddedAgent(runParams);
+      } satisfies RunEmbeddedAgentInternalParams;
+      if (runParams.config) {
+        const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+        setRuntimeConfigSnapshot(runParams.config);
+      }
+      await runEmbeddedAgent(runParams);
 
-    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimePluginSelections: [
-          { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
-          { provider: "custom", modelId: "plugin-fallback", agentId: "worker" },
-        ],
-      }),
-      expect.any(Object),
-    );
-  });
+      expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePluginSelections: [
+            { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
+            {
+              provider: "custom",
+              modelId: "plugin-fallback",
+              agentId: "worker",
+              ...(override ? { runtime: "codex" } : {}),
+            },
+          ],
+        }),
+        expect.any(Object),
+      );
+    },
+  );
 
   it("completes an admitted turn on A after plugin-runtime generation B publishes", async () => {
     const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
@@ -817,42 +835,4 @@ describe("prepared harness source delivery", () => {
       }
     },
   );
-
-  it("keeps the runtime override authoritative across fallback preparation", async () => {
-    const { runEmbeddedAgent } = await loadSourceDeliveryHarness("worker");
-    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({ assistantTexts: ["primary"] }),
-    );
-    useOpenAIPlatformAuthFixture();
-
-    await runEmbeddedAgent({
-      agentId: "worker",
-      sessionId: "authoritative-runtime-override",
-      workspaceDir: state.workspaceDir,
-      prompt: "hello",
-      runId: "authoritative-runtime-override",
-      timeoutMs: 30_000,
-      provider: "openai",
-      model: "gpt-5.4",
-      modelFallbacksOverride: ["custom/plugin-fallback"],
-      agentHarnessRuntimeOverride: "codex",
-    });
-
-    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimePluginSelections: [
-          { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
-          {
-            provider: "custom",
-            modelId: "plugin-fallback",
-            runtime: "codex",
-            agentId: "worker",
-          },
-        ],
-      }),
-      expect.any(Object),
-    );
-  });
 });

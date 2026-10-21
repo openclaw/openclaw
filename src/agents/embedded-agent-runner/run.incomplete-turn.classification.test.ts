@@ -196,32 +196,22 @@ describe("incomplete-turn payload resolution", () => {
   });
 
   it("allows a same-prompt retry only for replay-safe missing assistant turns", () => {
-    const state = retryState({ lastAssistant: undefined });
-    expect(shouldRetryMissingAssistantTurn(state)).toBe(true);
+    const attempts: Attempt[] = [
+      { lastAssistant: undefined },
+      { toolMetas: [{ toolName: "image_generate", asyncStarted: true }] },
+      { itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } },
+    ];
     expect(
-      shouldRetryMissingAssistantTurn({
-        ...state,
-        attempt: makeEmbeddedRunnerAttempt({
-          toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
-        }),
-      }),
-    ).toBe(false);
-    expect(
-      shouldRetryMissingAssistantTurn({
-        ...state,
-        attempt: makeEmbeddedRunnerAttempt({
-          itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
-        }),
-      }),
-    ).toBe(false);
+      attempts.map((attempt) =>
+        shouldRetryMissingAssistantTurn(retryState({ lastAssistant: undefined, ...attempt })),
+      ),
+    ).toEqual([true, false, false]);
   });
 
   const payloadCases: Array<[string, Attempt, number, string]> = [
     [
       "unsigned thinking only (#89787)",
-      {
-        lastAssistant: assistant({ content: thinking() }),
-      },
+      { lastAssistant: assistant({ content: thinking() }) },
       1,
       "No answer was returned. Ask again if you still need one.",
     ],
