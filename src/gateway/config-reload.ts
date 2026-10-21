@@ -1045,8 +1045,8 @@ export function startGatewayConfigReloader(
         source.observation.writerRevision <= attemptedCandidate.epoch
       ) {
         retryCandidate = attemptedCandidate;
-        pending = true;
       }
+      pending ||= superseded && retryCandidate !== null && retryCandidate === attemptedCandidate;
       if (!superseded || retryCandidate !== attemptedCandidate) {
         settleCandidateApplications(attemptedCandidate, superseded ? "superseded" : "failed");
       }

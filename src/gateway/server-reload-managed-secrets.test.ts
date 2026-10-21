@@ -41,6 +41,7 @@ import {
 } from "./config-reload.test-support.js";
 import { GatewayHotReloadStaleSecretsError } from "./server-reload-contracts.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
+import { restoreCanonicalSecretRefs } from "./server-reload-utils.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 
@@ -166,7 +167,7 @@ function createSecretHandlers(
       commitRuntimePolicy: vi.fn(),
       reconcileRuntimePolicy: vi.fn(),
     },
-    prepareRuntimeCandidate: (config) => config,
+    prepareRuntimeCandidate: restoreCanonicalSecretRefs,
     tryPrepareRuntimeSecrets: async (config) => ({
       snapshot: await prepareSnapshot(config),
       expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
@@ -263,6 +264,63 @@ async function createReload(
 }
 
 describe("managed reload authored source", () => {
+  it.each([false, true])(
+    "settles a source-equivalent write with resolved secrets (rotated: %s)",
+    async (rotated) => {
+      const source: OpenClawConfig = {
+        gateway: { reload: {} },
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.example.invalid/v1",
+              apiKey: { source: "env", provider: "default", id: "RELOAD_KEY" },
+              models: [],
+            },
+          },
+        },
+      };
+      const env = { RELOAD_KEY: "original-fixture-key" };
+      const prepareSnapshot = (config: OpenClawConfig) => prepare(config, env);
+      const initial = await prepareSnapshot(source);
+      activateSecretsRuntimeSnapshotWithSource(initial, source);
+      const handlers = createSecretHandlers(
+        createActivator({ prepareRuntimeSecretsSnapshot: ({ config }) => prepareSnapshot(config) }),
+        prepareSnapshot,
+      );
+      if (rotated) {
+        env.RELOAD_KEY = "rotated-fixture-key";
+        activateSecretsRuntimeSnapshotWithSource(await prepareSnapshot(source), source);
+      }
+      const { clock, scheduler } = createConfigReloadTestClock();
+      const snapshot = makeSnapshot({ config: source, hash: "same-source" });
+      const harness = createReloaderHarness(async () => snapshot, {
+        scheduler,
+        initialConfig: initial.config,
+        initialCompareConfig: source,
+        onHotReload: handlers.onHotReload,
+        onNoopConfigCommit: handlers.onHotReload,
+        onEffectiveConfigUnchanged: handlers.onEffectiveConfigUnchanged,
+      });
+      await harness.reloader.ready;
+      const application = createRuntimeConfigWriteApplication();
+      const settled: string[] = [];
+      void application.result.then((status) => settled.push(status));
+
+      harness.emitWrite(
+        attachRuntimeConfigWriteApplication(
+          makeWrite(source, "same-source", { snapshot }),
+          application,
+        ),
+      );
+      await clock.advanceBy(0);
+
+      expect(settled).toEqual(["applied"]);
+      expect(getRuntimeConfigSnapshot()?.models?.providers?.fixture?.apiKey).toBe(env.RELOAD_KEY);
+      expect(getRuntimeConfigSourceSnapshot()).toEqual(source);
+      expect(harness.log.error).not.toHaveBeenCalled();
+    },
+  );
+
   it("acknowledges a delayed managed write already applied by the watcher with resolved secrets", async () => {
     const initial: OpenClawConfig = { gateway: { reload: {} } };
     const source: OpenClawConfig = {
