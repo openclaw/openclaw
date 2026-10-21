@@ -17,6 +17,7 @@ type ProgressResult = boolean | void;
 type ProgressReturn = Promise<ProgressResult> | ProgressResult;
 type AsyncVisibility = (() => Promise<boolean>) | undefined;
 type PublicReplyKey =
+  | "assertChannelAuthority"
   | "internalEventExecution"
   | "onReplyOperationAdmitted"
   | "onReplyOperationOwned";

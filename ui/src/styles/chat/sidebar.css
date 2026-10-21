@@ -1895,6 +1895,9 @@ openclaw-chat-files-panel,
 .chat-files-panel__reader {
   display: contents;
 }
+.chat-files-panel__fallback-rail {
+  display: none;
+}
 
 .sidebar-file-toolbar {
   display: flex;

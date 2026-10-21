@@ -2264,21 +2264,6 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("passes opaque custom session targets through to isolated cron runs", async () => {
-    const cfg = createCronConfig("server-cron-custom-session");
-    await withCronService(cfg, async (state) => {
-      const sessionKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
-      const job = await addAgentTurnJob(state, "custom-session", "hello", {
-        sessionTarget: `session:${sessionKey}`,
-      });
-
-      await state.cron.run(job.id, "force");
-
-      const options = expectIsolatedRunFields({ sessionKey });
-      expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-    });
-  });
-
   it.each([false, true])("handles roster commit failure (uncertain=%s)", async (uncertain) => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-delete-${Date.now()}`);
     const cfg = {

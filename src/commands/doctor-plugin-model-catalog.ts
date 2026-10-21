@@ -107,7 +107,6 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   agentDirs?: readonly string[];
   prompter: DoctorPrompter;
   runtime: RuntimeEnv;
-  note?: typeof note;
 }): Promise<void> {
   const warnings: string[] = [];
   const agents: Array<{
@@ -166,7 +165,6 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     params.runtime.error(warning);
   }
 
-  const emitNote = params.note ?? note;
   if (detected > 0) {
     const details =
       migrations.length > 0
@@ -186,7 +184,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
       }
     }
     details.push("Run openclaw doctor --fix to verify and repair these catalogs.");
-    emitNote(details.join("\n"), "Plugin model catalogs");
+    note(details.join("\n"), "Plugin model catalogs");
   }
   const shouldRepair =
     params.prompter.shouldRepair ||
@@ -258,13 +256,13 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   }
 
   if (migrated > 0) {
-    emitNote(
+    note(
       `Migrated and verified ${migrated} generated provider catalog${migrated === 1 ? "" : "s"} in agent SQLite.`,
       "Doctor changes",
     );
   }
   if (repairs.length > 0) {
-    emitNote(
+    note(
       repairs
         .map(({ pluginId, removedModelCount, completedCostModelCount }) => {
           const actions = [
@@ -282,6 +280,6 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     );
   }
   if (rootCopyChanges.length > 0) {
-    emitNote(rootCopyChanges.join("\n"), "Doctor changes");
+    note(rootCopyChanges.join("\n"), "Doctor changes");
   }
 }

@@ -172,8 +172,9 @@ it.for([undefined, 600_000])(
       }
       if (timeoutMs !== undefined) {
         expect(() => process.kill(pid, 0)).not.toThrow();
+        await fs.writeFile(release, "continue");
       }
-      await fs.writeFile(release, "continue");
+      // Keep the default worker blocked until the deferred timeout decision settles.
       if (timeoutMs === undefined) {
         expect(await operation).toMatchObject({
           error: expect.objectContaining({

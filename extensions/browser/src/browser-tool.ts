@@ -32,7 +32,7 @@ import {
   resolveBrowserToolNodeTarget,
   resolveBrowserToolTimeoutMs,
 } from "./browser-tool.routing.js";
-import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
+import { BROWSER_ACT_REQUEST_KEYS, type BrowserToolCapabilities } from "./browser-tool.schema.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
 import type { browserAct } from "./browser/client-actions.js";
 import {
@@ -66,30 +66,6 @@ function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is st
     value.length <= maxChars &&
     value.trim() === value
   );
-}
-
-function resolveBrowserTabIdentity(params: {
-  targetId?: string;
-  profile?: string;
-  target: "host" | "node";
-  node?: string;
-  baseUrl?: string;
-}): BrowserTabIdentity | undefined {
-  // Bridge/sandbox tabs have no operator browser.request route. Identity must
-  // remain exact: truncation could address another tab, profile, or node.
-  if (
-    params.baseUrl ||
-    !isBrowserRouteIdentifier(params.targetId, 128) ||
-    !isBrowserRouteIdentifier(params.profile, 128)
-  ) {
-    return undefined;
-  }
-  if (params.target === "node") {
-    return isBrowserRouteIdentifier(params.node, 256)
-      ? { targetId: params.targetId, profile: params.profile, target: "node", node: params.node }
-      : undefined;
-  }
-  return { targetId: params.targetId, profile: params.profile, target: "host" };
 }
 
 function withBrowserTabDetails(
@@ -177,37 +153,6 @@ async function readHostSystemProfiles(params: {
   }
 }
 
-const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
-  "kind",
-  "actions",
-  "stopOnError",
-  "targetId",
-  "ref",
-  "doubleClick",
-  "button",
-  "modifiers",
-  "x",
-  "y",
-  "text",
-  "submit",
-  "slowly",
-  "key",
-  "delayMs",
-  "startRef",
-  "endRef",
-  "values",
-  "fields",
-  "width",
-  "height",
-  "timeMs",
-  "textGone",
-  "selector",
-  "url",
-  "loadState",
-  "fn",
-  "timeoutMs",
-] as const;
-
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   const nestedRequest =
@@ -222,7 +167,7 @@ function readActRequestParam(params: Record<string, unknown>) {
     typeof request.kind === "string" &&
     typeof params.kind === "string" &&
     request.kind !== params.kind;
-  for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
+  for (const key of BROWSER_ACT_REQUEST_KEYS) {
     if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
       continue;
     }
@@ -620,13 +565,30 @@ export function createBrowserTool(
                 ? route.profile
                 : undefined
               : (profile ?? resolvedBrowser.defaultProfile);
-            tabIdentity = resolveBrowserTabIdentity({
-              targetId,
-              baseUrl,
-              profile: openedProfile ?? routeProfile,
-              target: onNode ? "node" : "host",
-              node: onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined,
-            });
+            const identityProfile = openedProfile ?? routeProfile;
+            const identityNode =
+              onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined;
+            tabIdentity = undefined;
+            // Bridge/sandbox tabs have no operator browser.request route. Identity must
+            // remain exact: truncation could address another tab, profile, or node.
+            if (
+              !baseUrl &&
+              isBrowserRouteIdentifier(targetId, 128) &&
+              isBrowserRouteIdentifier(identityProfile, 128)
+            ) {
+              if (onNode) {
+                if (isBrowserRouteIdentifier(identityNode, 256)) {
+                  tabIdentity = {
+                    targetId,
+                    profile: identityProfile,
+                    target: "node",
+                    node: identityNode,
+                  };
+                }
+              } else {
+                tabIdentity = { targetId, profile: identityProfile, target: "host" };
+              }
+            }
           },
         });
       const dashboardTarget = browserDashboard;

@@ -14,9 +14,8 @@ import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeClawRouterRootUrl } from "./base-url.js";
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
-
-const CLAWROUTER_DEFAULT_BASE_URL = "https://clawrouter.openclaw.ai";
 
 const PROVIDER_ID = "clawrouter";
 // Inventory changes infrequently; inference still enforces current grants and budgets.
@@ -202,15 +201,6 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
       ? row.models.map(parseCatalogModel).filter((model): model is CatalogModel => Boolean(model))
       : [],
   };
-}
-
-export function normalizeClawRouterRootUrl(baseUrl: string | undefined): string {
-  const normalized = (baseUrl?.trim() || CLAWROUTER_DEFAULT_BASE_URL).replace(/\/+$/, "");
-  return normalized.endsWith("/v1") ? normalized.slice(0, -3) : normalized;
-}
-
-export function normalizeClawRouterApiBaseUrl(baseUrl: string | undefined): string {
-  return `${normalizeClawRouterRootUrl(baseUrl)}/v1`;
 }
 
 function findNativeRoute(

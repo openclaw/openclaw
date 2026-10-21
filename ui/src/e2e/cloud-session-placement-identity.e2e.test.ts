@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { activePlacement, cloudSession, cloudSessionList } from "./cloud-session.test-support.ts";
 import {
   createControlUiE2eContextOptions,
@@ -62,20 +63,22 @@ suite.define(() => {
       const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("sessions.list");
-      const chip = page.locator(".chat-pane__placement-chip");
-      await expect.poll(() => chip.textContent()).toBe("machine0 · team");
-      await chip.click();
+      const details = await openChatDetails(page);
+      await details.locator(".chat-environment__machine-trigger").click();
       const facts = page.locator(".chat-pane__placement-facts");
       await facts.waitFor({ state: "visible" });
       for (const [label, value] of [
         ["Service", "machine0"],
         ["Profile", "team"],
-        ["Machine", "…d94c1a"],
       ]) {
         const term = facts.locator("dt", { hasText: label });
         expect(await term.locator("+ dd").textContent()).toBe(value);
       }
+      expect(await page.locator(".chat-pane__placement-heading > span").textContent()).toBe(
+        "…d94c1a",
+      );
       await page.keyboard.press("Escape");
+      await closeChatDetails(page);
       const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${session.key}"]`);
       expect(await sidebarRow.locator(".session-row-badge--cloud").getAttribute("aria-label")).toBe(
         "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active",

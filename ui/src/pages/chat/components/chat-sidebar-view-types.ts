@@ -52,6 +52,7 @@ export type FileReaderWorkspace = {
 };
 
 export type ChatDetailPanelProps = {
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   panelPresentation?: "desktop" | "mobile";
   panelActive?: boolean;
   /** Supplied by the native shell; a narrow desktop panel is still desktop. */

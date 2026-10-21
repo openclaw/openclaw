@@ -98,13 +98,12 @@ const enAgentsHome = {
     details: "View security report",
   },
   clawsDraft: {
-    title: "Create a Claw",
+    title: "Create Claw",
     railHint: "Turn this agent into a shareable Claw",
     reviewTitle: "Review your Claw",
     intro: "Choose what to include. The archive below is rebuilt before publication.",
     name: "Name",
     description: "Description",
-    publisher: "Publishing as @{publisher} · {version}",
     behavior: "Behavior and authority",
     input: "Input",
     output: "Output",
@@ -117,7 +116,7 @@ const enAgentsHome = {
     packageContents: "Package contents",
     packageNote:
       "These are the exact text files in the current archive. Dependencies above are declarations.",
-    inspect: "Inspect",
+    view: "View",
     updating: "Updating package preview…",
     reviewNeeded: "Review the current package before publishing.",
     askChanges: "Ask for changes",
@@ -130,7 +129,7 @@ const enAgentsHome = {
     retryReview: "Retry review",
     reopen: "Review Claw package",
     openingChat: "Opening the agent’s main chat…",
-    sendFailed: "The main chat did not accept the Create a Claw message.",
+    sendFailed: "The main chat did not accept the Create Claw message.",
   },
 } satisfies TranslationMap;
 

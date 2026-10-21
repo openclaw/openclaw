@@ -25,6 +25,7 @@ import {
 } from "./control-ui-team-scale-people.ts";
 import {
   dashboardMcpAppHtml,
+  dashboardPaintMarkerHtml,
   dashboardWidgetHtml,
   widgetHtml,
 } from "./control-ui-team-scale-widget-html.ts";
@@ -82,6 +83,8 @@ type FixtureOptions = {
   dashboardMcpApp?: { font: Buffer };
   /** Opt into a scripted HTML dashboard with an independently fetched web font. */
   dashboardWidgetFontUrl?: string;
+  historyStateReceipt?: boolean;
+  dashboardPaintMarker?: boolean;
 };
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
@@ -183,16 +186,25 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     largeSnapshot: options.largeSnapshot,
     attachments: duplicateReads?.attachments,
   });
-  const largeHistory = options.largeSnapshot
-    ? {
-        messages: historyMessages,
-        sessionId: pinnedRows[0]!.sessionId,
-        sessionInfo: pinnedRows[0]!,
-        hasMore: false,
-        totalMessages: counts.transcriptMessages,
-        metadata: { models: [] },
-      }
-    : undefined;
+  const configuredHistory =
+    options.largeSnapshot || options.historyStateReceipt
+      ? {
+          messages: historyMessages,
+          sessionId: pinnedRows[0]!.sessionId,
+          sessionInfo: pinnedRows[0]!,
+          hasMore: false,
+          totalMessages: counts.transcriptMessages,
+          metadata: { commands: [], models: [] },
+          ...(options.historyStateReceipt
+            ? {
+                stateRevision: {
+                  sessionInfo: "fixture-session-v1",
+                  commands: "fixture-commands-v1",
+                },
+              }
+            : {}),
+        }
+      : undefined;
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -281,12 +293,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     };
   });
   const boardPath = `/__openclaw__/board/${encodeURIComponent(selectedSessionKey)}/team-overview/index.html`;
+  const dashboardHtml = (html: string) =>
+    options.dashboardPaintMarker ? dashboardPaintMarkerHtml(html) : html;
   if (!options.dashboardMcpApp) {
     assets.set(boardPath, {
       contentType: "text/html",
-      body: options.dashboardWidgetFontUrl
-        ? dashboardWidgetHtml(options.dashboardWidgetFontUrl)
-        : widgetHtml(0),
+      body: dashboardHtml(
+        options.dashboardWidgetFontUrl
+          ? dashboardWidgetHtml(options.dashboardWidgetFontUrl)
+          : widgetHtml(0),
+      ),
     });
   }
   const sandbox = { sandboxUrl: options.sandboxUrl, sandboxPort: options.sandboxPort };
@@ -399,7 +415,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         : {}),
       "question.list": { questions: [] },
       ...(options.dashboardWidgetFontUrl ? { "mcp.app.discover": { servers: [] } } : {}),
-      ...(largeHistory ? { "chat.startup": largeHistory, "chat.history": largeHistory } : {}),
+      ...(configuredHistory
+        ? { "chat.startup": configuredHistory, "chat.history": configuredHistory }
+        : {}),
       ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
@@ -447,7 +465,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
             },
             "mcp.app.view": {
               ...sandbox,
-              html: dashboardMcpAppHtml(dashboardStylesheetUrl),
+              html: dashboardHtml(dashboardMcpAppHtml(dashboardStylesheetUrl)),
               csp: { resourceDomains: [dashboardAssetOrigin] },
               toolInput: {},
               toolResult: { content: [{ type: "text", text: "Synthetic dashboard ready" }] },
@@ -661,6 +679,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   }
   return {
     scenario,
+    board,
     selectedSessionKey,
     pinnedKeys,
     sidebarEntries,

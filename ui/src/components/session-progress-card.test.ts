@@ -563,13 +563,24 @@ describe("renderSessionProgressCard", () => {
     ["failed", "Failed"],
     ["timeout", "Failed"],
     ["killed", "Stopped"],
-  ] as const)("shows %s as %s in the closed summary", (status, expected) => {
-    const container = mountCard({
-      sessionStatus: status,
-      ...runWindow,
-    });
+  ] as const)("announces %s as %s in collapsed progress summaries", (status, expected) => {
+    for (const placement of ["composer", "details"] as const) {
+      const container = mountCard({
+        placement,
+        desktopDetails: placement === "details",
+        collapseComposerByDefault: true,
+        sessionStatus: status,
+        ...runWindow,
+      });
 
-    expect(cardPart(container, "summary-count--collapsed")?.textContent).toBe(expected);
+      expect(container.querySelector("details")?.open).toBe(false);
+      expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
+        `Wire the checklist. ${status === "running" ? "1 of 3 completed" : expected}`,
+      );
+      if (placement === "composer") {
+        expect(cardPart(container, "summary-count--collapsed")?.textContent).toBe(expected);
+      }
+    }
   });
 
   it("uses a terminal circle-x instead of pausing after the run stops", () => {

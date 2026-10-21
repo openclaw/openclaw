@@ -16,7 +16,7 @@ export function previewFetch(
   return vi.fn<typeof fetch>(async (input, init) => respond(requestUrl(input), init));
 }
 
-export function conditionalJson(body: unknown, etag: string) {
+function conditionalJson(body: unknown, etag: string) {
   return Response.json(body, { headers: { etag } });
 }
 

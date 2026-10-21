@@ -1,9 +1,10 @@
+import assert from "node:assert/strict";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect } from "vitest";
-import { createQaBusState } from "./bus-state.js";
+import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 
@@ -21,9 +22,7 @@ export function createSelection(
 }
 
 export function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`${label} is required`);
-  }
+  assert(typeof value === "string" && value.length > 0, `${label} is required`);
   return value;
 }
 
@@ -39,19 +38,16 @@ export function telegramApi(transport: Pick<QaTransportAdapter, "createGatewayCo
     return payload;
   };
   const send = async (chatId: string, threadId: string, text: string) => {
-    const payload = await post("sendMessage", {
+    const reply = await post("sendMessage", {
       chat_id: chatId,
       message_thread_id: Number(threadId),
       text,
     });
-    if (
-      !isRecord(payload) ||
-      !isRecord(payload.result) ||
-      typeof payload.result.message_id !== "number"
-    ) {
-      throw new Error("Crabline Telegram send did not return a message ID");
-    }
-    return payload.result.message_id;
+    assert(
+      isRecord(reply) && isRecord(reply.result) && typeof reply.result.message_id === "number",
+      "Crabline Telegram send did not return a message ID",
+    );
+    return reply.result.message_id;
   };
   return { url, post, send };
 }
@@ -73,31 +69,28 @@ export async function postJson<T = unknown>(
     auditContext,
   });
   try {
-    if (init.status === undefined) {
-      expect(response.ok).toBe(true);
-    } else {
-      expect(response.status).toBe(init.status);
-    }
+    expect(init.status === undefined ? response.ok : response.status).toBe(init.status ?? true);
     return (await response.json()) as T;
   } finally {
     await release();
   }
 }
 
-export async function withTransport(
+export async function withTransport<T>(
   channel: OpenClawCrablineChannelDriverSelection["channel"],
-  run: (transport: CrablineTransport, outputDir: string) => Promise<void>,
+  run: (transport: CrablineTransport, outputDir: string, state: QaBusState) => Promise<T>,
   transportPolicy?: Parameters<typeof createQaCrablineTransportAdapter>[0]["transportPolicy"],
+  state = createQaBusState(),
 ) {
-  await withTempDir("qa-crabline-transport-", async (outputDir) => {
+  return await withTempDir("qa-crabline-transport-", async (outputDir) => {
     const transport = await createQaCrablineTransportAdapter({
       outputDir,
       selection: createSelection(channel),
-      state: createQaBusState(),
+      state,
       transportPolicy,
     });
     try {
-      await run(transport, outputDir);
+      return await run(transport, outputDir, state);
     } finally {
       await transport.cleanupAfterGatewayStop();
     }

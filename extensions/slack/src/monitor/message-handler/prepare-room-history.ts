@@ -100,20 +100,70 @@ export async function resolveSlackRoomHistory(params: {
         sender: user?.name ?? message.userId ?? `Bot (${message.botId ?? "unknown"})`,
       });
     }
+    async function resolveSlackHistoryMedia(message: SlackThreadStarter, maxAttachments: number) {
+      const { ctx, eventScope, assertCurrent, abortSignal } = params;
+      const files = sliceSlackImageFileCandidates(message.files, maxAttachments);
+      const attachments: SlackAttachment[] = [];
+      let remaining = Math.max(0, maxAttachments - files.length);
+      if (remaining > 0 && message.attachments?.length) {
+        for (const attachment of message.attachments) {
+          if (attachment.is_share !== true) {
+            continue;
+          }
+          const hasImageUrl = Boolean(normalizeOptionalString(attachment.image_url));
+          const attachmentFiles = sliceSlackImageFileCandidates(
+            attachment.files,
+            remaining - (hasImageUrl ? 1 : 0),
+          );
+          if (!hasImageUrl && attachmentFiles.length === 0) {
+            continue;
+          }
+          attachments.push({ ...attachment, files: attachmentFiles });
+          remaining -= (hasImageUrl ? 1 : 0) + attachmentFiles.length;
+          if (remaining <= 0) {
+            break;
+          }
+        }
+      }
+      if (files.length === 0 && attachments.length === 0) {
+        return { media: [], attempted: 0 };
+      }
+      const attempted =
+        files.length +
+        attachments.reduce(
+          (count, attachment) =>
+            count +
+            (normalizeOptionalString(attachment.image_url) ? 1 : 0) +
+            (attachment.files?.length ?? 0),
+          0,
+        );
+      const { resolveSlackAttachmentContent } = await loadSlackMediaModule();
+      const content = await resolveSlackAttachmentContent({
+        files,
+        attachments,
+        client: eventScope?.client ?? ctx.app.client,
+        token: ctx.botToken,
+        maxBytes: Math.min(ctx.mediaMaxBytes, SLACK_HISTORY_MEDIA_MAX_BYTES),
+        readIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
+        totalTimeoutMs: SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
+        assertCurrent,
+        abortSignal,
+      });
+      return {
+        media: await toInboundMediaFactsWithMetadata(content?.media, {
+          kind: "image",
+          messageId: message.ts,
+        }),
+        attempted,
+      };
+    }
     const entries: HistoryEntry[] = [];
     let mediaRemaining = SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS;
     for (const { message, sender } of permitted.slice(-params.ctx.historyLimit)) {
       // Keep media on the same native snapshot as text, including edits and deletions.
       const { media, attempted } =
         mediaRemaining > 0 && (message.files?.length || message.attachments?.length)
-          ? await resolveSlackHistoryMedia({
-              ctx: params.ctx,
-              eventScope: params.eventScope,
-              maxAttachments: mediaRemaining,
-              assertCurrent: params.assertCurrent,
-              abortSignal: params.abortSignal,
-              message,
-            })
+          ? await resolveSlackHistoryMedia(message, mediaRemaining)
           : { media: [], attempted: 0 };
       params.assertCurrent();
       mediaRemaining -= attempted;
@@ -144,80 +194,4 @@ function sliceSlackImageFileCandidates(files: SlackFile[] | undefined, limit: nu
     return [];
   }
   return files.filter(isSlackImageFileCandidate).slice(0, limit);
-}
-
-function sliceSlackHistoryAttachmentCandidates(
-  attachments: SlackAttachment[] | undefined,
-  limit: number,
-): SlackAttachment[] {
-  if (limit <= 0 || !attachments?.length) {
-    return [];
-  }
-  const out: SlackAttachment[] = [];
-  let remaining = limit;
-  for (const attachment of attachments) {
-    if (attachment.is_share !== true) {
-      continue;
-    }
-    const hasImageUrl = Boolean(normalizeOptionalString(attachment.image_url));
-    const files = sliceSlackImageFileCandidates(
-      attachment.files,
-      remaining - (hasImageUrl ? 1 : 0),
-    );
-    if (!hasImageUrl && files.length === 0) {
-      continue;
-    }
-    out.push({ ...attachment, files });
-    remaining -= (hasImageUrl ? 1 : 0) + files.length;
-    if (remaining <= 0) {
-      break;
-    }
-  }
-  return out;
-}
-
-async function resolveSlackHistoryMedia(params: {
-  ctx: SlackMonitorContext;
-  message: SlackThreadStarter;
-  eventScope?: SlackEventScope;
-  maxAttachments: number;
-  assertCurrent: () => void;
-  abortSignal?: AbortSignal;
-}) {
-  const files = sliceSlackImageFileCandidates(params.message.files, params.maxAttachments);
-  const attachments = sliceSlackHistoryAttachmentCandidates(
-    params.message.attachments,
-    Math.max(0, params.maxAttachments - files.length),
-  );
-  if (files.length === 0 && attachments.length === 0) {
-    return { media: [], attempted: 0 };
-  }
-  const attempted =
-    files.length +
-    attachments.reduce(
-      (count, attachment) =>
-        count +
-        (normalizeOptionalString(attachment.image_url) ? 1 : 0) +
-        (attachment.files?.length ?? 0),
-      0,
-    );
-  const { resolveSlackAttachmentContent } = await loadSlackMediaModule();
-  const content = await resolveSlackAttachmentContent({
-    files,
-    attachments,
-    client: params.eventScope?.client ?? params.ctx.app.client,
-    token: params.ctx.botToken,
-    maxBytes: Math.min(params.ctx.mediaMaxBytes, SLACK_HISTORY_MEDIA_MAX_BYTES),
-    readIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
-    totalTimeoutMs: SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
-    assertCurrent: params.assertCurrent,
-    abortSignal: params.abortSignal,
-  });
-  return {
-    media: await toInboundMediaFactsWithMetadata(content?.media, {
-      kind: "image",
-      messageId: params.message.ts,
-    }),
-    attempted,
-  };
 }

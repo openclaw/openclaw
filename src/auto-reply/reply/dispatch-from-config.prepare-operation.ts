@@ -3,6 +3,7 @@ import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
+import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -15,7 +16,8 @@ import {
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import { isNativeCommandTurn } from "../command-turn-context.js";
+import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -30,6 +32,7 @@ import {
   mirrorDeliveredReplyToTranscript,
   sendReplyWithTranscriptMirror,
 } from "./dispatch-from-config.transcript.js";
+import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
 import { extractShortModelName } from "./response-prefix-template.js";
@@ -61,6 +64,59 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     suppressDelivery,
     turnLedger,
   } = state;
+  const input = readReplySourceInput(params.replyOptions);
+  const assertRequestCurrent = () => {
+    params.replyOptions?.assertChannelAuthority?.();
+    const sourceAuthority = input?.sourceAdapter?.authority;
+    sourceAuthority?.assertCurrent();
+    if (params.replyOptions?.operatorAuthority !== sourceAuthority) {
+      params.replyOptions?.operatorAuthority?.assertCurrent();
+    }
+    params.replyOptions?.internalEventExecution?.assertCurrent?.();
+    if (isPreDispatchOperationAborted() || input?.retirementRequested) {
+      throw new DispatchReplyOperationAbortedError();
+    }
+  };
+  const archivedSource = state.operationSessionStoreEntry.entry;
+  const sourceSessionKey = state.dispatchOperationSessionKey;
+  // Native controls do not claim a reply turn, but must restore their source before side effects.
+  if (
+    isNativeCommandTurn(ctx.CommandTurn) &&
+    archivedSource?.archivedAt !== undefined &&
+    sourceSessionKey
+  ) {
+    assertRequestCurrent();
+    const entry = await restoreArchivedDispatchSession({
+      assertCurrent: assertRequestCurrent,
+      ctx,
+      entry: archivedSource,
+      hasPluginOwnedBinding: Boolean(pluginOwnedBinding),
+      placementContext: params.sessionWorkerPlacementContext,
+      sessionKey: sourceSessionKey,
+      storePath: state.operationSessionStoreEntry.storePath,
+    });
+    assertRequestCurrent();
+    const error = resolveSessionWorkStartError(sourceSessionKey, entry, {
+      expectedSessionId: archivedSource.sessionId,
+    });
+    if (error) {
+      const payload: ReplyPayload = { text: error, isError: true };
+      markCommandReplyForDelivery(payload);
+      const queuedFinal = !state.sendPolicyDenied && dispatcher.sendFinalReply(payload);
+      recordProcessed("skipped", { reason: "session-directive-rejected" });
+      markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
+      return {
+        status: "complete" as const,
+        result: attachSourceReplyDeliveryMode({
+          queuedFinal,
+          counts: dispatcher.getQueuedCounts(),
+          ...(state.sendPolicyDenied ? { deliberateSilentTerminalReply: true as const } : {}),
+        }),
+      };
+    }
+    state.operationSessionStoreEntry.entry = entry;
+  }
   const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
   const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
   const formatAbortReplyTextResolver =
@@ -214,13 +270,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     await runWithDispatchAbortSignal(
       state.getPreDispatchAbortSignal(),
       async () => {
-        const sourceAuthority = readReplySourceInput(params.replyOptions)?.sourceAdapter?.authority;
-        sourceAuthority?.assertCurrent();
-        if (params.replyOptions?.operatorAuthority !== sourceAuthority) {
-          params.replyOptions?.operatorAuthority?.assertCurrent();
-        }
-        params.replyOptions?.internalEventExecution?.assertCurrent?.();
-        state.getPreDispatchAbortSignal()?.throwIfAborted();
+        assertRequestCurrent();
         await getSessionBindingService().touchAsync(
           pluginOwnedBinding.bindingId,
           undefined,

@@ -355,7 +355,12 @@ function ToggleControl(
   );
 }
 
-export function SettingsToggle(props: SettingsToggleControl & { ariaLabel: string }) {
+export function SettingsToggle(
+  props: SettingsToggleControl & {
+    ariaLabel: string;
+    inputRef?: (element: HTMLInputElement) => void;
+  },
+) {
   return <ToggleControl {...props} label={props.ariaLabel} />;
 }
 

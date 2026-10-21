@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -15,30 +16,21 @@ export function createGenericDatabase(
     database.exec(`
       ${options.wal ? "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;" : ""}
       PRAGMA user_version = ${options.userVersion ?? 7};
-      CREATE TABLE entries (
-        id INTEGER PRIMARY KEY,
-        value TEXT NOT NULL
-      );
+      CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
     `);
     const insert = database.prepare("INSERT INTO entries (value) VALUES (?)");
-    for (const value of options.values ?? ["one"]) {
-      insert.run(value);
-    }
+    (options.values ?? ["one"]).forEach((value) => insert.run(value));
   });
 }
 
 export function withDatabase<T>(
   databasePath: string,
-  action: (database: InstanceType<ReturnType<typeof requireNodeSqlite>["DatabaseSync"]>) => T,
+  action: (database: DatabaseSync) => T,
   options: { readOnly?: boolean } = {},
 ): T {
   const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(databasePath, options);
-  try {
-    return action(database);
-  } finally {
-    database.close();
-  }
+  using database = new sqlite.DatabaseSync(databasePath, options);
+  return action(database);
 }
 
 export async function withRestoredSpies<T>(
@@ -48,31 +40,26 @@ export async function withRestoredSpies<T>(
   try {
     return await action();
   } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
-    }
+    spies.forEach((spy) => spy.mockRestore());
   }
 }
 
-export async function expectMissing(filePath: string): Promise<void> {
-  await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
-}
+export const expectMissing = (filePath: string) =>
+  expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 
-export function readGenericValues(databasePath: string): unknown[] {
-  return withDatabase(
+export const readGenericValues = (databasePath: string): unknown[] =>
+  withDatabase(
     databasePath,
     (database) => database.prepare("SELECT value FROM entries ORDER BY id").all(),
     { readOnly: true },
   );
-}
 
-export function createGenericSnapshot(
+export const createGenericSnapshot = (
   provider: ReturnType<typeof createLocalSqliteSnapshotProvider>,
   sourcePath: string,
   id: string,
-): Promise<SnapshotResult> {
-  return provider.create({ path: sourcePath, identity: { role: "generic", id } });
-}
+): Promise<SnapshotResult> =>
+  provider.create({ path: sourcePath, identity: { role: "generic", id } });
 
 export function useLocalRepositoryFixtures(
   registerCleanup: Parameters<typeof useAutoCleanupTempDirTracker>[0],
@@ -80,11 +67,10 @@ export function useLocalRepositoryFixtures(
   const tempDirs = useAutoCleanupTempDirTracker(registerCleanup);
 
   async function createTempDir(): Promise<string> {
-    const tempDir = tempDirs.make("openclaw-snapshot-repository-");
+    let tempDir = tempDirs.make("openclaw-snapshot-repository-");
     if (process.platform === "win32") {
-      const privateTempDir = path.join(tempDir, "private");
-      await createPrivateSqliteDirectory(privateTempDir);
-      return privateTempDir;
+      tempDir = path.join(tempDir, "private");
+      await createPrivateSqliteDirectory(tempDir);
     }
     return tempDir;
   }
@@ -97,26 +83,25 @@ export function useLocalRepositoryFixtures(
     } = {},
   ) {
     const tempDir = await createTempDir();
-    const sourcePath = path.join(tempDir, "source.sqlite");
-    const repositoryPath = path.join(tempDir, "snapshots");
-    const restorePath = path.join(tempDir, "restore", "source.sqlite");
-    const validationRootPath = path.join(tempDir, "validation");
-    createGenericDatabase(sourcePath, options.database);
+    const paths = {
+      tempDir,
+      sourcePath: path.join(tempDir, "source.sqlite"),
+      repositoryPath: path.join(tempDir, "snapshots"),
+      restorePath: path.join(tempDir, "restore", "source.sqlite"),
+      validationRootPath: path.join(tempDir, "validation"),
+    };
+    createGenericDatabase(paths.sourcePath, options.database);
     if (options.useValidationRoot) {
-      await fs.mkdir(validationRootPath, { mode: 0o700 });
-      await fs.chmod(validationRootPath, 0o700);
+      await fs.mkdir(paths.validationRootPath, { mode: 0o700 });
+      await fs.chmod(paths.validationRootPath, 0o700);
     }
     return {
       provider: createLocalSqliteSnapshotProvider({
-        repositoryPath,
-        ...(options.useValidationRoot ? { validationRootPath } : {}),
+        repositoryPath: paths.repositoryPath,
+        ...(options.useValidationRoot ? { validationRootPath: paths.validationRootPath } : {}),
         ...(options.now ? { now: options.now } : {}),
       }),
-      repositoryPath,
-      restorePath,
-      sourcePath,
-      tempDir,
-      validationRootPath,
+      ...paths,
     };
   }
 

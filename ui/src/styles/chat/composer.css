@@ -1437,7 +1437,7 @@
     rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
 
   display: flex;
-  gap: calc(var(--chat-composer-editor-inset-block) * 3);
+  gap: calc(var(--chat-attachment-inset-block) * 3);
   flex-wrap: nowrap;
   flex-shrink: 0;
   /* Keep horizontal clipping inside the composer. Reserve remove-target and
@@ -1445,8 +1445,8 @@
   width: 100%;
   max-width: 100%;
   margin-block-start: calc(-1 * var(--chat-attachment-hit-slop));
-  padding-block: calc(var(--chat-composer-editor-inset-block) * 2 + var(--chat-attachment-hit-slop))
-    var(--chat-composer-editor-inset-block);
+  padding-block: calc(var(--chat-attachment-inset-block) * 2 + var(--chat-attachment-hit-slop))
+    var(--chat-attachment-inset-block);
   padding-inline: var(--chat-composer-editor-inset-inline)
     calc(var(--chat-composer-editor-inset-inline) + var(--chat-attachment-hit-slop));
   overflow-x: auto;
@@ -1550,31 +1550,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
     transform: scaleX(1);
     opacity: 0;
   }
-}
-
-.chat-attachment-failures {
-  margin: 0 var(--chat-composer-editor-inset-inline) var(--chat-composer-editor-inset-block);
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-  color: var(--danger);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.chat-attachment-failures__help {
-  margin-block-start: 4px;
-  color: var(--text);
-}
-
-.chat-attachment-error {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  place-items: center;
-  border-radius: inherit;
 }
 
 @media (prefers-reduced-motion: reduce) {

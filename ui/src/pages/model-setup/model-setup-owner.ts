@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onSettled } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
@@ -62,7 +62,6 @@ export function createModelSetup(
       projection.invalidate();
     }
   };
-  const stopAfterRender = projection.subscribe(() => onSettled(afterRender));
   const actionsDisabled = (): boolean =>
     login.busy ||
     nativeModels.saving ||
@@ -721,6 +720,7 @@ export function createModelSetup(
     },
   );
   onSettled(() => {
+    const stopAfterRender = projection.subscribe(() => onSettled(afterRender));
     connected = true;
     // Connection authority changes synchronously suspend or retire the admitted wizard.
     const stopGateway = context.gateway.subscribe(() => {
@@ -732,18 +732,16 @@ export function createModelSetup(
     synchronizeGateway(context.gateway.snapshot);
     notify();
     return () => {
+      disposed = true;
+      stopAfterRender();
+      connected = false;
       stopGateway();
       stopFirstRun();
+      firstRun.dispose();
+      retireWizardMutation();
+      iconLoader.reset();
+      void wizard.cancel();
     };
-  });
-  onCleanup(() => {
-    disposed = true;
-    stopAfterRender();
-    connected = false;
-    firstRun.dispose();
-    retireWizardMutation();
-    iconLoader.reset();
-    void wizard.cancel();
   });
   return {
     view,

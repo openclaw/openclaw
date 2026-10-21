@@ -6,6 +6,7 @@ import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-wo
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { bindReportFetch } from "./report-network.test-support.js";
 import { createGithubSource } from "./sources/github/index.js";
 import {
   commit,
@@ -187,14 +188,11 @@ describe.skipIf(!connection)("Team Reports PostgreSQL runtime", () => {
           ? database
           : openTeamReportsDatabase(path.join(directory, "github-source.sqlite"));
       let title = "Original commit";
-      const source = createGithubSource({
-        logger,
-        fetchImpl: async (request) => {
-          const url = new URL(request);
-          return url.pathname === "/repos/example/app/commits"
-            ? json([commit("first", title), commit("second", "Second commit")])
-            : emptyRoute(url);
-        },
+      const source = bindReportFetch(createGithubSource({ logger }), async (request) => {
+        const url = new URL(request);
+        return url.pathname === "/repos/example/app/commits"
+          ? json([commit("first", title), commit("second", "Second commit")])
+          : emptyRoute(url);
       });
       try {
         withEngineStoreAdmission(() => target.resetActivity());

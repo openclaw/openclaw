@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
@@ -63,18 +64,15 @@ module.exports = {
     sourceWorkerName: `../plugin-sdk/${name}`,
     distWorkerPath: `plugin-sdk/${name}.js`,
   });
-  const host = createCompiledSdkHost([entrypoint("first"), entrypoint("second")], (prefix) =>
-    tempDirs.make(prefix),
-  );
-  if (!host) {
-    throw new Error("Expected a compiled SDK host");
-  }
-  const narrowHost = createCompiledSdkHost([entrypoint("second")], (prefix) =>
-    tempDirs.make(prefix),
-  );
-  if (!narrowHost) {
-    throw new Error("Expected a compiled SDK host without embedded dependencies");
-  }
+  const createHost = (first: string, ...rest: string[]) =>
+    expectDefined(
+      createCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)], (prefix) =>
+        tempDirs.make(prefix),
+      ),
+      "compiled SDK host",
+    );
+  const host = createHost("first", "second");
+  const narrowHost = createHost("second");
   expect(fs.existsSync(path.join(narrowHost, "dist/node_modules"))).toBe(false);
   expect(require(path.join(narrowHost, "dist/plugin-sdk/second.js"))).toMatchObject({ value: 2 });
   expect(fs.existsSync(path.join(host, "dist/unrelated.js"))).toBe(false);
@@ -89,15 +87,13 @@ module.exports = {
     workerUrl: URL;
     load: () => Promise<number>;
   };
-  expect(first.result).toBe(5);
+  expect(first).toMatchObject({ result: 5, buildId: "fixture-build", packageName: "openclaw" });
   expect(first.embeddedResult).toEqual({
     value: 13,
     name: "embedded-package",
     asset: "embedded asset",
     sibling: 17,
   });
-  expect(first.buildId).toBe("fixture-build");
-  expect(first.packageName).toBe("openclaw");
   await expect(first.load()).resolves.toBe(7);
   expect(require(fileURLToPath(first.workerUrl))).toMatchObject({ value: 11 });
   expect(require(path.join(host, "dist/plugin-sdk/second.js"))).toMatchObject({ value: 2 });

@@ -38,7 +38,7 @@ vi.mock("./google-genai-runtime.js", () => ({
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
+import { googleVideoGenerationProvider } from "./video-generation-provider.js";
 
 function mockGoogleApiKeyAuth(apiKey = "google-key") {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
@@ -49,7 +49,7 @@ function mockGoogleApiKeyAuth(apiKey = "google-key") {
 }
 
 function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
-  return buildGoogleVideoGenerationProvider().generateVideo({
+  return googleVideoGenerationProvider.generateVideo({
     provider: "google",
     model: "veo-3.1-fast-generate-preview",
     prompt: "A tiny robot watering a windowsill garden",
@@ -154,7 +154,7 @@ describe("google video generation provider", () => {
   });
 
   it("declares explicit mode capabilities", () => {
-    const provider = buildGoogleVideoGenerationProvider();
+    const provider = googleVideoGenerationProvider;
     expectExplicitVideoGenerationCapabilities(provider);
     expect(provider.capabilities.generate?.supportsAudio).toBe(false);
     expect(provider.capabilities.imageToVideo?.supportsAudio).toBe(false);

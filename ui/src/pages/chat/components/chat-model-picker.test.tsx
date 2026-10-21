@@ -63,6 +63,51 @@ it.each([false, true])(
   },
 );
 
+it("retains disclosure across catalog refreshes and forgets removed providers", async () => {
+  const params = pickerProps({
+    open: true,
+    modelOptions: [
+      option("selected", "current"),
+      option("other", "lead", { recommended: true }),
+      option("other", "rest"),
+    ],
+    selectedModelValue: "selected/current",
+  });
+  const { container, update } = mountPicker(params);
+  await waitForMenu(container);
+  const group = () =>
+    container.querySelector<HTMLElement>('[data-chat-model-provider-group="other"]')!;
+  const toggle = () =>
+    group().querySelector<HTMLButtonElement>(modelControlSelector("provider-toggle"))!;
+  const rest = () =>
+    group().querySelector<HTMLButtonElement>(modelControlSelector("option", "other/rest"))!;
+  toggle().click();
+  flush();
+  group().querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!.click();
+  flush();
+  const initialRest = rest();
+  expect(initialRest.hidden).toBe(false);
+
+  update({ ...params, modelOptions: params.modelOptions.map((entry) => ({ ...entry })) });
+  expect(rest()).toBe(initialRest);
+  expect(rest().hidden).toBe(false);
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
+
+  update({
+    ...params,
+    modelOptions: params.modelOptions.filter((entry) => entry.provider !== "other"),
+  });
+  expect(group()).toBeNull();
+  update(params);
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  toggle().click();
+  flush();
+  expect(rest().hidden).toBe(true);
+  expect(
+    group().querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!.hidden,
+  ).toBe(false);
+});
+
 it.each([false, true])(
   "keeps current visible in a bounded catalog with Default=%s",
   async (hasDefault) => {

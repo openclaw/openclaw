@@ -243,3 +243,72 @@ it("retains the cache count across writes and reloads after rollback or an unsco
     sql.restore();
   }
 });
+
+it("reuses exact cache counts through capacity writes and bounded prune batches", () => {
+  using fixture = createPublication({ cacheEnabled: true });
+  const { db, backend } = fixture;
+  let executedCounts = 0;
+  const sql = observeHostDataSql((query, database) => {
+    // Prepare callbacks carry a database; only native statement executions omit it.
+    if (database === undefined && /select count\(\*\).*memory_embedding_cache/i.test(query)) {
+      executedCounts += 1;
+    }
+  });
+  const write = (hashes: string[], maxEntries: number) =>
+    backend.execute({
+      type: "cache.write.inline",
+      input: {
+        header: {
+          agentId: "main",
+          provider: { id: "test", model: "test" },
+          providerKey: "test",
+          maxEntries,
+        },
+        entries: hashes.map((hash) => ({ hash, embedding: [1] })),
+      },
+    });
+  const prune = (maxEntries: number) =>
+    backend.execute({ type: "cache.prune", input: { maxEntries } });
+  try {
+    expect(write(["a", "b"], 2)).toMatchObject({ ok: true });
+    const admittedCounts = executedCounts;
+    expect(admittedCounts).toBe(1);
+    expect(write(["c"], 2)).toMatchObject({ ok: true });
+    expect(write(["c", "d"], 2)).toMatchObject({ ok: true });
+    expect(write(["d", "e"], 2)).toMatchObject({ ok: true });
+    expect(executedCounts).toBe(admittedCounts);
+    expect(db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash").all()).toEqual([
+      { hash: "d" },
+      { hash: "e" },
+    ]);
+
+    // An ordinary replacement produces an upper bound, so correct it once before pruning.
+    expect(write(["d"], 10)).toMatchObject({ ok: true });
+    expect(prune(2)).toMatchObject({ ok: true });
+    expect(executedCounts).toBe(admittedCounts + 1);
+    expect(prune(2)).toMatchObject({ ok: true, value: false });
+
+    // A sibling write invalidates both the size and its precision through the existing receipt.
+    db.exec("DELETE FROM memory_embedding_cache");
+    expect(
+      write(
+        Array.from({ length: 205 }, (_, index) => `row-${index}`),
+        205,
+      ),
+    ).toMatchObject({
+      ok: true,
+    });
+    const reseededCounts = executedCounts;
+    expect(reseededCounts).toBe(admittedCounts + 2);
+    expect(prune(2)).toMatchObject({ ok: true, value: true });
+    expect(prune(2)).toMatchObject({ ok: true, value: true });
+    expect(prune(2)).toMatchObject({ ok: true, value: true });
+    expect(prune(2)).toMatchObject({ ok: true, value: false });
+    expect(executedCounts).toBe(reseededCounts);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get()).toEqual({
+      count: 2,
+    });
+  } finally {
+    sql.restore();
+  }
+});

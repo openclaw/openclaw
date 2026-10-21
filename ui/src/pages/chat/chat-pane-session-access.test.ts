@@ -460,7 +460,14 @@ describe("chat pane session access", () => {
         true,
       ),
     );
-    expect(container.querySelector('[data-value="visibility:read-only"]')).not.toBeNull();
-    expect(container.textContent).not.toContain("People");
+    expect(container.querySelector(".chat-pane__sharing-permissions")).toBeNull();
+    const access = container.querySelector<HTMLButtonElement>('[data-value="access"]');
+    expect(access).not.toBeNull();
+    access!.click();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector<HTMLButtonElement>('[data-value="visibility:read-only"]')?.disabled,
+      ).toBe(false),
+    );
   });
 });

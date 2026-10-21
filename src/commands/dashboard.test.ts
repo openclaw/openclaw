@@ -120,7 +120,7 @@ beforeEach(() => {
   mocks.inspectPortUsage.mockReset();
   mocks.ensureDashboardGatewayReady
     .mockReset()
-    .mockResolvedValue({ ready: true, status: {}, recovered: false });
+    .mockResolvedValue({ ready: true, recovered: false });
   mocks.waitForControlUiDocument.mockReset().mockResolvedValue({ ready: true });
   mockSnapshot();
   mockCustomLinks();
@@ -194,8 +194,8 @@ it("re-probes a changed endpoint after recovery before URL delivery", async () =
     .mockResolvedValueOnce(createSnapshot({ bind: "custom", customBindHost: "10.0.0.5" }))
     .mockResolvedValueOnce(createSnapshot({ bind: "custom", customBindHost: "10.0.0.6" }));
   mocks.ensureDashboardGatewayReady
-    .mockResolvedValueOnce({ ready: true, status: {}, recovered: true })
-    .mockResolvedValueOnce({ ready: false, status: {}, reason: "failed", recoverable: false });
+    .mockResolvedValueOnce({ ready: true, recovered: true })
+    .mockResolvedValueOnce({ ready: false, reason: "failed" });
 
   await dashboardCommand(runtime, { noOpen: true, yes: true });
 

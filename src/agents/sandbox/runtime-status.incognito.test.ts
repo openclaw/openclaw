@@ -9,7 +9,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { assertAgentHarnessExecutionEnvironment } from "../harness/execution-environment.js";
 import { readSessionRuntimeOwnership } from "../harness/session-runtime-ownership.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -29,17 +32,27 @@ const harness: AgentHarness = {
   },
 };
 afterEach(() => memorySessionActorOwners.reset());
+const enabledStatus = { sandboxed: true, sandboxRequired: false };
+
+function memoryPolicy(state: OpenClawTestState, suffix: string) {
+  const sessionKey = `agent:main:dashboard:incognito-${suffix}`;
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { sandbox: { mode: "all" } } },
+    session: { store: storePath },
+  };
+  return {
+    request: { cfg, sessionKey },
+    storePath,
+    scope: { agentId: "main", sessionKey, storePath, env: state.env },
+    source: { env: state.env, cwd: state.env.OPENCLAW_STATE_DIR!, assertCurrent() {} },
+  };
+}
 
 it("classifies unbound memory policy and rejects execution after permission or sandbox changes", async () => {
   await withOpenClawTestState({ label: "memory-policy" }, async (state) => {
-    const sessionKey = "agent:main:dashboard:incognito-policy";
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { sandbox: { mode: "all" } } },
-      session: { store: storePath },
-    };
-    const scope = { agentId: "main", sessionKey, storePath, env: state.env };
-    const source = { env: state.env, cwd: state.env.OPENCLAW_STATE_DIR!, assertCurrent() {} };
+    const { request, scope, source } = memoryPolicy(state, "policy");
+    const classify = () => resolveSandboxRuntimeStatus(request);
     const observe = observeHostDataSql();
     try {
       await replaceSessionEntry(scope, {
@@ -52,38 +65,34 @@ it("classifies unbound memory policy and rejects execution after permission or s
         nativeRuntimeConsent: "fixture",
       });
       const params = {
-        config: cfg,
+        config: request.cfg,
         agentId: "main",
-        sessionKey,
+        sessionKey: request.sessionKey,
         sessionId: "policy",
         permissionMode: "full" as const,
       };
-      expect(resolveSandboxRuntimeStatus({ cfg, sessionKey }).sandboxed).toBe(false);
+      expect(classify().sandboxed).toBe(false);
       await expect(assertAgentHarnessExecutionEnvironment(harness, params)).resolves.toBe(true);
       expect(
         resolveSandboxRuntimeStatus({
-          cfg,
-          sessionKey,
+          ...request,
           preparedSessionEntry: { sandbox: "required" },
         }).sandboxRequired,
       ).toBe(true);
       await expect(
-        withSandboxRuntimeStatusesInWorker([{ cfg, sessionKey }], source, (statuses) => statuses),
+        withSandboxRuntimeStatusesInWorker([request], source, (statuses) => statuses),
       ).resolves.toMatchObject([{ sandboxed: false }]);
       await upsertSessionEntryCore(scope, { permissionMode: "workspace" });
       await expect(assertAgentHarnessExecutionEnvironment(harness, params)).rejects.toThrow(
         "requires Full access",
       );
       await expect(
-        withSandboxRuntimeStatusInWorker({ cfg, sessionKey }, source, async () => {
+        withSandboxRuntimeStatusInWorker(request, source, async () => {
           await upsertSessionEntryCore(scope, { sandboxMode: undefined });
           return "prepared";
         }),
       ).rejects.toThrow("Session entry changed during read");
-      expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
-        sandboxRequired: false,
-        sandboxed: true,
-      });
+      expect(classify()).toMatchObject(enabledStatus);
       expect(observe.queries).toEqual([]);
     } finally {
       observe.restore();
@@ -93,36 +102,18 @@ it("classifies unbound memory policy and rejects execution after permission or s
 
 it("classifies absent incognito sessions without allocating an owner", async () => {
   await withOpenClawTestState({ label: "memory-policy-absent" }, async (state) => {
-    const sessionKey = "agent:main:dashboard:incognito-absent";
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { sandbox: { mode: "all" } } },
-      session: { store: storePath },
-    };
-    expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
-      sandboxed: true,
-      sandboxRequired: false,
-    });
+    const { request, storePath, source } = memoryPolicy(state, "absent");
+    expect(resolveSandboxRuntimeStatus(request)).toMatchObject(enabledStatus);
     await expect(
-      withSandboxRuntimeStatusesInWorker(
-        [{ cfg, sessionKey }],
-        {
-          env: state.env,
-          cwd: state.env.OPENCLAW_STATE_DIR!,
-          assertCurrent() {},
-        },
-        (statuses) => statuses,
-      ),
-    ).resolves.toMatchObject([{ sandboxed: true, sandboxRequired: false }]);
+      withSandboxRuntimeStatusesInWorker([request], source, (statuses) => statuses),
+    ).resolves.toMatchObject([enabledStatus]);
     expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
   });
 });
 
 it("reads current memory predecessor lineage and retires the scoped runtime reader", async () => {
   await withOpenClawTestState({ label: "memory-policy-lineage" }, async (state) => {
-    const sessionKey = "agent:main:dashboard:incognito-lineage";
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const scope = { agentId: "main", sessionKey, storePath, env: state.env };
+    const { scope } = memoryPolicy(state, "lineage");
     const entry = {
       sessionId: "lineage",
       updatedAt: 1,

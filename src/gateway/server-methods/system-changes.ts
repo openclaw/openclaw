@@ -430,25 +430,16 @@ async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number
 
 export async function listSystemChanges(
   params: SystemChangesListParams,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    systemStore?: AuditStore<SystemAgentAuditEntry>;
-    configStore?: AuditStore<ConfigAuditRecord>;
-  } = {},
 ): Promise<SystemChangesListResult> {
-  const env = options.env ?? process.env;
-  const systemStore =
-    options.systemStore ??
-    createSqliteAuditRecordReader<SystemAgentAuditEntry>({
-      scope: SYSTEM_AGENT_AUDIT_SCOPE,
-      env,
-    });
-  const configStore =
-    options.configStore ??
-    createSqliteAuditRecordReader<ConfigAuditRecord>({
-      scope: CONFIG_AUDIT_SCOPE,
-      env,
-    });
+  const env = process.env;
+  const systemStore: AuditStore<SystemAgentAuditEntry> = createSqliteAuditRecordReader({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    env,
+  });
+  const configStore: AuditStore<ConfigAuditRecord> = createSqliteAuditRecordReader({
+    scope: CONFIG_AUDIT_SCOPE,
+    env,
+  });
   const cursor = params.beforeCursor
     ? decodeCursor(params.beforeCursor)
     : {

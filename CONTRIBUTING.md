@@ -202,20 +202,12 @@ enforcement: bypassing or disabling hooks also bypasses this check.
 
 After your PR receives Barnacle, ClawSweeper, or maintainer feedback, read the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) for how to interpret rank-up moves, proof guidance, re-review requests, and review conversation follow-up.
 
-## Control UI Decorators
+## Control UI
 
-The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
-`accessor` fields required for standard decorators). When adding reactive fields, keep the
-legacy style:
-
-```ts
-@state() foo = "bar";
-@property({ type: Number }) count = 0;
-```
-
-The root `tsconfig.json` is configured for legacy decorators (`experimentalDecorators: true`)
-with `useDefineForClassFields: false`. Avoid flipping these unless you are also updating the UI
-build tooling to support standard decorators.
+The Control UI uses **Solid 2** and native primitives, not Lit or decorator-based
+reactive fields. Before changing UI code, read the [Control UI guide](ui/AGENTS.md)
+and the [Solid skill](.agents/skills/solid/SKILL.md) for the current patterns and
+validation requirements.
 
 ## AI/Vibe-Coded PRs Welcome! 🤖
 

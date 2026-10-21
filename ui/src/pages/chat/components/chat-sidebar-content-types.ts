@@ -12,6 +12,9 @@ import type {
   ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
 
+/** Destination selected by the content owner; void keeps an existing reader in place. */
+export type SidebarOpenResult = "detail" | "workspace" | void;
+
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
 export type SessionWorkspaceTreeState = {
@@ -102,6 +105,7 @@ type SessionDiffMobilePageRequest = {
 };
 
 export type SessionDiffProps = {
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   /** Native host presentation, not the width of the panel. Unknown retains the native UI. */
   mobile?: boolean | null;
   active?: boolean;
@@ -231,7 +235,7 @@ type SessionDiffSidebarContent = {
   /** Last accepted native Uncommitted result for this exact diff loader. */
   uncommitted?: SessionsDiffResult;
   /** Visible Environment demand shares this content's native diff loader. */
-  requestUncommitted?: () => void;
+  requestUncommitted?: () => void | (() => void);
   onResult?: SessionDiffProps["onResult"];
   loadFileText?: SessionDiffFileTextLoader;
   openFile?: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
@@ -327,7 +331,9 @@ export type SidebarSelection = (
   // Keep failed opens attached to their selected surface instead of falling back
   // to unrelated content.
   | { kind: "unavailable"; message: string }
-) & { fileTab?: { id: string; label: string; disposition?: "pinned" | "preview" } };
+) & {
+  fileTab?: { id: string; label: string; disposition?: "pinned" | "preview"; intent?: "navigate" };
+};
 
 export type FileReaderInteraction = "selection" | "copy" | "link" | "edit";
 

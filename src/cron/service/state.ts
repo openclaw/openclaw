@@ -207,6 +207,24 @@ export type CronServiceDeps = {
         nextCheck?: CronNextCheckProposal;
       }
   >;
+  /** Shared-conversation work settles through the session controller's ordinary turn owner. */
+  runSessionEvent?: (params: {
+    admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
+    deliveryAttemptFence: CronCompletionDeliveryFence | null;
+    onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+    onLaneWait?: (info?: { waiting?: boolean }) => void;
+    executionIdentity?: CronExecutionIdentityAdmission;
+    job: CronStoredJob;
+    text: string;
+    abortSignal?: AbortSignal;
+    prepare?: () => Promise<void>;
+    assertCurrent: () => void;
+  }) => Promise<
+    CronRunOutcome &
+      CronRunTelemetry &
+      CronRunDeliveryResult & { nextCheck?: CronNextCheckProposal }
+  >;
   runCommandJob?: (params: {
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;

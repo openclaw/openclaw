@@ -126,6 +126,15 @@ it.each<[string, Request, Record<string, unknown>]>([
     },
     { promptImage: "data:image/png;base64,cG5nLWJ5dGVz", ratio: "960:960", duration: 6 },
   ],
+  [
+    "video_to_video",
+    {
+      model: "gen4_aleph",
+      inputVideos: [{ url: "https://example.com/input.mp4" }],
+      aspectRatio: "1:1",
+    },
+    { model: "gen4_aleph", videoUri: "https://example.com/input.mp4", ratio: "960:960" },
+  ],
 ])("submits %s, polls, and downloads the output", async (endpoint, request, body) => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
   try {

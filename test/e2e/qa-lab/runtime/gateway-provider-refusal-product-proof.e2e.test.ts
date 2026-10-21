@@ -1,51 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { listenLoopback, sendChat } from "./gateway-recovery.test-support.js";
 
-const PRIMARY_MODEL = "anthropic/claude-opus-4-8";
-const FALLBACK_MODEL = "anthropic/claude-sonnet-4-6";
 const REFUSAL_EXPLANATION = "Service unavailable. Try again.";
 const REFUSAL_TEXT =
   "The provider refused this request (category: reasoning_extraction). Revise the request and try again.";
 const REFUSAL_NOTICE = `Your request couldn't be completed: ${REFUSAL_TEXT}`;
 
-type GatewayRun = {
-  runId?: unknown;
-  status?: unknown;
-  error?: unknown;
-};
-
 type GatewayHistory = {
   messages?: Array<{ role?: unknown; content?: unknown; customType?: unknown }>;
 };
-
-const cleanups: Array<() => Promise<void>> = [];
-
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "provider refusal product proof cleanup failed");
-  }
-});
 
 function messageText(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
+  return (Array.isArray(content) ? content : [])
     .flatMap((part) =>
       part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
         ? [(part as { text: string }).text]
@@ -88,16 +62,9 @@ async function startRefusingAnthropicProvider() {
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("refusing Anthropic provider did not bind a loopback port");
-  }
+  const baseUrl = await listenLoopback(server, "refusal provider did not bind a loopback port");
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     requests,
     stop: async () => {
       server.closeAllConnections();
@@ -108,84 +75,68 @@ async function startRefusingAnthropicProvider() {
   };
 }
 
-describe("Gateway provider refusal product proof", () => {
-  it("keeps a structured Anthropic refusal terminal across retry and fallback", async () => {
-    const provider = await startRefusingAnthropicProvider();
-    cleanups.push(() => provider.stop());
-    const gatewayOwner = createQaGatewayChild();
-    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-    const gateway = await gatewayOwner.start({
-      repoRoot: process.cwd(),
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: ["dist/entry.js"],
-        cwd: process.cwd(),
-        tempParentDir: process.env.TMPDIR ?? tmpdir(),
-        usePackagedPlugins: false,
-      },
-      providerBaseUrl: provider.baseUrl,
-      providerMode: "mock-openai",
-      primaryModel: PRIMARY_MODEL,
-      alternateModel: FALLBACK_MODEL,
-      transportBaseUrl: "http://127.0.0.1",
-      controlUiEnabled: false,
-      runtimeEnvPatch: {
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      },
-      mutateConfig: ({ plugins: _plugins, ...config }) => config,
-    });
+it("keeps a structured Anthropic refusal terminal across retry and fallback", async () => {
+  const provider = await startRefusingAnthropicProvider();
+  const gatewayOwner = createQaGatewayChild();
+  await runQaGatewayFixture(
+    async () => {
+      const gateway = await gatewayOwner.start({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: ["dist/entry.js"],
+          cwd: process.cwd(),
+          tempParentDir: process.env.TMPDIR ?? tmpdir(),
+          usePackagedPlugins: false,
+        },
+        providerBaseUrl: provider.baseUrl,
+        providerMode: "mock-openai",
+        primaryModel: "anthropic/claude-opus-4-8",
+        alternateModel: "anthropic/claude-sonnet-4-6",
+        transportBaseUrl: "http://127.0.0.1",
+        controlUiEnabled: false,
+        runtimeEnvPatch: {
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        },
+        mutateConfig: ({ plugins: _plugins, ...config }) => config,
+      });
 
-    const sessionKey = `agent:qa:provider-refusal-${randomUUID()}`;
-    const started = (await gateway.call(
-      "chat.send",
-      {
+      const sessionKey = `agent:qa:provider-refusal-${randomUUID()}`;
+      const started = await sendChat(
+        gateway,
         sessionKey,
-        message: "Trigger the deterministic provider refusal.",
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      },
-      { timeoutMs: 30_000 },
-    )) as GatewayRun;
-    expect(started).toMatchObject({ status: "started" });
-    expect(typeof started.runId).toBe("string");
+        "Trigger the deterministic provider refusal.",
+      );
+      expect(started).toMatchObject({ status: "started", runId: expect.any(String) });
 
-    const terminal = (await gateway.call(
-      "agent.wait",
-      { runId: started.runId, timeoutMs: 30_000 },
-      { timeoutMs: 35_000 },
-    )) as GatewayRun;
-    const history = (await gateway.call(
-      "chat.history",
-      { sessionKey, limit: 20 },
-      { timeoutMs: 10_000 },
-    )) as GatewayHistory;
-    const refusals =
-      history.messages?.filter(
-        (message) => message.role === "custom" && message.customType === "run-failed-before-reply",
-      ) ?? [];
-    const proof = {
-      requestCount: provider.requests.length,
-      requestModels: provider.requests.map((body) => (body as { model?: unknown }).model),
-      terminalStatus: terminal.status,
-      terminalError: terminal.error,
-      refusalNotices: refusals.length,
-      refusalText: refusals[0] ? messageText(refusals[0].content) : undefined,
-    };
-    console.log(`[gateway provider-refusal proof] ${JSON.stringify(proof)}`);
-    expect(proof).toMatchObject({
-      requestCount: 1,
-      requestModels: ["claude-opus-4-8"],
-      terminalStatus: "error",
-      terminalError: REFUSAL_TEXT,
-      refusalNotices: 1,
-      refusalText: REFUSAL_NOTICE,
-    });
-    expect(refusals[0]).toMatchObject({
-      display: true,
-      openclawRunError: { runId: started.runId, summary: REFUSAL_NOTICE },
-    });
-    expect(JSON.stringify({ terminal, history })).not.toContain(REFUSAL_EXPLANATION);
-  }, 60_000);
-});
+      const terminal = (await gateway.call(
+        "agent.wait",
+        { runId: started.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      )) as { status?: unknown; error?: unknown };
+      const history = (await gateway.call(
+        "chat.history",
+        { sessionKey, limit: 20 },
+        { timeoutMs: 10_000 },
+      )) as GatewayHistory;
+      const refusals =
+        history.messages?.filter(
+          (message) =>
+            message.role === "custom" && message.customType === "run-failed-before-reply",
+        ) ?? [];
+      expect(provider.requests).toEqual([expect.objectContaining({ model: "claude-opus-4-8" })]);
+      expect(terminal).toMatchObject({ status: "error", error: REFUSAL_TEXT });
+      expect(refusals).toHaveLength(1);
+      expect(messageText(refusals[0]?.content)).toBe(REFUSAL_NOTICE);
+      expect(refusals[0]).toMatchObject({
+        display: true,
+        openclawRunError: { runId: started.runId, summary: REFUSAL_NOTICE },
+      });
+      expect(JSON.stringify({ terminal, history })).not.toContain(REFUSAL_EXPLANATION);
+    },
+    () => stopQaGatewayFixture(gatewayOwner),
+    () => provider.stop(),
+  );
+}, 60_000);

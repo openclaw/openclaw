@@ -13,7 +13,7 @@ const suite = createControlUiE2eSuite({
 const sessionKeys = ["agent:main:review-a", "agent:main:review-b"] as const;
 
 suite.define(() => {
-  it("dismisses the visible CI popover after a keyboard session switch", async () => {
+  it("dismisses the visible PR menu after a keyboard session switch", async () => {
     await suite.withPage(
       {
         colorScheme: "light",
@@ -39,7 +39,6 @@ suite.define(() => {
         });
         await page.goto(new URL(controlUiSessionPath(sessionKeys[0]), suite.server.baseUrl).href);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const visibleChecks = pane.locator(".chat-pr__checks");
         for (const [index, key] of sessionKeys.entries()) {
           if (index > 0) {
             const link = page.locator(`.sidebar-recent-session[data-session-key="${key}"] a`);
@@ -69,31 +68,41 @@ suite.define(() => {
             },
           });
           // Keep this regression keyboard-only: a pointer click would light-dismiss
-          // the previous pane's CI disclosure before Escape is exercised.
+          // the previous pane's PR menu before Escape is exercised.
           await pane.getByRole("button", { name: "Details", exact: true }).press("Enter");
           await expect
             .poll(() => pane.locator('[data-details-group="pull-requests"]').getAttribute("open"))
             .not.toBeNull();
-          const summary = visibleChecks.locator(":scope > summary");
-          await summary.focus();
-          await summary.press("Enter");
-          await expect.poll(() => visibleChecks.getAttribute("open")).toBe("");
+          const actions = pane.locator(".chat-pr__actions-trigger");
+          await actions.focus();
+          await actions.press("Enter");
+          const menu = pane.locator(".chat-pr-menu");
+          await menu.waitFor();
+          await menu.locator('[data-value="monitoring"]').press("Enter");
+          await menu.locator(".chat-pr-menu__page:visible").waitFor();
         }
         await expect.poll(() => page.locator("openclaw-chat-pane").count()).toBe(2);
-        const hiddenChecks = page.locator(
-          'openclaw-chat-pane[aria-hidden="true"][inert] .chat-pr__checks',
-        );
-        expect(await hiddenChecks.getAttribute("open")).toBe("");
-        expect(await hiddenChecks.locator(".chat-pr__checks-menu").isVisible()).toBe(false);
-        await expect
-          .poll(() => visibleChecks.locator(".chat-pr__checks-menu").isVisible())
-          .toBe(true);
+        const hiddenPane = page.locator('openclaw-chat-pane[aria-hidden="true"][inert]');
+        const visiblePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        const hiddenMenu = hiddenPane.locator(".chat-pr-menu");
+        const visibleMenu = visiblePane.locator(".chat-pr-menu");
+        expect(
+          await hiddenPane.locator(".chat-pr__actions-trigger").getAttribute("aria-expanded"),
+        ).toBe("false");
+        expect(await hiddenMenu.isVisible()).toBe(false);
+        await expect.poll(() => visibleMenu.isVisible()).toBe(true);
         await page.keyboard.press("Escape");
-        await expect.poll(() => visibleChecks.getAttribute("open")).toBeNull();
-        await expect
-          .poll(() => visibleChecks.locator(".chat-pr__checks-menu").isVisible())
-          .toBe(false);
-        expect(await hiddenChecks.getAttribute("open")).toBe("");
+        await expect.poll(() => visibleMenu.locator(".chat-pr-menu__page:visible").count()).toBe(0);
+        expect(await visibleMenu.isVisible()).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => visibleMenu.isVisible()).toBe(false);
+        expect(
+          await visiblePane.locator(".chat-pr__actions-trigger").getAttribute("aria-expanded"),
+        ).toBe("false");
+        expect(
+          await hiddenPane.locator(".chat-pr__actions-trigger").getAttribute("aria-expanded"),
+        ).toBe("false");
+        expect(await hiddenMenu.isVisible()).toBe(false);
       },
     );
   });

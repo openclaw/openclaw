@@ -7,6 +7,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
+import { PluginDetailLoadingHero } from "./detail-loading-hero.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
@@ -153,7 +154,7 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.
       {props.error ? (
         <div class="callout danger oc-banner oc-banner-error" role="alert">
           <span>{formatUiExternalText(props.error)}</span>
-          <button type="button" class="btn btn--sm" onClick={props.onRetry}>
+          <button type="button" class="btn btn--sm" onClick={() => props.onRetry()}>
             {t("pluginsPage.tryAgain")}
           </button>
         </div>
@@ -167,14 +168,7 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.
           aria-label={t("pluginsPage.detailLoading")}
         >
           <div class="plugin-catalog-detail__back skeleton" />
-          <div class="plugin-catalog-detail__hero">
-            <div class="plugin-catalog-detail__icon skeleton" />
-            <div>
-              <div class="plugin-catalog-detail__loading-title skeleton" />
-              <div class="plugin-catalog-detail__loading-publisher skeleton" />
-              <div class="plugin-catalog-detail__loading-summary skeleton" />
-            </div>
-          </div>
+          <PluginDetailLoadingHero />
           <div class="plugin-catalog-detail__content">
             <div class="plugin-catalog-detail__main" aria-hidden="true">
               <div class="plugin-catalog-detail__loading-card skeleton" />

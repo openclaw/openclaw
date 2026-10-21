@@ -75,7 +75,14 @@ export type MenuItem = {
 export type MenuEntry =
   | MenuItem
   | { kind: "content"; id: string; content: JSX.Element }
-  | { kind: "group"; id: string; class?: string; items: readonly MenuEntry[] };
+  | {
+      kind: "group";
+      id: string;
+      class?: string;
+      items: readonly MenuEntry[];
+      /** Custom layout retains the native item bindings and this group's lifetime. */
+      render?: (children: JSX.Element) => JSX.Element;
+    };
 
 export type MenuHandle = {
   overlay: Overlay;
@@ -428,9 +435,28 @@ export function Menu(props: BranchProps): JSX.Element {
           const current = entry();
           return current.kind === "group" ? current : undefined;
         };
+        const groupMount = createMemo<
+          { id: string; render?: (children: JSX.Element) => JSX.Element } | undefined
+        >((previous) => {
+          const current = group();
+          if (!current) {
+            return undefined;
+          }
+          // The keyed group keeps its renderer while its rows and presentation update.
+          return previous?.id === current.id
+            ? previous
+            : { id: current.id, render: current.render };
+        });
         const fallback = (
-          <Show when={group()} fallback={content()}>
-            {(section) => <div class={section().class}>{renderEntries(() => section().items)}</div>}
+          <Show when={groupMount()} keyed fallback={content()}>
+            {(mount) => {
+              const children = renderEntries(() => group()?.items ?? []);
+              return mount.render ? (
+                mount.render(children)
+              ) : (
+                <div class={group()?.class}>{children}</div>
+              );
+            }}
           </Show>
         );
         return (

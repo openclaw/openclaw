@@ -7,6 +7,12 @@ import {
   toLegacyMcpListToolsResult,
 } from "./mcp-sdk-compatibility.js";
 
+function toolResult(
+  tool: Partial<Parameters<typeof toLegacyMcpListToolsResult>[0]["tools"][number]>,
+) {
+  return { tools: [{ name: "fixture", inputSchema: { type: "object" as const }, ...tool }] };
+}
+
 describe("published MCP result compatibility", () => {
   it("preserves complete v1 payloads, metadata, schemas, and cursors", () => {
     const call = {
@@ -17,13 +23,10 @@ describe("published MCP result compatibility", () => {
     };
     expect(toLegacyMcpCallToolResult(call)).toStrictEqual(call);
     const tools = {
-      tools: [
-        {
-          name: "fixture",
-          inputSchema: { type: "object" as const, properties: { query: { type: "string" } } },
-          _meta: { "fixture/tool": true },
-        },
-      ],
+      ...toolResult({
+        inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        _meta: { "fixture/tool": true },
+      }),
       nextCursor: "next/page",
       _meta: { page: 1 },
     };
@@ -63,9 +66,9 @@ describe("published MCP result compatibility", () => {
     "rejects scalar schema properties (%j) without changing the schema",
     ({ value }) => {
       expect(() =>
-        toLegacyMcpListToolsResult({
-          tools: [{ name: "fixture", inputSchema: { type: "object", properties: { value } } }],
-        }),
+        toLegacyMcpListToolsResult(
+          toolResult({ inputSchema: { type: "object", properties: { value } } }),
+        ),
       ).toThrow(
         expect.objectContaining({
           code: "MCP_SDK_RESULT_UNREPRESENTABLE",
@@ -77,28 +80,19 @@ describe("published MCP result compatibility", () => {
 
   it("preserves array-valued schema properties and result extensions accepted by v1", () => {
     const result = {
-      tools: [
-        {
-          name: "fixture",
-          inputSchema: { type: "object" as const, properties: { value: [{ type: "string" }] } },
-          outputSchema: { type: "object" as const, properties: { result: { type: "number" } } },
-        },
-      ],
+      ...toolResult({
+        inputSchema: { type: "object", properties: { value: [{ type: "string" }] } },
+        outputSchema: { type: "object", properties: { result: { type: "number" } } },
+      }),
       ttlMs: 123,
       cacheScope: "private" as const,
       _meta: { source: "fixture" },
     };
     expect(toLegacyMcpListToolsResult(result)).toStrictEqual(result);
     expect(() =>
-      toLegacyMcpListToolsResult({
-        tools: [
-          {
-            name: "fixture",
-            inputSchema: { type: "object" },
-            outputSchema: { type: "object", properties: { result: false } },
-          },
-        ],
-      }),
+      toLegacyMcpListToolsResult(
+        toolResult({ outputSchema: { type: "object", properties: { result: false } } }),
+      ),
     ).toThrow(McpSdkCompatibilityError);
   });
 
@@ -108,11 +102,9 @@ describe("published MCP result compatibility", () => {
       text: "answer",
       "fixture/extension": { meaningful: true },
     };
-    expect(() =>
-      toLegacyMcpCallToolResult({
-        content: [content],
-      }),
-    ).toThrow(McpSdkCompatibilityError);
+    expect(() => toLegacyMcpCallToolResult({ content: [content] })).toThrow(
+      McpSdkCompatibilityError,
+    );
   });
 
   it.each([
@@ -122,11 +114,7 @@ describe("published MCP result compatibility", () => {
     { type: "object", properties: false },
     { type: "object", required: false },
   ])("rejects an output schema outside the published v1 shape (%j)", (outputSchema) => {
-    expect(() =>
-      toLegacyMcpListToolsResult({
-        tools: [{ name: "fixture", inputSchema: { type: "object" }, outputSchema }],
-      }),
-    ).toThrow(
+    expect(() => toLegacyMcpListToolsResult(toolResult({ outputSchema }))).toThrow(
       expect.objectContaining({
         code: "MCP_SDK_RESULT_UNREPRESENTABLE",
         method: "tools/list",

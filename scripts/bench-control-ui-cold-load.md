@@ -173,6 +173,20 @@ cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
 restores each build's warm state before each run. Streaming comparisons do not
 require the separate `--warm-reload` diagnostics or external probe scripts.
 
+Add `--streaming-allocations` to sample JavaScript allocations during the stream
+with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both
+major and minor GC. `streaming.allocations` reports estimated bytes and bytes per
+delivered delta; `run-N.streaming.heapprofile` retains the allocation call tree.
+The interval covers the whole renderer, including synthetic delivery and native
+composer input, and excludes reload and report serialization. These are sampled
+allocation estimates, not retained heap sizes or exact array counts. Collect
+timings in separate runs without allocation sampling.
+
+For concurrent paired comparisons, use separate processes and bundle directories
+with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and
+distinct `--port` / `--sandbox-port` values. The start barrier supports either
+`--streaming-reply` or `--live-events` and fails if setup misses the requested time.
+
 Use `--streaming-burst-size 5` to enqueue five snapshots every 166.7 ms
 while retaining the average 30 deltas/s. The mock transport still applies
 `--frame-gap-ms`; set it to zero to remove intentional spacing, and inspect

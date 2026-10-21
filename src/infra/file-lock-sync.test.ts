@@ -43,15 +43,11 @@ const writerSource = `
       }
       return result;
     };
-    try {
-      const release = acquireFileLockSyncWithRetry(workerData.target, {
-        lockRoot, timeoutMs: 5_000,
-      });
-      release();
-      parentPort.postMessage({ phase: "acquired" });
-    } catch (error) {
-      parentPort.postMessage({ phase: "failed", code: error.code, message: error.message });
-    }
+    const release = acquireFileLockSyncWithRetry(workerData.target, {
+      lockRoot, timeoutMs: 5_000,
+    });
+    release();
+    parentPort.postMessage({ phase: "acquired" });
     parentPort.close();
   })().catch(error => {
     parentPort.postMessage({ phase: "failed", code: error.code, message: error.message });
@@ -70,6 +66,8 @@ it.for([
   const target = path.join(directory, "coordinator.sqlite");
   const lockPath = `${target}.lock`;
   const gate = new Int32Array(new SharedArrayBuffer(4));
+  const sidecarReplaced = transition === "replacement inode" || transition === "foreign owner";
+  const foreign = Buffer.from(JSON.stringify({ pid: process.pid + 1, createdAt: "foreign" }));
   const launch = (holder: boolean) => {
     const worker = new Worker(writerSource, {
       eval: true,
@@ -93,7 +91,7 @@ it.for([
         awaitGateBeforeSettlement(once(worker, "message"), exited, "Lock worker exited"),
         signal,
       );
-    return { worker, exited, next, ready: next() };
+    return { worker, next, ready: next() };
   };
   const holder = launch(true);
   let contender: ReturnType<typeof launch> | undefined;
@@ -103,11 +101,7 @@ it.for([
     contender = launch(false);
     expect((await contender.ready)[0]).toEqual({ phase: "reclaim" });
     const outcome = contender.next();
-    if (
-      transition === "release" ||
-      transition === "expired budget" ||
-      transition === "replaced root"
-    ) {
+    if (!sidecarReplaced) {
       const released = holder.next();
       holder.worker.postMessage("release", []);
       expect((await released)[0]).toEqual({ phase: "released" });
@@ -122,27 +116,25 @@ it.for([
       fs.writeFileSync(replacement, original);
       fs.renameSync(replacement, lockPath);
     } else {
-      fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid + 1, createdAt: "foreign" }));
+      fs.writeFileSync(lockPath, foreign);
     }
     Atomics.store(gate, 0, 1);
     Atomics.notify(gate, 0);
     const result = (await outcome)[0];
     if (transition === "release") {
       expect(result).toEqual({ phase: "acquired" });
-      expect(fs.existsSync(lockPath)).toBe(false);
-    } else if (transition === "expired budget") {
-      expect(result).toMatchObject({ phase: "failed", code: "file_lock_timeout" });
-      expect(fs.existsSync(lockPath)).toBe(false);
-    } else if (transition === "replaced root") {
-      expect(result).toMatchObject({ phase: "failed", code: "path-mismatch" });
-      expect(fs.existsSync(lockPath)).toBe(false);
     } else {
-      expect(result).toMatchObject({ phase: "failed", code: "path-mismatch" });
+      expect(result).toMatchObject({
+        phase: "failed",
+        code: transition === "expired budget" ? "file_lock_timeout" : "path-mismatch",
+      });
+    }
+    if (sidecarReplaced) {
       expect(fs.readFileSync(lockPath)).toEqual(
-        transition === "replacement inode"
-          ? original
-          : Buffer.from(JSON.stringify({ pid: process.pid + 1, createdAt: "foreign" })),
+        transition === "replacement inode" ? original : foreign,
       );
+    } else {
+      expect(fs.existsSync(lockPath)).toBe(false);
     }
   } finally {
     Atomics.store(gate, 0, 1);

@@ -449,6 +449,13 @@ export async function startNodeHostMcpManager(
   }
 
   const tasks = Array.from(states.values(), (state) => async () => {
+    if (state.config.auth === "enterprise" || state.config.enterprise) {
+      states.delete(state.serverName);
+      console.warn(
+        `node host MCP server "${state.serverName}" skipped: enterprise-managed authorization is not supported on node hosts; configure it in mcp.servers on the Gateway and run openclaw mcp login <server-name> there`,
+      );
+      return;
+    }
     if (state.config.auth === "oauth" || state.config.oauth) {
       states.delete(state.serverName);
       console.warn(`node host MCP server "${state.serverName}" skipped: OAuth is not supported`);

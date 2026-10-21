@@ -72,6 +72,10 @@ it.each([
       });
       throw new Error("failure alert channel unavailable");
     });
+    const failRun = async () => ({
+      status: "error" as const,
+      error: "temporary upstream error",
+    });
     const cron = new CronService({
       ...cronTestDeps({ storePath: (await makeStorePath()).storePath }),
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
@@ -94,7 +98,8 @@ it.each([
         );
       },
       sendCronFailureAlert,
-      runIsolatedAgentJob: async () => ({ status: "error", error: "temporary upstream error" }),
+      runIsolatedAgentJob: failRun,
+      runSessionEvent: failRun,
     });
     try {
       await cron.start();

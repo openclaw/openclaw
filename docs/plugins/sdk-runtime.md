@@ -342,6 +342,9 @@ immediately and returns the callback's value or promise. It detaches the calling
 turn, request, and unrelated async-local context while preserving the instance's
 host resource bindings. Each call selects that exact instance's current adopted
 registry, so a retained plugin sees replacement providers after a reload.
+Background SQLite readers belong to the instance, independently of the temporary
+scope that loaded it or invoked the callback. They stay available through admitted
+work and cleanup, and close with the instance's module resources.
 
 Use it when installing timers, watchers, and listeners, and again when delivering
 each background callback. Keep the runner with the resource that owns it; an old

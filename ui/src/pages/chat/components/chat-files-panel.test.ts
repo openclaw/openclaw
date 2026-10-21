@@ -16,7 +16,7 @@ import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import {
   openSessionWorkspacePreview,
   pinSessionWorkspacePreview,
-  closeSessionWorkspacePreview,
+  requestCloseSessionWorkspacePreview,
   selectSessionWorkspacePreview,
   getSessionWorkspace,
   loadSessionWorkspace,
@@ -161,7 +161,7 @@ describe("workspace file tabs", () => {
         state.connectionEpoch += 1;
       }
       if (change === "closed") {
-        closeSessionWorkspacePreview(state, preview.id);
+        await requestCloseSessionWorkspacePreview(state, preview.id);
       }
       const workspace = getSessionWorkspace(state);
       read.resolve({ ...initial, file: { ...initial.file, content: "STALE" } });
@@ -283,17 +283,13 @@ describe("workspace file tabs", () => {
       expect(readFileDraft(originalContent)?.content).toBe("Unsaved buffer");
     }
     expect(getSessionWorkspace(state).activePreviewId).toBe(retained.id);
-    void openSessionWorkspaceFile(state, { path: aliasPath, line: 9 });
+    const revalidation = openSessionWorkspaceFile(state, { path: aliasPath, line: 9 });
     expect(getFile).toHaveBeenCalledTimes(dirty ? 2 : 3);
     expect(retained.content).toMatchObject({ navigation: { line: 9 } });
-    closeSessionWorkspacePreview(state, retained.id);
-    void openSessionWorkspaceFile(state, { path: aliasPath });
-    const updated = nextWorkspaceUpdate(state);
-    // A clean line-9 revalidation also settles after close; join both pending reads.
-    if (!dirty) {
-      await nextWorkspaceUpdate(state);
-    }
-    await updated;
+    // Finish the draft-retention scenario before exercising the public close path.
+    setFileDraft(originalContent, null);
+    await requestCloseSessionWorkspacePreview(state, retained.id);
+    await Promise.all([revalidation, openSessionWorkspaceFile(state, { path: aliasPath })]);
     expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     expect(getFile).toHaveBeenCalledTimes(dirty ? 3 : 4);
   });
@@ -434,7 +430,7 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
   });
 
-  it("deduplicates stable identities, closes only the selected preview, and scopes tabs to reconnect", () => {
+  it("deduplicates stable identities, closes only the selected preview, and scopes tabs to reconnect", async () => {
     const state = host();
     const first = openSessionWorkspacePreview(state, "file:a", "a.txt", {
       kind: "markdown",
@@ -443,7 +439,7 @@ describe("workspace file tabs", () => {
     openSessionWorkspacePreview(state, "file:b", "b.txt", { kind: "markdown", content: "B" });
     expect(openSessionWorkspacePreview(state, "file:a", "a.txt", { kind: "loading" })).toBe(first);
     expect(getSessionWorkspace(state).previews).toHaveLength(2);
-    closeSessionWorkspacePreview(state, "file:a");
+    await requestCloseSessionWorkspacePreview(state, "file:a");
     expect(getSessionWorkspace(state).activePreviewId).toBe("file:b");
     selectSessionWorkspacePreview(state, null);
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
@@ -479,7 +475,7 @@ describe("workspace file tabs", () => {
     if (content.kind !== "file") {
       throw new Error("Expected loaded file");
     }
-    closeSessionWorkspacePreview(state, loaded.id);
+    await requestCloseSessionWorkspacePreview(state, loaded.id);
     const retained = openSessionWorkspacePreview(
       state,
       loaded.id,
@@ -522,7 +518,7 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     expect(getSessionWorkspace(state).activePreviewId).toBe("attachment:b");
     void openSessionWorkspaceFile(state, { path: "c.txt" });
-    closeSessionWorkspacePreview(state, "file:c.txt");
+    await requestCloseSessionWorkspacePreview(state, "file:c.txt");
     const closedUpdated = nextWorkspaceUpdate(state);
     resolve(textResponse(state, "c.txt", "C"));
     await closedUpdated;
@@ -570,7 +566,7 @@ describe("workspace file tabs", () => {
       activeId: "a",
       renderDetail: Draft,
       onSelect: (id: string | null) => selectSessionWorkspacePreview(state, id),
-      onClose: (id: string) => closeSessionWorkspacePreview(state, id),
+      onClose: (id: string) => requestCloseSessionWorkspacePreview(state, id),
     });
     document.body.append(panel);
     await panel.updateComplete;
