@@ -10,8 +10,9 @@ import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { createEmptyPluginRegistry, createPluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { MigrationPlan, MigrationProviderContext } from "./types.js";
@@ -31,10 +32,6 @@ type MockManifestRegistry = { plugins: Array<Record<string, unknown>> };
 type MockPluginIndex = {
   plugins: Array<{ pluginId: string; origin: string; enabled: boolean }>;
 };
-
-function createMockPluginIndex(plugins: MockPluginIndex["plugins"]): MockPluginIndex {
-  return { plugins };
-}
 
 const mocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn<(params?: unknown) => PluginRegistry | undefined>(),
@@ -102,11 +99,7 @@ function createOwnedMigrationRegistry(
   provider: ReturnType<typeof createMigrationProvider>,
   initialize?: () => void,
 ) {
-  const builder = createPluginRegistry({
-    runtime: createPluginRuntime(),
-    activateGlobalSideEffects: false,
-    logger,
-  });
+  const builder = createTestPluginRegistry(createPluginRuntime());
   const { registry } = builder;
   const record = createPluginRecord({
     id: pluginId,
@@ -138,11 +131,13 @@ function createOwnedMigrationRegistry(
 function mockInstalledProviders(
   entries: Array<{ pluginId: string; providerId: string; enabled?: boolean }>,
 ) {
-  mocks.loadPluginRegistrySnapshot.mockReturnValue(
-    createMockPluginIndex(
-      entries.map(({ pluginId, enabled = true }) => ({ pluginId, origin: "installed", enabled })),
-    ),
-  );
+  mocks.loadPluginRegistrySnapshot.mockReturnValue({
+    plugins: entries.map(({ pluginId, enabled = true }) => ({
+      pluginId,
+      origin: "installed",
+      enabled,
+    })),
+  });
   mocks.loadPluginManifestRegistry.mockImplementation((params) => ({
     plugins: entries
       .filter(({ enabled }) => params?.includeDisabled || enabled !== false)
@@ -171,7 +166,7 @@ describe("migration provider runtime", () => {
     vi.clearAllMocks();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [] });
-    mocks.loadPluginRegistrySnapshot.mockReturnValue(createMockPluginIndex([]));
+    mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
     mocks.acquirePluginRegistryForInspection.mockResolvedValue({
       registry: createEmptyPluginRegistry(),
       release: mocks.release,
@@ -326,9 +321,9 @@ describe("migration provider runtime", () => {
       const active = createEmptyPluginRegistry();
       mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
       if (origin === "global") {
-        mocks.loadPluginRegistrySnapshot.mockReturnValue(
-          createMockPluginIndex([{ pluginId: "fixture", origin, enabled: true }]),
-        );
+        mocks.loadPluginRegistrySnapshot.mockReturnValue({
+          plugins: [{ pluginId: "fixture", origin, enabled: true }],
+        });
         mocks.loadPluginManifestRegistry.mockReturnValue({
           plugins: [
             {

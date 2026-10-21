@@ -66,10 +66,6 @@ function bundledPluginDir(repoRoot: string, pluginId: string) {
   return path.join(repoRoot, "dist", "extensions", pluginId);
 }
 
-function bundledSkillPath(repoRoot: string, pluginId: string, ...relativePath: string[]) {
-  return path.join(bundledPluginDir(repoRoot, pluginId), ...relativePath);
-}
-
 function expectBundledSkills(repoRoot: string, pluginId: string, skills: string[]) {
   expect(readBundledManifest(repoRoot, pluginId).skills).toEqual(skills);
 }
@@ -81,7 +77,12 @@ function fixture(id: string, manifest: Record<string, unknown> = {}) {
 }
 
 function skillFixture() {
-  return fixture("tlon", { skills: ["node_modules/@tloncorp/tlon-skill"] });
+  const result = fixture("tlon", { skills: ["node_modules/@tloncorp/tlon-skill"] });
+  return {
+    ...result,
+    legacy: path.join(result.distDir, "node_modules/@tloncorp/tlon-skill"),
+    copied: path.join(result.distDir, "bundled-skills/@tloncorp/tlon-skill"),
+  };
 }
 
 function theme(source: string, beret: string) {
@@ -249,7 +250,7 @@ describe("copyBundledPluginMetadata", () => {
   });
 
   it("relocates node_modules-backed skill paths into bundled-skills and rewrites the manifest", () => {
-    const { repoRoot, pluginDir } = skillFixture();
+    const { repoRoot, pluginDir, legacy, copied } = skillFixture();
     const storeSkillDir = path.join(
       repoRoot,
       "node_modules/.pnpm/@tloncorp+tlon-skill@0.2.2/node_modules/@tloncorp/tlon-skill",
@@ -264,55 +265,38 @@ describe("copyBundledPluginMetadata", () => {
       path.join(pluginDir, "node_modules", "@tloncorp", "tlon-skill"),
       process.platform === "win32" ? "junction" : "dir",
     );
-    const staleNodeModulesSkillDir = bundledSkillPath(
-      repoRoot,
-      "tlon",
-      "node_modules/@tloncorp/tlon-skill",
-    );
-    writeFiles(staleNodeModulesSkillDir, { "stale.txt": "stale\n" });
+    writeFiles(legacy, { "stale.txt": "stale\n" });
 
     copyBundledPluginMetadata({ repoRoot });
 
-    const copiedSkillDir = bundledSkillPath(
-      repoRoot,
-      "tlon",
-      "bundled-skills/@tloncorp/tlon-skill",
-    );
-    expect(fs.existsSync(path.join(copiedSkillDir, "SKILL.md"))).toBe(true);
-    expect(fs.lstatSync(copiedSkillDir).isSymbolicLink()).toBe(false);
-    expect(fs.existsSync(path.join(copiedSkillDir, "node_modules"))).toBe(false);
-    expect(fs.existsSync(staleNodeModulesSkillDir)).toBe(false);
+    expect(fs.existsSync(path.join(copied, "SKILL.md"))).toBe(true);
+    expect(fs.lstatSync(copied).isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(path.join(copied, "node_modules"))).toBe(false);
+    expect(fs.existsSync(legacy)).toBe(false);
     expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
   it("falls back to repo-root hoisted node_modules skill paths", () => {
-    const { repoRoot } = skillFixture();
+    const { repoRoot, copied } = skillFixture();
     const hoistedSkillDir = path.join(repoRoot, "node_modules", "@tloncorp", "tlon-skill");
     writeFiles(hoistedSkillDir, { "SKILL.md": "# Hoisted Tlon Skill\n" });
 
     copyBundledPluginMetadata({ repoRoot });
 
-    expect(
-      readText(bundledPluginDir(repoRoot, "tlon"), "bundled-skills/@tloncorp/tlon-skill/SKILL.md"),
-    ).toContain("Hoisted Tlon Skill");
+    expect(readText(copied, "SKILL.md")).toContain("Hoisted Tlon Skill");
     expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
   it("omits missing declared skill paths and removes stale generated outputs", () => {
-    const { repoRoot } = skillFixture();
-    const staleBundledSkillDir = bundledSkillPath(
-      repoRoot,
-      "tlon",
-      "bundled-skills/@tloncorp/tlon-skill",
-    );
-    writeFiles(staleBundledSkillDir, { "SKILL.md": "# stale\n" });
-    const staleNodeModulesDir = path.join(bundledPluginDir(repoRoot, "tlon"), "node_modules");
+    const { repoRoot, distDir, copied } = skillFixture();
+    writeFiles(copied, { "SKILL.md": "# stale\n" });
+    const staleNodeModulesDir = path.join(distDir, "node_modules");
     fs.mkdirSync(staleNodeModulesDir, { recursive: true });
 
     copyBundledPluginMetadata({ repoRoot });
 
     expectBundledSkills(repoRoot, "tlon", []);
-    expect(fs.existsSync(bundledSkillPath(repoRoot, "tlon", "bundled-skills"))).toBe(false);
+    expect(fs.existsSync(path.join(distDir, "bundled-skills"))).toBe(false);
     expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
   });
 

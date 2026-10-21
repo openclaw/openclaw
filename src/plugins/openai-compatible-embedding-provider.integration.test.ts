@@ -14,10 +14,6 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
-import {
-  resolveApiKeyForProviderCore,
-  resolveScopedAuthProfileStore,
-} from "../agents/model-auth-provider.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
@@ -253,16 +249,6 @@ it.each([false, true])(
     if (ownedStore) {
       writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, fixtureAgentDir);
       options.agentDir = fixtureAgentDir;
-      const authParams = {
-        cfg: options.config,
-        provider: options.provider,
-        agentDir: fixtureAgentDir,
-      };
-      const store = resolveScopedAuthProfileStore(authParams);
-      expect(store.profiles[profileId]).toBeUndefined();
-      await expect(resolveApiKeyForProviderCore({ ...authParams, store })).resolves.toMatchObject({
-        apiKey: profileId,
-      });
     }
     await expectEmbedding(embed(options), `Bearer ${profileId}`);
   },

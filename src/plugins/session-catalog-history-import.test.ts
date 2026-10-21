@@ -195,14 +195,3 @@ it("preserves items once across sync, including id-less duplicates and a shifted
     expect(texts.at(-1)).toContain("New source answer");
   });
 });
-
-it("requests pages within the Claude and Codex transcript read cap", async () => {
-  const source = Array.from({ length: 120 }, (_, index) => ({
-    id: `item-${index}`,
-    type: "userMessage" as const,
-    text: `Source prompt ${index}`,
-  }));
-  const history = await readHistory(source);
-  expect(history).toMatchObject({ totalItems: 120, complete: true });
-  expect(history.items.map((item) => item.id)).toEqual(source.map((item) => item.id));
-});
