@@ -508,12 +508,14 @@ export function projectCatalogUserProfileIdentity(
 
 /** Verified GitHub identity facts of one catalog row; a row without them exposes neither field. */
 export function projectUserProfileGitHubFacts(
-  row: Pick<ProfileDisplayRow, "githubAccountIds" | "enterpriseGitHubAccount"> | undefined,
+  row: Pick<ProfileDisplayRow, "githubAccountIds" | "enterpriseGitHubAccounts"> | undefined,
 ) {
   return {
     ...(row?.githubAccountIds ? { githubAccountIds: [...row.githubAccountIds] } : {}),
-    ...(row?.enterpriseGitHubAccount
-      ? { enterpriseGitHubAccount: { ...row.enterpriseGitHubAccount } }
+    ...(row?.enterpriseGitHubAccounts
+      ? {
+          enterpriseGitHubAccounts: row.enterpriseGitHubAccounts.map((account) => ({ ...account })),
+        }
       : {}),
   };
 }

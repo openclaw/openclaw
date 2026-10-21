@@ -15,11 +15,15 @@ export function isProfileDisplayRow(value: unknown): value is ProfileDisplayRow 
     (value.githubAccountIds === undefined ||
       (Array.isArray(value.githubAccountIds) &&
         value.githubAccountIds.every((id) => Number.isSafeInteger(id) && id > 0))) &&
-    (value.enterpriseGitHubAccount === undefined ||
-      (isRecord(value.enterpriseGitHubAccount) &&
-        typeof value.enterpriseGitHubAccount.host === "string" &&
-        typeof value.enterpriseGitHubAccount.accountId === "number" &&
-        Number.isSafeInteger(value.enterpriseGitHubAccount.accountId) &&
-        value.enterpriseGitHubAccount.accountId > 0))
+    (value.enterpriseGitHubAccounts === undefined ||
+      (Array.isArray(value.enterpriseGitHubAccounts) &&
+        value.enterpriseGitHubAccounts.every(
+          (account) =>
+            isRecord(account) &&
+            typeof account.host === "string" &&
+            typeof account.accountId === "number" &&
+            Number.isSafeInteger(account.accountId) &&
+            account.accountId > 0,
+        )))
   );
 }

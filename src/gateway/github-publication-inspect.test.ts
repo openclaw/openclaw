@@ -393,6 +393,17 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     );
     f.pr.user = { id: 101, login: "contributor" };
     expect(await f.invoke()).toMatchObject({ host, author: { accountId: 101 } });
+    // A verified identity on another Enterprise host neither admits nor disables this host's account.
+    await linkCanonicalUserProfileEmail("github:other.example.test:303", f.guestProfile);
+    await ensureCanonicalEnterpriseGitHubProfile(
+      "github:other.example.test:303",
+      "Contributor",
+      {},
+      { login: "contributor-other" },
+    );
+    expect(await f.invoke()).toMatchObject({ host, author: { accountId: 101 } });
+    f.pr.user = { id: 303, login: "contributor-other" };
+    await expect(f.invoke()).rejects.toThrow("could not be verified as yours");
   });
 
   it("rejects arbitrary hosts, credential URLs and non-PR paths before network access", async () => {

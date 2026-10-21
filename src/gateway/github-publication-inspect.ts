@@ -148,9 +148,9 @@ export async function inspectOwnGitHubPullRequest(params: {
     // Enterprise identity comes from the catalog's proof-validated binding; a principal-shaped alias alone never qualifies.
     return host === "github.com"
       ? [...(facts.githubAccountIds ?? [])]
-      : facts.enterpriseGitHubAccount?.host === host
-        ? [facts.enterpriseGitHubAccount.accountId]
-        : [];
+      : (facts.enterpriseGitHubAccounts ?? []).flatMap((account) =>
+          account.host === host ? [account.accountId] : [],
+        );
   };
   const admittedIds = accountIds();
   if (!admittedIds.length) {
