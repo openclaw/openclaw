@@ -451,16 +451,23 @@ It excludes `--activity-session` and `--activity-cron`. Catalog observations
 retain model rows for before/after option comparisons; use only synthetic
 catalogs. Compare warm session-scoped request counts and activity blocking time,
 keeping the initial catalogs separate from the activity window.
+Add `--activity-catalog-refresh` to request unchanged catalog renewal from a
+separate controller every third activity step. The fixture's live provider returns
+the same rows as its static catalog. Controller requests are recorded in `activity`
+and excluded from browser request counts. This isolates browser invalidation after
+explicit renewal; it does not prove which production action triggered a renewal.
 With `--open-details`, the final check reopens Details for the selected conversation
 after the activity window, then compares its session identity, label, model, status
 note, and thinking level with a fresh controller-side descriptor. It records this
-as an input-state comparison, then separately checks the rendered model in Details
-and the visible conversation header's label. The controller read is excluded
+as an input-state comparison, then separately checks the visible conversation
+header's label. The controller read is excluded
 from browser request counts; compare activity requests only between
 `activityStartedAtMs` and `activityEndedAtMs`. Request traces retain the preceding
 event's session key, reason, timestamp, and revision to distinguish event-driven
 reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis,
 then omit it for paired timing.
+Failed attempts retain the available browser probe under `failure`, including
+failures in the final Details assertions; they are diagnostics, not accepted samples.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
@@ -1139,6 +1146,25 @@ removal fails, discard the fixture before reuse as directed by the warning.
 These background turns contribute resource cost but are excluded
 from the foreground-turn denominator. The twenty foreground child sessions are
 direct `agent` calls.
+
+Add `--stress-session-store` to make each Code Mode cell load the preceding
+turn's value and commit a new value. The cell fails on a replay mismatch, including
+when a value disappears behind the bounded hydration window. Combine this with
+seeded long histories and `--reset-every-rounds 0` to measure repeated store
+replay on the same sessions. `--transcript-hydration-counts` observes the source
+worker reader and writes `HYDRATION_COUNT` records in the Gateway log with the
+session, full/bounded mode, decoded bytes/events, and caller stack; it never logs
+transcript content. Bounded reads return worker-decoded objects and therefore
+report zero main-thread decoded bytes. The observer requires `--entry src/entry.ts`
+and fails if the instrumented source shape changes.
+
+For the isolated store owner, alternate source roots with
+`node --expose-gc --import ./scripts/tsx.mjs --import ./scripts/perf/transcript-hydration-counts-preload.ts scripts/perf/code-mode-store-measure.ts /path/to/source`.
+This seeds a store value before 256 large messages, then binds six fresh runs
+with bounded SessionManagers. It verifies the value twice per run and reports
+first-load and same-run cached latency plus sampled main-thread allocation
+(including collected objects). Keep the first cold sample separate from the five
+warm samples, and use at least five alternating invocations per revision.
 
 `--stress-subagents` requires `memory-soak --stress-tools`. Each cohort adds one
 dedicated parent that uses Code Mode to call the real `sessions_spawn` tool with
@@ -1869,6 +1895,23 @@ counter hooks, and is not isolated bytes allocated by one assertion. Use matched
 instrumentation and the same paired host procedure for comparisons. The tiny
 fixture proves the path, not deployment capacity or production recheck rates.
 
+## State and agent database path resolution
+
+Measure the real path owners without opening a database:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/state-path-resolution-measure.ts \
+  --iterations 100000 --rounds 5
+```
+
+The JSON-lines output separates warm roots, alternating roots, explicit agent
+paths, and cold unique roots. Timing and allocation are separate passes; V8
+sampling includes objects collected by major and minor GC. A third, untimed pass
+counts exported `path.resolve` and `path.join` calls. These are owner-level
+operation counts, not Gateway calls per turn. Run both revisions with identical
+arguments, interleave samples, and compare with the `chat.send` allocation
+workload below before drawing an end-to-end conclusion.
+
 ## Allocated bytes per RPC or turn
 
 Use the same owned Gateway driver with `--allocations` and a named `--scenario`:
@@ -2113,3 +2156,25 @@ Run at least five pairs. The retained append-normalized case should eliminate
 repeated nested-argument hashing; sealed history should remain at zero warm hash
 bytes, and mutable SDK content must still be inspected. Diagnostic output and
 in-place mutation coverage live in `prompt-cache-observability.history.test.ts`.
+
+## WebSocket event diagnostic accounting
+
+`ws-event-diagnostics-measure.ts` exercises the real recording and diagnostic
+dispatch owners with 250 batches of 1,000 synthetic accepted frames, plus wire-byte
+observations. It includes plain, presence, subscribed/roster session, and unknown
+event labels. Run on the approved benchmark host:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/ws-event-diagnostics-measure.ts
+```
+
+The JSON result separates cold and warmed sampled allocation bytes per frame,
+including collected objects, for the entire process and the recording/flush owner.
+CPU is measured in a separate unprofiled pass; the inactive-interest pass verifies
+recording is skipped. Delivered frame and histogram counts are checked. Compare
+at least five interleaved baseline/candidate samples, then confirm real transport
+behavior with `transcript-broadcast-measure.ts --scenario transcript-broadcast
+--clients 30 --allocations --diagnostics --active-work-diagnostics --trace-gc`
+and the memory-soak scenario. Compare promotion per turn, minor and major GC
+time, and event-loop and turn latency tails as well as sampled allocation;
+allocation reduction alone is insufficient.

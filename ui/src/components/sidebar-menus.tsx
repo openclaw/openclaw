@@ -1,4 +1,3 @@
-import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { createMemo, lazy, merge, onCleanup, Show } from "solid-js";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
@@ -8,16 +7,11 @@ import {
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../lib/session-pull-requests.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import { PendingSessionCreate } from "../pages/chat/pending-session-create-lazy.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { createSidebarCatalogMenu } from "./app-sidebar-catalog-menu.tsx";
 import {
@@ -30,7 +24,6 @@ import type {
   SidebarSessionMenuState,
 } from "./app-sidebar-session-types.ts";
 import type { SessionMenuWork } from "./session-menu-solid.tsx";
-import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 import type { SidebarMenusOwner, SidebarRouteView } from "./sidebar-menus-types.ts";
 import { createSidebarRendererLoader } from "./sidebar-renderer-loader.tsx";
@@ -62,6 +55,7 @@ function menuPosition(x: number, y: number, width: number, height: number): Menu
 
 export type SidebarFilterMenuView = "root" | "specific-owner";
 
+type SidebarMenusRenderer = typeof import("./sidebar-menus-render.tsx");
 type CatalogMenuView = ReturnType<ReturnType<typeof createSidebarCatalogMenu>["createView"]>;
 
 type SidebarMenusState = {
@@ -78,6 +72,7 @@ type SidebarMenusState = {
   filterMenuView: SidebarFilterMenuView;
   agentMenuPosition: { x: number; top: number; placement?: "right-start" } | null;
   agentMenuMode: "hover" | "click";
+  agentCreateDialogOpen: boolean;
   // Anchored by its bottom edge so the footer menu grows upward.
   identityMenuPosition: {
     x: number;
@@ -112,6 +107,7 @@ export function createSidebarMenus(deps: {
     filterMenuView: "root",
     agentMenuPosition: null,
     agentMenuMode: "click",
+    agentCreateDialogOpen: false,
     identityMenuPosition: null,
   };
   const listeners = new Set<() => void>();
@@ -120,17 +116,28 @@ export function createSidebarMenus(deps: {
   let focusAgentRoster: (() => void) | undefined;
   const agentMenuAvatars = createIdentityAvatars();
   const routePreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
-  const sessionMenuWorkOwner = {};
-  let sessionMenuWorkStore: ReturnType<typeof sessionPullRequestsForGateway> | null = null;
-  let stopSessionMenuGateway: (() => void) | undefined;
-  let sessionMenuWorkVersion = 0;
+  let sessionMenuWork: ReturnType<SidebarMenusRenderer["createSessionMenuWork"]> | undefined;
   let agentMenuHoverOpenTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let agentMenuHoverCloseTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let agentMenuFocusBeforeHover: HTMLElement | null = null;
   let pluginActionLifetime = new AbortController();
+  let disposed = false;
   let catalogMenuView: CatalogMenuView | undefined;
-  const menuRendererImport = createSidebarRendererLoader(
-    () => import("./sidebar-menus-render.tsx"),
+  const menuRendererImport = createSidebarRendererLoader(() =>
+    // A visible Create action can enter its pending chat synchronously.
+    Promise.all([import("./sidebar-menus-render.tsx"), PendingSessionCreate.preload()]).then(
+      ([renderer]) => {
+        if (!disposed) {
+          sessionMenuWork = renderer.createSessionMenuWork(host, (work) =>
+            setField("sessionMenuWork", work),
+          );
+          if (!pluginActionLifetime.signal.aborted && state.sessionMenu) {
+            sessionMenuWork.load(state.sessionMenu.session);
+          }
+        }
+        return renderer;
+      },
+    ),
   );
   const MenuRenderer = lazy(menuRendererImport.load, { export: "SidebarMenusRenderer" });
   const LazyCatalogMenu = lazy(menuRendererImport.load, { export: "CatalogSessionMenu" });
@@ -154,70 +161,6 @@ export function createSidebarMenus(deps: {
   }
 
   const loadMenuRenderer = () => void menuRendererImport.load().catch(() => undefined);
-
-  function releaseSessionMenuWork() {
-    sessionMenuWorkVersion += 1;
-    stopSessionMenuGateway?.();
-    stopSessionMenuGateway = undefined;
-    sessionMenuWorkStore?.unwatch(sessionMenuWorkOwner);
-    sessionMenuWorkStore = null;
-  }
-
-  function loadSessionMenuWork(session: SidebarRecentSession) {
-    const version = ++sessionMenuWorkVersion;
-    const context = host.sessionDataContext;
-    const snapshot = context?.gateway.snapshot;
-    const client = snapshot?.phase === "connected" ? snapshot.client : null;
-    setField(
-      "sessionMenuWork",
-      session.worktreeId
-        ? {
-            pullRequestUrl: null,
-            worktreePath: null,
-          }
-        : null,
-    );
-    if (!session.worktreeId || !context) {
-      return;
-    }
-    // A replacement connection retires pending menu work before starting its successor.
-    stopSessionMenuGateway = context.gateway.subscribe((next) => {
-      if (next.phase === "connected" && next.client !== client) {
-        releaseSessionMenuWork();
-        loadSessionMenuWork(session);
-      }
-    });
-    if (!client) {
-      return;
-    }
-    const { selectedAgentId } = host.getSessionNavigationState();
-    const store = (sessionMenuWorkStore = sessionPullRequestsForGateway(context.gateway));
-    const pullRequestKey = scopedSessionArtifactKey(
-      session.key,
-      parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
-    );
-    void fetchSessionMenuWork({
-      client,
-      loadPullRequests: canCallGatewayMethod(
-        context.gateway.snapshot,
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        "operator.read",
-      )
-        ? () => store.load(sessionMenuWorkOwner, pullRequestKey)
-        : undefined,
-      worktreeId: session.worktreeId,
-      execNode: session.execNode,
-    }).then((work) => {
-      if (
-        version === sessionMenuWorkVersion &&
-        // A replacement provider wrapper may retain the same Gateway and client.
-        host.sessionDataContext?.gateway === context.gateway &&
-        context.gateway.snapshot.client === client
-      ) {
-        setField("sessionMenuWork", work);
-      }
-    });
-  }
 
   function openPositionedMenu<Menu extends PositionedMenu>(
     menu: Menu,
@@ -300,6 +243,7 @@ export function createSidebarMenus(deps: {
       return () => listeners.delete(listener);
     },
     dispose(): void {
+      disposed = true;
       menus.disconnect();
       listeners.clear();
     },
@@ -345,7 +289,7 @@ export function createSidebarMenus(deps: {
       if (pluginActionLifetime.signal.aborted) {
         pluginActionLifetime = new AbortController();
         if (state.sessionMenu) {
-          loadSessionMenuWork(state.sessionMenu.session);
+          sessionMenuWork?.load(state.sessionMenu.session);
         }
       }
     },
@@ -354,7 +298,7 @@ export function createSidebarMenus(deps: {
       agentMenuAvatars.disconnect();
       pluginActionLifetime.abort();
       menuRendererImport.dispose();
-      releaseSessionMenuWork();
+      sessionMenuWork?.release();
       clearAgentMenuHoverTimers();
       for (const timer of routePreloadTimers.values()) {
         globalThis.clearTimeout(timer);
@@ -477,11 +421,11 @@ export function createSidebarMenus(deps: {
       menus.dismissTransientMenus();
       triggers.set("session", trigger);
       setField("sessionMenu", { session, x, y });
-      loadSessionMenuWork(session);
+      sessionMenuWork?.load(session);
     },
 
     closeSessionMenu() {
-      releaseSessionMenuWork();
+      sessionMenuWork?.release();
       triggers.set("session", null);
       setField("sessionMenu", null);
       setField("sessionMenuWork", null);
@@ -628,6 +572,19 @@ export function createSidebarMenus(deps: {
       releaseTrigger("agent", options.restoreFocus);
     },
 
+    openAgentCreateDialog() {
+      if (!host.sessionDataContext) {
+        return;
+      }
+      menus.closeAgentMenu();
+      loadMenuRenderer();
+      setField("agentCreateDialogOpen", true);
+    },
+
+    closeAgentCreateDialog() {
+      setField("agentCreateDialogOpen", false);
+    },
+
     toggleIdentityMenu(trigger: HTMLElement) {
       if (state.identityMenuPosition) {
         menus.closePositionedMenu("identity");
@@ -651,41 +608,32 @@ export function createSidebarMenus(deps: {
     },
 
     render(view: SidebarMenusOwner): JSX.Element {
-      const avatars = projectOwner(agentMenuAvatars, (owner) => owner);
       const projection = projectOwner(menus, (owner) => owner);
-      // Read through without copying identities or filtering same-owner publications.
-      const projected = new Proxy(menus, {
-        get(target, key, receiver) {
-          if (getObserver()) {
-            projection.revision();
-          }
-          return Reflect.get(target, key, receiver);
-        },
-      });
       return [
         <Show
           when={
-            projected.railPinMenuPosition ||
-            projected.pluginNavigationMenuPosition ||
-            projected.agentMenuPosition ||
-            projected.identityMenuPosition ||
-            projected.sessionMenu ||
-            projected.sessionGroupMenu ||
-            projected.sessionSortMenuPosition ||
-            projected.peopleFilterMenuPosition ||
-            projected.catalogViewMenuPosition
+            projection.read().railPinMenuPosition ||
+            projection.read().pluginNavigationMenuPosition ||
+            projection.read().agentMenuPosition ||
+            projection.read().agentCreateDialogOpen ||
+            projection.read().identityMenuPosition ||
+            projection.read().sessionMenu ||
+            projection.read().sessionGroupMenu ||
+            projection.read().sessionSortMenuPosition ||
+            projection.read().peopleFilterMenuPosition ||
+            projection.read().catalogViewMenuPosition
           }
         >
           <Boundary>
             <MenuRenderer
-              menus={projected}
+              menus={menus}
               host={view}
-              avatars={avatars.read}
-              withActiveRoutes={(render) => agentMenuAvatars.withActiveRoutes(render)}
+              avatars={agentMenuAvatars}
+              revision={projection.revision}
             />
           </Boundary>
         </Show>,
-        projected.catalogMenuView.render(CatalogMenu),
+        menus.catalogMenuView.render(CatalogMenu),
       ];
     },
 

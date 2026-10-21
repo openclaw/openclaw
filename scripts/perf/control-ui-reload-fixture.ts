@@ -76,6 +76,7 @@ if (values.prepare) {
   );
   const { pluginsDir, pluginIds } = writePluginFixtures(root, {
     count: 7,
+    providerCatalogStallMs: 0,
     providerStaticCatalogStallMs: 0,
     providerStaticCatalogModelCount: 12,
   });
@@ -97,8 +98,9 @@ if (values.prepare) {
     });
   }
   const config = JSON.parse(await readFile(configPath, "utf8"));
-  config.agents.defaults.model = {
-    primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`,
+  config.agents.defaults = {
+    ...config.agents.defaults,
+    model: { primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}` },
   };
   config.gateway = {
     ...config.gateway,

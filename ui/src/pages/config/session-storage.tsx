@@ -1,7 +1,17 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo, createSignal, onSettled } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  onSettled,
+} from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -70,7 +80,9 @@ export function SessionStorageSettings(props: SettingsProps) {
   const [ageDraft, setAgeDraft] = createSignal<string | null>(null);
   const [runError, setRunError] = createSignal<string | null>(null);
   const [runOutcome, setRunOutcome] = createSignal<string | null>(null);
-  const [runOperation, setRunOperation] = createSignal<object | null>(null);
+  const [submitting, setSubmitting] = createOptimistic(false);
+  // Admission and retirement are synchronous; Solid owns the visible submission state.
+  let runOperation: AbortController | null = null;
   let followingRun = false;
   let maintenanceTimer: ReturnType<typeof setInterval> | undefined;
   function stopPolling() {
@@ -91,7 +103,8 @@ export function SessionStorageSettings(props: SettingsProps) {
   }
   function retireRequests(identityChanged: boolean) {
     stopPolling();
-    setRunOperation(null);
+    runOperation?.abort();
+    runOperation = null;
     if (identityChanged) {
       followingRun = false;
       setAgeDraft(null);
@@ -99,7 +112,10 @@ export function SessionStorageSettings(props: SettingsProps) {
       setRunOutcome(null);
     }
   }
-  onSettled(() => stopPolling);
+  onSettled(() => () => {
+    stopPolling();
+    runOperation?.abort();
+  });
   function observeMaintenance(status: SessionsStorageStatusResult) {
     if (status.maintenance.running) {
       followingRun = true;
@@ -130,7 +146,8 @@ export function SessionStorageSettings(props: SettingsProps) {
     const config = context.runtimeConfig;
     return (
       props.mutationDisabled ||
-      runOperation() !== null ||
+      submissionPending() ||
+      runOperation !== null ||
       !client() ||
       !config.canSet ||
       !config.state.connected ||
@@ -139,6 +156,10 @@ export function SessionStorageSettings(props: SettingsProps) {
       config.state.configApplying ||
       (config.state.configFormMode === "raw" && config.state.configFormDirty)
     );
+  }
+  function submissionPending() {
+    gatewayProjection.read();
+    return submitting() && runOperation !== null;
   }
   function storageConfig() {
     configProjection.read();
@@ -173,22 +194,25 @@ export function SessionStorageSettings(props: SettingsProps) {
     );
   }
   const ageValue = liveValue(() => ageDraft() ?? String(storageConfig().afterDays));
-  async function runNow() {
+  const runNow = action(function* () {
     const currentClient = client();
     const ownsConnection = capture();
     if (!canRun() || !currentClient || !ownsConnection()) {
       return;
     }
-    const operation = {};
-    setRunOperation(operation);
+    const operation = new AbortController();
+    runOperation = operation;
+    setSubmitting(true);
     setRunError(null);
     setRunOutcome(null);
-    const isCurrent = () => runOperation() === operation && ownsConnection();
+    const isCurrent = () => runOperation === operation && ownsConnection();
     try {
-      const response = await currentClient.request<SessionsStorageStatusResult>(
-        "sessions.storage.run",
-        {},
-      );
+      const response: SessionsStorageStatusResult =
+        yield currentClient.request<SessionsStorageStatusResult>(
+          "sessions.storage.run",
+          {},
+          { signal: operation.signal },
+        );
       if (!isCurrent()) {
         return;
       }
@@ -204,10 +228,10 @@ export function SessionStorageSettings(props: SettingsProps) {
       }
     } finally {
       if (isCurrent()) {
-        setRunOperation(null);
+        runOperation = null;
       }
     }
-  }
+  });
   function setAge(event: Event) {
     // SAFETY: The native number input calls this synchronously from its own change binding.
     const input = event.currentTarget as HTMLInputElement;
@@ -430,14 +454,15 @@ export function SessionStorageSettings(props: SettingsProps) {
                 control={
                   <button class="btn" disabled={!canRun()} onClick={() => void runNow()}>
                     {t(
-                      runOperation() !== null || status()?.maintenance.running
+                      submissionPending() || status()?.maintenance.running
                         ? "configView.sessionStorage.running"
                         : "configView.sessionStorage.runNow",
                     )}
                   </button>
                 }
               />
-              {runError() && runError() !== status()?.maintenance.lastError ? (
+              {submissionPending() ? undefined : runError() &&
+                runError() !== status()?.maintenance.lastError ? (
                 <SettingsEmpty message={<span role="alert">{runError()}</span>} />
               ) : runOutcome() ? (
                 <SettingsEmpty message={<span role="status">{runOutcome()}</span>} />

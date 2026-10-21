@@ -6,7 +6,6 @@ import {
   createMemo,
   createSignal,
   merge,
-  onCleanup,
   onSettled,
   Show,
   type Element,
@@ -64,9 +63,6 @@ export function ChatPaneMobileComposition(props: {
   ) => Element;
 }) {
   let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-  });
   // The destination's first visit mounts its content under this retained header owner.
   const retainPage = (render: () => Element) => {
     const opened = createMemo<boolean>(
@@ -376,7 +372,10 @@ export function ChatPaneMobileComposition(props: {
       ? request
       : undefined;
   };
-  onCleanup(() => moveRequest()?.cancel());
+  onSettled(() => () => {
+    disposed = true;
+    moveRequest()?.cancel();
+  });
   const layoutProps = merge(
     () => props.header,
     () => ({ mobile: props.header.mergedChrome }),

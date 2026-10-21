@@ -214,6 +214,12 @@ export type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   kind: "attachment";
   file?: FilePreviewSource;
   attachmentKind?: "audio" | "video" | "document" | "image";
+  /** Reads the original through its media owner without selecting a download-only renderer. */
+  readForAttachment?: (
+    runtime: AttachmentSidebarRuntime,
+    signal: AbortSignal,
+    maxBytes: number,
+  ) => Promise<Blob | null>;
   title: string;
   /** Static sources only; expiring sources are resolved live through resolveSource. */
   src?: string;

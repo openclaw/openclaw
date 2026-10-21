@@ -26,6 +26,7 @@ import {
   openSidebarCustomizationPage,
   openSidebarPinMenu,
 } from "./sidebar-customization.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
 const desktop = {
@@ -103,6 +104,8 @@ suite.define(() => {
         controlUiSessionUrl(`${suite.server.baseUrl}operator/`, `agent:${agentId}:main`),
       );
       await waitForControlUiRoute(page, { routeId: "chat" });
+      await chooseSidebarMenuOption(page, "Status", "All");
+      await closeSidebarMenu(page);
       const composer = page.locator(".agent-chat__composer-combobox > textarea");
       const draft = "Keep this unsent conversation draft";
       await composer.fill(draft);
@@ -187,104 +190,6 @@ suite.define(() => {
       expect(await mockRequests(page, "sessions.create")).toEqual([]);
     });
   });
-
-  async function openCapabilitiesPrompt(reducedMotion: "no-preference" | "reduce") {
-    const context = await suite.newBrowserContext({ ...desktop, reducedMotion });
-    const page = await context.newPage();
-    await installMockGateway(page);
-    await page.goto(`${suite.server.baseUrl}chat`);
-
-    // Record the 600ms cue before clicking; a host-side poll can arrive after it expires.
-    const observedCue = await page.evaluateHandle(() => {
-      const state = {
-        active: false,
-        background: "",
-        boxShadow: "",
-        duration: "",
-        focused: false,
-        name: "",
-        value: "",
-      };
-      const observer = new MutationObserver(() => {
-        const textarea = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-        const input = textarea?.closest<HTMLElement>(".agent-chat__input");
-        if (!textarea || !input?.classList.contains("agent-chat__input--prefill-attention")) {
-          return;
-        }
-        const style = getComputedStyle(input);
-        Object.assign(state, {
-          active: true,
-          background: style.backgroundColor,
-          boxShadow: style.boxShadow,
-          duration: style.animationDuration,
-          focused: textarea === document.activeElement,
-          name: style.animationName,
-          value: textarea.value,
-        });
-        observer.disconnect();
-      });
-      observer.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["class"],
-        childList: true,
-        subtree: true,
-      });
-      return { state, disconnect: () => observer.disconnect() };
-    });
-
-    try {
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-agent-card__main").click();
-      await sidebar.locator('.sidebar-agent-menu [data-value="command:capabilities"]').click();
-
-      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-      const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
-      await expect
-        .poll(() => observedCue.evaluate((cue) => cue.state))
-        .toMatchObject({ active: true, focused: true, value: "What can you do?" });
-      const cueStyle = await observedCue.evaluate((cue) => cue.state);
-      await expect
-        .poll(() =>
-          textarea.evaluate((element: HTMLTextAreaElement) => ({
-            focused: element === document.activeElement,
-            value: element.value,
-          })),
-        )
-        .toEqual({ focused: true, value: "What can you do?" });
-      return { context, cueStyle, input, page };
-    } finally {
-      await observedCue.evaluate((cue) => cue.disconnect());
-      await observedCue.dispose();
-    }
-  }
-
-  it.each(["no-preference", "reduce"] as const)(
-    "focuses the capabilities prompt with the %s motion cue",
-    async (motion) => {
-      const { context, cueStyle, input } = await openCapabilitiesPrompt(motion);
-      try {
-        if (motion === "reduce") {
-          expect(cueStyle.name).toBe("none");
-          expect(cueStyle.boxShadow).not.toBe("none");
-        } else {
-          expect(cueStyle).toMatchObject({
-            duration: "0.6s",
-            name: "chat-composer-prefill-attention",
-          });
-        }
-        await expect
-          .poll(() => input.getAttribute("class"))
-          .not.toContain("agent-chat__input--prefill-attention");
-        expect(
-          await input.evaluate((element) => getComputedStyle(element).backgroundColor),
-        ).not.toBe(cueStyle.background);
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
-    },
-  );
 
   it.each(["Escape", "Tab"] as const)("returns pin-menu focus on %s", async (exit) => {
     const { context, page } = await openSidebarCustomizationPage(suite);
@@ -381,11 +286,11 @@ suite.define(() => {
           return { height: bounds.height, width: bounds.width, gap: label.left - avatar.right };
         });
       });
-      expect(rowLayout.map((row) => row.height)).toEqual([56, 56, 56, 56, 56]);
+      expect(rowLayout.map((row) => row.height)).toEqual([44, 44, 44, 44, 44]);
       expect(new Set(rowLayout.map((row) => row.width)).size).toBe(1);
-      expect(rowLayout.map((row) => row.gap)).toEqual([12, 12, 12, 12, 12]);
-      const capabilities = menu.getByRole("menuitem", {
-        name: "What can Scheduled Automations do?",
+      expect(rowLayout.map((row) => row.gap)).toEqual([10, 10, 10, 10, 10]);
+      const createAgent = menu.getByRole("menuitem", {
+        name: "Create new agent",
         exact: true,
       });
       for (const scale of [1, 1.4]) {
@@ -394,10 +299,10 @@ suite.define(() => {
         }, scale);
         await expect
           .poll(() =>
-            capabilities.evaluate((item) => {
-              const label = item.querySelector(".sidebar-customize-menu__text");
+            createAgent.evaluate((item) => {
+              const label = item.querySelector(".agent-select__option-label");
               if (!label) {
-                throw new Error("Capabilities label is missing");
+                throw new Error("Create agent label is missing");
               }
               return label.getBoundingClientRect().right - item.getBoundingClientRect().right;
             }),
@@ -425,36 +330,26 @@ suite.define(() => {
       await pressAndExpectFocus(
         page,
         "End",
-        menu.getByRole("menuitem", { name: "Scheduled Automations settings", exact: true }),
+        menu.getByRole("menuitem", { name: "Support", exact: true }),
       );
-      await pressAndExpectFocus(page, "Home", allSwitch);
+      await pressAndExpectFocus(page, "Home", createAgent);
+      await pressAndExpectFocus(page, "ArrowDown", allSwitch);
+      await pressAndExpectFocus(page, "ArrowDown", mainSwitch);
       await pressAndExpectFocus(page, "r", researchSwitch);
-      await page.keyboard.press("Home");
-      await pressAndExpectFocus(page, "ArrowDown", mainSwitch);
-      await pressAndExpectFocus(page, "ArrowDown", researchSwitch);
-      const researchPin = researchSwitch.getByRole("button");
-      await pressAndExpectFocus(page, "Tab", researchPin);
-      await page.keyboard.press("Space");
-      await expectAttribute(researchPin, "aria-pressed", "true");
-      await expectFocused(researchPin);
-      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath("agent:main:main"));
-      expect(await menu.isVisible()).toBe(true);
-      await pressAndExpectFocus(page, "ArrowDown", mainSwitch);
-      await researchSwitch.focus();
-      await page.keyboard.press("Tab");
+      const researchSettings = researchSwitch.getByRole("button", { name: "Research settings" });
+      await pressAndExpectFocus(page, "Tab", researchSettings);
       await page.keyboard.press("Enter");
-      await expectAttribute(researchPin, "aria-pressed", "false");
-      await pressAndExpectFocus(page, "Shift+Tab", researchSwitch);
-      await researchSwitch.hover();
-      await researchPin.click();
-      await expectAttribute(researchPin, "aria-pressed", "true");
-      await page.keyboard.press("Escape");
-      await page.reload();
-      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      await expectAttribute(researchPin, "aria-pressed", "true");
-      await researchSwitch.hover();
-      await researchPin.click();
-      await expectAttribute(researchPin, "aria-pressed", "false");
+      await waitForControlUiRoute(page, {
+        routeId: "agents",
+        pathname: "/settings/agents/research",
+      });
+      expect(await page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey)).toBe(
+        "agent:main:main",
+      );
+      await page.locator(".settings-sidebar__back").click();
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      await sidebar.locator(".sidebar-agent-card__main").click();
+      await expectAttribute(mainSwitch, "aria-current", "true");
       await researchSwitch.focus();
       await page.keyboard.press("Enter");
       await expectPath(page, controlUiSessionPath("agent:research:main"));
@@ -464,7 +359,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps a crowded agent menu scrollable and keyboard accessible without search", async () => {
+  it("scrolls a crowded agent menu without a search field and keeps keyboard navigation", async () => {
     await suite.withPage(
       {
         ...desktop,
@@ -514,19 +409,16 @@ suite.define(() => {
           };
         });
         expect(geometry).toMatchObject({ scrolls: true, actionsFit: true });
-        expect(geometry.heights.every((height) => height === 56)).toBe(true);
-        expect(await rows.locator(".agent-select__option-description").allTextContents()).toEqual([
-          "agent-1",
-          "agent-2",
-        ]);
-        const lastAgent = menu.locator('[data-value="agent:agent-39"]');
-        expect(await lastAgent.getByRole("button", { name: /Pin to switcher/ }).count()).toBe(1);
-        await lastAgent.focus();
-        await expectFocused(lastAgent);
+        expect(geometry.heights.every((height) => height >= 44)).toBe(true);
+        const duplicateNames = rows.filter({ hasText: "Support" });
+        expect(await duplicateNames.count()).toBe(2);
+        expect(await duplicateNames.locator(".agent-select__option-description").count()).toBe(0);
+        expect(await menu.locator(".sidebar-agent-menu__pin").count()).toBe(0);
+        await pressAndExpectFocus(page, "End", menu.locator('[data-value="agent:agent-39"]'));
         await page.keyboard.press("Enter");
         await expectPath(page, controlUiSessionPath("agent:agent-39:main"));
         await trigger.click();
-        await expectCount(menu.getByRole("searchbox"), 0);
+        expect(await menu.getByRole("searchbox").count()).toBe(0);
         const active = menu.locator('[aria-current="true"]');
         await expectInScrollPort(active);
         await page.keyboard.press("Escape");

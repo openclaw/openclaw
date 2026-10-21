@@ -492,6 +492,7 @@ function BubbleContents(props: ContentProps) {
         onOpenSidebar={props.onOpenSidebar}
         onAssistantAttachmentLoaded={props.options.onAssistantAttachmentLoaded}
         inlinePlayback={props.state().normalizedRole === "assistant"}
+        inlineComments={props.state().inlineComments}
       />
       <Show when={props.state().isStandaloneToolMessage}>
         <AssistantViews {...props} />

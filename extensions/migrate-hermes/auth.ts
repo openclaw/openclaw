@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "openclaw/plugin-sdk/agent-runtime";
 import { AuthStorage } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -8,6 +7,7 @@ import {
   markMigrationItemSkipped,
 } from "openclaw/plugin-sdk/migration";
 import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOpenAICodexCredentialExtra,
@@ -59,17 +59,9 @@ type HermesCodexAuthProfile = {
 };
 
 function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): string {
-  const hash = createHash("sha256");
-  for (const part of [
-    candidate.sourceKind,
-    candidate.accountId ?? "",
-    candidate.access,
-    candidate.refresh,
-  ]) {
-    hash.update(part);
-    hash.update("\0");
-  }
-  return hash.digest("hex");
+  return sha256Hex(
+    `${candidate.sourceKind}\0${candidate.accountId ?? ""}\0${candidate.access}\0${candidate.refresh}\0`,
+  );
 }
 
 async function readOpenCodeOpenAICandidates(

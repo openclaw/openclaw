@@ -160,3 +160,70 @@ it("batches accepted presence frame counts and UTF-8 bytes by delivery mode", as
     ].map((event) => Object.assign({ type: "gateway.ws.event", event: "presence" }, event)),
   );
 });
+
+it("preserves histogram boundaries, wire-only batches, and detached snapshots across flushes", async () => {
+  setDiagnosticsEnabledForProcess(true);
+  expect(recordGatewayWsEvent("chat", 1)).toBe(false);
+  const observations = observeTraffic();
+  setDiagnosticsEnabledForProcess(false);
+  expect(recordGatewayWsEvent("chat", 1)).toBe(false);
+  setDiagnosticsEnabledForProcess(true);
+
+  for (const bytes of [256, 257, 1024, 65537]) {
+    expect(recordGatewayWsEvent("chat", bytes)).toBe(true);
+  }
+  recordGatewayWsEvent("chat", 0, undefined, undefined, 0);
+  recordGatewayWsEvent("not-a-protocol-event", 0, undefined, undefined, 13);
+  recordGatewayWsEvent("another-private-event", 0, undefined, undefined, 7);
+  expect(observations).toEqual([]);
+  await drain();
+  const firstBatch = observations.map(({ seq: _seq, ts: _ts, ...event }) => event);
+  expect(firstBatch).toEqual([
+    {
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 4,
+      bytes: 67074,
+      wireBytes: 0,
+      frameBytes: {
+        "256": 1,
+        "512": 2,
+        "1024": 3,
+        "2048": 3,
+        "4096": 3,
+        "8192": 3,
+        "16384": 3,
+        "65536": 3,
+        "+Inf": 4,
+      },
+    },
+    { type: "gateway.ws.event", event: "other", count: 0, bytes: 0, wireBytes: 20 },
+  ]);
+
+  recordGatewayWsEvent("not-a-protocol-event", 512);
+  recordGatewayWsEvent("chat", 0, undefined, undefined, 99);
+  await drain();
+  expect(observations.slice(2).map(({ seq: _seq, ts: _ts, ...event }) => event)).toEqual([
+    {
+      type: "gateway.ws.event",
+      event: "other",
+      count: 1,
+      bytes: 512,
+      frameBytes: {
+        "256": 0,
+        "512": 1,
+        "1024": 1,
+        "2048": 1,
+        "4096": 1,
+        "8192": 1,
+        "16384": 1,
+        "65536": 1,
+        "+Inf": 1,
+      },
+    },
+    { type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 99 },
+  ]);
+  expect(observations.slice(0, 2).map(({ seq: _seq, ts: _ts, ...event }) => event)).toEqual(
+    firstBatch,
+  );
+});

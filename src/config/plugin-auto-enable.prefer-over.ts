@@ -80,6 +80,9 @@ function resolvePreferredOverIds(
   if (installedChannelMeta?.preferOver?.length) {
     return [...installedChannelMeta.preferOver];
   }
+  if (installedPlugin?.channels.length === 0) {
+    return [];
+  }
   const builtInChannelId = normalizeChatChannelId(channelId);
   const builtInChannelPreferOver = builtInChannelId
     ? findChatChannelMeta(builtInChannelId)?.preferOver

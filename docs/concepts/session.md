@@ -338,6 +338,11 @@ recorded permissions against current profile, role, access-grant, and device
 policy. A Control UI administrator can therefore continue authorized automation
 work after a restart without losing `operator.admin`. Recovery cannot gain scopes
 the original caller lacked, and revocation still stops the recovered run.
+Callers with `operator.sessions.write` can resume their own interrupted turns
+without needing the broader `operator.write` scope. If the original grant has
+been revoked, recovery records an interruption and a notice in the session
+instead of repeatedly retrying the same input. Send a new authenticated message
+after access is restored to continue.
 Older interrupted turns without a recorded authorization source remain restricted;
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.

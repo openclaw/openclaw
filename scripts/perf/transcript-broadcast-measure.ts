@@ -65,6 +65,8 @@ const { values } = parseArgs({
     "worker-memory": { type: "boolean", default: false },
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
+    "stress-session-store": { type: "boolean", default: false },
+    "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
@@ -311,6 +313,9 @@ if (values["stress-tools"] && !toolScenario) {
   throw new Error(
     "--stress-tools requires chat.send, attempt-retention, session-idle-retention, or memory-soak",
   );
+}
+if (values["stress-session-store"] && !values["stress-tools"]) {
+  throw new Error("--stress-session-store requires --stress-tools");
 }
 if (
   values["operator-access-policy"] &&
@@ -924,6 +929,7 @@ let imageRequests = 0;
 let reasoningResponses = 0;
 let reasoningReplayRequests = 0;
 let historicalReplayRequests = 0;
+const sessionStoreValues = new Map<string, string>();
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -1191,6 +1197,15 @@ const mock = createServer((req, res) => {
         const items = toolPaths.map((toolPath, toolIndex) => {
           const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
           currentCohort.toolCallIds.add(callId);
+          const storeKey = `benchmark-${index}-${toolIndex}`;
+          const previous = sessionStoreValues.get(storeKey);
+          const storeCode = values["stress-session-store"]
+            ? `if ((await load(${JSON.stringify(storeKey)})) !== ${JSON.stringify(previous) ?? "undefined"}) throw new Error("Synthetic session store replay mismatch");\n` +
+              `await store(${JSON.stringify(storeKey)}, ${JSON.stringify(currentCohort.id)});\n`
+            : "";
+          if (values["stress-session-store"]) {
+            sessionStoreValues.set(storeKey, currentCohort.id);
+          }
           return {
             type: "function_call",
             id: `fc_${currentCohort.id}_${index}_${toolIndex}`,
@@ -1202,6 +1217,7 @@ const mock = createServer((req, res) => {
                     title: "Read the synthetic fixture and verify its worktree",
                     awaitResults: true,
                     code:
+                      storeCode +
                       `json(await read({ path: ${JSON.stringify(toolPath)} }));\n` +
                       `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(stressWorktree)} });\n` +
                       `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(stressWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
@@ -2300,6 +2316,7 @@ async function runRound(
       await rpc(client, "sessions.reset", { key });
       sessionResets++;
     }
+    sessionStoreValues.clear();
   }
   const child = gateway;
   if (!child) {
@@ -2871,6 +2888,9 @@ try {
         "./scripts/tsx.mjs",
         "--import",
         "./scripts/lib/gateway-bench-profile-preload.ts",
+        ...(values["transcript-hydration-counts"]
+          ? ["--import", "./scripts/perf/transcript-hydration-counts-preload.ts"]
+          : []),
         ...(values["worker-memory"] || values["baseline-owners"]
           ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
           : []),
@@ -3789,6 +3809,7 @@ try {
           method,
           {
             ...latencySummary(measurements.latenciesMs),
+            latenciesMs: measurements.latenciesMs,
             callsPerMinute: (measurements.latenciesMs.length / cpu.wallMs) * 60_000,
             responseBytes: measurements.responseBytes,
             responseBytesPerCall: measurements.responseBytes / measurements.latenciesMs.length,
@@ -4166,6 +4187,8 @@ try {
         }
       : {}),
     stressTools: values["stress-tools"],
+    stressSessionStore: values["stress-session-store"],
+    transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
     stressSubagents: values["stress-subagents"],
     cronRuns,

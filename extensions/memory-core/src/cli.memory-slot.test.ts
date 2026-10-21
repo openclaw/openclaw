@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createEmptyPluginRegistry,
   resetPluginRuntimeStateForTest,
@@ -165,4 +166,64 @@ it("refuses search instead of answering from the sidecar index", async () => {
   expect(process.exitCode).toBe(1);
   expect(getMemorySearchManager).not.toHaveBeenCalled();
   expect(open).not.toHaveBeenCalled();
+});
+
+const diagnosticConfig: OpenClawConfig = {
+  agents: { entries: { main: {} } },
+  memory: {
+    search: {
+      provider: "none",
+      sources: ["memory", "sessions"],
+      rememberAcrossConversations: false,
+    },
+  },
+};
+
+async function runDiagnostic(args: string[], results: MemorySearchResult[] = []) {
+  getMemorySearchManager.mockResolvedValueOnce({
+    manager: {
+      search: async () => results,
+      status: () => ({ backend: "builtin", provider: "none", sources: ["memory"] }),
+      close: vi.fn(async () => {}),
+    },
+  });
+  await runMemoryCli(args);
+}
+
+it("shows the excluded session source in human and JSON status", async () => {
+  getRuntimeConfig.mockReturnValue(diagnosticConfig);
+  const logs = spyRuntimeLogs(defaultRuntime);
+  await runDiagnostic(["status"]);
+  expect(output(logs)).toContain("sessions requested but disabled");
+  expect(output(logs)).toContain("memory.search.experimental.sessionMemory=true");
+  const json = spyRuntimeJson(defaultRuntime);
+  await runDiagnostic(["status", "--json"]);
+  expect(firstWrittenJsonArg(json)).toEqual([
+    expect.objectContaining({ excludedConfiguredSources: ["sessions"] }),
+  ]);
+});
+
+it("reports recall recording failure without discarding search results", async () => {
+  const result = {
+    path: "MEMORY.md",
+    snippet: "The fixture uses a copper telescope.",
+    source: "memory" as const,
+    startLine: 1,
+    endLine: 1,
+    score: 0.91,
+  };
+  getRuntimeConfig.mockReturnValue({
+    ...diagnosticConfig,
+    plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
+  });
+  const promotion = await import("./short-term-promotion-record.js");
+  vi.spyOn(promotion, "recordShortTermRecalls").mockRejectedValueOnce(
+    new Error("fixture recall persistence failed"),
+  );
+  const json = spyRuntimeJson(defaultRuntime);
+  await runDiagnostic(["search", "telescope", "--json"], [result]);
+  expect(firstWrittenJsonArg(json)).toEqual({
+    results: [result],
+    warning: "Memory recall recording failed: fixture recall persistence failed",
+  });
 });

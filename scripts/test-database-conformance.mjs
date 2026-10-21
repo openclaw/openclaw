@@ -77,6 +77,7 @@ let targets = explicitTargets
       "src/state/openclaw-agent-db-engine.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-search.postgres.test.ts",
       "extensions/memory-core/src/tools.postgres.test.ts",
