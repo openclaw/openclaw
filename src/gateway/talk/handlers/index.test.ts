@@ -367,6 +367,29 @@ function voiceModelConfig(primary: string): OpenClawConfig {
   return { agents: { defaults: { voiceModel: { primary } } } };
 }
 
+function realtimeProvider() {
+  return {
+    id: "openai",
+    label: "OpenAI Realtime",
+    isConfigured: () => true,
+    createBridge: vi.fn(),
+  };
+}
+
+function resolveRealtimeProvider(
+  provider: ReturnType<typeof realtimeProvider>,
+  providerConfig: Record<string, unknown>,
+) {
+  mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({ provider, providerConfig });
+}
+
+const readClient = () => ({ connect: { scopes: ["operator.read"] } });
+const redactedSecretRef = {
+  source: "__OPENCLAW_REDACTED__",
+  provider: "__OPENCLAW_REDACTED__",
+  id: "__OPENCLAW_REDACTED__",
+};
+
 function relaySession(relaySessionId: string, model: string, voice: string) {
   return {
     provider: "openai",
@@ -536,39 +559,67 @@ describe("talk.catalog handler", () => {
   it.each([[[]], [["transcribe-default", "transcribe-alternate"]]])(
     "returns safe catalogs with transcription models %j",
     async (models) => {
-      mocks.listSpeechProviders.mockReturnValue([
-        {
+      function metadata() {
+        const speech = {
           id: "elevenlabs",
           label: "ElevenLabs",
           aliases: ["11labs"],
           models: ["eleven_flash_v2_5"],
           voices: ["voice-1"],
-          isConfigured: vi.fn(() => true),
-        } as never,
-      ]);
-      mocks.listRealtimeTranscriptionProviders.mockReturnValue([
-        {
+        };
+        const transcription = {
           id: "openai",
           label: "OpenAI Realtime Transcription",
           aliases: ["openai-realtime"],
           defaultModel: "gpt-4o-transcribe",
+        };
+        const otherTranscription = {
+          id: "deepgram",
+          label: "Deepgram Realtime Transcription",
+          aliases: ["deepgram-realtime"],
+        };
+        const realtime = {
+          id: "google",
+          label: "Google Live Voice",
+          defaultModel: "gemini-live",
+        };
+        const otherRealtime = { id: "openai", label: "OpenAI Realtime" };
+        const audio = () => [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }];
+        const capabilities = {
+          transports: ["provider-websocket", "gateway-relay"],
+          inputAudioFormats: audio(),
+          outputAudioFormats: audio(),
+          supportsBrowserSession: true,
+          supportsBargeIn: true,
+          supportsToolCalls: true,
+          supportsVideoFrames: true,
+          supportsSessionResumption: true,
+        };
+        return { speech, transcription, otherTranscription, realtime, otherRealtime, capabilities };
+      }
+      const { speech, transcription, otherTranscription, realtime, otherRealtime, capabilities } =
+        metadata();
+      const expected = metadata();
+      mocks.listSpeechProviders.mockReturnValue([
+        { ...speech, isConfigured: vi.fn(() => true) } as never,
+      ]);
+      mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+        {
+          ...transcription,
           models,
           resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
           isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "stt-key"),
         } as never,
         {
-          id: "deepgram",
-          label: "Deepgram Realtime Transcription",
-          aliases: ["deepgram-realtime"],
+          ...otherTranscription,
           resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
           isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "deepgram-key"),
         } as never,
       ]);
       mocks.listRealtimeVoiceProviders.mockReturnValue([
         {
-          id: "google",
-          label: "Google Live Voice",
-          defaultModel: "gemini-live",
+          ...realtime,
+          capabilities,
           resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
           isConfigured: vi.fn(
             ({ providerConfig }) =>
@@ -576,22 +627,11 @@ describe("talk.catalog handler", () => {
               providerConfig.project === "base" &&
               providerConfig.model === "talk-model",
           ),
-          capabilities: {
-            transports: ["provider-websocket", "gateway-relay"],
-            inputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
-            outputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
-            supportsBrowserSession: true,
-            supportsBargeIn: true,
-            supportsToolCalls: true,
-            supportsVideoFrames: true,
-            supportsSessionResumption: true,
-          },
           createBrowserSession: vi.fn(),
           createBridge: vi.fn(),
         } as never,
         {
-          id: "openai",
-          label: "OpenAI Realtime",
+          ...otherRealtime,
           resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
           isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "openai-key"),
           createBridge: vi.fn(),
@@ -607,7 +647,7 @@ describe("talk.catalog handler", () => {
       } as never);
 
       const respond = await invokeTalkHandler("talk.catalog", {
-        client: { connect: { scopes: ["operator.read"] } },
+        client: readClient(),
         config: {
           talk: {
             provider: "elevenlabs",
@@ -639,14 +679,10 @@ describe("talk.catalog handler", () => {
             activeProvider: "elevenlabs",
             providers: [
               {
-                id: "elevenlabs",
-                label: "ElevenLabs",
-                aliases: ["11labs"],
+                ...expected.speech,
                 configured: true,
                 modes: ["stt-tts"],
                 brains: ["agent-consult"],
-                models: ["eleven_flash_v2_5"],
-                voices: ["voice-1"],
               },
             ],
           },
@@ -655,20 +691,15 @@ describe("talk.catalog handler", () => {
             activeProvider: "openai",
             providers: [
               {
-                id: "openai",
-                label: "OpenAI Realtime Transcription",
-                aliases: ["openai-realtime"],
+                ...expected.transcription,
                 configured: true,
                 modes: ["transcription"],
                 transports: ["gateway-relay"],
                 brains: ["none"],
-                defaultModel: "gpt-4o-transcribe",
                 ...(models?.length ? { models } : {}),
               },
               {
-                id: "deepgram",
-                label: "Deepgram Realtime Transcription",
-                aliases: ["deepgram-realtime"],
+                ...expected.otherTranscription,
                 configured: false,
                 modes: ["transcription"],
                 transports: ["gateway-relay"],
@@ -681,24 +712,14 @@ describe("talk.catalog handler", () => {
             activeProvider: "google",
             providers: [
               {
-                id: "google",
-                label: "Google Live Voice",
+                ...expected.realtime,
+                ...expected.capabilities,
                 configured: true,
-                defaultModel: "gemini-live",
                 modes: ["realtime"],
-                transports: ["provider-websocket", "gateway-relay"],
                 brains: ["agent-consult"],
-                inputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
-                outputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
-                supportsBrowserSession: true,
-                supportsBargeIn: true,
-                supportsToolCalls: true,
-                supportsVideoFrames: true,
-                supportsSessionResumption: true,
               },
               {
-                id: "openai",
-                label: "OpenAI Realtime",
+                ...expected.otherRealtime,
                 configured: false,
                 modes: ["realtime"],
                 brains: ["agent-consult"],
@@ -762,7 +783,7 @@ describe("talk.catalog handler", () => {
     } as never);
 
     const respond = await invokeTalkHandler("talk.catalog", {
-      client: { connect: { scopes: ["operator.read"] } },
+      client: readClient(),
       context: {
         getRuntimeConfig: () =>
           ({
@@ -856,7 +877,7 @@ describe("talk.catalog handler", () => {
 
       const respond = await invokeTalkHandler("talk.catalog", {
         id: "relay-catalog",
-        client: { connect: { scopes: ["operator.read"] } },
+        client: readClient(),
         context: {
           getRuntimeConfig: () =>
             ({
@@ -932,7 +953,7 @@ describe("talk.catalog handler", () => {
       } as never);
 
       const respond = await invokeTalkHandler("talk.catalog", {
-        client: { connect: { scopes: ["operator.read"] } },
+        client: readClient(),
         config: {
           ...voiceModelConfig("transcription-fast/transcribe-model"),
           ...realtimeConfig({
@@ -991,7 +1012,7 @@ describe("talk.catalog handler", () => {
     );
 
     const respond = await invokeTalkHandler("talk.catalog", {
-      client: { connect: { scopes: ["operator.read"] } },
+      client: readClient(),
       config: voiceCallConfig({
         streaming: {
           providers: { xai: { apiKey: "xai-key" } },
@@ -1049,7 +1070,7 @@ describe("talk.catalog handler", () => {
     } as never);
 
     const respond = await invokeTalkHandler("talk.catalog", {
-      client: { connect: { scopes: ["operator.read"] } },
+      client: readClient(),
       config: {
         ...realtimeConfig({
           provider: "shared-realtime",
@@ -1093,7 +1114,7 @@ describe("talk.catalog handler", () => {
       });
 
       const respond = await invokeTalkHandler("talk.catalog", {
-        client: { connect: { scopes: ["operator.read"] } },
+        client: readClient(),
         config: explicit
           ? {
               ...realtimeConfig({ provider: "realtime" }),
@@ -1255,11 +1276,7 @@ describe("talk.config handler", () => {
         talk: {
           providers: {
             acme: {
-              apiKey: {
-                source: "__OPENCLAW_REDACTED__",
-                provider: "__OPENCLAW_REDACTED__",
-                id: "__OPENCLAW_REDACTED__",
-              },
+              apiKey: redactedSecretRef,
             },
           },
         },
@@ -1357,7 +1374,7 @@ describe("talk.config handler", () => {
       mocks.listRealtimeVoiceProviders.mockReturnValue([]);
 
       const respond = await invokeTalkHandler("talk.config", {
-        client: { connect: { scopes: ["operator.read"] } },
+        client: readClient(),
         config: runtimeConfig,
       });
       const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
@@ -1446,7 +1463,7 @@ describe("talk.config handler", () => {
     setSourceConfig(sourceConfig);
 
     const respond = await invokeTalkHandler("talk.config", {
-      client: { connect: { scopes: ["operator.read"] } },
+      client: readClient(),
       config: runtimeConfig,
     });
 
@@ -1459,11 +1476,7 @@ describe("talk.config handler", () => {
     });
     const providers = realtime.providers as Record<string, unknown> | undefined;
     expectRecordFields(providers?.openai, {
-      apiKey: {
-        source: "__OPENCLAW_REDACTED__",
-        provider: "__OPENCLAW_REDACTED__",
-        id: "__OPENCLAW_REDACTED__",
-      },
+      apiKey: redactedSecretRef,
       azureEndpoint: "https://example.openai.azure.com",
       azureDeployment: "realtime-prod",
     });
@@ -1546,7 +1559,7 @@ describe("talk.config handler", () => {
     });
 
     const respond = await invokeTalkHandler("talk.config", {
-      client: { connect: { scopes: ["operator.read"] } },
+      client: readClient(),
       config: runtimeConfig,
     });
 
@@ -1700,11 +1713,7 @@ describe("talk.config handler", () => {
       } else {
         expectRecordFields(resolved, { provider: "acme" });
         const resolvedConfig = expectRecordFields(resolved?.config, {});
-        expectRecordFields(resolvedConfig.apiKey, {
-          source: "__OPENCLAW_REDACTED__",
-          provider: "__OPENCLAW_REDACTED__",
-          id: "__OPENCLAW_REDACTED__",
-        });
+        expectRecordFields(resolvedConfig.apiKey, redactedSecretRef);
         expect(serialized).not.toContain("runtime-resolved-talk-key");
         expect(serialized).not.toContain("ACME_SPEECH_API_KEY");
       }
@@ -1800,13 +1809,23 @@ describe("talk.session unified handlers", () => {
       createBridge: vi.fn(),
     };
     mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-      provider,
-      providerConfig: { apiKey: "openai-key", model: "gpt-realtime" },
-    });
+    resolveRealtimeProvider(provider, { apiKey: "openai-key", model: "gpt-realtime" });
     mocks.createTalkRealtimeRelaySession.mockReturnValue(
       relaySession("relay-unified-1", "gpt-realtime", "alloy"),
     );
+
+    const action = (method: string, params: Record<string, unknown> = {}, id?: string) =>
+      invokeTalkHandler(`talk.session.${method}`, {
+        params: { sessionId: "relay-unified-1", ...params },
+        id,
+        context: {},
+      });
+    const expectRelayCall = (mock: ReturnType<typeof vi.fn>, params: Record<string, unknown>) =>
+      expect(mock).toHaveBeenCalledWith({
+        relaySessionId: "relay-unified-1",
+        connId: "conn-1",
+        ...params,
+      });
 
     const createRespond = await invokeTalkHandler("talk.session.create", {
       params: {
@@ -1883,14 +1902,8 @@ describe("talk.session unified handlers", () => {
       brain: "agent-consult",
     });
 
-    await invokeTalkHandler("talk.session.appendAudio", {
-      params: { sessionId: "relay-unified-1", audioBase64: "aGVsbG8=", timestamp: 42 },
-      id: "2",
-      context: {},
-    });
-    expect(mocks.sendTalkRealtimeRelayAudio).toHaveBeenCalledWith({
-      relaySessionId: "relay-unified-1",
-      connId: "conn-1",
+    await action("appendAudio", { audioBase64: "aGVsbG8=", timestamp: 42 }, "2");
+    expectRelayCall(mocks.sendTalkRealtimeRelayAudio, {
       audioBase64: "aGVsbG8=",
       timestamp: 42,
     });
@@ -1899,25 +1912,23 @@ describe("talk.session unified handlers", () => {
       status: "applied",
       turnId: "turn-7",
     });
-    const cancelRespond = await invokeTalkHandler("talk.session.cancelOutput", {
-      params: { sessionId: "relay-unified-1", reason: "barge-in", turnId: "turn-7" },
-      id: "3",
-      context: {},
-    });
-    expect(mocks.cancelTalkRealtimeRelayTurn).toHaveBeenCalledWith({
-      relaySessionId: "relay-unified-1",
-      connId: "conn-1",
+    const cancelRespond = await action(
+      "cancelOutput",
+      { reason: "barge-in", turnId: "turn-7" },
+      "3",
+    );
+    expectRelayCall(mocks.cancelTalkRealtimeRelayTurn, {
       reason: "barge-in",
       turnId: "turn-7",
     });
     expectRespondOk(cancelRespond, { ok: true, status: "applied", turnId: "turn-7" });
     for (const status of ["stale", "idle"] as const) {
       mocks.cancelTalkRealtimeRelayTurn.mockResolvedValueOnce({ status });
-      const nonAppliedRespond = await invokeTalkHandler("talk.session.cancelOutput", {
-        params: { sessionId: "relay-unified-1", reason: "barge-in", turnId: "turn-old" },
-        id: `3-${status}`,
-        context: {},
-      });
+      const nonAppliedRespond = await action(
+        "cancelOutput",
+        { reason: "barge-in", turnId: "turn-old" },
+        `3-${status}`,
+      );
       expectRespondOk(nonAppliedRespond, { ok: true, status });
     }
     expect(mocks.cancelTalkRealtimeRelayTurn).toHaveBeenLastCalledWith({
@@ -1927,14 +1938,8 @@ describe("talk.session unified handlers", () => {
       turnId: "turn-old",
     });
 
-    const markRespond = await invokeTalkHandler("talk.session.acknowledgeMark", {
-      params: { sessionId: "relay-unified-1", markName: "audio-mark-1" },
-      id: "3-mark",
-      context: {},
-    });
-    expect(mocks.acknowledgeTalkRealtimeRelayMark).toHaveBeenCalledWith({
-      relaySessionId: "relay-unified-1",
-      connId: "conn-1",
+    const markRespond = await action("acknowledgeMark", { markName: "audio-mark-1" }, "3-mark");
+    expectRelayCall(mocks.acknowledgeTalkRealtimeRelayMark, {
       markName: "audio-mark-1",
     });
     expectRespondOk(markRespond, { ok: true });
@@ -1965,9 +1970,7 @@ describe("talk.session unified handlers", () => {
     expect(toolRespond).not.toHaveBeenCalled();
     acceptToolResult();
     await toolRequest;
-    expect(mocks.submitTalkRealtimeRelayToolResult).toHaveBeenCalledWith({
-      relaySessionId: "relay-unified-1",
-      connId: "conn-1",
+    expectRelayCall(mocks.submitTalkRealtimeRelayToolResult, {
       callId: "call-1",
       result: { status: "working" },
       options: { suppressResponse: true, willContinue: true },
@@ -2002,9 +2005,7 @@ describe("talk.session unified handlers", () => {
       id: "5",
       context: {},
     });
-    expect(mocks.steerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
-      relaySessionId: "relay-unified-1",
-      connId: "conn-1",
+    expectRelayCall(mocks.steerTalkRealtimeRelayAgentRun, {
       authority: {
         senderIsOwner: false,
         replyCaller: expect.objectContaining({
@@ -2050,17 +2051,12 @@ describe("talk.session unified handlers", () => {
       id: "6",
       context: {},
     });
-    expect(mocks.stopTalkRealtimeRelaySession).toHaveBeenCalledWith({
-      relaySessionId: "relay-unified-1",
-      connId: "conn-1",
+    expectRelayCall(mocks.stopTalkRealtimeRelaySession, {
       disposition: undefined,
     });
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
 
-    const closedSession = await invokeTalkHandler("talk.session.close", {
-      params: { sessionId: "relay-unified-1" },
-      context: {},
-    });
+    const closedSession = await action("close", {});
     expectRespondError(closedSession, {
       code: ErrorCodes.UNAVAILABLE,
       message: "Error: Unknown Talk session",
@@ -2082,10 +2078,7 @@ describe("talk.session unified handlers", () => {
         },
       },
     };
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-      provider,
-      providerConfig: { model },
-    });
+    resolveRealtimeProvider(provider, { model });
     mocks.createTalkRealtimeRelaySession.mockReturnValue(
       relaySession("relay-talk-owner", model, "alloy"),
     );
@@ -2225,16 +2218,8 @@ describe("talk.session unified handlers", () => {
   });
 
   it("rejects forced consult routing when the provider resolves gpt-live", async () => {
-    const provider = {
-      id: "openai",
-      label: "OpenAI Realtime",
-      isConfigured: () => true,
-      createBridge: vi.fn(),
-    };
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-      provider,
-      providerConfig: { model: "gpt-live-test-canary" },
-    });
+    const provider = realtimeProvider();
+    resolveRealtimeProvider(provider, { model: "gpt-live-test-canary" });
     mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError.mockReturnValueOnce(
       "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively",
     );
@@ -2271,16 +2256,8 @@ describe("talk.session unified handlers", () => {
   });
 
   it("returns classified talk issue details when realtime relay creation fails", async () => {
-    const provider = {
-      id: "openai",
-      label: "OpenAI Realtime",
-      isConfigured: () => true,
-      createBridge: vi.fn(),
-    };
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-      provider,
-      providerConfig: { apiKey: "bad-key" },
-    });
+    const provider = realtimeProvider();
+    resolveRealtimeProvider(provider, { apiKey: "bad-key" });
     mocks.createTalkRealtimeRelaySession.mockImplementation(() => {
       throw new Error("OpenAI API key rejected with 401");
     });
@@ -2929,10 +2906,7 @@ describe("talk.client.create handler", () => {
       ]);
       const createBrowserSession = createBrowserSessionMock();
       const provider = createBrowserProvider(createBrowserSession);
-      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-        provider,
-        providerConfig: { apiKey: "openai-key", model: "gpt-realtime" },
-      });
+      resolveRealtimeProvider(provider, { apiKey: "openai-key", model: "gpt-realtime" });
 
       const respond = await invokeTalkHandler("talk.client.create", {
         params: {
@@ -3523,10 +3497,7 @@ describe("talk.client.create handler", () => {
         },
       });
       mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
-      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-        provider,
-        providerConfig: { apiKey: "openai-key", model },
-      });
+      resolveRealtimeProvider(provider, { apiKey: "openai-key", model });
 
       const respond = await invokeTalkHandler("talk.client.create", {
         params: { model },

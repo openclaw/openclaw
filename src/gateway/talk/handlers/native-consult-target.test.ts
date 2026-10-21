@@ -177,6 +177,54 @@ function control(
   });
 }
 
+function unrelatedRun(storePath: string, sessionId: string, runId: string) {
+  const operation = createReplyOperation({
+    sessionKey: "global",
+    sessionId,
+    agentId: "voice",
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: `${storePath}.unrelated`,
+      sessionKey: "global",
+      agentId: "voice",
+      incarnation: sessionId,
+    }),
+  });
+  const abort = vi.fn();
+  const handle = createEmbeddedRunHandle({ runId, abort });
+  setActiveEmbeddedRun(sessionId, handle, "global", undefined, "voice", operation);
+  return {
+    operation,
+    abort,
+    dispose() {
+      clearActiveEmbeddedRun(sessionId, handle, "global");
+      operation.complete();
+    },
+  };
+}
+
+function pauseControl(
+  target: Parameters<typeof control>[0],
+  cancelRun?: NonNullable<Parameters<typeof control>[2]>["cancelRun"],
+) {
+  const preparing = createDeferredCore();
+  const prepared = createDeferredCore();
+  const pending = control(target, "cancel", {
+    mode: "cancel",
+    cancelRun,
+    getToolAuthorityOverlay: () => ({
+      senderIsOwner: false,
+      disableTools: false,
+      traceAuthorized: false,
+    }),
+    prepareToolAuthorityOverlay: async () => {
+      preparing.resolve();
+      await prepared.promise;
+    },
+  });
+  return { preparing, prepared, pending };
+}
+
 function configureProvider(provider: RealtimeVoiceProviderPlugin, supportsGatewayControl = true) {
   mocks.resolveProvider.mockReturnValue({
     provider,
@@ -465,20 +513,7 @@ it.each([
       : { kind: "voice-session", voiceSessionId },
   );
   expect(targetRun?.isCurrent()).toBe(true);
-  const preparing = createDeferredCore();
-  const prepared = createDeferredCore();
-  const pending = control(targetRun, "cancel", {
-    mode: "cancel",
-    getToolAuthorityOverlay: () => ({
-      senderIsOwner: false,
-      disableTools: false,
-      traceAuthorized: false,
-    }),
-    prepareToolAuthorityOverlay: async () => {
-      preparing.resolve();
-      await prepared.promise;
-    },
-  });
+  const { preparing, prepared, pending } = pauseControl(targetRun);
   await preparing.promise;
   const entry = rpcSourceTesting.get(runId)!;
   if (change === "replaced") {
@@ -552,38 +587,10 @@ it.each([
       { executionStarted: source === "native" },
     );
     const operation = registration.entry.input.claim!.operation!;
-    const preparing = createDeferredCore();
-    const prepared = createDeferredCore();
     const cancelRun = override ? vi.fn(async () => true) : undefined;
-    const pending = control(runTarget(target), "cancel", {
-      mode: "cancel",
-      cancelRun,
-      getToolAuthorityOverlay: () => ({
-        senderIsOwner: false,
-        disableTools: false,
-        traceAuthorized: false,
-      }),
-      prepareToolAuthorityOverlay: async () => {
-        preparing.resolve();
-        await prepared.promise;
-      },
-    });
+    const { preparing, prepared, pending } = pauseControl(runTarget(target), cancelRun);
     await preparing.promise;
-    const foreignOperation = createReplyOperation({
-      sessionKey: "global",
-      sessionId,
-      agentId: "voice",
-      resetTriggered: false,
-      target: captureSessionTarget({
-        storeScope: `${target.storePath}.unrelated`,
-        sessionKey: "global",
-        agentId: "voice",
-        incarnation: sessionId,
-      }),
-    });
-    const abortForeign = vi.fn();
-    const foreign = createEmbeddedRunHandle({ runId, abort: abortForeign });
-    setActiveEmbeddedRun(sessionId, foreign, "global", undefined, "voice", foreignOperation);
+    const foreign = unrelatedRun(target.storePath, sessionId, runId);
     try {
       prepared.resolve();
       expect(await pending).toMatchObject({
@@ -593,17 +600,16 @@ it.each([
         reason: "no_active_run",
       });
       expect(abort).not.toHaveBeenCalled();
-      expect(abortForeign).not.toHaveBeenCalled();
+      expect(foreign.abort).not.toHaveBeenCalled();
       if (cancelRun) {
         expect(cancelRun).not.toHaveBeenCalled();
       }
       expect(operation.abortSignal.aborted).toBe(false);
-      expect(foreignOperation.abortSignal.aborted).toBe(false);
+      expect(foreign.operation.abortSignal.aborted).toBe(false);
     } finally {
       prepared.resolve();
       await Promise.allSettled([pending]);
-      clearActiveEmbeddedRun(sessionId, foreign, "global");
-      foreignOperation.complete();
+      foreign.dispose();
     }
   },
 );
@@ -686,38 +692,15 @@ it.each(["source", "claim"] as const)(
         await dispatch("talk.client.steer", { sessionKey: "main", text: "status", mode: "status" }),
         expect.objectContaining({ active: true, sessionId: resolvedSessionId }),
       );
-      const abortUnrelated = vi.fn();
-      const unrelated = createEmbeddedRunHandle({ runId: "queued-talk", abort: abortUnrelated });
       // Colliding session IDs must not cross the distinct physical controller target.
-      const unrelatedSessionId = resolvedSessionId;
-      const unrelatedOperation = createReplyOperation({
-        sessionKey: "global",
-        sessionId: unrelatedSessionId,
-        agentId: "voice",
-        resetTriggered: false,
-        target: captureSessionTarget({
-          storeScope: `${target.storePath}.unrelated`,
-          sessionKey: "global",
-          agentId: "voice",
-          incarnation: unrelatedSessionId,
-        }),
-      });
-      setActiveEmbeddedRun(
-        unrelatedSessionId,
-        unrelated,
-        "global",
-        undefined,
-        "voice",
-        unrelatedOperation,
-      );
+      const unrelated = unrelatedRun(target.storePath, resolvedSessionId, "queued-talk");
       try {
         expect(await control(targetRun)).toMatchObject({ active: false, aborted: false });
-        expect(abortUnrelated).not.toHaveBeenCalled();
-        expect(unrelatedOperation.abortSignal.aborted).toBe(false);
+        expect(unrelated.abort).not.toHaveBeenCalled();
+        expect(unrelated.operation.abortSignal.aborted).toBe(false);
         expect(operation.abortSignal.aborted).toBe(false);
       } finally {
-        clearActiveEmbeddedRun(unrelatedSessionId, unrelated, "global");
-        unrelatedOperation.complete();
+        unrelated.dispose();
       }
       expectOk(
         await dispatch("talk.client.steer", { sessionKey: "main", text: "cancel", mode: "cancel" }),

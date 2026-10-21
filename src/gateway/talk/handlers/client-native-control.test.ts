@@ -1,20 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setImmediate as nextEventLoopTurn, setTimeout as delay } from "node:timers/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { getActiveNativeAttempt } from "../../../agents/embedded-agent-runner/run-state.js";
-import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
-import {
-  detachActiveEmbeddedRun,
-  attachActiveEmbeddedRun,
-} from "../../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import * as workspace from "../../../agents/workspace.js";
 import { readSessionTranscriptMessageEvents } from "../../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
-import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.lifecycle.js";
 import { getRpcSourceIdentity } from "../../../sessions/session-controller.rpc-sources.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -60,14 +53,12 @@ const nativeTranscript = (transcript: string) => ({
   type: "turn.done",
   turn: { role: "user", transcript },
 });
-const appendResult = (id: string, text: unknown, partial = false) => ({
-  type: "delegation.context.append",
-  delegation_item_id: id,
-  channel: "speakable",
-  content: [
-    partial ? expect.objectContaining({ type: "input_text", text }) : { type: "input_text", text },
-  ],
-});
+const nativeCompletion = (id: string) =>
+  expect.objectContaining({
+    type: "delegation.context.append",
+    delegation_item_id: id,
+    content: [expect.objectContaining({ text: "Real runner consultation completed." })],
+  });
 
 describe("native Talk through the public OpenAI plugin registration", () => {
   installNativePluginTestHooks();
@@ -374,7 +365,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
         return result;
       });
       await withNativePlugin(
-        async ({ create, offer, invoke, broadcast }) => {
+        async ({ create, offer, invoke, broadcast, rpcSourceTesting }) => {
           try {
             const { result, socket } = await connectNativeSession({ create, offer });
             expect(
@@ -401,22 +392,16 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               },
               2,
             );
-            const messages = readSessionTranscriptMessageEvents({
-              agentId: AGENT_ID,
-              sessionId: SESSION_ID,
-            });
-            expect(messages).toMatchObject([
-              {
-                event: {
-                  message: { role: "user", content: [{ type: "text", text: "Hello voice" }] },
-                },
-              },
-              {
-                event: {
-                  message: { role: "assistant", content: [{ type: "text", text: "Hello human" }] },
-                },
-              },
-            ]);
+            expect(
+              readSessionTranscriptMessageEvents({ agentId: AGENT_ID, sessionId: SESSION_ID }),
+            ).toMatchObject(
+              [
+                ["user", "Hello voice"],
+                ["assistant", "Hello human"],
+              ].map(([role, text]) => ({
+                event: { message: { role, content: [{ type: "text", text }] } },
+              })),
+            );
             expect(talkEventTypes(broadcast)).not.toContain("turn.ended");
             socket.serverEvent(
               nativeDelegation("real-runner-request", "Complete a small voice consultation."),
@@ -440,6 +425,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
                 });
               }),
             ]);
+            const activeRun = upstream.runEmbeddedAgent.mock.calls[0]![0];
+            expect(getRpcSourceIdentity(rpcSourceTesting.get(activeRun.runId)!)).toMatchObject({
+              agentId: AGENT_ID,
+              sessionKey: SESSION_KEY,
+              sessionId: SESSION_ID,
+            });
+            expect(activeRun.abortSignal?.aborted).toBe(false);
             const idle = await connectNativeSession({ create, offer });
             idle.socket.serverEvent(nativeDelegation("other-call-control", control));
             await idle.socket.waitForSent((frame) =>
@@ -461,24 +453,14 @@ describe("native Talk through the public OpenAI plugin registration", () => {
                   : "OpenClaw is waiting on the model.",
               ),
             );
+            expect(activeRun.abortSignal?.aborted).toBe(control === "cancel");
+            expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
             if (eventOrder === "delegation-first") {
               socket.serverEvent(transcript);
             }
-            finishModel.resolve();
-            await Promise.allSettled(
-              upstream.runEmbeddedAgent.mock.results
-                .filter((invocation) => invocation.type === "return")
-                .map((invocation) => invocation.value),
-            );
-            await nextEventLoopTurn();
+            await settleNativeBackend(finishModel.resolve);
             const frames = socket.sent.map((frame): unknown => JSON.parse(frame));
-            const completion = expect.objectContaining({
-              type: "delegation.context.append",
-              delegation_item_id: "real-runner-request",
-              content: [expect.objectContaining({ text: "Real runner consultation completed." })],
-            });
             if (control === "cancel") {
-              expect(frames).not.toContainEqual(completion);
               expect(frames).not.toContainEqual(
                 expect.objectContaining({
                   type: "delegation.context.append",
@@ -486,7 +468,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
                 }),
               );
             } else {
-              expect(frames).toContainEqual(completion);
+              expect(frames).toContainEqual(nativeCompletion("real-runner-request"));
             }
             expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
             expect(modelRequests).toBe(1);
@@ -503,17 +485,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
                   frame.includes("Real runner consultation completed."),
               );
               expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual(
-                expect.objectContaining({
-                  type: "delegation.context.append",
-                  delegation_item_id: "after-cancel",
-                  content: [
-                    expect.objectContaining({ text: "Real runner consultation completed." }),
-                  ],
-                }),
+                nativeCompletion("after-cancel"),
               );
               expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2);
               expect(modelRequests).toBe(2);
             }
+            expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
+            expect(talkEventTypes(broadcast)).not.toContain("session.error");
             await invoke("talk.client.close", {
               voiceSessionId: requireString(result, "voiceSessionId"),
             });
@@ -533,114 +511,6 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           },
         },
       );
-    },
-  );
-
-  it.for(["partial", "rejection"] as const)(
-    "preserves intentional native cancellation after %s backend settlement",
-    async (settlement, { signal }) => {
-      const releaseBackend = createDeferredCore();
-      const cancellationObserved = createDeferredCore();
-      let activeRun: RunEmbeddedAgentParams | undefined;
-      let backendAborted = false;
-      const abortOwned = vi.fn(() => {
-        backendAborted = true;
-        cancellationObserved.resolve();
-      });
-      upstream.runEmbeddedAgent
-        .mockImplementationOnce(async (params) => {
-          const handle = {
-            ...createEmbeddedRunHandle({ runId: params.runId, abort: abortOwned }),
-            isAborted: () => backendAborted,
-          };
-          attachActiveEmbeddedRun(
-            params.sessionId,
-            handle,
-            params.sessionKey,
-            undefined,
-            params.agentId,
-            getCurrentSessionControllerOwner(),
-          );
-          activeRun = params;
-          try {
-            await releaseBackend.promise;
-            if (settlement === "rejection") {
-              params.abortSignal?.throwIfAborted();
-              throw new Error("Expected the model's actual cancellation signal");
-            }
-            return {
-              payloads: settlement === "partial" ? [{ text: "Canceled partial output." }] : [],
-              meta: { durationMs: 0, aborted: true },
-            };
-          } finally {
-            detachActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-          }
-        })
-        .mockImplementationOnce(nativeConsult("Fresh consult completed."));
-      const settleBackend = () => settleNativeBackend(releaseBackend.resolve);
-
-      await withNativePlugin(async ({ create, offer, broadcast, rpcSourceTesting }) => {
-        try {
-          const { socket, result } = await connectNativeSession({ create, offer });
-          const sentFrames = () => socket.sent.map((frame): unknown => JSON.parse(frame));
-          socket.serverEvent(
-            nativeDelegation("canceled-delegation", "Keep working until I cancel."),
-          );
-          await vi.waitFor(() => expect(activeRun).toBeDefined());
-          if (!activeRun) {
-            throw new Error("Native delegation did not reach the model backend");
-          }
-          const { runId, abortSignal } = activeRun;
-          expect(getRpcSourceIdentity(rpcSourceTesting.get(runId)!)).toMatchObject({
-            agentId: AGENT_ID,
-            sessionKey: SESSION_KEY,
-            sessionId: SESSION_ID,
-          });
-          expect(abortSignal?.aborted).toBe(false);
-
-          await flushNativeTranscript(result, () => {
-            socket.serverEvent(nativeTranscript("cancel"));
-            socket.serverEvent(nativeDelegation("cancel-request", "cancel"));
-          });
-          await withinTest(cancellationObserved.promise, signal);
-          expect(abortOwned).toHaveBeenCalledOnce();
-          await vi.waitFor(() =>
-            expect(sentFrames()).toContainEqual(
-              expect.objectContaining(
-                appendResult(
-                  "cancel-request",
-                  expect.stringContaining("Cancelled the active OpenClaw run."),
-                  true,
-                ),
-              ),
-            ),
-          );
-          expect(abortSignal?.aborted).toBe(true);
-          expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
-
-          await settleBackend();
-          expect(sentFrames()).not.toContainEqual(
-            expect.objectContaining({
-              type: "delegation.context.append",
-              delegation_item_id: "canceled-delegation",
-            }),
-          );
-          socket.serverEvent(nativeDelegation("late-cancel", "cancel"));
-          await nextEventLoopTurn();
-          expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
-          socket.serverEvent(nativeDelegation("after-cancel", "Start a fresh small task."));
-          await vi.waitFor(() =>
-            expect(sentFrames()).toContainEqual(
-              appendResult("after-cancel", "Fresh consult completed."),
-            ),
-          );
-          expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2);
-          expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
-          expect(talkEventTypes(broadcast)).not.toContain("session.error");
-        } finally {
-          await settleBackend();
-        }
-      });
     },
   );
 
