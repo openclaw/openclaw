@@ -13,18 +13,21 @@ import { createOnnxProvider } from "./decisions.js";
 import type { ClassificationInput } from "./models/types.js";
 import { InferenceWorkerClient } from "./worker-client.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const clients: InferenceWorkerClient[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // Kill and join blocked work before removing its fixture files.
+    await Promise.all(clients.splice(0).map((client) => client.stop()));
+    cleanup();
+    vi.unstubAllEnvs();
+  }),
+);
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
 afterAll(async () => {
   await receipts.close();
-});
-afterEach(async () => {
-  await Promise.all(clients.splice(0).map((client) => client.stop()));
-  vi.unstubAllEnvs();
 });
 
 type FixtureEvent = { kind: string; pid: number; text?: string };
@@ -88,24 +91,16 @@ process.on('message', async (request) => {
       .filter(Boolean)
       .map((line: string): FixtureEvent => JSON.parse(line))
       .filter((event) => kind === undefined || event.kind === kind);
-  const waitFor = (match: (event: FixtureEvent) => boolean): Promise<FixtureEvent> =>
-    vi.waitFor(
-      () => {
-        const found = events().find(match);
-        if (!found) {
-          throw new Error("Fixture did not reach the requested IPC boundary");
-        }
-        return found;
-      },
-      { timeout: 10_000 },
-    );
-  const observedHeld = () => {
-    const found = events().find((event) => event.text === "wait");
+  const findEvent = (match: (event: FixtureEvent) => boolean) => {
+    const found = events().find(match);
     if (!found) {
       throw new Error("Fixture did not reach the requested IPC boundary");
     }
     return found;
   };
+  const waitFor = (match: (event: FixtureEvent) => boolean) =>
+    vi.waitFor(() => findEvent(match), { timeout: 10_000 });
+  const observedHeld = () => findEvent((event) => event.text === "wait");
   const classify = (text: string, abortSignal = signal()) =>
     client.classify("test-model", input(text), abortSignal);
   return {
@@ -179,42 +174,32 @@ describe("InferenceWorkerClient", () => {
     expect(alive(pid)).toBe(false);
   });
 
-  it("removes canceled queued work without killing active work and enforces FIFO capacity", async ({
-    signal: testSignal,
-  }) => {
-    const { client, classify, events, waitHeld, release } = fixture();
+  it("preserves FIFO and active work when queued work is canceled", async (ctx) => {
+    const { classify, events, waitHeld, release } = fixture();
     const active = classify("wait");
     void active.catch(() => {});
-    try {
-      const started = await waitHeld(active, testSignal);
-      const canceled = new AbortController();
-      const queued = classify("canceled", canceled.signal);
-      const queuedRejected = expect(queued).rejects.toThrow("queued canceled");
-      const second = classify("second");
-      const third = classify("third");
-      await rejectsCode(classify("overflow"));
-      canceled.abort(new Error("queued canceled"));
-      await queuedRejected;
-      const fourth = classify("fourth");
-      expect(alive(started.pid)).toBe(true);
-      release();
-      const results = await Promise.all([active, second, third, fourth]);
-      expect(results.every((result) => result[0]?.logits[0] === started.pid)).toBe(true);
-      expect(events("classify").map((event) => event.text)).toEqual([
-        "wait",
-        "second",
-        "third",
-        "fourth",
-      ]);
-    } finally {
-      release();
-      await client.stop();
-    }
+    const started = await waitHeld(active, ctx.signal);
+    const canceled = new AbortController();
+    const queued = classify("canceled", canceled.signal);
+    const queuedRejected = expect(queued).rejects.toThrow("queued canceled");
+    const second = classify("second");
+    const third = classify("third");
+    await rejectsCode(classify("overflow"));
+    canceled.abort(new Error("queued canceled"));
+    await queuedRejected;
+    const fourth = classify("fourth");
+    expect(alive(started.pid)).toBe(true);
+    release();
+    const results = await Promise.all([active, second, third, fourth]);
+    expect(results.every((result) => result[0]?.logits[0] === started.pid)).toBe(true);
+    expect(events("classify")).toMatchObject(
+      ["wait", "second", "third", "fourth"].map((text) => ({ text, pid: started.pid })),
+    );
   });
 
   it.for(["closed", "throws"] as const)(
-    "skips queued decisions whose admission %s without restarting the warm worker",
-    async (mode, { signal: testSignal }) => {
+    "skips admission=%s without restarting the warm worker",
+    async (mode, ctx) => {
       const { client, events, waitHeld, release } = fixture();
       const provider = createOnnxProvider(client, vi.fn());
       const evaluate = (text: string, isAdmissible?: () => boolean) =>
@@ -222,10 +207,7 @@ describe("InferenceWorkerClient", () => {
           {
             state: text,
             questions: {
-              needed: {
-                type: "boolean",
-                criteria: { true: "Work is needed", false: "No work is needed" },
-              },
+              needed: { type: "boolean", criteria: { true: "needed", false: "unneeded" } },
             },
           },
           {
@@ -236,58 +218,49 @@ describe("InferenceWorkerClient", () => {
           },
         );
       const active = evaluate("wait");
-      try {
-        const started = await waitHeld(active, testSignal);
-        let admitted = true;
-        const queued = evaluate("revoked", () => {
-          if (!admitted && mode === "throws") {
-            throw new Error("consumer authority closed");
-          }
-          return admitted;
-        });
-        admitted = false;
-        const survivor = evaluate("survivor");
-        release();
-        const outcomes = await Promise.all([active, queued, survivor]);
-        const classifications = events("classify");
-        expect(classifications.map((event) => event.text)).toEqual(["wait", "survivor"]);
-        expect(outcomes.map((outcome) => outcome.status)).toEqual(["ok", "unavailable", "ok"]);
-        expect(classifications.every((event) => event.pid === started.pid)).toBe(true);
-        expect(alive(started.pid)).toBe(true);
-      } finally {
-        release();
-        await client.stop();
-      }
+      const started = await waitHeld(active, ctx.signal);
+      let admitted = true;
+      const queued = evaluate("revoked", () => {
+        if (!admitted && mode === "throws") {
+          throw new Error("consumer authority closed");
+        }
+        return admitted;
+      });
+      admitted = false;
+      const survivor = evaluate("survivor");
+      release();
+      const outcomes = await Promise.all([active, queued, survivor]);
+      expect(events("classify")).toMatchObject(
+        ["wait", "survivor"].map((text) => ({ text, pid: started.pid })),
+      );
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(["ok", "unavailable", "ok"]);
+      expect(alive(started.pid)).toBe(true);
     },
   );
 
-  it("joins native process exit before settling active cancellation and restarts surviving queued work", async () => {
-    const { classify, waitFor } = fixture();
-    const controller = new AbortController();
-    const active = classify("block", controller.signal);
-    const rejected = expect(active).rejects.toThrow("active canceled");
-    const started = await waitFor((event) => event.text === "block");
-    const queued = classify("survivor");
-    controller.abort(new Error("active canceled"));
-    await rejected;
-    expect(alive(started.pid)).toBe(false);
-    const result = await queued;
-    expect(result[0]?.logits[0]).not.toBe(started.pid);
-  });
-
-  it("recovers queued work in a new process after the worker exits", async () => {
-    const { classify, events } = fixture();
-    const rejected = rejectsCode(classify("exit"));
-    const good = classify("recovery");
-    await rejected;
-    const result = await good;
-    const oldPid = events().find((event) => event.text === "exit")!.pid;
-    expect(alive(oldPid)).toBe(false);
-    expect(result[0]?.logits[0]).not.toBe(oldPid);
-  });
+  it.each(["cancel", "exit"])(
+    "joins %s before settling failure and recovers queued work",
+    async (mode) => {
+      const { classify, waitFor } = fixture();
+      const controller = new AbortController();
+      const text = mode === "cancel" ? "block" : "exit";
+      const active = classify(text, controller.signal);
+      const rejected =
+        mode === "cancel" ? expect(active).rejects.toThrow("active canceled") : rejectsCode(active);
+      const queued = classify("survivor");
+      const started = await waitFor((event) => event.text === text);
+      if (mode === "cancel") {
+        controller.abort(new Error("active canceled"));
+      }
+      await rejected;
+      expect(alive(started.pid)).toBe(false);
+      const result = await queued;
+      expect(result[0]?.logits[0]).not.toBe(started.pid);
+    },
+  );
 
   it.each([false, true])(
-    "stops and joins running work with initialization blocked=%s, then refuses new admission",
+    "joins stop during blocked init=%s and refuses admission",
     async (holdInit) => {
       const { client, classify, waitFor, events } = fixture({ holdInit });
       const activeRejected = rejectsCode(classify("block"));
