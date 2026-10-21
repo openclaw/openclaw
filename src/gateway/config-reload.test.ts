@@ -2387,7 +2387,7 @@ describe("startGatewayConfigReloader", () => {
       throw new Error("disk reads unavailable during this commit");
     });
     const write = makeZeroDebounceHookWrite("internal-1");
-    const parsed = configWithReload({ hooks: { $include: "./hooks.json5" } });
+    const parsed = { gateway: { reload: {} }, hooks: { $include: "./hooks.json5" } };
     write.snapshot = {
       ...write.snapshot,
       raw: JSON.stringify(parsed),

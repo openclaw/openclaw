@@ -31,6 +31,7 @@ const stdioWorkerSource = String.raw`
 import fs from "node:fs";
 import { createInterface } from "node:readline";
 let active;
+let retained = false;
 if (process.connected || process.argv.includes("--internal-worker-ipc") ||
     !process.argv.includes("--internal-worker-session")) {
   process.stderr.write("container worker unexpectedly received Node IPC");
@@ -40,19 +41,22 @@ const completedResult = { status: "completed", transcriptLeafId: "leaf-1", trans
 const finish = (descriptor, result = completedResult) => {
   if (active !== descriptor) return;
   fs.writeSync(1, JSON.stringify({
-    type: "result", turnId: descriptor.assignment.turnId, result, retainWorker: false,
+    type: "result", turnId: descriptor.assignment.turnId, result, retainWorker: retained,
   }) + "\n");
   active = undefined;
-  process.exit(0);
+  if (!retained) process.exit(0);
 };
 const runTurn = async (descriptor) => {
 fs.writeFileSync(descriptor.assignment.workspaceDir + "/" + descriptor.assignment.turnId + ".fixture.json", JSON.stringify({
   pid: process.pid, argv: process.argv.slice(2), endpoint: descriptor.connectionEndpoint,
 }));
-if (descriptor.assignment.prompt === "wait") {
+if (descriptor.assignment.prompt === "admission-failure") {
+  throw new Error("worker admission deadline exceeded after 9 attempts to gateway.example:443: connect failed: Opening handshake has timed out " + descriptor.admission.credential);
+} else if (descriptor.assignment.prompt === "wait") {
   fs.writeFileSync(descriptor.assignment.workspaceDir + "/worker-started", "started");
   return;
 } else {
+  retained ||= descriptor.assignment.prompt === "retain";
   await new Promise((resolve) => setTimeout(resolve, 35));
   finish(descriptor);
 }
@@ -173,7 +177,9 @@ if (command === "version") {
 } else if (command === "info") {
   const daemonId = fs.readFileSync(enginePath("daemon-id"), "utf8");
   record({ argv: args, daemonId });
-  setTimeout(() => print(daemonId), 0);
+  const delayFile = enginePath("info-delay-ms");
+  const delayMs = fs.existsSync(delayFile) ? Number(fs.readFileSync(delayFile, "utf8")) : 0;
+  setTimeout(() => print(daemonId), delayMs);
 } else if (command === "create") {
   const id = createHash("sha256").update(JSON.stringify(args)).digest("hex");
   const labels = {};

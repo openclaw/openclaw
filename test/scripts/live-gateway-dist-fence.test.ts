@@ -176,19 +176,22 @@ it("retains uncertain native read cleanup instead of allowing a build", async ()
     }),
   ).rejects.toBe(failure);
 });
-it("fences the loaded command rather than its saved definition", async () => {
-  const savedDefinition = path.join(tmp, "saved-definition");
-  await writeOpenClawPackage(tmp);
-  await writeOpenClawPackage(savedDefinition);
-  const result = await inspectFixtureGateway(tmp, async (_binding, input) => ({
-    ...runningUnit(tmp, defaultUnit, process.pid),
-    command: gatewayCommand(
-      input?.requireEffective && input.requireLoadedCommand ? tmp : savedDefinition,
-      ["--profile", "dev"],
-    ),
-  }));
-  expectRefusal(result, path.join(tmp, "dist", "index.js"), defaultUnit, "openclaw update");
-});
+it.each([[], ["--profile", "dev"], ["--profile=dev"], ["--dev"]].map((options) => [options]))(
+  "fences the loaded command and names its recovery owner with root options %j",
+  async (rootOptions) => {
+    const savedDefinition = path.join(tmp, "saved-definition");
+    await writeOpenClawPackage(tmp);
+    await writeOpenClawPackage(savedDefinition);
+    const result = await inspectFixtureGateway(tmp, async (_binding, input) => ({
+      ...runningUnit(tmp, defaultUnit, process.pid),
+      command: gatewayCommand(
+        input?.requireEffective && input.requireLoadedCommand ? tmp : savedDefinition,
+        rootOptions,
+      ),
+    }));
+    expectRefusal(result, path.join(tmp, "dist", "index.js"), defaultUnit, "openclaw update");
+  },
+);
 
 it.each([
   ["stopped", { status: "stopped", state: "inactive" }, false],
@@ -208,6 +211,13 @@ it.each([
     expect(result.refuse).toBe(refuse);
   },
 );
+
+it("allows a foreign running checkout", async () => {
+  const { checkout, other } = await packagePair(tmp);
+  expect(
+    await inspectFixtureGateway(checkout, async () => stateForPackage(other, { running: true })),
+  ).toEqual({ refuse: false });
+});
 
 it.each([
   { code: "EPERM", refuse: true },
@@ -413,38 +423,46 @@ it.each(["saved environment", "root argv"] as const)(
     const renames = vi.spyOn(fs, "rename").mockRejectedValue(new Error("Unexpected rename"));
     const removals = vi.spyOn(fs, "rm").mockRejectedValue(new Error("Unexpected removal"));
     const signals = vi.spyOn(process, "kill").mockReturnValue(true);
-    restoreAfter(signals, removals, renames, writes, native, probe, inventory, files);
-    await withMockedPlatform("win32", async () => {
-      const env = { HOME: tmp, USERPROFILE: tmp, OPENCLAW_PROFILE: "selected" };
-      const result = await resolveLiveManagedGatewayDistFence(checkout, { env });
-      expectRefusal(result, `Scheduled Task ${JSON.stringify("Services\\Recovery")}`);
-      const bindings = await gatewayBindings.discoverManagedGatewayBindings(env);
-      expect(bindings).toHaveLength(1);
-      expect(bindings[0]?.env).toMatchObject({
-        OPENCLAW_PROFILE: "rescue",
-        OPENCLAW_WINDOWS_TASK_NAME: "Services\\Recovery",
+    const mocks = [signals, removals, renames, writes, native, probe, inventory, files];
+    try {
+      await withMockedPlatform("win32", async () => {
+        const env = { HOME: tmp, USERPROFILE: tmp, OPENCLAW_PROFILE: "selected" };
+        const result = await resolveLiveManagedGatewayDistFence(checkout, { env });
+        expectRefusal(result, `Scheduled Task ${JSON.stringify("Services\\Recovery")}`);
+        const bindings = await gatewayBindings.discoverManagedGatewayBindings(env);
+        expect(bindings).toHaveLength(1);
+        expect(bindings[0]?.env).toMatchObject({
+          OPENCLAW_PROFILE: "rescue",
+          OPENCLAW_WINDOWS_TASK_NAME: "Services\\Recovery",
+        });
+        await expect(
+          gatewayBindings.readManagedGatewayBindingState(bindings[0]!),
+        ).resolves.toMatchObject({
+          installed: true,
+          running: false,
+          runtime: { status: "unknown", state: "Running" },
+        });
+        await expect(resolveLiveManagedGatewayDistFence(other, { env })).resolves.toEqual({
+          refuse: false,
+        });
+        task.state = 2;
+        await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual(
+          result,
+        );
+        task.state = 3;
+        await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual({
+          refuse: false,
+        });
+        expect(probe).toHaveBeenCalled();
+        for (const mutation of [native, writes, renames, removals, signals]) {
+          expect(mutation).not.toHaveBeenCalled();
+        }
       });
-      await expect(
-        gatewayBindings.readManagedGatewayBindingState(bindings[0]!),
-      ).resolves.toMatchObject({
-        installed: true,
-        running: false,
-        runtime: { status: "unknown", state: "Running" },
-      });
-      await expect(resolveLiveManagedGatewayDistFence(other, { env })).resolves.toEqual({
-        refuse: false,
-      });
-      task.state = 2;
-      await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual(result);
-      task.state = 3;
-      await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual({
-        refuse: false,
-      });
-      expect(probe).toHaveBeenCalled();
-      for (const mutation of [native, writes, renames, removals, signals]) {
-        expect(mutation).not.toHaveBeenCalled();
+    } finally {
+      for (const mock of mocks) {
+        mock.mockRestore();
       }
-    });
+    }
   },
 );
 
@@ -522,36 +540,39 @@ it("continues to a live sibling after a Startup file read exhausts its inspectio
     entered.resolve();
     return pending.promise;
   });
-  restoreAfter(files);
-  await withMockedPlatform("win32", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const inspection = inspectFixtureGateway(
-      tmp,
-      async (binding, input) =>
-        input?.windowsStartupEntry
-          ? readState(gatewayService.resolveGatewayService(), input)
-          : stateForPackage(tmp, { running: binding.env.OPENCLAW_PROFILE === "live" }),
-      {
-        bindings: [
-          { env: {}, windowsStartupEntry: startupPath },
-          { env: { OPENCLAW_PROFILE: "live" } },
-        ],
-      },
-    );
-    try {
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(signal?.aborted).toBe(true);
-      expectRefusal(await inspection, "Scheduled Task", "live");
-    } finally {
-      pending.reject(new Error("Fixture file read released"));
+  try {
+    await withMockedPlatform("win32", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const inspection = inspectFixtureGateway(
+        tmp,
+        async (binding, input) =>
+          input?.windowsStartupEntry
+            ? readState(gatewayService.resolveGatewayService(), input)
+            : stateForPackage(tmp, { running: binding.env.OPENCLAW_PROFILE === "live" }),
+        {
+          bindings: [
+            { env: {}, windowsStartupEntry: startupPath },
+            { env: { OPENCLAW_PROFILE: "live" } },
+          ],
+        },
+      );
       try {
-        await inspection;
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(signal?.aborted).toBe(true);
+        expectRefusal(await inspection, "Scheduled Task", "live");
       } finally {
-        vi.useRealTimers();
+        pending.reject(new Error("Fixture file read released"));
+        try {
+          await inspection;
+        } finally {
+          vi.useRealTimers();
+        }
       }
-    }
-  });
+    });
+  } finally {
+    files.mockRestore();
+  }
 });
 
 it.each([true, false])(

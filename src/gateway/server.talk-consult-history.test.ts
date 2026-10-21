@@ -259,7 +259,7 @@ const assistantMessage = (text: string) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 const matchingTexts = (messages: unknown[], text: string) =>
   messages.map(extractText).filter((value) => value === text);
-const generatedInputs = (messages: unknown[]) =>
+const generatedInputs = <T>(messages: T[]) =>
   messages.filter((message) => extractText(message)?.includes(args.question));
 function transcriptMessages() {
   return loadTranscriptEventsSync(scope()).flatMap((event) => {

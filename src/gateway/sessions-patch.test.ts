@@ -405,7 +405,7 @@ describe("gateway sessions patch", () => {
   ])("validates pin eligibility on %s with %j", async (key, fields, existing, error) => {
     const result = await runPatch({
       storeKey: key,
-      store: existing === false ? {} : { [key]: { sessionId: "session", updatedAt: 1, ...fields } },
+      store: existing ? { [key]: { sessionId: "session", updatedAt: 1, ...fields } } : {},
       pinned: true,
     });
     if (error) {

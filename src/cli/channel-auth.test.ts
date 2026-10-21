@@ -73,7 +73,8 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
 
-vi.mock("../globals.js", () => ({
+vi.mock("../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../globals.js")>()),
   setVerbose: mocks.setVerbose,
 }));
 

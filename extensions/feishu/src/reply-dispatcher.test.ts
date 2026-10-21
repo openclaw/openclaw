@@ -55,9 +55,8 @@ vi.mock("./send.js", async (importOriginal) => ({
   sendCardFeishu: sendCardFeishuMock,
 }));
 vi.mock("./media.js", async (importOriginal) => {
-  const { shouldSuppressFeishuTextForVoiceMedia } =
-    await importOriginal<typeof import("./media.js")>();
-  return { sendMediaFeishu: sendMediaFeishuMock, shouldSuppressFeishuTextForVoiceMedia };
+  const actual = await importOriginal<typeof import("./media.js")>();
+  return { ...actual, sendMediaFeishu: sendMediaFeishuMock };
 });
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();

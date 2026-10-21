@@ -3216,7 +3216,7 @@ fi
       for (const [file, value] of [
         ["doctor-env", "1"],
         ["parent-env", "unset"],
-      ]) {
+      ] as const) {
         expect(readFileSync(join(workDir, file), "utf8")).toBe(
           `OPENCLAW_UPDATE_IN_PROGRESS=${value}\n` +
             `OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=${value}\n` +

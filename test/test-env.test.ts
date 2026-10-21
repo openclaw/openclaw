@@ -430,7 +430,7 @@ describe("installTestEnv", () => {
     ["OS home"],
   ])(
     "preserves the %s Corepack cache across HOME isolation and cleanup",
-    (_name, corepack, xdg, local, cache) => {
+    (_name, corepack?: string, xdg?: string, local?: string, cache?: string) => {
       const realHome = createTempHome();
       withEnv(
         {

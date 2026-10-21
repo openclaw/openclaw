@@ -141,7 +141,7 @@ describe("native hook relay CLI", () => {
     const exitCode = await runNativeHookRelayCliForTest(
       { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },
       {
-        stdin: createReadableTextStream("{}"),
+        stdin: Readable.from(["{}"]),
         stdout,
         stderr,
         invokeBridge: invokeBridge as never,
