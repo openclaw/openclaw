@@ -107,6 +107,14 @@ async function rejectBeforeSsh(request: Partial<WorkerBootstrapRequest>, error: 
   expect(runner.calls).toHaveLength(0);
 }
 
+const withFallback = { ssh: { ...SSH, fallbackPorts: [22] } };
+const commandNames = (runner: ReturnType<typeof fakeRunner>) =>
+  runner.calls.map(({ argv }) => argv[0]);
+const commandPorts = (runner: ReturnType<typeof fakeRunner>) =>
+  runner.calls.map(({ argv }) => commandPort(argv));
+const missingFile = (file: string) =>
+  expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
+
 async function prepareBundle(root: string, protocolFeatures: string[] = []) {
   const packageRoot = path.join(root, "package");
   await fs.mkdir(path.join(packageRoot, "dist", "worker"), { recursive: true });
@@ -270,7 +278,7 @@ describe("bootstrapWorker", () => {
 
     await expect(bootstrapWith(runner)).resolves.toEqual(RECEIPT);
     const [preflight, transfer, install] = runner.calls;
-    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "ssh", "ssh"]);
+    expect(commandNames(runner)).toEqual(["ssh", "scp", "ssh", "ssh"]);
     expect(preflight?.argv).toContain("StrictHostKeyChecking=yes");
     expect(runner.calls.flatMap((call) => call.argv)).not.toContain("StrictHostKeyChecking=no");
     expect(transfer?.argv).toEqual(
@@ -344,56 +352,27 @@ describe("bootstrapWorker", () => {
     expect(runner.calls).toHaveLength(2);
   });
 
-  it("selects an authenticated fallback before transfer and install", async () => {
-    const runner = fakeRunner([
-      result({ code: 255, stderr: "primary transport unavailable" }),
-      ...installResponses(),
-    ]);
-
-    await expect(bootstrapWith(runner, { ssh: { ...SSH, fallbackPorts: [22] } })).resolves.toEqual(
-      RECEIPT,
-    );
-
-    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh", "scp", "ssh", "ssh"]);
-    expect(runner.calls.map((call) => commandPort(call.argv))).toEqual([2222, 22, 22, 22, 22]);
-    expect(new Set(runner.calls.map((call) => call.argv[call.argv.indexOf("-i") + 1]))).toEqual(
+  it.each([
+    ["preflight", 0, ["ssh", "ssh", "scp", "ssh", "ssh"], [2222, 22, 22, 22, 22]],
+    ["transfer", 1, ["ssh", "scp", "scp", "ssh", "ssh"], [2222, 2222, 22, 22, 22]],
+    ["install", 2, ["ssh", "scp", "ssh", "ssh", "ssh"], [2222, 2222, 2222, 22, 22]],
+  ] as const)("retries %s on an authenticated fallback", async (_phase, index, commands, ports) => {
+    const responses = installResponses();
+    responses.splice(index, 0, result({ code: 255, stderr: "primary transport unavailable" }));
+    const runner = fakeRunner(responses);
+    await expect(bootstrapWith(runner, withFallback)).resolves.toEqual(RECEIPT);
+    expect(commandNames(runner)).toEqual(commands);
+    expect(commandPorts(runner)).toEqual(ports);
+    expect(new Set(runner.calls.map(({ argv }) => argv[argv.indexOf("-i") + 1]))).toEqual(
       new Set(["/keys/worker"]),
     );
     expect(
       new Set(
-        runner.calls.map((call) =>
-          call.argv.find((value) => value.startsWith("UserKnownHostsFile=")),
+        runner.calls.map(({ argv }) =>
+          argv.find((value) => value.startsWith("UserKnownHostsFile=")),
         ),
       ).size,
     ).toBe(1);
-  });
-
-  it.each([
-    {
-      phase: "transfer",
-      commands: ["ssh", "scp", "scp", "ssh", "ssh"],
-      ports: [2222, 2222, 22, 22, 22],
-    },
-    {
-      phase: "install",
-      commands: ["ssh", "scp", "ssh", "ssh", "ssh"],
-      ports: [2222, 2222, 2222, 22, 22],
-    },
-  ])("retries $phase when the selected port changes", async ({ phase, commands, ports }) => {
-    const responses = installResponses();
-    responses.splice(
-      phase === "transfer" ? 1 : 2,
-      0,
-      result({ code: 255, stderr: "primary transport unavailable" }),
-    );
-    const runner = fakeRunner(responses);
-
-    await expect(bootstrapWith(runner, { ssh: { ...SSH, fallbackPorts: [22] } })).resolves.toEqual(
-      RECEIPT,
-    );
-
-    expect(runner.calls.map((call) => call.argv[0])).toEqual(commands);
-    expect(runner.calls.map((call) => commandPort(call.argv))).toEqual(ports);
   });
 
   it.each([
@@ -475,7 +454,7 @@ describe("bootstrapWorker", () => {
     if (process.platform !== "win32") {
       expect(identityMode).toBe(0o600);
     }
-    await expect(fs.stat(identityPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await missingFile(identityPath);
   });
 
   it("rejects a stale remote receipt instead of synthesizing the expected fields", async () => {
@@ -499,11 +478,11 @@ describe("bootstrapWorker", () => {
         result(),
       ]);
 
-      await expect(bootstrapWith(runner, { ssh: { ...SSH, fallbackPorts: [22] } })).rejects.toThrow(
+      await expect(bootstrapWith(runner, withFallback)).rejects.toThrow(
         `Worker bootstrap ${phase} failed`,
       );
 
-      expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "ssh", "ssh"]);
+      expect(commandNames(runner)).toEqual(["ssh", "scp", "ssh", "ssh"]);
       const phaseCalls = runner.calls.filter((call) =>
         transferFailure
           ? call.argv[0] === "scp"
@@ -611,7 +590,7 @@ describe("bootstrapWorker", () => {
           bootstrapWith({ runCommand }, request);
         await expect(run()).rejects.toThrow("Worker bootstrap preflight failed (exit 255)");
         expect(preflightPaths).toHaveLength(2);
-        await expect(fs.stat(preflightPaths[0]!)).rejects.toMatchObject({ code: "ENOENT" });
+        await missingFile(preflightPaths[0]!);
 
         syntheticPreflightFailures = 1;
         await expect(run()).resolves.toEqual(JSON.parse(receiptJson));
@@ -622,7 +601,7 @@ describe("bootstrapWorker", () => {
         await fs.mkdir(path.dirname(tamperedDependency), { recursive: true });
         await fs.writeFile(tamperedDependency, "export const trusted = false;\n");
         await expect(run()).resolves.toEqual(JSON.parse(receiptJson));
-        await expect(fs.stat(tamperedDependency)).rejects.toMatchObject({ code: "ENOENT" });
+        await missingFile(tamperedDependency);
 
         const operationUpload = preflightPaths[0]!;
         const staleUpload = path.join(
@@ -645,11 +624,9 @@ describe("bootstrapWorker", () => {
         );
         expect(installAttempts).toBe(3);
         expect(uploadSurvivedAmbiguousInstall).toBe(true);
-        await expect(fs.stat(remoteTarball)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(operationUpload)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(staleUpload)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(staleStaging)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.lstat(staleLock)).rejects.toMatchObject({ code: "ENOENT" });
+        for (const file of [remoteTarball, operationUpload, staleUpload, staleStaging, staleLock]) {
+          await missingFile(file);
+        }
         await expect(
           fs.readFile(path.join(installRoot, "bootstrap-receipt.json"), "utf8"),
         ).resolves.toBe(`${receiptJson}\n`);
