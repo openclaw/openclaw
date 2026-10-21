@@ -576,6 +576,15 @@ function expectTextToIncludeInOrder(text: string, snippets: readonly string[]): 
   }
 }
 
+function expectFirstOccurrencesInOrder(text: string, snippets: readonly string[]): void {
+  let previous = -1;
+  for (const snippet of snippets) {
+    const index = text.indexOf(snippet);
+    expect(index).toBeGreaterThan(previous);
+    previous = index;
+  }
+}
+
 function extractUpgradeSurvivorSupervisor(script: string): string {
   const match = script.match(
     /cat >"\$supervisor_script" <<'SUPERVISOR'\n(?<source>[\s\S]*?)\nSUPERVISOR/u,
@@ -1219,12 +1228,7 @@ if (args[0] === "ps") {
     for (const snippet of excludes) {
       expect(source).not.toContain(snippet);
     }
-    let previous = -1;
-    for (const snippet of order) {
-      const index = source.indexOf(snippet);
-      expect(index).toBeGreaterThan(previous);
-      previous = index;
-    }
+    expectFirstOccurrencesInOrder(source, order);
     expectTextToIncludeInOrder(source, sequence);
   });
 
@@ -2533,40 +2537,19 @@ docker_e2e_docker_run_cmd run demo
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
-    const runnerPluginRegistryIndex = runner.indexOf("\nconfigure_plugin_registry\n");
-    const runnerCompanionInstallIndex = runner.indexOf("\ninstall_companion_plugins\n");
-    const runnerUpdateIndex = runner.indexOf(
-      '\necho "Running package update against the mounted tarball..."\n',
-    );
-    expect(runnerPluginRegistryIndex).toBeLessThan(runnerCompanionInstallIndex);
-    expect(runnerCompanionInstallIndex).toBeLessThan(runnerUpdateIndex);
-    expect(
-      publishedRunner.indexOf("phase configure-plugin-registry configure_plugin_registry"),
-    ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
-    const runnerClawHubIndex = runner.indexOf("\nconfigure_clawhub_fixture\n");
-    const runnerPrepareIndex = runner.indexOf(
+    expectFirstOccurrencesInOrder(runner, [
+      "\nconfigure_clawhub_fixture\n",
+      "\nconfigure_plugin_registry\n",
+      "\ninstall_companion_plugins\n",
       'prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"',
-    );
-    expect(runnerClawHubIndex).toBeGreaterThan(-1);
-    expect(runnerClawHubIndex).toBeLessThan(runnerPluginRegistryIndex);
-    expect(runnerPluginRegistryIndex).toBeLessThan(runnerCompanionInstallIndex);
-    expect(runnerCompanionInstallIndex).toBeLessThan(runnerPrepareIndex);
-    expect(runnerPrepareIndex).toBeLessThan(runnerUpdateIndex);
-    const publishedClawHubIndex = publishedRunner.indexOf(
+      '\necho "Running package update against the mounted tarball..."\n',
+    ]);
+    expectFirstOccurrencesInOrder(publishedRunner, [
       "phase configure-clawhub-fixture configure_clawhub_fixture",
-    );
-    const publishedPrepareIndex = publishedRunner.indexOf(
       "phase prepare-update-restart-probe prepare_update_restart_probe",
-    );
-    const publishedPluginRegistryIndex = publishedRunner.indexOf(
       "phase configure-plugin-registry configure_plugin_registry",
-    );
-    expect(publishedClawHubIndex).toBeGreaterThan(-1);
-    expect(publishedClawHubIndex).toBeLessThan(publishedPrepareIndex);
-    expect(publishedPrepareIndex).toBeLessThan(publishedPluginRegistryIndex);
-    expect(publishedPluginRegistryIndex).toBeLessThan(
-      publishedRunner.indexOf("phase update-candidate update_candidate"),
-    );
+      "phase update-candidate update_candidate",
+    ]);
     expect(publishedRunner).toContain(
       [
         'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
