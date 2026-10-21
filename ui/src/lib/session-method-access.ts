@@ -19,7 +19,12 @@ export type SessionMethodAccess =
       allowed: false;
       requiredScope: OperatorScope;
       reason: string;
-      cause: "disconnected" | "method-unavailable" | "missing-scope" | "session-not-owned";
+      cause:
+        | "disconnected"
+        | "method-unavailable"
+        | "missing-scope"
+        | "session-not-owned"
+        | "route-pending";
     };
 
 export type SessionMethodAccessRequest = {
@@ -51,6 +56,7 @@ function deniedAccess(
         "method-unavailable": "sessionsView.actionUnavailable",
         "session-not-owned": "sessionsView.actionRequiresOwnership",
         "missing-scope": "sessionsView.actionRequiresScope",
+        "route-pending": "chat.thread.loading",
       }[cause],
       { scope: requiredScope },
     ),

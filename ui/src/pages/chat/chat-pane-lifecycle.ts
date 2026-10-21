@@ -75,6 +75,7 @@ import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
 import { subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { replayPendingChatAbort } from "./run-lifecycle.ts";
 import { adoptAcknowledgedInitialRun, readAcknowledgedInitialRun } from "./run-lifecycle.ts";
 import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { closeSlot } from "./sidebar-layout.ts";
@@ -623,6 +624,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.syncSessionReactions();
     this.syncRetainedBoardSession(this.resolveBoardView());
     if (changes.routeResolutionPending && !this.routeResolutionPending && this.state) {
+      void replayPendingChatAbort(this.state);
       void resumeStoredChatOutboxes(this.state);
     }
   }

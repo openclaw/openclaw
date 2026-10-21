@@ -1,12 +1,38 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
+import {
+  clearChatHistory,
+  rewindChatHistory,
+  switchChatHistoryBranch,
+} from "./chat-history-actions.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { patchChatSessionSettings } from "./chat-settings-patches.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
+
+it("holds history mutations without changing the cached transcript or draft", async () => {
+  const host = makeChatHost({
+    isRouteSessionPending: () => true,
+    chatMessage: "Retain draft",
+    chatMessages: [{ role: "assistant", content: "Cached transcript" }],
+    requestHandlers: {},
+  });
+  const messages = host.chatMessages;
+  expect(await clearChatHistory(host)).toBe("failed");
+  expect(
+    await rewindChatHistory(host, "entry", new ChatAttachmentReadLifecycle(() => {})),
+  ).toBeNull();
+  expect(await switchChatHistoryBranch(host, "leaf")).toBe(false);
+  expect(await patchChatSessionSettings(host, host.sessionKey, { model: "synthetic" })).toBeNull();
+  expect(host.request).not.toHaveBeenCalled();
+  expect(host.chatMessage).toBe("Retain draft");
+  expect(host.chatMessages).toBe(messages);
+});
 
 it("holds direct and restored queued sends after startup until route revalidation", async () => {
   let pending = false;

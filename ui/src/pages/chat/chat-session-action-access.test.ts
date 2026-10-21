@@ -46,6 +46,17 @@ describe("readChatSessionActionAccess", () => {
     expect(Object.values(admin).every((access) => access.allowed)).toBe(true);
   });
 
+  it("holds every action until a cached route is confirmed", () => {
+    const gateway = snapshot({ methods, scopes: ["operator.admin"] });
+    const pending = readChatSessionActionAccess(gateway, true, { routePending: true });
+    for (const access of Object.values(pending)) {
+      expect(access).toMatchObject({ allowed: false, cause: "route-pending" });
+    }
+    expect(
+      Object.values(readChatSessionActionAccess(gateway, true)).every((access) => access.allowed),
+    ).toBe(true);
+  });
+
   it("selects the active-run abort method and rejects explicit method absence", () => {
     expect(
       readChatSessionActionAccess(

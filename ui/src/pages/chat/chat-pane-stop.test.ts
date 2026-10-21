@@ -82,6 +82,25 @@ function createStopFixture(scopes = ["operator.write"], useSessionOwner = false)
 }
 
 describe("chat pane compact intent", () => {
+  it("holds new and retained action callbacks until route confirmation", async () => {
+    const fixture = createStopFixture(["operator.admin"]);
+    const send = vi.fn(async () => {});
+    fixture.state.handleSendChat = send;
+    const retained = fixture.callbacks();
+    fixture.state.isRouteSessionPending = () => true;
+    expect(Object.values(fixture.callbacks()).every((callback) => callback === undefined)).toBe(
+      true,
+    );
+    retained.onAbort?.();
+    await retained.onCompact?.();
+    await retained.onRewindMessage?.("entry");
+    await retained.onForkMessage?.("entry");
+    expect(fixture.onDenied).toHaveBeenCalledTimes(4);
+    expect(fixture.request).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(fixture.state.chatMessage).toBe("keep this draft");
+  });
+
   it("dispatches through the existing command owner only with current admin access", async () => {
     const fixture = createStopFixture(["operator.admin"]);
     const send = vi.fn(async () => {});
@@ -116,6 +135,25 @@ describe("chat pane compact intent", () => {
 });
 
 describe("chat pane Stop intent", () => {
+  it("retains a queued Stop and the draft while the route is unconfirmed", async () => {
+    const fixture = createStopFixture(["operator.write"]);
+    fixture.disconnect();
+    fixture.callbacks().onAbort?.();
+    const intent = fixture.state.pendingAbort;
+    expect(intent).not.toBeNull();
+    fixture.reconnect();
+    fixture.state.isRouteSessionPending = () => true;
+    await handleAbortChat(fixture.state);
+    expect(await replayPendingChatAbort(fixture.state)).toBe(false);
+    expect(fixture.state.pendingAbort).toBe(intent);
+    expect(fixture.state.chatMessage).toBe("keep this draft");
+    expect(fixture.request).not.toHaveBeenCalled();
+    fixture.state.isRouteSessionPending = () => false;
+    fixture.pane.routeResolutionPending = false;
+    fixture.pane.synchronizeInputs({ routeResolutionPending: true });
+    expect(fixture.request).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { scope: "operator.write", method: "chat.abort", renderBeforeDisconnect: true },
     { scope: "operator.sessions.write", method: "chat.abort", renderBeforeDisconnect: false },

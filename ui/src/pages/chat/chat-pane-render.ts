@@ -86,6 +86,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       this.context.gateway.snapshot,
       state.sessionKey,
       selectedSession,
+      this.routeResolutionPending,
     );
     const observerDigest = pickFreshestObserverDigest(
       state.observerDigest,

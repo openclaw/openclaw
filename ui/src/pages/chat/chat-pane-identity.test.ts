@@ -821,6 +821,11 @@ describe("chat pane message cuts", () => {
     const { pane, state } = createTestChatPane({ client, sessions });
     state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
 
+    state.isRouteSessionPending = () => true;
+    await pane.forkFromMessage("user-entry");
+    expect(sessions.forkAtMessage).not.toHaveBeenCalled();
+    state.isRouteSessionPending = () => false;
+
     await pane.forkFromMessage("user-entry");
 
     expect(state.sessionKey).toBe("agent:main:current");

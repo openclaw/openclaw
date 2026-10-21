@@ -209,6 +209,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const branchSwitchAccess = readChatSessionActionAccess(
       this.context.gateway.snapshot,
       Boolean(this.state?.chatRunId),
+      { routePending: this.routeResolutionPending },
     ).branchSwitch;
     const branchSwitchDisabledReason =
       this.state && this.isCurrentSessionArchived(this.state)
@@ -435,6 +436,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       const access = readChatSessionActionAccess(
         this.context.gateway.snapshot,
         Boolean(this.state?.chatRunId),
+        { routePending: this.routeResolutionPending },
       ).branchSwitch;
       if (!access.allowed) {
         this.publishHeaderError(access.reason);
