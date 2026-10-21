@@ -86,11 +86,6 @@ vi.mock("../status/summary.runtime.js", async (importOriginal) => {
             }
           : null,
       ),
-      resolveStatusModelComparisonLabel: vi.fn(({ provider, model }) =>
-        typeof model === "string" && model.length > 0
-          ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
-          : null,
-      ),
       resolveAuthoredModelContextTokens: vi.fn(() => undefined),
       resolveContextTokensForModel: vi.fn(() => 200_000),
     },
@@ -843,12 +838,6 @@ describe("getStatusSummary", () => {
         : null;
     };
     vi.mocked(statusSummaryRuntime.resolveStatusModelLookupRef).mockImplementation(normalizeRef);
-    vi.mocked(statusSummaryRuntime.resolveStatusModelComparisonLabel).mockImplementation(
-      (params) => {
-        const ref = normalizeRef(params);
-        return ref ? `${ref.provider}/${ref.model}` : null;
-      },
-    );
     setSession({ modelOverride: "opus", modelOverrideSource: "user" });
 
     const summary = await getStatusSummary();
