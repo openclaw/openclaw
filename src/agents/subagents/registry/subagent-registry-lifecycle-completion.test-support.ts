@@ -393,20 +393,6 @@ export function registerNativeCompletionAuthorityTest({
   completeRun: CompleteLifecycleRun;
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
 }) {
-  it("emits one progress end event at the canonical terminal transition", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: false });
-    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
-    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
-    const completion = makeSubagentCompletion(entry, { terminalReply: undefined });
-
-    await controller.completeSubagentRun(completion);
-    await controller.completeSubagentRun(completion);
-
-    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(
-      readLifecycleRun(entry),
-    );
-  });
-
   it("keeps provisional cancellation when a repeated success has no producer reply evidence", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: true,

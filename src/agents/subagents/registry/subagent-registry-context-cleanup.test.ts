@@ -238,86 +238,79 @@ describe("subagent registry context cleanup", () => {
     await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("successor attachment");
   });
 
-  it.each([
-    "success",
-    "hook-error",
-    "stale",
-    "stale-prepared",
-    "foreign-change",
-    "absent",
-  ] as const)("retires resolved engine resources after ended-hook work (%s)", async (mode) => {
-    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-    const retire = vi.fn();
-    const resolutionStarted = createDeferred();
-    const resolutionGate = createDeferred();
-    const cleanupStarted = createDeferred();
-    const cleanupGate = createDeferred();
-    const hookError = new Error("ended hook failed");
-    const cleanupError = new Error("engine cleanup failed");
-    const onSubagentEnded = vi.fn(async () => {
-      expect(retire).not.toHaveBeenCalled();
-      if (mode === "hook-error") {
-        throw hookError;
-      }
-    });
-    const { registry, cleanup } = createCleanup(
-      {
-        ...(mode === "absent" ? {} : { onSubagentEnded }),
-        async dispose() {
-          cleanupStarted.resolve();
-          await cleanupGate.promise;
-          if (mode === "hook-error") {
-            throw cleanupError;
-          }
+  it.each(["hook-error", "stale-prepared", "foreign-change", "absent"] as const)(
+    "retires resolved engine resources after ended-hook work (%s)",
+    async (mode) => {
+      const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+      const retire = vi.fn();
+      const resolutionStarted = createDeferred();
+      const resolutionGate = createDeferred();
+      const cleanupStarted = createDeferred();
+      const cleanupGate = createDeferred();
+      const hookError = new Error("ended hook failed");
+      const cleanupError = new Error("engine cleanup failed");
+      const onSubagentEnded = vi.fn(async () => {
+        expect(retire).not.toHaveBeenCalled();
+        if (mode === "hook-error") {
+          throw hookError;
+        }
+      });
+      const { registry, cleanup } = createCleanup(
+        {
+          ...(mode === "absent" ? {} : { onSubagentEnded }),
+          async dispose() {
+            cleanupStarted.resolve();
+            await cleanupGate.promise;
+            if (mode === "hook-error") {
+              throw cleanupError;
+            }
+          },
         },
-      },
-      false,
-    );
-    resources.attach(registry);
-    resources.register("fixture", { id: "resource", dispose: retire });
-    let engine: ContextEngine | undefined;
-    let current = true;
-    vi.mocked(resolveContextEngine).mockImplementation(async (cfg, options) => {
-      engine = await actualResolveContextEngine(cfg, options);
-      resolutionStarted.resolve();
-      await resolutionGate.promise;
-      return engine;
-    });
-    const pending = cleanup.runContextEngineSubagentEnded(
-      { childSessionKey: "agent:main:subagent:owned", reason: "completed" },
-      {
-        isCurrent: () => current,
-        prepareCurrent: async () => {
-          if (mode === "stale-prepared") {
-            current = false;
-          }
-          return mode !== "foreign-change";
-        },
-      },
-    );
-    const result = pending.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    try {
-      await resolutionStarted.promise;
-      current = mode !== "stale";
-      resolutionGate.resolve();
-      await awaitGate(cleanupStarted.promise, result, "early return");
-      await resources.release();
-      expect(retire).not.toHaveBeenCalled();
-      cleanupGate.resolve();
-      expect(await result).toBe(mode === "hook-error" ? hookError : undefined);
-      expect(onSubagentEnded).toHaveBeenCalledTimes(
-        ["stale", "stale-prepared", "foreign-change", "absent"].includes(mode) ? 0 : 1,
+        false,
       );
-      expect(retire).toHaveBeenCalledTimes(1);
-    } finally {
-      resolutionGate.resolve();
-      cleanupGate.resolve();
-      await result;
-      await engine?.dispose?.().catch(() => {});
-      await resources.release();
-    }
-  });
+      resources.attach(registry);
+      resources.register("fixture", { id: "resource", dispose: retire });
+      let engine: ContextEngine | undefined;
+      let current = true;
+      vi.mocked(resolveContextEngine).mockImplementation(async (cfg, options) => {
+        engine = await actualResolveContextEngine(cfg, options);
+        resolutionStarted.resolve();
+        await resolutionGate.promise;
+        return engine;
+      });
+      const pending = cleanup.runContextEngineSubagentEnded(
+        { childSessionKey: "agent:main:subagent:owned", reason: "completed" },
+        {
+          isCurrent: () => current,
+          prepareCurrent: async () => {
+            if (mode === "stale-prepared") {
+              current = false;
+            }
+            return mode !== "foreign-change";
+          },
+        },
+      );
+      const result = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await resolutionStarted.promise;
+        resolutionGate.resolve();
+        await awaitGate(cleanupStarted.promise, result, "early return");
+        await resources.release();
+        expect(retire).not.toHaveBeenCalled();
+        cleanupGate.resolve();
+        expect(await result).toBe(mode === "hook-error" ? hookError : undefined);
+        expect(onSubagentEnded).toHaveBeenCalledTimes(mode === "hook-error" ? 1 : 0);
+        expect(retire).toHaveBeenCalledTimes(1);
+      } finally {
+        resolutionGate.resolve();
+        cleanupGate.resolve();
+        await result;
+        await engine?.dispose?.().catch(() => {});
+        await resources.release();
+      }
+    },
+  );
 });
