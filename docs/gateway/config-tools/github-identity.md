@@ -102,6 +102,24 @@ The default sandbox tool policy also allows `github_publish` in managed Gateway 
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
 
+Use `github_publish` with `action: "inspect_pr"` and `pullRequestUrl` to inspect
+an existing PR authored by a currently verified GitHub account linked to the
+requesting person. The URL must name a PR on the configured GitHub host. Copied
+Files, Commits and Checks links, query strings and comment or review anchors
+resolve to the same canonical PR. The Gateway checks numeric account identity, current session access and the selected
+shared publisher. A private repository also requires current repository access
+for the linked account; shared credentials alone do not grant that access.
+
+Inspection returns the canonical PR URL, author, state, base and head repository
+IDs, branches and observed commits. Closed and merged PRs retain their state;
+a deleted head repository returns a null head. Later operations must check their
+own write eligibility, current authority and head state before making changes.
+
+This action makes no GitHub or workspace writes, creates no publication receipt,
+and does not bind or prepare the PR in the conversation. Its result is data,
+not authority for another action. The separate `inspect` action below keeps its
+existing full-operator and session-publication requirements.
+
 Use `github_publish` with `action: "edit"` to change the current session's shared
 PR title or description without publishing source. Call it without `title`/`body`
 to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only

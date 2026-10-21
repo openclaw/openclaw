@@ -1,25 +1,25 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DevicePairSetupLifecycle } from "../../lib/device-pair-setup.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { DevicePairSetup, type DevicePairSetupProps } from "./view-pairing.tsx";
+import { DevicePairSetup } from "./view-pairing.tsx";
 
-function renderPairing(props: DevicePairSetupProps, container: HTMLElement) {
-  mountSolid(() => createComponent(DevicePairSetup, props), { container });
+function renderPairing(lifecycle: DevicePairSetupLifecycle, nowMs = 0) {
+  return mountSolid(() =>
+    createComponent(DevicePairSetup, {
+      open: true,
+      lifecycle,
+      nowMs,
+      pendingCount: 0,
+      onRefresh: vi.fn(),
+      onAccessChange: vi.fn(),
+      onClose: vi.fn(),
+      onManageDevices: vi.fn(),
+      onGetApps: vi.fn(),
+    }),
+  ).container;
 }
-
-const containers: HTMLElement[] = [];
-function createContainer() {
-  const container = document.body.appendChild(document.createElement("div"));
-  containers.push(container);
-  return container;
-}
-afterEach(() => {
-  for (const container of containers.splice(0)) {
-    container.remove();
-  }
-});
 
 describe("device pairing dialog", () => {
   it.each([
@@ -50,21 +50,7 @@ describe("device pairing dialog", () => {
   ] satisfies { lifecycle: DevicePairSetupLifecycle; choices: boolean; selectable: boolean }[])(
     "keeps access choices within the $lifecycle.phase lifecycle",
     ({ lifecycle, choices, selectable }) => {
-      const container = createContainer();
-      renderPairing(
-        {
-          open: true,
-          lifecycle,
-          nowMs: 0,
-          pendingCount: 0,
-          onRefresh: vi.fn(),
-          onAccessChange: vi.fn(),
-          onClose: vi.fn(),
-          onManageDevices: vi.fn(),
-          onGetApps: vi.fn(),
-        },
-        container,
-      );
+      const container = renderPairing(lifecycle);
       const fieldset = container.querySelector("fieldset");
       expect(Boolean(fieldset)).toBe(choices);
       if (fieldset) {
@@ -83,22 +69,7 @@ describe("device pairing dialog", () => {
       href: "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
     },
   ])("links $access setup help to the matching workflow", ({ access, href }) => {
-    const container = createContainer();
-
-    renderPairing(
-      {
-        open: true,
-        lifecycle: { phase: "selection", access },
-        nowMs: 0,
-        pendingCount: 0,
-        onRefresh: vi.fn(),
-        onAccessChange: vi.fn(),
-        onClose: vi.fn(),
-        onManageDevices: vi.fn(),
-        onGetApps: vi.fn(),
-      },
-      container,
-    );
+    const container = renderPairing({ phase: "selection", access });
 
     expect(container.textContent).toContain(
       "Device capabilities plus complete Gateway controls, including settings and upgrades.",
@@ -110,33 +81,21 @@ describe("device pairing dialog", () => {
   });
 
   it("renders the node one-paste command and quiet expiry countdown", () => {
-    const container = createContainer();
-
-    renderPairing(
+    const container = renderPairing(
       {
-        open: true,
-        lifecycle: {
-          phase: "waiting",
+        phase: "waiting",
+        access: "node",
+        setup: {
+          setupId: "setup-node",
+          setupCode: "AbC_123",
+          gatewayUrl: "wss://gateway.example",
+          auth: "token",
+          urlSource: "test",
           access: "node",
-          setup: {
-            setupId: "setup-node",
-            setupCode: "AbC_123",
-            gatewayUrl: "wss://gateway.example",
-            auth: "token",
-            urlSource: "test",
-            access: "node",
-            expiresAtMs: 70_000,
-          },
+          expiresAtMs: 70_000,
         },
-        nowMs: 10_000,
-        pendingCount: 0,
-        onRefresh: vi.fn(),
-        onAccessChange: vi.fn(),
-        onClose: vi.fn(),
-        onManageDevices: vi.fn(),
-        onGetApps: vi.fn(),
       },
-      container,
+      10_000,
     );
 
     expect(container.querySelectorAll('input[name="device-pair-access"]')).toHaveLength(3);

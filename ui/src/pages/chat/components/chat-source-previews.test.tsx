@@ -17,9 +17,11 @@ it("opens the matching source dialog and retires it when that source leaves", ()
       excerptKind: "page",
     },
   ]);
-  const { container } = mountSolid(() => <ChatSourcePreviews sources={sources()} />);
+  const view = mountSolid(() => <ChatSourcePreviews sources={sources()} />);
+  const { container } = view;
   flush();
   const trigger = container.querySelector<HTMLButtonElement>(".chat-source-card")!;
+  expect(view.getByRole("button", { name: "Trip checklistexample.test" })).toBe(trigger);
   trigger.click();
   const surface = container.querySelector<HTMLElement>(".chat-source-popover")!;
   expect(surface.matches(":popover-open")).toBe(true);
