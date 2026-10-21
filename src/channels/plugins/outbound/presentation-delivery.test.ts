@@ -14,29 +14,20 @@ const tablePresentation: MessagePresentation = {
     },
   ],
 };
+const fallbackPayload = {
+  text: "authored plain body",
+  presentation: tablePresentation,
+  presentationTextMode: "fallback" as const,
+};
 
 describe("renderPresentationForDelivery button adaptation", () => {
   it.each([
-    { name: "one button", count: 1, maxActions: 25, perRow: 5, maxRows: 5, styles: true },
-    {
-      name: "Discord-sized controls",
-      count: 25,
-      maxActions: 25,
-      perRow: 5,
-      maxRows: 5,
-      styles: true,
-    },
-    {
-      name: "Telegram-sized controls",
-      count: 100,
-      maxActions: 100,
-      perRow: 3,
-      maxRows: undefined,
-      styles: false,
-    },
-  ])(
-    "adapts $name once before native rendering",
-    async ({ count, maxActions, perRow, maxRows, styles }) => {
+    ["one button", 1, 25, 5, 5, true],
+    ["Discord-sized controls", 25, 25, 5, 5, true],
+    ["Telegram-sized controls", 100, 100, 3, undefined, false],
+  ] as const)(
+    "adapts %s once before native rendering",
+    async (_name, count, maxActions, perRow, maxRows, styles) => {
       const buttons = Array.from({ length: count }, (_, index) => ({
         label: `Choice ${index}`,
         action: { type: "callback" as const, value: `choice:${index}` },
@@ -53,7 +44,30 @@ describe("renderPresentationForDelivery button adaptation", () => {
         type: "buttons",
         buttons: adaptedButtons.slice(index * perRow, (index + 1) * perRow),
       }));
-      const expectedRendererCalls = [
+      const renderPresentation = vi.fn(async (payload: { text?: string }) => payload);
+      const resolveAction = vi.spyOn(presentationPayload, "resolveMessagePresentationButtonAction");
+      try {
+        const rendered = await renderPresentationForDelivery(
+          {
+            presentationCapabilities: {
+              supported: true,
+              buttons: true,
+              limits: {
+                actions: { maxActions, maxActionsPerRow: perRow, maxRows, supportsStyles: styles },
+              },
+            },
+            renderPresentation,
+          },
+          { text: "Body", presentation },
+        );
+        expect(rendered).toStrictEqual({ text: "Body" });
+        expect(resolveAction).toHaveBeenCalledTimes(count);
+      } finally {
+        resolveAction.mockRestore();
+      }
+
+      expect(presentation).toStrictEqual(expectedInput);
+      expect(renderPresentation.mock.calls).toStrictEqual([
         [
           { text: "Body", presentation: { title: "Choose", tone: undefined, blocks } },
           {
@@ -62,61 +76,31 @@ describe("renderPresentationForDelivery button adaptation", () => {
             blocks: [{ type: "buttons", buttons: normalizedButtons }],
           },
         ],
-      ];
-      const renderPresentation = vi
-        .fn()
-        .mockImplementation(async (payload: { text?: string }) => payload);
-      const handler = {
-        presentationCapabilities: {
-          supported: true,
-          buttons: true,
-          limits: {
-            actions: { maxActions, maxActionsPerRow: perRow, maxRows, supportsStyles: styles },
-          },
-        },
-        renderPresentation,
-      };
-      const resolveAction = vi.spyOn(presentationPayload, "resolveMessagePresentationButtonAction");
-      let actionReads = 0;
-      let rendered: Awaited<ReturnType<typeof renderPresentationForDelivery>>;
-      try {
-        rendered = await renderPresentationForDelivery(handler, { text: "Body", presentation });
-        actionReads = resolveAction.mock.calls.length;
-      } finally {
-        resolveAction.mockRestore();
-      }
-
-      expect(presentation).toStrictEqual(expectedInput);
-      expect(renderPresentation.mock.calls).toStrictEqual(expectedRendererCalls);
-      expect(rendered).toStrictEqual({ text: "Body" });
-      expect(actionReads).toBe(count);
+      ]);
     },
   );
 });
 
 describe("renderPresentationForDelivery authored fallback", () => {
   it.each([
-    { name: "a table", presentation: tablePresentation },
-    {
-      name: "a table with native context",
-      presentation: {
+    ["a table", tablePresentation],
+    [
+      "a table with native context",
+      {
         ...tablePresentation,
         blocks: [...tablePresentation.blocks, { type: "context", text: "Uptime: 42s" }],
       } satisfies MessagePresentation,
-    },
-  ])("preserves authored fallback for $name", async ({ presentation }) => {
+    ],
+  ] as const)("preserves authored fallback for %s", async (_name, presentation) => {
     const renderPresentation = vi.fn();
-    const handler = {
-      presentationCapabilities: { supported: true, tables: false, context: true },
-      renderPresentation,
-    };
     const authoredText = "Model: anthropic/claude-haiku-4-5\nUptime: 42s\nReference UTC: 12:00";
-
-    const rendered = await renderPresentationForDelivery(handler, {
-      text: authoredText,
-      presentation,
-      presentationTextMode: "fallback",
-    });
+    const rendered = await renderPresentationForDelivery(
+      {
+        presentationCapabilities: { supported: true, tables: false, context: true },
+        renderPresentation,
+      },
+      { ...fallbackPayload, text: authoredText, presentation },
+    );
 
     expect(rendered.text).toBe(authoredText);
     expect(rendered.presentation).toBeUndefined();
@@ -124,20 +108,14 @@ describe("renderPresentationForDelivery authored fallback", () => {
   });
 
   it("renders natively when the channel keeps table blocks", async () => {
-    const renderPresentation = vi.fn().mockImplementation(async (payload: { text?: string }) => ({
+    const renderPresentation = vi.fn(async (payload: { text?: string }) => ({
       ...payload,
       text: "native table rendering",
     }));
-    const handler = {
-      presentationCapabilities: { supported: true, tables: true },
-      renderPresentation,
-    };
-
-    const rendered = await renderPresentationForDelivery(handler, {
-      text: "authored plain body",
-      presentation: tablePresentation,
-      presentationTextMode: "fallback",
-    });
+    const rendered = await renderPresentationForDelivery(
+      { presentationCapabilities: { supported: true, tables: true }, renderPresentation },
+      fallbackPayload,
+    );
 
     expect(renderPresentation).toHaveBeenCalledTimes(1);
     expect(rendered.text).toBe("native table rendering");
@@ -145,24 +123,22 @@ describe("renderPresentationForDelivery authored fallback", () => {
   });
 
   it("still renders interactive presentations through the channel renderer", async () => {
-    const renderPresentation = vi
-      .fn()
-      .mockImplementation(async (payload: { text?: string }) => payload);
-    const handler = {
-      presentationCapabilities: { supported: true, buttons: true, tables: false },
-      renderPresentation,
-    };
-
-    await renderPresentationForDelivery(handler, {
-      text: "authored plain body",
-      presentation: {
-        blocks: [
-          ...tablePresentation.blocks,
-          { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
-        ],
+    const renderPresentation = vi.fn(async (payload: { text?: string }) => payload);
+    await renderPresentationForDelivery(
+      {
+        presentationCapabilities: { supported: true, buttons: true, tables: false },
+        renderPresentation,
       },
-      presentationTextMode: "fallback",
-    });
+      {
+        ...fallbackPayload,
+        presentation: {
+          blocks: [
+            ...tablePresentation.blocks,
+            { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
+          ],
+        },
+      },
+    );
 
     expect(renderPresentation).toHaveBeenCalledTimes(1);
   });
