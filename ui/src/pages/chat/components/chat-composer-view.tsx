@@ -35,6 +35,7 @@ import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
 import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
+import { createComposerLayoutRef } from "./chat-composer-layout-ref.ts";
 import { HumanMentionMenuView } from "./chat-composer-mention-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuView } from "./chat-composer-plus-menu.types.ts";
@@ -167,6 +168,16 @@ export function renderChatComposerView(
   const showComposerInput = createMemo(
     () => context().showComposer && props.disabledBanner?.kind !== "composer-replacement",
   );
+  let layoutContext: HTMLDivElement | undefined;
+  const layoutRef = createComposerLayoutRef(
+    () => ({
+      width: props.chatMessageMaxWidth,
+      onWidthChange: props.onComposerWidthChange,
+      getEditor: () => state.composerTextarea,
+      getContext: () => layoutContext,
+    }),
+    () => showComposerInput(),
+  );
   const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
     showComposerInput() ? (
@@ -237,9 +248,9 @@ export function renderChatComposerView(
   return (
     <div
       class="agent-chat__composer-shell"
-      ref={[footerControl, elementRef(props.onComposerShellRef)]}
+      ref={[footerControl, elementRef(props.onComposerShellRef), layoutRef.shell]}
     >
-      <div class="chat-footer__context">
+      <div class="chat-footer__context" ref={(node) => (layoutContext = node)}>
         {props.footerContent}
         <div class="agent-chat__composer-notices">
           {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
@@ -331,6 +342,7 @@ export function renderChatComposerView(
             ref={[
               context().state.composerInputRef ?? undefined,
               createBackgroundLayoutRef("composer"),
+              layoutRef,
             ]}
           >
             {context().menus.slashMenuVisible ? (

@@ -663,6 +663,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
+      onComposerWidthChange: (value) => state.applySettings({ chatMessageMaxWidth: value }),
       chatBubbleMode: isChatBubbleMode(
         state.settings,
         state.sessionKey,

@@ -133,7 +133,7 @@ suite.define(() => {
     }
   });
 
-  it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
+  it("grows the first prompt downward past ten lines, then scrolls at the pane limit", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -162,6 +162,8 @@ suite.define(() => {
         const style = getComputedStyle(element);
         return {
           height: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          viewportHeight: element.ownerDocument.defaultView!.innerHeight,
           lineHeight: Number.parseFloat(style.lineHeight),
           overflowY: style.overflowY,
           padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
@@ -175,6 +177,7 @@ suite.define(() => {
       expect(tenLines.height).toBeGreaterThanOrEqual(
         Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
       );
+      expect(tenLines.scrollHeight).toBe(tenLines.height);
       expect(tenLines).toMatchObject({ overflowY: "hidden", scrollbarWidth: "thin" });
       // Preserve a 12px drag target around the 6px painted thumb.
       const composerScrollbar = Number.parseFloat(tenLines.webkitScrollbarWidth);
@@ -182,7 +185,12 @@ suite.define(() => {
       expect(composerScrollbar).toBe(12);
       expect(composerScrollbar - composerThumbInset * 2).toBe(6);
 
-      const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
+      // More text than even the whole viewport can hold must exceed the pane budget.
+      const overflowLines = Math.ceil(tenLines.viewportHeight / tenLines.lineHeight) + 1;
+      const longPrompt = Array.from(
+        { length: overflowLines },
+        (_, index) => `line ${index + 1}`,
+      ).join("\n");
       await message.fill(longPrompt);
       const capped = await message.evaluate((element) => ({
         clientHeight: element.clientHeight,
@@ -194,6 +202,8 @@ suite.define(() => {
         triggers.boundingBox(),
         composer.boundingBox(),
       ]);
+      expect(capped.clientHeight).toBeGreaterThan(tenLines.height);
+      expect(capped.clientHeight).toBeLessThan(tenLines.viewportHeight);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
       expect(capped.overflowY).toBe("auto");
       // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.

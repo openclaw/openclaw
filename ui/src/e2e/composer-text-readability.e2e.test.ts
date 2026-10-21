@@ -20,7 +20,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         const lines = Array.from(
-          { length: 20 },
+          { length: 40 },
           (_, index) => `Line ${index + 1}: Keep text readable`,
         );
         await textarea.fill(lines.slice(0, 2).join("\n"));

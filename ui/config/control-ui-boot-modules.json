@@ -1098,6 +1098,8 @@
   "ui/src/pages/chat/components/chat-composer-dom.ts",
   "ui/src/pages/chat/components/chat-composer-emoji.tsx",
   "ui/src/pages/chat/components/chat-composer-inline-slash.ts",
+  "ui/src/pages/chat/components/chat-composer-layout-ref.ts",
+  "ui/src/pages/chat/components/chat-composer-layout.ts",
   "ui/src/pages/chat/components/chat-composer-mention-menu.tsx",
   "ui/src/pages/chat/components/chat-composer-menu.tsx",
   "ui/src/pages/chat/components/chat-composer-menus.ts",

@@ -42,6 +42,7 @@ import {
 } from "../chat/components/chat-composer-dom.ts";
 import "../../components/tooltip.ts";
 import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
+import { createComposerLayoutRef } from "../chat/components/chat-composer-layout-ref.ts";
 import {
   HumanMentionMenuView,
   type HumanMentionMenuHost,
@@ -92,6 +93,8 @@ export type NewSessionComposerOptions = {
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
@@ -371,7 +374,6 @@ export function NewSessionComposer(props: {
   const textarea = useContext(NewSessionComposerTextareaContext);
   const footerControl = createFooterControlRef();
   const inputHandle = createChatAttachmentInputHandle();
-  const backgroundLayoutRef = createBackgroundLayoutRef("composer");
   const draft = createMemo(() => {
     const source = props.options.draftSource;
     return source ? projectOwner(source, (owner) => owner.read()) : undefined;
@@ -384,6 +386,11 @@ export function NewSessionComposer(props: {
   });
   const frame = createMemo(() => prepareComposer(options(), textarea));
   const placeholder = createComposerPlaceholder(options, textarea);
+  const layoutRef = createComposerLayoutRef(() => ({
+    width: options().chatMessageMaxWidth,
+    onWidthChange: options().onComposerWidthChange,
+    getEditor: () => textarea.getTextarea(),
+  }));
   // The textarea owner retires stale command requests and closes menus when its scope changes.
   createEffect(
     () =>
@@ -433,7 +440,7 @@ export function NewSessionComposer(props: {
   });
   return (
     <div
-      ref={footerControl}
+      ref={[footerControl, layoutRef.shell]}
       class="agent-chat__composer-shell new-session-page__composer"
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
@@ -448,10 +455,7 @@ export function NewSessionComposer(props: {
       onDragOver={(event) => frame().attachmentDropHandlers.onDragover(event)}
     >
       <div
-        ref={(element) => {
-          composer = element;
-          backgroundLayoutRef(element);
-        }}
+        ref={[(element) => (composer = element), createBackgroundLayoutRef("composer"), layoutRef]}
         class={[
           "agent-chat__input agent-chat__input--mobile-toolbar",
           {
