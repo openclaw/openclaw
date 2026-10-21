@@ -95,6 +95,10 @@ function captureAuditWriter(inputs: AuditEventInput[]): AuditEventWriter {
       inputs.push(input);
       return true;
     },
+    recordRun: (start, finish) => {
+      inputs.push(start, finish);
+      return true;
+    },
     recordExecutionIdentity: () => true,
     recordExecutionDecision: () => true,
     recordExecutionDecisionWork: () => true,

@@ -465,7 +465,7 @@ function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventR
   return corruptAuditRow(row, "invalid outbound status");
 }
 
-export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
+function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   if (row.kind === "agent_run") {
     return parseAgentRunRow(row);
   }

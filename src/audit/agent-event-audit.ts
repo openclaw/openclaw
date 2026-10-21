@@ -439,6 +439,11 @@ export function createAgentEventAuditRecorder(options: {
         return;
       }
       if (projection.input.kind === "skill_selection") {
+        const start = bufferedStarts.get(runInstance);
+        if (start) {
+          bufferedStarts.delete(runInstance);
+          writer.record(start);
+        }
         writer.record(projection.input);
         return;
       }
