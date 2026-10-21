@@ -58,6 +58,7 @@ describe("trajectory tool definition preparation", () => {
   });
 
   it("still bounds published JSON before caching its diagnostic projection", () => {
+    const has = vi.spyOn(Headers.prototype, "has");
     const source = { description: "x".repeat(32_769) };
     const published = publishRuntimeToolInputSchema(source).schema;
     for (const parameters of [source, published, source, published]) {
@@ -70,6 +71,7 @@ describe("trajectory tool definition preparation", () => {
         },
       });
     }
+    expect(has).not.toHaveBeenCalled();
   });
 
   it("keeps schema text unchanged across secret registrations and log policy changes", async () => {
@@ -80,9 +82,7 @@ describe("trajectory tool definition preparation", () => {
       flush: async () => {},
       describeFlushState: () => undefined,
     });
-    const recorder = await createTrajectoryRuntimeRecorder({
-      sessionId: "tool-projection",
-    });
+    const recorder = await createTrajectoryRuntimeRecorder({ sessionId: "tool-projection" });
     const record = (text: string) =>
       recorder?.recordEvent("context.compiled", {
         tools: toTrajectoryToolDefinitions([{ name: "sample", parameters: { description: text } }]),
@@ -98,17 +98,15 @@ describe("trajectory tool definition preparation", () => {
     applyLoggingConfig(undefined);
     record("policy-fixture-value");
 
-    expect(writes).toHaveLength(7);
-    expect(writes[0]).toContain(description);
-    expect(writes[1]).toContain(description);
-    expect(writes[2]).toContain(description);
-    expect(writes[3]).toContain("synthetic-changed-value");
-    expect(JSON.parse(writes[3]!).data.tools[0].parameters.description).toBe(
+    expect(writes.map((line) => JSON.parse(line).data.tools[0].parameters.description)).toEqual([
+      description,
+      description,
+      description,
       "Authorization: Bearer synthetic-changed-value",
-    );
-    expect(writes[4]).toContain("policy-fixture-value");
-    expect(writes[5]).toContain("policy-fixture-value");
-    expect(writes[6]).toContain("policy-fixture-value");
+      "policy-fixture-value",
+      "policy-fixture-value",
+      "policy-fixture-value",
+    ]);
   });
 
   it("does not invoke custom serialization hooks or cache opaque array-operation results", () => {
@@ -119,19 +117,6 @@ describe("trajectory tool definition preparation", () => {
     opaque.ordinary = "second";
     expect(projectParameters(parameters)).toEqual({ ordinary: "second" });
     expect(toJSON).not.toHaveBeenCalled();
-  });
-
-  it("preserves truncation metadata without probing its records as native headers", () => {
-    const has = vi.spyOn(Headers.prototype, "has");
-    expect(projectParameters({ description: "x".repeat(32_769) })).toEqual({
-      description: {
-        truncated: true,
-        reason: "trajectory-field-size-limit",
-        originalChars: 32_769,
-        limitChars: 32_768,
-      },
-    });
-    expect(has).not.toHaveBeenCalled();
   });
 
   it.each(["native headers", "prototype traps"])(
