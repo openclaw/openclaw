@@ -253,6 +253,10 @@ suite.define(() => {
         const frame = panel.locator(".chat-html-preview__frame");
         const document = frame.contentFrame().frameLocator("iframe");
         await document.getByRole("heading", { name: "Parent revision", exact: true }).waitFor();
+        // The preview retires its loader after the inner document's load acknowledgment.
+        await panel
+          .locator("openclaw-chat-html-preview [role=status]")
+          .waitFor({ state: "hidden" });
         await document.getByRole("button", { name: "Count", exact: true }).click();
         expect(await document.locator("output").textContent()).toBe("1");
         expect(
