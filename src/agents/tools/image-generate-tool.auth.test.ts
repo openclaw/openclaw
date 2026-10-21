@@ -77,30 +77,42 @@ describe("image generation credential availability", () => {
   });
 
   it.each([
-    ["chatgpt-token-sharing", undefined, false, false],
-    ["chatgpt-identity", undefined, false, false],
-    ["chatgpt-token-sharing", "api_key", false, true],
-    ["chatgpt-token-sharing", "oauth", false, true],
-    ["chatgpt-token-sharing", "oauth", true, false],
+    {
+      authFlow: "chatgpt-token-sharing",
+      extraCredential: undefined,
+      pinned: false,
+      available: false,
+    },
+    { authFlow: "chatgpt-identity", extraCredential: undefined, pinned: false, available: false },
+    {
+      authFlow: "chatgpt-token-sharing",
+      extraCredential: "api_key",
+      pinned: false,
+      available: true,
+    },
+    { authFlow: "chatgpt-token-sharing", extraCredential: "oauth", pinned: false, available: true },
+    { authFlow: "chatgpt-token-sharing", extraCredential: "oauth", pinned: true, available: false },
   ] as const)(
-    "exposes image generation for %s with credential %s, pinned=%s: %s",
-    (authFlow, extraCredential, pinned, available) => {
+    "exposes image generation for $authFlow only with supported auth ($extraCredential, pinned=$pinned)",
+    ({ authFlow, extraCredential, pinned, available }) => {
       withEnv({ OPENAI_API_KEY: undefined, OPENAI_API_KEYS: undefined }, () => {
         const oauth = createOAuthRefreshCredential({ expires: Date.now() + 3_600_000 });
         const tool = createImageGenerateTool({
           config: {
             plugins: { allow: ["openai"] },
-            models: pinned
+            ...(pinned
               ? {
-                  providers: {
-                    openai: {
-                      baseUrl: "https://api.openai.com/v1",
-                      apiKey: "openai:siwc",
-                      models: [],
+                  models: {
+                    providers: {
+                      openai: {
+                        baseUrl: "https://api.openai.com/v1",
+                        apiKey: "openai:siwc",
+                        models: [],
+                      },
                     },
                   },
                 }
-              : undefined,
+              : {}),
           },
           authProfileStore: createAuthProfileStoreFixture({
             "openai:siwc": { ...oauth, authFlow },

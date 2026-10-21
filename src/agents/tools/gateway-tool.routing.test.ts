@@ -54,36 +54,41 @@ describe("gateway config tool routing", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it("dispatches admitted schema reads locally with least privilege", async () => {
-    const result = await runAsCaller(() => read("config.schema.lookup"));
+  it.each(["config.schema.lookup"] as const)(
+    "dispatches admitted %s reads locally with least privilege",
+    async (action) => {
+      const result = await runAsCaller(() => read(action));
 
-    expect(result.details).toMatchObject({ ok: true });
-    expect(handleGatewayRequest).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        req: expect.objectContaining({ method: "config.schema.lookup" }),
-        context,
-        client: expect.objectContaining({
-          connect: expect.objectContaining({ scopes: ["operator.read"] }),
+      expect(result.details).toMatchObject({ ok: true });
+      expect(handleGatewayRequest).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          req: expect.objectContaining({ method: action }),
+          context,
+          client: expect.objectContaining({
+            connect: expect.objectContaining({ scopes: ["operator.read"] }),
+          }),
         }),
-      }),
-    );
-    expect(callGateway).not.toHaveBeenCalled();
-  });
+      );
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
 
-  it("preserves explicit transport options", async () => {
-    const gatewayUrl = "ws://127.0.0.1:18789";
-    await runAsCaller(() => read("config.get", { gatewayUrl, timeoutMs: 2345 }));
+  it.each([{ gatewayUrl: "ws://127.0.0.1:18789" }])(
+    "preserves explicit transport options %j",
+    async (overrides) => {
+      await runAsCaller(() => read("config.get", { ...overrides, timeoutMs: 2345 }));
 
-    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        url: gatewayUrl,
-        token: undefined,
-        timeoutMs: 2345,
-        scopes: ["operator.read"],
-      }),
-    );
-    expect(handleGatewayRequest).not.toHaveBeenCalled();
-  });
+      expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          url: overrides.gatewayUrl,
+          token: undefined,
+          timeoutMs: 2345,
+          scopes: ["operator.read"],
+        }),
+      );
+      expect(handleGatewayRequest).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves schema misses from the in-process router", async () => {
     handleGatewayRequest.mockImplementationOnce(async ({ respond }) => {

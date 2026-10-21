@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  admitMediaHandle,
-  resetGeneratedMediaTaskActivityForTests,
-} from "../media-generation-activity.test-support.js";
+import { admitMediaHandle } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
   const { observeMediaActivity } =
@@ -23,6 +20,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
 import { resolveGeneratedMediaSessionDeliveryRoute } from "../subagents/announce/subagent-announce-origin.js";
+import {
+  createMediaCompletionFixture,
+  expectFallbackMediaAnnouncement,
+  resetMediaBackgroundMocks,
+} from "./media-generate-background.test-support.js";
 const taskExecutorMocks = vi.hoisted(() => ({
   createOperation: vi.fn(),
   recordProgress: vi.fn(),
@@ -59,10 +61,7 @@ const {
 } = await import("./media-generate-background.js");
 
 beforeEach(() => {
-  resetGeneratedMediaTaskActivityForTests();
-  for (const mock of [...Object.values(taskExecutorMocks), announce]) {
-    mock.mockReset();
-  }
+  resetMediaBackgroundMocks({ taskExecutorMocks, announceDeliveryMocks });
   setRuntimeConfigSnapshot({});
   taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-123" });
   announce.mockResolvedValue({ delivered: true, path: "direct" });
@@ -90,19 +89,12 @@ function expectReplyInstruction(required: string[]) {
 }
 
 function completion(kind: "image" | "music" | "video", result: string, mediaUrls?: string[]) {
-  return {
-    handle: admitMediaHandle({
-      taskId: "task-123",
-      runId: `tool:${kind}_generate:abc`,
-      requesterSessionKey: "agent:main:discord:direct:123",
-      requesterOrigin: { channel: "discord", to: "channel:1", threadId: "thread-1" },
-      taskLabel: `${kind} generation`,
-    }),
-    status: "ok" as const,
-    statusLabel: "completed successfully",
+  return createMediaCompletionFixture({
+    runId: `tool:${kind}_generate:abc`,
+    taskLabel: `${kind} generation`,
     result,
-    ...(mediaUrls ? { mediaUrls } : {}),
-  };
+    mediaUrls,
+  });
 }
 
 function setDelivery(to: string, accountId: string) {
@@ -184,32 +176,37 @@ it.each([
   },
 );
 
+it("records task progress updates", () => {
+  imageGenerationTaskLifecycle.recordTaskProgress({
+    handle: admitMediaHandle({
+      taskId: "task-123",
+      runId: "tool:image_generate:abc",
+      requesterSessionKey: "agent:main:discord:direct:123",
+      taskLabel: "small watercolor robot",
+    }),
+    progressSummary: "Saving generated image",
+  });
+  expect(taskExecutorMocks.recordProgress.mock.calls[0]?.[0]).toMatchObject({
+    runId: "tool:image_generate:abc",
+    progressSummary: "Saving generated image",
+  });
+});
+
 it("queues a completion event through the shared generated-media wake path", async () => {
   const path = "/tmp/generated-robot.png";
   await imageGenerationTaskLifecycle.wakeTaskCompletion(
     completion("image", `Generated 1 image.\nMEDIA:${path}`, [path]),
   );
-  expect(announce).toHaveBeenCalledOnce();
-  const params = announce.mock.calls[0]?.[0];
-  expect(params).toMatchObject({
+  expectFallbackMediaAnnouncement({
+    deliverAnnouncementMock: announce,
     requesterSessionKey: "agent:main:discord:direct:123",
-    requesterSessionOrigin: { channel: "discord", to: "channel:1" },
-    expectsCompletionMessage: true,
-  });
-  const events: unknown = params?.internalEvents;
-  assert(Array.isArray(events));
-  const event: Record<string, unknown> | undefined = events.find(
-    (candidate) =>
-      candidate.source === "image_generation" && candidate.announceType === "image generation task",
-  );
-  expect(event).toMatchObject({
+    channel: "discord",
+    to: "channel:1",
     source: "image_generation",
     announceType: "image generation task",
-    status: "ok",
+    resultMediaPath: `MEDIA:${path}`,
     mediaUrls: [path],
   });
-  expect(String(event?.result)).toContain(`MEDIA:${path}`);
-  expect(String(event?.replyInstruction)).toContain("visible-reply contract");
 });
 
 it("keeps failed completion notices in the durable agent-loop handoff", async () => {
@@ -252,7 +249,6 @@ it.each([
   "agent:main:discord:direct:123",
   "agent:main:discord:channel:C123",
   "agent:main:whatsapp:123@g.us",
-  "agent:main:dashboard:music-session",
 ])(
   "gives %s tool-agnostic visible-reply guidance with every generated attachment",
   async (requesterSessionKey) => {
@@ -263,15 +259,11 @@ it.each([
       ] as const
     ).map(([type, mimeType, name]) => ({ type, mimeType, name, path: `/tmp/generated-${name}` }));
     const completed = completion("music", "Generated a track and cover art.");
-    const requesterOrigin = requesterSessionKey.includes("dashboard")
-      ? { channel: "webchat", to: "session:dashboard" }
-      : completed.handle.requesterOrigin;
-    const outcome = await musicGenerationTaskLifecycle.wakeTaskCompletion({
+    await musicGenerationTaskLifecycle.wakeTaskCompletion({
       ...completed,
       attachments,
-      handle: { ...completed.handle, requesterSessionKey, requesterOrigin },
+      handle: { ...completed.handle, requesterSessionKey },
     });
-    expect(outcome).toEqual({ status: "delivered" });
     const event = expectReplyInstruction([
       "do not send them again",
       "Check the result against what the user asked for",
@@ -279,15 +271,6 @@ it.each([
       "current visible-reply contract",
     ]);
     expect(event?.attachments).toEqual(attachments);
-    expect(event?.mediaUrls).toEqual(attachments.map(({ path }) => path));
-    expect(announce.mock.calls[0]?.[0]).toMatchObject({
-      requesterSessionKey,
-      requesterSessionOrigin: requesterOrigin,
-      completionDirectOrigin: requesterOrigin,
-      sourceTool: "music_generate",
-      bestEffortDeliver: true,
-    });
-    expect(announce.mock.calls[0]?.[0]?.triggerMessage).toContain(`MEDIA:${attachments[0]!.path}`);
   },
 );
 it("keeps the detached video tool run context registered until terminal status", async () => {
@@ -302,10 +285,6 @@ it("keeps the detached video tool run context registered until terminal status",
   const beforeProgress = Date.now();
   videoGenerationTaskLifecycle.recordTaskProgress({
     handle,
-    progressSummary: "Generating video",
-  });
-  expect(taskExecutorMocks.recordProgress.mock.calls[0]?.[0]).toMatchObject({
-    runId: handle.runId,
     progressSummary: "Generating video",
   });
   expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);

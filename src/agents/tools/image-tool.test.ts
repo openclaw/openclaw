@@ -43,7 +43,6 @@ import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
 import {
   createMinimaxImageConfig,
-  createImageWebMediaRuntime,
   createRequiredImageTool,
   executeImplicitImageTool,
   expectToolText,
@@ -389,8 +388,20 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
 }
 
 function stubMinimaxOkFetch() {
+  minimaxUnderstandImageMock.mockReset();
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-  return stubMinimaxFetch({ status_code: 0, status_msg: "" });
+  minimaxUnderstandImageMock.mockResolvedValue("ok");
+  // Tests that fall back to the generic image runtime still hit a mocked
+  // global.fetch because media-understanding/image.ts is not behind the
+  // minimax-vlm module mock.
+  const fetch = vi.fn().mockImplementation(async () =>
+    Response.json({
+      content: "ok",
+      base_resp: { status_code: 0, status_msg: "" },
+    }),
+  );
+  global.fetch = withFetchPreconnect(fetch);
+  return minimaxUnderstandImageMock;
 }
 
 function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
@@ -455,28 +466,30 @@ async function readMockResponseText(response: Response): Promise<string> {
 async function describeGenericImageWithModel(
   params: ImageDescriptionRequest,
 ): Promise<{ text: string; model: string }> {
-  return describeGenericMedia("media-image", params, { mime: params.mime });
-}
-
-async function describeGenericImagesWithModel(
-  params: ImagesDescriptionRequest,
-): Promise<{ text: string; model: string }> {
-  return describeGenericMedia("media-images", params, { imageCount: params.images.length });
-}
-
-async function describeGenericMedia(
-  endpoint: string,
-  params: { provider: string; model: string; prompt?: string },
-  media: { mime?: string; imageCount?: number },
-) {
-  const response = await global.fetch(`https://example.invalid/${endpoint}`, {
+  const response = await global.fetch("https://example.invalid/media-image", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       provider: params.provider,
       model: params.model,
       prompt: params.prompt,
-      ...media,
+      mime: params.mime,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
+
+async function describeGenericImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-images", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      imageCount: params.images.length,
     }),
   });
   return { text: await readMockResponseText(response), model: params.model };
@@ -490,16 +503,30 @@ const codexMediaProvider = {
 
 function installImageUnderstandingProviderDeps(
   providers: MediaUnderstandingProvider[],
-  options?: Pick<
-    NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>,
-    | "describeImageWithModel"
-    | "describeImagesWithModel"
-    | "loadImageWebMediaRuntime"
-    | "resolveImageCompressionPolicy"
-    | "resolveModelAsync"
-    | "resolveAutoMediaKeyProviders"
-    | "resolveDefaultMediaModel"
-  > & { useDefaultResolveModelAsync?: boolean },
+  options?: {
+    describeImageWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImageWithModel"];
+    describeImagesWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImagesWithModel"];
+    loadImageWebMediaRuntime?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["loadImageWebMediaRuntime"];
+    resolveImageCompressionPolicy?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveImageCompressionPolicy"];
+    resolveModelAsync?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveModelAsync"];
+    useDefaultResolveModelAsync?: boolean;
+    resolveAutoMediaKeyProviders?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveAutoMediaKeyProviders"];
+    resolveDefaultMediaModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveDefaultMediaModel"];
+  },
 ) {
   imageProviderHarness.setProviders(providers);
   const defaultImageModels = new Map<string, string>([
@@ -560,8 +587,8 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
       throw new Error("Expected fast local image tests to use a registered image provider");
     },
     resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
-    loadImageWebMediaRuntime: async () =>
-      createImageWebMediaRuntime(async (mediaUrl, options) => {
+    loadImageWebMediaRuntime: async () => ({
+      loadWebMedia: async (mediaUrl, options) => {
         const localRoots =
           options && typeof options !== "number" && "localRoots" in options
             ? options.localRoots
@@ -589,7 +616,16 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
           kind: "image",
           fileName: path.basename(mediaUrl),
         };
-      }),
+      },
+      optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => {
+        return {
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        };
+      },
+    }),
   });
 }
 
@@ -833,7 +869,8 @@ describe("image tool implicit imageModel config", () => {
       });
 
       const request = firstImageRequest(describeImage);
-      expect(request).toMatchObject({ provider: "opencode-go", model: "mimo-v2.5" });
+      expect(request.provider).toBe("opencode-go");
+      expect(request.model).toBe("mimo-v2.5");
       expectToolText(result, "ok opencode-go/mimo-v2.5");
     });
   });
@@ -1137,11 +1174,9 @@ describe("image tool implicit imageModel config", () => {
       testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
 
       const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(tool).toMatchObject({
-        name: "view_image",
-        label: "View Image",
-        catalogMode: "direct-only",
-      });
+      expect(tool.name).toBe("view_image");
+      expect(tool.label).toBe("View Image");
+      expect(tool.catalogMode).toBe("direct-only");
       expect(tool.description).toContain("private model context");
       expect(tool.description).toContain("Does not display, attach, or send");
 
@@ -1149,14 +1184,21 @@ describe("image tool implicit imageModel config", () => {
         prompt: "Read the screenshot error.",
         path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
-      expect(result.content).toEqual([
+      const content = (
+        result as {
+          content?: Array<{ type?: string; data?: string; mimeType?: string }>;
+          details?: Record<string, unknown>;
+        }
+      ).content;
+
+      expect(content).toEqual([
         {
           type: "text",
           text: "Loaded 1 image into private model context for inspection; not displayed, attached, or sent to the user.",
         },
         expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
       ]);
-      expect(result.details).toMatchObject({
+      expect((result as { details?: Record<string, unknown> }).details).toMatchObject({
         transport: "native",
         media: { outbound: false },
       });
@@ -1201,15 +1243,14 @@ describe("image tool implicit imageModel config", () => {
     },
   );
 
-  it("does not accept the legacy image argument", async () => {
-    await withMinimaxImageToolFromTempAgentDir(async (tool) => {
-      await expect(
-        tool.execute("legacy-image-arg", {
-          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-        }),
-      ).rejects.toThrow("path required");
-    });
-  });
+  it.each([{ name: "image", input: { image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}` } }])(
+    "does not accept the legacy $name argument",
+    async ({ input }) => {
+      await withMinimaxImageToolFromTempAgentDir(async (tool) => {
+        await expect(tool.execute("legacy-image-arg", input)).rejects.toThrow("path required");
+      });
+    },
+  );
 
   it("preserves the unsupported image reference result contract", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
@@ -1455,7 +1496,7 @@ describe("image tool implicit imageModel config", () => {
       });
 
       expect(fetch).toHaveBeenCalledTimes(1);
-      expect(res.details).toMatchObject({ rewrittenFrom: expect.stringContaining("photo.png") });
+      expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain("photo.png");
     });
   });
 
@@ -1559,7 +1600,12 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(deduped.details).toMatchObject({ images: [expect.anything(), expect.anything()] });
+    const dedupedDetails = deduped.details as
+      | {
+          images?: Array<{ image: string }>;
+        }
+      | undefined;
+    expect(dedupedDetails?.images).toHaveLength(2);
 
     const tooMany = await tool.execute("t2", {
       prompt: "Compare these images.",
@@ -1569,7 +1615,16 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(tooMany.details).toMatchObject({ error: "too_many_images", count: 2, max: 1 });
+    const tooManyDetails = tooMany.details as
+      | {
+          error?: string;
+          count?: number;
+          max?: number;
+        }
+      | undefined;
+    expect(tooManyDetails?.error).toBe("too_many_images");
+    expect(tooManyDetails?.count).toBe(2);
+    expect(tooManyDetails?.max).toBe(1);
   });
 
   it("rejects invalid image cap values before loading images", async () => {
@@ -1763,40 +1818,61 @@ describe("image tool response validation", () => {
 });
 
 describe("image compression policy", () => {
-  function metadataModel(
-    id: string,
-    name: string,
-    maxSidePx: number,
-    preferredSidePx = maxSidePx,
-    tokenMode: "provider" | "detail" = "provider",
-  ): ModelDefinitionConfig {
-    const openai = tokenMode === "detail";
-    return {
-      ...makeModelDefinition(id, ["text", "image"]),
-      name,
-      reasoning: true,
-      contextWindow: openai ? 272_000 : 1_000_000,
-      maxTokens: openai ? 128_000 : 64_000,
-      mediaInput: { image: { maxSidePx, preferredSidePx, tokenMode } },
-    };
-  }
-
   const cfgWithImageModelMetadata = {
-    agents: { defaults: { imageQuality: "high" } },
+    agents: {
+      defaults: {
+        imageQuality: "high",
+      },
+    },
     models: {
       providers: {
         anthropic: {
           baseUrl: "https://api.anthropic.com",
           api: "anthropic-messages",
           models: [
-            metadataModel("claude-opus-4-7", "Claude Opus 4.7", 2576),
-            metadataModel("claude-opus-4-6", "Claude Opus 4.6", 1568),
+            {
+              id: "claude-opus-4-7",
+              name: "Claude Opus 4.7",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+              },
+            },
+            {
+              id: "claude-opus-4-6",
+              name: "Claude Opus 4.6",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+              },
+            },
           ],
         },
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-responses",
-          models: [metadataModel("gpt-5.5", "GPT-5.5", 6000, 2048, "detail")],
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+              },
+            },
+          ],
         },
       },
     },

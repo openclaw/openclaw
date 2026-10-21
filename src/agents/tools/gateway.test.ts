@@ -58,8 +58,6 @@ const source = {
 };
 const nodeParams = { nodeId: "node", command: "device.info", idempotencyKey: "invoke" };
 const approvalParams = { id: "approval-id", decision: "allow-once" };
-const staleIdentityMessage =
-  "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'";
 const invokeNode = () => callGatewayTool("node.invoke", {}, nodeParams);
 const invokeSystemRun = (
   params: Record<string, unknown>,
@@ -179,18 +177,23 @@ describe("gateway tool defaults", () => {
     expect(call).not.toHaveProperty("approvalRuntimeToken");
   });
 
-  it("requires execution-context support before dispatching prepared runs", async () => {
-    await callGatewayTool(
-      "node.invoke",
-      {},
-      {
-        ...nodeParams,
-        command: "system.run.prepare",
-        params: { executionContext: { subagent: true } },
-      },
-    );
-    expect(capturedGatewayCall().requiredCapabilities).toEqual(["system.run.execution-context.v1"]);
-  });
+  it.each(["system.run.prepare"])(
+    "requires Gateway context support before dispatching %s",
+    async (command) => {
+      await callGatewayTool(
+        "node.invoke",
+        {},
+        {
+          ...nodeParams,
+          command,
+          params: { executionContext: { subagent: true } },
+        },
+      );
+      expect(capturedGatewayCall().requiredCapabilities).toEqual([
+        "system.run.execution-context.v1",
+      ]);
+    },
+  );
 
   it("fails approval replay closed without a persisted device", async () => {
     mocks.missingDevice = true;
@@ -225,15 +228,18 @@ describe("gateway tool defaults", () => {
     });
   });
 
-  it("fails stale Gateway identity authentication closed", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error(staleIdentityMessage));
-    await expect(
-      runAsCaller(() => callGatewayTool("cron.remove", {}, { id: "job-1" }), true),
-    ).rejects.toThrow(
-      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
-    );
-    expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
-  });
+  it.each(["invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'"])(
+    "fails stale Gateway identity authentication closed: %s",
+    async (message) => {
+      mocks.callGateway.mockRejectedValueOnce(new Error(message));
+      await expect(
+        runAsCaller(() => callGatewayTool("cron.remove", {}, { id: "job-1" }), true),
+      ).rejects.toThrow(
+        "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+      );
+      expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
+    },
+  );
 
   it("pins hosted cron calls to their local Gateway", async () => {
     mocks.config = {
@@ -279,7 +285,11 @@ describe("gateway tool defaults", () => {
   });
 
   it("retries stale node identity without provenance", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error(staleIdentityMessage));
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error(
+        "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+      ),
+    );
     await runAsCaller(invokeNode, true);
     expect(mocks.callGateway).toHaveBeenCalledTimes(2);
     expect(mocks.callGateway.mock.calls[0]?.[0].agentRuntimeIdentityToken).toEqual(
@@ -325,8 +335,8 @@ describe("gateway tool defaults", () => {
     expect(sent).toEqual(stage === "preparation" ? [] : [nodeParams]);
   });
 
-  it("does not retry node commands already dispatched", async () => {
-    const error = schemaError(true);
+  it.each([true])("requires pre-dispatch proof for node retries: %s", async (dispatched) => {
+    const error = schemaError(dispatched);
     mocks.callGateway.mockRejectedValueOnce(error);
     await expect(runAsCaller(invokeNode, true)).rejects.toBe(error);
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
