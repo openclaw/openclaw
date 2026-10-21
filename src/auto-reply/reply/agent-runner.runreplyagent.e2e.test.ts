@@ -551,6 +551,7 @@ async function runHookBackedEmbeddedAgent(params: {
           terminalReply: hookResult.reply
             ? sanitizeAgentRunTerminalReply(hookResult.reply.text ?? "")
             : { disposition: "silent" as const },
+          providerStarted: false,
         },
       }
     : {
@@ -3144,9 +3145,14 @@ describe("runReplyAgent pending final delivery capture", () => {
     );
     state.beforeAgentReplyRunMock.mockResolvedValue({ handled: true });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
-    const { run } = createMinimalRun();
+    const receipt: ReplyOperationRunState = {};
+    const { run } = createMinimalRun({
+      opts: { [REPLY_OPERATION_RUN_STATE]: receipt },
+      runOverrides: { terminalReplyExpectation: "result-required" },
+    });
 
     await expect(run()).resolves.toBeUndefined();
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
