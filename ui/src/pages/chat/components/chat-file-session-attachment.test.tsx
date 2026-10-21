@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../../src/shared/deferred.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -19,7 +19,10 @@ import type {
   FileReaderDownload,
 } from "./chat-sidebar-content-types.ts";
 
-afterEach(() => resetComposerFixture());
+afterEach(async () => {
+  await resetComposerFixture();
+  vi.unstubAllGlobals();
+});
 
 it.each(["file", "session", "connection", "unmount"] as const)(
   "drops a pending download after %s changes and balances pending reads",
@@ -45,7 +48,9 @@ it.each(["file", "session", "connection", "unmount"] as const)(
     const [epoch, setEpoch] = createSignal(1);
     const chat = createComposerProps({
       getAttachments: () => attachments,
-      onAttachmentsChange: (values) => attachments.splice(0, attachments.length, ...values),
+      onAttachmentsChange: (values) => {
+        attachments.splice(0, attachments.length, ...values);
+      },
       onPendingReadsChange: (delta) => {
         pending += delta;
       },
@@ -99,6 +104,14 @@ it.each(["original", "dirty", "fallback"])(
   "stages file bytes through the attachment owner (%s)",
   async (kind) => {
     const dirty = kind === "dirty";
+    const downloadUrl = "/api/artifacts/download/fixture/notes";
+    const fetcher = vi.fn<typeof fetch>(
+      async () =>
+        new Response("Original\r\nbytes", { headers: { "content-type": "text/markdown" } }),
+    );
+    if (kind === "fallback") {
+      vi.stubGlobal("fetch", fetcher);
+    }
     let attachments: ChatAttachment[] = [];
     let pending = 0;
     let sends = 0;
@@ -143,7 +156,11 @@ it.each(["original", "dirty", "fallback"])(
             ? {
                 kind: "markdown",
                 content: "Not previewable",
-                fileDownload: { path: file.path, name: file.name, download: file.download! },
+                fileDownload: {
+                  path: file.path,
+                  name: file.name,
+                  download: async () => ({ url: downloadUrl, filename: file.name }),
+                },
               }
             : file,
       });
@@ -151,16 +168,24 @@ it.each(["original", "dirty", "fallback"])(
     });
     view.container.querySelector("button")!.click();
     await waitForSolid(() => expect(attachments).toHaveLength(1));
-    expect(attachments[0]).toMatchObject({
+    const attachment = attachments[0];
+    if (!attachment) {
+      throw new Error("The file was not staged");
+    }
+    expect(attachment).toMatchObject({
       fileName: "notes.md",
       mimeType: "text/markdown",
       sizeBytes: dirty ? 13 : 15,
     });
-    expect(getChatAttachmentDataUrl(attachments[0])).toBe(
+    expect(getChatAttachmentDataUrl(attachment)).toBe(
       dirty
         ? "data:text/markdown;base64,VmlzaWJsZSBlZGl0cw=="
         : "data:text/markdown;base64,T3JpZ2luYWwNCmJ5dGVz",
     );
+    if (kind === "fallback") {
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(fetcher.mock.calls[0]?.[0]).toBe(downloadUrl);
+    }
     expect(chat.getDraft?.()).toBe("Review this file");
     expect(pending).toBe(0);
     expect(sends).toBe(0);
