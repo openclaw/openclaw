@@ -65,7 +65,7 @@ function merge(
 describe("mergeAttemptToolMediaPayloads", () => {
   it("attaches tool media to the first visible reply", () => {
     const reasoning = { text: "thinking", isReasoning: true };
-    const urls = ["/tmp/a.png", "/tmp/b.opus"];
+    const urls: [string, string] = ["/tmp/a.png", "/tmp/b.opus"];
     const metadata = { assistantMessageIndex: 7, deliverDespiteSourceReplySuppression: true };
     const reply = setReplyPayloadMetadata({ text: "done", mediaUrls: [urls[0]] }, metadata);
     const output = merge(urls, [reasoning, reply], {

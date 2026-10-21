@@ -250,7 +250,7 @@ it.each(["runtime", "authoritative", "persisted"] as const)(
             ...(persisted ? { persistence: "persisted" as const } : {}),
           },
         ];
-    const overlaid = overlayRuntimeExternalOAuthProfiles(store, overlays, {
+    const overlaid: RuntimeAuthProfileStore = overlayRuntimeExternalOAuthProfiles(store, overlays, {
       runtimeExternalProfileIdsAuthoritative: authoritative,
     });
     expect(overlaid.runtimeExternalProfileIds).toEqual(
