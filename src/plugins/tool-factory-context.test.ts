@@ -56,7 +56,7 @@ function register(
     registry,
     entry,
     context,
-    tool(bind = true) {
+    tool: (bind = true) => {
       const raw = entry.factory(context);
       assert(raw && !Array.isArray(raw), "expected one probe");
       return bind
