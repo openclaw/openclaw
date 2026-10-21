@@ -5,28 +5,11 @@ const mocks = vi.hoisted(() => ({
   activateRuntime: vi.fn(async () => {
     throw new Error("read-only inspection activated the runtime");
   }),
-  staticStatus: vi.fn(async () => ({
-    enabled: true,
-    activation: "inactive",
-    configValid: true,
-    configErrors: [],
-    artifacts: {
-      captureBinary: false,
-      helperDylib: false,
-      helperKey: false,
-      helperBuild: false,
-    },
-    driverStatus: "missing",
-    note: "static",
-  })),
+  staticStatus: vi.fn(async () => ({ activation: "inactive" })),
   nativePackageReady: vi.fn(async () => true),
   inspectDriver: vi.fn(async () => "current"),
   uninstallDriver: vi.fn(async (_params?: unknown): Promise<void> => undefined),
   setup: vi.fn(async ({ nativePackageReady }: { nativePackageReady: boolean }) => ({
-    ok: false,
-    readyForTest: false,
-    liveCallProofRequired: true,
-    checks: [],
     actions: nativePackageReady ? [] : [{ id: "install-native-package" }],
   })),
 }));
@@ -46,8 +29,9 @@ vi.mock("./src/config.js", async (importOriginal) => {
   return {
     ...actual,
     validateFaceTimeConfig(config: import("./src/config.js").FaceTimeConfig) {
-      const validation = actual.validateFaceTimeConfig(config);
-      const errors = validation.errors.filter((error) => error !== "facetime requires macOS");
+      const errors = actual
+        .validateFaceTimeConfig(config)
+        .errors.filter((error) => error !== "facetime requires macOS");
       return { valid: errors.length === 0, errors };
     },
   };
@@ -73,7 +57,11 @@ function registerPlugin(enabled?: boolean) {
       },
     }),
   );
-  return { gatewayMethods, toolFactory };
+  const request = async (name: string, respond = vi.fn()) => {
+    await gatewayMethods.get(`facetime.${name}`)!({ respond });
+    return respond;
+  };
+  return { request, toolFactory };
 }
 
 describe("FaceTime control-plane registration", () => {
@@ -83,10 +71,11 @@ describe("FaceTime control-plane registration", () => {
   });
 
   it("serves gateway and model status without build, socket, injection, or runtime activation", async () => {
-    const { gatewayMethods, toolFactory } = registerPlugin();
-    const respond = vi.fn();
-    await gatewayMethods.get("facetime.status")!({ respond });
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ activation: "inactive" }));
+    const { request, toolFactory } = registerPlugin();
+    expect(await request("status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ activation: "inactive" }),
+    );
     await toolFactory!().execute("tool-1", { action: "get_status" });
 
     expect(mocks.staticStatus).toHaveBeenCalledTimes(2);
@@ -95,12 +84,8 @@ describe("FaceTime control-plane registration", () => {
 
   it("reports native installation remediation without attempting runtime activation", async () => {
     mocks.nativePackageReady.mockResolvedValue(false);
-    const { gatewayMethods } = registerPlugin();
-
-    const respond = vi.fn();
-    await gatewayMethods.get("facetime.setup")!({ respond });
-
-    expect(respond).toHaveBeenCalledWith(
+    const { request } = registerPlugin();
+    expect(await request("setup")).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
         actions: [expect.objectContaining({ id: "install-native-package" })],
@@ -117,19 +102,14 @@ describe("FaceTime control-plane registration", () => {
       throw new Error("carrier shutdown unresolved");
     });
     mocks.activateRuntime.mockResolvedValueOnce({ stop } as never);
-    const { gatewayMethods } = registerPlugin(true);
-
-    await gatewayMethods.get("facetime.preflight")!({ respond: vi.fn() });
-    const firstRespond = vi.fn();
-    await gatewayMethods.get("facetime.uninstall")!({ respond: firstRespond });
-    const secondRespond = vi.fn();
-    await gatewayMethods.get("facetime.uninstall")!({ respond: secondRespond });
-
+    const { request } = registerPlugin(true);
+    await request("preflight");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await request("uninstall")).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    }
     expect(stop).toHaveBeenCalledTimes(2);
     expect(mocks.activateRuntime).toHaveBeenCalledTimes(1);
     expect(mocks.uninstallDriver).not.toHaveBeenCalled();
-    expect(firstRespond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-    expect(secondRespond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
   });
 
   it("blocks runtime activation until native uninstall finishes", async () => {
@@ -140,22 +120,17 @@ describe("FaceTime control-plane registration", () => {
       preflight: vi.fn(async () => ({ ready: true })),
     };
     mocks.activateRuntime.mockResolvedValue(runtime as never);
-    const { gatewayMethods } = registerPlugin(true);
-
-    await gatewayMethods.get("facetime.preflight")!({ respond: vi.fn() });
-    const uninstall = gatewayMethods.get("facetime.uninstall")!({ respond: vi.fn() });
+    const { request } = registerPlugin(true);
+    await request("preflight");
+    const uninstall = request("uninstall");
     await vi.waitFor(() => expect(mocks.uninstallDriver).toHaveBeenCalledTimes(1));
 
-    const blockedRespond = vi.fn();
-    await gatewayMethods.get("facetime.preflight")!({ respond: blockedRespond });
-    expect(blockedRespond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    expect(await request("preflight")).toHaveBeenCalledWith(false, undefined, expect.any(Object));
     expect(mocks.activateRuntime).toHaveBeenCalledTimes(1);
 
     finishUninstall();
     await uninstall;
-    const resumedRespond = vi.fn();
-    await gatewayMethods.get("facetime.preflight")!({ respond: resumedRespond });
-    expect(resumedRespond).toHaveBeenCalledWith(true, { ready: true });
+    expect(await request("preflight")).toHaveBeenCalledWith(true, { ready: true });
     expect(mocks.activateRuntime).toHaveBeenCalledTimes(2);
   });
 });
