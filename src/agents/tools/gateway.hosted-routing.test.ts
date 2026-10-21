@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
@@ -12,11 +12,16 @@ import {
 } from "../../gateway/agent-runtime-identity-token.js";
 import { prepareAgentRunExecutionIdentityFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { createPreparedTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
+import {
+  createTestApprovalManager,
+  createPreparedTestApprovalManager,
+} from "../../gateway/exec-approval-manager.test-support.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import { sanitizeSystemRunParamsForForwarding } from "../../gateway/node-invoke-system-run-approval.js";
+import { bindApprovalRequesterMetadata } from "../../gateway/server-methods/approval-shared.js";
 import {
   readCronCallerScope,
   resolveCronScheduledToolPolicyForCaller,
@@ -27,10 +32,12 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
+  claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -39,12 +46,6 @@ import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "./gateway-session-spawn-execution-identity.js";
 import { callGatewayTool, resolveMessageActionAgentRuntimeIdentityToken } from "./gateway.js";
-import {
-  capturedRequest,
-  gatewayContext,
-  withCaller,
-  type ActiveCaller,
-} from "./gateway.test-support.js";
 import { bindAgentToolGatewayRequest } from "./in-process-gateway.js";
 
 const mocks = vi.hoisted(() => ({
@@ -55,12 +56,46 @@ vi.mock("../../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
 vi.mock("../../gateway/server-methods.js", () => ({
   handleGatewayRequest: mocks.handleGatewayRequest,
 }));
-const capturedGatewayCall = () => capturedRequest(mocks.callGateway);
+type Caller = NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>;
+type ActiveCaller = Caller & {
+  operationalRunInstance: NonNullable<Caller["operationalRunInstance"]>;
+};
+async function withCaller<T>(
+  overrides: Partial<Caller>,
+  run: (caller: ActiveCaller, authority: AgentRunDelegatedAuthority) => Promise<T>,
+) {
+  const caller = {
+    agentId: "ops",
+    sessionKey: "agent:ops:main",
+    ...overrides,
+    operationalRunInstance:
+      overrides.operationalRunInstance ?? createOperationalRunInstanceRef("run-1"),
+  };
+  const authority = claimAgentRunDelegatedAuthority(caller.operationalRunInstance);
+  onTestFinished(() => void releaseAgentRunDelegatedAuthority(authority));
+  try {
+    return await withGatewayToolCallerIdentity(
+      {
+        ...caller,
+        receiptAuthority: () =>
+          validateAgentRunDelegatedAuthority(authority) && caller.receiptAuthority?.() !== false,
+      },
+      () => run(caller, authority),
+    );
+  } finally {
+    releaseAgentRunDelegatedAuthority(authority);
+  }
+}
+function capturedGatewayCall() {
+  expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  return expectDefined(mocks.callGateway.mock.calls[0]?.[0], "Gateway request");
+}
 const gatewayUiCommandTarget = { connId: "requesting-ui", profileId: "requester" };
 const screenCommand = { command: { kind: "navigate", sessionKey: "agent:ops:dashboard:selected" } };
 function hostedRequest() {
   expect(mocks.callGateway).not.toHaveBeenCalled();
-  return capturedRequest(mocks.handleGatewayRequest);
+  expect(mocks.handleGatewayRequest).toHaveBeenCalledOnce();
+  return expectDefined(mocks.handleGatewayRequest.mock.calls[0]?.[0], "hosted request");
 }
 const verifyCallIdentity = () =>
   verifyAgentRuntimeIdentityToken(capturedGatewayCall().agentRuntimeIdentityToken);
@@ -183,7 +218,11 @@ function runHosted<T>(
 describe("Gateway tool identity and hosted routing", () => {
   beforeEach(() => {
     setRuntimeConfigSnapshot({ gateway: { mode: "local", port: 18789 } });
-    context = gatewayContext(() => ({ gateway: { mode: "local" } }));
+    context = {
+      trackExecution: (run) => run(),
+      getRuntimeConfig: () => ({ gateway: { mode: "local" } }),
+      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    } as GatewayRequestContext;
     currentContext = context;
     callerActive = true;
     mocks.callGateway.mockReset().mockResolvedValue({ ok: true });
@@ -558,6 +597,94 @@ describe("Gateway tool identity and hosted routing", () => {
       expect(mocks.callGateway).not.toHaveBeenCalled();
     },
   );
+
+  it("binds one-shot node approval replay to its requester", async (test) => {
+    const manager = createTestApprovalManager(test, {
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+    });
+    const command = ["echo", "synthetic"];
+    await runHosted(async (caller) => {
+      const { agentId, sessionKey } = caller;
+      mocks.handleGatewayRequest.mockImplementationOnce(async ({ client, respond }) => {
+        const record = manager.create(
+          {
+            host: "node",
+            nodeId: "node",
+            command: "echo synthetic",
+            commandArgv: command,
+            systemRunBinding: buildSystemRunApprovalBinding({ argv: command, agentId, sessionKey })
+              .binding,
+            agentId,
+            sessionKey,
+            ...hostedSource,
+          },
+          60_000,
+        );
+        bindApprovalRequesterMetadata({ record, client });
+        record.agentRuntimeDelegatedAuthority =
+          client?.internal?.agentRuntimeIdentity?.delegatedAuthority;
+        const decision = (await manager.register(record, 60_000)).decision;
+        expect(await manager.resolve(record.id, "allow-once")).toBe(true);
+        await decision;
+        respond(true, { id: record.id });
+      });
+      const registration = await callGatewayTool<{ id: string }>("exec.approval.request", {}, {});
+      mocks.handleGatewayRequest.mockImplementation(async ({ client, req, respond }) => {
+        const invoke = req.params as { params: Record<string, unknown> } & typeof hostedSource;
+        respond(
+          true,
+          sanitizeSystemRunParamsForForwarding({
+            rawParams: {
+              ...invoke.params,
+              turnSourceChannel: invoke.turnSourceChannel,
+              turnSourceTo: invoke.turnSourceTo,
+              turnSourceAccountId: invoke.turnSourceAccountId,
+              turnSourceThreadId: invoke.turnSourceThreadId,
+            },
+            nodeId: "node",
+            client,
+            execApprovalManager: manager,
+          }),
+        );
+      });
+      const replay = (bridge = false) =>
+        callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node",
+            command: "system.run",
+            params: {
+              command,
+              agentId,
+              sessionKey,
+              runId: registration.id,
+              approved: true,
+              approvalDecision: "allow-once",
+            },
+          },
+          { scopes: bridge ? ["operator.write", "operator.approvals"] : ["operator.write"] },
+        );
+      for (const [turnSourceTo, bridge] of [
+        ["other-recipient", true],
+        ["alice", false],
+      ] as const) {
+        await expect(
+          withCaller(
+            {
+              ...caller,
+              turnSourceTo,
+              operationalRunInstance: createOperationalRunInstanceRef("another-hosted-run"),
+            },
+            () => replay(bridge),
+          ),
+        ).resolves.toMatchObject({ ok: false });
+      }
+      await expect(replay()).resolves.toMatchObject({ ok: true });
+      await expect(replay()).resolves.toMatchObject({ ok: false });
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    });
+  });
 
   it.each([
     { owner: "run", pending: false },

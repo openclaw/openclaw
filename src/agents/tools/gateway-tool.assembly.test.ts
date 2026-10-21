@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -37,19 +36,23 @@ function createTools(config: OpenClawConfig, options: AssemblyOptions = {}) {
   });
 }
 
+function requireGateway(tools: AnyAgentTool[]) {
+  const tool = tools.find((candidate) => candidate.name === "gateway");
+  if (!tool) {
+    throw new Error("Expected gateway tool in the assembled profile");
+  }
+  return tool;
+}
+
 function gatewayParameters(tools: AnyAgentTool[]) {
-  return expectDefined(
-    tools.find(({ name }) => name === "gateway"),
-    "assembled gateway",
-  ).parameters as {
+  return requireGateway(tools).parameters as {
     properties: { action: { enum: string[] } };
   };
 }
 
-function gatewayActions(config: OpenClawConfig, options?: AssemblyOptions) {
-  return gatewayParameters(createTools(config, options)).properties.action.enum;
+function gatewayActions(tools: AnyAgentTool[]) {
+  return gatewayParameters(tools).properties.action.enum;
 }
-const readActions = ["config.get", "config.schema.lookup", "update.run"];
 
 describe("assembled Gateway update capability", () => {
   beforeEach(() => {
@@ -58,24 +61,38 @@ describe("assembled Gateway update capability", () => {
 
   it("exposes only update inputs in the coding profile", () => {
     const tools = createTools({ tools: { profile: "coding" } });
-    expect(gatewayParameters(tools).properties.action.enum).toEqual(["update.run"]);
+    expect(gatewayActions(tools)).toEqual(["update.run"]);
     expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual(["action", "note"]);
   });
 
-  it.each<[string, OpenClawConfig["tools"], string[], boolean]>([
-    ["default", {}, readActions, true],
-    ["full", { profile: "full" }, readActions, true],
-    [
-      "automation grant",
-      { profile: "coding", alsoAllow: ["group:automation"] },
-      ["config.get"],
-      false,
-    ],
-    ["wildcard grant", { profile: "coding", alsoAllow: ["gate*"] }, ["config.get"], false],
-    ["unrelated grant", { profile: "coding", alsoAllow: ["session_status"] }, ["update.run"], true],
-  ])("retains config authority for %s", (_name, tools, expected, exact) => {
-    const actions = gatewayActions({ tools });
-    expect(actions).toEqual(exact ? expected : expect.arrayContaining(expected));
+  it.each([undefined, "full"] as const)(
+    "retains existing config read authority with profile %s",
+    (profile) => {
+      expect(gatewayActions(createTools({ tools: { profile } }))).toEqual([
+        "config.get",
+        "config.schema.lookup",
+        "update.run",
+      ]);
+    },
+  );
+
+  it.each(["group:automation", "gate*"])(
+    "retains explicit config read authority from alsoAllow %s",
+    (grant) => {
+      expect(
+        gatewayActions(createTools({ tools: { profile: "coding", alsoAllow: [grant] } })),
+      ).toContain("config.get");
+    },
+  );
+
+  it("does not widen config reads from unrelated grants", () => {
+    expect(
+      gatewayActions(
+        createTools({
+          tools: { profile: "coding", alsoAllow: ["session_status"] },
+        }),
+      ),
+    ).toEqual(["update.run"]);
   });
 
   it.each([
@@ -85,18 +102,20 @@ describe("assembled Gateway update capability", () => {
   ])(
     "requires config read grants in both limited profiles: main=$mainGrant provider=$providerGrant",
     ({ mainGrant, providerGrant, configRead }) => {
-      const actions = gatewayActions({
-        tools: {
-          profile: "coding",
-          ...(mainGrant ? { alsoAllow: ["gateway"] } : {}),
-          byProvider: {
-            openai: {
-              profile: "minimal",
-              ...(providerGrant ? { alsoAllow: ["gateway"] } : {}),
+      const actions = gatewayActions(
+        createTools({
+          tools: {
+            profile: "coding",
+            ...(mainGrant ? { alsoAllow: ["gateway"] } : {}),
+            byProvider: {
+              openai: {
+                profile: "minimal",
+                ...(providerGrant ? { alsoAllow: ["gateway"] } : {}),
+              },
             },
           },
-        },
-      });
+        }),
+      );
 
       expect(actions).toContain("update.run");
       expect(actions.includes("config.get")).toBe(configRead);
@@ -105,22 +124,24 @@ describe("assembled Gateway update capability", () => {
 
   it("uses policy-agent rather than execution-agent authority", () => {
     const actions = gatewayActions(
-      {
-        session: { scope: "global" },
-        agents: {
-          ownership: "explicit",
-          entries: {
-            main: { tools: { profile: "coding" } },
-            execution: { tools: { profile: "full" } },
+      createTools(
+        {
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: { tools: { profile: "coding" } },
+              execution: { tools: { profile: "full" } },
+            },
           },
         },
-      },
-      {
-        agentId: "execution",
-        policyAgentId: "main",
-        sessionKey: "global",
-        runSessionKey: "agent:execution:main",
-      },
+        {
+          agentId: "execution",
+          policyAgentId: "main",
+          sessionKey: "global",
+          runSessionKey: "agent:execution:main",
+        },
+      ),
     );
 
     expect(actions).toContain("update.run");

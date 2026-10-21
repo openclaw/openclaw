@@ -1,36 +1,40 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-  type OpenClawConfig,
-} from "../../config/config.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
 } from "../../gateway/server-methods/types.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
-import { createGatewayTool } from "./gateway-tool.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callGatewayTool,
   readGatewayCallOptions,
   resolveGatewayOptions,
   resolveMessageActionAgentRuntimeIdentityToken,
 } from "./gateway.js";
-import { capturedRequest, gatewayContext, withCaller } from "./gateway.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn<(options: CallGatewayOptions) => Promise<unknown>>(),
   handleGatewayRequest: vi.fn<(options: GatewayRequestOptions) => Promise<void>>(),
-  config: {} as OpenClawConfig,
+  config: {} as Record<string, unknown>,
   deviceIdentity: { deviceId: "device", publicKeyPem: "public", privateKeyPem: "private" },
   missingDevice: false,
   deviceIdentityError: undefined as Error | undefined,
 }));
-// mock-isolation: Exercise tool routing without opening a websocket transport.
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => mocks.config,
+  resolveGatewayPort: () => 18789,
+}));
 vi.mock("../../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
-// mock-isolation: Observe routed requests without starting unrelated Gateway handlers.
 vi.mock("../../gateway/server-methods.js", () => ({
   handleGatewayRequest: mocks.handleGatewayRequest,
 }));
@@ -44,6 +48,7 @@ vi.mock("../../infra/device-identity-async.js", () => ({
   },
 }));
 
+const authorities: AgentRunDelegatedAuthority[] = [];
 const caller = { agentId: "ops", sessionKey: "agent:ops:main" };
 const source = {
   turnSourceChannel: "telegram",
@@ -63,30 +68,33 @@ const invokeSystemRun = (
 const waitForApproval = (opts: Parameters<typeof callGatewayTool>[1] = {}) =>
   callGatewayTool("exec.approval.waitDecision", opts, approvalParams);
 function capturedGatewayCall() {
-  return capturedRequest(mocks.callGateway);
+  expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  return expectDefined(mocks.callGateway.mock.calls[0]?.[0], "Gateway request");
 }
 function capturedHostedCall() {
   expect(mocks.callGateway).not.toHaveBeenCalled();
-  return capturedRequest(mocks.handleGatewayRequest);
+  expect(mocks.handleGatewayRequest).toHaveBeenCalledTimes(1);
+  return expectDefined(mocks.handleGatewayRequest.mock.calls[0]?.[0], "hosted Gateway request");
 }
-function setConfig(config: OpenClawConfig) {
-  mocks.config = config;
-  setRuntimeConfigSnapshot(config);
-}
-function runAsCaller<T>(
-  run: (context: GatewayRequestContext) => Promise<T>,
-  localEmbedded = false,
-) {
+function runAsCaller<T>(run: () => Promise<T>, localEmbedded = false) {
   const operationalRunInstance = createOperationalRunInstanceRef("run-gateway-tool-test");
-  const context = gatewayContext(() => mocks.config, localEmbedded ? { localEmbedded: true } : {});
-  return withCaller(
+  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  authorities.push(authority);
+  const context = {
+    getRuntimeConfig: () => mocks.config,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    trackExecution: (work: () => Promise<void>) => work(),
+    ...(localEmbedded ? { localEmbedded: true } : {}),
+  } as GatewayRequestContext;
+  return withGatewayToolCallerIdentity(
     {
       ...caller,
       ...source,
       operationalRunInstance,
       gatewayContextResolver: () => context,
+      receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
     },
-    () => run(context),
+    run,
   );
 }
 function schemaError(dispatched?: boolean) {
@@ -97,23 +105,29 @@ function schemaError(dispatched?: boolean) {
   });
 }
 
+function releaseAuthorities() {
+  for (const authority of authorities.splice(0)) {
+    releaseAgentRunDelegatedAuthority(authority);
+  }
+}
+
 describe("gateway tool defaults", () => {
   beforeEach(() => {
+    releaseAuthorities();
     mocks.callGateway.mockReset().mockResolvedValue({ ok: true });
     mocks.handleGatewayRequest
       .mockReset()
       .mockImplementation(async ({ respond }) => respond(true, { ok: true }));
     mocks.deviceIdentityError = undefined;
     mocks.missingDevice = false;
-    setConfig({});
+    mocks.config = {};
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
     vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18789");
   });
   afterAll(() => {
+    releaseAuthorities();
     vi.unstubAllEnvs();
   });
-  afterEach(() => clearRuntimeConfigSnapshot());
 
   it("parses allowlisted RPC options and scopes", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "fallback-token");
@@ -138,9 +152,9 @@ describe("gateway tool defaults", () => {
 
   it("does not leak local credentials to remote overrides", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "local-env-token");
-    setConfig({
+    mocks.config = {
       gateway: { auth: { token: "local-config-token" }, remote: { url: "wss://gateway.example" } },
-    });
+    };
     expect(resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" }).token).toBeUndefined();
   });
 
@@ -222,13 +236,13 @@ describe("gateway tool defaults", () => {
   });
 
   it("pins hosted cron calls to their local Gateway", async () => {
-    setConfig({
+    mocks.config = {
       gateway: {
         mode: "remote",
         auth: { mode: "token", token: "local-token" },
         remote: { url: "wss://gateway.example", token: "remote-token" },
       },
-    });
+    };
     vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://env.example");
     mocks.handleGatewayRequest.mockImplementationOnce(async ({ respond }) =>
       respond(true, { removed: true }),
@@ -337,7 +351,7 @@ describe("gateway tool defaults", () => {
   );
 
   it("uses unpaired local approval authority", async () => {
-    setConfig({ gateway: { mode: "remote" } });
+    mocks.config = { gateway: { mode: "remote" } };
     mocks.deviceIdentityError = new Error("state directory read-only");
     await waitForApproval();
     const call = capturedGatewayCall();
@@ -347,9 +361,9 @@ describe("gateway tool defaults", () => {
   });
 
   it("binds remote approvals to the requester", async () => {
-    setConfig({
+    mocks.config = {
       gateway: { mode: "remote", remote: { url: "wss://gateway.example", token: "remote-token" } },
-    });
+    };
     await waitForApproval();
     const call = capturedGatewayCall();
     expect(call.url).toBeUndefined();
@@ -382,62 +396,5 @@ describe("gateway tool defaults", () => {
       callGatewayTool("health", { gatewayUrl: "ws://169.254.169.254", gatewayToken: "t" }, {}),
     ).rejects.toThrow(/gatewayUrl override rejected/i);
     expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  describe("config tool routing", () => {
-    const snapshot = { hash: "revision", config: { gateway: { mode: "local" } } };
-    const read = (action: string, extra: Record<string, unknown> = {}, signal?: AbortSignal) =>
-      createGatewayTool().execute("config-read", { action, path: "gateway", ...extra }, signal);
-    beforeEach(() => {
-      setConfig({ gateway: { mode: "local", port: 18789 } });
-      mocks.callGateway.mockResolvedValue(snapshot);
-      mocks.handleGatewayRequest.mockImplementation(async ({ respond }) => respond(true, snapshot));
-    });
-    it("dispatches admitted schema reads locally with least privilege", async () => {
-      await runAsCaller(async (context) => {
-        expect((await read("config.schema.lookup")).details).toMatchObject({ ok: true });
-        expect(mocks.handleGatewayRequest).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            req: expect.objectContaining({ method: "config.schema.lookup" }),
-            context,
-            client: expect.objectContaining({
-              connect: expect.objectContaining({ scopes: ["operator.read"] }),
-            }),
-          }),
-        );
-        expect(mocks.callGateway).not.toHaveBeenCalled();
-      });
-    });
-    it("preserves explicit transport options", async () => {
-      const gatewayUrl = "ws://127.0.0.1:18789";
-      await runAsCaller(() => read("config.get", { gatewayUrl, timeoutMs: 2345 }));
-      expect(capturedGatewayCall()).toMatchObject({
-        url: gatewayUrl,
-        token: undefined,
-        timeoutMs: 2345,
-        scopes: ["operator.read"],
-      });
-      expect(mocks.handleGatewayRequest).not.toHaveBeenCalled();
-    });
-    it("preserves schema misses from the in-process router", async () => {
-      const message = "config schema path not found";
-      mocks.handleGatewayRequest.mockImplementationOnce(async ({ respond }) => {
-        respond(false, undefined, { code: "INVALID_REQUEST", message });
-      });
-      expect((await runAsCaller(() => read("config.schema.lookup"))).details).toEqual({
-        ok: false,
-        code: "schema_path_not_found",
-        path: "gateway",
-        message,
-      });
-    });
-    it("does not dispatch a cancelled config read", async () => {
-      const signal = AbortSignal.abort(new Error("config read cancelled"));
-      await expect(runAsCaller(() => read("config.get", {}, signal))).rejects.toThrow(
-        "config read cancelled",
-      );
-      expect(mocks.handleGatewayRequest).not.toHaveBeenCalled();
-      expect(mocks.callGateway).not.toHaveBeenCalled();
-    });
   });
 });

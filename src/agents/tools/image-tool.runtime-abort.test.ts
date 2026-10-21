@@ -182,20 +182,27 @@ describe("image tool run abort", () => {
         prompt: "Answer using this image.",
         model: scenario === "denied override" ? "blocked-alias" : undefined,
       };
-      const execution = runWithRequester(() => tool.execute("policy", args));
-      if (scenario === "permitted fallback") {
-        await expect(execution).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
-        expect(spies.describeImage).toHaveBeenCalledWith(
-          expect.objectContaining({ provider: "test-provider", model: "allowed" }),
-        );
-      } else {
-        await expect(execution).rejects.toThrow();
-        expect(spies.describeImage).not.toHaveBeenCalled();
-        expect(spies.describeImages).not.toHaveBeenCalled();
-      }
-      if (scenario === "denied override") {
-        expect(loadWebMedia).not.toHaveBeenCalled();
-        expect(resolveModel).not.toHaveBeenCalled();
+      const work = new AsyncWorkScope();
+      try {
+        const execution = work.track(() => runWithRequester(() => tool.execute("policy", args)));
+        if (scenario === "permitted fallback") {
+          await expect(execution).resolves.toMatchObject({
+            content: [{ type: "text", text: "ok" }],
+          });
+          expect(spies.describeImage).toHaveBeenCalledWith(
+            expect.objectContaining({ provider: "test-provider", model: "allowed" }),
+          );
+        } else {
+          await expect(execution).rejects.toThrow();
+          expect(spies.describeImage).not.toHaveBeenCalled();
+          expect(spies.describeImages).not.toHaveBeenCalled();
+        }
+        if (scenario === "denied override") {
+          expect(loadWebMedia).not.toHaveBeenCalled();
+          expect(resolveModel).not.toHaveBeenCalled();
+        }
+      } finally {
+        await work.drain();
       }
       expect(sourceHolds).toBe(0);
     },
@@ -268,7 +275,13 @@ describe("image tool run abort", () => {
       const downloadSignal = options?.requestInit?.signal;
       expect(downloadSignal).toBe(controller.signal);
       downloadStarted.resolve();
-      return racePromiseWithAbortSignal(createDeferredCore<never>().promise, downloadSignal);
+      return await new Promise<never>((_, reject) => {
+        downloadSignal?.addEventListener(
+          "abort",
+          () => reject(new Error("aborted", { cause: downloadSignal.reason })),
+          { once: true },
+        );
+      });
     });
     const spies = makeDescribeSpies();
     installAbortImageDeps(loadWebMedia, spies);

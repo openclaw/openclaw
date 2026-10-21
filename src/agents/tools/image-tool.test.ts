@@ -52,10 +52,35 @@ import {
   testing,
   type ToolTextResult,
 } from "./image-tool.test-support.js";
+import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 import { createPdfTool } from "./pdf-tool.js";
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => null),
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(
+    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+      if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
+        return {
+          resolveInboundAttachmentRoots: ({
+            accountId,
+            cfg,
+          }: {
+            accountId?: string | null;
+            cfg: OpenClawConfig;
+          }) => [
+            ...((accountId
+              ? cfg.channels?.imessage?.accounts?.[accountId]?.attachmentRoots
+              : undefined) ?? []),
+            ...(cfg.channels?.imessage?.attachmentRoots ?? []),
+            "/Users/*/Library/Messages/Attachments",
+          ],
+        };
+      }
+      throw new Error(
+        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+      );
+    },
+  ),
 }));
 
 vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
@@ -381,6 +406,13 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
   } else {
     minimaxUnderstandImageMock.mockResolvedValue(content);
   }
+  const fetch = vi.fn().mockImplementation(async () =>
+    Response.json({
+      content,
+      base_resp: baseResp,
+    }),
+  );
+  global.fetch = withFetchPreconnect(fetch);
   return minimaxUnderstandImageMock;
 }
 
@@ -415,8 +447,39 @@ const minimaxProvider = {
   },
 } satisfies MediaUnderstandingProvider;
 
-async function unexpectedGenericImageDispatch(): Promise<never> {
-  throw new Error("Expected a registered image provider or the implicit routing fixture");
+async function readMockResponseText(response: Response): Promise<string> {
+  const payload = (await response.json()) as { content?: string };
+  return payload.content ?? "";
+}
+
+async function describeGenericImageWithModel(
+  params: ImageDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  return describeGenericMedia("media-image", params, { mime: params.mime });
+}
+
+async function describeGenericImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  return describeGenericMedia("media-images", params, { imageCount: params.images.length });
+}
+
+async function describeGenericMedia(
+  endpoint: string,
+  params: { provider: string; model: string; prompt?: string },
+  media: { mime?: string; imageCount?: number },
+) {
+  const response = await global.fetch(`https://example.invalid/${endpoint}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      ...media,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
 }
 
 const codexMediaProvider = {
@@ -458,8 +521,8 @@ function installImageUnderstandingProviderDeps(
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-    describeImageWithModel: options?.describeImageWithModel ?? unexpectedGenericImageDispatch,
-    describeImagesWithModel: options?.describeImagesWithModel ?? unexpectedGenericImageDispatch,
+    describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
+    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders:
       options?.resolveAutoMediaKeyProviders ??
       (({ capability }) => (capability === "image" ? ["openai", "anthropic"] : [])),
@@ -472,11 +535,15 @@ function installImageUnderstandingProviderDeps(
         providerId,
         imageProviderHarness.buildProviderRegistry(),
       ),
-    resolveModelAsync: options?.useDefaultResolveModelAsync
-      ? undefined
-      : (options?.resolveModelAsync ?? resolveConfiguredImageModelForTest),
-    resolveImageCompressionPolicy: options?.resolveImageCompressionPolicy,
-    loadImageWebMediaRuntime: options?.loadImageWebMediaRuntime,
+    ...(options?.useDefaultResolveModelAsync
+      ? {}
+      : { resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest }),
+    ...(options?.resolveImageCompressionPolicy
+      ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
+      : {}),
+    ...(options?.loadImageWebMediaRuntime
+      ? { loadImageWebMediaRuntime: options.loadImageWebMediaRuntime }
+      : {}),
   });
 }
 
@@ -720,8 +787,8 @@ describe("image tool implicit imageModel config", () => {
           id: string,
           registry: Map<string, MediaUnderstandingProvider>,
         ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-        describeImageWithModel: unexpectedGenericImageDispatch,
-        describeImagesWithModel: unexpectedGenericImageDispatch,
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
         resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
         resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
       });
@@ -903,20 +970,20 @@ describe("image tool implicit imageModel config", () => {
   });
 
   it.each([
-    ["acme", "acme", false, true],
-    ["kimchi", "kimchi", true, false],
-    ["amazon-bedrock", "aws-bedrock", false, false],
-  ] as const)(
-    "pairs configured image models for %s with chat provider %s",
-    async (provider, chatProvider, prefixed, checkTool) => {
+    { provider: "acme", model: "vision-1", prefixed: false, checkTool: true },
+    { provider: "kimchi", model: "vision-1", prefixed: true, checkTool: false },
+  ])(
+    "pairs configured image model $provider/$model",
+    async ({ provider, model, prefixed, checkTool }) => {
       await withTempAgentDir(async (agentDir) => {
-        const model = "vision-1";
-        const authProfileStore = createAuthProfileStoreFixture({
-          [`${provider}:default`]: createApiKeyCredential(provider, "sk-test"),
-        });
-        await writeAuthProfiles(agentDir, authProfileStore);
+        await writeAuthProfiles(
+          agentDir,
+          createAuthProfileStoreFixture({
+            [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
+          }),
+        );
         const cfg: OpenClawConfig = {
-          agents: { defaults: { model: { primary: `${chatProvider}/text-1` } } },
+          agents: { defaults: { model: { primary: `${provider}/text-1` } } },
           models: {
             providers: {
               [provider]: {
@@ -929,16 +996,14 @@ describe("image tool implicit imageModel config", () => {
             },
           },
         };
-        const execution = executeImplicitImageTool({
+        const { requests } = await executeImplicitImageTool({
           config: cfg,
           agentDir,
-          authProfileStore,
+          authProfileStore: createAuthProfileStoreFixture({
+            [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
+          }),
         });
-        if (provider !== chatProvider) {
-          await expect(execution).rejects.toThrow(/No image model is configured/);
-        } else {
-          expect((await execution).requests).toEqual([`${provider}/${model}`]);
-        }
+        expect(requests).toEqual([`${provider}/${model}`]);
         if (checkTool) {
           // Direct image factories retain their shipped directory-backed auth contract.
           expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
@@ -947,6 +1012,38 @@ describe("image tool implicit imageModel config", () => {
       });
     },
   );
+
+  it("does not pair provider aliases through core normalization", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(
+        agentDir,
+        createAuthProfileStoreFixture({
+          "amazon-bedrock:default": createApiKeyCredential("amazon-bedrock", "sk-test"),
+        }),
+      );
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "aws-bedrock/text-1" } } },
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://example.com",
+              models: [
+                makeModelDefinition("text-1", ["text"]),
+                makeModelDefinition("vision-1", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+      await expect(
+        executeImplicitImageTool({
+          config: cfg,
+          agentDir,
+          authProfileStore: readMockRuntimeAuthProfileStore(agentDir),
+        }),
+      ).rejects.toThrow(/No image model is configured/);
+    });
+  });
 
   it.each<{
     name: string;
@@ -1204,6 +1301,14 @@ describe("image tool implicit imageModel config", () => {
             },
           },
         };
+        expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+        const roots = resolveMediaToolInboundRoots({
+          cfg,
+          channelId: "imessage",
+          accountId: "work",
+        });
+        expect(roots).toContain(attachmentRoot);
+        expect(isInboundPathAllowed({ filePath: imagePath, roots })).toBe(true);
         const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
         await expect(
           withoutChannel.execute("t1", { prompt: "Describe.", path: imagePath }),
@@ -1526,45 +1631,133 @@ describe("image tool MiniMax VLM routing", () => {
 });
 
 describe("image tool response validation", () => {
+  function createAssistantMessage(
+    overrides: Partial<{
+      api: string;
+      provider: string;
+      model: string;
+      stopReason: string;
+      errorMessage: string;
+      content: unknown[];
+    }>,
+  ) {
+    return {
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      usage: makeZeroUsageSnapshot(),
+      content: [] as unknown[],
+      ...overrides,
+    };
+  }
+
   it.each([
-    ["reasoning_content", "reasoning_content", true, 0],
-    ["Responses JSON", JSON.stringify({ id: "rs_123", type: "reasoning" }), true, 0],
-    ["Responses object", { id: "rs_456", type: "reasoning.encrypted" }, true, 0],
-    [
-      "oversized Responses JSON",
-      JSON.stringify({
+    {
+      name: "surfaces provider errors from image-model responses",
+      message: createAssistantMessage({
+        stopReason: "error",
+        errorMessage: "boom",
+      }) as never,
+      expectedError: /boom/i,
+      expectedText: undefined,
+    },
+    {
+      name: "returns trimmed text from image-model responses",
+      message: createAssistantMessage({
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "  hello  " }],
+      }) as never,
+      expectedError: undefined,
+      expectedText: "hello",
+    },
+  ])("$name", ({ message, expectedError, expectedText }) => {
+    const coerce = () =>
+      testing.coerceImageAssistantText({
+        provider: expectedError ? "openai" : "anthropic",
+        model: expectedError ? "gpt-5.4-mini" : "claude-opus-4-6",
+        message,
+      });
+    if (expectedError) {
+      expect(coerce).toThrow(expectedError);
+    } else {
+      expect(coerce()).toBe(expectedText);
+    }
+  });
+
+  it.each<{
+    name: string;
+    signature: unknown;
+    expected: boolean;
+    thinking?: string;
+    precedingBlocks?: number;
+    rejectText?: boolean;
+  }>([
+    {
+      name: "reasoning_content",
+      signature: "reasoning_content",
+      expected: true,
+      rejectText: true,
+    },
+    {
+      name: "Responses JSON",
+      signature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+      expected: true,
+      rejectText: true,
+    },
+    {
+      name: "Responses object",
+      signature: { id: "rs_456", type: "reasoning.encrypted" },
+      expected: true,
+      rejectText: true,
+    },
+    {
+      name: "oversized Responses JSON",
+      signature: JSON.stringify({
         id: "rs_123",
         summary: [{ text: "x".repeat(2_100) }],
         type: "reasoning",
       }),
-      true,
-      0,
-    ],
-    ["signature after bounded block scan", "reasoning_content", false, 50],
-  ] as const)(
-    "detects image reasoning-only responses: %s",
-    (_name, signature, expected, precedingBlocks) => {
-      const message = {
-        role: "assistant",
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        stopReason: "stop",
-        timestamp: Date.now(),
-        usage: makeZeroUsageSnapshot(),
+      expected: true,
+    },
+    {
+      name: "signature after bounded block scan",
+      signature: "reasoning_content",
+      precedingBlocks: 50,
+      expected: false,
+    },
+  ])(
+    "detects image reasoning-only responses: $name",
+    ({
+      signature,
+      expected,
+      thinking = "  <think>private</think> maybe a cat  ",
+      precedingBlocks = 0,
+      rejectText,
+    }) => {
+      const message = createAssistantMessage({
         content: [
           ...Array.from({ length: precedingBlocks }, () => ({
             type: "thinking",
             thinking: "untagged",
           })),
-          {
-            type: "thinking",
-            thinking: "  <think>private</think> maybe a cat  ",
-            thinkingSignature: signature,
-          },
+          { type: "thinking", thinking, thinkingSignature: signature },
         ],
-      };
+      });
       expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(expected);
+      if (rejectText) {
+        expect(() =>
+          testing.coerceImageAssistantText({
+            provider: "openai",
+            model: "gpt-5.4-mini",
+            message: message as never,
+          }),
+        ).toThrow(/returned no text/i);
+      }
     },
   );
 });
