@@ -1,49 +1,38 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
-import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import {
   codexCatalogResidentHomeKey,
   observeCodexCatalogClient,
   subscribeCodexCatalogEvents,
 } from "./session-catalog-events.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { catalogWebSocketOptions } from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 let fixtureId = 0;
+const persisted = { cwd: "/workspace/persisted", modelProvider: "openai" };
+const runtime = { cwd: "/workspace/runtime", modelProvider: "runtime-provider" };
+const live = { cwd: "/workspace/live", modelProvider: "live-provider" };
 const liveSettingsEvent = {
   method: "thread/settings/updated",
-  params: {
-    threadId: "thread-1",
-    threadSettings: { cwd: "/workspace/live", modelProvider: "live-provider" },
-  },
+  params: { threadId: "thread-1", threadSettings: live },
 };
 
-function nativeThread(overrides: Partial<CodexThread> = {}) {
+function nativeThread(overrides: Partial<CodexThread> = {}): CodexThread {
   return {
-    id: "thread-1",
-    projectId: null,
-    sessionId: "session-1",
-    forkedFromId: null,
+    ...threadStartResult().thread,
     name: "Native thread",
     preview: "First user request",
-    ephemeral: false,
-    source: "cli" as const,
-    cwd: "/workspace/persisted",
-    modelProvider: "openai",
-    cliVersion: CODEX_APP_SERVER_VERSION,
-    agentNickname: null,
-    agentRole: null,
-    gitInfo: null,
-    path: null,
+    source: "cli",
+    ...persisted,
     createdAt: 100,
     updatedAt: 100,
     recencyAt: 100,
-    status: { type: "idle" as const },
-    turns: [],
+    status: { type: "idle" },
     ...overrides,
   };
 }
@@ -52,9 +41,8 @@ function resumeResponse(thread: ReturnType<typeof nativeThread>) {
   return {
     thread,
     model: "fixture-model",
-    modelProvider: "runtime-provider",
+    ...runtime,
     serviceTier: null,
-    cwd: "/workspace/runtime",
     runtimeWorkspaceRoots: [],
     instructionSources: [],
     approvalPolicy: "never",
@@ -66,13 +54,9 @@ function resumeResponse(thread: ReturnType<typeof nativeThread>) {
 }
 
 async function fixture(overflow = false, evicted = false) {
-  const options: CodexAppServerStartOptions = {
-    transport: "websocket",
-    command: "codex",
-    args: ["app-server"],
-    url: `wss://catalog-settings-${++fixtureId}.example.test/codex`,
+  const options = {
+    ...catalogWebSocketOptions(`wss://catalog-settings-${++fixtureId}.example.test/codex`),
     authToken: "synthetic-settings-token",
-    headers: {},
   };
   const inventory = [
     nativeThread({ recencyAt: evicted ? 0 : 100 }),
@@ -102,9 +86,8 @@ async function fixture(overflow = false, evicted = false) {
             id: request.id,
             result: {
               data,
-              ...(offset + data.length < matching.length
-                ? { nextCursor: String(offset + data.length) }
-                : {}),
+              nextCursor:
+                offset + data.length < matching.length ? String(offset + data.length) : undefined,
             },
           });
         } else if (request.method === "thread/read") {
@@ -123,11 +106,8 @@ async function fixture(overflow = false, evicted = false) {
     await Promise.all([a.client.closeAndWait(), b.client.closeAndWait()]);
   });
   // Worker startup is fixture setup, outside the live-settings request deadline.
-  await (overflow ? b.client : a.client).request(
-    "thread/list",
-    { limit: 1 },
-    { catalogPreview: true },
-  );
+  const reader = overflow ? b.client : a.client;
+  await reader.request("thread/list", { limit: 1 }, { catalogPreview: true });
   methods.length = 0;
   await observeCodexCatalogClient(a.client, { startOptions: options });
   await observeCodexCatalogClient(b.client, { startOptions: options });
@@ -137,9 +117,7 @@ async function fixture(overflow = false, evicted = false) {
     readNative: async (params: CodexThreadListParams) =>
       projectCodexCatalogPage(
         // Overflow queries still have a native reader after the live settings source closes.
-        await (overflow ? b.client : a.client).request("thread/list", params, {
-          catalogPreview: true,
-        }),
+        await reader.request("thread/list", params, { catalogPreview: true }),
       ),
     assertCurrent: () => {},
   });
@@ -153,7 +131,10 @@ async function fixture(overflow = false, evicted = false) {
       request: { threadId: "thread-1", excludeTurns: true },
       timeoutMs: 1_000,
     });
-  return { a, b, index, inventory, methods, homeId, resume, abandonClient };
+  const sessions = async (cwd?: string) => (await index.list({ cwd })).sessions;
+  const session = async (cwd?: string) =>
+    (await sessions(cwd)).find((row) => row.threadId === "thread-1");
+  return { a, b, index, inventory, methods, homeId, resume, abandonClient, sessions, session };
 }
 
 afterEach(async () => {
@@ -163,142 +144,117 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("Codex catalog live settings", () => {
-  it("keeps live resume settings authoritative for overflow cwd queries after eviction", async () => {
-    const { a, index, resume } = await fixture(true, true);
-    expect(index.get("thread-1")).toBeUndefined();
-    const findThread = async (cwd: string) => {
-      let cursor: string | undefined;
-      do {
-        const page = await index.list({ cwd, cursor });
-        const thread = page.sessions.find((session) => session.threadId === "thread-1");
-        if (thread) {
-          return thread;
-        }
-        cursor = page.nextCursor;
-      } while (cursor);
-      return undefined;
-    };
-    await resume();
-    expect(await findThread("/workspace/runtime")).toMatchObject({
-      threadId: "thread-1",
-      cwd: "/workspace/runtime",
-      modelProvider: "runtime-provider",
-    });
-    expect(await findThread("/workspace/persisted")).toBeUndefined();
-    a.client.close();
-    expect((await index.list({ cwd: "/workspace/runtime" })).sessions).toEqual([]);
-    expect(await findThread("/workspace/persisted")).toMatchObject({
-      threadId: "thread-1",
-      modelProvider: "openai",
-    });
+it("keeps live resume settings authoritative for overflow cwd queries after eviction", async () => {
+  const { a, index, resume } = await fixture(true, true);
+  expect(index.get("thread-1")).toBeUndefined();
+  const findThread = async (cwd: string) => {
+    let cursor: string | undefined;
+    do {
+      const page = await index.list({ cwd, cursor });
+      const thread = page.sessions.find((session) => session.threadId === "thread-1");
+      if (thread) {
+        return thread;
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    return undefined;
+  };
+  await resume();
+  expect(await findThread(runtime.cwd)).toMatchObject({ threadId: "thread-1", ...runtime });
+  expect(await findThread(persisted.cwd)).toBeUndefined();
+  a.client.close();
+  expect((await index.list({ cwd: "/workspace/runtime" })).sessions).toEqual([]);
+  expect(await findThread(persisted.cwd)).toMatchObject({
+    threadId: "thread-1",
+    modelProvider: "openai",
   });
-
-  it("keeps another connection's active status on overflow pages until it closes", async () => {
-    const { a, index, inventory } = await fixture(true);
-    inventory[0]!.status = { type: "notLoaded" };
-    a.send({
-      method: "thread/status/changed",
-      params: {
-        threadId: "thread-1",
-        status: { type: "active", activeFlags: ["waitingOnApproval"] },
-      },
-    });
-    const expected = { status: "active", activeFlags: ["waitingOnApproval"] };
-    expect(
-      (await index.list({})).sessions.find((row) => row.threadId === "thread-1"),
-    ).toMatchObject(expected);
-    expect(
-      (await index.list({ cwd: "/workspace/persisted" })).sessions.find(
-        (row) => row.threadId === "thread-1",
-      ),
-    ).toMatchObject(expected);
-    a.client.close();
-    const closed = (await index.list({ cwd: "/workspace/persisted" })).sessions.find(
-      (row) => row.threadId === "thread-1",
-    );
-    expect(closed?.status).toBe("notLoaded");
-    expect(closed?.activeFlags).toBeUndefined();
-  });
-
-  it("publishes acknowledged resume settings before returning and keeps stale native metadata behind the live overlay", async () => {
-    const { a, index, inventory, methods, resume, abandonClient } = await fixture();
-    await resume();
-    expect((await index.list({ cwd: "/workspace/runtime" })).sessions).toEqual([
-      expect.objectContaining({ threadId: "thread-1", modelProvider: "runtime-provider" }),
-    ]);
-    expect(index.get("thread-1")?.page.sessions[0]?.cwd).toBe("/workspace/persisted");
-    expect(methods).toEqual(["thread/list", "thread/resume"]);
-    inventory[0]!.updatedAt = 300;
-    const stale = await a.client.request("thread/read", {
-      threadId: "thread-1",
-      includeTurns: false,
-    });
-    await index.upsertThread(stale.thread);
-    expect((await index.list({ cwd: "/workspace/runtime" })).sessions[0]).toMatchObject({
-      cwd: "/workspace/runtime",
-      modelProvider: "runtime-provider",
-    });
-    a.client.close();
-    expect((await index.list({ cwd: "/workspace/runtime" })).sessions).toEqual([]);
-    expect(
-      (await index.list({ cwd: "/workspace/persisted" })).sessions.some(
-        (row) => row.threadId === "thread-1",
-      ),
-    ).toBe(true);
-    expect(abandonClient).not.toHaveBeenCalled();
-  });
-
-  it("withdraws settings only when their supporting source reports notLoaded", async () => {
-    const { a, b, index, methods } = await fixture();
-    a.send(liveSettingsEvent);
-    const unloaded = {
-      method: "thread/status/changed",
-      params: { threadId: "thread-1", status: { type: "notLoaded" } },
-    };
-    b.send(unloaded);
-    expect((await index.list({ cwd: "/workspace/live" })).sessions[0]?.threadId).toBe("thread-1");
-    a.send(unloaded);
-    expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([]);
-    expect(
-      (await index.list({})).sessions.find((row) => row.threadId === "thread-1"),
-    ).toMatchObject({ cwd: "/workspace/persisted", modelProvider: "openai" });
-    expect(a.client.getCloseError()).toBeUndefined();
-    expect(methods).toEqual(["thread/list"]);
-  });
-
-  it("keeps a successful resume subscribed when a catalog observer fails", async () => {
-    const { a, homeId, resume, abandonClient } = await fixture();
-    const observer = vi.fn(async () => {
-      throw new Error("catalog observer failed");
-    });
-    const stop = subscribeCodexCatalogEvents(homeId, () => {}, { onResume: observer });
-    try {
-      await expect(resume()).resolves.toMatchObject({
-        thread: { id: "thread-1" },
-        cwd: "/workspace/runtime",
-      });
-      expect(observer).toHaveBeenCalledOnce();
-      expect(abandonClient).not.toHaveBeenCalled();
-      expect(a.client.getCloseError()).toBeUndefined();
-    } finally {
-      stop();
-    }
-  });
-
-  it.each(["thread/archived", "thread/deleted"])(
-    "clears live settings on %s before a native row reappears",
-    async (method) => {
-      const { a, index, inventory } = await fixture();
-      a.send(liveSettingsEvent);
-      expect((await index.list({ cwd: "/workspace/live" })).sessions).toHaveLength(1);
-      a.send({ method, params: { threadId: "thread-1" } });
-      expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([]);
-      await index.upsertThread(inventory[0]!);
-      expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([]);
-      expect(
-        (await index.list({})).sessions.find((row) => row.threadId === "thread-1"),
-      ).toMatchObject({ cwd: "/workspace/persisted", modelProvider: "openai" });
-    },
-  );
 });
+
+it("keeps another connection's active status on overflow pages until it closes", async () => {
+  const { a, inventory, session } = await fixture(true);
+  inventory[0]!.status = { type: "notLoaded" };
+  a.send({
+    method: "thread/status/changed",
+    params: {
+      threadId: "thread-1",
+      status: { type: "active", activeFlags: ["waitingOnApproval"] },
+    },
+  });
+  const expected = { status: "active", activeFlags: ["waitingOnApproval"] };
+  expect(await session()).toMatchObject(expected);
+  expect(await session("/workspace/persisted")).toMatchObject(expected);
+  a.client.close();
+  const closed = await session("/workspace/persisted");
+  expect(closed?.status).toBe("notLoaded");
+  expect(closed?.activeFlags).toBeUndefined();
+});
+
+it("publishes acknowledged resume settings before returning and keeps stale native metadata behind the live overlay", async () => {
+  const { a, index, inventory, methods, resume, abandonClient, sessions } = await fixture();
+  await resume();
+  expect(await sessions("/workspace/runtime")).toEqual([
+    expect.objectContaining({ threadId: "thread-1", modelProvider: "runtime-provider" }),
+  ]);
+  expect(index.get("thread-1")?.page.sessions[0]?.cwd).toBe("/workspace/persisted");
+  expect(methods).toEqual(["thread/list", "thread/resume"]);
+  inventory[0]!.updatedAt = 300;
+  const stale = await a.client.request("thread/read", {
+    threadId: "thread-1",
+    includeTurns: false,
+  });
+  await index.upsertThread(stale.thread);
+  expect((await sessions(runtime.cwd))[0]).toMatchObject(runtime);
+  a.client.close();
+  expect(await sessions("/workspace/runtime")).toEqual([]);
+  expect((await sessions(persisted.cwd)).some((row) => row.threadId === "thread-1")).toBe(true);
+  expect(abandonClient).not.toHaveBeenCalled();
+});
+
+it("withdraws settings only when their supporting source reports notLoaded", async () => {
+  const { a, b, methods, sessions, session } = await fixture();
+  a.send(liveSettingsEvent);
+  const unloaded = {
+    method: "thread/status/changed",
+    params: { threadId: "thread-1", status: { type: "notLoaded" } },
+  };
+  b.send(unloaded);
+  expect((await sessions("/workspace/live"))[0]?.threadId).toBe("thread-1");
+  a.send(unloaded);
+  expect(await sessions("/workspace/live")).toEqual([]);
+  expect(await session()).toMatchObject(persisted);
+  expect(a.client.getCloseError()).toBeUndefined();
+  expect(methods).toEqual(["thread/list"]);
+});
+
+it("keeps a successful resume subscribed when a catalog observer fails", async () => {
+  const { a, homeId, resume, abandonClient } = await fixture();
+  const observer = vi.fn(async () => {
+    throw new Error("catalog observer failed");
+  });
+  const stop = subscribeCodexCatalogEvents(homeId, () => {}, { onResume: observer });
+  try {
+    await expect(resume()).resolves.toMatchObject({
+      thread: { id: "thread-1" },
+      cwd: "/workspace/runtime",
+    });
+    expect(observer).toHaveBeenCalledOnce();
+    expect(abandonClient).not.toHaveBeenCalled();
+    expect(a.client.getCloseError()).toBeUndefined();
+  } finally {
+    stop();
+  }
+});
+
+it.each(["thread/archived", "thread/deleted"])(
+  "clears live settings on %s before a native row reappears",
+  async (method) => {
+    const { a, index, inventory, sessions, session } = await fixture();
+    a.send(liveSettingsEvent);
+    expect(await sessions("/workspace/live")).toHaveLength(1);
+    a.send({ method, params: { threadId: "thread-1" } });
+    expect(await sessions("/workspace/live")).toEqual([]);
+    await index.upsertThread(inventory[0]!);
+    expect(await sessions("/workspace/live")).toEqual([]);
+    expect(await session()).toMatchObject(persisted);
+  },
+);

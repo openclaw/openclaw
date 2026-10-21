@@ -20,6 +20,7 @@ import {
   projectCodexCatalogPage,
 } from "./session-catalog-projection.js";
 import { projectNativeCatalogFixture } from "./session-catalog-projection.test-support.js";
+import type { CodexSessionCatalogPageParams } from "./session-catalog-types.js";
 
 const indexes: CodexCatalogIndex[] = [];
 const clients: ReturnType<typeof createClientHarness>[] = [];
@@ -33,6 +34,8 @@ function catalog(options: Omit<CodexCatalogIndexOptions, "assertCurrent">) {
   indexes.push(index);
   return index;
 }
+const ids = async (index: CodexCatalogIndex, params: CodexSessionCatalogPageParams = {}) =>
+  (await index.list(params)).sessions.map((row) => row.threadId);
 let fixtureId = 0;
 
 function sourceThread(overrides: Partial<CodexThread> = {}): CodexThread {
@@ -110,10 +113,7 @@ describe("Codex catalog physical status sources", () => {
     );
     const request = JSON.parse(await a.waitForWrite(1));
     const native = sourceThread({ status: { type: "active", activeFlags: ["stale-source-a"] } });
-    a.send({
-      id: request.id,
-      result: { thread: native },
-    });
+    a.send({ id: request.id, result: { thread: native } });
     a.client.close();
     active(b, "source-b");
     const response = await reading;
@@ -176,13 +176,11 @@ it("finishes reconnect hydration after an offline snapshot refresh and resumes p
   });
   await vi.waitFor(() => expect(settled).toBe(true));
   await recovering;
-  expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual([
-    "reconnected",
-  ]);
+  expect(await ids(index)).toEqual(["reconnected"]);
   readNative.mockResolvedValue({ rows: [row("later")] });
   await vi.advanceTimersByTimeAsync(15 * 60_000);
   await vi.waitFor(async () => {
-    expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual(["later"]);
+    expect(await ids(index)).toEqual(["later"]);
   });
   await index.retire();
 });
@@ -234,12 +232,9 @@ it.each([
   await vi.waitFor(async () => {
     expect((await index.list({ limit: 1 })).sessions[0]?.threadId).toBe("bravo");
   });
-  const previous = await index.list({ limit: 1, cursor: second.backwardsCursor });
-  expect(previous.sessions.map((row) => row.threadId)).toEqual(["alpha"]);
-  const expandedPrevious = await index.list({ limit: 64, cursor: second.backwardsCursor });
-  expect(expandedPrevious.sessions.map((row) => row.threadId)).toEqual(["alpha"]);
-  const following = await index.list({ limit: 1, cursor: second.nextCursor });
-  expect(following.sessions.map((row) => row.threadId)).toEqual(["charlie"]);
+  expect(await ids(index, { limit: 1, cursor: second.backwardsCursor })).toEqual(["alpha"]);
+  expect(await ids(index, { limit: 64, cursor: second.backwardsCursor })).toEqual(["alpha"]);
+  expect(await ids(index, { limit: 1, cursor: second.nextCursor })).toEqual(["charlie"]);
   expect(readNative).toHaveBeenCalledOnce();
   expect(harness.writes).toHaveLength(1);
 });
