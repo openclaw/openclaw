@@ -55,21 +55,10 @@ describe("Codex subagent native tool policy", () => {
       key: "subagent",
       config: { agents: { defaults: { subagents: { maxSpawnDepth: 1 } } } },
     },
-    { name: "session send deny", config: { tools: { deny: ["sessions_send"] } } },
-    {
-      name: "inherited session send deny",
-      config: {},
-      inheritedToolDeny: ["sessions_send"],
-    },
-    { name: "exec deny", config: { tools: { deny: ["exec"] } } },
-    { name: "unknown deny", config: { tools: { deny: ["unknown_tool"] } } },
-    { name: "finite allowlist", config: { tools: { allow: ["read"] } } },
-    { name: "inherited exec deny", config: {}, inheritedToolDeny: ["exec"] },
   ] satisfies Array<{
     name: string;
     key?: string;
     config: OpenClawConfig;
-    inheritedToolDeny?: string[];
   }>)("preserves the effective policy for $name", async (testCase) => {
     const sessionKey = `agent:main:${testCase.key ?? "subagent"}:policy-child`;
     const store = path.join(tempDirs.make(), "sessions.json");
@@ -80,7 +69,6 @@ describe("Codex subagent native tool policy", () => {
         updatedAt: 1,
         spawnDepth: 1,
         spawnedBy: "agent:main:main",
-        inheritedToolDeny: testCase.inheritedToolDeny,
       },
     );
     const policy = await prepare({

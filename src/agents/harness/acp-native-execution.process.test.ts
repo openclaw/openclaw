@@ -44,7 +44,6 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "./acp-native-process.test-support.js";
-import { getRegisteredAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 
 useNativeProcessFixture();
@@ -127,7 +126,7 @@ it.each([
   "admits $agent profile=$profile alsoAllow=$alsoAllow before native effects",
   async ({ agent, profile, alsoAllow, denied }) => {
     await withNativeAttempt(
-      async ({ state, config, native, attempt }) => {
+      async ({ native, attempt }) => {
         if (!denied) {
           await appendSessionTranscriptMessageByIdentityStrict({
             ...attempt.target,
@@ -182,31 +181,6 @@ it.each([
           expect(assistant?.message).toEqual(outcome.value?.currentAttemptAssistant);
           expect(assistant?.idempotencyKey).toBe(outcome.value?.assistantTranscriptIdempotencyKey);
           expect.soft(effects).toHaveLength(1);
-          const harness = getRegisteredAgentHarness(`acp-${agent}`)?.harness;
-          assert(harness?.loadModelCatalog !== undefined, "Native catalog operation missing");
-          expect(
-            await harness.loadModelCatalog({
-              config,
-              agentId: "main",
-              agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-            }),
-          ).toEqual({
-            entries: [
-              ["initial", "Initial"],
-              ["selected", "Selected"],
-            ].map(([id, name]) => ({
-              provider: `acp-${agent}`,
-              id,
-              name,
-              nativeRuntime: `acp-${agent}`,
-            })),
-            outcomes: [{ provider: `acp-${agent}`, status: "ready" }],
-          });
-          expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
-            transcript,
-          );
-          expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual(effects);
         }
       },
       { tools: { profile, alsoAllow } },

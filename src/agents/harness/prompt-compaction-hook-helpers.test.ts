@@ -95,35 +95,8 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     });
   });
 
-  it("preserves the admitted request through projected prompts", async () => {
-    const handler = vi.fn(async (_event: unknown) => undefined);
-    const history = [{ role: "user", content: "Earlier request" }];
-    installHooks(promptHook(handler));
-    const result = await buildPrompt({
-      prompt: "Current message: hello",
-      currentInboundContext: {
-        text: "Prior conversation: remember my preference",
-        promptJoiner: "\n",
-      },
-      currentUserMessage: "hello",
-      currentUserMessageId: "message-1",
-      messages: async () => history,
-      toolAuthority: toolAuthority(),
-    });
-    expect(result.prompt).toBe(
-      "Prior conversation: remember my preference\nCurrent message: hello",
-    );
-    expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler.mock.calls[0]?.[0]).toMatchObject({
-      currentUserMessage: "hello",
-      currentUserMessageId: "message-1",
-      prompt: expect.stringContaining("Prior conversation:"),
-      messages: history,
-    });
-  });
-
   it.each([
+    { content: undefined, expected: "hello" },
     { content: "hello", expected: "hello" },
     {
       content: [
@@ -133,23 +106,52 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       ],
       expected: "What do you remember\nabout my preferences?",
     },
-  ] satisfies { content: PersistedUserTurnMessage["content"]; expected: string }[])(
-    "normalizes admitted message content for prompt hooks: $expected",
+  ] satisfies { content: PersistedUserTurnMessage["content"] | undefined; expected: string }[])(
+    "preserves admitted content and identity through projected prompts: $content",
     async ({ content, expected }) => {
       const handler = vi.fn(async (_event: unknown) => undefined);
+      const history = [{ role: "user", content: "Earlier request" }];
+      const ctx = {
+        trigger: "user",
+        accountId: "account-a",
+        channel: "telegram",
+        channelId: "chat-a",
+        senderId: "sender-a",
+        chatId: "chat-a",
+        channelContext: { sender: { id: "sender-a" }, chat: { id: "chat-a" } },
+      } satisfies Parameters<typeof buildBase>[0]["ctx"];
+      const expectedContext = structuredClone(ctx);
       installHooks(promptHook(handler), promptHook(handler, { requiresToolAuthority: true }));
-      await buildPrompt({
-        prompt: "Projected transport prompt",
-        currentUserMessage: { content, idempotencyKey: "original:user" },
+      const result = await buildPrompt({
+        ctx,
+        prompt: "Current message: hello",
+        currentInboundContext: {
+          text: "Prior conversation: remember my preference",
+          promptJoiner: "\n",
+        },
+        currentUserMessage:
+          content === undefined ? "hello" : { content, idempotencyKey: "original:user" },
+        currentUserMessageId: content === undefined ? "message-1" : undefined,
+        messages: async () => history,
         toolAuthority: toolAuthority(),
       });
+      expect(result.prompt).toBe(
+        "Prior conversation: remember my preference\nCurrent message: hello",
+      );
+      expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
       expect(handler).toHaveBeenCalledTimes(2);
       for (const [event] of handler.mock.calls) {
         expect(event).toMatchObject({
           currentUserMessage: expected,
-          currentUserMessageId: "original:user",
+          currentUserMessageId: content === undefined ? "message-1" : "original:user",
+          prompt: expect.stringContaining("Prior conversation:"),
+          messages: history,
         });
       }
+      expect(handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining(expectedContext),
+      );
     },
   );
 
@@ -279,28 +281,6 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       expect(result).toMatchObject({ prompt: expected, developerInstructions: "base" });
     },
   );
-
-  it("preserves authenticated channel identity in prompt-build hook context", async () => {
-    const ctx = {
-      trigger: "user",
-      accountId: "account-a",
-      channel: "telegram",
-      channelId: "chat-a",
-      senderId: "sender-a",
-      chatId: "chat-a",
-      channelContext: {
-        sender: { id: "sender-a" },
-        chat: { id: "chat-a" },
-      },
-    } satisfies Parameters<typeof buildBase>[0]["ctx"];
-    const expected = structuredClone(ctx);
-    const handler = vi.fn(() => undefined);
-    installHooks(promptHook(handler));
-
-    await buildPrompt({ ctx });
-
-    expect(handler).toHaveBeenCalledWith(expect.anything(), expect.objectContaining(expected));
-  });
 
   it("runs authorized enrichment after restrictive hooks finalize the tool surface", async () => {
     const calls: string[] = [];

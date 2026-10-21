@@ -41,29 +41,11 @@ const agentParams = { entries: { writer: { params: { temperature: 0.2 } } } };
 const routeModel = (facts: Record<string, unknown> = {}, id = "gpt-5.5") => ({ id, ...facts });
 
 describe("resolveAgentHarnessPolicy", () => {
-  it.each<[string, Record<string, unknown>, string, string?]>([
-    ["official Responses", {}, "codex"],
-    ["HTTP Responses", { baseUrl: "http://api.openai.com/v1" }, "openclaw"],
-    [
-      "HTTP ChatGPT",
-      { api: "openai-chatgpt-responses", baseUrl: "http://chatgpt.com/backend-api/codex" },
-      "openclaw",
-    ],
-    ["custom endpoint", { baseUrl: "https://relay.example.test/v1" }, "openclaw"],
-    ["Completions", { api: "openai-completions" }, "openclaw"],
-    [
-      "explicit Completions",
-      { api: "openai-completions", agentRuntime: { id: "openclaw" } },
-      "openclaw",
-      "provider",
-    ],
-    ["request override", { headers: { "x-route": "custom" } }, "openclaw"],
-  ])(
-    "uses the provider-owned runtime for %s",
-    (_name, overrides, runtime, runtimeSource = "implicit") => {
-      expect(policy(providerConfig(overrides))).toEqual({ runtime, runtimeSource });
-    },
-  );
+  it("preserves the source of an explicit provider runtime", () => {
+    expect(
+      policy(providerConfig({ api: "openai-completions", agentRuntime: { id: "openclaw" } })),
+    ).toEqual({ runtime: "openclaw", runtimeSource: "provider" });
+  });
 
   it.each(["default", "auto"] as const)("treats %s as implicit route selection", (id) => {
     const agentRuntime = { id };

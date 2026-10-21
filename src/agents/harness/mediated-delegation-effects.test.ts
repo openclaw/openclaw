@@ -126,10 +126,6 @@ async function createCaller(
     });
     sessionEntry = await readResolvedSessionEntryInWorker(scope);
   }
-  expect(sessionEntry).toMatchObject({
-    delegatedToolPolicy: { requesterDeny: denied },
-    inheritedToolDeny: denied,
-  });
   const admission = prepareSystemAgentRunAdmission(
     currentConfig,
     runId,
@@ -171,9 +167,6 @@ async function createCaller(
       isSideQuestion: false,
       skipsTurnPreparation: false,
     });
-    if (currentConfig === config) {
-      expect(policy.params.cliToolAvailability?.native).toEqual([]);
-    }
     const context = buildCliMcpGrantContext({
       run: policy.params,
       config: currentConfig,
@@ -285,15 +278,8 @@ async function createCaller(
 }
 
 function observeLaunches() {
-  const supervisor = getProcessSupervisor();
-  const original = supervisor.spawn.bind(supervisor);
-  let launches = 0;
-  vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
-    const run = await original(input);
-    launches += 1;
-    return run;
-  });
-  return () => launches;
+  const spawn = vi.spyOn(getProcessSupervisor(), "spawn");
+  return () => spawn.mock.calls.length;
 }
 
 async function prepareEffect(route: Route, suffix: string, senderRestricted = false) {

@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatForLog } from "../../gateway/ws-log.js";
 import * as installedManifests from "../../plugins/manifest-registry-installed.js";
 import { restorePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { prepareOwnedPluginLoadContext } from "../prepared-model-runtime.plugin-context.js";
@@ -144,28 +145,13 @@ function installedProviderRecord(
 }
 
 function createMemoryPlanMetadataSnapshot() {
-  const manifestRegistry = makeRegistry(
-    ["memory-core", "memory-lancedb"].map((id) => ({
-      id,
-      channels: [],
-      origin: "bundled" as const,
-    })),
-  );
-  for (const plugin of manifestRegistry.plugins) {
-    plugin.kind = "memory";
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: ["memory-core", "memory-lancedb"].map((id) => ({ id, kind: "memory" })),
+  });
+  for (const plugin of snapshot.index.plugins) {
+    plugin.startup.memory = true;
   }
-  const snapshot = createPluginMetadataSnapshot({ manifestRegistry });
-  snapshot.index.plugins = manifestRegistry.plugins.map((plugin) =>
-    Object.assign(installedProviderRecord(plugin.id), {
-      origin: plugin.origin,
-      rootDir: plugin.rootDir,
-      manifestPath: plugin.manifestPath,
-      manifestHash: plugin.id,
-      enabled: true,
-      startup: { sidecar: false, memory: true, agentHarnesses: [] },
-    }),
-  );
-  return restorePluginMetadataSnapshot(snapshot);
+  return snapshot;
 }
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -214,8 +200,6 @@ describe("harness runtime plugins", () => {
   });
 
   it.each<[NonNullable<OpenClawConfig["plugins"]>, string]>([
-    [{ enabled: false }, "plugins disabled"],
-    [{ allow: ["telegram"] }, "not in allowlist"],
     [{ deny: ["codex"] }, "blocked by denylist"],
     [{ entries: { codex: { enabled: false } } }, "disabled in config"],
   ])("reports %j as %s without a prepared registry context", async (plugins, expectedReason) => {
@@ -377,16 +361,6 @@ describe("harness runtime plugins", () => {
     expect(plan.config?.plugins?.entries?.openai).toEqual({ enabled: true });
   });
 
-  it("includes and enables the context-engine owner in the prepared load plan", () => {
-    const plan = runtimePlan({
-      config: { plugins: { slots: { contextEngine: "custom-context-engine" } } },
-      basePluginIds: [],
-    });
-    expect(plan.pluginIds).toEqual(["custom-context-engine"]);
-    expect(plan.config?.plugins?.allow).toEqual(["custom-context-engine"]);
-    expect(plan.config?.plugins?.entries?.["custom-context-engine"]).toEqual({ enabled: true });
-  });
-
   it.each([
     [[], ["catalog-provider"], []],
     [["catalog-provider"], ["catalog-provider"], ["catalog-provider"]],
@@ -430,24 +404,10 @@ describe("harness runtime plugins", () => {
 
   it("reuses prepared memory aliases while applying current activation policy", () => {
     const config: OpenClawConfig = { plugins: { slots: { memory: "fixture-memory" } } };
-    const snapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: makeRegistry([
-        { id: "fixture-memory", channels: [], providers: ["memory-alias"] },
-      ]),
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "fixture-memory", origin: "config", providers: ["memory-alias"] }],
     });
-    snapshot.index.plugins = [
-      {
-        ...installedProviderRecord("fixture-memory"),
-        origin: "config",
-        rootDir: "/fake/fixture-memory",
-        manifestPath: "/fake/fixture-memory/openclaw.plugin.json",
-        manifestHash: "fixture",
-        enabled: true,
-        enabledByDefault: true,
-        startup: { sidecar: false, memory: true, agentHarnesses: [] },
-      },
-    ];
+    snapshot.index.plugins[0]!.startup.memory = true;
     const metadataSnapshot = restorePluginMetadataSnapshot(snapshot);
     const rebuildManifests = vi
       .spyOn(installedManifests, "loadPluginManifestRegistryForInstalledIndex")

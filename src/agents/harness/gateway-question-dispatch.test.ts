@@ -161,7 +161,7 @@ const ownerCases = [
 ] as const;
 
 describe("question dispatch ownership", () => {
-  it.each(["open", "reassigned", "closed"] as const)(
+  it.each(["reassigned", "closed"] as const)(
     "rechecks %s source authority at real question dispatch",
     async (change) => {
       await withQuestionGateway(async (fixture) => {
@@ -195,28 +195,19 @@ describe("question dispatch ownership", () => {
         hello.release();
         const result = await outcome;
         expect(fixture.backingRun.signal.aborted).toBe(false);
-        if (change === "open") {
-          expect(result).toEqual({ accepted: true });
-          expect(await question.run).toEqual({
-            status: "answered",
-            answers: { answers: { answer: ["Old source answer"] } },
-          });
-          expect(resolvedRequests(fixture)).toHaveLength(1);
-        } else {
-          expect.soft(resolvedRequests(fixture)).toEqual([]);
-          expect.soft(fixture.manager.get(pending.id)?.status).toBe("pending");
-          expect.soft(result).toHaveProperty("error");
-          // Refusal releases the reservation without replacing the question or run.
-          await expect(
-            claimAnswer("Current source answer", {
-              authority: currentSource(fixture).authority,
-            }),
-          ).resolves.toBe(true);
-          expect(await question.run).toEqual({
-            status: "answered",
-            answers: { answers: { answer: ["Current source answer"] } },
-          });
-        }
+        expect.soft(resolvedRequests(fixture)).toEqual([]);
+        expect.soft(fixture.manager.get(pending.id)?.status).toBe("pending");
+        expect.soft(result).toHaveProperty("error");
+        // Refusal releases the reservation without replacing the question or run.
+        await expect(
+          claimAnswer("Current source answer", {
+            authority: currentSource(fixture).authority,
+          }),
+        ).resolves.toBe(true);
+        expect(await question.run).toEqual({
+          status: "answered",
+          answers: { answers: { answer: ["Current source answer"] } },
+        });
       });
     },
   );

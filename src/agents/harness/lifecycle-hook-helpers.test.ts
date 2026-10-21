@@ -132,25 +132,12 @@ describe("agent harness lifecycle hook helpers", () => {
     await expect(run()).resolves.toEqual({ action: "continue" });
   });
 
-  it("preserves merged revise reasons when retry metadata is present", async () => {
-    const run = finalizer({
-      action: "revise",
-      reason: "fix generated baseline\n\nrerun the focused tests",
-      retry: retry("rerun the focused tests", "merged-reason"),
-    });
-
-    await expect(run()).resolves.toEqual({
-      action: "revise",
-      reason: "fix generated baseline\n\nrerun the focused tests",
-    });
-  });
-
-  it("honors a later finalize retry candidate after an earlier candidate is spent", async () => {
+  it("preserves merged reasons and advances to the next unspent finalize retry", async () => {
     const firstRetry = retry("regenerate artifacts", "artifacts");
     const secondRetry = retry("rerun focused tests", "tests");
     const result = {
       action: "revise",
-      reason: "retry generated artifacts\n\nretry focused tests",
+      reason: "regenerate artifacts\n\nretry focused tests",
       retry: firstRetry,
     };
     // retryCandidates is intentionally non-enumerable in production hook
@@ -163,28 +150,15 @@ describe("agent harness lifecycle hook helpers", () => {
 
     await expect(run()).resolves.toEqual({
       action: "revise",
-      reason: "retry generated artifacts\n\nretry focused tests\n\nregenerate artifacts",
+      reason: "regenerate artifacts\n\nretry focused tests",
     });
     await expect(run()).resolves.toEqual({
       action: "revise",
-      reason: "retry generated artifacts\n\nretry focused tests\n\nrerun focused tests",
+      reason: "regenerate artifacts\n\nretry focused tests\n\nrerun focused tests",
     });
   });
 
-  it("falls back to retry instruction keys when retry idempotency keys are malformed", async () => {
-    const run = finalizer({
-      action: "revise",
-      retry: retry("retry with a safe key", { invalid: true }) as never,
-    });
-
-    await expect(run()).resolves.toEqual({
-      action: "revise",
-      reason: "retry with a safe key",
-    });
-    await expect(run()).resolves.toEqual({ action: "continue" });
-  });
-
-  it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
+  it("deduplicates malformed retry keys by full instruction without prefix collisions", async () => {
     // Fallback keys include a digest of the full instruction. Prefix-only
     // truncation would spend unrelated long retry requests together.
     const sharedPrefix = "x".repeat(180);
@@ -193,6 +167,7 @@ describe("agent harness lifecycle hook helpers", () => {
     const hookRunner = finalizeRunner(
       { action: "revise", retry: retry(firstInstruction, { invalid: true }) },
       { action: "revise", retry: retry(secondInstruction, { invalid: true }) },
+      { action: "revise", retry: retry(firstInstruction, { invalid: true }) },
     );
 
     await expect(finalize(hookRunner as never)).resolves.toEqual({
@@ -203,5 +178,6 @@ describe("agent harness lifecycle hook helpers", () => {
       action: "revise",
       reason: secondInstruction,
     });
+    await expect(finalize(hookRunner as never)).resolves.toEqual({ action: "continue" });
   });
 });

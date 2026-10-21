@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { harnessRegistry } from "../model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { mergePreparedNativeCatalog } from "../prepared-model-runtime.catalog-publication.js";
 import {
@@ -85,19 +86,9 @@ const snapshot: ModelCatalogSnapshot = {
 
 function catalogRegistry(loaders: Record<string, () => Promise<readonly ModelCatalogEntry[]>>) {
   const registry = createEmptyPluginRegistry();
-  for (const [id, loadModelCatalog] of Object.entries(loaders)) {
-    registry.agentHarnesses.push({
-      pluginId: id,
-      source: "test",
-      harness: {
-        id,
-        label: id,
-        supports: () => ({ supported: true }),
-        runAttempt: vi.fn(),
-        loadModelCatalog,
-      },
-    });
-  }
+  registry.agentHarnesses = Object.entries(loaders).flatMap(
+    ([id, loadModelCatalog]) => harnessRegistry(id, { loadModelCatalog }).agentHarnesses,
+  );
   return registry;
 }
 const registryWithCatalog = (load: () => Promise<readonly ModelCatalogEntry[]>) =>
@@ -391,18 +382,7 @@ it("checks resident native readiness with linear catalog work and observes revoc
   const readModelCatalogReadiness = vi.fn(() =>
     ready ? { accountType: "apiKey" as const } : undefined,
   );
-  const pluginRegistry = createEmptyPluginRegistry();
-  pluginRegistry.agentHarnesses.push({
-    pluginId: "native-test",
-    source: "fixture",
-    harness: {
-      id: "native-test",
-      label: "Native fixture",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-      readModelCatalogReadiness,
-    },
-  });
+  const pluginRegistry = harnessRegistry("native-test", { readModelCatalogReadiness });
   const params = {
     input: {
       config: cfg,

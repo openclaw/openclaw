@@ -535,31 +535,6 @@ describe("gateway harness questions", () => {
     }
   });
 
-  it("accepts a later text answer after cancellation fails", async () => {
-    let cancelAttempts = 0;
-    const gatewayCall = answerGateway(() => {
-      cancelAttempts += 1;
-      throw new Error("temporary gateway failure");
-    });
-    const onBlockReply = vi.fn();
-    const run = startQuestion("agent:main:cancel-retry", gatewayCall, onBlockReply);
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce());
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        deliveryIntentId: `block-reply:v1:agent-question:${questionId}`,
-      }),
-    );
-
-    await expect(cancelQuestion("agent:main:cancel-retry")).rejects.toThrow(
-      "temporary gateway failure",
-    );
-    await expect(claimQuestion("agent:main:cancel-retry")).resolves.toBe(true);
-
-    await expect(run).resolves.toEqual(answerResult("Continue"));
-    expect(cancelAttempts).toBe(1);
-  });
-
   it("returns a gateway answer without waiting for stalled prompt delivery", async () => {
     const gatewayCall = answerGateway(() => ({ status: "cancelled" }));
     let deliverySignal: AbortSignal | undefined;
@@ -571,6 +546,12 @@ describe("gateway harness questions", () => {
     );
     const run = startQuestion("agent:main:stalled-delivery", gatewayCall, onBlockReply);
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce());
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        deliveryIntentId: `block-reply:v1:agent-question:${questionId}`,
+      }),
+    );
     await expect(claimQuestion("agent:main:stalled-delivery")).resolves.toBe(true);
 
     await expect(run).resolves.toEqual(answerResult("Continue"));

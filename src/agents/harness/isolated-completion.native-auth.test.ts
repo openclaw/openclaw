@@ -133,32 +133,6 @@ describe("runIsolatedCompletion native authorization", () => {
     },
   );
 
-  it("clamps V2 output tokens to the resolved physical model limit", async () => {
-    mocks.resolveModelAsync.mockResolvedValueOnce({
-      model: {
-        provider: "openai",
-        id: "gpt-test",
-        api: "openai-chatgpt-responses",
-        baseUrl: nativeAuthPlan.modelRoute.baseUrl,
-        maxTokens: 1_024,
-      },
-    });
-    const runIsolatedCompletionV2 = registerReply("native result");
-
-    await runIsolatedCompletion({
-      ...isolatedRequest(),
-      outputTextPolicy: "strict-visible",
-      streamParams: { maxTokens: 4_096, temperature: 0.2 },
-    });
-
-    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outputTextPolicy: "strict-visible",
-        streamParams: { maxTokens: 1_024, temperature: 0.2 },
-      }),
-    );
-  });
-
   it.each([false, true])("keeps harness fallback core-owned (retired: %s)", async (retired) => {
     let current = true;
     const expired = new Error("The completion owner retired.");
@@ -311,7 +285,13 @@ describe("runIsolatedCompletion native authorization", () => {
       },
     });
     mocks.resolveModelAsync.mockResolvedValue({
-      model: { provider: "openai", id: "gpt-5.5", api: route.api, baseUrl: route.baseUrl },
+      model: {
+        provider: "openai",
+        id: "gpt-5.5",
+        api: route.api,
+        baseUrl: route.baseUrl,
+        maxTokens: 1_024,
+      },
     });
     const runIsolatedCompletionV2 = registerReply("prepared route result");
 
@@ -322,6 +302,8 @@ describe("runIsolatedCompletion native authorization", () => {
           ...isolatedRequest(),
           model: "gpt-5.5",
           authProfileId: profileId,
+          outputTextPolicy: "strict-visible",
+          streamParams: { maxTokens: 4_096, temperature: 0.2 },
         }),
       );
     } finally {
@@ -340,7 +322,11 @@ describe("runIsolatedCompletion native authorization", () => {
     expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
-      expect.objectContaining({ authorization: expect.objectContaining({ owner: route.owner }) }),
+      expect.objectContaining({
+        authorization: expect.objectContaining({ owner: route.owner }),
+        outputTextPolicy: "strict-visible",
+        streamParams: { maxTokens: route.owner === "harness" ? 1_024 : 4_096, temperature: 0.2 },
+      }),
     );
   });
 });
