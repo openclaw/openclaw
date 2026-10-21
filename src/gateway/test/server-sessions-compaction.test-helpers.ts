@@ -1,9 +1,8 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { embeddedRunMock } from "../test-helpers.runtime-state.js";
 
@@ -45,14 +44,11 @@ export function holdCompaction(
     release: () => terminal.resolve(result),
     waitForEntry: async (compactResult: Promise<unknown>) => {
       // Admission can outlast waitFor's default; only backend entry makes the held result ready.
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        compactResult.then((response) => {
-          throw new Error(
-            `Compaction RPC completed before backend entry: ${JSON.stringify(response)}`,
-          );
-        }),
-      ]);
+        compactResult,
+        "Compaction RPC completed before backend entry",
+      );
       expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
     },
   };
@@ -79,20 +75,10 @@ export async function createCompactedSessionFixture(dir: string) {
   await session.appendMessageAsync(
     makeAgentAssistantMessage({
       content: [{ type: "text", text: "working on it" }],
-      api: "responses",
-      model: "gpt-test",
-      usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
-      timestamp: Date.now(),
     }),
   );
   const preCompactionLeafId = persistLeaf("expected persisted session leaf before compaction");
   await session.appendCompactionAsync("compaction summary", preCompactionLeafId, 123, { ok: true });
-  const postCompactionLeafId = persistLeaf("expected post-compaction leaf");
-  return {
-    session,
-    sessionId: session.getSessionId(),
-    sessionFile,
-    preCompactionLeafId,
-    postCompactionLeafId,
-  };
+  persistLeaf("expected post-compaction leaf");
+  return { sessionId: session.getSessionId(), sessionFile };
 }
