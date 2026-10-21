@@ -1,4 +1,4 @@
-import type { MSTeamsConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MSTeamsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 import { MSTeamsConfigSchema } from "./src/config-schema.js";
