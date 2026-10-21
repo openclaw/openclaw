@@ -35,12 +35,15 @@ function withSlackApi(
   }
   vi.stubEnv("NO_PROXY", "*");
   return withServer(
-    async (request, response) => {
+    (request, response) => {
       const url = request.url ?? "";
       paths.push(url);
       request.resume();
-      const payload = await respond(url, paths.length);
-      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(payload));
+      void Promise.resolve(respond(url, paths.length)).then((payload) => {
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(JSON.stringify(payload));
+      });
     },
     async (baseUrl) => {
       vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);

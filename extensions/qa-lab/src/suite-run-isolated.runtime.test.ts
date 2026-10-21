@@ -74,8 +74,10 @@ it("preserves scenario runtimes without a global override", async () => {
   });
   const runs = await runIsolated(3, { scenarioIds: [] });
 
-  expect(mocks.startQaGatewayChild.mock.calls.map(([params]) => params.forcedRuntime)).toEqual(
-    expect.arrayContaining([...expectedPins]),
+  expect(mocks.startQaGatewayChild.mock.calls).toEqual(
+    expect.arrayContaining(
+      expectedPins.map((forcedRuntime) => [expect.objectContaining({ forcedRuntime })]),
+    ),
   );
   const runtimes = Object.fromEntries(runs.map(([env, scenario]) => [scenario.id, env.runtimeId]));
   expect(runtimes).toEqual({ codex: "codex", openclaw: "openclaw", unpinned: "openclaw" });

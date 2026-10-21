@@ -86,7 +86,7 @@ export function startCompactActiveRun(
   params: HandleCommandsParams,
   options: { abortable?: boolean; settleOnCancel?: boolean; onCancel?: () => void } = {},
 ) {
-  const { sessionKey, storePath, agentId = "main" } = params;
+  const { sessionKey, storePath, agentId } = params;
   const sessionId = params.sessionEntry?.sessionId;
   assert(sessionId && storePath, "Active compaction fixture requires session and store identities");
   const target = captureSessionTarget({

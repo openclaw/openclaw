@@ -43,7 +43,11 @@ export async function withMcpBrowser(
     const page = context.pages()[0] ?? (await context.newPage());
     await run({ profile, profileName, context, page });
   } finally {
-    await closeChromeMcpSession(profileName).finally(() => context.close());
+    try {
+      await closeChromeMcpSession(profileName);
+    } finally {
+      await context.close();
+    }
   }
 }
 

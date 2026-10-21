@@ -66,7 +66,9 @@ module.exports = {
   });
   const createHost = (first: string, ...rest: string[]) =>
     expectDefined(
-      createCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)], tempDirs.make),
+      createCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)], (prefix) =>
+        tempDirs.make(prefix),
+      ),
       "compiled SDK host",
     );
   const host = createHost("first", "second");

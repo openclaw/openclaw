@@ -6,9 +6,8 @@ type Flow = Extract<Scenario["execution"], { kind: "flow" }>;
 type ScenarioOptions = Partial<
   Pick<Scenario, "plugins" | "gatewayConfigPatch" | "runtimePairLane" | "surface">
 > &
-  Pick<
-    Flow,
-    "channel" | "config" | "flowKind" | "runtime" | "suiteIsolation" | "transportPolicy"
+  Partial<
+    Pick<Flow, "channel" | "config" | "flowKind" | "runtime" | "suiteIsolation" | "transportPolicy">
   > & {
     gatewayRuntime?: Omit<NonNullable<Scenario["gatewayRuntime"]>, "env">;
   };
@@ -70,11 +69,19 @@ export function recordQaSuiteTestResults(
     const id = invocation.begin(index);
     const status = result.status === "skip" ? "skipped" : result.status;
     const test = { kind: "qa-scenario" as const, id: definition.id, title: definition.title };
-    const observation =
-      result.status === "fail" && result.details
-        ? { status, failure: { reason: result.details } }
-        : { status };
-    invocation.complete(id, { status, entries: [{ test, coverage: [], result: observation }] });
+    invocation.complete(id, {
+      status,
+      entries: [
+        {
+          test,
+          coverage: [],
+          result:
+            result.status === "fail" && result.details
+              ? { status, failure: { reason: result.details } }
+              : { status },
+        },
+      ],
+    });
     return { ...result, evidenceOccurrenceId: invocation.select(index, id) };
   });
   return {

@@ -24,12 +24,13 @@ vi.mock("../../agents/isolated-completion-route.js", () => ({
 const cfg: OpenClawConfig = {
   agents: { defaults: { model: { primary: "test-provider/allowed" } } },
 };
-const dispatch = vi.fn();
-const route = {
-  selection: {
-    selectedHarnessId: "test-harness",
-    harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
-  },
+const design = {
+  version: 1,
+  id: "garden-keeper",
+  name: "Garden Keeper",
+  description: "A gardener with a sprout.",
+  palette: { shell: "#87b891", claw: "#5b9471", glint: "#fff0b3" },
+  layers: { back: "", left_prop: "", right_prop: "", shell_overlay: "", accessory: "" },
 };
 
 beforeEach(() => {
@@ -43,8 +44,7 @@ beforeEach(() => {
     outputTextPolicy: "strict-visible",
   });
   utility.provider.mockReset().mockReturnValue({ provider: "test-provider" });
-  utility.route.mockReset().mockResolvedValue(route);
-  dispatch.mockReset();
+  utility.route.mockReset();
   completion.resolveModelAsync.mockImplementation(async (provider, model) => ({
     logicalRef: { provider, model },
     model: { provider, id: model, api: "openai-completions" },
@@ -85,7 +85,10 @@ function operator() {
   };
 }
 
-async function generate(authority: ReturnType<typeof operator>["authority"]) {
+async function generate(
+  authority: ReturnType<typeof operator>["authority"],
+  hasCurrentClientAuthority = () => true,
+) {
   const respond = vi.fn();
   await agentAvatarGenerateHandler({
     req: { type: "req", id: "avatar-authority", method: "agents.avatar.generate" },
@@ -97,30 +100,72 @@ async function generate(authority: ReturnType<typeof operator>["authority"]) {
       internal: { operatorRunAuthority: authority },
     } as GatewayRequestHandlerOptions["client"],
     isWebchatConnect: () => false,
+    hasCurrentClientAuthority,
   });
   return respond;
 }
 
-it("does not dispatch after model authority is revoked during route preparation", async () => {
-  const access = operator();
-  utility.route.mockImplementationOnce(async () => {
-    access.revokeModel();
-    return route;
+it("returns a preview through the real handler and isolated completion owner", async () => {
+  const dispatch = vi.fn(async () => ({
+    assistant: {
+      ...isolatedAssistant([{ type: "text", text: JSON.stringify(design) }]),
+      provider: "test-provider",
+      model: "allowed",
+    },
+  }));
+  utility.route.mockResolvedValue({
+    selection: {
+      selectedHarnessId: "test-harness",
+      harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
+    },
   });
-  const respond = await generate(access.authority);
+  const respond = await generate(operator().authority);
+  expect(dispatch).toHaveBeenCalledOnce();
   expect(respond).toHaveBeenCalledWith(
-    false,
+    true,
+    expect.objectContaining({ name: "Garden Keeper", svg: expect.stringContaining("<svg") }),
     undefined,
-    expect.objectContaining({
-      code: "FORBIDDEN",
-    }),
   );
-  expect(dispatch).not.toHaveBeenCalled();
 });
+
+it.each(["device", "model"] as const)(
+  "does not dispatch to the provider after %s authority is revoked during route preparation",
+  async (kind) => {
+    const dispatch = vi.fn();
+    const access = operator();
+    let deviceCurrent = true;
+    let firstRoute = true;
+    utility.route.mockImplementation(async () => {
+      if (firstRoute) {
+        firstRoute = false;
+        if (kind === "device") {
+          deviceCurrent = false;
+        } else {
+          access.revokeModel();
+        }
+      }
+      return {
+        selection: {
+          selectedHarnessId: "test-harness",
+          harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
+        },
+      };
+    });
+    const respond = await generate(access.authority, () => deviceCurrent);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: kind === "device" ? "UNAVAILABLE" : "FORBIDDEN",
+      }),
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  },
+);
 
 it("does not retry or publish after model access is revoked during the first completion", async () => {
   const access = operator();
-  dispatch.mockImplementation(async () => {
+  const dispatch = vi.fn(async () => {
     access.revokeModel();
     return {
       assistant: {
@@ -129,6 +174,12 @@ it("does not retry or publish after model access is revoked during the first com
         model: "allowed",
       },
     };
+  });
+  utility.route.mockResolvedValue({
+    selection: {
+      selectedHarnessId: "test-harness",
+      harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
+    },
   });
   const respond = await generate(access.authority);
   expect(respond).toHaveBeenCalledWith(

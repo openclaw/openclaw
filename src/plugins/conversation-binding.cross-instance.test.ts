@@ -35,10 +35,15 @@ type StoredBinding = {
   metadata?: Record<string, unknown>;
 };
 type TelegramStore = ReturnType<typeof createPluginStateKeyedStoreV2ForTests<StoredBinding>>;
-type TelegramFacade = Pick<
-  typeof import("../../extensions/telegram/runtime-api.js"),
-  "createTelegramThreadBindingManager" | "setTelegramRuntime"
->;
+type TelegramFacade = {
+  setTelegramRuntime: (runtime: PluginRuntime) => void;
+  createTelegramThreadBindingManager: (params: {
+    cfg: { channels: { telegram: { botToken: string } } };
+    accountId: string;
+    persist: boolean;
+    enableSweeper: boolean;
+  }) => Promise<{ stop: () => Promise<void> }>;
+};
 
 const telegramConfig = { channels: { telegram: { botToken: "test-token" } } };
 const conversation = {
