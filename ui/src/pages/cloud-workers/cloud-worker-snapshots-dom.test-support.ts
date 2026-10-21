@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent } from "solid-js";
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -28,6 +28,7 @@ export function setupSnapshotsDomSuite() {
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     await i18n.setLocale("en");
   });
+  afterEach(() => vi.useRealTimers());
 }
 
 export function mountPage(
