@@ -284,13 +284,6 @@ export class RestScheduler<TData> {
       if (!requeued) {
         this.queuedRequests = Math.max(0, this.queuedRequests - 1);
       }
-      if (bucket.active === 0 && countPending(bucket) === 0) {
-        for (const routeKey of bucket.routeKeys) {
-          if (this.routeBuckets.get(routeKey) === routeKey) {
-            this.routeBuckets.delete(routeKey);
-          }
-        }
-      }
       this.drainQueues();
     }
   }

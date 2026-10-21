@@ -45,8 +45,5 @@ export function validateDiscordProxyUrl(proxyUrl: string): string {
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error("Proxy URL must use http or https");
   }
-  if (!parsed.hostname) {
-    throw new Error("Proxy URL must include a host");
-  }
   return proxyUrl;
 }
