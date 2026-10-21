@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";
@@ -82,7 +83,6 @@ describe("extension profile readiness", () => {
     const unavailable = browser.profile.ensureBrowserAvailable().catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(8_500);
 
-    expect(await unavailable).toEqual(expect.objectContaining({ message: expect.any(String) }));
     expect((await unavailable) as Error).toHaveProperty(
       "message",
       expect.stringContaining("Pair the browser extension."),
@@ -104,18 +104,13 @@ describe("extension profile readiness", () => {
 
     controller.abort(new Error("first browser request cancelled"));
     expect((await cancelled) as Error).toHaveProperty("message", "first browser request cancelled");
-    const runtime = browser.state.profiles.get("chrome");
-    expect(runtime).toBeDefined();
-    if (runtime) {
-      expect(getProfileLifecycle(runtime).leases.size).toBe(1);
-    }
+    const runtime = expectDefined(browser.state.profiles.get("chrome"), "extension runtime");
+    const lifecycle = getProfileLifecycle(runtime);
+    expect(lifecycle.leases.size).toBe(1);
     expect(browser.state.extensionRelays?.get("chrome")).toBe(browser.relay);
     browser.connect();
     await expect(sibling).resolves.toBeUndefined();
-    if (runtime) {
-      expect(getProfileLifecycle(runtime).starts.size).toBe(0);
-      expect(getProfileLifecycle(runtime).leases.size).toBe(0);
-    }
+    expect([lifecycle.starts.size, lifecycle.leases.size]).toEqual([0, 0]);
     expect(browser.relay.bridge.extensionConnected).toBe(true);
     browser.dispose();
     expect(vi.getTimerCount()).toBe(0);

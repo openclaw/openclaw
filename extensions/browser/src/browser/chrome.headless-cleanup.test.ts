@@ -539,33 +539,13 @@ it("holds cross-runtime exclusion through reset's trash operation, with nested s
 });
 
 it.each([
-  {
-    configuredHeadless: false,
-    ownsProfile: true,
-    code: "websocket_health_command_timeout",
-    recovers: true,
-  },
-  {
-    configuredHeadless: true,
-    ownsProfile: true,
-    code: "websocket_health_command_timeout",
-    recovers: true,
-  },
-  {
-    configuredHeadless: false,
-    ownsProfile: false,
-    code: "websocket_health_command_timeout",
-    recovers: false,
-  },
-  {
-    configuredHeadless: false,
-    ownsProfile: true,
-    code: "websocket_health_command_failed",
-    recovers: false,
-  },
-])(
-  "recovers stale cache browser with configuredHeadless=$configuredHeadless, ownsProfile=$ownsProfile, code=$code",
-  async ({ configuredHeadless, ownsProfile, code, recovers }) => {
+  [false, true, "websocket_health_command_timeout", true],
+  [true, true, "websocket_health_command_timeout", true],
+  [false, false, "websocket_health_command_timeout", false],
+  [false, true, "websocket_health_command_failed", false],
+] as const)(
+  "recovers stale cache browser with configuredHeadless=%s, ownsProfile=%s, code=%s",
+  async (configuredHeadless, ownsProfile, code, recovers) => {
     const { resolved, profile, kill, chrome } = setupOwnedBrowser(
       "cache",
       ownsProfile,

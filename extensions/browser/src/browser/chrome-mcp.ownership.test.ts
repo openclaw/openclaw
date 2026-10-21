@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSessionStub,
+  installChromeMcpSessionTestHooks,
   pagesResult,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -128,15 +129,10 @@ function mockNativeClose(pages: FakePage[]) {
 }
 
 describe("Chrome MCP durable tab ownership", () => {
-  beforeEach(async () => {
-    await resetChromeMcpSessionsForTest();
+  installChromeMcpSessionTestHooks();
+  beforeEach(() => {
     fetchJsonMock.mockReset();
     fetchOkMock.mockReset().mockResolvedValue(undefined);
-  });
-
-  afterEach(async () => {
-    await resetChromeMcpSessionsForTest();
-    vi.restoreAllMocks();
   });
 
   it("serializes duplicate-destination opens while preserving unique marker mapping", async () => {

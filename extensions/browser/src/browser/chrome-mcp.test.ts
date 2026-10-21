@@ -564,10 +564,7 @@ describe("chrome MCP page parsing", () => {
   it("reads jpeg screenshots and cleans their workspace", async () => {
     const session = createFakeSession();
     setChromeMcpSessionFactoryForTest(() => session);
-    const result = takeChromeMcpScreenshot({
-      ...fakeTarget,
-      format: "jpeg",
-    });
+    const result = takeChromeMcpScreenshot({ ...fakeTarget, format: "jpeg" });
     await expect(result).resolves.toEqual(Buffer.from("screenshot:jpeg"));
     const filePath = vi
       .mocked(session.client)
@@ -643,7 +640,10 @@ describe("chrome MCP page parsing", () => {
     },
   );
 
-  it("terminates the owned Chrome MCP subprocess tree when closing temporary sessions", async () => {
+  it.each([
+    { reparented: false, owned: [125, 124, 123] },
+    { reparented: true, owned: [123] },
+  ])("terminates only owned processes (reparented=$reparented)", async ({ reparented, owned }) => {
     const { closeMock } = installProcessSession();
     const killCalls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const alive = new Set([123, 124, 125]);
@@ -652,7 +652,7 @@ describe("chrome MCP page parsing", () => {
       listProcesses: vi.fn(async () =>
         [
           processSnapshot(123, 1),
-          processSnapshot(124, 123),
+          processSnapshot(124, reparented ? 999 : 123),
           processSnapshot(125, 124),
           processSnapshot(126, 1),
         ].filter(({ pid }) => alive.has(pid)),
@@ -668,44 +668,9 @@ describe("chrome MCP page parsing", () => {
     await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
 
     expect(closeMock).toHaveBeenCalledTimes(1);
-    expect(killCalls).toEqual([
-      { pid: 125, signal: "SIGTERM" },
-      { pid: 124, signal: "SIGTERM" },
-      { pid: 123, signal: "SIGTERM" },
-      { pid: 125, signal: "SIGKILL" },
-      { pid: 124, signal: "SIGKILL" },
-      { pid: 123, signal: "SIGKILL" },
-    ]);
-  });
-
-  it("retains the proven root while skipping exited and reparented descendants", async () => {
-    installProcessSession();
-    const alive = new Set([123, 124, 125]);
-    const killProcess = vi.fn((pid: number, signal: NodeJS.Signals) => {
-      if (signal === "SIGKILL") {
-        alive.delete(pid);
-      }
-    });
-    mockCleanupProcesses({
-      platform: "linux",
-      listProcesses: vi.fn(async () =>
-        [
-          processSnapshot(123, 1),
-          // 124 reparented before the snapshot; 125 remains its child. An exited
-          // child is simply absent. Neither can become owned through stale ancestry.
-          processSnapshot(124, 999),
-          processSnapshot(125, 124),
-        ].filter(({ pid }) => alive.has(pid)),
-      ),
-      killProcess,
-    });
-
-    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
-
-    expect(killProcess).toHaveBeenCalledWith(123, "SIGTERM");
-    expect(killProcess).toHaveBeenCalledWith(123, "SIGKILL");
-    expect(killProcess).not.toHaveBeenCalledWith(124, expect.anything());
-    expect(killProcess).not.toHaveBeenCalledWith(125, expect.anything());
+    expect(killCalls).toEqual(
+      (["SIGTERM", "SIGKILL"] as const).flatMap((signal) => owned.map((pid) => ({ pid, signal }))),
+    );
   });
 
   it("keeps snapshot uncertainty closed after the root disappears", async () => {

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
-import type { BrowserServerState } from "./server-context.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
 const braveProfileDir = fs.realpathSync(
@@ -35,7 +34,10 @@ function tab(targetId: string, url: string, title = "") {
   return { targetId, title, url, type: "page" as const };
 }
 
-function setup(configure?: (state: BrowserServerState) => void) {
+function setup(
+  profile: Parameters<typeof makeBrowserProfile>[0] = {},
+  overrides: NonNullable<Parameters<typeof makeBrowserServerState>[0]>["resolvedOverrides"] = {},
+) {
   const settings = {
     cdpPort: 18801,
     color: "#0066CC",
@@ -49,10 +51,10 @@ function setup(configure?: (state: BrowserServerState) => void) {
       evaluateEnabled: true,
       headless: false,
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-      profiles: { "chrome-live": settings },
+      profiles: { "chrome-live": { ...settings, ...profile } },
+      ...overrides,
     },
   });
-  configure?.(state);
   const ctx = createBrowserRouteContext({ getState: () => state });
   return {
     state,
@@ -104,13 +106,10 @@ afterEach(() => {
 
 describe("browser server-context existing-session profile", () => {
   it("fails closed for Chrome MCP endpoint mcpArgs under the default CDP policy", async () => {
-    const { live } = setup((state) => {
-      state.resolved.ssrfPolicy = {};
-      state.resolved.profiles["chrome-live"] = {
-        ...state.resolved.profiles["chrome-live"],
-        mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"],
-      };
-    });
+    const { live } = setup(
+      { mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"] },
+      { ssrfPolicy: {} },
+    );
 
     await expect(live.listTabs()).rejects.toThrow(/Chrome MCP cannot carry that pinned transport/);
     await expect(live.openTab("https://example.com")).rejects.toThrow(
@@ -124,13 +123,10 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("reports endpoint cdpUrl for existing-session profiles", async () => {
-    const { ctx } = setup((state) => {
-      state.resolved.ssrfPolicy = undefined;
-      state.resolved.profiles["chrome-live"] = {
-        ...state.resolved.profiles["chrome-live"],
-        cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222",
-      };
-    });
+    const { ctx } = setup(
+      { cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222" },
+      { ssrfPolicy: undefined },
+    );
 
     const profiles = await ctx.listProfiles();
 
@@ -203,17 +199,13 @@ describe("browser server-context existing-session profile", () => {
       .mockResolvedValue(false);
     try {
       await expect(live.stopRunningBrowser()).rejects.toThrow("MCP cleanup failed");
-      expect(chromeMcp.closeChromeMcpSession.mock.calls).toEqual([
-        ["chrome-live"],
-        ["chrome-live"],
-      ]);
+      expect(chromeMcp.closeChromeMcpSession.mock.calls).toEqual(
+        Array.from({ length: 2 }, () => ["chrome-live"]),
+      );
       await expect(live.stopRunningBrowser()).resolves.toEqual({ stopped: true });
-      expect(chromeMcp.closeChromeMcpSession.mock.calls).toEqual([
-        ["chrome-live"],
-        ["chrome-live"],
-        ["chrome-live"],
-        ["chrome-live"],
-      ]);
+      expect(chromeMcp.closeChromeMcpSession.mock.calls).toEqual(
+        Array.from({ length: 4 }, () => ["chrome-live"]),
+      );
     } finally {
       chromeMcp.closeChromeMcpSession.mockReset().mockResolvedValue(true);
     }
@@ -246,9 +238,7 @@ describe("browser server-context existing-session profile", () => {
     const blockedTab = tab("chrome-mcp:blocked:1", "http://127.0.0.1:9/", "Blocked");
     chromeMcp.openChromeMcpTab.mockResolvedValueOnce(goodTab).mockResolvedValueOnce(blockedTab);
     chromeMcp.listChromeMcpTabs.mockResolvedValue([goodTab, blockedTab]);
-    const { state, live } = setup((configured) => {
-      configured.resolved.ssrfPolicy = {};
-    });
+    const { state, live } = setup({}, { ssrfPolicy: {} });
 
     await expect(live.openTab("https://example.com", { label: "good" })).resolves.toMatchObject({
       targetId: goodTab.targetId,
