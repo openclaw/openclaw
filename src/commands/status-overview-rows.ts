@@ -6,6 +6,12 @@ import { formatDatabaseEngineSelection } from "../infra/database-engine/report.j
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import {
+  resolveMemoryVectorState,
+  resolveMemoryFtsState,
+  resolveMemoryCacheSummary,
+  type Tone,
+} from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { BackupRunFreshness } from "../state/backup-run-records.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
@@ -19,12 +25,92 @@ import { buildStatusDatabaseStoreRows } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import { countActiveStatusAgents, formatHostDesktopStatus } from "./status-overview-values.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
-import {
-  buildStatusHeartbeatValue,
-  buildStatusLastHeartbeatValue,
-  buildStatusMemoryValue,
-} from "./status.command-sections.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
+
+function buildStatusLastHeartbeatValue(params: {
+  deep?: boolean;
+  gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
+  lastHeartbeat: HeartbeatEventPayload | null;
+}) {
+  if (!params.deep) {
+    // Fast status omits the row entirely instead of implying heartbeat is missing.
+    return null;
+  }
+  if (params.gatewayStartupPhase) {
+    return theme.muted(`not checked (gateway still starting; phase ${params.gatewayStartupPhase})`);
+  }
+  if (!params.gatewayReachable) {
+    return theme.warn("unavailable");
+  }
+  if (!params.lastHeartbeat) {
+    return theme.muted("none");
+  }
+  const age = formatTimeAgo(Date.now() - params.lastHeartbeat.ts);
+  const accountLabel = params.lastHeartbeat.accountId
+    ? `account ${params.lastHeartbeat.accountId}`
+    : null;
+  return [params.lastHeartbeat.status, age, params.lastHeartbeat.channel, accountLabel]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function buildStatusMemoryValue(params: {
+  memory: MemoryStatusSnapshot | null;
+  memoryPlugin: MemoryPluginStatus;
+  memoryUnavailableLabel?: string;
+}) {
+  if (!params.memoryPlugin.enabled) {
+    const suffix = params.memoryPlugin.reason ? ` (${params.memoryPlugin.reason})` : "";
+    return theme.muted(`disabled${suffix}`);
+  }
+  if (!params.memory) {
+    const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
+    return theme.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
+  }
+  if ("health" in params.memory) {
+    const detail = params.memory.health.message ? ` · ${params.memory.health.message}` : "";
+    const status =
+      params.memory.health.status === "ready"
+        ? theme.success("ready")
+        : params.memory.health.status === "degraded"
+          ? theme.warn("degraded")
+          : theme.warn("unavailable");
+    return `plugin ${params.memory.provider} · ${status}${detail}`;
+  }
+  const parts: string[] = [];
+  const dirtySuffix = params.memory.dirty ? ` · ${theme.warn("dirty")}` : "";
+  parts.push(`${params.memory.files} files · ${params.memory.chunks} chunks${dirtySuffix}`);
+  if (params.memory.sources?.length) {
+    parts.push(`sources ${params.memory.sources.join(", ")}`);
+  }
+  if (params.memoryPlugin.slot) {
+    parts.push(`plugin ${params.memoryPlugin.slot}`);
+  }
+  const colorByTone = (tone: Tone, text: string) =>
+    tone === "ok" ? theme.success(text) : tone === "warn" ? theme.warn(text) : theme.muted(text);
+  if (params.memory.vector) {
+    const vector =
+      params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
+        ? // Built-in memory reports store availability under a backend-specific field.
+          { ...params.memory.vector, available: params.memory.vector.storeAvailable }
+        : params.memory.vector;
+    const state = resolveMemoryVectorState(vector);
+    const prefix = params.memory.backend === "builtin" ? "vector store" : "vector";
+    const label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
+    parts.push(colorByTone(state.tone, label));
+  }
+  if (params.memory.fts) {
+    const state = resolveMemoryFtsState(params.memory.fts);
+    const label = state.state === "disabled" ? "fts off" : `fts ${state.state}`;
+    parts.push(colorByTone(state.tone, label));
+  }
+  if (params.memory.cache) {
+    const summary = resolveMemoryCacheSummary(params.memory.cache);
+    parts.push(colorByTone(summary.tone, summary.text));
+  }
+  return parts.join(" · ");
+}
 
 type StatusDegradationSummary = Pick<
   StatusSummary,
@@ -133,7 +219,16 @@ export function buildStatusCommandOverviewRows(params: {
   const probesValue = params.health
     ? theme.success("enabled")
     : theme.muted("skipped (use --deep)");
-  const heartbeatValue = buildStatusHeartbeatValue({ summary: params.summary });
+  const heartbeatParts = params.summary.heartbeat.agents.map((agent) => {
+    if (!agent.enabled || !agent.everyMs) {
+      return `disabled (${agent.agentId})`;
+    }
+    if (agent.waitingForRoute) {
+      return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
+    }
+    return `${agent.every} (${agent.agentId})`;
+  });
+  const heartbeatValue = heartbeatParts.length > 0 ? heartbeatParts.join(", ") : "disabled";
   const lastHeartbeatValue = buildStatusLastHeartbeatValue({
     deep: params.opts.deep,
     gatewayReachable: params.surface.gatewayReachable,

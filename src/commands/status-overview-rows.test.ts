@@ -197,6 +197,31 @@ it("marks skipped memory inspection as not checked in fast status output", () =>
   );
 });
 
+it("renders native provider health without legacy index counters", () => {
+  params.memory = {
+    agentId: "main",
+    provider: "records",
+    health: { status: "degraded", message: "warming" },
+  };
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Memory")).toBe(
+    "plugin records · warn(degraded) · warming",
+  );
+});
+
+it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
+  params.summary.heartbeat = {
+    defaultAgentId: "main",
+    agents: [
+      { agentId: "main", enabled: true, every: "1m", everyMs: 60_000, waitingForRoute: true },
+    ],
+  };
+  const value = findRowValue(buildStatusCommandOverviewRows(params), "Heartbeat");
+  expect(value).toContain("1m (main; waiting for delivery route");
+  expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+  expect(value).toContain('heartbeat.target="telegram"');
+  expect(value).toContain('heartbeat.to="123456789"');
+});
+
 it("shows managed host desktop coordinates", () => {
   params.summary.hostDesktop = {
     enabled: true,
