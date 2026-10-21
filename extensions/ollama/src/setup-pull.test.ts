@@ -10,7 +10,11 @@ function mockPull(body: BodyInit, update: () => void = vi.fn()) {
   fetchWithSsrFGuardMock.mockResolvedValue({ response: new Response(body), release });
   const progress = { update, stop: vi.fn() };
   const prompter = createTestWizardPrompter({ progress: () => progress });
-  return { release, progress, pull: () => pullOllamaModel(baseUrl, "gemma4:e2b", prompter) };
+  return async (ok: boolean, message: unknown = "Downloaded gemma4:e2b") => {
+    await expect(pullOllamaModel(baseUrl, "gemma4:e2b", prompter)).resolves.toBe(ok);
+    expect(progress.stop).toHaveBeenCalledWith(message);
+    expect(release).toHaveBeenCalledOnce();
+  };
 }
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
@@ -22,15 +26,11 @@ describe("Ollama onboarding model pulls", () => {
   afterEach(() => fetchWithSsrFGuardMock.mockReset());
 
   it("uses the canonical Ollama model request field and requires its success terminal", async () => {
-    const { release, progress, pull } = mockPull(
-      '{"status":"pulling manifest"}\n{"status":"success"}\n',
-    );
-    await expect(pull()).resolves.toBe(true);
+    const check = mockPull('{"status":"pulling manifest"}\n{"status":"success"}\n');
+    await check(true);
 
     const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as { init?: { body?: string } };
     expect(JSON.parse(request.init?.body ?? "null")).toEqual({ model: "gemma4:e2b" });
-    expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4:e2b");
-    expect(release).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -41,13 +41,7 @@ describe("Ollama onboarding model pulls", () => {
     { label: "malformed stream", body: "not valid json\n" },
     { label: "incomplete trailing record", body: '{"status":"success"' },
   ])("does not report a completed model pull for an $label", async ({ body }) => {
-    const { release, progress, pull } = mockPull(body);
-    await expect(pull()).resolves.toBe(false);
-
-    expect(progress.stop).toHaveBeenCalledWith(
-      "Failed to download gemma4:e2b: pull stream ended before success",
-    );
-    expect(release).toHaveBeenCalledOnce();
+    await mockPull(body)(false, "Failed to download gemma4:e2b: pull stream ended before success");
   });
 
   it.each([
@@ -65,42 +59,34 @@ describe("Ollama onboarding model pulls", () => {
       ]),
     },
   ])("accepts $label", async ({ body }) => {
-    const { progress, pull } = mockPull(body);
-    await expect(pull()).resolves.toBe(true);
-    expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4:e2b");
+    await mockPull(body)(true);
   });
 
   it.each([
     { status: "pulling manifest" },
     { status: "pulling abcdef123456", total: 100, completed: 40 },
   ])("reports progress failures instead of a successful pull for %j", async (chunk) => {
-    const { release, progress, pull } = mockPull(
+    const check = mockPull(
       `${JSON.stringify(chunk)}\n{"status":"success"}\n`,
       vi.fn(() => {
         throw new Error("progress display failed");
       }),
     );
-    await expect(pull()).resolves.toBe(false);
-    expect(progress.stop).toHaveBeenCalledWith(
-      "Failed to download gemma4:e2b: progress display failed",
-    );
-    expect(release).toHaveBeenCalledOnce();
+    await check(false, "Failed to download gemma4:e2b: progress display failed");
   });
 
   it("coerces non-Error stream failures through the shared error contract", async () => {
-    const { release, progress, pull } = mockPull(
+    const check = mockPull(
       new ReadableStream<Uint8Array>({
         pull(controller) {
           controller.error({ code: "OLLAMA_PULL_INTERRUPTED" });
         },
       }),
     );
-    await expect(pull()).resolves.toBe(false);
-
-    expect(progress.stop).toHaveBeenCalledWith(
+    await check(
+      false,
       expect.stringContaining("Failed to download gemma4:e2b: Non-Error rejection"),
     );
-    expect(release).toHaveBeenCalledOnce();
   });
 
   it("cancels an oversized unterminated pull record", async () => {
@@ -116,16 +102,14 @@ describe("Ollama onboarding model pulls", () => {
         canceled = true;
       },
     });
-    const { release, progress, pull } = mockPull(body);
-    await expect(pull()).resolves.toBe(false);
+    await mockPull(body)(
+      false,
+      "Failed to download gemma4:e2b: Ollama NDJSON record exceeds 16777216 bytes",
+    );
 
     expect(readCount).toBeGreaterThan(16);
     expect(readCount).toBeLessThan(32);
     expect(canceled).toBe(true);
     expect(body.locked).toBe(false);
-    expect(progress.stop).toHaveBeenCalledWith(
-      "Failed to download gemma4:e2b: Ollama NDJSON record exceeds 16777216 bytes",
-    );
-    expect(release).toHaveBeenCalledOnce();
   });
 });

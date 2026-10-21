@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createModel } from "../model.test-support.js";
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: fetchMock }));
@@ -46,19 +47,12 @@ describe.each(["runtime", "configured"] as const)(
         release: async () => undefined,
       });
       const model: ProviderRuntimeModel = {
-        id,
-        name: "test model",
+        ...createModel(id, "test model", { reasoning: true, contextWindow: 131072 }),
         provider: "ollama",
         api: "ollama",
         baseUrl: modelBaseUrl,
-        reasoning: true,
-        input: ["text"],
-        contextWindow: 131072,
-        maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         ...(source === "configured" ? { params: { thinking: "max" } } : {}),
       };
-      const baseStream = createConfiguredOllamaStreamFn({ model, providerBaseUrl });
       const streamFn = expectDefined(
         createConfiguredOllamaCompatStreamWrapper({
           provider: model.provider,
@@ -72,7 +66,7 @@ describe.each(["runtime", "configured"] as const)(
               }
             : undefined,
           thinkingLevel: source === "runtime" ? "max" : "off",
-          streamFn: baseStream,
+          streamFn: createConfiguredOllamaStreamFn({ model, providerBaseUrl }),
         }),
         "wrapped stream",
       );

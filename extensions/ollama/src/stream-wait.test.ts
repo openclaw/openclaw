@@ -1,6 +1,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModel } from "../model.test-support.js";
 
 const { guardedFetch } = vi.hoisted(() => ({
   guardedFetch: vi.fn<typeof fetchWithSsrFGuard>(),
@@ -13,16 +14,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 import { createOllamaStreamFn } from "./stream.runtime.js";
 
 const model: Model = {
+  ...createModel("qwen3:4b", "Qwen3 4B", { reasoning: true, contextWindow: 32768 }),
   api: "ollama",
   provider: "ollama",
   baseUrl: "http://localhost:11434",
-  id: "qwen3:4b",
-  name: "Qwen3 4B",
-  reasoning: true,
-  input: ["text"],
-  contextWindow: 32768,
-  maxTokens: 8192,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
 const notify = vi.fn();
@@ -32,11 +27,6 @@ const start = (options: { signal?: AbortSignal } = {}, id = model.id) =>
     { messages: [] },
     { onProviderWait: notify, ...options },
   );
-const pendingFetch = () => {
-  const pending = Promise.withResolvers<Awaited<ReturnType<typeof fetchWithSsrFGuard>>>();
-  guardedFetch.mockReturnValue(pending.promise);
-  return pending;
-};
 beforeEach(() => {
   vi.useFakeTimers();
   notify.mockReset();
@@ -77,29 +67,21 @@ describe("native Ollama held request status", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(["cancel", "failure"] as const)("clears a held request on %s", async (ending) => {
+  it.each(["cancel", "failure", "cloud"] as const)("settles a held %s request", async (ending) => {
+    const cloud = ending === "cloud";
     const controller = new AbortController();
-    const pending = pendingFetch();
-    const stream = await start({ signal: controller.signal });
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof fetchWithSsrFGuard>>>();
+    guardedFetch.mockReturnValue(pending.promise);
+    const stream = await start({ signal: controller.signal }, cloud ? "qwen3:cloud" : model.id);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(notify.mock.calls).toEqual([["response"]]);
+    expect(notify.mock.calls).toEqual(cloud ? [] : [["response"]]);
     if (ending === "cancel") {
       controller.abort();
       expect(notify.mock.calls).toEqual([["response"], [null]]);
     }
     pending.reject(new Error("request stopped"));
     expect((await stream.result()).stopReason).toBe(ending === "cancel" ? "aborted" : "error");
-    expect(notify.mock.calls).toEqual([["response"], [null]]);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not label a held cloud request as a local-model wait", async () => {
-    const pending = pendingFetch();
-    const stream = await start({}, "qwen3:cloud");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(notify).not.toHaveBeenCalled();
-    pending.reject(new Error("request stopped"));
-    await stream.result();
+    expect(notify.mock.calls).toEqual(cloud ? [] : [["response"], [null]]);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

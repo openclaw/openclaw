@@ -24,14 +24,7 @@ function buildBracketDenseChunks(sections: number) {
 const servers: Server[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        }),
-    ),
-  );
+  await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
 });
 
 async function startNdjsonChatServer(chunks: readonly string[]): Promise<string> {
@@ -136,10 +129,12 @@ describe("plain-text tool-call compat wrapper over the real Ollama NDJSON transp
     const payload = buildBracketDenseChunks(40);
     const run = await runThroughTransport(payload.chunks, []);
 
-    expect(run.errors).toEqual([]);
-    expect(run.doneText).toBe(payload.text);
-    expect(run.deltaText).toBe(payload.text);
-    expect(run.toolCallNames).toEqual([]);
-    expect(run.partialCarryingDeltas).toBe(0);
+    expect(run).toEqual({
+      errors: [],
+      doneText: payload.text,
+      deltaText: payload.text,
+      toolCallNames: [],
+      partialCarryingDeltas: 0,
+    });
   });
 });
