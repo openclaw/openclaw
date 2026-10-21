@@ -38,20 +38,12 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionLifecycleOwner from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
-import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { callGateway } from "../call.js";
@@ -249,17 +241,6 @@ afterEach(async () => {
   await cleanupSubagentRegistryPersistenceTest({
     stateDir,
     resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
-    closeDatabases: () => {
-      memorySessionActorOwners.closeDatabase({
-        agentId: "worker",
-        path: resolveIncognitoOpenClawAgentSqlitePath({
-          agentId: "worker",
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        }),
-      });
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-    },
   });
   registryGateway.mockReset();
   clearRuntimeConfigSnapshot();
@@ -283,8 +264,6 @@ test.each([false, true])("collector cleanup retry after reset: %s", async (reset
 async function reopen() {
   await resetSubagentRegistryForTests({ persist: false });
   await cleanupSessionStateForTest({ stateDir });
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   await initSubagentRegistry();
 }
 

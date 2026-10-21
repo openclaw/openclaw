@@ -297,6 +297,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const showPermissions = () =>
     props.membersAvailable !== false &&
     (!result() || props.state?.loading || Boolean(props.state?.error) || people().length > 0);
+  const permissionItems = () => (showPermissions() ? rosterItems()().map((item) => item()) : []);
   // The observer and its ref share the mounted permissions subtree's lifetime.
   const SharingPermissions = (view: { children: JSX.Element }) => {
     const scroll = useScrollState();
@@ -516,11 +517,11 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
         kind: "group",
         id: "permissions",
         get items() {
-          return showPermissions() ? rosterItems()().map((item) => item()) : [];
+          return permissionItems();
         },
-        render: (children) => (
+        render: (renderItems) => (
           <Show when={showPermissions()}>
-            <SharingPermissions>{children}</SharingPermissions>
+            <SharingPermissions>{renderItems(permissionItems)}</SharingPermissions>
           </Show>
         ),
       },

@@ -96,11 +96,34 @@
   transform-origin: right top;
 }
 
+/* Use the viewport to detect flips; consumer size budgets must win even when loaded first. */
+.oc-overlay:where(
+  [data-placement="left"],
+  [data-placement="left-start"],
+  [data-placement="left-end"],
+  [data-placement="right"],
+  [data-placement="right-start"],
+  [data-placement="right-end"]
+) {
+  max-height: min(
+    var(--oc-overlay-max-height, 420px),
+    var(--oc-overlay-available-height, calc(100dvh - 16px)),
+    calc(100dvh - 16px)
+  );
+}
+
 .oc-overlay[data-placement="left"],
 .oc-overlay[data-placement="left-start"],
 .oc-overlay[data-placement="left-end"] {
   margin: 0 var(--oc-overlay-distance, 6px) 0 0;
-  position-try-fallbacks: flip-inline, --oc-overlay-below, --oc-overlay-above;
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline,
+    --oc-overlay-below,
+    --oc-overlay-above,
+    --oc-overlay-right-center,
+    --oc-overlay-left-center;
   transform-origin: right;
 }
 
@@ -108,7 +131,14 @@
 .oc-overlay[data-placement="right-start"],
 .oc-overlay[data-placement="right-end"] {
   margin: 0 0 0 var(--oc-overlay-distance, 6px);
-  position-try-fallbacks: flip-inline, --oc-overlay-below, --oc-overlay-above;
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline,
+    --oc-overlay-below,
+    --oc-overlay-above,
+    --oc-overlay-right-center,
+    --oc-overlay-left-center;
   transform-origin: left;
 }
 
@@ -138,6 +168,17 @@
 .oc-overlay[data-placement="right-end"] {
   position-area: right span-top;
   transform-origin: left bottom;
+}
+
+/* A menu taller than both half-planes can still scroll beside its trigger. */
+@position-try --oc-overlay-right-center {
+  position-area: right;
+  margin: 0 0 0 var(--oc-overlay-distance, 6px);
+}
+
+@position-try --oc-overlay-left-center {
+  position-area: left;
+  margin: 0 var(--oc-overlay-distance, 6px) 0 0;
 }
 
 @position-try --oc-overlay-below {

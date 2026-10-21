@@ -34,7 +34,7 @@ import {
   type SessionListFilterParams,
   type SessionListFilteredEntries,
 } from "./session-list-filters.js";
-import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import { sortAndLimitSessionEntries, type SessionListEntry } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -78,8 +78,8 @@ export function* selectSessionEntries(
     !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
-    const entries: SessionEntryPair[] = [];
-    const ownerEntries: SessionEntryPair[] = [];
+    const entries: SessionListEntry[] = [];
+    const ownerEntries: SessionListEntry[] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
     let totalCount = 0;
     let activityExpiresAt = Infinity;
@@ -372,7 +372,7 @@ export function prepareSessionRowSelection(
   };
 }
 
-export function filterAndSortSessionEntries(params: SessionListFilterParams): SessionEntryPair[] {
+export function filterAndSortSessionEntries(params: SessionListFilterParams): SessionListEntry[] {
   return withAgentRosterFactsBatch(params.cfg, () =>
     runSynchronousWork(
       selectSessionEntries({

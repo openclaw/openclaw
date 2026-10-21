@@ -121,7 +121,9 @@ not authority for another action. The separate `inspect` action below keeps its
 existing full-operator and session-publication requirements.
 
 To continue that PR in a local managed sandbox, use `github_publish` with
-`action: "prepare_pr"` and `pullRequestUrl`. A separate inspection call is
+`action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
+sessions with a writable managed sandbox; sessions that run directly on the host
+do not see it. A separate inspection call is
 optional: preparation verifies the current linked author, repository access,
 original head and publisher write eligibility again. The request can be made in
 one message or established earlier in the conversation before the URL arrives.

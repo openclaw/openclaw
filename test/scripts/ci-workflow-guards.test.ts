@@ -840,7 +840,7 @@ AFTER_CD
   });
 
   it("serializes the shared Swift package suite on hosted macOS retries", () => {
-    const macosSwift = readCiWorkflow().jobs["macos-swift"];
+    const macosSwift = readCiWorkflow().jobs["macos-swift-packages"];
 
     expect(macosSwift.env.OPENCLAWKIT_TEST_EXECUTION).toContain("github.run_attempt > 1");
     const openClawKitTests = requiredWorkflowStep(macosSwift.steps, "OpenClawKit tests");
@@ -4359,19 +4359,51 @@ ${buildScript}`,
       workflow.jobs["build-artifacts"].steps,
       "Upload runtime for native policy tests",
     );
-    expect(workflow.jobs["macos-swift"].needs).toEqual(["preflight"]);
+    const native = workflow.jobs["macos-swift"];
+    const packages = workflow.jobs["macos-swift-packages"];
+    expect(native.needs).toEqual(["preflight", "build-artifacts"]);
+    expect(packages.needs).toEqual(["preflight"]);
+    expect(packages.strategy.matrix.phase).toEqual(["packages"]);
+    expect(packages.steps).toEqual(native.steps);
+    expect(packages["timeout-minutes"]).toBe(30);
+    for (const result of ["success", "skipped", "failure", "cancelled"] as const) {
+      const context = {
+        eventName: "schedule" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: { run_macos_swift: "true" },
+        additionalNeeds: { "build-artifacts": { result, outputs: {} } },
+      };
+      expect(evaluateWorkflowCondition(native.if, context)).toBe(
+        result === "success" || result === "skipped",
+      );
+      expect(evaluateWorkflowCondition(packages.if, context)).toBe(true);
+    }
+    expect(steps.some((step: WorkflowStep) => step.name === "Wait for native policy runtime")).toBe(
+      false,
+    );
     const build = requiredWorkflowStep(steps, "Build Swift tests");
-    const wait = requiredWorkflowStep(steps, "Wait for native policy runtime");
-    expect(steps.indexOf(build)).toBeLessThan(steps.indexOf(wait));
-    expect(steps.indexOf(wait)).toBeLessThan(steps.indexOf(download));
     expect(build.run).toContain("--build-tests");
     expect(build.run).not.toContain("macos-native-runtime");
-    expect(wait.run).toContain('macos-native-runtime-artifact.mjs wait "$TARGET_SHA"');
-    expect(wait.env.TARGET_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(download.with).toMatchObject({
-      "artifact-ids": "${{ steps.native-runtime-ready.outputs.artifact-id }}",
+      "artifact-ids": "${{ env.NATIVE_RUNTIME_ARTIFACT_ID }}",
       "merge-multiple": true,
     });
+    expect(workflow.jobs["build-artifacts"].outputs.native_runtime_artifact_id).toBe(
+      "${{ steps.native_runtime_upload.outputs.artifact-id }}",
+    );
+    // Failed-only reruns consume the successful producer's retained output ID.
+    for (const runAttempt of [1, 2]) {
+      expect(
+        evaluateWorkflowExpression(native.env.NATIVE_RUNTIME_ARTIFACT_ID, {
+          eventName: "schedule",
+          runAttempt,
+          additionalNeeds: {
+            "build-artifacts": { result: "success", outputs: { native_runtime_artifact_id: "42" } },
+          },
+        }),
+      ).toBe("42");
+    }
     expect(producer.with.name).toBe(
       "macos-native-runtime-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}",
     );

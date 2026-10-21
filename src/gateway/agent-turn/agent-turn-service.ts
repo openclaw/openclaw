@@ -408,7 +408,7 @@ export function createAgentTurnService(
             // Replay can precede startup recovery. Restore the dead predecessor's
             // custody before this admission touches its row or replaces its claim.
             const { reconcileOrphanedGatewaySessionRecovery } =
-              await import("../session-recovery-service.js");
+              await import("../session-recovery-source.js");
             entry =
               (await reconcileOrphanedGatewaySessionRecovery({
                 cfg: cfgLocal,

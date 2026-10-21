@@ -1,3 +1,4 @@
+import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerUpdateCli } from "./update-cli.js";
@@ -59,6 +60,21 @@ function expectRejected(message: string, ...commands: Array<typeof mocks.updateC
 
 describe("update cli option collisions", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("describes the shared status deadline in rendered timeout help", async () => {
+    const program = new Command();
+    let output = "";
+    program.configureOutput({ writeOut: (text) => (output += text) }).exitOverride();
+    registerUpdateCli(program);
+    await expect(
+      program.parseAsync(["update", "status", "--help"], { from: "user" }),
+    ).rejects.toMatchObject({
+      code: "commander.helpDisplayed",
+    });
+    expect(output.replace(/\s+/g, " ")).toContain(
+      "--timeout <seconds> Check timeout (default: shared 30s; longer values extend it)",
+    );
+  });
 
   it.each([
     { args: ["--full-integrity-check"], target: mocks.updateCommand },

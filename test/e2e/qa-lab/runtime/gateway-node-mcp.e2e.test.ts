@@ -12,7 +12,6 @@ import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   MCP_SERVERS,
   NODE_MCP_COMMAND,
-  TEST_TIMEOUT_MS,
   WAIT_OPTIONS,
   approvePairing,
   createMcpPlacement,
@@ -41,7 +40,8 @@ const QA_AGENT_ID = "qa";
 
 it(
   "connects, filters, inventories, invokes, withdraws, and cleans up all real transports",
-  { timeout: TEST_TIMEOUT_MS },
+  // Repair progress and Gateway readiness have independent startup deadlines.
+  { timeout: 300_000 },
   async ({ signal, onTestFinished }) => {
     // Finish hooks run in reverse order: join children before deleting their paths.
     const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);

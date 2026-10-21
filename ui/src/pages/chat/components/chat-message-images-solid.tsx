@@ -59,6 +59,7 @@ type ImagePresentation = {
   image: ImageBlock;
   key?: symbol;
   managed: boolean;
+  originalUnavailable?: boolean;
   previewUrl?: string;
   state?: "loading" | "unavailable";
   actions?: Pick<AssistantAttachmentStatusCardProps, "path" | "onAllow" | "onRetry" | "onOpen">;
@@ -259,7 +260,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
           refreshImage();
         }
       };
-      return renderImagePlaceholder(image, reason, {
+      const placeholder = renderImagePlaceholder(image, reason, {
         path: isLocalAssistantAttachmentSource(source) ? source : undefined,
         onAllow:
           !decodeFailed && availability.status === "unavailable" && availability.canAllow
@@ -274,6 +275,10 @@ function createMessageImagePresentation(props: MessageImageProps) {
             ? () => retryAvailability()
             : undefined,
       });
+      return {
+        ...placeholder,
+        originalUnavailable: availability.status === "unavailable" && !availability.unconfirmed,
+      };
     }
     if (!managed) {
       const retained = retainedImage;
@@ -638,7 +643,8 @@ function ImageFrame(props: {
   // Native previews use the viewer’s file controls. Show their inline menu only
   // when a failed preview cannot open that viewer, never over retained pixels.
   const hasFileActions = () =>
-    props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? ""));
+    !props.model.originalUnavailable &&
+    (props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? "")));
   // A mounted preview keeps its initial frame when the upload receipt adds dimensions.
   // Fresh history mounts use those durable dimensions; older facts retain a stable fallback.
   const initialDimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
@@ -650,6 +656,7 @@ function ImageFrame(props: {
         {
           "chat-image-frame--managed": props.model.managed,
           "chat-image-frame--compact": compact(),
+          "chat-image-frame--compact-actions": compact() && hasFileActions(),
         },
       ]}
       style={{
@@ -699,7 +706,7 @@ function ImageFrame(props: {
         </span>
       </Show>
       <Show when={!pending() && hasFileActions()}>
-        <ChatImageActions title={title()} readOriginalBlob={loadOriginal} />
+        <ChatImageActions title={title()} readOriginalBlob={loadOriginal} overlay={!compact()} />
       </Show>
     </span>
   );

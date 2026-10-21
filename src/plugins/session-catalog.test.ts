@@ -293,6 +293,72 @@ describe("importSessionCatalogHistory", () => {
 });
 
 describe("readBoundedSessionCatalogHistory", () => {
+  it.each([
+    ["cycle", [" A/+=? ", "B#/%", " A/+=? "]],
+    ["repeated cursor", ["A", "A"]],
+  ])("stops a %s after retaining its final page in source order", async (_name, cursors) => {
+    const pages = cursors.map((nextCursor, index) => ({
+      hostId: "gateway",
+      threadId: "thread-1",
+      items: [item(String(index), "userMessage", String(index))],
+      nextCursor,
+    }));
+    let requests = 0;
+    const read = vi.fn(async ({ cursor }: CatalogItem) => {
+      const index = requests++;
+      const page = pages[index];
+      if (!page) {
+        throw new Error("read past the repeated cursor");
+      }
+      expect(cursor).toBe(index === 0 ? undefined : cursors[index - 1]);
+      return page;
+    });
+
+    const history = await readBoundedSessionCatalogHistory({
+      read,
+      limits: { maxItems: 10, maxBytes: 10_000 },
+    });
+
+    expect(read).toHaveBeenCalledTimes(pages.length);
+    expect(history).toEqual({
+      items: pages.flatMap((page) => page.items).toReversed(),
+      totalItems: pages.length,
+      complete: false,
+    });
+  });
+
+  it.each([
+    { terminal: false, finalItems: [] },
+    { terminal: false, finalItems: [item("last", "userMessage", "last page")] },
+    { terminal: true, finalItems: [item("last", "userMessage", "last page")] },
+  ])("bounds sparse pages and reports completeness: %j", async ({ terminal, finalItems }) => {
+    let requests = 0;
+    const read = vi.fn(async () => {
+      const count = ++requests;
+      if (count > 3) {
+        throw new Error("read past the request budget");
+      }
+      return {
+        hostId: "gateway",
+        threadId: "thread-1",
+        items: count === 3 ? finalItems : [],
+        ...(count === 3 && terminal ? {} : { nextCursor: `page-${count}` }),
+      };
+    });
+
+    const history = await readBoundedSessionCatalogHistory({
+      read,
+      limits: { maxItems: 3, maxBytes: 10_000 },
+    });
+
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(history).toEqual({
+      items: finalItems,
+      totalItems: finalItems.length,
+      complete: terminal,
+    });
+  });
+
   it("retains the import ceiling independently from the continuation seed and reports older history", async () => {
     const items: TranscriptItem[] = Array.from({ length: 50_001 }, (_, index) => ({
       type: "agentMessage",

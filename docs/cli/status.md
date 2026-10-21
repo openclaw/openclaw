@@ -100,6 +100,9 @@ and pressured inbound lanes. These warnings include pending, claimed, and blocke
 message counts even when a channel connection is healthy. See
 [Queue warnings](/gateway/health#queue-warnings).
 
+Deep health also warns when a context engine is quarantined or configuration hot
+reload is disabled. Healthy auxiliary components do not add warning rows.
+
 Plain `openclaw status` stays on the fast read-only path and marks memory as
 `not checked` instead of unavailable when it skips memory inspection. Heavy
 security audit, plugin compatibility, and memory-vector checks are left to

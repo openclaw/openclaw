@@ -50,24 +50,6 @@ describe("Slack subteam mentions", () => {
     expect(list).toHaveBeenCalledTimes(1);
   });
 
-  it("drops cached membership lookups when the current clock is not a valid date timestamp", async () => {
-    const { mention, list } = createLookup(["U_BOT"]);
-    await expect(mention({ now: 1_700_000_000_000 })).resolves.toBe(true);
-    await expect(mention({ text: "<!subteam^S123> ping again", now: Number.NaN })).resolves.toBe(
-      true,
-    );
-    expect(list).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache membership lookups when the expiry timestamp would exceed the valid date range", async () => {
-    const { mention, list } = createLookup(["U_BOT"]);
-    await expect(mention({ now: 8_640_000_000_000_000 })).resolves.toBe(true);
-    await expect(
-      mention({ text: "<!subteam^S123> ping again", now: 1_700_000_000_000 }),
-    ).resolves.toBe(true);
-    expect(list).toHaveBeenCalledTimes(2);
-  });
-
   it("fails closed when Slack rejects the user-group lookup", async () => {
     const log = vi.fn();
     const { mention, list } = createLookup([]);

@@ -306,12 +306,12 @@ export function loadBundledMemoryPluginRegistry(options?: {
 export function setupBundledTelegramPlugin() {
   if (!cachedBundledTelegramDir) {
     cachedBundledTelegramDir = makePluginLoaderTempDir();
-    writePlugin({
+    const plugin = writePlugin({
       id: "telegram",
       body: BUNDLED_TELEGRAM_PLUGIN_BODY,
       dir: cachedBundledTelegramDir,
-      filename: "telegram.cjs",
     });
+    updatePluginManifest(plugin, { channels: ["telegram"] });
   }
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = cachedBundledTelegramDir;
 }

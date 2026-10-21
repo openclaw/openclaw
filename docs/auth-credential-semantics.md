@@ -92,6 +92,8 @@ and first-run noninteractive setup retain their existing behavior.
 
 Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.
 
+When `agents.defaults.authInheritance.agentId` names another agent, Doctor relocates that agent's credentials if `main` has none. If both stores contain credentials, Doctor leaves both untouched and reports a recoverable warning: keep the credentials agents should share in one store, then rerun `openclaw doctor --fix`. Agent-private credentials stay local. This repair applies during relocation; it does not change stores that have already completed the shared-state cutover.
+
 OAuth sibling synchronization writes the selected primary profile first, then the discovered shared owner before other siblings. This preserves read-through inheritance regardless of filesystem directory order. A shared owner outside the selected agents tree is not added to the synchronization targets.
 
 Auth usage and cooldown updates wait for write admission on their actual agent

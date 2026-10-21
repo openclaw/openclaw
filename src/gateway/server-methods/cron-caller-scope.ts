@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronJobEffectiveAgentId,
   tryResolveCronJobEffectiveAgentId,
@@ -40,6 +41,27 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "./types.js";
+
+/** Check stored and requested kinds: metadata-only edits must not revive command jobs. */
+export function assertCronModelJobAllowed(
+  client: GatewayClient | null,
+  config: OpenClawConfig,
+  job: Pick<CronJobCreate, "payload" | "schedule">,
+  patch?: CronJobPatch,
+): void {
+  if (
+    client?.internal?.agentRuntimeIdentity &&
+    config.tools?.gatewayPolicy?.automations?.allowCommandJobs === false &&
+    (job.payload.kind === "command" ||
+      job.schedule.kind === "on-exit" ||
+      patch?.payload?.kind === "command" ||
+      patch?.schedule?.kind === "on-exit")
+  ) {
+    throw new TypeError(
+      "Gateway tool policy denies model changes to or runs of command automations.",
+    );
+  }
+}
 
 export function resolveCronCreatorAuthorityCapture(
   callerScope: CronCallerScope | undefined,
@@ -104,7 +126,7 @@ export function resolveCronMutationCommitGuard(
   callerAuthority?: Pick<
     GatewayRequestHandlerOptions,
     "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
-  >,
+  > & { modelJobPolicy?: { config: OpenClawConfig; jobId: string; patch?: CronJobPatch } },
 ): (() => void) | undefined {
   const validatesAuthority =
     client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority;
@@ -135,6 +157,14 @@ export function resolveCronMutationCommitGuard(
       throw new TypeError("Gateway caller authority is no longer active.");
     }
     manageAll?.();
+    if (identity && callerAuthority?.modelJobPolicy) {
+      const { config, jobId, patch } = callerAuthority.modelJobPolicy;
+      const job = context.cron.getJob(jobId);
+      if (!job) {
+        throw new TypeError(`unknown cron job id: ${jobId}`);
+      }
+      assertCronModelJobAllowed(client, config, job, patch);
+    }
     if (validatesAuthority) {
       assertActiveAgentRuntimeAuthority(client, context);
     }

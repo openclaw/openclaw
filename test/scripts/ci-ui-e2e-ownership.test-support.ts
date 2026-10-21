@@ -58,6 +58,7 @@ export function assertControlUiE2eOwnership(
           (inSuiteServer &&
             [
               "createOpenClawTestInstance",
+              "createChatGatewayInstance",
               "createBackgroundWorkInstance",
               "createDesktopResizeProxy",
               "createWaitClockInstance",

@@ -24,6 +24,7 @@ import {
   selectedFiles,
   fallbackGroups,
   expectProtectedOwnerExpansion,
+  isSerialNodeTestProjection,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -876,13 +877,13 @@ describe("CI changed Node test plan", () => {
           "selected commands job",
         );
         expect(selectedJob.runner).toBe(ownerJob.runner);
-        const singleton = selectedJob.groups?.length === 1 && ownerJob.planConcurrency === 2;
+        const serialProjection = isSerialNodeTestProjection(selectedJob.groups, ownerJob);
         expect(selectedJob.env).toEqual(
-          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+          serialProjection && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
             ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
             : ownerJob.env,
         );
-        expect(selectedJob.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
+        expect(selectedJob.planConcurrency).toBe(serialProjection ? 1 : ownerJob.planConcurrency);
         expect(selectedJob.pretestBuildMode).toBe(ownerJob.pretestBuildMode);
         expect(selectedJob.timeoutMinutes).toBe(ownerJob.timeoutMinutes);
       }

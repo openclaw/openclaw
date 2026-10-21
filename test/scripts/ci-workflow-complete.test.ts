@@ -385,10 +385,10 @@ describe("native CI failure collection", () => {
   it("OpenClawKit trait builds share a fresh scratch and clean it after testing", () => {
     const root = fixture();
     const optOut = ciStep(
-      "macos-swift",
+      "macos-swift-packages",
       "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
     );
-    const tests = ciStep("macos-swift", "OpenClawKit tests");
+    const tests = ciStep("macos-swift-packages", "OpenClawKit tests");
     const result = run(
       root,
       `
@@ -397,7 +397,7 @@ export -f swift
 ${optOut.run}
 if [[ -f "$GITHUB_ENV" ]]; then source "$GITHUB_ENV"; fi
 ${tests.run}
-${ciStep("macos-swift", "Clean OpenClawKit build scratch").run}
+${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").run}
 `,
       { GITHUB_ENV: path.join(root, "environment"), OPENCLAWKIT_TEST_EXECUTION: "serial" },
     );
@@ -413,7 +413,7 @@ ${ciStep("macos-swift", "Clean OpenClawKit build scratch").run}
     expect(commands[2]).not.toContain("--disable-default-traits");
     expect(
       evaluateWorkflowExpression(
-        `\${{ ${ciStep("macos-swift", "Clean OpenClawKit build scratch").if} }}`,
+        `\${{ ${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").if} }}`,
         {
           eventName: "schedule",
           cancelled: true,
@@ -547,13 +547,13 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     ["macos-swift", "Swift test", "swift-test-build", "tests"],
     ["macos-swift", "Swift test", "native-test-cli", "tests"],
     [
-      "macos-swift",
+      "macos-swift-packages",
       "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
       "select-xcode",
       "packages",
     ],
-    ["macos-swift", "OpenClawKit tests", "select-xcode", "packages"],
-    ["macos-swift", "Swabble tests", "select-xcode", "packages"],
+    ["macos-swift-packages", "OpenClawKit tests", "select-xcode", "packages"],
+    ["macos-swift-packages", "Swabble tests", "select-xcode", "packages"],
     ["ios-build", "Test Watch RTC engine", "watch-rust-toolchain", "tests"],
     ["ios-build", "Install iOS Swift tooling", "node-env", "tests"],
     ["ios-build", "Configure iOS build and report simulator selection", "node-env", "tests"],

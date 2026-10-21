@@ -148,12 +148,12 @@ export async function loadRequesterSessionEntry(
   );
 }
 
-/** Prepare once; effect guards consume the session writer's published facts. */
+/** Retain requester identity; run metadata writes do not replace its lifecycle. */
 export async function captureRequesterSessionEntryCurrent(
   requesterSessionKey: string,
   explicitAgentId?: string,
 ): Promise<{
-  readCurrent: () => SessionEntryCurrentFacts | undefined;
+  readCurrent: () => Pick<SessionEntryCurrentFacts, "sessionId" | "lifecycleRevision"> | undefined;
   release: () => void;
 }> {
   const source = captureSessionActorStorageOwner(
@@ -190,13 +190,13 @@ export async function captureRequesterSessionEntryCurrent(
     async ({ result }) => {
       const entry = result.entries[0]?.entry;
       const databaseIdentity = result.databaseIdentity?.identity;
-      if (!databaseIdentity) {
+      if (!entry || !databaseIdentity) {
         return { readCurrent: () => undefined, release() {} };
       }
       const retained = retainPreparedSessionGenerationFacts({
         databaseIdentity: `file:${databaseIdentity}`,
         sessionKey: storageKey,
-        entry: entry ? projectSessionSharingEntry(entry) : undefined,
+        entry: projectSessionSharingEntry(entry),
       });
       return {
         readCurrent: () => retained.readCurrent() ?? undefined,

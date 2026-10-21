@@ -10,14 +10,6 @@ import { MISTRAL_BASE_URL } from "./model-definitions.js";
 
 export const DEFAULT_MISTRAL_EMBEDDING_MODEL = "mistral-embed";
 
-function normalizeMistralModel(model: string): string {
-  return normalizeEmbeddingModelWithPrefixes({
-    model,
-    defaultModel: DEFAULT_MISTRAL_EMBEDDING_MODEL,
-    prefixes: ["mistral/"],
-  });
-}
-
 export async function createMistralEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: RemoteEmbeddingClient }> {
@@ -25,7 +17,12 @@ export async function createMistralEmbeddingProvider(
     provider: "mistral",
     options,
     defaultBaseUrl: MISTRAL_BASE_URL,
-    normalizeModel: normalizeMistralModel,
+    normalizeModel: (model) =>
+      normalizeEmbeddingModelWithPrefixes({
+        model,
+        defaultModel: DEFAULT_MISTRAL_EMBEDDING_MODEL,
+        prefixes: ["mistral/"],
+      }),
   });
 
   return {
