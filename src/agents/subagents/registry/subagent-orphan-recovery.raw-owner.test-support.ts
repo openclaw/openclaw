@@ -35,8 +35,12 @@ import {
 
 export async function restartRegistry(
   fixture: ReturnType<typeof useSubagentRestartRecoveryFixture>,
+  beforeInit?: () => void | Promise<void>,
 ) {
   await resetSubagentRegistryForTests({ persist: false });
+  if (beforeInit) {
+    await beforeInit();
+  }
   rotateAgentEventLifecycleGeneration();
   await initSubagentRegistry();
   await fixture.activateGatewayRuntime();
@@ -45,6 +49,46 @@ export async function restartRegistry(
 
 function readSession(sessionKey: string, agentId = "main") {
   return loadExactSessionEntry({ agentId, sessionKey })?.entry;
+}
+
+export async function rawChildFixture(phase: "recovery" | "restore") {
+  const childSessionKey = "global";
+  const runId = `raw-owner-${phase}`;
+  const startedAt = Date.now() - 1_000;
+  const endedAt = startedAt + 500;
+  const restored = phase === "restore";
+  for (const agentId of ["main", "research"]) {
+    await replaceSessionEntry(
+      { agentId, sessionKey: childSessionKey },
+      {
+        sessionId: `${agentId}-${phase}-session`,
+        lifecycleRevision: `${agentId}-${phase}-revision`,
+        lifecycleRunId: agentId === "research" ? runId : "unrelated-main-run",
+        ...(restored ? { status: agentId === "research" ? "done" : "interrupted", endedAt } : {}),
+        abortedLastRun: !restored || agentId === "main",
+        startedAt,
+        updatedAt: restored ? endedAt : startedAt,
+      },
+    );
+  }
+  return {
+    runId,
+    childSessionKey,
+    startedAt,
+    endedAt,
+    mainBefore: readSession(childSessionKey),
+    run: (overrides: Parameters<typeof makeRunRecord>[0] = {}) =>
+      makeRunRecord({
+        runId,
+        childSessionKey,
+        childAgentId: "research",
+        childSessionIdentity: {
+          sessionId: `research-${phase}-session`,
+          lifecycleRevision: `research-${phase}-revision`,
+        },
+        ...overrides,
+      }),
+  };
 }
 
 export function registerMissingStorageRecoveryTests() {
@@ -149,39 +193,14 @@ export function registerRawChildRestoreOwnershipTest(
   const { activateGatewayRuntime, dispatchAgent } = fixture;
 
   it("restores a completed raw-key child from its recorded agent instead of an aborted namesake", async () => {
-    const childSessionKey = "global";
-    const runId = "raw-owner-restore";
-    const startedAt = Date.now() - 1_000;
-    const endedAt = startedAt + 500;
-    for (const agentId of ["main", "research"]) {
-      await replaceSessionEntry(
-        { agentId, sessionKey: childSessionKey },
-        {
-          sessionId: `${agentId}-restore-session`,
-          lifecycleRevision: `${agentId}-restore-revision`,
-          lifecycleRunId: agentId === "research" ? runId : "unrelated-main-run",
-          status: agentId === "research" ? "done" : "interrupted",
-          abortedLastRun: agentId === "main",
-          startedAt,
-          endedAt,
-          updatedAt: endedAt,
-        },
-      );
-    }
-    const mainBefore = readSession(childSessionKey);
+    const child = await rawChildFixture("restore");
+    const { runId, childSessionKey, startedAt, endedAt, mainBefore } = child;
     expect(mainBefore).toMatchObject({
       sessionId: "main-restore-session",
       status: "interrupted",
       abortedLastRun: true,
     });
-    const recovered = makeRunRecord({
-      runId,
-      childSessionKey,
-      childAgentId: "research",
-      childSessionIdentity: {
-        sessionId: "research-restore-session",
-        lifecycleRevision: "research-restore-revision",
-      },
+    const recovered = child.run({
       createdAt: startedAt,
       expectsCompletionMessage: true,
       endedReason: "subagent-complete",

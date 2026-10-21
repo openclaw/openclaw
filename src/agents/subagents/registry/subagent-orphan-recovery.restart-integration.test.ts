@@ -46,6 +46,7 @@ import { registerRecoveredTerminalTailTest } from "./subagent-orphan-recovery.li
 import {
   registerMissingStorageRecoveryTests,
   registerRawChildRestoreOwnershipTest,
+  rawChildFixture,
   restartRegistry,
 } from "./subagent-orphan-recovery.raw-owner.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -117,31 +118,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
   }
 
   it("recovers a raw child key using its recorded owner without borrowing another agent's session", async () => {
-    const childSessionKey = "global";
-    const runId = "raw-owner-recovery";
-    const startedAt = Date.now() - 1_000;
-    for (const agentId of ["main", "research"]) {
-      await replaceSessionEntry(
-        { agentId, sessionKey: childSessionKey },
-        {
-          sessionId: `${agentId}-recovery-session`,
-          lifecycleRevision: `${agentId}-recovery-revision`,
-          lifecycleRunId: agentId === "research" ? runId : "unrelated-main-run",
-          startedAt,
-          updatedAt: startedAt,
-          abortedLastRun: true,
-        },
-      );
-    }
-    const mainBefore = readSession(childSessionKey);
-    const entry = makeRunRecord({
-      runId,
-      childSessionKey,
-      childAgentId: "research",
-      childSessionIdentity: {
-        sessionId: "research-recovery-session",
-        lifecycleRevision: "research-recovery-revision",
-      },
+    const child = await rawChildFixture("recovery");
+    const { runId, childSessionKey, startedAt, mainBefore } = child;
+    const entry = child.run({
       execution: { status: "interrupted", startedAt },
     });
     const warn = vi.fn();
@@ -461,12 +440,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         // The retired task registry reported every unended run as running; sessions keep the interruption.
         expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe(expected);
 
-        await resetSubagentRegistryForTests({ persist: false });
-        resetGatewayWorkAdmission();
-        rotateAgentEventLifecycleGeneration();
-        await initSubagentRegistry();
-        await activateGatewayRuntime();
-        await fixture.settle();
+        await restartRegistry(fixture, resetGatewayWorkAdmission);
         await testing.sweepOnceForTests();
         expect(dispatchAgent).not.toHaveBeenCalled();
         expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
@@ -604,12 +578,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
         expect(
           loadSubagentRegistryFromSqlite().get(runId)?.execution.interruptionReason,
         ).toBeUndefined();
-        await resetSubagentRegistryForTests({ persist: false });
-        await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
-        rotateAgentEventLifecycleGeneration();
-        await initSubagentRegistry();
-        await activateGatewayRuntime();
-        await fixture.settle();
+        await restartRegistry(fixture, () =>
+          cleanupSessionStateForTest({ stateDir: fixture.stateDir }),
+        );
       }
       const announce = vi.mocked(runSubagentAnnounceFlow);
       const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
