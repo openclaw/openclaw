@@ -162,6 +162,22 @@ export function createManager(
   });
 }
 
+export function createRestoredManager(overrides: Parameters<typeof createManager>[1] = {}) {
+  const snapshot = workspaceSnapshot("/gateway/workspace");
+  const manager = createManager(environment(), {
+    workspaceTransfer: workspaceTransfer({
+      prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
+    }),
+    ...overrides,
+  });
+  manager.bindWorkspaceBindingResolver(async () => ({
+    source: { kind: "local", path: snapshot.root },
+    manifestRef: snapshot.manifestRef,
+    remoteWorkspaceDir: "/node/workspace",
+  }));
+  return manager;
+}
+
 export function workspaceTransfer(
   operations: Partial<NodeWorkspaceTransferService> = {},
 ): NodeWorkspaceTransferService {

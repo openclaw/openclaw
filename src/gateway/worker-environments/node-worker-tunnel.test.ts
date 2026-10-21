@@ -24,9 +24,9 @@ import {
   NodeWorkerWorkspaceTransferError,
 } from "../../worker/node-workspace-transfer-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
-import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
   createManager,
+  createRestoredManager,
   environment,
   manifestCaptureOutput,
   seedNodeWorkspaceRepositories,
@@ -67,6 +67,12 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const reconciliationJournal = () => ({
+  load: async () => undefined,
+  begin: vi.fn(async () => {}),
+  commit: vi.fn(async () => {}),
+  abort: vi.fn(async () => {}),
+});
 
 describe("node worker tunnel manager", () => {
   it.for<[string, boolean]>([
@@ -112,6 +118,11 @@ describe("node worker tunnel manager", () => {
       onTestFinished(() => sourceGit.mockRestore());
       const localGit = (args: string[]) =>
         execFileSync("git", [...sourceIdentityArgs, "-C", localPath, ...args], {
+          encoding: "utf8",
+          env: gitEnv,
+        }).trim();
+      const remoteGit = (args: string[]) =>
+        execFileSync("git", ["-C", remoteWorkspaceDir, ...args], {
           encoding: "utf8",
           env: gitEnv,
         }).trim();
@@ -168,13 +179,8 @@ describe("node worker tunnel manager", () => {
       const transfer = workspaceTransfer({
         prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
       });
-      const handle = await createNodeWorkerTunnelManager({
-        gatewayDeviceId: "gateway-device-1",
-        getEnvironment: environment,
-        listEnvironments: () => [environment()],
+      const handle = await createManager(environment(), {
         getTransport: () => nodeTransport,
-        launchNodeWorker: vi.fn(),
-        validateWorkerTurn: () => true,
         workspaceTransfer: transfer,
       }).start(startRequest());
 
@@ -205,17 +211,8 @@ describe("node worker tunnel manager", () => {
         });
       }
 
-      const readRemoteAuthor = (key: "name" | "email") =>
-        execFileSync(
-          "git",
-          ["-C", remoteWorkspaceDir, "config", "--local", "--get", `user.${key}`],
-          {
-            encoding: "utf8",
-            env: gitEnv,
-          },
-        ).trim();
-      const name = readRemoteAuthor("name");
-      const email = readRemoteAuthor("email");
+      const name = remoteGit(["config", "--local", "--get", "user.name"]);
+      const email = remoteGit(["config", "--local", "--get", "user.email"]);
       // The simulated node commits with the identity production persisted there;
       // caller-owned author overrides must not replace that remote fixture context.
       const commitEnv = {
@@ -239,12 +236,9 @@ describe("node worker tunnel manager", () => {
       });
       expect(commit.stderr).not.toContain("Author identity unknown");
       expect(commit.status).toBe(0);
-      expect(
-        execFileSync("git", ["-C", remoteWorkspaceDir, "show", "-s", "--format=%an <%ae>"], {
-          encoding: "utf8",
-          env: gitEnv,
-        }).trim(),
-      ).toBe("Configured Gateway Author <gateway-author@example.invalid>");
+      expect(remoteGit(["show", "-s", "--format=%an <%ae>"])).toBe(
+        "Configured Gateway Author <gateway-author@example.invalid>",
+      );
 
       await handle.stop();
     },
@@ -290,17 +284,13 @@ describe("node worker tunnel manager", () => {
       await siblingCleanup.promise;
     });
     const closeAll = vi.fn(async () => {});
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
+    const manager = createManager(environment(), {
       listEnvironments: () => [],
       getEnvironment: (environmentId) => ({
         ...environment(),
         environmentId,
         attachedSessionIds: [environmentId === "environment-1" ? "session-1" : "session-2"],
       }),
-      getTransport: transport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: {
         ...workspaceTransfer(),
         close,
@@ -573,9 +563,6 @@ describe("node worker tunnel manager", () => {
   });
 
   it("keeps node command deadlines and rechecks turn authority after discovery", async () => {
-    const record = environment();
-    const snapshot = workspaceSnapshot("/gateway/workspace");
-    const { manifestRef } = snapshot;
     let commandTimeoutMs: number | undefined;
     let transportTimeoutMs: number | undefined;
     const nodeTransport = transport();
@@ -601,18 +588,9 @@ describe("node worker tunnel manager", () => {
         };
       }),
     );
-    const transfer = workspaceTransfer({
-      prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
-    });
-    const manager = createManager(record, {
+    const manager = createRestoredManager({
       getTransport: () => nodeTransport,
-      workspaceTransfer: transfer,
     });
-    manager.bindWorkspaceBindingResolver(async () => ({
-      source: { kind: "local" as const, path: "/gateway/workspace" },
-      manifestRef,
-      remoteWorkspaceDir: "/node/workspace",
-    }));
     const handle = await manager.start(startRequest());
 
     await expect(
@@ -661,18 +639,9 @@ describe("node worker tunnel manager", () => {
           message: `workspace quiescence failed: Authorization: Bearer ${secret}\n${"detail ".repeat(300)}terminal diagnosis`,
         },
       }));
-      const snapshot = workspaceSnapshot("/gateway/workspace");
-      const manager = createManager(environment(), {
+      const manager = createRestoredManager({
         getTransport: () => nodeTransport,
-        workspaceTransfer: workspaceTransfer({
-          prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
-        }),
       });
-      manager.bindWorkspaceBindingResolver(async () => ({
-        source: { kind: "local", path: snapshot.root },
-        manifestRef: snapshot.manifestRef,
-        remoteWorkspaceDir: "/node/workspace",
-      }));
       const handle = await manager.start(startRequest());
 
       const error = await handle
@@ -704,17 +673,7 @@ describe("node worker tunnel manager", () => {
   );
 
   it("keeps the workspace error code when the node provides no message", async () => {
-    const snapshot = workspaceSnapshot("/gateway/workspace");
-    const manager = createManager(environment(), {
-      workspaceTransfer: workspaceTransfer({
-        prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
-      }),
-    });
-    manager.bindWorkspaceBindingResolver(async () => ({
-      source: { kind: "local", path: snapshot.root },
-      manifestRef: snapshot.manifestRef,
-      remoteWorkspaceDir: "/node/workspace",
-    }));
+    const manager = createRestoredManager();
     const handle = await manager.start(startRequest());
     await expect(
       handle.runWorkspaceCommand({ argv: ["node", "-e", "void 0"], transportRetry: "never" }),
@@ -830,12 +789,7 @@ describe("node worker tunnel manager", () => {
         source: {
           kind: "local",
           path: localPath,
-          journal: {
-            load: async () => undefined,
-            begin: vi.fn(async () => {}),
-            commit: vi.fn(async () => {}),
-            abort: vi.fn(async () => {}),
-          },
+          journal: reconciliationJournal(),
           stagedResult: { ref: workerWorkspaceResultRef("node-error"), record: () => {} },
         },
         remoteWorkspaceDir,
@@ -935,12 +889,7 @@ describe("node worker tunnel manager", () => {
         generation: 1,
       });
       const quiescence = { assertActive: async () => {}, resume: async () => {} };
-      const journal = {
-        load: async () => undefined,
-        begin: vi.fn(async () => {}),
-        commit: vi.fn(async () => {}),
-        abort: vi.fn(async () => {}),
-      };
+      const journal = reconciliationJournal();
       const workerOperations = vi.spyOn(
         await import("../../infra/git-worker.js"),
         "runGitWorkerOperation",

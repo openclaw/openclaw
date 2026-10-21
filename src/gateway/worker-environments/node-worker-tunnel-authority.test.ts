@@ -3,12 +3,12 @@ import { createReadBarrier } from "../../infra/sqlite-readonly.test-support.js";
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import {
   createManager,
+  createRestoredManager,
   environment,
   startRequest,
   transport,
   withWorkspaceDrain,
   workspaceCommandPayload,
-  workspaceSnapshot,
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 
@@ -83,7 +83,6 @@ it.each([300_000, -300_000])(
   "keeps idempotent retries on the monotonic budget across a %i ms wall-clock step",
   async (stepMs) => {
     const wallNow = Date.now.bind(Date);
-    const snapshot = workspaceSnapshot("/gateway/workspace");
     const nodeTransport = transport();
     const timeouts: number[] = [];
     nodeTransport.invoke = withWorkspaceDrain(async (request) => {
@@ -96,17 +95,9 @@ it.each([300_000, -300_000])(
       }
       return { ok: true, payloadJSON: workspaceCommandPayload("/node/workspace") };
     });
-    const manager = createManager(environment(), {
+    const manager = createRestoredManager({
       getTransport: () => nodeTransport,
-      workspaceTransfer: workspaceTransfer({
-        prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
-      }),
     });
-    manager.bindWorkspaceBindingResolver(async () => ({
-      source: { kind: "local" as const, path: "/gateway/workspace" },
-      manifestRef: snapshot.manifestRef,
-      remoteWorkspaceDir: "/node/workspace",
-    }));
     const handle = await manager.start(startRequest());
     await expect(
       handle.runWorkspaceCommand({

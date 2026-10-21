@@ -6,11 +6,11 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { hashWorkerCredential } from "./credential.js";
+import { transferFixture as createTransferFixture } from "./node-workspace-transfer-fixtures.test-support.js";
 import {
   createNodeWorkspaceTransferHttpCallback,
   handleNodeWorkspaceTransferHttpRequest,
 } from "./node-workspace-transfer-http.js";
-import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import * as support from "./service.test-support.js";
 
@@ -53,22 +53,16 @@ async function transferFixture(name: string, filename: string, payload: string |
     to: "attached",
     patch: support.attachedPatch(ready.environmentId, sessionId),
   });
-  const localPath = path.join(root, "workspace");
-  await fs.mkdir(localPath);
-  await fs.writeFile(path.join(localPath, filename), payload);
-  const service = createNodeWorkspaceTransferService({
+  const { service, request, files } = await createTransferFixture(root, {
+    environmentId: record.environmentId,
+    ownerEpoch: record.ownerEpoch,
+    sessionId,
     getOwner: (id) => store.getTransferOwner(id),
     now: () => support.testState.nowMs,
     temporaryRoot: path.join(root, "transfer-tmp"),
   });
-  const input = {
-    environmentId: record.environmentId,
-    ownerEpoch: record.ownerEpoch,
-    sessionId,
-    localPath,
-    isAuthorized: () => true,
-    signal: new AbortController().signal,
-  };
+  await files.write(filename, payload);
+  const input = { ...request, signal: new AbortController().signal };
   return { service, record, input };
 }
 

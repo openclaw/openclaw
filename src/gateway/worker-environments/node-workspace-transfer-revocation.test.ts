@@ -20,7 +20,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { nodeWorkspaceTransferReconcilePath } from "../../worker/node-workspace-transfer-protocol.js";
 import { hashWorkerCredential } from "./credential.js";
-import { workspaceFiles } from "./node-workspace-transfer-fixtures.test-support.js";
+import {
+  transferFixture,
+  workspaceFiles,
+} from "./node-workspace-transfer-fixtures.test-support.js";
 import {
   createNodeWorkspaceTransferHttpCallback,
   handleNodeWorkspaceTransferHttpRequest,
@@ -51,13 +54,8 @@ async function closeServer(server: Server) {
   });
 }
 
-const makeService = (root: string) =>
-  createNodeWorkspaceTransferService({
-    temporaryRoot: path.join(root, "transfers"),
-    getOwner: () => transferOwner("session"),
-  });
 const prepareSync = (
-  service: ReturnType<typeof makeService>,
+  service: ReturnType<typeof createNodeWorkspaceTransferService>,
   localPath: string,
   authority: { isAuthorized: () => boolean; signal?: AbortSignal } = { isAuthorized: () => true },
 ) =>
@@ -96,11 +94,10 @@ it.each([
   { boundary: "after body", cancellation: "discard-and-close" },
   { boundary: "after body", cancellation: "discard-and-fail" },
 ] as const)("upload settles $boundary with $cancellation", async ({ boundary, cancellation }) => {
-  const root = tempDirs.make("workspace-upload-cancellation-");
-  const localPath = path.join(root, "source");
-  await fs.mkdir(localPath);
+  const { localPath, service } = await transferFixture(
+    tempDirs.make("workspace-upload-cancellation-"),
+  );
   const owner = new AbortController();
-  const service = makeService(root);
   const { snapshot } = await prepareSync(service, localPath, {
     isAuthorized: () => !owner.signal.aborted,
     signal: owner.signal,
@@ -455,10 +452,7 @@ it.each([
 });
 
 it("fenceEnvironment aborts capability signals and denies new admissions", async () => {
-  const root = tempDirs.make("workspace-transfer-fence-");
-  const localPath = path.join(root, "source");
-  await fs.mkdir(localPath);
-  const service = makeService(root);
+  const { localPath, service } = await transferFixture(tempDirs.make("workspace-transfer-fence-"));
   await service.initialize();
   try {
     const { snapshot, token } = await prepareSync(service, localPath);
