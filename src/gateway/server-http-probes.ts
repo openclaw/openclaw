@@ -110,7 +110,7 @@ export async function handleGatewayProbeRequest(
       body = readiness
         ? JSON.stringify(
             includeDetails
-              ? { ready: false, failing: ["internal"], uptimeMs: 0 }
+              ? { ready: false, coreReady: false, failing: ["internal"], uptimeMs: 0 }
               : { ready: false },
           )
         : startupProbeBody(
