@@ -13,6 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
+import { TEST_MEETING_PLATFORM_METADATA } from "./observation-provenance.test-support.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
   createTestRuntime,
@@ -110,17 +111,7 @@ describe("createMeetingSession", () => {
   it("preserves bidi realtime session fields", () => {
     const session = createMeetingSession({
       platform: {
-        id: "test-meeting",
-        displayName: "Test Meeting",
-        logScope: "[test-meeting]",
-        agentConsult: {
-          surface: "a test meeting",
-          userLabel: "Participant",
-          assistantLabel: "Agent",
-          questionSourceLabel: "participant",
-          workingResponseLabel: "participant",
-          extraSystemPrompt: "Answer briefly.",
-        },
+        ...TEST_MEETING_PLATFORM_METADATA,
         session: {
           idPrefix: "test_meeting",
           participantIdentity: (transport) => `Test participant via ${transport}`,

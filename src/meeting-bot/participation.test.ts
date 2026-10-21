@@ -77,8 +77,7 @@ async function withSqliteStore(
 }
 
 function memoryStore(maxEntries = Infinity): MeetingParticipationOptions<object>["store"] {
-  const rows = new Map<string, MeetingParticipationAttempt>();
-  const createdAt = new Map<string, number>();
+  const rows = new Map<string, { value: MeetingParticipationAttempt; createdAt: number }>();
   let clock = 0;
   const validate = (value: MeetingParticipationAttempt) =>
     serializePluginStoreJson({
@@ -100,19 +99,19 @@ function memoryStore(maxEntries = Infinity): MeetingParticipationOptions<object>
     });
   const set = (key: string, value: MeetingParticipationAttempt) => {
     validate(value);
-    if (!rows.has(key)) {
-      if (rows.size >= maxEntries) {
-        throw new PluginStateStoreError("Namespace full.", {
-          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-          operation: "register",
-        });
-      }
-      createdAt.set(key, clock++);
+    if (!rows.has(key) && rows.size >= maxEntries) {
+      throw new PluginStateStoreError("Namespace full.", {
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+        operation: "register",
+      });
     }
-    rows.set(key, structuredClone(value));
+    rows.set(key, {
+      value: structuredClone(value),
+      createdAt: rows.get(key)?.createdAt ?? clock++,
+    });
   };
   return {
-    lookup: async (key) => structuredClone(rows.get(key)),
+    lookup: async (key) => structuredClone(rows.get(key)?.value),
     registerIfAbsent: async (key, value) => {
       validate(value);
       if (rows.has(key)) {
@@ -123,15 +122,12 @@ function memoryStore(maxEntries = Infinity): MeetingParticipationOptions<object>
     },
     register: async (key, value) => set(key, value),
     entries: async () =>
-      [...rows].map(([key, value]) => ({
+      [...rows].map(([key, { value, createdAt }]) => ({
         key,
         value: structuredClone(value),
-        createdAt: createdAt.get(key)!,
+        createdAt,
       })),
-    delete: async (key) => {
-      createdAt.delete(key);
-      return rows.delete(key);
-    },
+    delete: async (key) => rows.delete(key),
   };
 }
 
@@ -450,30 +446,27 @@ describe("meeting participation live source capacity", () => {
     }));
   }
 
-  it.each([1_025])(
-    "preserves retained references and issued guards when replaying %i unchanged captions",
-    async (count) => {
-      vi.useFakeTimers();
-      const { owner, effect } = harness();
-      const snapshot = captions(count);
-      for (const caption of snapshot) {
-        owner.observe(sessionId, caption);
-      }
-      const before = owner.context(sessionId);
-      const retained = before.sources.at(-1)!;
-      const inspection = owner.inspect(sessionId, retained.sourceId);
-      expect(inspection).toBeDefined();
+  it("preserves retained references and issued guards when replaying 1025 unchanged captions", async () => {
+    vi.useFakeTimers();
+    const { owner, effect } = harness();
+    const snapshot = captions(1_025);
+    for (const caption of snapshot) {
+      owner.observe(sessionId, caption);
+    }
+    const before = owner.context(sessionId);
+    const retained = before.sources.at(-1)!;
+    const inspection = owner.inspect(sessionId, retained.sourceId);
+    expect(inspection).toBeDefined();
 
-      for (const caption of snapshot) {
-        owner.observe(sessionId, caption);
-      }
+    for (const caption of snapshot) {
+      owner.observe(sessionId, caption);
+    }
 
-      expect(() => inspection!.assertCurrent()).not.toThrow();
-      expect(owner.context(sessionId)).toEqual(before);
-      await check(owner, "succeeded", { sourceId: retained.sourceId });
-      expect(effect).toHaveBeenCalledOnce();
-    },
-  );
+    expect(() => inspection!.assertCurrent()).not.toThrow();
+    expect(owner.context(sessionId)).toEqual(before);
+    await check(owner, "succeeded", { sourceId: retained.sourceId });
+    expect(effect).toHaveBeenCalledOnce();
+  });
 
   it("evicts by original observation order after an interim correction is finalized", () => {
     vi.useFakeTimers();
