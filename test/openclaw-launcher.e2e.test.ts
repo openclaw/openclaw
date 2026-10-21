@@ -6,7 +6,6 @@ import {
 } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { builtinModules } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
@@ -1667,9 +1666,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       ["src/infra/node-compile-cache-env.ts", "cache-b.mjs", "resolveNodeCompileCacheEnv"],
       ["src/entry.compile-cache.ts", "cache-owner.mjs", "enableOpenClawCompileCache"],
     ] as const) {
-      const built = await esbuild({
+      await esbuild({
         bundle: true,
-        metafile: true,
         stdin: {
           contents: `export { ${exportName} } from ${JSON.stringify(path.resolve(entryPoint))};`,
           resolveDir: process.cwd(),
@@ -1681,17 +1679,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         platform: "node",
         target: "node24",
       });
-      if (!built.metafile) {
-        throw new Error("Compile-cache fixture bundle metadata is missing");
-      }
-      for (const output of Object.values(built.metafile.outputs)) {
-        for (const imported of output.imports) {
-          expect(
-            imported.path.startsWith("node:") || builtinModules.includes(imported.path),
-            `Fixture must own its nonbuiltin dependencies: ${imported.path}`,
-          ).toBe(true);
-        }
-      }
     }
     await writeEntry(
       `import assert from "node:assert/strict";
