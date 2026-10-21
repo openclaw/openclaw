@@ -1,0 +1,133 @@
+title: Hook turns cannot act on another automation
+
+scenario:
+  id: hook-turn-automations-scope
+  surface: cron
+  coverage:
+    primary: [gateway.hook-ingress]
+    secondary:
+      - automation.cron-rpcs
+  gatewayConfigPatch:
+    hooks:
+      enabled: true
+      token: qa-hook-automations-scope-token
+      path: /hooks
+      allowedAgentIds: [qa]
+      allowRequestSessionKey: false
+  objective: Verify a webhook agent turn gets the same current-job automations scope as a scheduled run.
+  successCriteria:
+    - A POST to /hooks/agent completes its run successfully.
+    - The hook turn's attempt to remove another automation is rejected by the tool scope.
+    - The other automation still exists after the hook turn.
+  docsRefs:
+    - docs/automation/cron-jobs/webhooks.md
+  codeRefs:
+    - src/gateway/server/hooks.ts
+    - src/agents/agent-tools.ts
+    - src/agents/tools/cron-tool.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-hook-automations-scope.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Enables Gateway HTTP hooks and drives a hook turn against a sibling automation.
+    channel: qa-channel
+    retryCount: 0
+    summary: Create one automation, then prove a hook turn cannot remove it through the automations tool.
+    config:
+      requiredProviderMode: mock-openai
+      hookToken: qa-hook-automations-scope-token
+      promptSnippet: Hook automations scope QA check
+      doneMarker: QA-HOOK-AUTOMATIONS-SCOPE-DONE
+      scopeError: Automations tool is restricted to the current automation.
+
+flow:
+  steps:
+    - name: rejects a hook turn removing another automation
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: hook automations scope proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - set: sibling
+          value:
+            expr: |-
+              await env.gateway.call("cron.add", {
+                agentId: "qa",
+                owner: { agentId: "qa" },
+                name: `qa-hook-scope-sibling-${randomUUID()}`,
+                enabled: false,
+                schedule: { kind: "at", at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() },
+                sessionTarget: "isolated",
+                wakeMode: "now",
+                payload: { kind: "agentTurn", message: "Sibling automation; never runs." },
+                delivery: { mode: "none" },
+              }, { timeoutMs: 30000 })
+        - set: siblingId
+          value:
+            expr: sibling.id
+        - assert:
+            expr: "Boolean(siblingId)"
+            message:
+              expr: "`sibling automation was not created: ${JSON.stringify(sibling)}`"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: hookResponse
+          value:
+            expr: |-
+              await (async () => {
+                const response = await fetch(`${env.gateway.baseUrl}/hooks/agent`, {
+                  method: "POST",
+                  headers: {
+                    authorization: `Bearer ${config.hookToken}`,
+                    "content-type": "application/json",
+                    "idempotency-key": `qa-hook-scope-${randomUUID()}`,
+                  },
+                  body: JSON.stringify({
+                    message: `${config.promptSnippet}: target=${siblingId}`,
+                    name: "QA hook automations scope",
+                    agentId: "qa",
+                    deliver: false,
+                    waitForCompletion: true,
+                  }),
+                });
+                return { status: response.status, body: await response.json().catch(() => null) };
+              })()
+        - assert:
+            expr: "hookResponse.status === 200 && hookResponse.body?.ok === true && hookResponse.body?.completion?.status === 'ok'"
+            message:
+              expr: "`expected a completed hook run, got ${JSON.stringify(hookResponse)}`"
+        - set: hookRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: removeRequest
+          value:
+            expr: "hookRequests.find((request) => { const args = request.plannedToolName === 'dispatch_action' ? request.plannedToolArgs?.args : request.plannedToolArgs; const target = request.plannedToolName === 'dispatch_action' ? request.plannedToolArgs?.id : request.plannedToolName; return target === 'automations' && args?.action === 'remove' && args?.jobId === siblingId; })"
+        - assert:
+            expr: "Boolean(removeRequest)"
+            message:
+              expr: "`expected the hook turn to request removal of ${siblingId}, got ${JSON.stringify(hookRequests.map((request) => ({ planned: request.plannedToolName, args: request.plannedToolArgs })))}`"
+        - set: toolResult
+          value:
+            expr: "hookRequests.map((request) => String(request.toolOutput ?? '')).find((output) => output.length > 0) ?? ''"
+        - assert:
+            expr: "toolResult.includes(config.scopeError)"
+            message:
+              expr: "`expected the sibling removal to be rejected by the automations scope, got ${toolResult}`"
+        - set: remaining
+          value:
+            expr: "await env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "(remaining.jobs ?? []).some((job) => job.id === siblingId)"
+            message:
+              expr: "`sibling automation was removed by the hook turn: ${JSON.stringify(remaining)}`"
+        - call: env.gateway.call
+          args:
+            - cron.remove
+            - id:
+                ref: siblingId
+            - timeoutMs: 30000
+      detailsExpr: "`hook turn removal of ${siblingId} rejected: ${toolResult.slice(0, 200)}`"
