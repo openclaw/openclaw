@@ -1,4 +1,3 @@
-// Diagnostic session context tests cover session context capture for diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +53,14 @@ async function seedSessionTranscript(params: {
   for (const message of messages) {
     await appendTranscriptMessage({ agentId, sessionId, sessionKey }, { message });
   }
+}
+
+async function assistantText(agentId: string, sessionId: string, sessionKey: string) {
+  return (await readLatestTranscriptAssistantTextAsync({ agentId, sessionId, sessionKey }))?.text;
+}
+
+function databasePath(agentId: string) {
+  return path.join(tempDir!, "agents", agentId, "agent", "openclaw-agent.sqlite");
 }
 
 describe("diagnostic session context", () => {
@@ -132,24 +139,15 @@ describe("diagnostic session context", () => {
       ],
     });
 
-    const message = await captureSessionLog({
-      sessionKey,
-    });
-
+    const message = await captureSessionLog({ sessionKey });
     expect(message).toContain("cronJobId=job-123");
     expect(message).toContain("cronRunId=run-456");
     expect(message).toContain(`cronJob="${"a".repeat(136)}..."`);
     expect(message).not.toContain("cached mentions");
     expect(message).not.toContain("lastAssistant=");
-    expect(
-      (
-        await readLatestTranscriptAssistantTextAsync({
-          agentId: "clawblocker",
-          sessionKey,
-          sessionId: "run-456",
-        })
-      )?.text,
-    ).toBe("There are 40\ncached mentions ready.");
+    expect(await assistantText("clawblocker", "run-456", sessionKey)).toBe(
+      "There are 40\ncached mentions ready.",
+    );
   });
 
   it.each(["dashboard", "subagent", "internal-session-effects"])(
@@ -166,56 +164,23 @@ describe("diagnostic session context", () => {
         messages: [{ role: "assistant", content: privateReply }],
       });
 
-      expect(
-        (
-          await readLatestTranscriptAssistantTextAsync({
-            agentId: "incognito-agent",
-            sessionId,
-            sessionKey,
-          })
-        )?.text,
-      ).toBe(privateReply);
+      expect(await assistantText("incognito-agent", sessionId, sessionKey)).toBe(privateReply);
       expect(await captureSessionLog({ sessionKey })).toBe("");
-      expect(
-        fs.existsSync(
-          path.join(tempDir!, "agents", "incognito-agent", "agent", "openclaw-agent.sqlite"),
-        ),
-      ).toBe(false);
+      expect(fs.existsSync(databasePath("incognito-agent"))).toBe(false);
     },
   );
 
-  it("omits context for malformed agent ids", async () => {
-    expect(
-      await captureSessionLog({
-        sessionKey: "agent:../main:main",
-      }),
-    ).toBe("");
-  });
-
-  it("does not treat channel-owned cron segments as cron metadata", async () => {
-    const sessionKey = "agent:oauth-agent:slack:cron:job-123:run:run-456";
-    const message = await captureSessionLog({
-      sessionKey,
-    });
-
-    expect(message).toBe("");
+  it.each([
+    ["malformed agent ids", "agent:../main:main"],
+    ["channel-owned cron segments", "agent:oauth-agent:slack:cron:job-123:run:run-456"],
+  ])("omits context for %s", async (_label, sessionKey) => {
+    expect(await captureSessionLog({ sessionKey })).toBe("");
   });
 
   it("does not create an agent database when its session store is missing", async () => {
-    const databasePath = path.join(
-      tempDir!,
-      "agents",
-      "missing-agent",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    expect(fs.existsSync(databasePath)).toBe(false);
-
-    expect(
-      await captureSessionLog({
-        sessionKey: "agent:missing-agent:main",
-      }),
-    ).toBe("");
-    expect(fs.existsSync(databasePath)).toBe(false);
+    const file = databasePath("missing-agent");
+    expect(fs.existsSync(file)).toBe(false);
+    expect(await captureSessionLog({ sessionKey: "agent:missing-agent:main" })).toBe("");
+    expect(fs.existsSync(file)).toBe(false);
   });
 });

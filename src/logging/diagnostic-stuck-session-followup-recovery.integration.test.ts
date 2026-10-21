@@ -25,6 +25,13 @@ function begin() {
   operation.setPhase("running");
   return operation;
 }
+function trackedSource(prompt: string) {
+  const settled = createDeferredCore();
+  const onSettled = vi.fn(() => settled.resolve());
+  const run = source(prompt);
+  run.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled };
+  return { run, onSettled, settled: settled.promise };
+}
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
@@ -46,15 +53,10 @@ describe("controller watchdog and actual followup delivery custody", () => {
       operation.attachBackend({ kind: "embedded", cancel });
       const settings: QueueSettings = { mode, debounceMs: 0, cap: 50 };
       const delivered = createDeferredCore();
-      const settled = createDeferredCore();
       const dispatch = vi.fn(async (_run: FollowupRun) => {
         delivered.resolve();
       });
-      const run = source("pending");
-      const onSettled = vi.fn(() => {
-        settled.resolve();
-      });
-      run.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled };
+      const { run, onSettled, settled } = trackedSource("pending");
       enqueueFollowupRun(key, run, settings, "none", dispatch);
       vi.setSystemTime(6 * 60_000);
       const recovery = recoverStuckDiagnosticSession({
@@ -73,7 +75,7 @@ describe("controller watchdog and actual followup delivery custody", () => {
       expect(getSessionControllerOperation(key)).toBe(operation);
       operation.complete();
       await delivered.promise;
-      await settled.promise;
+      await settled;
       await recovery;
       expect(dispatch).toHaveBeenCalledOnce();
       expect(dispatch.mock.calls[0]?.[0].prompt).toContain("pending");
@@ -85,12 +87,7 @@ describe("controller watchdog and actual followup delivery custody", () => {
     const operation = begin();
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const settled = createDeferredCore();
-    const onSettled = vi.fn(() => {
-      settled.resolve();
-    });
-    const run = source("fresh");
-    run.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled };
+    const { run, onSettled, settled } = trackedSource("fresh");
     const dispatch = vi.fn(async () => {
       entered.resolve();
       await release.promise;
@@ -103,16 +100,14 @@ describe("controller watchdog and actual followup delivery custody", () => {
     expect(onSettled).not.toHaveBeenCalled();
     expect(dispatch).toHaveBeenCalledOnce();
     release.resolve();
-    await settled.promise;
+    await settled;
     expect(onSettled).toHaveBeenCalledOnce();
   });
 
   it("cannot free a selected source merely because no native backend is registered", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const settled = createDeferredCore();
-    const first = source("selected");
-    first.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled: () => settled.resolve() };
+    const { run: first, settled } = trackedSource("selected");
     const calls: string[] = [];
     const secondEntered = createDeferredCore();
     const dispatch = async (run: FollowupRun) => {
@@ -138,7 +133,7 @@ describe("controller watchdog and actual followup delivery custody", () => {
     ).resolves.toMatchObject({ status: "skipped", reason: "missing_session_ref" });
     expect(calls).toEqual(["selected"]);
     release.resolve();
-    await settled.promise;
+    await settled;
     await secondEntered.promise;
     expect(calls).toEqual(["selected", "pending"]);
   });

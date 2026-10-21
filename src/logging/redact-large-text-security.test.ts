@@ -138,6 +138,9 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
 
 it("masks every rule family across former slice boundaries and at the control offset", () => {
   for (const [_name, secret, sentence] of RULE_FAMILY_SAMPLES) {
+    // An isolated token must reach the prefilter without another credential marker.
+    const standalone = secret.trimStart();
+    expect(redact(standalone)).not.toContain(standalone);
     const template = sentence ?? "@@SECRET@@ and trailing context";
     for (const offset of [16_384, 32_768, 65_536]) {
       const total = Math.max(40_000, offset + 6_000);
