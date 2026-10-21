@@ -38,6 +38,9 @@ const {
 } = await import("./request.js");
 const { listAllCodexAppServerModels } = await import("./models.js");
 
+const listRequest = (options: Partial<Parameters<typeof requestCodexAppServerJson>[0]> = {}) =>
+  requestCodexAppServerJson({ method: "thread/list", requestParams: {}, ...options });
+
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
 const sandboxPolicy = {
@@ -57,6 +60,15 @@ const mockRequest = (response: unknown = { ok: true }) => {
   shared.acquire.mockResolvedValue({ request });
   return request;
 };
+function deferAcquisition<T>(once = true) {
+  const entered = createDeferred<void>();
+  const acquisition = createDeferred<T>();
+  shared.acquire[once ? "mockImplementationOnce" : "mockImplementation"](() => {
+    entered.resolve();
+    return acquisition.promise;
+  });
+  return { entered, acquisition };
+}
 
 describe("requestCodexAppServerJson sandbox guard", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-preflight-");
@@ -218,13 +230,9 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       const request = vi.fn().mockRejectedValue(error);
       const controlObservation = { phase: vi.fn(), failed: vi.fn() };
       shared.acquire.mockResolvedValue({ request });
-      await expect(
-        requestCodexAppServerJson({
-          method: "thread/list",
-          requestParams: { limit: 1 },
-          controlObservation,
-        }),
-      ).rejects.toBe(error);
+      await expect(listRequest({ requestParams: { limit: 1 }, controlObservation })).rejects.toBe(
+        error,
+      );
       expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
         phase: "client-request",
         category,
@@ -295,9 +303,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const error = new Error("private-acquire-error");
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
     shared.acquire.mockRejectedValue(error);
-    await expect(
-      requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
-    ).rejects.toBe(error);
+    await expect(listRequest({ controlObservation })).rejects.toBe(error);
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
       phase: "acquire-client",
       category: "other",
@@ -320,14 +326,9 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           }
         }),
       });
-      await expect(
-        requestCodexAppServerJson({
-          method: "thread/list",
-          requestParams: {},
-          isolated: true,
-          controlObservation,
-        }),
-      ).rejects.toBe(cleanupFails ? cleanupError : requestError);
+      await expect(listRequest({ isolated: true, controlObservation })).rejects.toBe(
+        cleanupFails ? cleanupError : requestError,
+      );
       expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
         phase: cleanupFails ? "release-client" : "client-request",
         category: "other",
@@ -347,13 +348,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       }),
     });
     await expect(
-      requestCodexAppServerJson({
-        method: "thread/list",
-        requestParams: {},
-        timeoutMs: 50,
-        isolated: true,
-        controlObservation,
-      }),
+      listRequest({ timeoutMs: 50, isolated: true, controlObservation }),
     ).rejects.toMatchObject({
       message: "codex app-server thread/list timed out",
       cause: requestError,
@@ -406,11 +401,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     );
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
     shared.acquire.mockRejectedValue(original);
-    const result = await requestCodexAppServerJson({
-      method: "thread/list",
-      requestParams: {},
-      controlObservation,
-    }).then(
+    const result = await listRequest({ controlObservation }).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -430,24 +421,15 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       },
     };
     shared.acquire.mockResolvedValue({ request });
-    await expect(
-      requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
-    ).resolves.toEqual({ data: [] });
-    await expect(
-      requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
-    ).rejects.toBe(error);
+    await expect(listRequest({ controlObservation })).resolves.toEqual({ data: [] });
+    await expect(listRequest({ controlObservation })).rejects.toBe(error);
     expect(shared.release).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a scoped request live when wall time jumps during acquisition", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const request = vi.fn(async () => ({ ok: true }));
-    const entered = createDeferred<void>();
-    const acquisition = createDeferred<{ request: typeof request }>();
-    shared.acquire.mockImplementation(() => {
-      entered.resolve();
-      return acquisition.promise;
-    });
+    const { entered, acquisition } = deferAcquisition<{ request: typeof request }>(false);
     const result = requestCodexAppServerJson({ method: "model/list", timeoutMs: 1_000 });
     const accepted = expect(result).resolves.toEqual({ ok: true });
     try {
@@ -472,15 +454,9 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const request = vi.fn(async () => ({ ok: true }));
     type TestClient = { request: typeof request };
     const client: TestClient = { request };
-    const acquisition = createDeferred<TestClient>();
-    const acquisitionStarted = createDeferred<void>();
-    shared.acquire.mockImplementationOnce(() => {
-      acquisitionStarted.resolve();
-      return acquisition.promise;
-    });
+    const { acquisition, entered: acquisitionStarted } = deferAcquisition<TestClient>();
 
-    const result = requestCodexAppServerJson({
-      method: "thread/list",
+    const result = listRequest({
       requestParams: { limit: 10 },
       timeoutMs: 50,
       pluginConfig: { appServer: { requestTimeoutMs: 10 } },
@@ -520,12 +496,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     async ({ requestTimeoutMs, acquisitionDelayMs, expired }) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       const harness = createClientHarness();
-      const entered = createDeferred<void>();
-      const acquisition = createDeferred<typeof harness.client>();
-      shared.acquire.mockImplementationOnce(() => {
-        entered.resolve();
-        return acquisition.promise;
-      });
+      const { entered, acquisition } = deferAcquisition<typeof harness.client>();
       const pending = codexControlRequest(
         { appServer: { requestTimeoutMs, transport: "unix", url: "unix://" } },
         "thread/list",
