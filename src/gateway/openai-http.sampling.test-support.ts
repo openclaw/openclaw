@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { AgentStreamParams } from "../agents/command/shared-types.js";
+import { createOpenAiHttpTestClient } from "./http-stream.test-support.js";
 import type { agentCommandMock as sharedAgentCommandMock } from "./test-helpers.runtime-state.js";
 
 export function registerOpenAiHttpSamplingTests({
@@ -24,9 +25,10 @@ export function registerOpenAiHttpSamplingTests({
   const expectSampling = async (
     body: Record<string, unknown>,
     expected: Partial<AgentStreamParams> | undefined,
+    text = "hello",
   ) => {
     agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text }] } as never);
     const res = await request(body);
     expect(res.status).toBe(200);
     const params = firstAgentCommandOptions()?.streamParams;
@@ -38,9 +40,11 @@ export function registerOpenAiHttpSamplingTests({
     await res.text();
     return params;
   };
-  const expectInvalid = async (body: Record<string, unknown>, field?: string) => {
+  const expectInvalid = async (body: Record<string, unknown> | string, field?: string) => {
     agentCommandMock.mockClear();
-    const res = await request(body);
+    const res = await (typeof body === "string"
+      ? postRawChatCompletions(getPort(), body)
+      : request(body));
     expect(res.status).toBe(400);
     const json = (await res.json()) as { error?: { type?: string; message?: string } };
     expect(json.error?.type).toBe("invalid_request_error");
@@ -49,6 +53,85 @@ export function registerOpenAiHttpSamplingTests({
     }
     expect(agentCommandMock).not.toHaveBeenCalled();
   };
+
+  it("validates and forwards max_completion_tokens and max_tokens into streamParams", async () => {
+    const cases: Array<[Record<string, unknown>, number | undefined]> = [
+      [{ max_completion_tokens: 256 }, 256],
+      [{ max_tokens: 128 }, 128],
+      [{ max_completion_tokens: 64, max_tokens: 999 }, 64],
+      [{ max_completion_tokens: null, max_tokens: 32 }, 32],
+      [{ max_completion_tokens: 16, max_tokens: null }, 16],
+      [{ max_completion_tokens: Number.MAX_SAFE_INTEGER }, Number.MAX_SAFE_INTEGER],
+      [{}, undefined],
+    ];
+    for (const [body, maxTokens] of cases) {
+      const params = await expectSampling(
+        body,
+        maxTokens === undefined ? undefined : { maxTokens },
+      );
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      expect(params?.maxTokens).toBe(maxTokens);
+    }
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+    await createOpenAiHttpTestClient(getPort()).chat.completions.create({
+      model: "openclaw",
+      max_completion_tokens: null,
+      max_tokens: null,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(firstAgentCommandOptions()?.streamParams?.maxTokens).toBeUndefined();
+  });
+
+  it("rejects malformed token caps before agent dispatch", async () => {
+    for (const field of ["max_completion_tokens", "max_tokens"] as const) {
+      for (const value of ["32", {}, [32], 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        await expectInvalid({ [field]: value }, field);
+      }
+      await expectInvalid(
+        `{"model":"openclaw","messages":[{"role":"user","content":"hi"}],"${field}":1e309}`,
+        field,
+      );
+    }
+    await expectInvalid({ max_completion_tokens: "64", max_tokens: 32 }, "max_completion_tokens");
+    await expectInvalid({ max_completion_tokens: 64, max_tokens: "32" }, "max_tokens");
+  });
+
+  it("forwards inbound stop into streamParams", async () => {
+    for (const [stop, expected] of [
+      ["\n\n", ["\n\n"]],
+      [
+        ["User:", "Assistant:"],
+        ["User:", "Assistant:"],
+      ],
+      [undefined, undefined],
+    ] as const) {
+      await expectSampling(
+        stop === undefined ? {} : { stop },
+        expected ? { stop: [...expected] } : undefined,
+      );
+    }
+    for (const stop of [["a", "b", "c", "d", "e"], [""], [123], {}]) {
+      await expectInvalid({ stop }, "stop");
+    }
+  });
+
+  it("forwards response_format into streamParams", async () => {
+    for (const format of [
+      { type: "json_object" },
+      { type: "json_schema", json_schema: { name: "test", schema: { type: "object" } } },
+      { type: "text" },
+      undefined,
+    ]) {
+      await expectSampling(
+        format ? { response_format: format } : {},
+        format ? { responseFormat: { type: format.type } } : undefined,
+        format?.type.startsWith("json") ? "{}" : "hello",
+      );
+    }
+    await expectInvalid({ response_format: { type: "xml" } }, "response_format");
+  });
 
   it("rejects malformed sampling numbers before agent dispatch", async () => {
     for (const field of ["temperature", "top_p", "frequency_penalty", "presence_penalty", "seed"]) {
