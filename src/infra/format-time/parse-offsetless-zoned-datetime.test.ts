@@ -1,11 +1,15 @@
 import { expect, it } from "vitest";
+import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "./parse-offsetless-zoned-datetime.js";
 
+it.each(["+002027-01-15T12:00:00Z", "+002027-01-15T12:00:00+0200", "2026-03-23Z", "+20m"])(
+  "rejects non-offsetless ISO input %s",
+  (input) => {
+    expect(isOffsetlessIsoDateTime(input)).toBe(false);
+  },
+);
+
 it.each([
-  ["+002027-01-15T12:00:00Z", "UTC", null],
-  ["+002027-01-15T12:00:00+0200", "UTC", null],
-  ["2026-03-23Z", "UTC", null],
-  ["+20m", "UTC", null],
   ["2026-03-23", "UTC", "2026-03-23T00:00:00.000Z"],
   ["2026-03-23", "Asia/Shanghai", "2026-03-22T16:00:00.000Z"],
   ["2026-03-23", "America/New_York", "2026-03-23T04:00:00.000Z"],
