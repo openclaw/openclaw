@@ -1,17 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { writeSecretStoreEntry } from "../src/secrets/store/secret-store.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
-import {
-  closeHttpServer,
-  listenLoopback,
-  readRequestText,
-} from "./helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -25,30 +21,38 @@ it("opens New Agent through the real Gateway and runner using a protected provid
   let acceptedKey = key;
   const secretRef = { source: "store", provider: "default", id: "SETUP_TEST_KEY" };
   const requests: { authorization: string | undefined; body: unknown }[] = [];
-  const provider = createServer(async (request, response) => {
+  const provider = createServer((request, response) => {
     if (request.method !== "POST" || request.url !== "/v1/responses") {
       response.writeHead(404).end();
       return;
     }
-    requests.push({
-      authorization: request.headers.authorization,
-      body: JSON.parse(await readRequestText(request)),
-    });
-    if (request.headers.authorization !== `Bearer ${acceptedKey}`) {
-      response.writeHead(401).end();
-      return;
-    }
-    writeOpenAiResponsesText(response, {
-      text: "OK",
-      messageId: "msg_setup_probe",
-      responseId: "resp_setup_probe",
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      requests.push({
+        authorization: request.headers.authorization,
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+      });
+      if (request.headers.authorization !== `Bearer ${acceptedKey}`) {
+        response.writeHead(401).end();
+        return;
+      }
+      writeOpenAiResponsesText(response, {
+        text: "OK",
+        messageId: "msg_setup_probe",
+        responseId: "resp_setup_probe",
+      });
     });
   });
   let instance: OpenClawTestInstance | undefined;
   let client: GatewayClient | undefined;
   await runQaGatewayFixture(
     async () => {
-      const baseUrl = await listenLoopback(provider);
+      await new Promise<void>((resolve, reject) => {
+        provider.once("error", reject);
+        provider.listen(0, "127.0.0.1", resolve);
+      });
+      const port = (provider.address() as AddressInfo).port;
       instance = await createOpenClawTestInstance({
         name: "system-agent-managed-auth",
         env: {
@@ -67,7 +71,7 @@ it("opens New Agent through the real Gateway and runner using a protected provid
             providers: {
               fixture: {
                 api: "openai-responses",
-                baseUrl: `${baseUrl}/v1`,
+                baseUrl: `http://127.0.0.1:${port}/v1`,
                 apiKey: secretRef,
                 request: { allowPrivateNetwork: true },
                 models: [
@@ -184,8 +188,11 @@ it("opens New Agent through the real Gateway and runner using a protected provid
     () => client?.stopAndWait(),
     () => instance?.cleanup(),
     async () => {
+      provider.closeAllConnections();
       if (provider.listening) {
-        await closeHttpServer(provider);
+        await new Promise<void>((resolve, reject) => {
+          provider.close((error) => (error ? reject(error) : resolve()));
+        });
       }
     },
   );
