@@ -357,7 +357,7 @@ describe
         expect(readRows()).toEqual(rowsBeforePartialPair);
         const beforeFusion = await first.actor.read(authority);
         expect(beforeFusion.transcript.version).toEqual(afterPartialPair.transcript.version);
-        const fused = await appendProjection("Final transformed input");
+        const fused = await appendProjection("Captured input");
         assert(fused.kind === "committed");
         expect(fused.failure).toBeUndefined();
         const transcript = fused.receipt.transcript;
@@ -367,7 +367,7 @@ describe
         expect(transcript.append?.modelPromptProjection?.result.message).toMatchObject({
           role: "user",
           content: "first input",
-          __openclaw: { modelPromptProjection: { version: 1, text: "Final transformed input" } },
+          __openclaw: { modelPromptProjection: { version: 1, text: "Captured input" } },
         });
         expect(transcript.appendedEvents?.map(({ event }) => event)).toMatchObject([
           { id: "runtime-context", parentId: "initial-thinking" },
@@ -378,6 +378,9 @@ describe
           value: { ...transcript.after, leafEventId: "runtime-context" },
         });
         expect(first.actor.snapshot(authority)?.transcript.version).toEqual(transcript.after);
+        const unchanged = await appendProjection("Captured input");
+        assert(unchanged.kind === "committed");
+        expect(unchanged.receipt.transcript.after).toEqual(transcript.after);
       } finally {
         await first.actor.release();
       }
@@ -396,7 +399,7 @@ describe
               role: "user",
               content: "first input",
               __openclaw: {
-                modelPromptProjection: { version: 1, text: "Final transformed input" },
+                modelPromptProjection: { version: 1, text: "Captured input" },
               },
             },
           },

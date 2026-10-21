@@ -64,64 +64,6 @@ type MinimaxFileRetrieveResponse = {
   base_resp?: MinimaxBaseResp;
 };
 
-function resolveDurationSeconds(params: {
-  model: string;
-  durationSeconds: number | undefined;
-}): number | undefined {
-  const rounded = normalizeVideoGenerationDuration({ durationSeconds: params.durationSeconds });
-  if (rounded === undefined) {
-    return undefined;
-  }
-  const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_DURATIONS, params.model)
-    ? MINIMAX_MODEL_ALLOWED_DURATIONS[params.model]
-    : undefined;
-  if (!allowed || allowed.length === 0) {
-    return rounded;
-  }
-  return allowed.reduce((best, current) =>
-    Math.abs(current - rounded) < Math.abs(best - rounded) ? current : best,
-  );
-}
-
-function resolveResolution(params: {
-  model: string;
-  resolution: string | undefined;
-}): string | undefined {
-  const requested = normalizeOptionalString(params.resolution)?.toUpperCase();
-  if (!requested) {
-    return undefined;
-  }
-  const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_RESOLUTIONS, params.model)
-    ? MINIMAX_MODEL_ALLOWED_RESOLUTIONS[params.model]
-    : undefined;
-  if (!allowed || allowed.length === 0 || allowed.includes(requested)) {
-    return requested;
-  }
-  const requestedIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
-    requested as (typeof MINIMAX_RESOLUTION_ORDER)[number],
-  );
-  if (requestedIndex < 0) {
-    return undefined;
-  }
-  return allowed.reduce((best, current) => {
-    const currentIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
-      current as (typeof MINIMAX_RESOLUTION_ORDER)[number],
-    );
-    const bestIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
-      best as (typeof MINIMAX_RESOLUTION_ORDER)[number],
-    );
-    if (currentIndex < 0) {
-      return best;
-    }
-    if (bestIndex < 0) {
-      return current;
-    }
-    return Math.abs(currentIndex - requestedIndex) < Math.abs(bestIndex - requestedIndex)
-      ? current
-      : best;
-  });
-}
-
 export function buildMinimaxVideoGenerationProvider(
   providerId = "minimax",
 ): VideoGenerationProvider {
@@ -190,19 +132,51 @@ export function buildMinimaxVideoGenerationProvider(
       if (firstFrameImage) {
         body.first_frame_image = firstFrameImage;
       }
-      const resolution = resolveResolution({
-        model,
-        resolution: req.resolution,
-      });
-      if (resolution) {
-        body.resolution = resolution;
+      const requested = normalizeOptionalString(req.resolution)?.toUpperCase();
+      if (requested) {
+        const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_RESOLUTIONS, model)
+          ? MINIMAX_MODEL_ALLOWED_RESOLUTIONS[model]
+          : undefined;
+        if (!allowed || allowed.length === 0 || allowed.includes(requested)) {
+          body.resolution = requested;
+        } else {
+          const requestedIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
+            requested as (typeof MINIMAX_RESOLUTION_ORDER)[number],
+          );
+          if (requestedIndex >= 0) {
+            body.resolution = allowed.reduce((best, current) => {
+              const currentIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
+                current as (typeof MINIMAX_RESOLUTION_ORDER)[number],
+              );
+              const bestIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
+                best as (typeof MINIMAX_RESOLUTION_ORDER)[number],
+              );
+              if (currentIndex < 0) {
+                return best;
+              }
+              if (bestIndex < 0) {
+                return current;
+              }
+              return Math.abs(currentIndex - requestedIndex) < Math.abs(bestIndex - requestedIndex)
+                ? current
+                : best;
+            });
+          }
+        }
       }
-      const durationSeconds = resolveDurationSeconds({
-        model,
+      const rounded = normalizeVideoGenerationDuration({
         durationSeconds: req.durationSeconds,
       });
-      if (durationSeconds !== undefined) {
-        body.duration = durationSeconds;
+      if (rounded !== undefined) {
+        const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_DURATIONS, model)
+          ? MINIMAX_MODEL_ALLOWED_DURATIONS[model]
+          : undefined;
+        body.duration =
+          !allowed || allowed.length === 0
+            ? rounded
+            : allowed.reduce((best, current) =>
+                Math.abs(current - rounded) < Math.abs(best - rounded) ? current : best,
+              );
       }
       const submitted = await postJsonResponse<MinimaxCreateResponse>({
         url: `${baseUrl}/v1/video_generation`,

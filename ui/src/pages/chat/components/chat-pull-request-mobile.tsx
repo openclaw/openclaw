@@ -4,13 +4,14 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import { GitDiffValues } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { ChecksRow } from "./chat-pull-request-shared.tsx";
+import { ChecksRows } from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-pull-request-presenters.css";
 import "./chat-ci-details.ts";
@@ -116,16 +117,7 @@ export function ChatPullRequestMobileRow(props: ChatPullRequestMobileRowProps) {
             }
           >
             <span aria-hidden="true"> · </span>
-            <Show when={props.pullRequest.additions !== undefined}>
-              <span class="chat-pr__additions">
-                +{props.pullRequest.additions?.toLocaleString("en-US")}
-              </span>
-            </Show>{" "}
-            <Show when={props.pullRequest.deletions !== undefined}>
-              <span class="chat-pr__deletions">
-                −{props.pullRequest.deletions?.toLocaleString("en-US")}
-              </span>
-            </Show>
+            <GitDiffValues item={props.pullRequest} classPrefix="chat-pr" locale="en-US" spaced />
           </Show>
         </span>
       </span>
@@ -241,16 +233,7 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                         })}
                       </span>
                     </Show>
-                    <Show when={pullRequest().additions !== undefined}>
-                      <span class="chat-pr__additions">
-                        +{pullRequest().additions?.toLocaleString("en-US")}
-                      </span>
-                    </Show>
-                    <Show when={pullRequest().deletions !== undefined}>
-                      <span class="chat-pr__deletions">
-                        −{pullRequest().deletions?.toLocaleString("en-US")}
-                      </span>
-                    </Show>
+                    <GitDiffValues item={pullRequest()} classPrefix="chat-pr" locale="en-US" />
                   </div>
                 </Show>
               </div>
@@ -280,26 +263,7 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
               >
                 <h3>{t("chat.pullRequests.checksTitle")}</h3>
                 <div class="chat-pr-mobile__group chat-pr-mobile__check-rows">
-                  <ChecksRow
-                    label={t("chat.pullRequests.checksFailed")}
-                    count={pullRequest().checks?.failed ?? 0}
-                    modifier="failed"
-                  />
-                  <ChecksRow
-                    label={t("chat.pullRequests.checksPassed")}
-                    count={pullRequest().checks?.passed ?? 0}
-                    modifier="passed"
-                  />
-                  <ChecksRow
-                    label={t("chat.pullRequests.checksRunning")}
-                    count={pullRequest().checks?.running ?? 0}
-                    modifier="running"
-                  />
-                  <ChecksRow
-                    label={t("chat.pullRequests.checksSkipped")}
-                    count={pullRequest().checks?.skipped ?? 0}
-                    modifier="skipped"
-                  />
+                  <ChecksRows checks={pullRequest().checks} />
                   <Show when={pullRequest().checksUrl}>
                     {(url) => (
                       <a

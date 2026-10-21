@@ -28,179 +28,60 @@ const PLUGIN_CATALOG_PATHS = {
   "memory status": "registered and covered by the memory-core plugin",
 } as const;
 
+function commandPaths(paths: string): string[] {
+  return paths.split("|").map((path) => path.trim());
+}
+
 const JSON_NOT_APPLICABLE = {
   namespaces: {
     reason: "command group only; reporting subcommands declare JSON output individually",
-    commands: [
-      "agents team",
-      "claws",
-      "backup",
-      "backup git",
-      "backup sqlite",
-      "database",
-      "database ownership",
-      "message",
-      "message thread",
-      "message emoji",
-      "message sticker",
-      "message role",
-      "message channel",
-      "message member",
-      "message voice",
-      "message event",
-      "mcp",
-      "transcripts",
-      "gateway restart-handoff",
-      "gateway diagnostics",
-      "system",
-      "system heartbeat",
-      "promos",
-      "telemetry",
-      "infer",
-      "infer model",
-      "infer model auth",
-      "infer image",
-      "infer audio",
-      "infer tts",
-      "infer video",
-      "infer web",
-      "infer embedding",
-      "approvals",
-      "approvals allowlist",
-      "approvals grants",
-      "exec-policy",
-      "nodes",
-      "nodes camera",
-      "nodes screen",
-      "nodes location",
-      "devices",
-      "users",
-      "node",
-      "sandbox",
-      "worktrees",
-      "cron",
-      "dns",
-      "proxy",
-      "webhooks",
-      "webhooks gmail",
-      "clawbot",
-      "pairing",
-      "plugins",
-      "plugins marketplace",
-      "channels",
-      "channels dead-letters",
-      "directory",
-      "directory peers",
-      "directory groups",
-      "security",
-      "secrets",
-      "secrets store",
-      "models aliases",
-      "models fallbacks",
-      "models image-fallbacks",
-      "models auth",
-      "models auth order",
-      "skills workshop",
-    ],
+    commands: commandPaths(`
+      agents team | claws | backup | backup git | backup sqlite | database | database ownership |
+      message | message thread | message emoji | message sticker | message role | message channel |
+      message member | message voice | message event | mcp | transcripts |
+      gateway restart-handoff | gateway diagnostics | system | system heartbeat | promos | telemetry |
+      infer | infer model | infer model auth | infer image | infer audio | infer tts | infer video |
+      infer web | infer embedding | approvals | approvals allowlist | approvals grants | exec-policy |
+      nodes | nodes camera | nodes screen | nodes location | devices | users | node | sandbox |
+      worktrees | cron | dns | proxy | webhooks | webhooks gmail | clawbot | pairing |
+      plugins | plugins marketplace | channels | channels dead-letters |
+      directory | directory peers | directory groups | security | secrets | secrets store |
+      models aliases | models fallbacks | models image-fallbacks | models auth | models auth order |
+      skills workshop
+    `),
   },
   interactive: {
     reason: "interactive wizard, login, or terminal session has no single report document",
-    commands: [
-      "configure",
-      "config",
-      "acp client",
-      "gateway auth-token",
-      "promos claim",
-      "infer model auth login",
-      "models auth add",
-      "models auth login",
-      "models auth setup-token",
-      "models auth paste-token",
-      "models auth paste-api-key",
-      "models auth login-github-copilot",
-      "mcp configure",
-      "mcp login",
-      "attach",
-      "tui",
-      "resume",
-      "update wizard",
-    ],
+    commands: commandPaths(`
+      configure | config | acp client | gateway auth-token | promos claim | infer model auth login |
+      models auth add | models auth login | models auth setup-token | models auth paste-token |
+      models auth paste-api-key | models auth login-github-copilot |
+      mcp configure | mcp login | attach | tui | resume | update wizard
+    `),
   },
   longRunning: {
     reason: "long-running server, worker, or live stream does not terminate with one JSON document",
-    commands: [
-      "acp",
-      "gateway",
-      "gateway run",
-      "mcp serve",
-      "node worker",
-      "node run",
-      "connect",
-      "worker",
-      "proxy start",
-      "proxy run",
-      "webhooks gmail run",
-      "hooks relay",
-      "sessions tail",
-    ],
+    commands: commandPaths(`
+      acp | gateway | gateway run | mcp serve | node worker | node run | connect | worker |
+      proxy start | proxy run | webhooks gmail run | hooks relay | sessions tail
+    `),
   },
   mutations: {
     reason: "pure side-effect command has no meaningful report payload",
-    commands: [
-      "reset",
-      "uninstall",
-      "backup enable",
-      "backup disable",
-      "telemetry on",
-      "telemetry off",
-      "config set",
-      "mcp add",
-      "mcp set",
-      "mcp tools",
-      "mcp logout",
-      "mcp reload",
-      "mcp unset",
-      "onboard recommendations acknowledge",
-      "onboard recommendations refresh",
-      "models set",
-      "models set-image",
-      "models aliases add",
-      "models aliases remove",
-      "models fallbacks add",
-      "models fallbacks remove",
-      "models fallbacks clear",
-      "models image-fallbacks add",
-      "models image-fallbacks remove",
-      "models image-fallbacks clear",
-      "models auth activate",
-      "models auth logout",
-      "models auth order set",
-      "models auth order clear",
-      "hooks enable",
-      "hooks disable",
-      "hooks install",
-      "hooks update",
-      "skills install",
-      "skills update",
-      "sandbox recreate",
-      "dns setup",
-      "proxy purge",
-      "pairing approve",
-      "plugins enable",
-      "plugins disable",
-      "plugins uninstall",
-      "plugins install",
-      "plugins update",
-      "plugins build",
-      "plugins init",
-      "channels add",
-      "channels remove",
-      "channels login",
-      "channels logout",
-      "secrets store set",
-      "secrets store rm",
-      "secrets store import",
-    ],
+    commands: commandPaths(`
+      reset | uninstall | backup enable | backup disable | telemetry on | telemetry off | config set |
+      mcp add | mcp set | mcp tools | mcp logout | mcp reload | mcp unset |
+      onboard recommendations acknowledge | onboard recommendations refresh |
+      models set | models set-image | models aliases add | models aliases remove |
+      models fallbacks add | models fallbacks remove | models fallbacks clear |
+      models image-fallbacks add | models image-fallbacks remove | models image-fallbacks clear |
+      models auth activate | models auth logout | models auth order set | models auth order clear |
+      hooks enable | hooks disable | hooks install | hooks update | skills install | skills update |
+      sandbox recreate | dns setup | proxy purge | pairing approve |
+      plugins enable | plugins disable | plugins uninstall | plugins install | plugins update |
+      plugins build | plugins init | channels add | channels remove | channels login | channels logout |
+      secrets store set | secrets store rm | secrets store import
+    `),
   },
   rawArtifacts: {
     reason: "command streams a raw artifact whose bytes are already the machine contract",

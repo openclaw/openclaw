@@ -1593,7 +1593,7 @@
   "ui/src/pages/chat/chat-page-pane-render.tsx",
   "ui/src/pages/chat/chat-page-retained-sessions.ts",
   "ui/src/pages/chat/chat-page-state.ts",
-  "ui/src/pages/chat/chat-page.ts",
+  "ui/src/pages/chat/chat-page.tsx",
   "ui/src/pages/chat/chat-pane-active-resources.ts",
   "ui/src/pages/chat/chat-pane-attachment-catalog.ts",
   "ui/src/pages/chat/chat-pane-attachment-handoff.ts",

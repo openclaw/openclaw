@@ -1225,6 +1225,8 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region--desktop .chat-thread:not(.chat-thread--route-loading) {
+  --chat-table-reserved-space: var(--chat-details-space, 0px);
+
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--chat-details-space, 0px);
   align-content: start;

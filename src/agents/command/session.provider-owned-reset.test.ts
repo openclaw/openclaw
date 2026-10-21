@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 
@@ -33,102 +33,68 @@ vi.mock("../../config/sessions/lifecycle-read.js", async () => {
 const { resolveSession } = await import("./session.js");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const sessionKey = "agent:main:cli";
 
-function seedProviderOwned(sessionKey: string): void {
-  const startedAt = Date.now() - DAY_MS;
+function seedSession(sessionId: string, age: number, fields: Partial<SessionEntry> = {}): void {
+  hoisted.terminalTranscriptNewer = false;
+  const startedAt = Date.now() - age;
   hoisted.store = {
     [sessionKey]: {
-      sessionId: "old-session-id",
+      sessionId,
       updatedAt: startedAt,
       sessionStartedAt: startedAt,
       lastInteractionAt: startedAt,
-      model: "claude-opus-4-6",
-      modelProvider: "claude-cli",
-      cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
+      ...fields,
     },
   };
 }
 
-describe("command resolveSession provider-owned daily reset", () => {
-  beforeEach(() => {
-    hoisted.terminalTranscriptNewer = false;
+function resolve(session: OpenClawConfig["session"] = {}) {
+  return resolveSession({ cfg: { session }, sessionKey, agentId: "main" });
+}
+
+function expectRotation(result: Awaited<ReturnType<typeof resolve>>, oldId: string) {
+  expect(result).toMatchObject({
+    isNewSession: true,
+    persistedThinking: "high",
+    persistedVerbose: "full",
   });
+  expect(result.sessionId).not.toBe(oldId);
+}
 
-  it("keeps a provider-owned CLI session with the default reset policy", async () => {
-    const sessionKey = "agent:main:cli";
-    seedProviderOwned(sessionKey);
+it("keeps a provider-owned CLI session with the default reset policy", async () => {
+  seedSession("old-session-id", DAY_MS, {
+    model: "claude-opus-4-6",
+    modelProvider: "claude-cli",
+    cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
+  });
+  expect(await resolve()).toMatchObject({ isNewSession: false, sessionId: "old-session-id" });
+});
 
-    const result = await resolveSession({
-      cfg: { session: {} } as OpenClawConfig,
-      sessionKey,
+it("carries stored thinking and verbose preferences during terminal transcript recovery", async () => {
+  seedSession("recovering-session-id", 0, { thinkingLevel: "high", verboseLevel: "full" });
+  hoisted.terminalTranscriptNewer = true;
+  expectRotation(await resolve(), "recovering-session-id");
+});
+
+it("carries preferences across a daily reset", async () => {
+  const startedAt = Date.now() - 2 * DAY_MS;
+  seedSession("daily-expired-session-id", 2 * DAY_MS, {
+    thinkingLevel: "high",
+    verboseLevel: "full",
+    pendingTranscriptRepair: [{ id: "old-repair", text: "old reply", createdAt: startedAt }],
+    lastRunId: "settled-old-run",
+    restartRecoveryRequesterSource: {
       agentId: "main",
-    });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe("old-session-id");
-  });
-
-  it("carries stored thinking and verbose preferences during terminal transcript recovery", async () => {
-    const sessionKey = "agent:main:cli";
-    const now = Date.now();
-    hoisted.store = {
-      [sessionKey]: {
-        sessionId: "recovering-session-id",
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now,
-        thinkingLevel: "high",
-        verboseLevel: "full",
-      },
-    };
-    hoisted.terminalTranscriptNewer = true;
-
-    const result = await resolveSession({
-      cfg: { session: {} } as OpenClawConfig,
       sessionKey,
-      agentId: "main",
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe("recovering-session-id");
-    expect(result.persistedThinking).toBe("high");
-    expect(result.persistedVerbose).toBe("full");
+      sessionId: "daily-expired-session-id",
+      sourceRunId: "settled-old-run",
+      requesterOrigin: { sessionKey, operatorProfileId: "original-requester" },
+    },
   });
-
-  it("carries preferences across a daily reset", async () => {
-    const sessionKey = "agent:main:cli";
-    const startedAt = Date.now() - 2 * DAY_MS;
-    hoisted.store = {
-      [sessionKey]: {
-        sessionId: "daily-expired-session-id",
-        updatedAt: startedAt,
-        sessionStartedAt: startedAt,
-        lastInteractionAt: startedAt,
-        thinkingLevel: "high",
-        verboseLevel: "full",
-        pendingTranscriptRepair: [{ id: "old-repair", text: "old reply", createdAt: startedAt }],
-        lastRunId: "settled-old-run",
-        restartRecoveryRequesterSource: {
-          agentId: "main",
-          sessionKey,
-          sessionId: "daily-expired-session-id",
-          sourceRunId: "settled-old-run",
-          requesterOrigin: { sessionKey, operatorProfileId: "original-requester" },
-        },
-      },
-    };
-    const result = await resolveSession({
-      cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
-      sessionKey,
-      agentId: "main",
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe("daily-expired-session-id");
-    expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
-    expect(result.sessionEntry?.lastRunId).toBeUndefined();
-    expect(result.sessionEntry?.restartRecoveryRequesterSource).toBeUndefined();
-    expect(result.persistedThinking).toBe("high");
-    expect(result.persistedVerbose).toBe("full");
-  });
+  const result = await resolve({ reset: { mode: "daily" } });
+  expectRotation(result, "daily-expired-session-id");
+  expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
+  expect(result.sessionEntry?.lastRunId).toBeUndefined();
+  expect(result.sessionEntry?.restartRecoveryRequesterSource).toBeUndefined();
 });

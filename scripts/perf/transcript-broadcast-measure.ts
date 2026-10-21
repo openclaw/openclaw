@@ -69,6 +69,10 @@ const { values } = parseArgs({
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
+    "github-options-connected": { type: "boolean", default: false },
+    "github-options-observe": { type: "boolean", default: false },
+    "github-observation-owner": { type: "string" },
+    "github-availability-owner": { type: "string" },
     "stream-start-diagnostics": { type: "boolean", default: false },
     "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
@@ -116,6 +120,16 @@ const { values } = parseArgs({
 });
 if (!values["state-dir"]) {
   throw new Error("--state-dir is required (existing team-shape fixture)");
+}
+if (
+  (values["github-options-observe"] &&
+    (!values["dashboard-rpc"] || path.resolve(values.entry) !== path.resolve("src/entry.ts"))) ||
+  ((values["github-observation-owner"] || values["github-availability-owner"]) &&
+    !values["github-options-observe"])
+) {
+  throw new Error(
+    "GitHub stage observation requires --dashboard-rpc --entry src/entry.ts --github-options-observe",
+  );
 }
 const integer = (raw: string, label: string, min = 1) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
@@ -316,6 +330,14 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
 if (values["dashboard-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--dashboard-rpc requires memory-soak and --mixed-rpc");
 }
+if (values["github-options-connected"] && !values["dashboard-rpc"]) {
+  throw new Error("--github-options-connected requires --dashboard-rpc");
+}
+if (values["github-options-connected"] && historyTurns) {
+  throw new Error(
+    "--github-options-connected requires fresh foreground sessions; omit --history-turns",
+  );
+}
 const recapBurstRepeats = integer(values["recap-burst-repeats"], "--recap-burst-repeats", 0);
 const recapBurstIntervalMs = integer(
   values["recap-burst-interval-ms"],
@@ -373,6 +395,9 @@ const fixture: unknown = JSON.parse(
 );
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture");
+}
+if (values["github-options-connected"] && fixture.githubOptionsConnected !== true) {
+  throw new Error("Regenerate this fixture with --github-options-connected before measurement");
 }
 const output = path.join(root, `broadcast-measure-${Date.now()}`);
 mkdirSync(output);
@@ -449,6 +474,33 @@ const dashboardBoardId = "synthetic-soak-board";
 const dashboardPreviewUrl = "https://github.com/openclaw-fixture/soak/issues/1";
 const dashboardPreviewTitle = "Synthetic dashboard issue";
 let dashboardFixtureRequests = 0;
+const githubStages: Array<{
+  request: number;
+  phase: string;
+  startedAtEpochMs: number;
+  durationMs: number;
+}> = [];
+let githubObservationOwner: { path: string; override: boolean } | undefined;
+let githubAvailabilityOwner: { path: string; override: boolean } | undefined;
+type GitHubFixtureRequest = {
+  phase: "setup/preflight" | "measurement" | "outside-measurement";
+  route: string;
+  sequence: number;
+  startedAtEpochMs: number;
+  durationMs: number;
+  delayMs: number;
+  status: number;
+  accountRevision?: number;
+};
+const githubFixtureRequests: GitHubFixtureRequest[] = [];
+const githubOptionsObservations: Array<{
+  phase: GitHubFixtureRequest["phase"];
+  sessionKey: string;
+  startedAtEpochMs: number;
+  durationMs: number;
+  stale: boolean;
+  login: string;
+}> = [];
 const dashboardPreload = path.join(output, "dashboard-preload.mjs");
 if (values["dashboard-rpc"]) {
   for (const id of ["github", "workboard"]) {
@@ -460,12 +512,30 @@ if (values["dashboard-rpc"]) {
   writeFileSync(
     dashboardPreload,
     `import { MockAgent } from ${JSON.stringify(import.meta.resolve("undici"))};
+import { setTimeout as delay } from 'node:timers/promises';
 const transport = new MockAgent();
 transport.disableNetConnect();
 const github = transport.get('https://api.github.com');
 const repository = '/repos/openclaw-fixture/soak';
+const connected = ${JSON.stringify(values["github-options-connected"])};
+let firstAccountRequestAt;
+let accountRevision = 1;
+if (connected) {
+  github.intercept({ path: '/user', method: 'GET' }).reply(() => {
+    firstAccountRequestAt ??= Date.now();
+    accountRevision = Date.now() - firstAccountRequestAt >= 60_000 ? 2 : 1;
+    return { statusCode: 200, data: JSON.stringify({ id: 1516,
+      login: accountRevision === 1 ? 'synthetic-shared' : 'synthetic-shared-updated',
+      avatar_url: null }), responseOptions: { headers: {
+        'content-type': 'application/json', 'x-oauth-scopes': 'repo, read:org, gist',
+      } } };
+  }).persist();
+  github.intercept({ path: /^\\/repos\\/openclaw-fixture\\/soak\\/pulls\\?/, method: 'GET' })
+    .reply(200, []).persist();
+}
 github.intercept({ path: repository, method: 'GET' }).reply(200, {
-  private: false, visibility: 'public', full_name: 'openclaw-fixture/soak',
+  id: 1516, private: false, visibility: 'public', fork: false,
+  full_name: 'openclaw-fixture/soak', default_branch: 'main',
 }).persist();
 github.intercept({ path: repository + '/issues/1', method: 'GET' }).reply(() => {
   process.send?.({ channel: 'dashboard-github-fixture' });
@@ -478,9 +548,27 @@ github.intercept({ path: repository + '/issues/1', method: 'GET' }).reply(() => 
 }).persist();
 // Startup replaces global agents; bind the synthetic transport on each fetch.
 const nativeFetch = globalThis.fetch;
+const routeRequests = new Map();
 globalThis.fetch = async (input, options) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-  if (url.origin === 'https://api.github.com') return nativeFetch(input, { ...options, dispatcher: transport });
+  if (url.origin === 'https://api.github.com') {
+    const route = url.pathname + url.search;
+    const sequence = (routeRequests.get(route) ?? 0) + 1;
+    routeRequests.set(route, sequence);
+    const delayMs = connected && url.pathname === '/user' ? 300 + ((sequence - 1) % 3) * 300 : 0;
+    const startedAtEpochMs = performance.timeOrigin + performance.now();
+    let status = 0;
+    try {
+      if (delayMs) await delay(delayMs, undefined, { signal: options?.signal ?? undefined });
+      const response = await nativeFetch(input, { ...options, dispatcher: transport });
+      status = response.status;
+      return response;
+    } finally {
+      if (connected) process.send?.({ channel: 'dashboard-github-upstream', route, sequence,
+        startedAtEpochMs, durationMs: performance.timeOrigin + performance.now() - startedAtEpochMs,
+        delayMs, status, ...(url.pathname === '/user' ? { accountRevision } : {}) });
+    }
+  }
   if (url.hostname !== '127.0.0.1') throw new Error('Benchmark blocked external fetch');
   return nativeFetch(input, options);
 };\n`,
@@ -495,6 +583,21 @@ if (scenario === "plugins.reload") {
 const authorityChannel = "openclaw-operator-authority-bench";
 const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
+const fixtureDirectPassword = "synthetic-connected-github-local-caller";
+const trustedProxyScenario = values["operator-access-policy"] || values["github-options-connected"];
+const clientConnection = {
+  url: `ws://127.0.0.1:${port}`,
+  ...(trustedProxyScenario
+    ? {
+        origin: authorityOrigin,
+        headers: {
+          "x-forwarded-user": authorityEmail,
+          "x-forwarded-proto": "https",
+          "x-forwarded-for": "203.0.113.50",
+        },
+      }
+    : {}),
+};
 if (values["operator-access-policy"]) {
   const id = "synthetic-operator-access";
   const pluginDir = path.join(output, id);
@@ -562,11 +665,14 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     cfg.plugins.allow.push(id);
   }
   cfg.plugins.entries[id] = { enabled: true };
+}
+if (trustedProxyScenario) {
   cfg.gateway = {
     ...cfg.gateway,
     trustedProxies: ["127.0.0.1"],
     auth: {
       mode: "trusted-proxy",
+      ...(values["github-options-connected"] ? { password: fixtureDirectPassword } : {}),
       identityScopes: { [authorityEmail]: ["operator.admin"] },
       trustedProxy: {
         userHeader: "x-forwarded-user",
@@ -582,7 +688,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           scopes: ["operator.admin"],
           agents: "*",
           sessions: { others: "write" },
-          accessPolicyPlugin: id,
+          ...(values["operator-access-policy"]
+            ? { accessPolicyPlugin: "synthetic-operator-access" }
+            : {}),
         },
       },
     },
@@ -1208,6 +1316,7 @@ const mock = createServer((req, res) => {
 });
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
+const githubOptionsClients: ReturnType<typeof createGatewayWsClient>[] = [];
 const expectedClosures = new WeakSet<ReturnType<typeof createGatewayWsClient>>();
 const responseFrameBytes = new WeakMap<
   ReturnType<typeof createGatewayWsClient>,
@@ -1318,12 +1427,32 @@ const env = {
   OPENCLAW_STATE_DIR: root,
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
+  ...(values["github-options-connected"]
+    ? {
+        GH_TOKEN: "synthetic-github-options",
+        GITHUB_TOKEN: "synthetic-github-options",
+        // Trusted-proxy local-call resolution selects the explicit/env password.
+        OPENCLAW_GATEWAY_PASSWORD: fixtureDirectPassword,
+        // Synthetic HTTPS origins are metadata only, including during worktree preparation.
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "protocol.https.allow",
+        GIT_CONFIG_VALUE_0: "never",
+      }
+    : {}),
   OPENCLAW_PROFILE: `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
   ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
   ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
+  ...(values["github-observation-owner"]
+    ? { OPENCLAW_BENCH_GITHUB_OBSERVATION_OWNER: path.resolve(values["github-observation-owner"]) }
+    : {}),
+  ...(values["github-availability-owner"]
+    ? {
+        OPENCLAW_BENCH_GITHUB_AVAILABILITY_OWNER: path.resolve(values["github-availability-owner"]),
+      }
+    : {}),
 };
 function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, ipc = false) {
   const log = createWriteStream(path.join(output, `${name}.log`));
@@ -1335,8 +1464,66 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
   child.stdout?.pipe(log, { end: false });
   child.stderr?.pipe(log, { end: false });
   child.on("message", (message: unknown) => {
+    if (
+      isRecord(message) &&
+      message.channel === "github-options-stage" &&
+      typeof message.request === "number" &&
+      typeof message.phase === "string" &&
+      typeof message.startedAtEpochMs === "number" &&
+      typeof message.durationMs === "number"
+    ) {
+      githubStages.push({
+        request: message.request,
+        phase: message.phase,
+        startedAtEpochMs: message.startedAtEpochMs,
+        durationMs: message.durationMs,
+      });
+    }
+    if (
+      isRecord(message) &&
+      message.channel === "github-options-owner-loaded" &&
+      typeof message.path === "string" &&
+      typeof message.override === "boolean"
+    ) {
+      githubObservationOwner = { path: message.path, override: message.override };
+    }
+    if (
+      isRecord(message) &&
+      message.channel === "github-options-availability-loaded" &&
+      typeof message.path === "string" &&
+      typeof message.override === "boolean"
+    ) {
+      githubAvailabilityOwner = { path: message.path, override: message.override };
+    }
     if (isRecord(message) && message.channel === "dashboard-github-fixture") {
       dashboardFixtureRequests++;
+    }
+    if (
+      isRecord(message) &&
+      message.channel === "dashboard-github-upstream" &&
+      typeof message.route === "string" &&
+      typeof message.sequence === "number" &&
+      typeof message.startedAtEpochMs === "number" &&
+      typeof message.durationMs === "number" &&
+      typeof message.delayMs === "number" &&
+      typeof message.status === "number"
+    ) {
+      githubFixtureRequests.push({
+        phase: capturingColdSetup
+          ? "setup/preflight"
+          : measuring
+            ? "measurement"
+            : "outside-measurement",
+        route: message.route,
+        sequence: message.sequence,
+        startedAtEpochMs: message.startedAtEpochMs,
+        durationMs: message.durationMs,
+        delayMs: message.delayMs,
+        status: message.status,
+        ...(typeof message.accountRevision === "number"
+          ? { accountRevision: message.accountRevision }
+          : {}),
+      });
     }
     if (
       isRecord(message) &&
@@ -1442,6 +1629,26 @@ if (values["dashboard-rpc"] && Array.isArray(fixture.projectWorktrees)) {
       original: readFileSync(path.join(worktree, "README.md"), "utf8"),
     });
   }
+}
+function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], created: unknown) {
+  if (
+    !isRecord(created) ||
+    !isRecord(created.entry) ||
+    !isRecord(created.entry.worktree) ||
+    typeof created.entry.worktree.id !== "string" ||
+    typeof created.entry.sessionRoot !== "string"
+  ) {
+    throw new Error("Connected GitHub options require a session-owned managed worktree");
+  }
+  const worktree = realpathSync(created.entry.sessionRoot);
+  if (
+    !worktree.startsWith(`${realpathSync(root)}${path.sep}`) ||
+    !readFileSync(path.join(worktree, ".git"), "utf8").startsWith("gitdir: ")
+  ) {
+    throw new Error("Connected GitHub worktree must be linked and inside the synthetic fixture");
+  }
+  target.worktree = worktree;
+  target.original = readFileSync(path.join(worktree, "README.md"), "utf8");
 }
 const dashboardRpcShapes = values["dashboard-rpc"]
   ? [
@@ -1678,11 +1885,11 @@ const connectParams = {
   minProtocol: PROTOCOL_VERSION,
   maxProtocol: PROTOCOL_VERSION,
   client: {
-    id: values["operator-access-policy"] ? "openclaw-control-ui" : "gateway-client",
+    id: trustedProxyScenario ? "openclaw-control-ui" : "gateway-client",
     displayName: "synthetic-broadcast-measurement",
     version: "1.0.0",
     platform: process.platform,
-    mode: values["operator-access-policy"] ? "webchat" : "backend",
+    mode: trustedProxyScenario ? "webchat" : "backend",
   },
   role: "operator",
   scopes: ["operator.read", "operator.admin"],
@@ -1794,7 +2001,15 @@ function validateDashboardRpc(method: string, result: unknown) {
                   ? isRecord(result.session) && result.session.key === parentKey
                   : method === "controlUi.sessionPullRequests.subscribe"
                     ? result.subscribed === true
-                    : "personal" in result && "shared" in result;
+                    : "personal" in result &&
+                      "shared" in result &&
+                      (!values["github-options-connected"] ||
+                        (isRecord(result.shared) &&
+                          result.shared.accountId === 1516 &&
+                          ["synthetic-shared", "synthetic-shared-updated"].includes(
+                            String(result.shared.login),
+                          ) &&
+                          result.sharedUnavailableReason === undefined));
   if (!valid) {
     throw new Error(`${method} did not return the expected synthetic dashboard data`);
   }
@@ -1812,6 +2027,29 @@ async function rpc(
   assertGatewayAlive();
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
+  }
+  if (values["github-options-connected"] && method === "sessions.github.options") {
+    validateDashboardRpc(method, response.payload);
+    if (
+      isRecord(params) &&
+      typeof params.sessionKey === "string" &&
+      isRecord(response.payload) &&
+      isRecord(response.payload.shared) &&
+      typeof response.payload.shared.login === "string"
+    ) {
+      githubOptionsObservations.push({
+        phase: capturingColdSetup
+          ? "setup/preflight"
+          : measuring
+            ? "measurement"
+            : "outside-measurement",
+        sessionKey: params.sessionKey,
+        startedAtEpochMs: performance.timeOrigin + started,
+        durationMs: rpcDurationMs,
+        stale: response.payload.stale === true,
+        login: response.payload.shared.login,
+      });
+    }
   }
   if (capturingColdSetup) {
     const sessionKey = isRecord(params) ? (params.sessionKey ?? params.key) : undefined;
@@ -2460,17 +2698,7 @@ async function connectClient(index: number) {
   let previousSeq: number | undefined;
   let receivedFrameBytes = 0;
   const client = createGatewayWsClient({
-    url: `ws://127.0.0.1:${port}`,
-    ...(values["operator-access-policy"]
-      ? {
-          origin: authorityOrigin,
-          headers: {
-            "x-forwarded-user": authorityEmail,
-            "x-forwarded-proto": "https",
-            "x-forwarded-for": "203.0.113.50",
-          },
-        }
-      : {}),
+    ...clientConnection,
     onEvent: (event) => {
       lastSubscriberEventAt = performance.now();
       if (event.seq !== undefined) {
@@ -2566,7 +2794,7 @@ async function connectClient(index: number) {
     !hello.features.methods.includes("sessions.list") ||
     !hello.features.methods.includes("sessions.describe") ||
     hello.auth.role !== "operator" ||
-    (values["operator-access-policy"] && hello.auth.method !== "trusted-proxy") ||
+    (trustedProxyScenario && hello.auth.method !== "trusted-proxy") ||
     !hello.auth.scopes.includes("operator.admin") ||
     hello.snapshot.sessionDefaults?.defaultAgentId !== "main"
   ) {
@@ -2592,7 +2820,7 @@ function cleanup() {
         console.warn("Stress cron cleanup failed; discard this fixture before reuse:", error);
       }
     }
-    for (const client of clients) {
+    for (const client of [...clients, ...githubOptionsClients]) {
       client.close();
     }
     await Promise.all(
@@ -2642,8 +2870,11 @@ try {
           ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
           : []),
         ...(values["dashboard-rpc"] ? ["--import", dashboardPreload] : []),
+        ...(values["github-options-observe"]
+          ? ["--import", "./scripts/perf/github-options-measure-preload.ts"]
+          : []),
       ],
-      values["operator-access-policy"] ? "trusted-proxy" : "none",
+      trustedProxyScenario ? "trusted-proxy" : "none",
     ),
     "gateway",
     {},
@@ -2658,12 +2889,20 @@ try {
     const client = await connectClient(index);
     if (index === 0) {
       if (!historyTurns) {
-        await rpc(client, "sessions.create", {
+        const created = await rpc(client, "sessions.create", {
           key: parentKey,
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
+          ...(values["github-options-connected"]
+            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+            : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast parent",
         });
+        if (values["github-options-connected"]) {
+          bindConnectedOptionsWorktree(diffTargets[0]!, created);
+          stressWorktree = diffTargets[0]!.worktree;
+          diffControlOriginal = diffTargets[0]!.original;
+        }
         await rpc(client, "sessions.reset", { key: parentKey });
       }
       if (values["stress-subagents"]) {
@@ -2697,6 +2936,61 @@ try {
   const sender = clients[0];
   if (!sender) {
     throw new Error("no sender client");
+  }
+  for (const target of diffTargets) {
+    if (target.sessionKey !== parentKey) {
+      const created = await rpc(sender, "sessions.create", {
+        key: target.sessionKey,
+        cwd: target.worktree,
+        ...(values["github-options-connected"]
+          ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+          : {}),
+        visibility: "shared",
+        displayName: "Synthetic dashboard diff",
+      });
+      if (values["github-options-connected"]) {
+        bindConnectedOptionsWorktree(target, created);
+      }
+      await rpc(sender, "sessions.reset", { key: target.sessionKey });
+    }
+  }
+  if (values["github-options-connected"]) {
+    // Broad dashboard grants skip target qualification. These sockets exercise
+    // the session-scoped read path without changing the other widget grants.
+    for (let index = 0; index < clientCount; index++) {
+      const client = createGatewayWsClient({
+        ...clientConnection,
+        headers: { ...clientConnection.headers, "x-openclaw-scopes": "operator.sessions.read" },
+      });
+      githubOptionsClients.push(client);
+      trackClientFrames(client);
+      await client.waitOpen();
+      const hello = await rpc(client, "connect", {
+        ...connectParams,
+        scopes: ["operator.sessions.read"],
+      });
+      if (
+        !Value.Check(HelloOkSchema, hello) ||
+        hello.auth.method !== "trusted-proxy" ||
+        hello.auth.scopes.length !== 1 ||
+        hello.auth.scopes[0] !== "operator.sessions.read"
+      ) {
+        const auth = isRecord(hello) && isRecord(hello.auth) ? hello.auth : undefined;
+        throw new Error(
+          `GitHub options client did not retain its session-scoped grant: ${JSON.stringify({
+            method: auth?.method,
+            scopes: auth?.scopes,
+          })}`,
+        );
+      }
+    }
+    await Promise.all(
+      githubOptionsClients.map((client, index) =>
+        rpc(client, "sessions.github.options", {
+          sessionKey: diffTargets[index % diffTargets.length]!.sessionKey,
+        }),
+      ),
+    );
   }
   if (values["dashboard-rpc"]) {
     await rpc(sender, "board.widget.put", {
@@ -2739,6 +3033,9 @@ try {
       });
     }
     for (const { method, params } of dashboardRpcShapes) {
+      if (values["github-options-connected"] && method === "sessions.github.options") {
+        continue;
+      }
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
@@ -2747,15 +3044,6 @@ try {
       ? sidebarIdentity(await rpc(sender, "sessions.list", { limit, rowMode, archived: "all" }))
       : undefined;
   for (const target of diffTargets) {
-    if (target.sessionKey !== parentKey) {
-      await rpc(sender, "sessions.create", {
-        key: target.sessionKey,
-        cwd: target.worktree,
-        visibility: "shared",
-        displayName: "Synthetic dashboard diff",
-      });
-      await rpc(sender, "sessions.reset", { key: target.sessionKey });
-    }
     // First work captures the baseline; later child announcements must not capture our edit.
     const runId = randomUUID();
     await rpc(sender, "agent", {
@@ -3138,6 +3426,7 @@ try {
       endedAtEpochMs: number;
       durationMs: number;
       diffSessionKey?: string;
+      githubOptionsSessionKey?: string;
     }> = [];
     const workload = async () => {
       let polling = true;
@@ -3163,6 +3452,7 @@ try {
                   const started = performance.now();
                   let responseId = "";
                   let diffSessionKey: string | undefined;
+                  let githubOptionsSessionKey: string | undefined;
                   const method = values["mixed-rpc"]
                     ? mixedRpcMethods[poll++ % mixedRpcMethods.length]!
                     : "sessions.list";
@@ -3175,12 +3465,30 @@ try {
                       }
                     : undefined;
                   if (dashboardShape) {
+                    const optionsClient =
+                      method === "sessions.github.options"
+                        ? githubOptionsClients[clientIndex]
+                        : undefined;
+                    if (optionsClient) {
+                      githubOptionsSessionKey =
+                        diffTargets[
+                          (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
+                            diffTargets.length
+                        ]!.sessionKey;
+                    }
                     validateDashboardRpc(
                       method,
-                      await rpc(client, method, dashboardShape.params, onResponse),
+                      await rpc(
+                        optionsClient ?? client,
+                        method,
+                        githubOptionsSessionKey
+                          ? { sessionKey: githubOptionsSessionKey }
+                          : dashboardShape.params,
+                        onResponse,
+                      ),
                     );
                   } else if (method === "connect") {
-                    const peer = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
+                    const peer = createGatewayWsClient(clientConnection);
                     trackClientFrames(peer);
                     try {
                       await peer.waitOpen();
@@ -3264,6 +3572,7 @@ try {
                       endedAtEpochMs: performance.timeOrigin + ended,
                       durationMs: requestDurationMs,
                       ...(diffSessionKey ? { diffSessionKey } : {}),
+                      ...(githubOptionsSessionKey ? { githubOptionsSessionKey } : {}),
                     });
                   }
                   const intervalMs = random ? listIntervalMs * (0.5 + random()) : listIntervalMs;
@@ -3658,6 +3967,16 @@ try {
   if (values["dashboard-rpc"] && dashboardFixtureRequests === 0) {
     throw new Error("Dashboard GitHub preview never reached the synthetic transport");
   }
+  if (
+    values["github-options-observe"] &&
+    (!githubObservationOwner ||
+      !githubAvailabilityOwner ||
+      !githubStages.some(({ phase }) => phase === "handler"))
+  ) {
+    throw new Error(
+      "GitHub options source observation requires both owners loaded and a measured handler",
+    );
+  }
   let wholeSoakAllocation;
   if (soakAllocationPath) {
     // Stop after the GC/loop window so the profiler's forced collection cannot affect acceptance.
@@ -3786,6 +4105,52 @@ try {
           dashboardRpc: {
             methods: dashboardRpcShapes.map(({ method }) => method),
             dashboardFixtureRequests,
+            ...(values["github-options-observe"]
+              ? {
+                  githubObservation: {
+                    owner: githubObservationOwner,
+                    availabilityOwner: githubAvailabilityOwner,
+                    stages: githubStages,
+                  },
+                }
+              : {}),
+            ...(values["github-options-connected"]
+              ? {
+                  githubOptionsConnected: {
+                    additionalScopedSockets: githubOptionsClients.length,
+                    accountId: 1516,
+                    accountVerificationDelayMs: [300, 600, 900],
+                    accountRenameAfterMs: 60_000,
+                    upstreamRequests: githubFixtureRequests,
+                    upstreamByRoute: Object.fromEntries(
+                      [...new Set(githubFixtureRequests.map((request) => request.route))].map(
+                        (route) => {
+                          const requests = githubFixtureRequests.filter(
+                            (request) => request.route === route,
+                          );
+                          return [
+                            route,
+                            {
+                              count: requests.length,
+                              totalMs: requests.reduce(
+                                (sum, request) => sum + request.durationMs,
+                                0,
+                              ),
+                              latencyMs: latencySummary(
+                                requests.map((request) => request.durationMs),
+                              ),
+                            },
+                          ];
+                        },
+                      ),
+                    ),
+                    observations: githubOptionsObservations,
+                    accountRenameObserved: githubOptionsObservations.some(
+                      (observation) => observation.login === "synthetic-shared-updated",
+                    ),
+                  },
+                }
+              : {}),
             diffWorktrees: diffTargets.map(({ sessionKey, worktree }) => ({
               sessionKey,
               worktree,

@@ -533,6 +533,7 @@ export function createTalkClientAgentConsultRunner(params: {
         owner.source === "native-delegation"
           ? (text) =>
               createUserTurnTranscriptRecorder({
+                sessionLifecyclePatch: { lastInteractionAt: Date.now() },
                 input: { text, display: false },
                 target: {
                   agentId,
