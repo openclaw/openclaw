@@ -15,7 +15,7 @@ function nativeCatalog(rows: unknown) {
   return normalizeModelPricingCatalog(rows, normalizeUpstreamModelPricing);
 }
 
-describe("model pricing source policy", () => {
+describe("model pricing", () => {
   it("normalizes all source mappings without losing explicit opt-outs", () => {
     const policy = {
       external: false,
@@ -39,9 +39,6 @@ describe("model pricing source policy", () => {
   ])("ignores empty or unrecognized policy %j", (value) =>
     expect(normalizeModelPricingProvider(value)).toBeUndefined(),
   );
-});
-
-describe("native pricing catalogs", () => {
   const paid = { id: "paid", pricing: { input: 2, output: 10 } };
 
   it("uses the selected identity and validates prices before filtering unsupported schedules", () => {
@@ -78,9 +75,6 @@ describe("native pricing catalogs", () => {
   it("rejects non-arrays rather than publishing a partial native feed", () => {
     expect(nativeCatalog({})).toBeUndefined();
   });
-});
-
-describe("OpenRouter native pricing", () => {
   const base = {
     ...BASE_RATES,
     input_cache_read: "0.00000025",
@@ -112,12 +106,8 @@ describe("OpenRouter native pricing", () => {
         },
       ],
     };
-    const overrideCost = {
-      input: 4,
-      output: 15,
-      cacheRead: expect.closeTo(0.4, 12),
-      cacheWrite: 5,
-    };
+    const cacheRead = expect.closeTo(0.4, 12);
+    const overrideCost = { input: 4, output: 15, cacheRead, cacheWrite: 5 };
     expect(normalizeOpenRouterModelPricing(pricing)).toEqual({
       ...cost,
       tieredPricing: [
@@ -142,9 +132,6 @@ describe("OpenRouter native pricing", () => {
     }
     expect(calculateUsageCost(usage, pricing).total).toBeCloseTo(expected, 12);
   });
-});
-
-describe("upstream pricing tiers", () => {
   it.each([
     { context_over_200k: { input: 4 } },
     {
