@@ -115,7 +115,7 @@ describe("sessions view", () => {
     const buttons = selectors.map(([name, selector]) => ({
       name,
       selector,
-      button: expectDefined(container.querySelector<HTMLButtonElement>(selector)),
+      button: expectDefined(container.querySelector<HTMLButtonElement>(selector), name),
     }));
 
     setHandlers(current);
@@ -150,6 +150,7 @@ describe("sessions view", () => {
     await Promise.resolve();
     const button = expectDefined(
       container.querySelector<HTMLButtonElement>(".data-table-empty-state button"),
+      "clear-filter button",
     );
 
     setHandlers({ onClearFilters: current });
