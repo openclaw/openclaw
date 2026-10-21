@@ -1,4 +1,5 @@
 // Real registry, SQLite and sweeper proof that a yielded run no continuation can reach settles.
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -142,15 +143,18 @@ describe("yielded run settlement", () => {
   const waitSurface = async (runId: string) => {
     const tool = createAgentsWaitTool({ agentSessionKey: "agent:main:main", agentId: "main" });
     const result = await tool.execute("wait", { ids: [runId], timeoutSeconds: 0 });
+    // The published output schema is the guest-facing contract for every projected field.
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     return result.details as {
-      completed: Array<{ status: string; error?: string; result?: string }>;
+      completed: Array<{ status: string; error?: string; result?: string; reason?: string }>;
       pending: string[];
     };
   };
   // The pre-fix shapes seen in the field: the yield marker with no collector completion, and the
   // execution outcome either absent (#141474 comment of 9/13) or `ok` (the issue body). A recorded
   // `ok` is kept and read as the result, as a collector that yields now settles; only the absent
-  // shape takes the diagnostic error.
+  // shape takes the diagnostic error. A recorded `error` is kept as the failure and is not marked
+  // either: the marker means the sweeper substituted the diagnostic.
   const DIAGNOSTIC = expect.stringContaining("no recorded collectorCompletion");
   const LEGACY_SHAPES = [
     {
@@ -159,6 +163,7 @@ describe("yielded run settlement", () => {
       settledOutcome: { status: "error", error: DIAGNOSTIC },
       endedReason: "subagent-error",
       waited: { status: "failed", error: DIAGNOSTIC, result: "" },
+      reason: "yielded_without_result",
     },
     {
       shape: "execution.outcome ok with endedAt",
@@ -166,9 +171,20 @@ describe("yielded run settlement", () => {
       settledOutcome: { status: "ok" },
       endedReason: "subagent-complete",
       waited: { status: "done", result: YIELDED_REPLY },
+      reason: undefined,
+    },
+    {
+      shape: "execution.outcome error with endedAt",
+      outcome: { status: "error" as const, error: "recorded failure" },
+      settledOutcome: { status: "error", error: "recorded failure" },
+      endedReason: "subagent-error",
+      waited: { status: "failed", error: "recorded failure", result: "" },
+      reason: undefined,
     },
   ];
-  const legacyYieldedCollector = (outcome?: { status: "ok" | "timeout" }) =>
+  const legacyYieldedCollector = (
+    outcome?: { status: "ok" | "timeout" } | { status: "error"; error: string },
+  ) =>
     makeRunRecord({
       runId: "legacy-yielded-collector",
       childSessionKey: COLLECTOR_KEY,
@@ -185,7 +201,7 @@ describe("yielded run settlement", () => {
 
   it.each(LEGACY_SHAPES)(
     "settles a collector persisted yielded without a result when the registry restarts ($shape)",
-    async ({ outcome, settledOutcome, endedReason, waited: expectedWait }) => {
+    async ({ outcome, settledOutcome, endedReason, waited: expectedWait, reason }) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(T0);
       await writeYieldedTranscript();
@@ -255,10 +271,12 @@ describe("yielded run settlement", () => {
       });
       expect(settled?.endedReason).toBe(endedReason);
       expect(settled?.collectorCompletion?.status).toBe(expectedWait.status);
+      expect(settled?.collectorCompletion?.reason).toBe(reason);
       const waited = await waitSurface("legacy-yielded-collector");
       expect(waited.pending).toEqual([]);
       expect(waited.completed).toMatchObject([expectedWait]);
-      if (outcome) {
+      expect(waited.completed[0]?.reason).toBe(reason);
+      if (outcome?.status === "ok") {
         expect(waited.completed[0]?.error).toBeUndefined();
       }
       for (const control of [orchestrator, legacyLeaf]) {
@@ -337,6 +355,8 @@ describe("yielded run settlement", () => {
       expect(persisted("ordinary-collector")?.execution.outcome).toMatchObject({
         status: status === "done" ? "ok" : "timeout",
       });
+      // Only a yield settlement marks a collector that had no recorded outcome.
+      expect(persisted("ordinary-collector")?.collectorCompletion?.reason).toBeUndefined();
       expect((await waitSurface("ordinary-collector")).completed).toMatchObject([
         {
           status,

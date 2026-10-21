@@ -113,7 +113,6 @@ function captureHashes(includeMemo = true) {
         pruneWorkspaceHashMemo(context.memo);
         if (context.metrics) {
           context.metrics.contentHashCount += result.metrics.contentHashCount;
-          context.metrics.contentHashDurationMs += result.metrics.contentHashDurationMs;
           context.metrics.memoHitCount += result.metrics.memoHitCount;
         }
       }
@@ -186,26 +185,16 @@ export async function preflightWorkspaceApply(
   );
 }
 
-export async function computeWorkspaceFileSnapshot(
-  path: string,
-  maxBytes: number,
-  root?: string,
-  signal?: AbortSignal,
-) {
+export async function computeWorkspaceFileSnapshot(path: string, maxBytes: number, root?: string) {
   if (hasGitWorkerContext()) {
     const { readWorkspaceFileSnapshotWithLimit } = await import("./workspace-actual-manifest.js");
-    return await readWorkspaceFileSnapshotWithLimit(path, maxBytes, root, signal);
+    return await readWorkspaceFileSnapshotWithLimit(path, maxBytes, root);
   }
   // Bulk capture/preflight carries the memo once. A single verification must not
   // clone a placement's complete cache for every file it observes.
-  signal?.throwIfAborted();
   const hashes = captureHashes(false);
   return hashes.accept(
-    await computeValue(
-      "workspace.manifest.file",
-      { path, maxBytes, root, hashes: hashes.hashes },
-      signal,
-    ),
+    await computeValue("workspace.manifest.file", { path, maxBytes, root, hashes: hashes.hashes }),
   );
 }
 
@@ -247,24 +236,22 @@ export async function overlayWorkspaceManifest(
   return await computeValue("workspace.manifest.overlay", { source, prepared, incoming }, signal);
 }
 
-export async function parseWorkspaceManifestPair(
-  input: { baseRaw: string; baseRef: string; currentRaw: string; currentRef: string },
-  signal?: AbortSignal,
-) {
-  signal?.throwIfAborted();
+export async function parseWorkspaceManifestPair(input: {
+  baseRaw: string;
+  baseRef: string;
+  currentRaw: string;
+  currentRef: string;
+}) {
   const encoder = new TextEncoder();
-  return await computeWorkspaceManifest(
-    {
-      type: "workspace.manifest.pair",
-      input: {
-        baseRef: input.baseRef,
-        currentRef: input.currentRef,
-        baseRaw: encoder.encode(input.baseRaw),
-        currentRaw: encoder.encode(input.currentRaw),
-      },
+  return await computeWorkspaceManifest({
+    type: "workspace.manifest.pair",
+    input: {
+      baseRef: input.baseRef,
+      currentRef: input.currentRef,
+      baseRaw: encoder.encode(input.baseRaw),
+      currentRaw: encoder.encode(input.currentRaw),
     },
-    signal,
-  );
+  });
 }
 
 export async function loadStagedWorkspaceManifest(
@@ -279,17 +266,13 @@ export async function loadStagedWorkspaceManifest(
   );
 }
 
-export async function* readStagedWorkspaceManifestEntries(
-  input: {
-    root: string;
-    entries: readonly WorkerWorkspaceManifestEntry[];
-    objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"];
-  },
-  signal?: AbortSignal,
-) {
+export async function* readStagedWorkspaceManifestEntries(input: {
+  root: string;
+  entries: readonly WorkerWorkspaceManifestEntry[];
+  objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"];
+}) {
   let nextEntry = 0;
   while (nextEntry < input.entries.length) {
-    signal?.throwIfAborted();
     const entries: StagedWorkerWorkspaceReadEntry[] = [];
     let bytes = 0;
     while (nextEntry < input.entries.length) {
@@ -306,13 +289,12 @@ export async function* readStagedWorkspaceManifestEntries(
       bytes += entryBytes;
       nextEntry++;
     }
-    const contents = await computeWorkspaceManifest(
-      { type: "workspace.manifest.entries", input: { root: input.root, entries } },
-      signal,
-    );
+    const contents = await computeWorkspaceManifest({
+      type: "workspace.manifest.entries",
+      input: { root: input.root, entries },
+    });
     let offset = 0;
     for (const { entry } of entries) {
-      signal?.throwIfAborted();
       const content =
         entry.type === "file" ? contents.subarray(offset, offset + entry.size) : undefined;
       offset += entry.type === "file" ? entry.size : 0;
@@ -321,37 +303,30 @@ export async function* readStagedWorkspaceManifestEntries(
   }
 }
 
-export async function prepareWorkspaceStageInput(
-  input: WorkspaceStageInput<string>,
-  signal?: AbortSignal,
-) {
-  signal?.throwIfAborted();
+export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<string>) {
   const encoder = new TextEncoder();
-  return await computeWorkspaceManifest(
-    {
-      type: "workspace.manifest.stage-input",
-      input: {
-        inputPath: input.inputPath,
-        stagingRoot: input.stagingRoot,
-        stagedResultRef: input.stagedResultRef,
-        buildCacheInputs: input.buildCacheInputs,
-        ...("publication" in input
-          ? {
-              publication: {
-                ...input.publication,
-                metadata: encoder.encode(input.publication.metadata),
-              },
-            }
-          : {
-              baseManifestRef: input.baseManifestRef,
-              currentManifestRef: input.currentManifestRef,
-              baseManifestRaw: encoder.encode(input.baseManifestRaw),
-              currentManifestRaw: encoder.encode(input.currentManifestRaw),
-            }),
-      },
+  return await computeWorkspaceManifest({
+    type: "workspace.manifest.stage-input",
+    input: {
+      inputPath: input.inputPath,
+      stagingRoot: input.stagingRoot,
+      stagedResultRef: input.stagedResultRef,
+      buildCacheInputs: input.buildCacheInputs,
+      ...("publication" in input
+        ? {
+            publication: {
+              ...input.publication,
+              metadata: encoder.encode(input.publication.metadata),
+            },
+          }
+        : {
+            baseManifestRef: input.baseManifestRef,
+            currentManifestRef: input.currentManifestRef,
+            baseManifestRaw: encoder.encode(input.baseManifestRaw),
+            currentManifestRaw: encoder.encode(input.currentManifestRaw),
+          }),
     },
-    signal,
-  );
+  });
 }
 
 export async function prepareWorkspaceTreeInput(

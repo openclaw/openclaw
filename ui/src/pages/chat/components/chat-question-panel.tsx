@@ -1,9 +1,10 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   initializeQuestionDrafts,
@@ -58,13 +59,11 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   const focusTarget = createMemo(() => [collapsed(), currentQuestionIndex()] as const, {
     equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
   });
-  let initialFocus = true;
   // Question navigation moves browser focus to the newly presented panel.
-  createEffect(focusTarget, ([isCollapsed]) => {
-    if (!isCollapsed && (!initialFocus || initialModel.autoFocus !== false)) {
-      panel?.focus({ preventScroll: true });
-    }
-    initialFocus = false;
+  createPendingFocus(focusTarget, {
+    requested: ([isCollapsed], previous) =>
+      !isCollapsed && (previous !== undefined || initialModel.autoFocus !== false),
+    focus: () => panel?.focus({ preventScroll: true }),
   });
   onCleanup(() => {
     live = false;
@@ -482,8 +481,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                   agentId={model().agentId}
                   selected={draft()?.selected ?? new Set()}
                   disabled={disabled()}
-                  onResource-selection={(event: CustomEvent<{ values: string[] }>) =>
-                    updateDraft(item(), { selected: new Set(event.detail.values), freeText: "" })
+                  onSelection={(values) =>
+                    updateDraft(item(), { selected: new Set(values), freeText: "" })
                   }
                 />
               )}

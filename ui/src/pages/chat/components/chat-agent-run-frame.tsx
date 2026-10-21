@@ -69,6 +69,8 @@ function FrameBody(props: {
   options: AgentRunFrameOptions;
   children: (input: Accessor<PartInput>) => JSX.Element;
 }): JSX.Element {
+  // Canvas widgets move between these foreign-DOM ranges without disconnecting.
+  // Mount new ranges under the frame's owner, not the transient reconciliation effect.
   const owner = getOwner();
   const anchor = document.createComment("frame-body");
   const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import * as confirmDialog from "../../components/confirm-dialog.ts";
@@ -15,17 +15,13 @@ import {
 import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
 
 const archiveImport = vi.hoisted(() => {
-  let release!: () => void;
-  let markStarted!: () => void;
+  const held = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
   return {
-    held: new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-    started: new Promise<void>((resolve) => {
-      markStarted = resolve;
-    }),
-    release: () => release(),
-    markStarted: () => markStarted(),
+    held: held.promise,
+    release: held.resolve,
+    started: started.promise,
+    markStarted: started.resolve,
   };
 });
 
@@ -41,7 +37,6 @@ async function setup() {
     key: "agent:main:archive-lifetime",
     sessionId: "archive-lifetime-session",
     kind: "direct",
-    label: "Running conversation",
     sharingRole: "owner",
     hasActiveRun: true,
   };
@@ -63,11 +58,7 @@ async function setup() {
     if (method === "sessions.describe") {
       return { session: row };
     }
-    throw new Error(
-      method === "sessions.patch" || method === "sessions.patchMany"
-        ? "Retired archive must not write"
-        : "Unexpected request: " + method,
-    );
+    throw new Error("Unexpected request: " + method);
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const gateway = createGateway(client);
@@ -83,65 +74,57 @@ async function setup() {
   return { page, row, client, gateway, sessions, writes };
 }
 
-describe("Sessions page archive confirmation lifetime", () => {
-  it("does not open a confirmation when navigation retires a pending archive import", async () => {
-    const modal = createModalDialogTestFixture();
-    const fixture = await setup();
-    const confirm = vi.spyOn(confirmDialog, "showConfirmDialog");
-    try {
-      const archive = modal.track(fixture.page.archive(fixture.row));
-      const tree = modal.track(fixture.page.archive(fixture.row, true));
-      await archiveImport.started;
-      fixture.page.remove();
-      archiveImport.release();
-      await vi.dynamicImportSettled();
+let fixture: Awaited<ReturnType<typeof setup>>;
+let modal: ReturnType<typeof createModalDialogTestFixture>;
+beforeEach(async () => {
+  modal = createModalDialogTestFixture();
+  fixture = await setup();
+});
+afterEach(async () => {
+  archiveImport.release();
+  fixture.page.remove();
+  await modal.cleanup();
+  fixture.sessions.dispose();
+  vi.restoreAllMocks();
+});
 
-      expect(confirm).not.toHaveBeenCalled();
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-      await Promise.all([archive, tree]);
-      expect(fixture.writes()).toEqual([]);
-    } finally {
-      archiveImport.release();
-      fixture.page.remove();
-      await modal.cleanup();
-      fixture.sessions.dispose();
-      confirm.mockRestore();
-    }
-  });
-
-  it.each([
-    { hasDescendants: false, retire: "navigate" },
-    { hasDescendants: false, retire: "reconnect" },
-    { hasDescendants: true, retire: "navigate" },
-    { hasDescendants: true, retire: "reconnect" },
-  ] as const)(
-    "closes an open confirmation (descendants=$hasDescendants) on $retire without writing",
-    async ({ hasDescendants, retire }) => {
-      archiveImport.release();
-      const modal = createModalDialogTestFixture();
-      const fixture = await setup();
-      try {
-        const operation = modal.track(fixture.page.archive(fixture.row, hasDescendants));
-        await waitForConfirmDialogActions();
-        expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
-        expect(fixture.writes()).toEqual([]);
-
-        if (retire === "navigate") {
-          fixture.page.remove();
-        } else {
-          fixture.gateway.emit({ phase: "reconnecting", client: null });
-          fixture.gateway.emit({ phase: "connected", client: fixture.client });
-        }
-
-        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-        await operation;
-        expect(fixture.writes()).toEqual([]);
-        expect(fixture.sessions.archiveVisibility(fixture.row.key)).not.toBe("pending");
-      } finally {
-        fixture.page.remove();
-        await modal.cleanup();
-        fixture.sessions.dispose();
-      }
-    },
+it.each([
+  [null, "navigate"],
+  [false, "navigate"],
+  [false, "reconnect"],
+  [true, "navigate"],
+  [true, "reconnect"],
+] as const)("retires archive intent (descendants=%s, retired=%s)", async (descendants, retire) => {
+  const importing = descendants === null;
+  if (!importing) {
+    archiveImport.release();
+  }
+  const confirm = vi.spyOn(confirmDialog, "showConfirmDialog");
+  const operations = (descendants === null ? [false, true] : [descendants]).map((tree) =>
+    modal.track(fixture.page.archive(fixture.row, tree)),
   );
+  if (importing) {
+    await archiveImport.started;
+  } else {
+    await waitForConfirmDialogActions();
+    expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    expect(fixture.writes()).toEqual([]);
+  }
+  if (retire === "navigate") {
+    fixture.page.remove();
+  } else {
+    fixture.gateway.emit({ phase: "reconnecting", client: null });
+    fixture.gateway.emit({ phase: "connected", client: fixture.client });
+  }
+  if (importing) {
+    archiveImport.release();
+    await vi.dynamicImportSettled();
+    expect(confirm).not.toHaveBeenCalled();
+  }
+  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  await Promise.all(operations);
+  expect(fixture.writes()).toEqual([]);
+  if (!importing) {
+    expect(fixture.sessions.archiveVisibility(fixture.row.key)).not.toBe("pending");
+  }
 });

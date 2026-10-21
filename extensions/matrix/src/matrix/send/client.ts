@@ -61,9 +61,6 @@ export async function withResolvedMatrixSendClient<T>(
         () => run(client, abortSignal),
       );
     },
-    // Started one-off send clients should flush sync/crypto state before CLI
-    // shutdown paths can tear down the process.
-    "persist",
   );
 }
 
@@ -83,11 +80,10 @@ export async function withResolvedMatrixControlClient<T>(
 async function withResolvedMatrixClient<T>(
   opts: MatrixControlClientOptions & { readiness: "started" | "none" },
   run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
-  shutdownBehavior?: "persist",
 ): Promise<T> {
   if (opts.client) {
     return await run(opts.client);
   }
   const { withResolvedRuntimeMatrixClient } = await loadMatrixSendClientRuntime();
-  return await withResolvedRuntimeMatrixClient(opts, run, shutdownBehavior);
+  return await withResolvedRuntimeMatrixClient(opts, run);
 }

@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSignalApprovalReactionTargetsForTest } from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
 import { sendMessageSignal } from "./send.js";
@@ -15,6 +14,25 @@ import {
   closeSignalServer,
   type SignalRpcEnvelope,
 } from "./signal-rpc.test-support.js";
+
+const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
+
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
+  return {
+    ...actual,
+    createApprovalReactionTargetStore: <TTarget>(
+      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
+    ) => {
+      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
+      if (params.namespace === "signal.approval-reactions.v2") {
+        reactionStores.add(store);
+      }
+      return store;
+    },
+  };
+});
 
 const SIGNAL_IMAGE = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
@@ -91,7 +109,7 @@ describe("Signal host-owned outbound media access", () => {
         await closeSignalServer(server);
       }
     } finally {
-      clearSignalApprovalReactionTargetsForTest();
+      reactionStores.forEach((store) => store.clearForTest());
       vi.restoreAllMocks();
       await state?.cleanup();
     }

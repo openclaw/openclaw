@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
@@ -78,6 +79,21 @@ describe("install.sh", () => {
     prefix: false,
     createTempDir: (prefix: string) => tempDirs.make(prefix),
   };
+
+  it.each([false, true])("offers support in human footer and errors with gum=%s", (withGum) => {
+    const result = runInstallShell(
+      `source "${SCRIPT_PATH}"
+      ${withGum ? 'gum_fixture() { printf "%s\\n" "$*"; }; GUM=gum_fixture' : 'GUM=""'}
+      show_footer_links
+      parse_args --install-method`,
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe("");
+    const output = stripVTControlCharacters(result.stdout);
+    expect(output).toContain("FAQ: https://docs.openclaw.ai/start/faq");
+    expect(output).toContain("Missing value for --install-method");
+    expect(output.match(/Support: https:\/\/community\.openclaw\.ai\//g)).toHaveLength(2);
+  });
 
   it("re-execs a streamed installer on Darwin Bash 5.3+ without leaving a temp file", (context) => {
     const bash = findDarwinReexecBash();
@@ -968,7 +984,7 @@ NODE
     const args = join(tmp, "args");
     const npmRoot = join(tmp, "lib", "node_modules");
     writeNpmLifecycleFixture(npm);
-    const run = (version: string, keepGuard: string) =>
+    const run = (version: string, keepGuard: string, versionStatus = "0") =>
       runInstallShell(
         [
           `source ${JSON.stringify(SCRIPT_PATH)}`,
@@ -981,10 +997,17 @@ NODE
           NPM_FAKE_PACKAGE_DIR: join(npmRoot, "openclaw"),
           NPM_FAKE_ROOT: npmRoot,
           NPM_FAKE_VERSION: version,
+          NPM_FAKE_VERSION_STATUS: versionStatus,
         },
       );
     expect(run("invalid", "0").status).not.toBe(0);
     expect(run("npm 12.0.0 warning", "0").status).not.toBe(0);
+    const unreadableVersion = run("", "0", "23");
+    expect(unreadableVersion.status).toBe(1);
+    expect(unreadableVersion.stdout).toBe("");
+    expect(unreadableVersion.stderr).toBe(
+      `Unable to determine npm version from ${npm}; no package changes were made.\nSupport: https://community.openclaw.ai/\n`,
+    );
     expect(existsSync(args)).toBe(false);
     expect(run("12.0.0", "1").status).not.toBe(0);
   });

@@ -565,7 +565,7 @@ describe("Sessions page typing and detail ownership", () => {
       let description = descriptor.promise;
       const request = listRequest(() => sessionsResult([row], 1), {
         "sessions.subscribe": subscribed,
-        "sessions.groups.list": () => ({ names: [], sectionOrder: [] }),
+        "sessions.groups.list": () => ({ groups: [], sectionOrder: [] }),
         "sessions.describe": () => description,
       });
       const { connection, page } = await mountPage(

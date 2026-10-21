@@ -133,11 +133,11 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await waitForGatewayRecoveryScope(page, false);
         await page.getByText("Recovery frame 4", { exact: true }).waitFor({ state: "visible" });
-        const header = page.locator(".chat-pane__header").first();
+        const header = page.locator(".agent-chat__header--mobile");
         const initialHeaderY = await header.evaluate(
           (element) => element.getBoundingClientRect().y,
         );
-        const connectionStatus = page.locator(".mobile-connection-status .gateway-status:visible");
+        const connectionStatus = page.locator(".mobile-header__notices:visible");
         const content = page.locator("main.content");
         const initialContentBounds = await content.boundingBox();
         expect(initialContentBounds).not.toBeNull();
@@ -157,7 +157,6 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await waitForGatewayRecoveryScope(page, false);
         await connectionStatus
-          .locator(".gateway-status__label")
           .getByText("Restoring…", { exact: true })
           .waitFor({ state: "visible" });
         expect(await content.boundingBox()).toEqual(initialContentBounds);
@@ -236,10 +235,13 @@ suite.define(() => {
       await captureStatus(page, "collapsed-avatar-flag", flag, [retainedStatus, flag]);
       await page.mouse.move(600, 400);
       await flag.waitFor({ state: "hidden" });
+      await pauseVirtualClock(page);
+      await gateway.closeLatest(1006, "synthetic failed attempt");
       await retainedStatus.focus();
       await retry.waitFor({ state: "visible" });
       await page.keyboard.press("Tab");
       expect(await retry.evaluate((element) => element === document.activeElement)).toBe(true);
+      await page.clock.resume();
 
       await composer.locator("textarea").focus();
       await page.setViewportSize({ width: 1280, height: 900 });
@@ -341,7 +343,7 @@ suite.define(() => {
         ]);
 
         await page.setViewportSize({ width: 390, height: 844 });
-        const mobileStatus = page.locator(".mobile-connection-status .gateway-status:visible");
+        const mobileStatus = page.locator(".mobile-header__notices:visible");
         await mobileStatus.waitFor({ state: "visible" });
         // The drawer stays mounted for its slide; Playwright visibility ignores off-screen placement.
         await expect
@@ -357,14 +359,12 @@ suite.define(() => {
           }),
         ).toEqual({ inert: true, focused: false });
         expect(await page.locator(".sidebar-connection-flag").isVisible()).toBe(false);
-        expect(await mobileStatus.locator(".gateway-status__label").textContent()).toBe(
-          "Reconnecting… · 2 queued",
-        );
-        expect(
-          await page
-            .getByRole("button", { name: "Expand sidebar" })
-            .getAttribute("data-connection-status"),
-        ).toBe("reconnecting");
+        expect(await mobileStatus.textContent()).toBe("Reconnecting…");
+        expect(await page.locator(".chat-queue__item").count()).toBe(2);
+        expect(await announcement.textContent()).toBe("Reconnecting… · 2 queued");
+        // The shell owns the single live announcement, including queued messages.
+        expect(await mobileStatus.getAttribute("role")).toBeNull();
+        expect(await mobileStatus.getAttribute("aria-live")).toBeNull();
         await captureStatus(page, "mobile-header-queued", mobileStatus, [
           page.getByRole("button", { name: "Expand sidebar" }),
           mobileStatus,
@@ -397,6 +397,7 @@ suite.define(() => {
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         expect(await footer.textContent()).not.toContain("in outbox");
         const socketCount = await gateway.getSocketCount();
+        await gateway.closeLatest(1006, "synthetic failed attempt");
         await retry.click();
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await gateway.setOnline(true);

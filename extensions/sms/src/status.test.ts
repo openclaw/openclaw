@@ -1,8 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import { formatSmsProbeLines, probeSmsAccount } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsTestAccount } from "./webhook.test-support.js";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+}));
+
+function mockTwilioFetch(fetchImpl: typeof fetch) {
+  fetchWithSsrFGuardMock.mockImplementation(async ({ url, init, beforeRequest }) => {
+    beforeRequest?.();
+    return { response: await fetchImpl(url, init), release: async () => {} };
+  });
+}
 
 function createWebhookResponse(overrides: Record<string, string> = {}) {
   return {
@@ -24,12 +37,16 @@ function createFetch(responses: Array<unknown>): typeof fetch {
 function probe(
   responses: unknown[],
   account: Partial<ResolvedSmsAccount> = {},
-  options: Parameters<typeof probeSmsAccount>[0]["options"] = {},
+  options: NonNullable<Parameters<typeof probeSmsAccount>[0]["options"]> & {
+    fetchImpl?: typeof fetch;
+  } = {},
 ) {
+  const { fetchImpl = createFetch(responses), ...probeOptions } = options;
+  mockTwilioFetch(fetchImpl);
   return probeSmsAccount({
     account: createSmsTestAccount({ accountId: "default", ...account }),
     timeoutMs: 1000,
-    options: { fetchImpl: createFetch(responses), ...options },
+    options: probeOptions,
   });
 }
 
@@ -87,6 +104,10 @@ function probeService(use_inbound_webhook_on_number: boolean) {
 function fetchInputUrl(input: Parameters<typeof fetch>[0]): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
+
+afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+});
 
 describe("SMS status probe", () => {
   it("reports a healthy Twilio SMS webhook", async () => {

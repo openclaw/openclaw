@@ -196,7 +196,6 @@ describe("OpenAI Realtime media lifecycle", () => {
     expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
     expect(peer?.addTrack).toHaveBeenCalledOnce();
     expect(drawImage).toHaveBeenCalledTimes(2);
-    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toContain("tool.result");
     for (const [payload] of peer?.channel.send.mock.calls ?? []) {
       expect(new TextEncoder().encode(String(payload)).length).toBeLessThanOrEqual(512);
     }

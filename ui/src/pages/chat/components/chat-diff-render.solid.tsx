@@ -22,6 +22,7 @@ export function createDiffPresentation(props: {
   lines: readonly DiffLine[];
   file: DiffFilePaths;
   rows?: readonly SessionSplitDiffRow[];
+  wordDiffs?: boolean;
 }) {
   const sourceLines = createMemo(() => props.lines);
   // Gap expansion retains original line objects; preserve their manual folds,
@@ -31,7 +32,9 @@ export function createDiffPresentation(props: {
     return new Set([...(previous ?? [])].filter((line) => present.has(line)));
   });
   const rows = createMemo(() => props.rows ?? pairSessionDiffLines(props.lines));
-  const changes = createMemo(() => diffLineChangeRanges(rows()));
+  const changes = createMemo(() =>
+    props.wordDiffs === false ? null : diffLineChangeRanges(rows()),
+  );
   const syntaxSource = createMemo(
     () => ({
       lines: sourceLines(),
@@ -91,7 +94,7 @@ export function createDiffPresentation(props: {
   const syntaxFolds = createMemo(() => prepared()?.folds ?? []);
   const rendered = createMemo(() => {
     const result = new Map(highlighted());
-    for (const [line, ranges] of changes()) {
+    for (const [line, ranges] of changes() ?? []) {
       const parts: DiffHighlightToken[] = [];
       let offset = 0;
       let rangeIndex = 0;

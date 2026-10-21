@@ -215,13 +215,13 @@ function SessionRows(props: {
   return (
     <For each={props.sessions} keyed={(session) => session.key}>
       {(session) => {
-        const label = createMemo(() => {
+        const label = () => {
           const raw = session().label || session().key;
           // Agent session keys often include a token query param; remove it for readability.
           return raw.startsWith("agent:") && raw.includes("?token=")
             ? raw.slice(0, raw.indexOf("?token="))
             : raw;
-        });
+        };
         const meta = createMemo(() => {
           i18nRevision();
           return buildSessionMeta(session());

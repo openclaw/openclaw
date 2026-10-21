@@ -439,19 +439,8 @@ describe("memory session update sync", () => {
     const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
     try {
       await manager.sync({ reason: "index-before-forget", force: true });
-      // Forget checks must not serialize the source's chunks and embeddings.
-      const sessionChecks = reads.mock.calls.flatMap(([, command]) =>
-        command.type === "session.current" ? [command.input] : [],
-      );
-      expect(sessionChecks).toEqual(
-        expect.arrayContaining([
-          { agentId: "main", sessionId },
-          { agentId: "main", sessionId: decoyId },
-        ]),
-      );
-      for (const input of sessionChecks) {
-        expect(input).toStrictEqual({ agentId: "main", sessionId: input.sessionId });
-      }
+      // Live publication enforces forget authority without one preflight request per session.
+      expect(reads.mock.calls.map(([, command]) => command.type)).not.toContain("session.current");
     } finally {
       reads.mockRestore();
     }

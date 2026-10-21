@@ -464,6 +464,7 @@ it.each([
   "mutable-message",
   "native-append",
   "worker-append",
+  "unrelated-worker-append",
   "worker-reset",
   "worker-compaction",
   "local-reset",
@@ -500,6 +501,17 @@ it.each([
       } else if (change === "worker-append") {
         await source.appendMessageAsync(userMessage("worker successor", 2));
         expectedMessages.push({ role: "user", content: "worker successor" });
+      } else if (change === "unrelated-worker-append") {
+        await runWithoutOwnedSessionTranscriptWrites(async () => {
+          const other = {
+            ...target,
+            sessionId: "unrelated-session",
+            sessionKey: "agent:main:unrelated-session",
+          };
+          await upsertSessionEntryCore(other, { sessionId: other.sessionId, updatedAt: 2 });
+          const writer = await SessionManager.openAsync(other);
+          await writer.appendMessageAsync(userMessage("unrelated question", 2));
+        });
       } else if (change === "worker-reset") {
         await source.appendResetBoundaryAsync("new");
         expectedMessages = [];
@@ -556,6 +568,7 @@ it.each([
           "unchanged",
           "default-selector",
           "mutable-message",
+          "unrelated-worker-append",
           "local-reset",
           "local-branch",
         ].includes(change)

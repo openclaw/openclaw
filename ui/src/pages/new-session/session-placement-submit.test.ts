@@ -300,8 +300,8 @@ describe("session placement draft advancement", () => {
       }),
     ).resolves.toEqual(
       cleanupFails
-        ? { status: "cancelled", cleanupError: "delete unavailable", recoveryPersisted: true }
-        : { status: "cancelled", recoveryPersisted: false },
+        ? { status: "cancelled", cleanupError: "delete unavailable" }
+        : { status: "cancelled" },
     );
     if (cleanupFails) {
       expect(
@@ -394,7 +394,7 @@ describe("session placement draft advancement", () => {
         mode: "recover",
         clearRecovery,
       }),
-    ).resolves.toEqual({ status: "cancelled", recoveryPersisted: false });
+    ).resolves.toEqual({ status: "cancelled" });
     expect(request).toHaveBeenCalledTimes(1);
     expect(clearRecovery).toHaveBeenCalledOnce();
   });

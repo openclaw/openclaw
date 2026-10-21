@@ -9,6 +9,16 @@ read_when:
 
 The Model Context Protocol (MCP) is how an agent borrows tools from another program: an MCP server exposes tools, resources, and prompts, and OpenClaw connects to it and makes those tools available to your agents. Server definitions live under `mcp.servers` in config, and the tools they expose go through the same tool-profile and tool-policy controls as everything else — connecting a server does not bypass your policy.
 
+When a server publishes usage instructions during initialization, the embedded
+agent receives them alongside its available tools. Direct tools include the
+guidance in the system prompt; tools deferred behind Tool Search or Code Mode
+provide it through discovery. If discovery shows an `instructionsHint`, load
+the server guidance with `tool_describe` or the Code Mode handle's `describe()`
+before calling the tool. To bound embedded prompt cost, OpenClaw keeps at most
+the first 2,000 characters per server, followed by a truncation marker when needed.
+The system prompt, Tool Search, and Code Mode share that capped text. Native
+Claude CLI loopback connections continue to receive the complete server guidance.
+
 <Note>
 This guide is about connecting third-party MCP servers **to OpenClaw**. For the reverse — exposing OpenClaw channel conversations to another MCP client — use [`openclaw mcp serve`](/cli/mcp#openclaw-as-an-mcp-server).
 </Note>
@@ -106,6 +116,12 @@ The same `docs` server, written straight into config:
 ```
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+
+Local `claude-cli` turns receive configured server tools through the Gateway's
+MCP bridge as `<server>__<tool>`, including when `tools.exec.host` is `"node"`.
+The Gateway owns the server connections, so Claude does not start duplicate
+stdio servers. Node execution does not change that mode's native Bash or user
+settings. See [CLI backend MCP overlays](/gateway/cli-backends#bundle-mcp-overlays).
 
 ## Interactive apps and plugin extensions
 

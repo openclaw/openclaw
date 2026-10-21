@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../infra/agent-run-registry.js";
 import {
   clearGeneratedMediaTaskActivity,
@@ -12,12 +12,10 @@ import {
   updateMediaGenerationOperation,
 } from "./media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "./media-generation-activity.test-support.js";
-import { recordRecentMediaGenerationTaskStartForSession } from "./media-generation-task-status-shared.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 import { findDuplicateGuardImageGenerationTaskForSession } from "./media-generation-task-status.js";
 afterEach(() => {
   resetGeneratedMediaTaskActivityForTests();
-  resetRecentMediaGenerationDuplicateGuardsForTests();
+  vi.restoreAllMocks();
 });
 describe("native media operation lifetime", () => {
   it("keeps shared bare session keys agent-scoped and retires stale process ownership", async () => {
@@ -31,8 +29,8 @@ describe("native media operation lifetime", () => {
         taskKind: "image_generation",
         sourceId: "image_generate:synthetic",
         task: "a synthetic lighthouse",
+        requestKey: "same-request",
         status: "running",
-        createdAt: Date.now(),
       });
     }
     expect(listMediaGenerationOperations("shared")).toEqual([]);
@@ -46,17 +44,6 @@ describe("native media operation lifetime", () => {
     expect(hasNewGeneratedMediaTaskForSessionKey("shared", oneAdmissions, "one")).toBe(false);
     expect(hasNewGeneratedMediaTaskForSessionKey("shared", oneAdmissions, "two")).toBe(true);
     expect(getActiveMediaGenerationRunCount()).toBe(2);
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "shared",
-      agentId: "one",
-      taskKind: "image_generation",
-      sourcePrefix: "image_generate",
-      taskId: "one",
-      runId: "one",
-      taskLabel: "a synthetic lighthouse",
-      requestKey: "same-request",
-      progressSummary: "generating",
-    });
     expect(
       await findDuplicateGuardImageGenerationTaskForSession("shared", {
         agentId: "one",
@@ -87,19 +74,8 @@ describe("native media operation lifetime", () => {
       requesterSessionKey: sessionKey,
       requesterAgentId: "main",
       task: "draw a tree",
-      status: "running",
-      createdAt: Date.now(),
-    });
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey,
-      agentId: "main",
-      taskKind: "image_generation",
-      sourcePrefix: "image_generate",
-      taskId: operation.taskId,
-      runId: operation.runId,
-      taskLabel: "draw a tree",
       requestKey: "same-request",
-      progressSummary: "generating",
+      status: "running",
     });
     expect(
       await findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
@@ -128,5 +104,30 @@ describe("native media operation lifetime", () => {
         agentId: "main",
       }),
     ).toBeUndefined();
+  });
+  it.each([
+    { age: 120_001, retained: false },
+    { age: 1_000, retained: true },
+  ])("owns recent completion expiry at $age ms", async ({ age, retained }) => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const operation = createMediaGenerationOperation({
+      taskId: "image:recent",
+      runId: "image:recent",
+      taskKind: "image_generation",
+      sourceId: "image_generate:test",
+      requesterSessionKey: "agent:main:main",
+      requesterAgentId: "main",
+      task: "draw a tree",
+      requestKey: "same-request",
+      status: "succeeded",
+      endedAt: now - age,
+    });
+    expect(
+      await findDuplicateGuardImageGenerationTaskForSession("agent:main:main", {
+        requestKey: "same-request",
+        agentId: "main",
+      }),
+    ).toBe(retained ? operation : undefined);
   });
 });

@@ -30,7 +30,7 @@ import * as support from "./doctor-health.test-support.js";
 const { mocks, registerDoctorConfigReceiptTests } = support;
 const repairOptions = { repair: true, nonInteractive: true };
 const leaseRefusal =
-  "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+  "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.";
 
 function expectNotCalled(...spies: { mock: { calls: unknown[][] } }[]) {
   spies.forEach((spy) => expect(spy).not.toHaveBeenCalled());
@@ -164,7 +164,7 @@ it.each(["unresolved-unknown", "windows-queued", "windows-startup-unknown", "spl
         );
         expect(fs.existsSync(sourcePath)).toBe(false);
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-        const action = "Restart the Gateway you launched manually after the update.";
+        const action = "Stop the Gateway through its owner";
         expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(action));
         expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
           resultPath,

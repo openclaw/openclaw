@@ -448,16 +448,16 @@ function resolveChannelPresencePolicyFromSignals(
   return entries;
 }
 
-function listChannelIdsForGatewayPolicy(
+export function listGatewayActivatedChannelIds(
   params: Omit<
     Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
     "includePersistedAuthState"
   >,
-  includePersistedAuthState: boolean,
 ): string[] {
+  // Persisted credentials are migration evidence, not activation consent.
   return resolveConfiguredChannelPresencePolicy({
     ...params,
-    includePersistedAuthState,
+    includePersistedAuthState: false,
   })
     .filter(
       (entry) =>
@@ -467,16 +467,6 @@ function listChannelIdsForGatewayPolicy(
         entry.blockedReasons.includes("bundled-disabled-by-default"),
     )
     .map((entry) => entry.channelId);
-}
-
-export function listGatewayActivatedChannelIds(
-  params: Omit<
-    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
-    "includePersistedAuthState"
-  >,
-): string[] {
-  // Persisted credentials are migration evidence, not activation consent.
-  return listChannelIdsForGatewayPolicy(params, false);
 }
 
 export function listChannelIdsForOwnershipMigration(

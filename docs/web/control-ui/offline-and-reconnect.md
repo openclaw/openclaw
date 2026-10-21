@@ -20,6 +20,35 @@ including failures: subsequent reads back off from 500 ms to 5 seconds and honor
 longer Gateway retry hints. Reconnecting clears the retry wait so identity reads
 can resume on the new connection.
 
+## Queued session changes
+
+While the same Gateway connection is recovering, changes to a session's name,
+icon, color, or existing category and message reaction additions or removals
+appear immediately. The connection status in the sidebar footer counts these
+changes together with queued chat messages. Repeated changes to the same fields
+or reaction replace the earlier queued change and move to the end of the queue,
+so overlapping edits finish with the latest choice.
+
+These changes send in order after reconnecting with unchanged credentials and the
+same account recovery scope, including Retry and automatic socket replacement.
+New metadata and reaction edits join the queue until its final request settles,
+so older queued values cannot overwrite newer choices. The queued count includes
+unsent changes, not the request already in flight.
+The Gateway still checks current permissions and the
+session identity. Rejected changes roll back and show an error. A change already
+sent when the connection drops is not automatically replayed by this queue;
+its existing uncertain-outcome handling still applies.
+
+This metadata and reaction queue is memory-only. Closing the tab loses unsent
+changes; the browser prompts before leaving, and automatic update reloads wait
+while changes are queued. Switching Gateway or account, signing out, or retiring
+offline access discards the queue and shows how many changes were discarded.
+Chat drafts and chat messages retain their separate storage and recovery rules.
+
+Other actions do not use this queue: creating categories, moving or deleting
+sessions, archiving, shared pins, approvals, settings or model changes, and
+terminal actions still need their existing live connection and authority.
+
 ## Busy initial connection
 
 If a WebSocket upgrade fails but the same-origin Gateway still answers its
@@ -58,7 +87,7 @@ next authentication result applies when contact resumes.
 
 Transcripts, roster data, text drafts, and queued input are separated by Gateway
 and account. Switching accounts cannot send or overwrite the previous account's
-input. Retiring offline access does not discard unsent drafts or queued work;
+input. Retiring offline access does not discard unsent drafts or queued chat input;
 that work remains under its original storage owner. Live state replaces cached
 roster data on connect, and chat resumes from its saved transcript cursor. The
 cached transcript opens at its latest messages without an initial scroll animation.
@@ -84,8 +113,11 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links also wait for the scoped cached roster before presenting
 their header. Dashboard layouts restore before the pane renders, and embedded
-HTML widgets keep one loading surface while their board metadata and document
-arrive. Widget requests still require the current Gateway connection.
+HTML widgets restore their last board metadata from the same scoped conversation
+cache and start loading the isolated sandbox while connecting. Document requests
+still require the current Gateway connection and overlap the live board refresh.
+Unchanged widgets keep their iframe; changed, removed, or forbidden boards replace
+or clear the cached view. Pending or rejected MCP apps wait for live board data.
 
 Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
 routing roster retains its first page; the sidebar separately keeps its visible
@@ -98,6 +130,9 @@ up to 80 recent rows (plus rows from the same history entry) for a warm reload.
 The snapshot also retains the slash-command catalog and its revision. Warm
 startup reuses that list when the Gateway confirms it is unchanged; config,
 plugin, and skill changes refresh it through the existing metadata owner.
+Saved dashboards restore independently of transcript validation, so a slow
+transcript download does not delay their layout. The Gateway still revalidates
+the board, its grants, and document tickets on connection.
 Older history loads from the Gateway as you scroll up. Cache upgrades discard
 older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history
@@ -275,7 +310,7 @@ controls, the avatar tooltip carries the status instead. The tooltip is hidden w
 On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
 shows the full footer row. Brief disconnects keep the existing two-second grace.
 
-The status includes the number of queued messages and **Retry** when an immediate connection
+The status includes the total queued messages and session changes, plus **Retry** when an immediate connection
 attempt is available. Hover or focus for the redacted connection error. Settings keeps its save feedback
 visible alongside connection status. One persistent shell region announces connection changes,
 even while the mobile drawer is closed. Native embedded views keep their own connection

@@ -9,7 +9,10 @@ vi.mock("../process/supervisor/service-child-group-ownership.js", async (importO
   >()),
   readProcessGroupMembers: members,
 }));
-vi.mock("./container-environment.js", () => ({ isContainerEnvironment: () => false }));
+vi.mock("./container-environment.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./container-environment.js")>()),
+  isContainerEnvironment: () => false,
+}));
 vi.mock("./gateway-process-argv.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-process-argv.js")>()),
   readProcessWorkingDirectories: () => new Map(),

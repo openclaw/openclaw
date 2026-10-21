@@ -4,7 +4,6 @@ import { GatewayBrowserClient } from "../api/gateway.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import * as gatewayStore from "./gateway-store.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
@@ -19,21 +18,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async () => Response.json({})),
   );
-  const createGateway = gatewayStore.createApplicationGateway;
-  vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation(
-    (settings, password, bootstrap, _factory, options) =>
-      createGateway(
-        settings,
-        password,
-        bootstrap,
-        (opts) => {
-          const client = new GatewayBrowserClient(opts);
-          vi.spyOn(client, "start").mockImplementation(() => {});
-          return client;
-        },
-        options,
-      ),
-  );
+  vi.spyOn(GatewayBrowserClient.prototype, "start").mockImplementation(() => {});
   resetServerUiPrefsSync();
   document.documentElement.setAttribute(
     CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,

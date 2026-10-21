@@ -43,7 +43,6 @@ export type SmsProbe = {
 };
 
 type ProbeOptions = {
-  fetchImpl?: typeof fetch;
   deliveryRecords?: readonly SmsDeliveryRecord[];
 };
 
@@ -215,7 +214,6 @@ export async function probeSmsAccount(params: {
   } else {
     const requestOptions = () => ({
       account: params.account,
-      fetchImpl: params.options?.fetchImpl,
       timeoutMs: remoteTimeoutMs,
     });
     const webhookTask: Promise<SmsTwilioWebhookProbe> = params.account.fromNumber
@@ -236,7 +234,6 @@ export async function probeSmsAccount(params: {
       ? listTwilioMessages({
           ...requestOptions(),
           to: params.account.fromNumber,
-          pageSize: 3,
         })
       : Promise.resolve([]);
     const [webhookOutcome, messageOutcome] = await Promise.allSettled([webhookTask, messageTask]);

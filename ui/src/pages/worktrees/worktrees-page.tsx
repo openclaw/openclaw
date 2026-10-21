@@ -11,10 +11,10 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
@@ -27,11 +27,14 @@ const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees"
 
 export function WorktreesPage() {
   const context = useApplication();
-  const view = renderWorktreesView(new WorktreesModel(() => context));
-  return <openclaw-worktrees-page>{view}</openclaw-worktrees-page>;
+  const { owner, view } = projectCallbackOwner(
+    (notify) => new WorktreesModel(() => context, notify),
+    (model) => model,
+  );
+  return <openclaw-worktrees-page>{renderWorktreesView(owner, view.read)}</openclaw-worktrees-page>;
 }
 
-export function renderWorktreesView(model: WorktreesModel) {
+export function renderWorktreesView(model: WorktreesModel, view: () => WorktreesModel) {
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,
     onIdentityChange: () => model.update({ records: [], error: null }),
@@ -39,7 +42,6 @@ export function renderWorktreesView(model: WorktreesModel) {
     ensureInitialData: () => void model.load(),
     onSnapshot: () => model.update(model.operatorAccess.canAdmin ? {} : { createOpen: false }),
   });
-  const view = projectOwner(model, (source) => source).read;
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -76,21 +78,23 @@ export function renderWorktreesView(model: WorktreesModel) {
   return (
     <>
       <HubPageHeader<"sessions" | "worktrees">
-        id="sessions"
         active="worktrees"
-        tabs={[
-          { value: "sessions", label: t("tabs.sessions") },
-          { value: "worktrees", label: t("tabs.worktrees") },
-        ]}
-        ariaLabel={t("sessionsPage.hubTablistLabel")}
-        panelId="sessions-hub-panel"
+        tabs={{
+          id: "sessions",
+          items: [
+            { value: "sessions", label: t("tabs.sessions") },
+            { value: "worktrees", label: t("tabs.worktrees") },
+          ],
+          ariaLabel: t("sessionsPage.hubTablistLabel"),
+          panelId: "sessions-hub-panel",
+          onSelect: (value) => {
+            if (value === "sessions") {
+              model.context.navigate("sessions");
+            }
+          },
+        }}
         docsUrl={WORKTREES_DOCS_URL}
         class="sessions-hub-header"
-        onSelect={(value) => {
-          if (value === "sessions") {
-            model.context.navigate("sessions");
-          }
-        }}
       />
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>

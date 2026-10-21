@@ -428,6 +428,30 @@ describe("refreshQueuedFollowupSession", () => {
 });
 
 describe("getFollowupQueue", () => {
+  it.each([
+    { mode: "collect", debounceMs: -12, cap: 9.8, dropPolicy: "new" },
+    { mode: "steer", cap: 0 },
+  ] as const)("normalizes supplied settings and retains omitted/invalid values: %j", (settings) => {
+    const queue = getFollowupQueue(QUEUE_KEY, {
+      mode: "followup",
+      debounceMs: 1000,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    const updated = getFollowupQueue(QUEUE_KEY, settings);
+    expect(updated).toBe(queue);
+    expect({
+      mode: updated.mode,
+      debounceMs: updated.debounceMs,
+      cap: updated.cap,
+      dropPolicy: updated.dropPolicy,
+    }).toEqual(
+      settings.mode === "collect"
+        ? { mode: "collect", debounceMs: 0, cap: 9, dropPolicy: "new" }
+        : { mode: "steer", debounceMs: 1000, cap: 20, dropPolicy: "summarize" },
+    );
+  });
+
   it("settles evicted summary sources and retains surviving delivery correlations", () => {
     const sources = Array.from({ length: 4 }, (_, index) => ({
       prompt: `queued message ${index}`,
@@ -478,14 +502,12 @@ describe("getFollowupQueue", () => {
         ),
       );
     }
-    queue.evictedSummaryCount = 5;
 
     const updated = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
 
     expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
     expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
     expect(updated.summaryElisions[0]?.summaryLines).toEqual(["newest"]);
-    expect(updated.evictedSummaryCount).toBe(13);
   });
 });
 
@@ -560,9 +582,8 @@ describe("hasPendingFollowupQueueWork", () => {
     }
   });
 
-  it("ignores empty queues and historical eviction accounting", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.evictedSummaryCount = 3;
+  it("ignores empty queues", () => {
+    getFollowupQueue(QUEUE_KEY, { mode: "followup" });
 
     expect(hasPendingFollowupQueueWork([undefined, "", QUEUE_KEY])).toBe(false);
   });

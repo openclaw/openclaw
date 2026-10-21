@@ -22,7 +22,6 @@ const lifecycleLocks = createFileLockManager("openclaw.package-lifecycle");
 /** Ownership is uncertain: callers must preserve the package until its writers settle. */
 export class PackageLifecycleOwnershipError extends Error {
   readonly packageRoot: string;
-  readonly lockPath: string;
 
   constructor(packageRoot: string, reason: string, cause?: unknown) {
     const lockPath = path.join(packageRoot, PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH);
@@ -33,7 +32,6 @@ export class PackageLifecycleOwnershipError extends Error {
     );
     this.name = "PackageLifecycleOwnershipError";
     this.packageRoot = packageRoot;
-    this.lockPath = lockPath;
   }
 }
 
@@ -118,14 +116,8 @@ async function assertLifecycleRoot(packageRoot: string, packageDirectory: Lifecy
   }
 }
 
-async function isPackageLifecyclePending(
-  paths: ReturnType<typeof resolveLifecyclePaths>,
-  packageDirectory: LifecycleRoot,
-) {
-  await assertLifecycleRoot(paths.packageRoot, packageDirectory);
-  const pending = (await pathExists(paths.pending)) || (await pathExists(paths.legacyGuard));
-  await assertLifecycleRoot(paths.packageRoot, packageDirectory);
-  return pending;
+async function isPackageLifecyclePending(paths: ReturnType<typeof resolveLifecyclePaths>) {
+  return (await pathExists(paths.pending)) || (await pathExists(paths.legacyGuard));
 }
 
 async function assertLifecycleAuthority(
@@ -386,7 +378,7 @@ export async function completePendingPackageLifecycle(params: {
   if (!packageDirectory) {
     return false;
   }
-  if (!(await isPackageLifecyclePending(paths, packageDirectory))) {
+  if (!(await isPackageLifecyclePending(paths))) {
     try {
       // Postinstall can clear its marker before its invocation settles. A lock
       // still requires admission before callers may verify or activate this package.
@@ -404,7 +396,7 @@ export async function completePendingPackageLifecycle(params: {
   const assertOwnership = () => assertLifecycleAuthority(paths, packageDirectory, lock);
   let observedPendingWork = false;
   const completeWhileHeld = async () => {
-    observedPendingWork = await isPackageLifecyclePending(paths, packageDirectory);
+    observedPendingWork = await isPackageLifecyclePending(paths);
     if (!observedPendingWork) {
       await assertOwnership();
       return false;
@@ -428,7 +420,7 @@ export async function completePendingPackageLifecycle(params: {
       // interrupted promotion, so successful retries can still finalize it.
       await fs.rm(paths.pending, { force: true });
     }
-    if (await isPackageLifecyclePending(paths, packageDirectory)) {
+    if (await isPackageLifecyclePending(paths)) {
       throw new Error("OpenClaw package postinstall did not complete its lifecycle marker");
     }
     return true;

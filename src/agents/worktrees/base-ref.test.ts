@@ -56,6 +56,51 @@ describe("managed worktree creation groups", () => {
     });
   });
 
+  it.each(["branch", "detached"])(
+    "creates from local HEAD without origin on a %s checkout",
+    async (checkout) => {
+      await git(repo, "remote", "remove", "origin");
+      await git(repo, "switch", "-c", "local-work");
+      await fs.writeFile(path.join(repo, "README.md"), "local commit\n");
+      await git(repo, "add", "README.md");
+      await git(repo, ...gitIdentity, "commit", "-m", "local work");
+      const expectedHead = await head(repo);
+      if (checkout === "detached") {
+        await git(repo, "checkout", "--detach", expectedHead);
+      }
+      const allocate = preparation.createWithWorktreeAllocation;
+      const joined = createDeferred();
+      let callers = 0;
+      vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
+        if (++callers === 2) {
+          joined.resolve();
+        }
+        await joined.promise;
+        return await allocate(...args);
+      });
+      const execute = gitExec.executeGitCommand;
+      const remoteCommands: string[] = [];
+      vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (["remote", "ls-remote", "fetch", "merge"].includes(args[0]!)) {
+          remoteCommands.push(args[0]!);
+        }
+        return await execute(cwd, args, options);
+      });
+
+      const records = await Promise.all([create("local-first"), create("local-second")]);
+
+      for (const record of records) {
+        expect(record.baseRef).toBe("HEAD");
+        expect(await head(record.path)).toBe(expectedHead);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe(
+          "local commit\n",
+        );
+      }
+      expect(await head(repo)).toBe(expectedHead);
+      expect(remoteCommands).toEqual(["remote"]);
+    },
+  );
+
   it("shares one dirty local-default decision across a burst of twenty creates", async () => {
     const localHead = await head(repo);
     const remoteHead = await advanceRemote();

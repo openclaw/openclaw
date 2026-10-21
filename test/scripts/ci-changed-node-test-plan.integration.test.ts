@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createChangedNodeTestShards,
   hasControlUiPerformanceAffectingChange,
@@ -18,6 +18,8 @@ import {
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
+
+afterEach(() => vi.unstubAllEnvs());
 
 // Real-checkout compositions share the planner's process-scoped import-graph cache.
 // Small synthetic graphs and canonical process selection remain in the unit file.
@@ -185,7 +187,8 @@ it.each([
   }
 });
 
-it("keeps UI and core changes with exact owners and direct consumers", () => {
+it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (runtimePolicy) => {
+  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", runtimePolicy);
   const paths = [
     "ui/src/components/markdown-file-links.ts",
     "src/agents/live-provider-owner.ts",
@@ -307,16 +310,28 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       ] as const) {
         expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
       }
+      const singletonProjection = job.groups?.length === 1 && selectedJob.planConcurrency === 2;
+      // Splitting an unpinned parallel owner must retain an exact two-worker singleton ceiling.
+      const expectedJobEnv =
+        singletonProjection &&
+        selectedGroup.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
+        selectedJob.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+          ? { ...selectedJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+          : selectedJob.env;
       for (const key of [
         "env",
         "runner",
-        "planConcurrency",
         "pretestBuildMode",
         "requiresDist",
         "timeoutMinutes",
       ] as const) {
-        expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
+        expect(job[key], `${group.shard_name} job ${key}`).toEqual(
+          key === "env" ? expectedJobEnv : selectedJob[key],
+        );
       }
+      expect(job.planConcurrency, `${group.shard_name} job planConcurrency`).toBe(
+        singletonProjection ? 1 : selectedJob.planConcurrency,
+      );
     }
   }
   expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(

@@ -39,7 +39,10 @@ beforeEach(async () => {
 function createCron(
   params: Pick<CronServiceDeps, "runIsolatedAgentJob"> &
     Partial<
-      Pick<CronServiceDeps, "runCommandJob" | "onEvent" | "enqueueSystemEvent" | "requestHeartbeat">
+      Pick<
+        CronServiceDeps,
+        "runSessionEvent" | "runCommandJob" | "onEvent" | "enqueueSystemEvent" | "requestHeartbeat"
+      >
     >,
 ) {
   return createCronServiceWithStateForTest({
@@ -187,14 +190,17 @@ it.for([
   async ({ edit, deleteAfterRun, overdueRestart }, { signal }) => {
     const delayMs = 60_000;
     const payload = createAgentGate();
-    const runIsolatedAgentJob = vi
-      .fn<CronServiceDeps["runIsolatedAgentJob"]>()
+    const runSessionEvent = vi
+      .fn<NonNullable<CronServiceDeps["runSessionEvent"]>>()
       .mockImplementationOnce(async () => {
         await payload.run();
         return { status: "ok", summary: "CI is pending", nextCheck: { delayMs } };
       })
       .mockResolvedValue({ status: "ok", summary: "CI passed" });
-    const options = { runIsolatedAgentJob };
+    const options = {
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runSessionEvent,
+    };
     let { cron } = createCron(options);
     try {
       await cron.start();
@@ -267,11 +273,11 @@ it.for([
       ({ cron } = createCron(options));
       cron.pauseScheduling();
       await cron.start();
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(runSessionEvent).toHaveBeenCalledTimes(1);
       expect(cron.getJob(job.id)?.state.nextRunAtMs).toBe(continuationAtMs);
       clock.setTime(continuationAtMs + 2_000);
       await expect(cron.run(job.id, "due")).resolves.toMatchObject({ ok: true, ran: true });
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      expect(runSessionEvent).toHaveBeenCalledTimes(2);
       for (const jobs of await jobViews(cron)) {
         if (deleteAfterRun) {
           expect(jobs).toEqual([]);

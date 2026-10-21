@@ -7,6 +7,7 @@ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
+import { inactiveHeartbeatHours } from "./heartbeat-runner.boundary-test-support.js";
 import {
   type HeartbeatRoutingFixture,
   formatQueuedEvents,
@@ -25,6 +26,7 @@ import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEvent,
   enqueueSystemEventEntry,
+  enqueueSystemEventWithReceipt,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "./system-events.js";
@@ -70,6 +72,34 @@ describe("Heartbeat cron and exec event ownership", () => {
     expect(ctx.Body).not.toContain("heartbeat poll");
   }
   const reminder = "Reminder: Send the nightly report";
+  it("acknowledges only the reminder adopted by its own heartbeat prompt", async () => {
+    await withHeartbeat(async (f) => {
+      const adopted = vi.fn();
+      const noise = vi.fn();
+      enqueueSystemEventWithReceipt(
+        reminder,
+        { sessionKey: f.sessionKey, contextKey: "cron:receipt" },
+        { onSettled: adopted },
+      );
+      enqueueSystemEventWithReceipt(
+        "HEARTBEAT_OK",
+        { sessionKey: f.sessionKey, contextKey: "cron:noise" },
+        { onSettled: noise },
+      );
+      f.enqueue("Exec completed (report, code 0) :: ready", "exec:report");
+      f.replySpy.mockResolvedValue({ text: "Handled the event" });
+      expect((await f.run({ source: "exec-event", reason: "exec-event" })).status).toBe("ran");
+      expect(getFirstReplyContext(f.replySpy).Body).not.toContain(reminder);
+      expect(adopted).not.toHaveBeenCalled();
+      expect(noise).toHaveBeenCalledExactlyOnceWith(false);
+
+      f.replySpy.mockClear();
+      expect((await runCron(f)).status).toBe("ran");
+      expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
+      expect(adopted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(peekSystemEvents(f.sessionKey)).toEqual([]);
+    });
+  });
   function withCronOwner(fn: (fixture: Fixture) => Promise<void>) {
     return withHeartbeat(async (fixture) => {
       fixture.enqueue(reminder, "cron:nightly-report");
@@ -113,7 +143,6 @@ describe("Heartbeat cron and exec event ownership", () => {
                   source: "cron",
                   intent: "immediate",
                   reason: "cron:nightly-report",
-                  deps: { nowMs: () => Date.UTC(2025, 0, 1, 7) },
                 }
               : { reason: "cron:reminder-job" },
           );
@@ -136,7 +165,7 @@ describe("Heartbeat cron and exec event ownership", () => {
         internal
           ? { target: "none" }
           : outsideHours
-            ? { activeHours: { start: "08:00", end: "24:00", timezone: "user" } }
+            ? { activeHours: inactiveHeartbeatHours() }
             : {},
       );
     },

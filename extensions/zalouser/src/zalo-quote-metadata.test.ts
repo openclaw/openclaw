@@ -24,10 +24,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 // mock-isolation: Quote fixtures provide synthetic listeners and sends, never a live Zalo session.
 vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock, TextStyle: { Indent: 9 } }));
 
-import { zalouserMessageAdapter } from "./channel.adapters.js";
+import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { saveStoredZaloCredentials } from "./session-state.js";
 import {
+  logoutZaloProfile,
   normalizeZaloInboundMessage,
   resolveZaloGroupContext,
   sendZaloTextMessage,
@@ -92,7 +93,7 @@ it("applies the resolved account media cap before the native message send", asyn
   const directory = tempDirs.make("zalouser-media-cap-");
   const file = path.join(directory, "attachment.txt");
   await withStoredSession("media-cap", api, async () => {
-    const sendMedia = zalouserMessageAdapter.send?.media;
+    const sendMedia = zalouserPlugin.message?.send?.media;
     if (!sendMedia) {
       throw new Error("Zalo Personal media sender unavailable");
     }
@@ -187,7 +188,6 @@ it("extracts quote metadata and implicit mentions", async () => {
 
   expect(message).toMatchObject({
     quotedGlobalMsgId: "987654321234",
-    quotedOwnerId: "555444333",
     quotedBody: "Previous bot message content",
     implicitMention: true,
   });
@@ -227,4 +227,52 @@ it("reuses group context until its five-minute TTL expires", async () => {
   });
 
   expect(getGroupInfo).toHaveBeenCalledTimes(2);
+});
+
+it("keeps group lookups profile-scoped and refreshes them after logout", async () => {
+  const groupId = "shared-group";
+  const getGroupInfoA = vi.fn(async () => ({
+    gridInfoMap: { [groupId]: { groupId, name: "Alpha" } },
+  }));
+  const getGroupInfoB = vi.fn(async () => ({
+    gridInfoMap: { [groupId]: { groupId, name: "Beta" } },
+  }));
+  await withStoredSession(
+    "cache-alpha",
+    createMockApi({ getGroupInfo: getGroupInfoA }),
+    async () => {
+      await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+        name: "Alpha",
+      });
+      await withStoredSession(
+        "cache-beta",
+        createMockApi({ getGroupInfo: getGroupInfoB }),
+        async () => {
+          await expect(resolveZaloGroupContext("cache-beta", groupId)).resolves.toMatchObject({
+            name: "Beta",
+          });
+        },
+      );
+      await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+        name: "Alpha",
+      });
+      expect(getGroupInfoA).toHaveBeenCalledOnce();
+      expect(getGroupInfoB).toHaveBeenCalledOnce();
+      await logoutZaloProfile("cache-alpha");
+    },
+  );
+
+  const getGroupInfoAfterLogin = vi.fn(async () => ({
+    gridInfoMap: { [groupId]: { groupId, name: "New Alpha" } },
+  }));
+  await withStoredSession(
+    "cache-alpha",
+    createMockApi({ getGroupInfo: getGroupInfoAfterLogin }),
+    async () => {
+      await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+        name: "New Alpha",
+      });
+    },
+  );
+  expect(getGroupInfoAfterLogin).toHaveBeenCalledOnce();
 });

@@ -79,7 +79,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "openai-tts",
     label: "OpenAI text-to-speech",
-    modulePath: "extensions/openai/tts.ts",
+    modulePath: "extensions/openai/speech-provider.ts",
     protocols: ["https"],
     status: "captured",
     notes:

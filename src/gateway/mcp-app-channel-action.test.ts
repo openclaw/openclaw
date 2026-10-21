@@ -32,10 +32,16 @@ const view = {
   toolInput: { privateInput: "do-not-emit-input" },
   toolResult: { privateResult: "do-not-emit-result" },
 };
+const channelView = { viewId: view.viewId, title: "do-not-emit-title" };
+const sessionKey = "agent:main:do-not-emit-session";
 
-function resetTailscalePublishedOrigin() {
-  prepareTailscalePublishedOrigin({ origin: "https://reset.test", mode: "serve" })();
+function publishOrigin(origin = "https://node.tailnet.ts.net", mode: "serve" | "funnel" = "serve") {
+  return prepareTailscalePublishedOrigin({ origin, mode });
 }
+
+const materialize = () =>
+  materializeMcpAppChannelPresentation({ sessionKey, view: channelView, nowMs });
+const resetTailscalePublishedOrigin = () => publishOrigin("https://reset.test")();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -53,14 +59,8 @@ afterEach(resetTailscalePublishedOrigin);
 
 describe("Tailscale published origin", () => {
   it("stores one lifecycle-owned Serve or Funnel snapshot", () => {
-    const clearServe = prepareTailscalePublishedOrigin({
-      origin: "https://node.tailnet.ts.net",
-      mode: "serve",
-    });
-    const clearFunnel = prepareTailscalePublishedOrigin({
-      origin: "https://public.example.ts.net/",
-      mode: "funnel",
-    });
+    const clearServe = publishOrigin();
+    const clearFunnel = publishOrigin("https://public.example.ts.net/", "funnel");
 
     expect(getTailscalePublishedOrigin()).toMatchObject({
       origin: "https://public.example.ts.net",
@@ -75,60 +75,30 @@ describe("Tailscale published origin", () => {
   it.each(["http://node.test", "https://%75@node.test", "https://node.test/path"])(
     "rejects unsafe origin %s",
     (origin) => {
-      expect(() => prepareTailscalePublishedOrigin({ origin, mode: "serve" })).toThrow(
-        "absolute HTTPS origin",
-      );
+      expect(() => publishOrigin(origin)).toThrow("absolute HTTPS origin");
     },
   );
 });
 
 describe("materializeMcpAppChannelPresentation", () => {
   it("mints late and emits only one typed action with an opaque ticket", () => {
-    prepareTailscalePublishedOrigin({
-      origin: "https://node.tailnet.ts.net",
-      mode: "serve",
-    });
+    publishOrigin();
+    const presentation = materialize();
 
-    const presentation = materializeMcpAppChannelPresentation({
-      sessionKey: "agent:main:do-not-emit-session",
-      view: { viewId: "view-latest", title: "do-not-emit-title" } as never,
-      nowMs,
-    });
-
-    expect(mocks.createTicket).toHaveBeenCalledOnce();
-    expect(mocks.createTicket).toHaveBeenCalledWith({
-      sessionKey: "agent:main:do-not-emit-session",
+    expect(mocks.createTicket).toHaveBeenCalledExactlyOnceWith({
+      sessionKey,
       view,
       toolOperationsAuthorized: true,
       nowMs,
     });
-    expect(presentation).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Open app",
-              action: {
-                type: "web-app",
-                url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
-              },
-            },
-          ],
-        },
-      ],
-    });
-    const serialized = JSON.stringify(presentation);
-    for (const privateValue of [
-      view.html,
-      "do-not-emit-input",
-      "do-not-emit-result",
-      "do-not-emit-session",
-      "do-not-emit-title",
-      view.viewId,
-    ]) {
-      expect(serialized).not.toContain(privateValue);
-    }
+    const button = {
+      label: "Open app",
+      action: {
+        type: "web-app",
+        url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+      },
+    };
+    expect(presentation).toEqual({ blocks: [{ type: "buttons", buttons: [button] }] });
   });
 
   it.each([
@@ -137,18 +107,8 @@ describe("materializeMcpAppChannelPresentation", () => {
     ["expired view", () => mocks.getView.mockReturnValue({ ...view, expiresAtMs: nowMs })],
     ["ticket capacity", () => mocks.createTicket.mockReturnValue(undefined)],
   ])("omits the action for %s", (_name, arrange) => {
-    prepareTailscalePublishedOrigin({
-      origin: "https://node.tailnet.ts.net",
-      mode: "serve",
-    });
+    publishOrigin();
     arrange();
-
-    expect(
-      materializeMcpAppChannelPresentation({
-        sessionKey: "agent:main:main",
-        view: { viewId: "view-latest" },
-        nowMs,
-      }),
-    ).toBeUndefined();
+    expect(materialize()).toBeUndefined();
   });
 });

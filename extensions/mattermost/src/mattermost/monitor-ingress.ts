@@ -188,9 +188,7 @@ export function createMattermostIngressMonitor(options: {
     retention: "standard",
     drain: {
       resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`mattermost ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

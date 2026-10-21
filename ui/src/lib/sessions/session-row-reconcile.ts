@@ -37,12 +37,6 @@ export type SessionChangedRowProjection = (
 export type SessionChangedRowResult = {
   applied: boolean;
   key?: string;
-  agentId?: string | null;
-  runId?: string | null;
-  clientRunId?: string | null;
-  hasActiveRun?: boolean | null;
-  status?: SessionRunStatus | null;
-  isChatTurn?: boolean;
   row?: GatewaySessionRow;
   /** Accepted event facts remain available when a list filter removes the row. */
   admittedRow?: GatewaySessionRow;
@@ -70,7 +64,6 @@ export type SessionChangedEventInfo = {
   activeRunIds?: string[] | null;
   status: SessionRunStatus | null;
   archived: boolean | null;
-  isChatTurn: boolean;
   isAncestorReference: boolean;
 };
 
@@ -123,17 +116,6 @@ export function preserveRosterPresentationMetadata(
     }
   }
   return row;
-}
-
-function isOlderSessionSnapshot(
-  incoming: GatewaySessionRow,
-  existing: GatewaySessionRow | undefined,
-): boolean {
-  return (
-    incoming.updatedAt != null &&
-    existing?.updatedAt != null &&
-    incoming.updatedAt < existing.updatedAt
-  );
 }
 
 function isStaleForActiveSession(
@@ -288,7 +270,6 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
     return null;
   }
   const reason = recordString(event, "reason") ?? recordString(source, "reason") ?? null;
-  const phase = recordString(event, "phase") ?? recordString(source, "phase");
   const sourceHasActiveRun = recordValue(source, "hasActiveRun");
   const hasActiveRun =
     typeof sourceHasActiveRun === "boolean"
@@ -327,13 +308,6 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
         sessionRunStatus(recordValue(source, "status")) ??
         sessionRunStatus(recordValue(event, "status")),
       archived: typeof archived === "boolean" ? archived : null,
-      isChatTurn:
-        phase === "start" ||
-        phase === "message" ||
-        phase === "end" ||
-        phase === "error" ||
-        reason === "send" ||
-        reason === "steer",
       isAncestorReference: event.ancestorSessionRef === true,
     },
     event,
@@ -470,7 +444,11 @@ export function reconcileSessionRow(
   if (options.preserveExisting && previous) {
     return reject("preserved");
   }
-  if (isOlderSessionSnapshot(session, previous)) {
+  if (
+    session.updatedAt != null &&
+    previous?.updatedAt != null &&
+    session.updatedAt < previous.updatedAt
+  ) {
     return reject("older");
   }
   if (!existing && !isPersistedSessionRow(session)) {
@@ -557,13 +535,13 @@ export function reconcileParsedSessionChangedRow(
     !info.agentId &&
     (isUiGlobalSessionKey(key) || (!parseAgentSessionKey(key) && !Object.keys(rowFields).length))
   ) {
-    return { applied: false, key, agentId: null, row: existing };
+    return { applied: false, key, row: existing };
   }
   if (reason === "delete") {
     if (!info.sessionId || (existing && existing.sessionId !== info.sessionId)) {
-      return { applied: false, key, agentId: info.agentId, row: existing };
+      return { applied: false, key, row: existing };
     }
-    return { applied: true, key, agentId: info.agentId, deletedKey: existing?.key ?? key };
+    return { applied: true, key, deletedKey: existing?.key ?? key };
   }
   // The Gateway folds cron/spawn-child into direct before projection.
   const kind =
@@ -582,12 +560,6 @@ export function reconcileParsedSessionChangedRow(
   const eventResult = {
     applied: true as const,
     key,
-    agentId: info.agentId,
-    runId: info.runId,
-    clientRunId: info.clientRunId,
-    hasActiveRun: info.hasActiveRun,
-    status: info.status,
-    isChatTurn: info.isChatTurn,
   };
   const fullSnapshot = Array.isArray(event.ancestorSessions);
   if (!existing && (!options.admitSnapshot || !fullSnapshot || !recordOrNull(event.session))) {

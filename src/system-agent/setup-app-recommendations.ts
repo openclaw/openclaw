@@ -15,6 +15,7 @@ import {
   type OfficialExternalPluginCatalogEntry,
 } from "../plugins/official-external-plugin-catalog.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { OnboardingRecommendationMatch } from "../state/onboarding-recommendations.js";
 import { completeSetupInference } from "./setup-inference.js";
 
@@ -155,15 +156,9 @@ function compareCandidates(left: SetupAppCandidate, right: SetupAppCandidate): n
 }
 
 function dedupeCandidates(candidates: SetupAppCandidate[]): SetupAppCandidate[] {
-  const seen = new Set<string>();
-  return candidates.toSorted(compareCandidates).filter((candidate) => {
-    const key = candidate.id.toLocaleLowerCase("en-US");
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  return dedupeByKey(candidates.toSorted(compareCandidates), (candidate) =>
+    candidate.id.toLocaleLowerCase("en-US"),
+  );
 }
 
 async function gatherSetupAppCandidates(

@@ -372,7 +372,7 @@ describe("runDaemonRestart health checks", () => {
         json: true,
         stdout: process.stdout,
         state: {},
-        issues: [{ code: "port-mismatch", message: "service port is stale" }],
+        issues: [{ message: "service port is stale" }],
       });
       await runRestartPostCheck(params, false);
       return true;
@@ -421,7 +421,7 @@ describe("runDaemonRestart health checks", () => {
           json: true,
           stdout: process.stdout,
           state: { command: { environment: { OPENCLAW_GATEWAY_PORT: "18789" } } },
-          issues: [{ code: "port-mismatch", message: "service port is stale" }],
+          issues: [{ message: "service port is stale" }],
         });
       },
     );
@@ -434,7 +434,7 @@ describe("runDaemonRestart health checks", () => {
         service,
         json: true,
         state: { command: { environment: { OPENCLAW_GATEWAY_PORT: "18789" } } },
-        issues: [{ code: "port-mismatch", message: "service port is stale" }],
+        issues: [{ message: "service port is stale" }],
       }),
     );
   });

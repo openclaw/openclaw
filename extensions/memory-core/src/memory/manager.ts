@@ -277,7 +277,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     };
     this.vector.enabled = effectiveSettings.store.vector.enabled;
     this.vector.extensionPath = effectiveSettings.store.vector.extensionPath;
-    const meta = this.readMeta();
+    const meta = this.database.facts.meta;
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
@@ -308,7 +308,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
-        this.ensureIntervalSync();
         void this.runInBackgroundContext(() => this.ensureSessionStartupCatchup()).catch(
           (err: unknown) => {
             log.warn("memory session startup catch-up failed: " + String(err));

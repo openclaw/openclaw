@@ -17,10 +17,8 @@ describe("option card", () => {
     container.remove();
   });
 
-  it("accents and focuses the recommended choice, then emits its value", () => {
+  it("accents and focuses the recommended choice, then calls its selection handler", () => {
     const onSelect = vi.fn();
-    const selected = vi.fn();
-    container.addEventListener("option-select", selected);
     const props = {
       header: "Access",
       question: "How should OpenClaw help?",
@@ -47,15 +45,10 @@ describe("option card", () => {
     recommended.click();
 
     expect(onSelect).toHaveBeenCalledWith("full");
-    expect(selected).toHaveBeenCalledOnce();
-    const selectEvent = selected.mock.calls[0]![0] as CustomEvent;
-    expect(selectEvent.detail).toEqual({ value: "full" });
   });
 
-  it("always renders a skip affordance and emits dismissal", () => {
+  it("always renders a skip affordance and calls its dismissal handler", () => {
     const onSkip = vi.fn();
-    const skipped = vi.fn();
-    container.addEventListener("option-skip", skipped);
     const props = {
       question: "Choose one",
       options: [
@@ -69,7 +62,6 @@ describe("option card", () => {
     container.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
 
     expect(onSkip).toHaveBeenCalledOnce();
-    expect(skipped).toHaveBeenCalledOnce();
   });
 
   it.each(["textarea", "button"] as const)(
@@ -182,5 +174,53 @@ describe("option card", () => {
 
     expect(view.getByRole("radio").getAttribute("aria-checked")).toBe("false");
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it("keeps the choices to one Tab stop and moves the checked choice with arrow keys", () => {
+    const onSelect = vi.fn();
+    const previous = document.createElement("button");
+    const target = document.createElement("div");
+    container.append(previous, target);
+    const props = {
+      question: "Choose one",
+      options: [
+        { value: "one", label: "One" },
+        { value: "two", label: "Two" },
+        { value: "three", label: "Three" },
+      ],
+      onSelect,
+    };
+    const view = mountSolid(() => <OptionCard props={props} />, { container: target });
+    flush();
+    const [one, two, three] = view.getAllByRole("radio");
+    const skip = view.getByRole("button", { name: "Skip for now" });
+    const tabStops = () =>
+      [...container.querySelectorAll("button")].filter((button) => button.tabIndex >= 0);
+    const press = (key: string) => {
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+      flush();
+    };
+
+    expect(tabStops()).toEqual([previous, one, skip]);
+    one!.focus();
+    press("ArrowDown");
+    expect(document.activeElement).toBe(two);
+    expect(two!.getAttribute("aria-checked")).toBe("true");
+    expect(one!.getAttribute("aria-checked")).toBe("false");
+    expect(tabStops()).toEqual([previous, two, skip]);
+
+    const walk = ["ArrowRight", "ArrowDown", "ArrowUp", "ArrowLeft", "End", "Home"].map((key) => {
+      press(key);
+      return view.getAllByRole("radio").indexOf(document.activeElement as HTMLElement);
+    });
+    expect(walk).toEqual([2, 0, 2, 1, 2, 0]);
+    expect(one!.getAttribute("aria-checked")).toBe("true");
+    expect(tabStops()).toEqual([previous, one, skip]);
+    expect(onSelect).not.toHaveBeenCalled();
+
+    three!.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("three");
   });
 });

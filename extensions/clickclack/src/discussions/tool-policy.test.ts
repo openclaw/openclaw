@@ -16,12 +16,9 @@ import {
   getClickClackDiscussionBindingStore,
 } from "./binding-store.js";
 import { discussionSessionKey } from "./naming.js";
+import { captureDiscussionRegistration } from "./register.test-support.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 import { asyncDiscussionTestStore, createDiscussionMemoryStore } from "./service-test-support.js";
-import {
-  enforceClickClackDiscussionToolTarget,
-  isClickClackDiscussionSessionTarget,
-} from "./tool-policy.js";
 
 const boundSessionKey = "agent:research:main";
 async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
@@ -57,13 +54,20 @@ async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
   if (!sideSessionKey) {
     throw new Error("expected discussion session key");
   }
+  const registration = captureDiscussionRegistration(runtime);
   const run = (toolName: string, toolParams: Record<string, unknown>) =>
-    enforceClickClackDiscussionToolTarget({
-      runtime,
-      event: { toolName, params: toolParams },
-      context: { toolName, sessionKey: sideSessionKey },
-    });
-  return { asyncStore, bindingStore, config, mainSessionKey, runtime, run, sideSessionKey, store };
+    registration.run({ toolName, params: toolParams }, { toolName, sessionKey: sideSessionKey });
+  return {
+    asyncStore,
+    bindingStore,
+    config,
+    mainSessionKey,
+    runtime,
+    run,
+    sideSessionKey,
+    store,
+    target: registration.target,
+  };
 }
 
 async function expectSessionAccess(
@@ -84,17 +88,11 @@ function currentBinding(store: ReturnType<typeof getClickClackDiscussionBindingS
 }
 describe("ClickClack discussion session tool policy", () => {
   it("authorizes a persisted binding synchronously before index preparation after restart", async () => {
-    const { runtime, mainSessionKey, sideSessionKey, run } = await setup({
+    const { mainSessionKey, sideSessionKey, run, target } = await setup({
       persistedBeforeOpening: true,
     });
 
-    expect(
-      isClickClackDiscussionSessionTarget({
-        runtime,
-        requesterSessionKey: sideSessionKey,
-        targetSessionKey: mainSessionKey,
-      })?.binding.sessionId,
-    ).toBe("session-id");
+    expect(target(sideSessionKey, mainSessionKey)?.expectedSessionId).toBe("session-id");
     expect(await run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
   });
 
@@ -189,19 +187,13 @@ describe("ClickClack discussion session tool policy", () => {
   it.each([{ channelId: "chn_replacement" }, { externalRef: "openclaw:replacement:research" }])(
     "rejects old side-session authority after an external binding replacement: %j",
     async (replacement) => {
-      const { bindingStore, mainSessionKey, run, sideSessionKey, store, runtime } = await setup();
+      const { bindingStore, mainSessionKey, run, sideSessionKey, store, target } = await setup();
       const previous = bindingStore.get(mainSessionKey)!;
       // Bypass the index owner, as a foreign process or released native writer can.
       store.register(mainSessionKey, { ...previous, ...replacement });
 
       expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
-      expect(
-        isClickClackDiscussionSessionTarget({
-          runtime,
-          requesterSessionKey: sideSessionKey,
-          targetSessionKey: mainSessionKey,
-        }),
-      ).toBeUndefined();
+      expect(target(sideSessionKey, mainSessionKey)).toBeUndefined();
       if ("channelId" in replacement) {
         expect(
           await bindingStore.getByChannel(previous.serverBaseUrl, previous.channelId),
@@ -219,16 +211,15 @@ describe("ClickClack discussion session tool policy", () => {
       const pending = createDeferred<typeof snapshot>();
       vi.spyOn(asyncStore, "entries").mockReturnValueOnce(pending.promise);
       const preparing = bindingStore.prepare();
-      if (operation === "replace") {
-        await bindingStore.setIfCurrent(mainSessionKey, previous, {
-          ...previous,
-          channelId: "chn_replacement",
-        });
-      } else {
-        await bindingStore.deleteIfCurrent(mainSessionKey, previous);
-      }
+      const mutation =
+        operation === "replace"
+          ? bindingStore.setIfCurrent(mainSessionKey, previous, {
+              ...previous,
+              channelId: "chn_replacement",
+            })
+          : bindingStore.deleteIfCurrent(mainSessionKey, previous);
       pending.resolve(snapshot);
-      await preparing;
+      await Promise.all([preparing, mutation]);
 
       expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
       expect(

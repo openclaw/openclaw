@@ -8,6 +8,7 @@ import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeManifestModelCatalog } from "../../plugins/manifest-decision-catalog.js";
 import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -175,7 +176,13 @@ describe("models.list plugin metadata handoff", () => {
           {
             id: "decisions",
             contracts: { decisionProviders: ["fixture"] },
-            decisionModels: [decision],
+            modelCatalog: normalizeManifestModelCatalog({
+              modelCatalog: undefined,
+              decisionModels: [decision],
+              providers: [],
+              cliBackends: [],
+              decisionProviders: ["fixture"],
+            }),
           },
           ...(chat ? [{ id: "custom", providers: ["custom"] }] : []),
         ],

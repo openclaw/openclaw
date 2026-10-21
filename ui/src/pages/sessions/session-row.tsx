@@ -70,9 +70,8 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
 }
 
 function SessionGoalStatus(props: { goal: GatewaySessionRow["goal"] }) {
-  const kind = createMemo(() =>
-    props.goal?.status === "active" || props.goal?.status === "complete" ? "ok" : "warn",
-  );
+  const kind = (): "ok" | "warn" =>
+    props.goal?.status === "active" || props.goal?.status === "complete" ? "ok" : "warn";
   const detail = createMemo(() => {
     const goal = props.goal;
     return goal ? formatGoalDetail(goal) : "";
@@ -161,25 +160,23 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
   );
-  const isExpanded = createMemo(() => props.expandedSessionKey === row().key);
-  const detailsId = createMemo(() => `session-details-${encodeURIComponent(row().key)}`);
-  const displayName = createMemo(() => normalizeOptionalString(row().displayName) ?? null);
-  const trimmedLabel = createMemo(() => normalizeOptionalString(row().label) ?? "");
-  const showDisplayName = createMemo(() =>
-    Boolean(displayName() && displayName() !== row().key && displayName() !== trimmedLabel()),
-  );
+  const isExpanded = () => props.expandedSessionKey === row().key;
+  const detailsId = () => `session-details-${encodeURIComponent(row().key)}`;
+  const displayName = () => normalizeOptionalString(row().displayName) ?? null;
+  const trimmedLabel = () => normalizeOptionalString(row().label) ?? "";
+  const showDisplayName = () =>
+    Boolean(displayName() && displayName() !== row().key && displayName() !== trimmedLabel());
   const keyParts = createMemo(() => parseSessionKeyParts(row().key));
   const agentIdentity = createMemo(() =>
     keyParts() ? getAgentIdentity(props.agentIdentityById, keyParts()!.agentId) : null,
   );
-  const identityEmoji = createMemo(() => normalizeOptionalString(agentIdentity()?.emoji) ?? "");
-  const identityName = createMemo(() => normalizeOptionalString(agentIdentity()?.name) ?? "");
-  const friendlyKeyLabel = createMemo(() =>
+  const identityEmoji = () => normalizeOptionalString(agentIdentity()?.emoji) ?? "";
+  const identityName = () => normalizeOptionalString(agentIdentity()?.name) ?? "";
+  const friendlyKeyLabel = () =>
     identityName() && keyParts()
       ? `${identityEmoji() ? `${identityEmoji()} ` : ""}${identityName()} (${keyParts()!.channel})`
-      : null,
-  );
-  const keyCellTitle = createMemo(() => friendlyKeyLabel() ?? row().key);
+      : null;
+  const keyCellTitle = () => friendlyKeyLabel() ?? row().key;
   const canLink = createMemo(() => row().kind !== "global");
   const chatUrl = createMemo(() =>
     canLink()
@@ -194,22 +191,21 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
       : undefined,
   );
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
-  const kindClass = createMemo(() => ["session-kind", `session-kind--${displayKind()}`]);
-  const rowClass = createMemo(() => [
+  const kindClass = () => ["session-kind", `session-kind--${displayKind()}`];
+  const rowClass = () => [
     "session-data-row session-data-row--expandable",
     {
       "session-data-row--archived": props.statusFilter === "all" && row().archived === true,
       "session-data-row--expanded": isExpanded(),
       "session-data-row--menu-open": props.sessionMenu?.key === row().key,
     },
-  ]);
+  ];
   // The {count} placeholder predates the drawer redesign; it carries the session title.
-  const detailsToggleLabel = createMemo(() =>
+  const detailsToggleLabel = () =>
     isExpanded()
       ? t("sessionsView.hideSessionDetails", { count: keyCellTitle() })
-      : t("sessionsView.showSessionDetails", { count: keyCellTitle() }),
-  );
-  const categoryMode = createMemo(() => props.groupBy === "category");
+      : t("sessionsView.showSessionDetails", { count: keyCellTitle() });
+  const categoryMode = () => props.groupBy === "category";
   // Dropping on a row targets that row's group so the whole section area accepts drops.
   const rowDrop = createMemo(() =>
     categoryDropHandlers(props, normalizeOptionalString(row().category) ?? null),

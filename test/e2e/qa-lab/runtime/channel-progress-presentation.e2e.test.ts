@@ -2,11 +2,18 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer, type RequestListener, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type RequestListener,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { connect, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { text as readBody } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -34,8 +41,9 @@ import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
 import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
 import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
+import { listenLoopback } from "./gateway-recovery.test-support.js";
 
 const MODEL = "mock-openai/progress-fixture";
 const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
@@ -47,42 +55,178 @@ const slackCardToolRow = /\b(?:Exec|Bash) — /u;
 const nativeToolTitle = /^(?:Exec|Bash)\b/u;
 const failedToolRow = /\b(?:Exec|Bash): failed\b/u;
 type WireWrite = {
-  at: number;
   method: string;
   route: string;
   body: Record<string, unknown>;
-  accepted?: { id: string; action: string; text: string };
-  rejected?: string;
+  accepted?: { id: string; text: string };
   identityOmitted?: true;
 };
 type CrablineAdapter = Awaited<ReturnType<typeof startOpenClawCrablineAdapter>>;
+type Cleanup = () => Promise<void>;
+type Gateway = Awaited<ReturnType<ReturnType<typeof createQaGatewayChild>["start"]>>;
+
+function closeServer(server: Server) {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function startProviderProxy(
+  cleanups: Cleanup[],
+  handle: (request: IncomingMessage, response: ServerResponse, raw: string) => Promise<void>,
+) {
+  const proxy = createServer((request, response) => {
+    void readBody(request)
+      .then((raw) => handle(request, response, raw))
+      .catch(() => response.writeHead(500).end("synthetic provider proxy failed"));
+  });
+  const baseUrl = await listenLoopback(proxy, "provider proxy did not bind");
+  cleanups.push(async () => {
+    proxy.closeAllConnections();
+    await closeServer(proxy);
+  });
+  return `${baseUrl}/v1`;
+}
+
+function forwardProvider(request: IncomingMessage, raw: string, baseUrl: string) {
+  return fetch(new URL(request.url ?? "/", baseUrl), {
+    method: request.method,
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(
+        ["session_id", "x-session-affinity"].flatMap((name) =>
+          typeof request.headers[name] === "string" ? [[name, request.headers[name]]] : [],
+        ),
+      ),
+    },
+    ...(request.method === "POST" ? { body: raw } : {}),
+  });
+}
+
+async function createPresentationTransport(
+  channel: "slack" | "discord",
+  cleanups: Cleanup[],
+  directory: string,
+  options?: Parameters<typeof startPresentationApi>[3],
+) {
+  const writes: WireWrite[] = [];
+  const adapter = await startOpenClawCrablineAdapter({
+    channel,
+    recorderPath: path.join(directory, "provider.jsonl"),
+  });
+  cleanups.push(() => adapter.close());
+  const api = await startPresentationApi(adapter, writes, directory, options);
+  cleanups.push(() => api.stop());
+  return { writes, adapter, api };
+}
+
+async function createDirectory(prefix: string, cleanups: Cleanup[]) {
+  const directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), prefix));
+  cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+async function waitForChannel(gateway: Gateway, channel: string, fields: string[]) {
+  await waitForFact(async () => {
+    const status = asRecord(await gateway.call("channels.status", { probe: false }));
+    const accounts = asRecord(status.channelAccounts)[channel];
+    return (
+      Array.isArray(accounts) &&
+      accounts.some((account) => fields.every((field) => asRecord(account)[field] === true))
+    );
+  }, `${channel} ready`);
+}
+
+async function listSessions(gateway: Gateway, limit = 20) {
+  const { sessions } = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit }));
+  return Array.isArray(sessions) ? sessions.map(asRecord) : [];
+}
+
+function presentationGatewayOptions(
+  adapter: CrablineAdapter,
+  api: Awaited<ReturnType<typeof startPresentationApi>>,
+  providerBaseUrl: string,
+): Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0] {
+  return {
+    repoRoot: process.cwd(),
+    providerBaseUrl,
+    providerMode: "mock-openai",
+    primaryModel: MODEL,
+    alternateModel: MODEL,
+    controlUiEnabled: false,
+    transportBaseUrl: api.baseUrl,
+    transport: {
+      requiredPluginIds: adapter.requiredPluginIds,
+      createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
+    },
+    runtimeEnvPatch: {
+      ...adapter.createProviderReadinessEnv({}),
+      ...(adapter.manifest.provider === "slack"
+        ? { SLACK_API_URL: `${api.baseUrl}/api/` }
+        : { NODE_EXTRA_CA_CERTS: api.caPath }),
+    },
+  };
+}
+
+async function deliverSlackEvent(adapter: CrablineAdapter, gateway: Gateway, event: unknown) {
+  if (adapter.manifest.provider !== "slack") {
+    throw new Error("expected Slack fixture");
+  }
+  const body = JSON.stringify(event);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = createHmac("sha256", adapter.manifest.signingSecret)
+    .update(`v0:${timestamp}:${body}`)
+    .digest("hex");
+  const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": `v0=${signature}`,
+    },
+    body,
+  });
+  expect(
+    delivered.ok,
+    `HTTP ${delivered.status}: ${(await delivered.text()).slice(0, 2000)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
+  ).toBe(true);
+}
+
+async function injectProviderMessage(
+  adapter: CrablineAdapter,
+  text: string,
+  conversationId = adapter.manifest.provider === "slack" ? "C12345678" : "123456789012345678",
+  threadId?: string,
+) {
+  const inbound = adapter.createInbound({
+    input: {
+      conversation: { id: conversationId, kind: "group" },
+      senderId: adapter.manifest.provider === "slack" ? "U12345678" : "123456789012345679",
+      text,
+      ...(threadId ? { threadId } : {}),
+    },
+  });
+  const response = await fetch(inbound.providerUrl, {
+    method: "POST",
+    headers: inbound.providerHeaders,
+    body: JSON.stringify(inbound.providerBody),
+  });
+  expect(response.ok, await response.clone().text()).toBe(true);
+  return response;
+}
 
 function createGroupOnlyGatewayConfig(adapter: CrablineAdapter): OpenClawConfig {
   const config = adapter.createGatewayConfig() as OpenClawConfig;
-  return {
-    ...config,
-    channels: {
-      ...config.channels,
-      ...(config.channels?.discord
-        ? {
-            discord: {
-              ...config.channels.discord,
-              dm: { ...config.channels.discord.dm, enabled: false },
-              dmPolicy: "disabled" as const,
-            },
-          }
-        : {}),
-      ...(config.channels?.slack
-        ? {
-            slack: {
-              ...config.channels.slack,
-              allowFrom: [],
-              dmPolicy: "disabled" as const,
-            },
-          }
-        : {}),
-    },
-  };
+  if (config.channels?.discord) {
+    const discord = config.channels.discord;
+    discord.dm = { ...discord.dm, enabled: false };
+    discord.dmPolicy = "disabled";
+  }
+  if (config.channels?.slack) {
+    config.channels.slack.allowFrom = [];
+    config.channels.slack.dmPolicy = "disabled";
+  }
+  return config;
 }
 
 function parseBody(text: string): Record<string, unknown> {
@@ -120,23 +264,18 @@ async function startPresentationApi(
   let nextMessage = 0;
   const listener: RequestListener = (request, response) => {
     void (async () => {
-      const buffers: Buffer[] = [];
-      for await (const chunk of request) {
-        buffers.push(Buffer.from(chunk));
-      }
-      const raw = Buffer.concat(buffers).toString("utf8");
+      const raw = await readBody(request);
       const body = parseBody(raw);
       const route = request.url ?? "/";
       const method = request.method ?? "GET";
       // Tokens are synthetic, but evidence never needs authentication fields.
       const { token: _token, ...visibleBody } = body;
-      const wire: WireWrite = { at: Date.now(), method, route, body: visibleBody };
+      const wire: WireWrite = { method, route, body: visibleBody };
       writes.push(wire);
-      const recordAccepted = (id: string, action: string) => {
+      const recordAccepted = (id: string) => {
         const message = messages.get(id);
         wire.accepted = {
           id,
-          action,
           text: (readStringValue(message?.text ?? message?.content) ?? "").slice(0, 250),
         };
       };
@@ -174,7 +313,7 @@ async function startPresentationApi(
             .map((chunk) => readStringValue(chunk.text) ?? "")
             .join("");
           messages.set(ts, { ...previous, text: (readStringValue(previous.text) ?? "") + text });
-          recordAccepted(ts, operation);
+          recordAccepted(ts);
           reply({ ok: true, channel: body.channel, ts });
           return;
         }
@@ -184,12 +323,12 @@ async function startPresentationApi(
             return;
           }
           messages.set(ts, body);
-          recordAccepted(ts, operation);
+          recordAccepted(ts);
           reply({ ok: true, channel: body.channel, ts, message: body });
           return;
         }
         if (operation === "chat.delete") {
-          recordAccepted(ts, operation);
+          recordAccepted(ts);
           messages.delete(ts);
           reply({ ok: true, channel: body.channel, ts });
           return;
@@ -213,12 +352,12 @@ async function startPresentationApi(
         if (method === "PATCH") {
           const updated = { ...messages.get(messageId), ...body };
           messages.set(messageId, updated);
-          recordAccepted(messageId, "updated");
+          recordAccepted(messageId);
           reply(updated);
           return;
         }
         if (method === "DELETE") {
-          recordAccepted(messageId, "deleted");
+          recordAccepted(messageId);
           messages.delete(messageId);
           response.writeHead(204).end();
           return;
@@ -239,16 +378,13 @@ async function startPresentationApi(
       let responseText = await upstream.text();
       if (upstream.ok && method === "POST") {
         const result = parseBody(responseText);
-        if (result.ok === false) {
-          wire.rejected = readStringValue(result.error);
-        }
         if (
           manifest.provider === "discord" &&
           /\/channels\/\d+\/messages$/u.test(route) &&
           typeof result.id === "string"
         ) {
           messages.set(result.id, result);
-          recordAccepted(result.id, "sent");
+          recordAccepted(result.id);
           if (
             unidentifiedFinalMarker &&
             (readStringValue(body.content) ?? "").includes(unidentifiedFinalMarker)
@@ -265,7 +401,7 @@ async function startPresentationApi(
           typeof result.ts === "string"
         ) {
           messages.set(result.ts, asRecord(result.message));
-          recordAccepted(result.ts, "sent");
+          recordAccepted(result.ts);
         }
       }
       response.writeHead(upstream.status, { "content-type": "application/json" });
@@ -314,13 +450,8 @@ async function startPresentationApi(
           listener,
         )
       : createServer(listener);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("presentation API did not bind a loopback port");
-  }
+  const baseUrl = await listenLoopback(server, "presentation API did not bind a loopback port");
+  const port = Number(new URL(baseUrl).port);
   const tunnelSockets = new Set<Socket>();
   const proxy = createServer((_request, response) => response.writeHead(405).end());
   proxy.on("connect", (request, socket, head) => {
@@ -328,7 +459,7 @@ async function startPresentationApi(
       manifest.provider === "discord" ? new URL(manifest.endpoints.gatewayUrl) : undefined;
     const targetPort =
       request.url === "discord.com:443"
-        ? address.port
+        ? port
         : localGateway && request.url === localGateway.host
           ? Number(localGateway.port)
           : undefined;
@@ -352,29 +483,19 @@ async function startPresentationApi(
     socket.on("error", () => upstream.destroy());
     socket.on("close", () => upstream.destroy());
   });
-  await new Promise<void>((resolve) => {
-    proxy.listen(0, "127.0.0.1", resolve);
-  });
-  const proxyAddress = proxy.address();
-  if (!proxyAddress || typeof proxyAddress === "string") {
-    throw new Error("proxy failed to bind");
-  }
+  const proxyUrl = await listenLoopback(proxy, "proxy failed to bind");
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    proxyUrl: `http://127.0.0.1:${proxyAddress.port}`,
+    baseUrl,
+    proxyUrl,
     caPath,
     messages,
     stop: async () => {
       for (const socket of tunnelSockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) => {
-        proxy.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(proxy);
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(server);
     },
   };
 }
@@ -395,18 +516,14 @@ function sendCompletionResponse(response: ServerResponse, marker: string, sequen
     content: [{ type: "output_text", text: "Checking the delegated result", annotations: [] }],
   };
   const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...preamble, status: "in_progress", content: [] },
-    },
-    { type: "response.output_item.done", output_index: 0, item: preamble },
-    {
-      type: "response.output_item.added",
-      output_index: 1,
-      item: { ...item, status: "in_progress", content: [] },
-    },
-    { type: "response.output_item.done", output_index: 1, item },
+    ...[preamble, item].flatMap((output, output_index) => [
+      {
+        type: "response.output_item.added",
+        output_index,
+        item: { ...output, status: "in_progress", content: [] },
+      },
+      { type: "response.output_item.done", output_index, item: output },
+    ]),
     {
       type: "response.completed",
       response: {
@@ -438,47 +555,73 @@ function progressConfig(
       ...(channel === "slack" ? { style: compact ? ("compact" as const) : ("card" as const) } : {}),
     },
   };
+  // mutateConfig receives this fixture's own config; preserve unrelated fields.
+  const agents = (config.agents ??= {});
+  const model = { primary: MODEL, fallbacks: [] };
+  agents.defaults = { ...agents.defaults, model };
+  const entries = (agents.entries ??= {});
+  entries.qa = { ...entries.qa, identity: { name: "Progress QA" }, model };
+  config.messages = {
+    ackReaction: "eyes",
+    ackReactionScope: "all",
+    statusReactions: { enabled: true },
+  };
+  const channels = (config.channels ??= {});
+  if (channel === "slack") {
+    channels.slack = {
+      ...channels.slack,
+      replyToMode: "all",
+      streaming: { ...streaming, nativeTransport: native },
+    };
+  } else {
+    // The first Crabline guild join must not create a separate welcome turn.
+    channels.discord = {
+      ...channels.discord,
+      joinIntro: false,
+      ackReaction: "👀",
+      streaming,
+      commands: { native: false, nativeSkills: false },
+    };
+  }
+  return config;
+}
+
+function progressCase(
+  channel: "discord" | "slack",
+  tools: boolean,
+  overrides: Partial<{
+    native: boolean;
+    thread: string;
+    rejectStop: boolean;
+    compact: boolean;
+    failTool: boolean;
+  }> = {},
+) {
+  return { channel, tools, native: false, thread: "root", rejectStop: false, ...overrides };
+}
+
+async function writePluginManifest(directory: string, id: string) {
+  await fs.mkdir(directory);
+  await fs.writeFile(
+    path.join(directory, "openclaw.plugin.json"),
+    JSON.stringify({
+      id,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+  );
+}
+
+function pluginConfig(
+  config: OpenClawConfig,
+  id: string,
+  directory: string,
+): OpenClawConfig["plugins"] {
   return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: { ...config.agents?.defaults, model: { primary: MODEL, fallbacks: [] } },
-      entries: {
-        ...config.agents?.entries,
-        qa: {
-          ...config.agents?.entries?.qa,
-          identity: { name: "Progress QA" },
-          model: { primary: MODEL, fallbacks: [] },
-        },
-      },
-    },
-    messages: {
-      ackReaction: "eyes",
-      ackReactionScope: "all",
-      statusReactions: { enabled: true },
-    },
-    channels: {
-      ...config.channels,
-      ...(channel === "slack"
-        ? {
-            slack: {
-              ...config.channels?.slack,
-              replyToMode: "all",
-              streaming: { ...streaming, nativeTransport: native },
-            },
-          }
-        : {
-            discord: {
-              ...config.channels?.discord,
-              // Crabline emits a fresh guild join with the first input. This proof
-              // owns the ordinary user turn, not the separate welcome-message turn.
-              joinIntro: false,
-              ackReaction: "👀",
-              streaming,
-              commands: { native: false, nativeSkills: false },
-            },
-          }),
-    },
+    ...config.plugins,
+    allow: [...(config.plugins?.allow ?? []), id],
+    load: { ...config.plugins?.load, paths: [...(config.plugins?.load?.paths ?? []), directory] },
+    entries: { ...config.plugins?.entries, [id]: { enabled: true } },
   };
 }
 
@@ -508,22 +651,11 @@ async function startTablePresentationFixture(
   cleanups: Array<() => Promise<void>>,
 ) {
   const { channel, native, tools, compact, rejectStop } = params;
-  const directory = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
-  );
-  cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await createDirectory("channel-progress-", cleanups);
   const mutationPluginId = "qa-progress-mutation";
   const mutationPluginDir = path.join(directory, mutationPluginId);
   if (rejectStop) {
-    await fs.mkdir(mutationPluginDir);
-    await fs.writeFile(
-      path.join(mutationPluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: mutationPluginId,
-        activation: { onStartup: true },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    await writePluginManifest(mutationPluginDir, mutationPluginId);
     // Mutate through the running Gateway so its session owner publishes the route loss.
     await fs.writeFile(
       path.join(mutationPluginDir, "index.mjs"),
@@ -553,17 +685,10 @@ export default {
 };`,
     );
   }
-  const writes: WireWrite[] = [];
-  const adapter = await startOpenClawCrablineAdapter({
-    channel,
-    recorderPath: path.join(directory, "provider.jsonl"),
-  });
-  cleanups.push(() => adapter.close());
-  const api = await startPresentationApi(adapter, writes, directory, {
+  const { writes, adapter, api } = await createPresentationTransport(channel, cleanups, directory, {
     rejectStop,
     clearOrigin: params.clearOrigin,
   });
-  cleanups.push(() => api.stop());
   const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
   cleanups.push(() => provider.stop());
   const owner = createQaGatewayChild();
@@ -577,37 +702,12 @@ export default {
       ),
     }),
   );
-  const environment = adapter.createProviderReadinessEnv({});
-  if (channel === "slack") {
-    environment.SLACK_API_URL = `${api.baseUrl}/api/`;
-  } else {
-    environment.NODE_EXTRA_CA_CERTS = api.caPath;
-  }
   const gateway = await owner.start({
-    repoRoot: process.cwd(),
-    providerBaseUrl: `${provider.baseUrl}/v1`,
-    providerMode: "mock-openai",
-    primaryModel: MODEL,
-    alternateModel: MODEL,
-    controlUiEnabled: false,
-    transportBaseUrl: api.baseUrl,
-    transport: {
-      requiredPluginIds: adapter.requiredPluginIds,
-      createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
-    },
-    runtimeEnvPatch: environment,
+    ...presentationGatewayOptions(adapter, api, `${provider.baseUrl}/v1`),
     mutateConfig: (config) => {
       const configured = progressConfig(config, channel, native, tools, compact);
       if (rejectStop) {
-        configured.plugins = {
-          ...configured.plugins,
-          allow: [...(configured.plugins?.allow ?? []), mutationPluginId],
-          load: {
-            ...configured.plugins?.load,
-            paths: [...(configured.plugins?.load?.paths ?? []), mutationPluginDir],
-          },
-          entries: { ...configured.plugins?.entries, [mutationPluginId]: { enabled: true } },
-        };
+        configured.plugins = pluginConfig(configured, mutationPluginId, mutationPluginDir);
       }
       if (channel === "discord") {
         configured.channels!.discord!.proxy = api.proxyUrl;
@@ -620,17 +720,7 @@ export default {
       return configured;
     },
   });
-  await waitForFact(async () => {
-    const status = asRecord(await gateway.call("channels.status", { probe: false }));
-    const accounts = asRecord(status.channelAccounts)[channel];
-    return (
-      Array.isArray(accounts) &&
-      accounts.some((account) => {
-        const state = asRecord(account);
-        return state.running === true && state.connected === true;
-      })
-    );
-  }, `${channel} ready`);
+  await waitForChannel(gateway, channel, ["running", "connected"]);
   return { writes, adapter, api, gateway };
 }
 
@@ -645,43 +735,19 @@ describe("channel progress presentation through an isolated Gateway", () => {
   afterAll(async () => {
     // The identical Slack cases run last; startup and every acquired owner stay joined through teardown.
     await Promise.allSettled(sharedSlackFixture ? [sharedSlackFixture] : []);
-    const errors: unknown[] = [];
-    for (const cleanup of sharedSlackCleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "shared Slack presentation fixture cleanup failed");
-    }
+    await runQaGatewayFixture(async () => {}, ...sharedSlackCleanups.splice(0).toReversed());
   });
   afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "progress fixture cleanup failed");
-    }
+    await runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed());
   });
 
   it("retires unphased Slack previews across tool-only assistant messages", async () => {
-    const directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "slack-preview-"));
-    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
-    const writes: WireWrite[] = [];
-    const adapter = await startOpenClawCrablineAdapter({
-      channel: "slack",
-      recorderPath: path.join(directory, "provider.jsonl"),
-    });
-    cleanups.push(() => adapter.close());
-    const api = await startPresentationApi(adapter, writes, directory);
-    cleanups.push(() => api.stop());
+    const directory = await createDirectory("slack-preview-", cleanups);
+    const { writes, adapter, api } = await createPresentationTransport(
+      "slack",
+      cleanups,
+      directory,
+    );
     const requestLog = path.join(directory, "model-requests.jsonl");
     const provider = spawn(
       process.execPath,
@@ -731,21 +797,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
-      repoRoot: process.cwd(),
-      // The source QA fixture uses prebuilt dist without installed-package repair.
-      providerBaseUrl: `http://127.0.0.1:${providerPort}/v1`,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
-      alternateModel: MODEL,
-      controlUiEnabled: false,
-      transportBaseUrl: api.baseUrl,
+      ...presentationGatewayOptions(adapter, api, `http://127.0.0.1:${providerPort}/v1`),
       transport: {
         requiredPluginIds: adapter.requiredPluginIds,
         createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
-      },
-      runtimeEnvPatch: {
-        ...adapter.createProviderReadinessEnv({}),
-        SLACK_API_URL: `${api.baseUrl}/api/`,
       },
       mutateConfig: (config) => {
         const configured = progressConfig(config, "slack", false, true);
@@ -759,53 +814,22 @@ describe("channel progress presentation through an isolated Gateway", () => {
         return configured;
       },
     });
-    await waitForFact(async () => {
-      const status = asRecord(await gateway.call("channels.status", { probe: false }));
-      const accounts = asRecord(status.channelAccounts).slack;
-      return (
-        Array.isArray(accounts) && accounts.some((account) => asRecord(account).running === true)
-      );
-    }, "Slack preview ready");
-    const inbound = adapter.createInbound({
-      input: {
-        conversation: { id: "C12345678", kind: "group" },
-        senderId: "U12345678",
-        text: "Inspect the workspace with two exec calls, then report the result.",
-      },
-    });
-    const injected = await fetch(inbound.providerUrl, {
-      method: "POST",
-      headers: inbound.providerHeaders,
-      body: JSON.stringify(inbound.providerBody),
-    });
-    expect(injected.ok, await injected.clone().text()).toBe(true);
+    await waitForChannel(gateway, "slack", ["running"]);
+    const injected = await injectProviderMessage(
+      adapter,
+      "Inspect the workspace with two exec calls, then report the result.",
+    );
     if (adapter.manifest.provider !== "slack") {
       throw new Error("expected Slack fixture");
     }
-    const body = JSON.stringify(asRecord(await injected.json()).event);
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const signature = createHmac("sha256", adapter.manifest.signingSecret)
-      .update(`v0:${timestamp}:${body}`)
-      .digest("hex");
-    const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-slack-request-timestamp": timestamp,
-        "x-slack-signature": `v0=${signature}`,
-      },
-      body,
-    });
-    expect(delivered.ok, await delivered.text()).toBe(true);
+    await deliverSlackEvent(adapter, gateway, asRecord(await injected.json()).event);
     const finalText = "PREVIEW_FINAL_25592";
     await waitForFact(
       () => [...api.messages.values()].some((message) => message.text === finalText),
       "Slack final answer",
     );
     await waitForFact(async () => {
-      const listing = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit: 20 }));
-      const sessions = Array.isArray(listing.sessions) ? listing.sessions.map(asRecord) : [];
-      return sessions.some(
+      return (await listSessions(gateway)).some(
         (session) => String(session.key).includes(":slack:") && session.hasActiveRun === false,
       );
     }, "Slack turn settlement");
@@ -823,48 +847,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
         : [],
     );
     expect(toolResultCounts).toEqual([0, 1, 2]);
-    const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-    await fs.mkdir(evidenceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(evidenceDir, "slack-preview-retirement.json"),
-      JSON.stringify(
-        {
-          kind: "mock-gateway",
-          channel: "slack",
-          status: "pass",
-          providerApi: "openai-completions",
-          previewWasVisible,
-          toolResultCounts,
-          remainingMessages,
-          writes: writes
-            .filter((write) => write.accepted)
-            .map(({ route, accepted }) => ({ route, accepted })),
-        },
-        null,
-        2,
-      ),
-    );
   }, 120_000);
 
   it("records suppressed Slack announcements without claiming delivery", async () => {
-    const directory = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "slack-announce-"),
-    );
-    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+    const directory = await createDirectory("slack-announce-", cleanups);
     const cancelledMarker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
     const deliveredMarker = "QA-SUBAGENT-TERMINAL-RESTART-OK";
     const observerModel = "mock-openai/observer-failure-fixture";
     const pluginId = "qa-announce-suppression";
     const pluginDir = path.join(directory, pluginId);
-    await fs.mkdir(pluginDir);
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        activation: { onStartup: true },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    await writePluginManifest(pluginDir, pluginId);
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `module.exports = {
@@ -875,26 +867,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }
     };`,
     );
-    const writes: WireWrite[] = [];
-    const adapter = await startOpenClawCrablineAdapter({
-      channel: "slack",
-      recorderPath: path.join(directory, "provider.jsonl"),
-    });
-    cleanups.push(() => adapter.close());
-    const api = await startPresentationApi(adapter, writes, directory);
-    cleanups.push(() => api.stop());
+    const { writes, adapter, api } = await createPresentationTransport(
+      "slack",
+      cleanups,
+      directory,
+    );
     const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL, observerModel] });
     cleanups.push(() => provider.stop());
     const completions: string[] = [];
     const tasks: Array<Record<string, unknown>> = [];
-    const inboundMessages: Array<Record<string, unknown>> = [];
-    const providerRequests: Array<{
-      model: unknown;
-      requester: boolean;
-      completion: boolean;
-      requestText: string;
-    }> = [];
-    let observerRequests = 0;
     let releaseRequester: (() => void) | undefined;
     let requesterHeld = false;
     const slowRequesterCases = new Set<string>();
@@ -907,16 +888,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
         .flatMap((line) => {
           try {
             const value = asRecord(JSON.parse(line));
-            const message = readStringValue(value.message) ?? "";
-            return message === "session observer disabled after consecutive failures"
-              ? [
-                  {
-                    message,
-                    error: value.error,
-                    runId: value.runId,
-                    attempts: value.consecutiveFailures,
-                  },
-                ]
+            return value.message === "session observer disabled after consecutive failures"
+              ? [value]
               : [];
           } catch {
             return [];
@@ -924,202 +897,86 @@ describe("channel progress presentation through an isolated Gateway", () => {
         });
     // The shared terminal fixture intentionally requests a direct fallback.
     // Supply a visible model final over HTTP to exercise automatic-final receipts.
-    const proxy = createServer((request, response) => {
-      void (async () => {
-        const buffers: Buffer[] = [];
-        for await (const chunk of request) {
-          buffers.push(Buffer.from(chunk));
-        }
-        const raw = Buffer.concat(buffers).toString("utf8");
-        const body = parseBody(raw);
-        const turn = resolveMockSubagentTurn(normalizeResponsesInput(body.input));
-        const currentText = turn?.text ?? "";
-        const completion = turn?.kind === "completion" || turn?.kind === "settled";
-        providerRequests.push({
-          model: body.model,
-          requester: currentText.includes("Subagent terminal reply QA check:"),
-          completion,
-          requestText: currentText.slice(0, 1_000),
+    const providerBaseUrl = await startProviderProxy(cleanups, async (request, response, raw) => {
+      const body = parseBody(raw);
+      const turn = resolveMockSubagentTurn(normalizeResponsesInput(body.input));
+      const currentText = turn?.text ?? "";
+      const completion = turn?.kind === "completion" || turn?.kind === "settled";
+      if (String(body.model).endsWith("observer-failure-fixture")) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: { type: "invalid_request_error", message: "synthetic observer failure" },
+          }),
+        );
+        return;
+      }
+      if (!requesterHeld && currentText.includes("Subagent terminal reply QA check:")) {
+        requesterHeld = true;
+        await new Promise<void>((resolve) => {
+          releaseRequester = resolve;
         });
-        if (String(parseBody(raw).model).endsWith("observer-failure-fixture")) {
-          observerRequests += 1;
-          response.writeHead(400, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              error: { type: "invalid_request_error", message: "synthetic observer failure" },
-            }),
-          );
-          return;
-        }
-        if (!requesterHeld && currentText.includes("Subagent terminal reply QA check:")) {
-          requesterHeld = true;
-          await new Promise<void>((resolve) => {
-            releaseRequester = resolve;
-          });
-        }
-        const marker = completion
-          ? [deliveredMarker, cancelledMarker].find((candidate) => currentText.includes(candidate))
-          : undefined;
-        if (marker) {
-          completions.push(marker);
-          sendCompletionResponse(response, marker, completions.length);
-          return;
-        }
-        const requesterCase = [
-          ...currentText.matchAll(/Subagent terminal reply QA check: (visible|restart)/g),
-        ].at(-1)?.[1];
-        if (requesterCase && !slowRequesterCases.has(requesterCase)) {
-          slowRequesterCases.add(requesterCase);
-          // A deliberately slow provider crosses the observer's 30s final-digest
-          // threshold; this is scenario input, not a wait for eventual delivery.
-          await sleep(31_000);
-        }
-        const workerCase = /Subagent terminal reply QA worker:\s*(visible|restart)/i
-          .exec(currentText)?.[1]
-          ?.toLowerCase();
-        if (workerCase) {
-          // Child completion starts another requester run. Keep it pending until
-          // the current observer records its outcome, or that run is superseded.
-          await waitForFact(
-            () =>
-              observerFailures().length ===
-              caseNames.findIndex((caseName) => caseName === workerCase) * 2 + 1,
-            `${workerCase} requester observer settled before child completion`,
-          );
-          settledRequesterCases.push(workerCase);
-        }
-        const upstream = await fetch(new URL(request.url ?? "/", provider.baseUrl), {
-          method: request.method,
-          headers: {
-            "content-type": "application/json",
-            ...(typeof request.headers.session_id === "string"
-              ? { session_id: request.headers.session_id }
-              : {}),
-            ...(typeof request.headers["x-session-affinity"] === "string"
-              ? { "x-session-affinity": request.headers["x-session-affinity"] }
-              : {}),
-          },
-          ...(request.method === "POST" ? { body: raw } : {}),
-        });
-        response.writeHead(upstream.status, {
-          "content-type": upstream.headers.get("content-type") ?? "application/json",
-        });
-        response.end(await upstream.text());
-      })().catch(() => response.writeHead(500).end("synthetic provider proxy failed"));
-    });
-    await new Promise<void>((resolve) => {
-      proxy.listen(0, "127.0.0.1", resolve);
-    });
-    cleanups.push(async () => {
-      proxy.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        proxy.close((error) => (error ? reject(error) : resolve()));
+      }
+      const marker = completion
+        ? [deliveredMarker, cancelledMarker].find((candidate) => currentText.includes(candidate))
+        : undefined;
+      if (marker) {
+        completions.push(marker);
+        sendCompletionResponse(response, marker, completions.length);
+        return;
+      }
+      const requesterCase = [
+        ...currentText.matchAll(/Subagent terminal reply QA check: (visible|restart)/g),
+      ].at(-1)?.[1];
+      if (requesterCase && !slowRequesterCases.has(requesterCase)) {
+        slowRequesterCases.add(requesterCase);
+        // A deliberately slow provider crosses the observer's 30s final-digest
+        // threshold; this is scenario input, not a wait for eventual delivery.
+        await sleep(31_000);
+      }
+      const workerCase = /Subagent terminal reply QA worker:\s*(visible|restart)/i
+        .exec(currentText)?.[1]
+        ?.toLowerCase();
+      if (workerCase) {
+        // Child completion starts another requester run. Keep it pending until
+        // the current observer records its outcome, or that run is superseded.
+        await waitForFact(
+          () =>
+            observerFailures().length ===
+            caseNames.findIndex((caseName) => caseName === workerCase) * 2 + 1,
+          `${workerCase} requester observer settled before child completion`,
+        );
+        settledRequesterCases.push(workerCase);
+      }
+      const upstream = await forwardProvider(request, raw, provider.baseUrl);
+      response.writeHead(upstream.status, {
+        "content-type": upstream.headers.get("content-type") ?? "application/json",
       });
+      response.end(await upstream.text());
     });
-    const address = proxy.address();
-    if (!address || typeof address === "string") {
-      throw new Error("provider proxy did not bind");
-    }
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
-      repoRoot: process.cwd(),
-      providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      ...presentationGatewayOptions(adapter, api, providerBaseUrl),
       mockSessionObserverUrl: provider.sessionObserverUrl,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
       alternateModel: observerModel,
-      controlUiEnabled: false,
-      transportBaseUrl: api.baseUrl,
-      transport: {
-        requiredPluginIds: adapter.requiredPluginIds,
-        createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
+      mutateConfig: (config) => {
+        config.logging = { ...config.logging, consoleStyle: "json" };
+        const agents = (config.agents ??= {});
+        agents.defaults = { ...agents.defaults, utilityModel: observerModel };
+        const entries = (agents.entries ??= {});
+        entries.qa = { ...entries.qa, utilityModel: observerModel };
+        config.plugins = pluginConfig(config, pluginId, pluginDir);
+        const channels = (config.channels ??= {});
+        channels.slack = {
+          ...channels.slack,
+          replyToMode: "all",
+          streaming: { mode: "off" },
+        };
+        return config;
       },
-      runtimeEnvPatch: {
-        ...adapter.createProviderReadinessEnv({}),
-        SLACK_API_URL: `${api.baseUrl}/api/`,
-      },
-      mutateConfig: (config) => ({
-        ...config,
-        logging: { ...config.logging, consoleStyle: "json" },
-        agents: {
-          ...config.agents,
-          defaults: { ...config.agents?.defaults, utilityModel: observerModel },
-          entries: {
-            ...config.agents?.entries,
-            qa: { ...config.agents?.entries?.qa, utilityModel: observerModel },
-          },
-        },
-        plugins: {
-          ...config.plugins,
-          allow: [...(config.plugins?.allow ?? []), pluginId],
-          load: {
-            ...config.plugins?.load,
-            paths: [...(config.plugins?.load?.paths ?? []), pluginDir],
-          },
-          entries: { ...config.plugins?.entries, [pluginId]: { enabled: true } },
-        },
-        channels: {
-          ...config.channels,
-          slack: { ...config.channels?.slack, replyToMode: "all", streaming: { mode: "off" } },
-        },
-      }),
     });
-    cleanups.push(async () => {
-      const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      await fs.mkdir(evidenceDir, { recursive: true });
-      const root = inboundMessages[0];
-      const mockThread =
-        root && adapter.manifest.provider === "slack"
-          ? asRecord(
-              await (
-                await fetch(`${adapter.manifest.baseUrl}/api/conversations.replies`, {
-                  method: "POST",
-                  headers: {
-                    "content-type": "application/json",
-                    authorization: `Bearer ${adapter.manifest.botToken}`,
-                  },
-                  body: JSON.stringify({ channel: root.channel, ts: root.ts, limit: 100 }),
-                })
-              ).json(),
-            )
-          : {};
-      await fs.writeFile(
-        path.join(evidenceDir, "slack-announcement-diagnostics.json"),
-        JSON.stringify(
-          {
-            providerRequests,
-            completions,
-            tasks,
-            inboundMessages,
-            mockThreadMessages: Array.isArray(mockThread.messages)
-              ? mockThread.messages
-                  .map(asRecord)
-                  .map(({ channel, ts, thread_ts }) => ({ channel, ts, thread_ts }))
-              : mockThread,
-            slackSends: writes
-              .filter((write) => write.route.endsWith("chat.postMessage"))
-              .map(({ body, accepted, rejected }) => ({
-                channel: body.channel,
-                thread_ts: body.thread_ts,
-                text: body.text,
-                accepted,
-                rejected,
-              })),
-            logs: gateway.logs().replaceAll(gateway.token, "[redacted]"),
-          },
-          null,
-          2,
-        ),
-      );
-    });
-    await waitForFact(async () => {
-      const status = asRecord(await gateway.call("channels.status", { probe: false }));
-      const accounts = asRecord(status.channelAccounts).slack;
-      return (
-        Array.isArray(accounts) && accounts.some((account) => asRecord(account).running === true)
-      );
-    }, "Slack ready");
+    await waitForChannel(gateway, "slack", ["running"]);
     const observerEvents: Array<Record<string, unknown>> = [];
     const client = await connectGatewayClient({
       url: gateway.wsUrl,
@@ -1135,91 +992,47 @@ describe("channel progress presentation through an isolated Gateway", () => {
     await client.request("sessions.observer.visibility", { visible: true });
     let threadId: string | undefined;
     for (const [caseIndex, caseName] of caseNames.entries()) {
-      const inbound = adapter.createInbound({
-        input: {
-          conversation: { id: "C12345678", kind: "group" },
-          senderId: "U12345678",
-          threadId,
-          text: `Subagent terminal reply QA check: ${caseName}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`,
-        },
-      });
-      const injected = await fetch(inbound.providerUrl, {
-        method: "POST",
-        headers: inbound.providerHeaders,
-        body: JSON.stringify(inbound.providerBody),
-      });
-      expect(injected.ok).toBe(true);
+      const injected = await injectProviderMessage(
+        adapter,
+        `Subagent terminal reply QA check: ${caseName}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`,
+        "C12345678",
+        threadId,
+      );
       if (adapter.manifest.provider !== "slack") {
         throw new Error("expected Slack fixture");
       }
       const receipt = asRecord(await injected.json());
-      const event = asRecord(asRecord(receipt.event).event);
-      inboundMessages.push({ channel: event.channel, ts: event.ts, thread_ts: event.thread_ts });
       threadId ??= readStringValue(asRecord(receipt.message).ts);
       expect(threadId).toBeTypeOf("string");
-      const body = JSON.stringify(receipt.event);
-      const timestamp = String(Math.floor(Date.now() / 1000));
-      const signature = createHmac("sha256", adapter.manifest.signingSecret)
-        .update(`v0:${timestamp}:${body}`)
-        .digest("hex");
-      const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-slack-request-timestamp": timestamp,
-          "x-slack-signature": `v0=${signature}`,
-        },
-        body,
-      });
-      expect(
-        delivered.ok,
-        `HTTP ${delivered.status}: ${(await delivered.text()).slice(0, 2000)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
-      ).toBe(true);
+      await deliverSlackEvent(adapter, gateway, receipt.event);
       if (caseName === "visible") {
-        await waitForFact(() => Boolean(releaseRequester), "requester model admission").catch(
-          (error: unknown) => {
-            throw new Error(
-              `${String(error)}; requests=${JSON.stringify(providerRequests)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
-              { cause: error },
-            );
-          },
+        await waitForFact(() => Boolean(releaseRequester), "requester model admission");
+        const session = (await listSessions(gateway)).find((entry) =>
+          String(entry.key).includes(":slack:"),
         );
-        const listing = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit: 20 }));
-        const session = Array.isArray(listing.sessions)
-          ? listing.sessions.map(asRecord).find((entry) => String(entry.key).includes(":slack:"))
-          : undefined;
         expect(session?.key).toBeTypeOf("string");
         await client.request("sessions.messages.subscribe", { key: session!.key, agentId: "qa" });
         releaseRequester!();
       }
       let terminalTask: Record<string, unknown> | undefined;
-      try {
-        await waitForFact(async () => {
-          await provider.terminalRequesters.settle(gateway);
-          const run = readQaSubagentRuns(gateway.runtimeEnv).find(
-            (entry) => entry.label === `qa-terminal-${caseName}`,
-          );
-          terminalTask = run
-            ? {
-                runId: run.runId,
-                title: run.label,
-                sessionKey: run.requesterSessionKey,
-                status: run.execution.status,
-                deliveryStatus: run.delivery?.status,
-                error: run.delivery?.lastError,
-              }
-            : undefined;
-          return (
-            terminalTask?.status === "terminal" &&
-            ["failed", "delivered"].includes(String(terminalTask.deliveryStatus))
-          );
-        }, `settled ${caseName} task`);
-      } catch (error) {
-        throw new Error(
-          `${String(error)}; task=${JSON.stringify(terminalTask)}; completions=${JSON.stringify(completions)}; logs=${gateway.logs().slice(-6000)}`,
-          { cause: error },
+      await waitForFact(async () => {
+        await provider.terminalRequesters.settle(gateway);
+        const run = readQaSubagentRuns(gateway.runtimeEnv).find(
+          (entry) => entry.label === `qa-terminal-${caseName}`,
         );
-      }
+        terminalTask = run
+          ? {
+              sessionKey: run.requesterSessionKey,
+              status: run.execution.status,
+              deliveryStatus: run.delivery?.status,
+              error: run.delivery?.lastError,
+            }
+          : undefined;
+        return (
+          terminalTask?.status === "terminal" &&
+          ["failed", "delivered"].includes(String(terminalTask.deliveryStatus))
+        );
+      }, `settled ${caseName} task`);
       tasks.push(terminalTask!);
       expect(terminalTask?.deliveryStatus, JSON.stringify(terminalTask)).toBe(
         caseName === "visible" ? "failed" : "delivered",
@@ -1257,57 +1070,21 @@ describe("channel progress presentation through an isolated Gateway", () => {
     ).toBe(true);
     // The observer warning carries its run-owned consecutive-failure count;
     // provider transport starts from overlapping runs cannot be partitioned by warning order.
-    expect(observerFailures().every((failure) => failure.attempts === 2)).toBe(true);
+    expect(observerFailures().every((failure) => failure.consecutiveFailures === 2)).toBe(true);
     expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
-    const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-    await fs.mkdir(evidenceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(evidenceDir, "slack-announcement-receipts.json"),
-      JSON.stringify(
-        {
-          kind: "mock-gateway",
-          channel: "slack",
-          status: "pass",
-          completions,
-          tasks: tasks.map(({ title, status, deliveryStatus, error }) => ({
-            title,
-            status,
-            deliveryStatus,
-            error,
-          })),
-          suppressedSlackWrites: 0,
-          deliveredSlackMessages: 1,
-          observerRequests,
-          observerFailures: observerFailures().map(({ message, error, runId, attempts }) => ({
-            message,
-            error,
-            runId,
-            attempts,
-          })),
-          observedRuns: new Set(observerEvents.map((event) => event.runId)).size,
-        },
-        null,
-        2,
-      ),
-    );
   }, 240_000);
 
   it("retains ambiguous Discord announcement custody after an unidentified send", async () => {
-    const directory = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "discord-announce-"),
-    );
-    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+    const directory = await createDirectory("discord-announce-", cleanups);
     const marker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
-    const writes: WireWrite[] = [];
-    const adapter = await startOpenClawCrablineAdapter({
-      channel: "discord",
-      recorderPath: path.join(directory, "provider.jsonl"),
-    });
-    cleanups.push(() => adapter.close());
-    const api = await startPresentationApi(adapter, writes, directory, {
-      unidentifiedFinalMarker: marker,
-    });
-    cleanups.push(() => api.stop());
+    const { writes, adapter, api } = await createPresentationTransport(
+      "discord",
+      cleanups,
+      directory,
+      {
+        unidentifiedFinalMarker: marker,
+      },
+    );
     const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
     cleanups.push(() => provider.stop());
     let completions = 0;
@@ -1317,141 +1094,88 @@ describe("channel progress presentation through an isolated Gateway", () => {
     let parentAcknowledged = false;
     let taskRunId: string | undefined;
     let childSessionKey: string | undefined;
-    const providerRequests: Array<Record<string, unknown>> = [];
-    const proxy = createServer((request, response) => {
-      void (async () => {
-        const buffers: Buffer[] = [];
-        for await (const chunk of request) {
-          buffers.push(Buffer.from(chunk));
-        }
-        const raw = Buffer.concat(buffers).toString("utf8");
-        const turn = resolveMockSubagentTurn(normalizeResponsesInput(parseBody(raw).input));
-        const currentText = turn?.text ?? "";
-        const completion = turn?.kind === "completion" || turn?.kind === "settled";
-        const worker =
-          !completion && /Subagent terminal reply QA worker:\s*visible/i.test(currentText);
-        const requester =
-          !completion && !worker && currentText.includes("Subagent terminal reply QA check:");
-        providerRequests.push({
-          requester,
-          worker,
-          completion,
-          currentText: currentText.slice(0, 500),
-        });
-        if ((requester && !requesterSessionId) || worker) {
-          await waitForFact(
-            async () => {
-              const listing = asRecord(await gateway.call("sessions.list", { limit: 100 }));
-              const row = Array.isArray(listing.sessions)
-                ? listing.sessions.map(asRecord).find((session) => session.key === requesterKey)
-                : undefined;
-              if (requester) {
-                if (row?.hasActiveRun !== true || typeof row.sessionId !== "string") {
-                  return false;
-                }
-                requesterSessionId = row.sessionId;
-                return true;
+    const providerBaseUrl = await startProviderProxy(cleanups, async (request, response, raw) => {
+      const turn = resolveMockSubagentTurn(normalizeResponsesInput(parseBody(raw).input));
+      const currentText = turn?.text ?? "";
+      const completion = turn?.kind === "completion" || turn?.kind === "settled";
+      const worker =
+        !completion && /Subagent terminal reply QA worker:\s*visible/i.test(currentText);
+      const requester =
+        !completion && !worker && currentText.includes("Subagent terminal reply QA check:");
+      if ((requester && !requesterSessionId) || worker) {
+        await waitForFact(
+          async () => {
+            const listing = asRecord(await gateway.call("sessions.list", { limit: 100 }));
+            const row = Array.isArray(listing.sessions)
+              ? listing.sessions.map(asRecord).find((session) => session.key === requesterKey)
+              : undefined;
+            if (requester) {
+              if (row?.hasActiveRun !== true || typeof row.sessionId !== "string") {
+                return false;
               }
-              // Exercise idle announcement delivery, not the active-requester handoff.
-              // The exact admitted session must finish before the child provider replies.
-              requesterSettledBeforeWorker = Boolean(
-                requesterSessionId &&
-                row?.sessionId === requesterSessionId &&
-                row.hasActiveRun === false,
-              );
-              return requesterSettledBeforeWorker;
-            },
-            requester ? "requester admission" : "requester terminal before worker completion",
+              requesterSessionId = row.sessionId;
+              return true;
+            }
+            // Exercise idle announcement delivery, not the active-requester handoff.
+            // The exact admitted session must finish before the child provider replies.
+            requesterSettledBeforeWorker = Boolean(
+              requesterSessionId &&
+              row?.sessionId === requesterSessionId &&
+              row.hasActiveRun === false,
+            );
+            return requesterSettledBeforeWorker;
+          },
+          requester ? "requester admission" : "requester terminal before worker completion",
+        );
+      }
+      if (completion && currentText.includes(marker)) {
+        sendCompletionResponse(response, marker, ++completions);
+        return;
+      }
+      const upstream = await forwardProvider(request, raw, provider.baseUrl);
+      const upstreamText = await upstream.text();
+      if (requester && upstream.ok) {
+        const snapshots: unknown = await fetch(`${provider.baseUrl}/debug/requests`).then(
+          (snapshotResponse) => snapshotResponse.json(),
+        );
+        const snapshot = Array.isArray(snapshots)
+          ? snapshots.map(asRecord).findLast((entry) => entry.raw === raw)
+          : undefined;
+        const toolOutput = parseBody(readStringValue(snapshot?.toolOutput) ?? "");
+        const spawned =
+          asRecord(toolOutput.tool).name === "sessions_spawn"
+            ? asRecord(asRecord(toolOutput.result).details)
+            : toolOutput;
+        const acceptedRunId = readStringValue(spawned.runId);
+        const acceptedChildSessionKey = readStringValue(spawned.childSessionKey);
+        if (
+          snapshot?.requestKind === "tool-continuation" &&
+          spawned.status === "accepted" &&
+          acceptedRunId &&
+          acceptedChildSessionKey
+        ) {
+          // A normal final acknowledgement leaves completion with the child.
+          parentAcknowledged = true;
+          taskRunId = acceptedRunId;
+          childSessionKey = acceptedChildSessionKey;
+          sendCompletionResponse(
+            response,
+            "The worker is running; I will send its result here.",
+            0,
           );
-        }
-        if (completion && currentText.includes(marker)) {
-          sendCompletionResponse(response, marker, ++completions);
           return;
         }
-        const upstream = await fetch(new URL(request.url ?? "/", provider.baseUrl), {
-          method: request.method,
-          headers: {
-            "content-type": "application/json",
-            ...(typeof request.headers.session_id === "string"
-              ? { session_id: request.headers.session_id }
-              : {}),
-            ...(typeof request.headers["x-session-affinity"] === "string"
-              ? { "x-session-affinity": request.headers["x-session-affinity"] }
-              : {}),
-          },
-          ...(request.method === "POST" ? { body: raw } : {}),
-        });
-        const upstreamText = await upstream.text();
-        if (requester && upstream.ok) {
-          const snapshots: unknown = await fetch(`${provider.baseUrl}/debug/requests`).then(
-            (snapshotResponse) => snapshotResponse.json(),
-          );
-          const snapshot = Array.isArray(snapshots)
-            ? snapshots.map(asRecord).findLast((entry) => entry.raw === raw)
-            : undefined;
-          const toolOutput = parseBody(readStringValue(snapshot?.toolOutput) ?? "");
-          const spawned =
-            asRecord(toolOutput.tool).name === "sessions_spawn"
-              ? asRecord(asRecord(toolOutput.result).details)
-              : toolOutput;
-          const acceptedRunId = readStringValue(spawned.runId);
-          const acceptedChildSessionKey = readStringValue(spawned.childSessionKey);
-          if (
-            snapshot?.requestKind === "tool-continuation" &&
-            spawned.status === "accepted" &&
-            acceptedRunId &&
-            acceptedChildSessionKey
-          ) {
-            // A normal final acknowledgement leaves completion with the child.
-            parentAcknowledged = true;
-            taskRunId = acceptedRunId;
-            childSessionKey = acceptedChildSessionKey;
-            sendCompletionResponse(
-              response,
-              "The worker is running; I will send its result here.",
-              0,
-            );
-            return;
-          }
-        }
-        response.writeHead(upstream.status, {
-          "content-type": upstream.headers.get("content-type") ?? "application/json",
-        });
-        response.end(upstreamText);
-      })().catch(() => response.writeHead(500).end("synthetic provider proxy failed"));
-    });
-    await new Promise<void>((resolve) => {
-      proxy.listen(0, "127.0.0.1", resolve);
-    });
-    cleanups.push(async () => {
-      proxy.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        proxy.close((error) => (error ? reject(error) : resolve()));
+      }
+      response.writeHead(upstream.status, {
+        "content-type": upstream.headers.get("content-type") ?? "application/json",
       });
+      response.end(upstreamText);
     });
-    const address = proxy.address();
-    if (!address || typeof address === "string") {
-      throw new Error("provider proxy did not bind");
-    }
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
-      repoRoot: process.cwd(),
-      providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      ...presentationGatewayOptions(adapter, api, providerBaseUrl),
       mockSessionObserverUrl: provider.sessionObserverUrl,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
-      alternateModel: MODEL,
-      controlUiEnabled: false,
-      transportBaseUrl: api.baseUrl,
-      transport: {
-        requiredPluginIds: adapter.requiredPluginIds,
-        createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
-      },
-      runtimeEnvPatch: {
-        ...adapter.createProviderReadinessEnv({}),
-        NODE_EXTRA_CA_CERTS: api.caPath,
-      },
       mutateConfig: (config) => ({
         ...config,
         channels: {
@@ -1467,79 +1191,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
         tools: { ...config.tools, codeMode: false, toolSearch: false },
       }),
     });
-    let task: Record<string, unknown> | undefined;
-    let taskRuns: unknown[] = [];
-    let allTaskSummaries: unknown[] = [];
+    let task: ReturnType<typeof readQaSubagentRuns>[number] | undefined;
+    let taskRuns: ReturnType<typeof readQaSubagentRuns> = [];
     let queued: { recoveryState?: string; lastError?: string } | undefined;
-    let queueRows: unknown[] = [];
-    let delivery:
-      | { status?: string; disposition?: string; nextAttemptAt?: number; lastError?: string | null }
-      | undefined;
-    const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-    cleanups.push(async () => {
-      await fs.mkdir(evidenceDir, { recursive: true });
-      await fs.writeFile(
-        path.join(evidenceDir, "discord-announcement-diagnostics.json"),
-        JSON.stringify(
-          {
-            task,
-            taskRuns,
-            taskRunId,
-            childSessionKey,
-            allTaskSummaries,
-            requesterSessionId,
-            requesterSettledBeforeWorker,
-            parentAcknowledged,
-            providerRequests,
-            upstreamRequests: await fetch(`${provider.baseUrl}/debug/requests`).then(
-              async (response) => {
-                const requests: unknown = await response.json();
-                return Array.isArray(requests)
-                  ? requests.map((request) => {
-                      const record = asRecord(request);
-                      const args = asRecord(record.plannedToolArgs);
-                      return {
-                        requestKind: record.requestKind,
-                        plannedToolName: record.plannedToolName,
-                        label: args.label,
-                        task: readStringValue(args.task)?.slice(0, 300),
-                      };
-                    })
-                  : [];
-              },
-            ),
-            queued,
-            queueRows,
-            delivery,
-            completions,
-            writes,
-            logs: gateway.logs().replaceAll(gateway.token, "[redacted]"),
-          },
-          null,
-          2,
-        ),
-      );
-    });
-    await waitForFact(async () => {
-      const status = asRecord(await gateway.call("channels.status", { probe: false }));
-      const accounts = asRecord(status.channelAccounts).discord;
-      return (
-        Array.isArray(accounts) && accounts.some((account) => asRecord(account).connected === true)
-      );
-    }, "Discord ready");
-    const inbound = adapter.createInbound({
-      input: {
-        conversation: { id: "123456789012345678", kind: "group" },
-        senderId: "123456789012345679",
-        text: "Subagent terminal reply QA check: visible. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.",
-      },
-    });
-    const injected = await fetch(inbound.providerUrl, {
-      method: "POST",
-      headers: inbound.providerHeaders,
-      body: JSON.stringify(inbound.providerBody),
-    });
-    expect(injected.ok, await injected.text()).toBe(true);
+    let delivery: { status?: string; disposition?: string } | undefined;
+    await waitForChannel(gateway, "discord", ["connected"]);
+    const injected = await injectProviderMessage(
+      adapter,
+      "Subagent terminal reply QA check: visible. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.",
+    );
+    await injected.arrayBuffer();
     const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
@@ -1547,25 +1208,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
     await waitForFact(async () => {
       await provider.terminalRequesters.settle(gateway);
       const runs = readQaSubagentRuns(gateway.runtimeEnv);
-      const summaries = runs.map((run) => ({
-        runId: run.runId,
-        title: run.label,
-        status: run.execution.status,
-        deliveryStatus: run.delivery?.status,
-      }));
-      allTaskSummaries = summaries;
-      taskRuns = summaries.filter((entry) => entry.runId === taskRunId);
-      task = summaries.find((entry) => entry.runId === taskRunId);
-      const run = runs.find((entry) => entry.runId === taskRunId);
-      delivery =
-        run?.childSessionKey === childSessionKey && run?.delivery
-          ? {
-              status: run.delivery.status,
-              disposition: run.delivery.disposition,
-              nextAttemptAt: run.delivery.nextAttemptAt,
-              lastError: run.delivery.lastError,
-            }
-          : undefined;
+      taskRuns = runs.filter((entry) => entry.runId === taskRunId);
+      task = taskRuns[0];
+      const run = task;
+      delivery = run?.childSessionKey === childSessionKey ? run?.delivery : undefined;
       // The child Gateway cannot invalidate this process's physical-database queue cache.
       // Read committed rows directly, retaining the canonical filters and projection.
       const pendingRows = withOpenClawStateDatabaseReadOnly(
@@ -1582,23 +1228,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
           }),
         { env: gateway.runtimeEnv },
       );
-      queueRows = pendingRows.map(({ id, channel, to, recoveryState, lastError }) => ({
-        id,
-        channel,
-        to,
-        recoveryState,
-        lastError,
-      }));
       const pending = pendingRows.find(
         (entry) =>
           entry.channel === "discord" &&
           entry.lastError === "platform send returned no delivery identity",
       );
-      queued = pending
-        ? { recoveryState: pending.recoveryState, lastError: pending.lastError }
-        : undefined;
+      queued = pending;
       return (
-        task?.status === "terminal" &&
+        task?.execution.status === "terminal" &&
         delivery?.disposition === "ambiguous" &&
         Boolean(queued) &&
         gateway.logs().includes("automatic completion delivery could not be confirmed")
@@ -1616,70 +1253,23 @@ describe("channel progress presentation through an isolated Gateway", () => {
       ),
     ).toHaveLength(1);
     expect(completions).toBe(1);
-    await fs.mkdir(evidenceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(evidenceDir, "discord-announcement-receipts.json"),
-      JSON.stringify(
-        {
-          kind: "mock-gateway",
-          channel: "discord",
-          status: "pass",
-          taskDeliveryStatus: task?.deliveryStatus,
-          delivery,
-          queued,
-          acceptedMessages: 1,
-          omittedResponseIdentities: 1,
-          completions,
-        },
-        null,
-        2,
-      ),
-    );
   }, 180_000);
 
   it.each([
-    { channel: "discord" as const, native: false, thread: "root", rejectStop: false, tools: true },
-    { channel: "discord" as const, native: false, thread: "root", rejectStop: false, tools: false },
-    { channel: "slack" as const, native: true, thread: "root", rejectStop: false, tools: true },
-    { channel: "slack" as const, native: true, thread: "root", rejectStop: false, tools: false },
-    { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: false },
-    { channel: "slack" as const, native: true, thread: "root", rejectStop: true, tools: true },
-    {
-      channel: "slack" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: false,
-      compact: true,
-    },
-    {
-      channel: "slack" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: true,
-      compact: true,
-    },
-    {
-      channel: "discord" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: false,
-      failTool: true,
-    },
-    {
-      channel: "discord" as const,
-      native: false,
-      thread: "root",
-      rejectStop: false,
-      tools: true,
-      failTool: true,
-    },
+    progressCase("discord", true),
+    progressCase("discord", false),
+    progressCase("slack", true, { native: true }),
+    progressCase("slack", false, { native: true }),
+    progressCase("slack", false),
+    progressCase("slack", true, { native: true, rejectStop: true }),
+    progressCase("slack", false, { compact: true }),
+    progressCase("slack", true, { compact: true }),
+    progressCase("discord", false, { failTool: true }),
+    progressCase("discord", true, { failTool: true }),
     // Keep this static fixture last so no other Gateway overlaps its lifetime.
-    { channel: "slack" as const, native: false, thread: "root", rejectStop: false, tools: true },
-    { channel: "slack" as const, native: false, thread: "reply", rejectStop: false, tools: true },
-    { channel: "slack" as const, native: false, thread: "current", rejectStop: false, tools: true },
+    progressCase("slack", true),
+    progressCase("slack", true, { thread: "reply" }),
+    progressCase("slack", true, { thread: "current" }),
   ])(
     "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools, compact=$compact, failTool=$failTool)",
     async ({ channel, native, thread, rejectStop, tools, compact = false, failTool = false }) => {
@@ -1727,37 +1317,23 @@ describe("channel progress presentation through an isolated Gateway", () => {
         expect(result.delivery).toEqual({ kind: "none" });
       };
       let expectedThreadTs: unknown;
-      const injectProviderMessage = async (text: string, threadId?: string) => {
-        const inbound = adapter.createInbound({
-          input: {
-            conversation: {
-              id: conversationId,
-              kind: "group",
-            },
-            senderId: channel === "slack" ? "U12345678" : "123456789012345679",
-            text,
-            ...(threadId ? { threadId } : {}),
-          },
-        });
-        const injected = await fetch(inbound.providerUrl, {
-          method: "POST",
-          headers: inbound.providerHeaders,
-          body: JSON.stringify(inbound.providerBody),
-        });
-        expect(injected.ok).toBe(true);
-        return injected;
-      };
       let threadId: string | undefined;
       let inboundMessageId: unknown;
       if (thread !== "root") {
         // Seed only the provider's root; the Gateway receives the child below.
-        const root = asRecord(await (await injectProviderMessage("Original Slack thread")).json());
+        const root = asRecord(
+          await (
+            await injectProviderMessage(adapter, "Original Slack thread", conversationId)
+          ).json(),
+        );
         threadId = readStringValue(asRecord(root.message).ts);
         expect(threadId).toEqual(expect.any(String));
       }
       const finalText = `${thread === "current" ? "[[reply_to_current]] " : ""}${FINAL_MARKER}`;
       const injected = await injectProviderMessage(
+        adapter,
         `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${failTool ? "sleep 2; exit 1" : "sleep 2"}\`. After that command completes or fails, reply exactly \`${finalText}\`.`,
+        conversationId,
         threadId,
       );
       if (adapter.manifest.provider === "slack") {
@@ -1769,21 +1345,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           expect(event.thread_ts).toBe(threadId);
           expect(inboundMessageId).not.toBe(threadId);
         }
-        const body = JSON.stringify(payload.event);
-        const timestamp = String(Math.floor(Date.now() / 1000));
-        const signature = createHmac("sha256", adapter.manifest.signingSecret)
-          .update(`v0:${timestamp}:${body}`)
-          .digest("hex");
-        const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-slack-request-timestamp": timestamp,
-            "x-slack-signature": `v0=${signature}`,
-          },
-          body,
-        });
-        expect(delivered.ok, `HTTP ${delivered.status}: ${await delivered.text()}`).toBe(true);
+        await deliverSlackEvent(adapter, gateway, payload.event);
       } else {
         await injected.arrayBuffer();
       }
@@ -1800,39 +1362,19 @@ describe("channel progress presentation through an isolated Gateway", () => {
       if (!rejectStop) {
         await waitForFact(() => finalMessages().length > 0, "accepted final answer");
       }
-      try {
-        await waitForFact(
-          () =>
-            channel === "discord"
-              ? caseWrites().some(
-                  (write) => write.method === "DELETE" && !write.route.includes("/reactions/"),
-                )
-              : native
-                ? caseWrites().some((write) => write.route.endsWith("chat.stopStream"))
-                : caseWrites().some((write) =>
-                    write.route.endsWith(compact ? "chat.delete" : "chat.update"),
-                  ),
-          "progress finalization",
-        );
-      } catch (error) {
-        process.stderr.write(
-          `${redactSensitiveText(
-            JSON.stringify({
-              originCleared,
-              writes: caseWrites()
-                .slice(-80)
-                .map(({ at, method, route, accepted, rejected }) => ({
-                  at,
-                  method,
-                  route: route.slice(0, 250),
-                  accepted: accepted && { id: accepted.id, action: accepted.action },
-                  rejected,
-                })),
-            }),
-          )}\n`,
-        );
-        throw error;
-      }
+      await waitForFact(
+        () =>
+          channel === "discord"
+            ? caseWrites().some(
+                (write) => write.method === "DELETE" && !write.route.includes("/reactions/"),
+              )
+            : native
+              ? caseWrites().some((write) => write.route.endsWith("chat.stopStream"))
+              : caseWrites().some((write) =>
+                  write.route.endsWith(compact ? "chat.delete" : "chat.update"),
+                ),
+        "progress finalization",
+      );
 
       const progressWrites = caseWrites().filter(
         (write) =>
@@ -1888,49 +1430,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
         ),
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
-      const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}${tools ? "" : "-quiet"}${compact ? "-compact" : ""}${failTool ? "-failed-tool" : ""}`;
-      await fs.mkdir(evidenceDir, { recursive: true });
-      await fs.writeFile(
-        path.join(evidenceDir, `${evidenceName}-diagnostic.json`),
-        JSON.stringify(
-          {
-            rejectStop,
-            originCleared,
-            writes: caseWrites()
-              .slice(-80)
-              .map(({ at, method, route, body, accepted }) => ({
-                at,
-                method,
-                route: route.slice(0, 250),
-                markerFields: Object.entries(body)
-                  .filter(([, value]) => JSON.stringify(value)?.includes(FINAL_MARKER))
-                  .map(([key]) => key),
-                rendered: Object.fromEntries(
-                  ["content", "text", "blocks", "chunks"]
-                    .filter((key) => body[key] !== undefined)
-                    .map((key) => [
-                      key,
-                      (typeof body[key] === "string" ? body[key] : JSON.stringify(body[key])).slice(
-                        0,
-                        250,
-                      ),
-                    ]),
-                ),
-                accepted,
-              })),
-            acceptedMessages: [...api.messages]
-              .filter(([, message]) => !sharedSlack || message.channel === conversationId)
-              .slice(-80)
-              .map(([id, message]) => ({
-                id,
-                text: (readStringValue(message.text ?? message.content) ?? "").slice(0, 250),
-              })),
-          },
-          null,
-          2,
-        ),
-      );
       expect(finalWrites()).toHaveLength(1);
       expect(finalMessages()).toHaveLength(1);
       if (rejectStop) {
@@ -1973,29 +1472,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         expect(tasks.at(-1)?.status).toBe("complete");
       }
-      await fs.writeFile(
-        path.join(evidenceDir, `${evidenceName}.json`),
-        JSON.stringify(
-          {
-            kind: "mock-gateway",
-            channel,
-            native,
-            rejectStop,
-            originCleared,
-            thread,
-            threadId,
-            inboundMessageId,
-            status: "pass",
-            progressWrites: progressWrites.length,
-            finalWrites: finalWrites().length,
-            distinctWorkingReactions: reactionNames.size,
-            taskIds: new Set(tasks.map((task) => task.id)).size,
-            toolRows: tools,
-          },
-          null,
-          2,
-        ),
-      );
       if (channel === "discord") {
         const text = [
           "QA-PREFIX-REPORT",
@@ -2053,20 +1529,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
           expect(Array.from(String(display.content)).length).toBeLessThanOrEqual(1997);
         }
         expect(displays.map((display) => display.content).join("")).toBe(text);
-        await fs.writeFile(
-          path.join(evidenceDir, `discord-portable-prefix-tool-progress-${tools}.json`),
-          JSON.stringify(
-            {
-              kind: "mock-gateway",
-              status: "pass",
-              expectedText: text,
-              body: write.body,
-              accepted: write.accepted,
-            },
-            null,
-            2,
-          ),
-        );
       }
     },
     180_000,

@@ -4,11 +4,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
-const resolveAnyEnabledFeishuToolsConfigMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./tool-account.js", () => ({
+vi.mock("./tool-account.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tool-account.js")>()),
   createFeishuToolClient: createFeishuToolClientMock,
-  resolveAnyEnabledFeishuToolsConfig: resolveAnyEnabledFeishuToolsConfigMock,
 }));
 
 let registerFeishuWikiTools: typeof import("./wiki.js").registerFeishuWikiTools;
@@ -73,7 +72,6 @@ describe("registerFeishuWikiTools pagination", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveAnyEnabledFeishuToolsConfigMock.mockReturnValue({ wiki: true });
   });
 
   it("nodes: forwards pagination and returns continuation metadata", async () => {

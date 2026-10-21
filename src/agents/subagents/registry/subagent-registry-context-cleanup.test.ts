@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement as awaitGate,
   createDeferred,
@@ -28,7 +28,7 @@ import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
-import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import * as registryPersistence from "./subagent-registry-persistence.js";
 import {
   createArchivedSubagentSweeperRun,
@@ -53,9 +53,10 @@ const { resolveContextEngine: actualResolveContextEngine } = await vi.importActu
 
 function createCleanup(engine?: Partial<ContextEngine>, owner = true, warn = vi.fn()) {
   const registry = createEmptyPluginRegistry();
+  const nativeWarn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(warn);
+  onTestFinished(() => nativeWarn.mockRestore());
   const cleanup = createSubagentRegistryContextCleanup({
     isEndedHookOwnerCurrent: () => owner,
-    warn,
   });
   vi.mocked(getRuntimeConfig).mockReturnValue({});
   if (engine) {
@@ -80,7 +81,6 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(resolveContextEngine).mockReset();
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     vi.mocked(loadSubagentSessionEntry).mockReset();
-    resetSubagentRegistryRuntimeLoadersForTests();
   });
 
   it.each(["session tail", "inline collector"] as const)(

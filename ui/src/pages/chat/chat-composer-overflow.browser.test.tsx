@@ -6,11 +6,16 @@ import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
+import {
+  composerContextWrapper,
+  createComposerContainer,
+  createComposerProps,
+} from "./chat-composer.test-support.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
@@ -44,11 +49,15 @@ describe("composer overflow presentation", () => {
   let attachmentsView: ReturnType<typeof mountSolidProps<ChatAttachmentControlsProps>> | undefined;
 
   function ComposerFixture(props: ComposerFixtureProps) {
+    const Provider = composerContextWrapper(container)!;
+    const questions = createComposerQuestions(props.input.paneId, () => props.input);
     return (
-      <ContentPresentation value={presented}>
-        {props.thread ? <div class="chat-thread" /> : null}
-        <ChatComposer {...props.input} />
-      </ContentPresentation>
+      <Provider>
+        <ContentPresentation value={presented}>
+          {props.thread ? <div class="chat-thread" /> : null}
+          <ChatComposer {...props.input} questions={questions} />
+        </ContentPresentation>
+      </Provider>
     );
   }
 

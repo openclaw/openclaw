@@ -701,6 +701,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       return await readiness.promise;
     },
     beginClose,
+    cleanupSignal: shutdown.signal,
     stop,
     async stopAll(): Promise<void> {
       const live = new Set(

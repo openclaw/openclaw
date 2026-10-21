@@ -6,6 +6,7 @@ import {
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -291,9 +292,7 @@ suite.define(() => {
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
       const sidebarToggle = page.locator('[data-navigation-view="sessions"]');
-      const drawerToggle = page
-        .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-        .first();
+      const drawerToggle = navigationDrawerToggle(page);
       const sessionMenu = page.getByRole("menu", { name: "Actions for Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
@@ -562,6 +561,7 @@ suite.define(() => {
         '.sidebar-identity-menu [data-value="command:retry-connect"]',
       );
       await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
+      await gateway.closeLatest(1006, "synthetic failed attempt");
       await retryConnection.click();
       await expect.poll(() => pinnedEntry.count()).toBe(1);
       await captureUiProof(suite, page, "sidebar-sessions-during-client-replacement.png");

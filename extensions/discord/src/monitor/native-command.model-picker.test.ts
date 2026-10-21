@@ -5,7 +5,7 @@ import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-nat
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import * as sessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -24,7 +24,6 @@ import {
 } from "./model-picker.test-utils.js";
 import { renderDiscordModelPickerModelsView } from "./model-picker.view.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
-import { applyDiscordModelPickerSelection } from "./native-command-model-picker-apply.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
@@ -157,7 +156,8 @@ function replyText(
   interaction: MockInteraction,
   method: "reply" | "editReply" | "followUp" = "editReply",
 ) {
-  return JSON.stringify(interaction[method].mock.calls[0]?.[0]);
+  const payload = interaction[method].mock.calls[0]?.[0];
+  return JSON.stringify(payload === undefined ? payload : serializePayload(payload));
 }
 
 function recordRecentMock() {
@@ -215,32 +215,6 @@ function mockPickerData(data = createModelsProviderData()) {
 function mockRuntimeConfig(cfg: OpenClawConfig | null) {
   vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(cfg);
   vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(cfg);
-}
-
-type ApplySelectionParams = Parameters<typeof applyDiscordModelPickerSelection>[0];
-
-function applySelection({
-  result,
-  ...selection
-}: Pick<ApplySelectionParams, "resolveCurrentSelection" | "selectedRuntime"> & {
-  result: Awaited<ReturnType<DispatchDiscordCommandInteraction>>;
-}) {
-  return applyDiscordModelPickerSelection({
-    ...createModelPickerContext(),
-    interaction: createInteraction() as unknown as PickerButtonInteraction,
-    selectionCommand: {
-      prompt: `/model openai/gpt-4o${selection.selectedRuntime ? ` --runtime ${selection.selectedRuntime}` : ""}`,
-      command: createModelCommandDefinition(),
-    },
-    dispatchCommandInteraction: vi
-      .fn<DispatchDiscordCommandInteraction>()
-      .mockResolvedValue(result),
-    route: createResolvedAgentRoute(),
-    resolvedModelRef: "openai/gpt-4o",
-    preferenceScope: { accountId: "default", userId: "owner" },
-    settleMs: 0,
-    ...selection,
-  });
 }
 
 function createPicker(
@@ -485,27 +459,41 @@ it("uses the hot-reloaded runtime config when old components reset to default", 
 
 it("reports a hidden model error with the authoritative current selection", async () => {
   const recordRecentSpy = recordRecentMock();
-  const resolveCurrentSelection = vi.fn(async () => ({
-    modelRef: "openai/gpt-4.1",
-    runtime: "codex",
-  }));
-  const result = await applySelection({
-    result: {
-      accepted: true,
-      hiddenFinalReply: {
-        text: "  Model change was not applied because the session changed.  ",
-        isError: true,
-      },
+  const { dispatchSpy, submit } = prepareModelPicker();
+  await sessionStoreRuntime.upsertSessionEntry({
+    storePath: path.join(tempDir, "sessions.json"),
+    sessionKey: createResolvedAgentRoute().sessionKey,
+    entry: {
+      sessionId: "picker-hidden-error",
+      updatedAt: 1,
+      modelOverride: "gpt-4.1",
+      providerOverride: "openai",
+      agentRuntimeOverride: "codex",
     },
-    resolveCurrentSelection,
   });
+  dispatchSpy.mockResolvedValue({
+    accepted: true,
+    effectiveRoute: createResolvedAgentRoute(),
+    hiddenFinalReply: {
+      text: "  Model change was not applied because the session changed.  ",
+      isError: true,
+    },
+  });
+  const interaction = await submit(createModelsViewSubmitData());
 
-  expect(result).toEqual({
-    status: "rejected",
-    noticeMessage:
-      "Model change was not applied because the session changed.\nCurrent selection: openai/gpt-4.1 with runtime codex.",
+  expect(interaction.followUp).toHaveBeenCalledOnce();
+  expect(interaction.followUp.mock.calls[0]?.[0]).toMatchObject({
+    components: [
+      {
+        components: [
+          {
+            content:
+              "Model change was not applied because the session changed.\nCurrent selection: openai/gpt-4.1 with runtime codex.",
+          },
+        ],
+      },
+    ],
   });
-  expect(resolveCurrentSelection).toHaveBeenCalledOnce();
   expect(recordRecentSpy).not.toHaveBeenCalled();
 });
 
@@ -516,23 +504,37 @@ it.each([
   "verifies authoritative runtime $selectedRuntime against $currentRuntime",
   async ({ selectedRuntime, currentRuntime, expectedStatus }) => {
     const recordRecentSpy = recordRecentMock();
-    const result = await applySelection({
-      result: { accepted: true, hiddenFinalReply: { text: "scope-aware core notice" } },
-      selectedRuntime,
-      resolveCurrentSelection: async () => ({
-        modelRef: "openai/gpt-4o",
-        runtime: currentRuntime,
-      }),
+    const pickerData = createModelsProviderData();
+    setFixtureRuntimeChoices(pickerData, new Map([["openai", [native, builtin]]]));
+    const { dispatchSpy, submit } = prepareModelPicker(pickerData);
+    await sessionStoreRuntime.upsertSessionEntry({
+      storePath: path.join(tempDir, "sessions.json"),
+      sessionKey: createResolvedAgentRoute().sessionKey,
+      entry: {
+        sessionId: "picker-runtime",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+      },
     });
+    dispatchSpy.mockResolvedValue({
+      accepted: true,
+      effectiveRoute: createResolvedAgentRoute(),
+      hiddenFinalReply: { text: "scope-aware core notice" },
+    });
+    const interaction = await submit({ ...createModelsViewSubmitData(), r: selectedRuntime });
 
-    expect(result.status).toBe(expectedStatus);
+    expect(interaction.followUp).toHaveBeenCalledOnce();
+    const expectedNotice =
+      expectedStatus === "success"
+        ? "scope-aware core notice"
+        : `⚠️ Tried to set openai/gpt-4o with runtime codex, but current selection is openai/gpt-4o with runtime ${currentRuntime}.`;
+    expect(interaction.followUp.mock.calls[0]?.[0]).toMatchObject({
+      components: [{ components: [{ content: expectedNotice }] }],
+    });
     if (expectedStatus === "success") {
-      expect(result.noticeMessage).toBe("scope-aware core notice");
       expect(recordRecentSpy).toHaveBeenCalledOnce();
     } else {
-      expect(result.noticeMessage).toBe(
-        "⚠️ Tried to set openai/gpt-4o with runtime codex, but current selection is openai/gpt-4o with runtime auto.",
-      );
       expect(recordRecentSpy).not.toHaveBeenCalled();
     }
   },
@@ -745,20 +747,27 @@ it("clicking recents model button applies model through /model pipeline", async 
 });
 
 it("reports a rejected hidden /model dispatch without reading authoritative state", async () => {
-  const resolveCurrentSelection = vi.fn(async () => ({
-    modelRef: "openai/gpt-4.1",
-    runtime: "auto",
-  }));
-  const result = await applySelection({
-    result: { accepted: false },
-    resolveCurrentSelection,
+  const readSession = vi.spyOn(sessionStoreRuntime, "getSessionEntryAsync");
+  const { dispatchSpy, submit } = prepareModelPicker();
+  let readsAtDispatch = 0;
+  dispatchSpy.mockImplementation(async () => {
+    readsAtDispatch = readSession.mock.calls.length;
+    return { accepted: false };
   });
+  const interaction = await submit(createModelsViewSubmitData());
 
-  expect(result).toEqual({
-    status: "rejected",
-    noticeMessage: "❌ Failed to apply openai/gpt-4o. Try /model openai/gpt-4o directly.",
+  expect(interaction.followUp).toHaveBeenCalledOnce();
+  expect(interaction.followUp.mock.calls[0]?.[0]).toMatchObject({
+    components: [
+      {
+        components: [
+          { content: "❌ Failed to apply openai/gpt-4o. Try /model openai/gpt-4o directly." },
+        ],
+      },
+    ],
   });
-  expect(resolveCurrentSelection).not.toHaveBeenCalled();
+  expect(readsAtDispatch).toBeGreaterThan(0);
+  expect(readSession).toHaveBeenCalledTimes(readsAtDispatch);
 });
 
 it("loads model picker data from the effective bound route", async () => {
@@ -770,7 +779,7 @@ it("loads model picker data from the effective bound route", async () => {
     authProfileOverrideSource: "user" as const,
     agentRuntimeOverride: "openclaw",
   };
-  await upsertSessionEntry({
+  await sessionStoreRuntime.upsertSessionEntry({
     storePath: path.join(tempDir, "sessions.json"),
     sessionKey: "agent:worker:subagent:bound",
     entry,

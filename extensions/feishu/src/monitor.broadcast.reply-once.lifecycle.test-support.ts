@@ -70,7 +70,6 @@ async function setupLifecycleMonitor(accountId: "account-A" | "account-B") {
     } as ClawdbotConfig,
     account: {
       accountId,
-      selectionSource: "explicit",
       enabled: true,
       configured: true,
       ...credentials[accountId],

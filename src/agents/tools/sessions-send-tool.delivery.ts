@@ -79,7 +79,6 @@ export async function notifySessionsSendSession(params: {
   };
   const event = selection.operatorAuthority
     ? await runWithInProcessGatewaySessionMutation(
-        "sessions.send",
         { sessionKey: params.sessionKey, agentId: params.targetAgentId },
         (assertCurrent) => {
           assertCurrent();
@@ -257,7 +256,7 @@ export async function trySessionsSendActiveRunDelivery(
                 assertCurrent: () => {
                   assertInputCurrent();
                   if (!selection.operatorAuthority) {
-                    assertCaller?.("agent");
+                    assertCaller?.("sessions.send");
                   }
                 },
               }

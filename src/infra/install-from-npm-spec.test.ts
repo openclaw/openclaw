@@ -122,7 +122,6 @@ describe("installFromValidatedNpmSpecArchive", () => {
 
     expect(packNpmSpecToArchive).toHaveBeenCalledWith(expect.objectContaining({ spec: baseSpec }));
     const okResult = expectOkResult(result, { ok: true, target: "done" });
-    expect(okResult.integrityDrift).toBeUndefined();
     expect(okResult.npmResolution.resolvedSpec).toBe(baseSpec);
     const resolvedAt = okResult.npmResolution.resolvedAt;
     if (!resolvedAt) {
@@ -143,12 +142,18 @@ describe("installFromValidatedNpmSpecArchive", () => {
       installFromArchive,
     });
 
-    const okResult = expectOkResult(result, { ok: true, id: "plugin-accept" });
-    expect(okResult.integrityDrift).toEqual({
+    expectOkResult(result, { ok: true, id: "plugin-accept" });
+    expect(onIntegrityDrift).toHaveBeenCalledExactlyOnceWith({
+      spec: baseSpec,
       expectedIntegrity: "sha512-old",
       actualIntegrity: "sha512-new",
+      resolution: {
+        resolvedSpec: baseSpec,
+        integrity: "sha512-new",
+        resolvedAt: expect.any(String),
+      },
     });
-    expect(onIntegrityDrift).toHaveBeenCalledTimes(1);
+    expect(installFromArchive).toHaveBeenCalledExactlyOnceWith({ archivePath: baseArchivePath });
   });
 
   it("aborts when integrity drift callback rejects drift", async () => {

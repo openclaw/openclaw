@@ -42,10 +42,7 @@ import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { acceptRealtimeInboundRequest } from "./webhook/realtime-inbound-admission.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
-import {
-  StreamDisconnectGrace,
-  type StreamDisconnectLifecycle,
-} from "./webhook/stream-disconnect-grace.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 import { appendRecentTalkEventMetadata } from "./webhook/talk-event-metadata.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
@@ -187,7 +184,7 @@ export class VoiceCallWebhookServer {
     this.realtimeHandler = handler;
   }
 
-  getStreamDisconnectLifecycle(): StreamDisconnectLifecycle {
+  getStreamDisconnectLifecycle(): StreamDisconnectGrace {
     return this.streamDisconnectGrace;
   }
 

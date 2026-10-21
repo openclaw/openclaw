@@ -369,8 +369,9 @@ suite.define(() => {
       await page.setViewportSize({ width, height: 900 });
       await expect.poll(() => conversation.count()).toBe(1);
       if (width !== 1440) {
-        // Narrow layouts retain the conversation but present the dashboard instead.
-        await expect.poll(() => conversation.isVisible()).toBe(false);
+        // Mobile panels share the screen with the retained conversation.
+        await expect.poll(() => conversation.isVisible()).toBe(true);
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
         await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
         continue;
       }

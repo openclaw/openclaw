@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
@@ -145,7 +145,15 @@ describe("daemon runtime pin owner migration", () => {
   });
 
   it("records complete custody for fresh installations without creating shared state", async () => {
-    expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    try {
+      expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+      expect(
+        exec.mock.calls.map(([sql]) => sql).filter((sql) => /^(?:BEGIN|COMMIT)\b/u.test(sql)),
+      ).toEqual(["BEGIN IMMEDIATE", "COMMIT"]);
+    } finally {
+      exec.mockRestore();
+    }
     expect(fs.existsSync(resolveDaemonRuntimePinStorePath(env))).toBe(true);
     expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
     expect(targetRows()).toEqual([]);
@@ -154,6 +162,33 @@ describe("daemon runtime pin owner migration", () => {
       phase: "complete",
       updated_at: expect.any(Number),
     });
+  });
+
+  it("rolls back first-use schema and intent together before retrying", () => {
+    const writeReceipt = (db: DatabaseSync) =>
+      db
+        .prepare(
+          "INSERT INTO daemon_runtime_pin_migration VALUES (1, 'first-use', 'complete', 123)",
+        )
+        .run();
+    expect(() =>
+      withDaemonRuntimePinStore(env, true, (db) => {
+        writeReceipt(db);
+        throw new Error("first-use write failed");
+      }),
+    ).toThrow("first-use write failed");
+    {
+      using db = new DatabaseSync(resolveDaemonRuntimePinStorePath(env));
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+      expect(
+        db.prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all(),
+      ).toEqual([]);
+    }
+    const read = vi.fn();
+    expect(withDaemonRuntimePinStore(env, false, read)).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
+    withDaemonRuntimePinStore(env, true, writeReceipt);
+    expect(receipt()).toEqual({ source_state: "first-use", phase: "complete", updated_at: 123 });
   });
 
   it("resumes after a crash leaves the local store empty", async () => {

@@ -79,6 +79,7 @@ const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
 const SKILLS_READINESS_CHECK_ID = "core/doctor/skills-readiness";
 const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
+const HEARTBEAT_CADENCE_CHECK_ID = "core/doctor/heartbeat-cadence-migration";
 
 /** Only the rehearsal worker reports before disposal and inherits its CLI's budget anchor. */
 export async function runDoctorLintCliInProcess(
@@ -412,7 +413,7 @@ async function executeDoctorLint(
     await stateView.runWithPluginStateSnapshot(async () => await run());
   // Update readiness keeps every declared check private until restart.
   const runWithSourceState: DoctorLintStateRunner = async (run) =>
-    opts.updateReadiness ? run() : withDoctorLintStateEnv(sourceEnv, run);
+    opts.updateReadiness ? run() : withDoctorLintStateEnv(sourceEnv, run, "captured");
   const coreCtx = {
     ...ctx,
     env: opts.updateReadiness ? stateView.pluginMetadataEnv : sourceEnv,
@@ -554,8 +555,10 @@ function withCoreLintContext(
       if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID || check.id === PROJECT_CLONE_SHAPE_CHECK_ID) {
         return inspectPrivate(detect);
       }
-      // Auth health uses read-only loaders but needs uncopied agent stores and source paths.
-      return check.id === AUTH_PROFILE_CHECK_ID ? ctx.runWithSourceState(detect) : detect();
+      // Source-bound loaders must keep the launch selectors of their retained read owner.
+      return check.id === AUTH_PROFILE_CHECK_ID || check.id === HEARTBEAT_CADENCE_CHECK_ID
+        ? ctx.runWithSourceState(detect)
+        : detect();
     },
   };
 }

@@ -74,6 +74,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/openai/embedding-provider.test.ts",
   "extensions/openai/realtime-voice-provider-routing.test.ts",
   "extensions/openai/tts.test.ts",
+  "extensions/clawrouter/speech-provider.test.ts",
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/minimax/speech-provider.test.ts",
   "extensions/minimax/tts.test.ts",
@@ -201,6 +202,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/command-handler-scope.worker.test.ts",
   "extensions/codex/src/commands.test.ts",
   // Async command auth reaches the host-owned shared-state broker.
+  "extensions/codex/src/account-usage.worker-read.test.ts",
+  "extensions/codex/src/command-diagnostics.worker-read.test.ts",
   "extensions/codex/src/command-account.test.ts",
   "extensions/codex/src/command-plugins-runtime.test.ts",
   "extensions/codex/src/command-rpc.test.ts",

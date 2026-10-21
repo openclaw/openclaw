@@ -636,8 +636,6 @@ it.each(dispatchCases)(
         isTurnTainted: () => false,
         allocateToolOutcomeOrdinal: () => 1,
         getPostCompactionAbortError: () => undefined,
-        setPostCompactionAbortController() {},
-        clearPostCompactionAbortController() {},
       } as unknown as Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0];
       const remoteWorkspace = state.path("remote-execution-only");
       const remoteBridgeCommand = vi.fn(async () => {

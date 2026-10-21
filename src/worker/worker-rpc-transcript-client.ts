@@ -34,7 +34,6 @@ type WorkerTranscriptCommitClientOptions = {
 export class WorkerTranscriptCommitClient {
   private baseLeafIdValue: string | null;
   private nextSeqValue: number;
-  private queue: Promise<void> = Promise.resolve();
   private terminalFailure: WorkerTranscriptCommitError | undefined;
 
   constructor(
@@ -53,16 +52,7 @@ export class WorkerTranscriptCommitClient {
     return this.nextSeqValue;
   }
 
-  commit(messages: readonly WorkerTranscriptMessage[]): Promise<WorkerTranscriptCommitResult> {
-    const operation = this.queue.then(() => this.commitBatches(messages));
-    this.queue = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    return operation;
-  }
-
-  private async commitBatches(
+  async commit(
     messages: readonly WorkerTranscriptMessage[],
   ): Promise<WorkerTranscriptCommitResult> {
     if (messages.length === 0) {

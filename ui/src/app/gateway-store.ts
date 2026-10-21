@@ -5,16 +5,11 @@ import {
   readControlUiBuildMismatchId,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  isGatewayRestartUnavailableError,
-  isGatewaySuspendUnavailableError,
-} from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { registerListener } from "../../../src/shared/listeners.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
   resolveGatewayErrorDetailCode,
-  type GatewayBrowserClientOptions,
   type GatewayEventListener,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
@@ -44,6 +39,7 @@ import {
 import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
+import { createGatewayDeferredIntents } from "./gateway-store.deferred-intents.ts";
 import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
 import { createGatewayPresenceObserver } from "./gateway-store.presence.ts";
 import { createGatewaySelfProfile } from "./gateway-store.self-profile.ts";
@@ -65,14 +61,10 @@ import {
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
 
-type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
-const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
-
 export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
   initialPassword = "",
   initialBootstrapToken = "",
-  createClient: GatewayClientFactory = defaultClientFactory,
   options: ApplicationGatewayOptions = {},
 ): ApplicationGateway {
   let settings = initialSettings;
@@ -90,6 +82,7 @@ export function createApplicationGateway(
     client: null,
     phase: "stopped",
     offlineStable: false,
+    deferredIntentCount: 0,
     hello: null,
     pluginCapabilities: null,
     canvasPluginSurfaceUrl: null,
@@ -151,15 +144,14 @@ export function createApplicationGateway(
     },
     onError: (error) => setSnapshot({ lastError: formatUiError(error) }),
   });
-  const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
-    // Retirement remains valid after a reentrant stop or same-account client replacement.
+  // Retirement remains valid after a reentrant stop or same-account client replacement.
+  const publishEventLogRetirement = (events: readonly EventLogEntry[]) =>
     notifyGatewayObservers(
       eventLogListeners,
       events,
       "event",
       (current) => current === eventLog.entries,
     );
-  };
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     const previous = snapshot;
     snapshot = { ...previous, ...patch };
@@ -201,6 +193,12 @@ export function createApplicationGateway(
       lastErrorAuthReason: null,
       ...patch,
     });
+  const deferredIntents = createGatewayDeferredIntents({
+    snapshot: () => snapshot,
+    connectionRevision: () => connectionRevision,
+    isStopped: () => stopped,
+    publish: setSnapshot,
+  });
   const refreshSelfProfile = () => {
     const requestClient = client;
     const hello = snapshot.hello;
@@ -339,6 +337,11 @@ export function createApplicationGateway(
     if (credentialsChanged) {
       connectionRevision += 1;
       credentials.retire(true);
+      deferredIntents.discard();
+      // Publishing the cleared count can synchronously stop the store.
+      if (stopped) {
+        return;
+      }
     }
     // Only a gateway URL that differs from the current connection counts as an
     // explicit selection. The login gate always resubmits its prefilled URL, so
@@ -401,7 +404,7 @@ export function createApplicationGateway(
         ),
       });
     };
-    const nextClient = createClient({
+    const nextClient = new GatewayBrowserClient({
       ...credentials.prepare(nextConnection, credentialsChanged, client),
       clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
@@ -504,6 +507,7 @@ export function createApplicationGateway(
               nextClient.instanceId,
             ) ?? undefined,
         });
+        void deferredIntents.flush();
         if (isCurrentClient(nextClient) && !snapshot.selfUser) {
           refreshSelfProfile();
         }
@@ -514,8 +518,10 @@ export function createApplicationGateway(
           return;
         }
         retireStoredGoalOperations(nextConnection.gatewayUrl, nextClient.recoveryScope);
+        void deferredIntents.flush();
         setSnapshot({});
       },
+      onConnecting: () => client === nextClient && setSnapshot({ reconnectAt: undefined }),
       onReconnectScheduled: (delayMs) => {
         if (client === nextClient) {
           setSnapshot({ reconnectAt: Date.now() + delayMs });
@@ -547,25 +553,17 @@ export function createApplicationGateway(
         if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
           connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         }
-        // Fresh drain evidence re-arms the deadline: the server still says
-        // "restarting", so the amber state stays honest for another window.
-        const restartPending = isGatewayRestartUnavailableError(error);
-        if (restartPending) {
-          setUnavailableDeadline("restartPending", 0);
-        }
-        const suspensionPhase = isGatewaySuspendUnavailableError(error)
-          ? (readSuspensionPhase(error?.details) ?? "prepared")
-          : undefined;
-        // Display-only evidence; admission is still re-derived from the next hello.
-        setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
+        const { restartPending, suspensionPhase, transient } = availability.observeClose(error);
         // Transport loss and announced unavailability keep this client's presentation;
         // any connect rejection (auth, pairing, protocol, build) fails closed.
-        const transientClose =
-          !error ||
-          restartPending ||
-          Boolean(suspensionPhase) ||
-          isRetryableGatewayStartupUnavailableError(error);
-        const retainPresentation = transientClose && !nextClient.offlineRecoveryRetired;
+        const retainPresentation = transient && !nextClient.offlineRecoveryRetired;
+        if (!retainPresentation) {
+          deferredIntents.discard();
+          // A queue-count observer may stop or replace this client during discard.
+          if (!isCurrentClient(nextClient)) {
+            return;
+          }
+        }
         const closeReason = formatUiExternalText(reason);
         setConnectionSnapshot({
           client: nextClient,
@@ -668,6 +666,7 @@ export function createApplicationGateway(
       return eventLog.revision;
     },
     connect,
+    defer: deferredIntents.defer,
     setSessionKey: (sessionKey) => {
       const nextSessionKey = sessionKey.trim();
       if (!nextSessionKey || nextSessionKey === snapshot.sessionKey) {
@@ -682,6 +681,7 @@ export function createApplicationGateway(
     start: () => connect(),
     stop: () => {
       stopped = true;
+      deferredIntents.discard();
       clearOfflineIndicatorTimer();
       setUnavailableDeadline("restartPending");
       setUnavailableDeadline("suspensionPhase");
@@ -729,6 +729,7 @@ export function createApplicationGateway(
       isStopped: () => stopped,
       retireOfflineAccess: () => {
         client?.retireOfflineRecoveryScope?.();
+        deferredIntents.discard();
         everConnected = false;
         connectionRevision += 1;
       },

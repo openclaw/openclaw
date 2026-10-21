@@ -2,39 +2,40 @@ import "./doctor-health.test-support.js";
 import { execFile, fork, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import fs from "node:fs";
+import fs, { readFileSync as read } from "node:fs";
 import path from "node:path";
 import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
-import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
-import * as configFlow from "../commands/doctor-config-flow.js";
-import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
-import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
-import { hashConfigRaw } from "../config/io.read-helpers.js";
-import { resolveStateDir } from "../config/paths.js";
-import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
+let { withUpdateCommandExecutor } = await import("../cli/update-cli/update-command-executor.js");
+let { parseUpdateRecoveryBackupManifest } = await import("../commands/backup-verify-manifest.js");
+let configFlow = await import("../commands/doctor-config-flow.js");
+let { prepareDoctorDatabasePreflight } = await import("../commands/doctor-database-preflight.js");
+let { beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js");
+let { hashConfigRaw } = await import("../config/io.read-helpers.js");
+let { resolveStateDir } = await import("../config/paths.js");
+let { resolveConfiguredAgentDatabaseTargets } = await import("../config/sessions/targets.js");
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
-import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
-import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
-import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
-import { inspectUpdateRecoveryBackups } from "../infra/update-recovery-backup-status.js";
-import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
-import { inspectUpdateRunDriver, readUpdateRunDriver } from "../infra/update-run-driver.js";
-import { createUpdateRun, listUpdateRuns } from "../infra/update-run-ledger.js";
-import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import * as databasePreflight from "../state/openclaw-database-preflight.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
-import { runDoctorHealthFlow } from "./doctor-health.js";
+let { resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js");
+let { migrateLegacyMediaPersistence } =
+  await import("../infra/state-migrations.media-persistence.js");
+let { createLegacyStateMigrationStepReceipt } =
+  await import("../infra/state-migrations.messages.js");
+let { resolveUpdateCaptureRoot } = await import("../infra/update-capture-paths.js");
+let { inspectUpdateRecoveryBackups } = await import("../infra/update-recovery-backup-status.js");
+let { captureUpdateRecoveryBaseline } =
+  await import("../infra/update-recovery-baseline-capture.js");
+let { inspectUpdateRunDriver, readUpdateRunDriver } = await import("../infra/update-run-driver.js");
+let { createUpdateRun, listUpdateRuns } = await import("../infra/update-run-ledger.js");
+let { listAgentDatabaseAdmissionRefusals } = await import("../state/agent-database-admission.js");
+let { closeOpenClawAgentDatabasesAsync, openOpenClawAgentDatabase } =
+  await import("../state/openclaw-agent-db.js");
+let databasePreflight = await import("../state/openclaw-database-preflight.js");
+let { getOpenClawDatabaseMaintenanceScope } =
+  await import("../state/openclaw-state-db-async-lifecycle.js");
+let { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db.js");
+let { resolveInitialDoctorHealthContributions } =
+  await import("./doctor-health-contributions-initial.js");
+let { runDoctorHealthFlow } = await import("./doctor-health.js");
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -52,18 +53,83 @@ vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
   return { ...actual, readProcessAncestry: vi.fn(actual.readProcessAncestry) };
 });
 
-const { mocks } = await import("./doctor-health.test-support.js");
+const { mocks, createDoctorRuntime, stubDoctorEnv } =
+  await import("./doctor-health.test-support.js");
+let { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+const withDoctorState: typeof import("./doctor-health.test-support.js").withDoctorState = (
+  run,
+  env,
+) => withOpenClawTestState({ scenario: "minimal", env }, run);
+
+async function reloadStateDirFixtureGraph() {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  vi.resetModules();
+  ({ withUpdateCommandExecutor } = await import("../cli/update-cli/update-command-executor.js"));
+  ({ parseUpdateRecoveryBackupManifest } = await import("../commands/backup-verify-manifest.js"));
+  configFlow = await import("../commands/doctor-config-flow.js");
+  ({ prepareDoctorDatabasePreflight } = await import("../commands/doctor-database-preflight.js"));
+  ({ beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js"));
+  ({ hashConfigRaw } = await import("../config/io.read-helpers.js"));
+  ({ resolveStateDir } = await import("../config/paths.js"));
+  ({ resolveConfiguredAgentDatabaseTargets } = await import("../config/sessions/targets.js"));
+  ({ resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js"));
+  ({ migrateLegacyMediaPersistence } =
+    await import("../infra/state-migrations.media-persistence.js"));
+  ({ createLegacyStateMigrationStepReceipt } =
+    await import("../infra/state-migrations.messages.js"));
+  ({ resolveUpdateCaptureRoot } = await import("../infra/update-capture-paths.js"));
+  ({ inspectUpdateRecoveryBackups } = await import("../infra/update-recovery-backup-status.js"));
+  ({ captureUpdateRecoveryBaseline } =
+    await import("../infra/update-recovery-baseline-capture.js"));
+  ({ inspectUpdateRunDriver, readUpdateRunDriver } = await import("../infra/update-run-driver.js"));
+  ({ createUpdateRun, listUpdateRuns } = await import("../infra/update-run-ledger.js"));
+  ({ listAgentDatabaseAdmissionRefusals } = await import("../state/agent-database-admission.js"));
+  ({ closeOpenClawAgentDatabasesAsync, openOpenClawAgentDatabase } =
+    await import("../state/openclaw-agent-db.js"));
+  databasePreflight = await import("../state/openclaw-database-preflight.js");
+  ({ getOpenClawDatabaseMaintenanceScope } =
+    await import("../state/openclaw-state-db-async-lifecycle.js"));
+  ({ closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db.js"));
+  ({ resolveInitialDoctorHealthContributions } =
+    await import("./doctor-health-contributions-initial.js"));
+  ({ runDoctorHealthFlow } = await import("./doctor-health.js"));
+  ({ withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));
+}
+
+const repairOptions = { repair: true, nonInteractive: true };
+function required<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message);
+  }
+  return value;
+}
+
+function installAdmissionContribution() {
+  const noOp = async () => {};
+  const admission = resolveInitialDoctorHealthContributions({
+    runStructuredHealthRepairs: noOp,
+    runGatewayConfigHealth: noOp,
+    runAuthProfileMigration: noOp,
+    runAuthProfileHealth: noOp,
+    runGatewayAuthHealth: noOp,
+    runLegacyStateHealth: noOp,
+  }).find((contribution) => contribution.id === "doctor:agent-database-admission")!;
+  mocks.runContributions.mockImplementation((ctx) => admission.run(ctx));
+}
 
 beforeEach(() => {
   vi.mocked(processIdentity.readProcessAncestry).mockReset();
   vi.mocked(execFile).mockReset();
   mocks.packageRoot.mockReturnValue(undefined);
+  mocks.config.mockReturnValue({});
   mocks.runContributions.mockReset();
+  mocks.runContributions.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resetAutoMigrateLegacyStateDirForTest();
+  vi.unstubAllEnvs();
 });
 
 function readCapturedConfig(directory: string, sourcePath: string) {
@@ -75,17 +141,12 @@ function readCapturedConfig(directory: string, sourcePath: string) {
     throw new Error(`Original configuration was not captured: ${sourcePath}`);
   }
   const payloadPath = path.join(directory, entry.archivePath);
-  return {
-    manifest,
-    manifestPath,
-    manifestBytes,
-    payloadPath,
-    bytes: fs.readFileSync(payloadPath),
-  };
+  return { manifest, manifestPath, manifestBytes, payloadPath, bytes: read(payloadPath) };
 }
 
 it("preserves original config bytes before Doctor relocates and repairs legacy state", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await reloadStateDirFixtureGraph();
+  await withDoctorState(async (state) => {
     const legacyRoot = path.join(state.home, ".clawdbot");
     const legacyConfig = path.join(legacyRoot, "openclaw.json");
     const original = Buffer.from("// original operator formatting\n{ gateway: { port: 19101 } }\n");
@@ -115,38 +176,31 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
         entries: [{ kind: "missing", sourcePath: legacyConfig, sqlite: false, directory: false }],
       }),
     );
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    vi.stubEnv("OPENCLAW_HOME", undefined);
-    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
+    stubDoctorEnv({
+      OPENCLAW_TEST_FAST: "0",
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: undefined,
+      OPENCLAW_CONFIG_PATH: undefined,
+      OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+      OPENCLAW_UPDATE_RUN_ID: undefined,
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    });
     mocks.packageRoot.mockReturnValue(process.cwd());
-    mocks.config.mockReturnValue({});
-    mocks.runContributions.mockResolvedValue(undefined);
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createDoctorRuntime();
     let captured: ReturnType<typeof readCapturedConfig> | undefined;
     const loadConfig = configFlow.loadAndMaybeMigrateDoctorConfig;
     const repair = vi
       .spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig")
       .mockImplementation(async (params) => {
-        const scope = getOpenClawDatabaseMaintenanceScope();
-        if (!scope) {
-          throw new Error("Doctor config repair lost its maintenance scope");
-        }
+        const scope = required(getOpenClawDatabaseMaintenanceScope(), "Lost maintenance scope");
         expect(scope.ownsSchemaMaintenance).toBe(true);
         scope.assertOwnerCurrent();
         expect(fs.existsSync(legacyRoot)).toBe(false);
         expect(resolveStateDir(process.env)).toBe(state.stateDir);
         const store = resolveUpdateCaptureRoot(legacyRoot);
-        expect(fs.existsSync(store), runtime.log.mock.calls.flat().join("\n")).toBe(true);
+        const logs = runtime.log.mock.calls.flat().join("\n");
         const captures = fs.readdirSync(store).filter((name) => name.startsWith("doctor-"));
-        expect(captures, runtime.log.mock.calls.flat().join("\n")).toHaveLength(1);
-        expect(
-          fs.existsSync(path.join(store, captures[0]!, "manifest.json")),
-          runtime.log.mock.calls.flat().join("\n"),
-        ).toBe(true);
+        expect(captures, logs).toHaveLength(1);
         captured = readCapturedConfig(path.join(store, captures[0]!), legacyConfig);
         expect(captured.bytes).toEqual(original);
         expect(captured.manifest.stateDir).toBe(legacyRoot);
@@ -154,246 +208,193 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
         fs.writeFileSync(state.configPath, '{ "gateway": { "port": 19102 } }\n');
         return { ...result, path: state.configPath };
       });
-    try {
-      expect(resolveStateDir(process.env)).toBe(state.stateDir);
-      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
-      expect(repair).toHaveBeenCalledOnce();
-      expect(fs.existsSync(expiredCapture)).toBe(false);
-      expect(runtime.log).toHaveBeenCalledWith(
-        `Retired superseded or expired standalone Doctor capture: ${expiredCapture}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
-      );
-      expect(fs.existsSync(legacyRoot)).toBe(false);
-      expect(fs.readFileSync(state.configPath, "utf8")).toContain("19102");
-      if (!captured) {
-        throw new Error("Doctor did not reach the config repair boundary");
-      }
-      expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
-      expect(fs.readFileSync(captured.payloadPath)).toEqual(original);
-      expect(await inspectUpdateRecoveryBackups()).toEqual([
-        expect.objectContaining({
-          ref: expect.objectContaining({ manifestPath: captured.manifestPath }),
-          runId: captured.manifest.runId,
-          captureStatus: "pending",
-          status: "manual",
-          terminalOutcome: undefined,
-        }),
-      ]);
-      expect(listUpdateRuns()).toEqual([]);
-    } finally {
-      repair.mockRestore();
-      vi.unstubAllEnvs();
-    }
+    expect(resolveStateDir(process.env)).toBe(state.stateDir);
+    await runDoctorHealthFlow(runtime, repairOptions);
+    expect(repair).toHaveBeenCalledOnce();
+    expect(fs.existsSync(expiredCapture)).toBe(false);
+    expect(runtime.log).toHaveBeenCalledWith(
+      `Retired superseded or expired standalone Doctor capture: ${expiredCapture}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
+    );
+    expect(fs.existsSync(legacyRoot)).toBe(false);
+    expect(fs.readFileSync(state.configPath, "utf8")).toContain("19102");
+    captured = required(captured, "Doctor did not reach the config repair boundary");
+    expect(read(captured.manifestPath)).toEqual(captured.manifestBytes);
+    expect(read(captured.payloadPath)).toEqual(original);
+    expect(await inspectUpdateRecoveryBackups()).toEqual([
+      expect.objectContaining({
+        ref: expect.objectContaining({ manifestPath: captured.manifestPath }),
+        runId: captured.manifest.runId,
+        captureStatus: "pending",
+        status: "manual",
+        terminalOutcome: undefined,
+      }),
+    ]);
+    expect(listUpdateRuns()).toEqual([]);
   });
 });
 
 it("reuses the admitted original capture and refuses changed evidence before Doctor repair", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withDoctorState(async (state) => {
     const original = '{ "gateway": { "port": 19111 } }\n';
     fs.writeFileSync(state.configPath, original);
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("The fixture requires its actual process identity");
-    }
+    const driver = required(readUpdateRunDriver(), "Missing actual process identity");
     const run = createUpdateRun({ trigger: "cli", origin: { driver } }, { env: state.env });
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
     vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
-    try {
-      const installRoot = state.path("installation");
-      fs.mkdirSync(installRoot);
-      mocks.packageRoot.mockReturnValue(installRoot);
-      mocks.config.mockReturnValue({});
-      mocks.runContributions.mockResolvedValue(undefined);
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      await withUpdateCommandExecutor(run.runId, async (executor) => {
-        const fence = await executor.enter(installRoot);
-        const maintenance = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true },
+    const installRoot = state.path("installation");
+    fs.mkdirSync(installRoot);
+    mocks.packageRoot.mockReturnValue(installRoot);
+    const runtime = createDoctorRuntime();
+    await withUpdateCommandExecutor(run.runId, async (executor) => {
+      const fence = await executor.enter(installRoot);
+      const maintenance = required(
+        await beginDoctorMaintenance({
+          options: repairOptions,
           root: null,
           runtime,
           assertCurrent: fence.assertCurrent,
-        });
-        if (!maintenance) {
-          throw new Error("The fixture requires actual maintenance custody");
-        }
-        let baseline: Awaited<ReturnType<typeof captureUpdateRecoveryBaseline>>;
-        try {
-          baseline = await maintenance.run(() => {
-            const scope = getOpenClawDatabaseMaintenanceScope();
-            if (!scope) {
-              throw new Error("Original update capture lost its maintenance scope");
-            }
-            return captureUpdateRecoveryBaseline({
-              runId: run.runId,
-              installRoot,
-              env: process.env,
-              drivers: [driver],
-              signal: maintenance.signal,
-              assertCurrent: () => {
-                fence.assertCurrent();
-                scope.assertOwnerCurrent();
-              },
-            });
-          });
-        } finally {
-          await maintenance.release();
-        }
-        const captured = readCapturedConfig(baseline.ref.directory, state.configPath);
-        expect(captured.bytes.toString("utf8")).toBe(original);
-        const store = resolveUpdateCaptureRoot(state.stateDir);
-        const originalEntries = fs.readdirSync(store).toSorted();
-        const { readProcessAncestry: readAncestry } = await vi.importActual<
-          typeof import("@openclaw/proc-safe/identity")
-        >("@openclaw/proc-safe/identity");
-        vi.mocked(processIdentity.readProcessAncestry).mockImplementation((pid, options) => {
-          const observed = readAncestry(pid, { ...options, throughPid: process.pid });
-          if (!observed || options?.throughPid === process.pid) {
-            return observed;
-          }
-          // Only the higher supervisor's visibility is denied. The real driver,
-          // executor, maintenance owner and retained capture stay authoritative.
-          return { ...observed, complete: false, stoppedBy: "unreadable-parent" };
-        });
-        for (const [port, inheritedRunId] of [
-          [19112, undefined],
-          [19113, run.runId],
-        ] as const) {
-          vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunId);
-          const current = `{ "gateway": { "port": ${port} } }\n`;
-          fs.writeFileSync(state.configPath, current);
-          await runDoctorHealthFlow(
-            runtime,
-            { repair: true, nonInteractive: true },
-            {
-              inputHash: hashConfigRaw(current),
-              assertCurrent: fence.assertCurrent,
-              originalRecoveryCapture: { runId: run.runId, installRoot, ref: baseline.ref },
+        }),
+        "Missing actual maintenance custody",
+      );
+      let baseline: Awaited<ReturnType<typeof captureUpdateRecoveryBaseline>>;
+      try {
+        baseline = await maintenance.run(() => {
+          const scope = required(getOpenClawDatabaseMaintenanceScope(), "Lost capture scope");
+          return captureUpdateRecoveryBaseline({
+            runId: run.runId,
+            installRoot,
+            env: process.env,
+            drivers: [driver],
+            signal: maintenance.signal,
+            assertCurrent: () => {
+              fence.assertCurrent();
+              scope.assertOwnerCurrent();
             },
-          );
-          expect(fs.readFileSync(state.configPath, "utf8")).toBe(current);
-          expect(fs.readdirSync(store).toSorted()).toEqual(originalEntries);
-          expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
-          expect(fs.readFileSync(captured.payloadPath, "utf8")).toBe(original);
-        }
-        // The real executor, maintenance owner and capture reader must refuse
-        // changed retained evidence before config repair or health contributions.
-        for (const fault of ["missing", "digest", "terminal", "later-generation"] as const) {
-          const current = fs.readFileSync(state.configPath);
-          const moved = `${baseline.ref.directory}-temporarily-missing`;
-          const outcome = path.join(baseline.ref.directory, "outcome.json");
-          const candidate = path.join(baseline.ref.directory, "candidate");
-          const repair = vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig");
-          if (fault === "missing") {
-            fs.renameSync(baseline.ref.directory, moved);
-          } else if (fault === "terminal") {
-            fs.writeFileSync(
-              outcome,
-              JSON.stringify({ status: "committed", manifestSha256: baseline.ref.manifestSha256 }),
-            );
-          } else if (fault === "later-generation") {
-            fs.mkdirSync(candidate);
-          }
-          try {
-            await expect(
-              runDoctorHealthFlow(
-                runtime,
-                { repair: true, nonInteractive: true },
-                {
-                  inputHash: hashConfigRaw(current.toString("utf8")),
-                  assertCurrent: fence.assertCurrent,
-                  originalRecoveryCapture: {
-                    runId: run.runId,
-                    installRoot,
-                    ref:
-                      fault === "digest"
-                        ? { ...baseline.ref, manifestSha256: "0".repeat(64) }
-                        : baseline.ref,
-                  },
-                },
-              ),
-              fault,
-            ).rejects.toThrow(/admitted original update capture/i);
-            expect(repair, fault).not.toHaveBeenCalled();
-            expect(mocks.runContributions, fault).toHaveBeenCalledTimes(2);
-            expect(fs.readFileSync(state.configPath), fault).toEqual(current);
-          } finally {
-            repair.mockRestore();
-            if (fault === "missing") {
-              fs.renameSync(moved, baseline.ref.directory);
-            } else if (fault === "terminal") {
-              fs.unlinkSync(outcome);
-            } else if (fault === "later-generation") {
-              fs.rmdirSync(candidate);
-            }
-          }
-          expect(fs.readdirSync(store).toSorted()).toEqual(originalEntries);
-          expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
-          expect(fs.readFileSync(captured.payloadPath, "utf8")).toBe(original);
-        }
-        expect(
-          mocks.runContributions,
-          [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n"),
-        ).toHaveBeenCalledTimes(2);
-        expect(
-          runtime.log.mock.calls.filter(
-            ([message]) =>
-              message === `Original update capture retained at ${baseline.ref.manifestPath}.`,
-          ),
-          runtime.log.mock.calls.flat().join("\n"),
-        ).toHaveLength(2);
-
-        const foreign = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
-          stdio: ["pipe", "ignore", "ignore"],
-        });
-        const closed = once(foreign, "close");
-        const repair = vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig");
-        const current = fs.readFileSync(state.configPath);
-        try {
-          await once(foreign, "spawn");
-          const foreignDriver = readUpdateRunDriver(foreign.pid);
-          if (!foreignDriver) {
-            throw new Error("The foreign updater fixture requires its actual live identity");
-          }
-          expect(inspectUpdateRunDriver(foreignDriver)).toBe("alive");
-          createUpdateRun(
-            { trigger: "cli", origin: { driver: foreignDriver } },
-            { env: state.env },
-          );
-          await expect(
-            runDoctorHealthFlow(
-              runtime,
-              { repair: true, nonInteractive: true },
-              {
-                inputHash: hashConfigRaw(current.toString("utf8")),
-                assertCurrent: fence.assertCurrent,
-                originalRecoveryCapture: { runId: run.runId, installRoot, ref: baseline.ref },
-              },
-            ),
-          ).rejects.toMatchObject({
-            name: "DoctorMaintenanceRefusalError",
-            refusal: { kind: "data-at-risk", reason: "unreadable-state" },
-            cause: { message: expect.stringContaining(`driver PID ${foreignDriver.pid}`) },
           });
-          expect(repair).not.toHaveBeenCalled();
-          expect(mocks.runContributions).toHaveBeenCalledTimes(2);
-          expect(fs.readFileSync(state.configPath)).toEqual(current);
-          expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
-          expect(fs.readFileSync(captured.payloadPath, "utf8")).toBe(original);
+        });
+      } finally {
+        await maintenance.release();
+      }
+      const captured = readCapturedConfig(baseline.ref.directory, state.configPath);
+      expect(captured.bytes.toString("utf8")).toBe(original);
+      const store = resolveUpdateCaptureRoot(state.stateDir);
+      const originalEntries = fs.readdirSync(store).toSorted();
+      const expectCaptureIntact = () => {
+        expect(fs.readdirSync(store).toSorted()).toEqual(originalEntries);
+        expect(read(captured.manifestPath)).toEqual(captured.manifestBytes);
+        expect(read(captured.payloadPath).toString()).toBe(original);
+      };
+      const doctor = (current: string | Buffer, ref = baseline.ref) =>
+        runDoctorHealthFlow(runtime, repairOptions, {
+          inputHash: hashConfigRaw(current.toString()),
+          assertCurrent: fence.assertCurrent,
+          originalRecoveryCapture: { runId: run.runId, installRoot, ref },
+        });
+      const { readProcessAncestry: readAncestry } = await vi.importActual<
+        typeof import("@openclaw/proc-safe/identity")
+      >("@openclaw/proc-safe/identity");
+      vi.mocked(processIdentity.readProcessAncestry).mockImplementation((pid, options) => {
+        const observed = readAncestry(pid, { ...options, throughPid: process.pid });
+        if (!observed || options?.throughPid === process.pid) {
+          return observed;
+        }
+        // Only the higher supervisor's visibility is denied. The real driver,
+        // executor, maintenance owner and retained capture stay authoritative.
+        return { ...observed, complete: false, stoppedBy: "unreadable-parent" };
+      });
+      for (const [port, inheritedRunId] of [
+        [19112, undefined],
+        [19113, run.runId],
+      ] as const) {
+        vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunId);
+        const current = `{ "gateway": { "port": ${port} } }\n`;
+        fs.writeFileSync(state.configPath, current);
+        await doctor(current);
+        expect(fs.readFileSync(state.configPath, "utf8")).toBe(current);
+        expectCaptureIntact();
+      }
+      for (const fault of ["missing", "digest", "terminal", "later-generation"] as const) {
+        const current = read(state.configPath);
+        const moved = `${baseline.ref.directory}-temporarily-missing`;
+        const outcome = path.join(baseline.ref.directory, "outcome.json");
+        const candidate = path.join(baseline.ref.directory, "candidate");
+        const repair = vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig");
+        if (fault === "missing") {
+          fs.renameSync(baseline.ref.directory, moved);
+        } else if (fault === "terminal") {
+          fs.writeFileSync(
+            outcome,
+            JSON.stringify({ status: "committed", manifestSha256: baseline.ref.manifestSha256 }),
+          );
+        } else if (fault === "later-generation") {
+          fs.mkdirSync(candidate);
+        }
+        try {
+          await expect(
+            doctor(
+              current,
+              fault === "digest"
+                ? { ...baseline.ref, manifestSha256: "0".repeat(64) }
+                : baseline.ref,
+            ),
+            fault,
+          ).rejects.toThrow(/admitted original update capture/i);
+          expect(repair, fault).not.toHaveBeenCalled();
+          expect(mocks.runContributions, fault).toHaveBeenCalledTimes(2);
+          expect(read(state.configPath), fault).toEqual(current);
         } finally {
           repair.mockRestore();
-          foreign.stdin.end();
-          await closed;
+          if (fault === "missing") {
+            fs.renameSync(moved, baseline.ref.directory);
+          } else if (fault === "terminal") {
+            fs.unlinkSync(outcome);
+          } else if (fault === "later-generation") {
+            fs.rmdirSync(candidate);
+          }
         }
+        expectCaptureIntact();
+      }
+      expect(mocks.runContributions).toHaveBeenCalledTimes(2);
+      const retainedMessage = `Original update capture retained at ${baseline.ref.manifestPath}.`;
+      expect(
+        runtime.log.mock.calls.filter(([message]) => message === retainedMessage),
+        runtime.log.mock.calls.flat().join("\n"),
+      ).toHaveLength(2);
+
+      const foreign = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+        stdio: ["pipe", "ignore", "ignore"],
       });
-    } finally {
-      vi.mocked(processIdentity.readProcessAncestry).mockReset();
-      vi.unstubAllEnvs();
-    }
+      const closed = once(foreign, "close");
+      const repair = vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig");
+      const current = read(state.configPath);
+      try {
+        await once(foreign, "spawn");
+        const foreignDriver = required(
+          readUpdateRunDriver(foreign.pid),
+          "Missing foreign identity",
+        );
+        expect(inspectUpdateRunDriver(foreignDriver)).toBe("alive");
+        createUpdateRun({ trigger: "cli", origin: { driver: foreignDriver } }, { env: state.env });
+        await expect(doctor(current)).rejects.toMatchObject({
+          name: "DoctorMaintenanceRefusalError",
+          refusal: { kind: "data-at-risk", reason: "unreadable-state" },
+          cause: { message: expect.stringContaining(`driver PID ${foreignDriver.pid}`) },
+        });
+        expect(repair).not.toHaveBeenCalled();
+        expect(mocks.runContributions).toHaveBeenCalledTimes(2);
+        expect(read(state.configPath)).toEqual(current);
+        expectCaptureIntact();
+      } finally {
+        foreign.stdin.end();
+        await closed;
+      }
+    });
   });
 });
 
 it("shares one fleet preflight with Doctor admission and its health contribution", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withDoctorState(async (state) => {
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {}, second: {}, third: {}, fourth: {} } },
     };
@@ -404,46 +405,33 @@ it("shares one fleet preflight with Doctor admission and its health contribution
     }
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
-    const noOp = async () => {};
-    const admission = resolveInitialDoctorHealthContributions({
-      runStructuredHealthRepairs: noOp,
-      runGatewayConfigHealth: noOp,
-      runAuthProfileMigration: noOp,
-      runAuthProfileHealth: noOp,
-      runGatewayAuthHealth: noOp,
-      runLegacyStateHealth: noOp,
-    }).find((contribution) => contribution.id === "doctor:agent-database-admission")!;
-    mocks.runContributions.mockImplementation((ctx) => admission.run(ctx));
+    installAdmissionContribution();
     const inspect = vi.spyOn(databasePreflight, "preflightOpenClawDatabaseSchemas");
-    try {
-      vi.mocked(execFile).mockClear();
-      vi.mocked(fork).mockClear();
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      await runDoctorHealthFlow(runtime, { nonInteractive: true });
+    vi.mocked(execFile).mockClear();
+    vi.mocked(fork).mockClear();
+    const runtime = createDoctorRuntime();
+    await runDoctorHealthFlow(runtime, { nonInteractive: true });
 
-      expect(mocks.runContributions).toHaveBeenCalledOnce();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(inspect.mock.calls.filter(([options]) => options.scope !== "state")).toHaveLength(1);
-      const schemaEntry = String(resolveRuntimeProcessEntrypointUrl("agentSchemaInspection"));
-      expect(
-        vi.mocked(fork).mock.calls.filter(([entry]) => String(entry) === schemaEntry),
-      ).toHaveLength(2);
-      expect(
-        vi
-          .mocked(execFile)
-          .mock.calls.filter(([, args]) => Array.isArray(args) && args.includes("schema-header")),
-      ).toHaveLength(0);
-    } finally {
-      inspect.mockRestore();
-    }
+    expect(mocks.runContributions).toHaveBeenCalledOnce();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(inspect.mock.calls.filter(([options]) => options.scope !== "state")).toHaveLength(1);
+    const schemaEntry = String(resolveRuntimeProcessEntrypointUrl("agentSchemaInspection"));
+    expect(
+      vi.mocked(fork).mock.calls.filter(([entry]) => String(entry) === schemaEntry),
+    ).toHaveLength(2);
+    expect(
+      vi
+        .mocked(execFile)
+        .mock.calls.filter(([, args]) => Array.isArray(args) && args.includes("schema-header")),
+    ).toHaveLength(0);
   });
 });
 
 it.each(["hardlink", "relocated-copy"] as const)(
   "reconciles Doctor admission with physical quarantine across ancestor aliases: %s",
   async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withDoctorState(async (state) => {
       const originalRoot = state.stateDir;
       const relocatedRoot = state.path("relocated-state");
       const cleanerDirectory = state.statePath("agents", "cleaner");
@@ -451,10 +439,7 @@ it.each(["hardlink", "relocated-copy"] as const)(
       const sessionAlias = state.statePath("session-alias");
       const cfg: OpenClawConfig = {
         agents: {
-          entries: {
-            main: {},
-            cleaner: { agentDir: path.join(configuredAlias, "agent") },
-          },
+          entries: { main: {}, cleaner: { agentDir: path.join(configuredAlias, "agent") } },
         },
         session: {
           store: path.join(sessionAlias, "agents", "{agentId}", "sessions", "sessions.json"),
@@ -475,95 +460,79 @@ it.each(["hardlink", "relocated-copy"] as const)(
       fs.symlinkSync(originalRoot, sessionAlias, "dir");
       await state.writeConfig(cfg);
       mocks.config.mockReturnValue(cfg);
-      const noOp = async () => {};
-      const admission = resolveInitialDoctorHealthContributions({
-        runStructuredHealthRepairs: noOp,
-        runGatewayConfigHealth: noOp,
-        runAuthProfileMigration: noOp,
-        runAuthProfileHealth: noOp,
-        runGatewayAuthHealth: noOp,
-        runLegacyStateHealth: noOp,
-      }).find((contribution) => contribution.id === "doctor:agent-database-admission")!;
-      mocks.runContributions.mockImplementation((ctx) => admission.run(ctx));
+      installAdmissionContribution();
       const inspect = vi.spyOn(databasePreflight, "preflightOpenClawDatabaseSchemas");
       const loadConfig = configFlow.loadAndMaybeMigrateDoctorConfig;
-      const migration = vi
-        .spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig")
-        .mockImplementation(async (params) => {
-          const result = await loadConfig(params);
-          if (kind === "relocated-copy") {
-            await closeOpenClawAgentDatabasesAsync();
-            await closeOpenClawStateDatabaseAsync();
-            // The state-dir owner preserves the old locator after moving the whole root.
-            fs.renameSync(originalRoot, relocatedRoot);
-            fs.symlinkSync(relocatedRoot, originalRoot, "dir");
-            process.env.OPENCLAW_STATE_DIR = relocatedRoot;
-          }
-          const repaired = await migrateLegacyMediaPersistence({
-            env: process.env,
-            configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(result.cfg, {
-              env: process.env,
-            }),
-            preparedDiscovery: params.agentDatabaseMigrationDiscovery,
-          });
-          return {
-            ...result,
-            stateMigrationStepReceipts: [
-              createLegacyStateMigrationStepReceipt(
-                {
-                  id: "media-persistence",
-                  phase: "shared",
-                  source: [],
-                  target: [],
-                  requiredness: "conditional",
-                  reversibility: "checkpoint-required",
-                },
-                repaired,
-              ),
-            ],
-          };
-        });
-      try {
-        const prepared = await prepareDoctorDatabasePreflight();
-        const refusedPath = path.join(configuredAlias, "agent", "openclaw-agent.sqlite");
-        expect(prepared.agentRefusals).toEqual([
-          expect.objectContaining({
-            agentId: "cleaner",
-            paths: [refusedPath],
-            code: "agent-database-ownership-mismatch",
-          }),
-        ]);
-        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        await runDoctorHealthFlow(runtime, { nonInteractive: true }, undefined, prepared);
-        expect(runtime.error).not.toHaveBeenCalled();
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(mocks.runContributions).toHaveBeenCalledOnce();
-        const refusals = listAgentDatabaseAdmissionRefusals({ env: process.env });
-        expect(refusals).toEqual(kind === "hardlink" ? prepared.agentRefusals : []);
-        expect(mocks.runContributions.mock.calls[0]?.[0].agentDatabaseRefusals).toEqual(refusals);
-        expect(inspect.mock.calls.filter(([options]) => options.scope !== "state")).toHaveLength(
-          kind === "relocated-copy" ? 2 : 1,
-        );
-        const currentCopyPath =
-          kind === "relocated-copy"
-            ? path.join(relocatedRoot, "agents", "cleaner", "agent", "openclaw-agent.sqlite")
-            : physicalCopyPath;
-        const backups = fs
-          .readdirSync(path.dirname(currentCopyPath))
-          .filter((name) => name.startsWith("openclaw-agent.sqlite.corrupt-"));
-        if (kind === "hardlink") {
-          expect(backups).toEqual([]);
-          expect(fs.statSync(currentCopyPath).ino).toBe(fs.statSync(ownerPath).ino);
-        } else {
-          expect(fs.existsSync(currentCopyPath)).toBe(false);
-          expect(backups).toHaveLength(1);
-          expect(fs.readFileSync(path.join(path.dirname(currentCopyPath), backups[0]!))).toEqual(
-            originalBytes,
-          );
+      vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig").mockImplementation(async (params) => {
+        const result = await loadConfig(params);
+        if (kind === "relocated-copy") {
+          await closeOpenClawAgentDatabasesAsync();
+          await closeOpenClawStateDatabaseAsync();
+          // The state-dir owner preserves the old locator after moving the whole root.
+          fs.renameSync(originalRoot, relocatedRoot);
+          fs.symlinkSync(relocatedRoot, originalRoot, "dir");
+          process.env.OPENCLAW_STATE_DIR = relocatedRoot;
         }
-      } finally {
-        migration.mockRestore();
-        inspect.mockRestore();
+        const repaired = await migrateLegacyMediaPersistence({
+          env: process.env,
+          configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(result.cfg, {
+            env: process.env,
+          }),
+          preparedDiscovery: params.agentDatabaseMigrationDiscovery,
+        });
+        return {
+          ...result,
+          stateMigrationStepReceipts: [
+            createLegacyStateMigrationStepReceipt(
+              {
+                id: "media-persistence",
+                phase: "shared",
+                source: [],
+                target: [],
+                requiredness: "conditional",
+                reversibility: "checkpoint-required",
+              },
+              repaired,
+            ),
+          ],
+        };
+      });
+      const prepared = await prepareDoctorDatabasePreflight();
+      const refusedPath = path.join(configuredAlias, "agent", "openclaw-agent.sqlite");
+      expect(prepared.agentRefusals).toEqual([
+        expect.objectContaining({
+          agentId: "cleaner",
+          paths: [refusedPath],
+          code: "agent-database-ownership-mismatch",
+        }),
+      ]);
+      const runtime = createDoctorRuntime();
+      await runDoctorHealthFlow(runtime, { nonInteractive: true }, undefined, prepared);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(mocks.runContributions).toHaveBeenCalledOnce();
+      const refusals = listAgentDatabaseAdmissionRefusals({ env: process.env });
+      expect(refusals).toEqual(kind === "hardlink" ? prepared.agentRefusals : []);
+      expect(mocks.runContributions.mock.calls[0]?.[0].agentDatabaseRefusals).toEqual(refusals);
+      expect(inspect.mock.calls.filter(([options]) => options.scope !== "state")).toHaveLength(
+        kind === "relocated-copy" ? 2 : 1,
+      );
+      const currentCopyPath =
+        kind === "relocated-copy"
+          ? path.join(relocatedRoot, "agents", "cleaner", "agent", "openclaw-agent.sqlite")
+          : physicalCopyPath;
+      const backups = fs
+        .readdirSync(path.dirname(currentCopyPath))
+        .filter((name) => name.startsWith("openclaw-agent.sqlite.corrupt-"));
+      if (kind === "hardlink") {
+        expect(backups).toEqual([]);
+        expect(fs.statSync(currentCopyPath).ino).toBe(fs.statSync(ownerPath).ino);
+      } else {
+        expect(fs.existsSync(currentCopyPath)).toBe(false);
+        expect(backups).toHaveLength(1);
+        expect(fs.readFileSync(path.join(path.dirname(currentCopyPath), backups[0]!))).toEqual(
+          originalBytes,
+        );
       }
     });
   },

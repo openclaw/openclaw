@@ -125,6 +125,9 @@ it("preserves extras and their staging while refreshing and pruning declared art
   await fs.rm(repoFile("agents/main/manifest.json"));
   const expired = repoFile("agents/expired");
   await writeBackupManifest(expired, "expired");
+  const untracked = "agents/operator-untracked/notes.txt";
+  await fs.mkdir(path.dirname(repoFile(untracked)), { recursive: true });
+  await fs.writeFile(repoFile(untracked), "operator-owned\n");
   const pruned = await backup([global]);
   await expectMissing(expired);
   expect(await git("ls-tree", "HEAD", "agents/main")).toBe("");
@@ -132,6 +135,10 @@ it("preserves extras and their staging while refreshing and pruning declared art
   for (const file of extras) {
     await expectContents(repoFile(file), `operator document: ${file}\n`);
   }
+  await expectContents(repoFile(untracked), "operator-owned\n");
+  expect(await git("status", "--porcelain", "--untracked-files=all", "--", untracked)).toBe(
+    `?? ${untracked}`,
+  );
   expect((await staged()).split("\n").toSorted()).toEqual(extras.toSorted());
   await expect(backup([global])).resolves.toMatchObject({ noChanges: true });
   expect(await git("rev-parse", "HEAD")).toBe(pruned.commit);

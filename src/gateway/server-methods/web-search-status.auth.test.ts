@@ -19,7 +19,6 @@ vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({
   readExternalCliBootstrapCredential: () => null,
 }));
 vi.mock("../../agents/auth-profiles/oauth-shared.js", () => ({}));
-vi.mock("../../web-search/runtime-execution.js", () => ({}));
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshot: mocks.snapshot,
 }));

@@ -83,19 +83,16 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
     const observedNodes = new Set<HTMLElement>();
-    const resizeObserver =
-      typeof ResizeObserver === "function"
-        ? new ResizeObserver((entries) => {
-            const shells = new Set(
-              entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
-            );
-            for (const shell of shells) {
-              if (shell) {
-                syncTableOverflow(shell);
-              }
-            }
-          })
-        : null;
+    const resizeObserver = new ResizeObserver((entries) => {
+      const shells = new Set(
+        entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
+      );
+      for (const shell of shells) {
+        if (shell) {
+          syncTableOverflow(shell);
+        }
+      }
+    });
     const syncTables = (shells: Iterable<HTMLElement>) => {
       for (const shell of shells) {
         if (!owner.contains(shell)) {
@@ -104,13 +101,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         enhanceTableShell(shell);
         // Both boxes are observed after layout; mutation-time reads would force
         // layout again after each table's chrome is installed.
-        if (!resizeObserver) {
-          syncTableOverflow(shell);
-        }
         for (const node of shell.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`)) {
           if (!observedNodes.has(node)) {
             observedNodes.add(node);
-            resizeObserver?.observe(node);
+            resizeObserver.observe(node);
           }
         }
       }
@@ -146,7 +140,7 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           ];
           for (const observed of removed) {
             if (observedNodes.delete(observed)) {
-              resizeObserver?.unobserve(observed);
+              resizeObserver.unobserve(observed);
             }
           }
         }
@@ -179,7 +173,7 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
       release: () => {
         stopScroll();
         mutationObserver.disconnect();
-        resizeObserver?.disconnect();
+        resizeObserver.disconnect();
       },
     };
     tableOwnerStates.set(owner, state);

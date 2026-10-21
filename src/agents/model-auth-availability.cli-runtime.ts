@@ -120,13 +120,14 @@ export function createCliRuntimeModelAuthEvaluator(
     }
     const runtimeAuthMode =
       params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(runtimeProvider)];
-    if (typeof runtimeAuthMode === "string") {
+    if (runtimeAuthMode !== undefined) {
       // The prepared native-runtime result is authoritative for this route. Provider
       // credentials cannot prove that the separately authenticated CLI is usable.
       return {
         availability: true,
         routeResolution: null,
-        selectedAuthMode: runtimeAuthMode,
+        selectedAuthMode:
+          typeof runtimeAuthMode === "string" ? runtimeAuthMode : runtimeAuthMode.mode,
         evidence: "runtime",
         runtimeAuth,
       };

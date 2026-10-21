@@ -146,6 +146,7 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
     expect.any(Object),
   );
   await waitForSolid(() => expect(page.textContent).toContain("Answered"));
+  expect(page.querySelector(".chat-question-summary")?.textContent).toContain("The design team");
 });
 
 it.each(["id", "client"] as const)(

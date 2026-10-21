@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import {
@@ -13,6 +16,7 @@ import {
   type WorkerSessionTurnOwner,
   type WorkerSessionPlacementIdentity,
 } from "./placement-record.js";
+import { ensureLocal, query, turnClaimValues } from "./placement-row-codec.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -112,6 +116,25 @@ describe("worker session placement store", () => {
       },
     );
   }
+
+  it("keeps warm local claims and releases in the shared owner without SQL or worker requests", async () => {
+    const warm = await claimTurn("warm-owner");
+    await store.releaseTurn(warm);
+    const reader = createWorkerSessionPlacementStore({ database });
+    const requests = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+    const sql = observeHostDataSql();
+    try {
+      const claim = await claimTurn("warm-next");
+      expect((await reader.getAsync(SESSION.sessionId))?.turnClaim?.claimId).toBe(claim.claimId);
+      await store.releaseTurnIfOwned(claim);
+      expect((await reader.getAsync(SESSION.sessionId))?.turnClaim).toBeNull();
+      expect(requests).not.toHaveBeenCalled();
+      expect(sql.queries).toEqual([]);
+    } finally {
+      requests.mockRestore();
+      sql.restore();
+    }
+  });
 
   it("closes local admission before draining the existing local turn", async () => {
     const localClaim = await claimTurn("local-claim");
@@ -255,6 +278,33 @@ describe("worker session placement store", () => {
       sessionKey: "agent:main:local-restart",
     };
     await claimTurn("local-before-restart", { kind: "local" }, localIdentity);
+    const legacyIdentity = {
+      ...localIdentity,
+      sessionId: "session-legacy-restart",
+      sessionKey: "agent:main:legacy-restart",
+    };
+    // A tagged predecessor persisted plain-local claims; upgrade startup still clears them.
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        ensureLocal(db, legacyIdentity, nowMs);
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_session_placements")
+            .set(
+              turnClaimValues({
+                owner: "local",
+                ownerEpoch: null,
+                generation: 0,
+                claimId: "legacy-claim",
+                runId: "legacy-run",
+              }),
+            )
+            .where("session_id", "=", legacyIdentity.sessionId),
+        );
+      },
+      { database },
+    );
     const active = await advanceToActive();
     const owner = placementTurnOwner(active);
     const workerClaim = await claimTurn("worker-before-restart", owner);
@@ -271,7 +321,8 @@ describe("worker session placement store", () => {
     } finally {
       queries.restore();
     }
-    expect(store.get(localIdentity.sessionId)?.turnClaim).toBeNull();
+    expect(await store.getAsync(localIdentity.sessionId)).toBeUndefined();
+    expect(store.get(legacyIdentity.sessionId)?.turnClaim).toBeNull();
     await store.getAsync(workerClaim.sessionId);
     expect(store.validateTurnClaim(workerClaim)).toBe(true);
     expect(await store.adoptActive(ownerInput(active))).toMatchObject({
@@ -282,12 +333,38 @@ describe("worker session placement store", () => {
       SESSION.sessionId,
     ]);
     expect((await store.listAsync()).map((record) => record.sessionId)).toEqual([
-      localIdentity.sessionId,
+      legacyIdentity.sessionId,
       SESSION.sessionId,
     ]);
   });
 
+  it("recovers a committed dispatch after the predecessor local turn disappears on restart", async () => {
+    await claimTurn("local-before-dispatch-crash");
+    const requested = await store.startDispatch(SESSION);
+    await closeStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    expect(await store.clearLocalTurnClaimsAfterRestartAsync()).toBe(0);
+    expect(await store.getAsync(SESSION.sessionId)).toMatchObject({
+      state: "requested",
+      generation: requested.generation,
+      turnClaim: null,
+    });
+    await expect(store.waitForTurnClaimRelease(SESSION.sessionId, {})).resolves.toBeUndefined();
+    expect(
+      await store.transition({
+        sessionId: SESSION.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: requested.generation,
+        patch: { environmentId: "environment-placement-restart" },
+      }),
+    ).toMatchObject({ state: "provisioning", turnClaim: null });
+  });
+
   it("fences remote-exec local claims and clears them after restart", async () => {
+    const local = await claimTurn("local-before-remote");
+    await store.releaseTurn(local);
     const active = await advanceToActive(SESSION, "remote-exec");
     const placementOwner = {
       environmentId: active.environmentId,
@@ -308,6 +385,13 @@ describe("worker session placement store", () => {
       runId: "remote-local-run",
     });
     expect(store.validateTurnClaim(claim)).toBe(true);
+    await store.releaseTurn(claim);
+    const recovered = await store.claimTurn({
+      ...SESSION,
+      owner: claim.owner,
+      claimId: "remote-local-restart",
+      runId: "remote-local-restart-run",
+    });
 
     await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -315,7 +399,7 @@ describe("worker session placement store", () => {
 
     expect(await store.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
     expect(store.get(SESSION.sessionId)).toMatchObject({ state: "active", turnClaim: null });
-    expect(store.validateTurnClaim(claim)).toBe(false);
+    expect(store.validateTurnClaim(recovered)).toBe(false);
   });
 
   it("closes worker admission before draining the active turn", async () => {

@@ -70,6 +70,32 @@ it("caps returned and cached results when Exa exceeds the requested count", asyn
   });
 });
 
+it("shares cached answers only with the same resolved credential", async () => {
+  fetchMock.mockImplementation(async (_url, init) =>
+    Response.json({
+      results: [
+        {
+          url:
+            new Headers(init?.headers).get("x-api-key") === "fixture-exa-a"
+              ? "https://example.com/account-a"
+              : "https://example.com/account-b",
+        },
+      ],
+    }),
+  );
+  const args = { query: "Exa credential cache isolation" };
+  const first = await requireExaTool({ apiKey: "fixture-exa-a" }).execute(args);
+  const other = await requireExaTool({ apiKey: "fixture-exa-b" }).execute(args);
+  const repeated = await requireExaTool({ apiKey: "fixture-exa-a" }).execute(args);
+
+  expect(first).toMatchObject({ results: [{ url: "https://example.com/account-a" }] });
+  expect(other).toMatchObject({ results: [{ url: "https://example.com/account-b" }] });
+  expect(repeated).toEqual({ ...first, cached: true });
+  expect(
+    fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("x-api-key")),
+  ).toEqual(["fixture-exa-a", "fixture-exa-b"]);
+});
+
 it.each(["before", "during"])("preserves cancellation %s transport", async (timing) => {
   const controller = new AbortController();
   const reason = new Error(`Exa canceled ${timing} transport`);
@@ -281,4 +307,26 @@ it("bounds Exa API error bodies without using response.text()", async () => {
   expect(tracked.wasCanceled()).toBe(true);
   expect(textSpy).not.toHaveBeenCalled();
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it.each(["body", "statusText"])("redacts the active credential reflected in %s", async (source) => {
+  const apiKey = "fixture-exa-opaque-credential";
+  const detail = `upstream rejected ${apiKey}`;
+  fetchMock.mockResolvedValue(
+    new Response(source === "body" ? detail : "", {
+      status: 503,
+      statusText: source === "statusText" ? detail : "Unavailable",
+    }),
+  );
+  const failure = requireExaTool({ apiKey }, { cacheTtlMinutes: 0 }).execute({
+    query: `reflected credential ${source}`,
+  });
+
+  await expect(failure).rejects.toMatchObject({
+    status: 503,
+    statusCode: 503,
+    message: expect.stringContaining("upstream rejected"),
+  });
+  await expect(failure).rejects.not.toThrow(apiKey);
+  expect(fetchMock).toHaveBeenCalledOnce();
 });

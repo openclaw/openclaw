@@ -129,6 +129,10 @@ main-session turns continue through normal restart recovery with the original
 operator restrictions. If the original authority is unavailable, the task stays
 owed instead of running with broader permissions.
 
+Completion replay uses the same captured requester identity as the original
+input. Optional fields absent from that identity stay absent after reload, so
+an already committed completion is reconciled without appending another notice.
+
 An already-admitted completion turn for a yielded nested requester is different
 from an orphaned child launch. Its frozen child-result batch retains the exact
 saved continuation across restart. Registry recovery waits for that owner instead
@@ -150,6 +154,12 @@ Startup activates only runs with unfinished execution, cleanup, or requester
 obligations. Settled history stays available for listing and result reads without
 reserving completion sources or resuming it. Retention still prunes finished Swarm
 groups, including when no runs need activation.
+Activation waits for source restoration and ordered completion reservations.
+Interrupted child settlement then runs in the background, with at most eight
+recoveries in flight across requester groups. Shutdown waits for accepted recovery
+work; a failed attempt remains available to the normal sweep. Startup trace
+subspans sum work across requester groups and can exceed activation wall time;
+`background.subagent-interrupted` reports the separate settlement work.
 Durably completed cleanup does not replay interrupted child-session effects on restart.
 The saved interruption still rejects late child results, and pending requester wakes
 continue through their existing settlement owner.

@@ -74,36 +74,87 @@ function readLogicalFamily(pathname: string): Map<string, Buffer> {
   return family;
 }
 
-it("keeps each scoped artifact-preserving inspection byte-neutral across writer commits", async () => {
-  const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-cache-"), "missing");
-  const databasePath = createTempDatabasePath();
-  const writer = new sqlite.DatabaseSync(databasePath);
-  try {
-    writer.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE probe(value TEXT)",
-    );
-    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, () =>
+it.each(["cache", "update-tmpdir"])(
+  "keeps %s inspections byte-neutral across writer commits",
+  async (placement) => {
+    const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-cache-"), "missing");
+    const databasePath = createTempDatabasePath();
+    const writer = new sqlite.DatabaseSync(databasePath);
+    try {
+      writer.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE probe(value TEXT)",
+      );
+      await withEnvAsync(
+        placement === "cache"
+          ? { XDG_CACHE_HOME: cacheRoot }
+          : {
+              XDG_CACHE_HOME: undefined,
+              TMPDIR: cacheRoot,
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            },
+        () =>
+          withSqliteReadOnlyWorkerScope(async () => {
+            for (const value of ["first", "second"]) {
+              writer.prepare("INSERT INTO probe VALUES (?)").run(value);
+              const familyBefore = readFamily(databasePath);
+              const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
+                preserveSourceArtifacts: true,
+              });
+              inspectSnapshot(prepared, (snapshot) => {
+                expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
+                expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
+                expect(readFamily(databasePath)).toEqual(familyBefore);
+                expect(
+                  snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
+                ).toEqual({ value });
+              });
+            }
+          }),
+      );
+    } finally {
+      writer.close();
+    }
+  },
+);
+
+it("stages update inspection snapshots in TMPDIR instead of the home cache", async () => {
+  const root = tempDirs.make("openclaw-update-snapshot-placement-");
+  const scratch = path.join(root, "large-volume");
+  fs.mkdirSync(scratch);
+  const cacheRoot = path.join(root, "home-cache");
+  const source = createTempDatabasePath(
+    "CREATE TABLE probe(value); INSERT INTO probe VALUES ('kept');",
+  );
+  const before = readFamily(source);
+  await withEnvAsync(
+    {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      TMPDIR: scratch,
+      TMP: scratch,
+      TEMP: scratch,
+      XDG_CACHE_HOME: cacheRoot,
+    },
+    () =>
       withSqliteReadOnlyWorkerScope(async () => {
-        for (const value of ["first", "second"]) {
-          writer.prepare("INSERT INTO probe VALUES (?)").run(value);
-          const familyBefore = readFamily(databasePath);
-          const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
-            preserveSourceArtifacts: true,
-          });
-          inspectSnapshot(prepared, (snapshot) => {
-            expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
-            expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
-            expect(readFamily(databasePath)).toEqual(familyBefore);
-            expect(
-              snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
-            ).toEqual({ value });
-          });
+        const prepared = await prepareSqliteReadOnlyLocation(source, {
+          preserveSourceArtifacts: true,
+        });
+        try {
+          withDatabase(
+            prepared.location,
+            (snapshot) => {
+              expect(snapshot.prepare("SELECT value FROM probe").get()).toEqual({ value: "kept" });
+            },
+            true,
+          );
+          expect(prepared.location.startsWith(scratch + path.sep)).toBe(true);
+          expect(fs.existsSync(cacheRoot)).toBe(false);
+          expect(readFamily(source)).toEqual(before);
+        } finally {
+          expect(await prepared.cleanupAsync()).toBe(true);
         }
       }),
-    );
-  } finally {
-    writer.close();
-  }
+  );
 });
 
 it.each([13, 778])(

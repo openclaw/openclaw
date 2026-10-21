@@ -83,7 +83,7 @@ suite.define(() => {
     for (const name of ["Back", "Forward"]) {
       await expect.poll(() => toolbar.getByRole("button", { name }).isVisible()).toBe(true);
     }
-    for (const name of ["Expand sidebar", "Open command palette", "New session"]) {
+    for (const name of ["Expand sidebar", "Command palette", "New session"]) {
       await expect.poll(() => toolbar.getByRole("button", { name }).count()).toBe(0);
     }
   });
@@ -119,22 +119,21 @@ suite.define(() => {
     await shellHas(page, "shell--merged-chat-chrome");
     await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-    const header = page.locator(".chat-pane__header").first();
+    const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
     const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
     await drawerButton.waitFor({ state: "visible" });
     await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
     if (phone) {
       await capture(page, "01-chat-title-bar.png", header, [drawerButton]);
-      await drawerButton.tap();
-      await shellHas(page, "shell--nav-drawer-open");
-      const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
-      await expect.poll(() => drawerSearch.isVisible()).toBe(true);
-      await capture(page, "02-sidebar-drawer.png", page.locator(".shell-nav"), [drawerSearch]);
-      await drawerSearch.tap();
-    } else {
-      await header.locator(".chat-header-session-menu__trigger").click();
-      await page.getByText("Open command palette", { exact: true }).click();
     }
+    await (phone ? drawerButton.tap() : drawerButton.click());
+    await shellHas(page, "shell--nav-drawer-open");
+    const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
+    await expect.poll(() => drawerSearch.isVisible()).toBe(true);
+    if (phone) {
+      await capture(page, "02-sidebar-drawer.png", page.locator(".shell-nav"), [drawerSearch]);
+    }
+    await (phone ? drawerSearch.tap() : drawerSearch.click());
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible" });
     if (phone) {
@@ -209,7 +208,7 @@ suite.define(() => {
         const frame = await takeControlUiScreenshotFrame(
           page,
           shell,
-          [page.locator(".chat-pane__header").first()],
+          [page.locator(".agent-chat__header--mobile").filter({ visible: true })],
           { animations: "disabled" },
         );
         await writeFile(path.join(suite.artifactDir, "held-swipe.png"), frame.png);

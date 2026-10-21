@@ -1,5 +1,3 @@
-// Real session lineage and slot-owner registration for memory audience tests:
-// SQLite rows, worker reads, generation leases, and a registered native provider.
 import { randomUUID } from "node:crypto";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -24,16 +22,11 @@ export type ChildLineage = {
   audience: MemoryAudience;
   root: SessionEntry;
   child: SessionEntry;
-  /** Commits a row through the session owner, advancing or revoking leases. */
   write: (sessionKey: string, entry: SessionEntry) => void;
   storePath: string;
 };
 
-/**
- * Writes a direct root and a spawned child, then resolves the child's audience
- * from its admitted row as a turn owner does. The root sender's owner bit
- * selects owner-private or conversation audience.
- */
+/** Commit real lineage and mint its audience from the admitted child row. */
 export async function withChildAudience(
   rootSenderIsOwner: boolean,
   run: (lineage: ChildLineage) => Promise<void>,
@@ -41,22 +34,20 @@ export async function withChildAudience(
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const write = (sessionKey: string, entry: SessionEntry) =>
       replaceSessionEntrySync({ agentId: "main", sessionKey, env }, entry);
-    const root: SessionEntry = {
-      sessionId: randomUUID(),
-      lifecycleRevision: randomUUID(),
-      chatType: "direct",
-      updatedAt: 1,
-    };
-    const child: SessionEntry = {
+    const entry = (fields: Partial<SessionEntry>): SessionEntry => ({
       sessionId: randomUUID(),
       lifecycleRevision: randomUUID(),
       updatedAt: 1,
+      ...fields,
+    });
+    const root = entry({ chatType: "direct" });
+    const child = entry({
       spawnedBy: AUDIENCE_ROOT_KEY,
       parentSessionKey: AUDIENCE_ROOT_KEY,
       spawnedBySessionId: root.sessionId,
       parentSessionLifecycleRevision: root.lifecycleRevision,
       spawnedBySenderIsOwner: rootSenderIsOwner,
-    };
+    });
     write(AUDIENCE_ROOT_KEY, root);
     write(AUDIENCE_CHILD_KEY, child);
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
@@ -73,15 +64,11 @@ export async function withChildAudience(
     if (resolution.status !== "granted") {
       throw new Error(resolution.reason);
     }
-    try {
-      await run({ audience: resolution.audience, root, child, write, storePath });
-    } finally {
-      resolution.release();
-    }
+    using _ = { [Symbol.dispose]: resolution.release };
+    await run({ audience: resolution.audience, root, child, write, storePath });
   });
 }
 
-/** Session authority for the spawned child carrying its host-minted audience. */
 export function childMemoryContext(audience: MemoryAudience): MemoryCallerContext {
   return {
     authority: { kind: "session", sessionKey: AUDIENCE_CHILD_KEY, sandboxed: false, audience },
@@ -89,10 +76,7 @@ export function childMemoryContext(audience: MemoryAudience): MemoryCallerContex
   };
 }
 
-/**
- * Registers a selected native provider and runs `action` inside its registry
- * scope; `open` receives the exact context the host passes to the provider.
- */
+/** Register a selected native provider; preserve the host-supplied open context. */
 export async function withNativeMemoryProvider<T>(
   open: (context: MemoryCallerContext) => MemoryProviderHandle,
   action: () => Promise<T>,

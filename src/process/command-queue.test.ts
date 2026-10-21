@@ -97,26 +97,12 @@ describe("command queue", () => {
       queue.enqueueCommandInLane(CommandLane.Main, async () => context.getStore(), {
         warnAfterMs: 0,
         onWait: () => record("wait"),
-        taskTimeoutMs: 60_000,
-        taskTimeoutProgressAtMs: () => {
-          record("progress");
-          return Date.now();
-        },
-        taskTimeoutSubscribe: () => {
-          record("subscribe");
-          return () => record("unsubscribe");
-        },
       }),
     );
     blocker.resolve();
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
-    expect(callbacks).toEqual([
-      ["wait", "second"],
-      ["progress", "second"],
-      ["subscribe", "second"],
-      ["unsubscribe", "second"],
-    ]);
+    expect(callbacks).toEqual([["wait", "second"]]);
   });
 
   it("preserves priority and FIFO order across partial drains and resumed growth", async () => {
@@ -267,74 +253,21 @@ describe("command queue", () => {
     ).toBe(false);
   });
 
-  it.each([0, 3])("counts matching targets with lane concurrency %s", async (concurrency) => {
+  it.each([0, 3])("counts lane work with concurrency %s", async (concurrency) => {
     const lane = CommandLane.CronNested;
     const finish = createDeferred();
     queue.setCommandLaneConcurrency(lane, concurrency);
-    const tasks = ["alpha", "beta", undefined].map((agentId) =>
-      queue.enqueueCommandInLane(lane, () => finish.promise, {
-        sessionTarget: agentId ? { agentId, sessionId: agentId } : undefined,
-      }),
+    const tasks = Array.from({ length: 3 }, () =>
+      queue.enqueueCommandInLane(lane, () => finish.promise),
     );
     try {
       expect(queue.getQueueSize(lane)).toBe(3);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "alpha")).toBe(1);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "beta")).toBe(1);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "other")).toBe(0);
-      expect(queue.getQueueSize(lane, (target) => target === undefined)).toBe(1);
     } finally {
       finish.resolve();
       queue.setCommandLaneConcurrency(lane, 3);
       await Promise.all(tasks);
     }
-    expect(queue.getQueueSize(lane, (target) => target?.agentId === "alpha")).toBe(0);
-  });
-
-  it("task timeout renews from progress timestamps", async () => {
-    const lane = "timeout-progress-lane";
-    queue.setCommandLaneConcurrency(lane, 1);
-    vi.useFakeTimers();
-    let progressAtMs = Date.now();
-    const first = park(lane, "first", {
-      taskTimeoutMs: 25,
-      taskTimeoutProgressAtMs: () => progressAtMs,
-    });
-    let secondRan = false;
-    const second = queue.enqueueCommandInLane(lane, async () => {
-      secondRan = true;
-      return "second";
-    });
-    await vi.advanceTimersByTimeAsync(20);
-    progressAtMs = Date.now();
-    await vi.advanceTimersByTimeAsync(20);
-    expect(secondRan).toBe(false);
-    first.release();
-    await expect(first.task).resolves.toBe("first");
-    await expect(second).resolves.toBe("second");
-    expect(secondRan).toBe(true);
-  });
-
-  it("task timeout falls back when progress timestamp callback throws", async () => {
-    const lane = "timeout-progress-throw-lane";
-    queue.setCommandLaneConcurrency(lane, 1);
-    vi.useFakeTimers();
-    const first = queue.enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
-      taskTimeoutMs: 25,
-      taskTimeoutProgressAtMs: () => {
-        throw new Error("progress failed");
-      },
-    });
-    const firstRejected = expect(first).rejects.toMatchObject({
-      name: "CommandLaneTaskTimeoutError",
-      message: expect.stringContaining("no progress for 25ms (task budget 25ms"),
-    });
-    await vi.advanceTimersByTimeAsync(25);
-    await firstRejected;
-    expect(
-      diagnosticMocks.diag.warn.mock.calls.some(([message]) =>
-        String(message).includes("lane task timeout progress callback failed"),
-      ),
-    ).toBe(true);
+    expect(queue.getQueueSize(lane)).toBe(0);
   });
 
   it("owner cancellation rejects pending promises at every priority without releasing active work", async () => {
@@ -709,8 +642,9 @@ describe("command queue", () => {
       await expect(staleRun.task).resolves.toBe("stale");
       expect(lanes.get(lane)).toBe(replacementState);
       expectCounts(lane, 1, 0);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "stale")).toBe(0);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "replacement")).toBe(1);
+      expect(Array.from(replacementState?.activeTasks.values() ?? [])).toEqual([
+        { agentId: "replacement", sessionId: "replacement" },
+      ]);
       replacementRun.release();
       await expect(replacementRun.task).resolves.toBe("replacement");
       expect(lanes.has(lane)).toBe(false);
@@ -744,29 +678,6 @@ describe("command queue", () => {
       await expect(staleRun.task).resolves.toBe("stale");
       expect(lanes.get(lane)).toBe(replacementState);
       lanes.delete(lane);
-    });
-
-    it("retires a scoped lane after its active task times out", async () => {
-      const lanes = getQueueState().lanes;
-      const lane = "session:probe-autoqa-timed-out";
-      vi.useFakeTimers();
-      try {
-        const timedOut = queue.enqueueCommandInLane(
-          lane,
-          async () => new Promise<never>(() => {}),
-          {
-            taskTimeoutMs: 5,
-          },
-        );
-        const rejection = expect(timedOut).rejects.toMatchObject({
-          name: "CommandLaneTaskTimeoutError",
-        });
-        await vi.advanceTimersByTimeAsync(5);
-        await rejection;
-        expect(lanes.has(lane)).toBe(false);
-      } finally {
-        vi.useRealTimers();
-      }
     });
   });
 });

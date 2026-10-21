@@ -673,8 +673,22 @@ describe("CI changed Node test plan", () => {
       expected: [
         "src/gateway/server.agent-execution-shutdown.test.ts",
         "src/gateway/server.agent-late-admission.test.ts",
+        "test/gateway-session-end-shutdown.e2e.test.ts",
       ],
     })),
+    // Child-process E2Es: the import graph reaches only the test-instance helper.
+    {
+      changedPath: "src/gateway/server-startup-observers.ts",
+      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
+    },
+    {
+      changedPath: "src/process/command-queue.capacity-groups.ts",
+      expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
+    },
+    {
+      changedPath: "node-runtime-recovery.mjs",
+      expected: ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"],
+    },
     {
       changedPath: "src/auto-reply/reply/abort.test.ts",
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
@@ -843,7 +857,9 @@ describe("CI changed Node test plan", () => {
         expect(selectedJob.runner).toBe(fullJob.runner);
         const singleton = selectedJob.groups?.length === 1 && fullJob.planConcurrency === 2;
         expect(selectedJob.env).toEqual(
-          singleton ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" } : fullJob.env,
+          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+            ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+            : fullJob.env,
         );
         expect(selectedJob.planConcurrency).toBe(singleton ? 1 : fullJob.planConcurrency);
         expect(selectedJob.pretestBuildMode).toBe(fullJob.pretestBuildMode);

@@ -137,10 +137,8 @@ function remoteManifestResult(command: WorkerWorkspaceCommand) {
           memo: [],
           metrics: {
             contentHashCount: 0,
-            contentHashDurationMs: 0,
             memoHitCount: 0,
             memoTruncatedCount: 0,
-            totalDurationMs: 0,
           },
         })
       : acceptedRef;
@@ -639,7 +637,6 @@ describe("accepted workspace publication", () => {
       cause: expect.objectContaining({
         message: "Worker workspace sync failed: apply transport lost",
       }),
-      observationFailure: expect.any(WorkerTunnelOwnerDisconnectedError),
     });
     expect(actions()).toEqual(["begin", "apply", "settle"]);
   });

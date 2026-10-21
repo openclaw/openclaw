@@ -93,10 +93,24 @@ function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardSt
   return unfinishedProgressStep(steps) ?? steps.findLast((step) => step.status === "completed");
 }
 
-export function promoteFirstProgressBar(sanitizedHtml: string): string {
+function parseProgressMarkup(sanitizedHtml: string) {
   const template = document.createElement("template");
   template.innerHTML = sanitizedHtml;
-  const progress = template.content.querySelector("progress");
+  return { template, bars: template.content.querySelectorAll("progress") };
+}
+
+/** Compact previews share the full note parser but omit progress-bar fallback text. */
+export function progressCardNoteSummary(sanitizedHtml: string): string {
+  const { template, bars } = parseProgressMarkup(sanitizedHtml);
+  for (const bar of bars) {
+    bar.remove();
+  }
+  return template.content.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+export function promoteFirstProgressBar(sanitizedHtml: string): string {
+  const { template, bars } = parseProgressMarkup(sanitizedHtml);
+  const progress = bars[0];
   if (!progress) {
     return sanitizedHtml;
   }
@@ -194,7 +208,6 @@ export function progressCardPresentation(
     effectiveSessionStatus,
     activityTimestamp,
     activityKey,
-    currentStep,
     currentPosition,
     complete,
     stepLabel,

@@ -1,12 +1,14 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { availableParallelism } from "node:os";
-import { writeHeapSnapshot } from "node:v8";
+import { fileURLToPath } from "node:url";
+import { queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
+  GATEWAY_GC_TRACE_MARKER,
   GATEWAY_CPU_SAMPLE_INTERVAL_MICROS,
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   type GatewayBenchCommand,
@@ -54,12 +56,44 @@ if (isMainThread) {
   if (!process.send) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
   }
+  if (process.env.OPENCLAW_BENCH_FIRST_TEXT === "1") {
+    const { onAgentEvent } = await import("../../src/infra/agent-events.js");
+    onAgentEvent((event) => {
+      if (event.stream === "assistant" && (event.data.delta || event.data.text)) {
+        process.send?.({
+          channel: GATEWAY_PROFILE_CHANNEL,
+          kind: "agent-text",
+          runId: event.runId,
+          atEpochMs: performance.timeOrigin + performance.now(),
+        });
+      }
+    });
+  }
   // This begins after preload imports, before the Gateway entry. It is not
   // process birth and does not include the profiler's own module import cost.
   const initialResources = sampleResources();
   const inspector = new Session();
   const workers = new GatewayBenchWorkerProfiler(inspector);
   let inspectorConnected = false;
+  const traceGc = process.execArgv.includes("--trace-gc-nvp");
+  const markGc = (phase: string, profilePath?: string) => {
+    if (traceGc) {
+      // Share V8's stdout descriptor without asynchronous stream buffering.
+      writeSync(
+        1,
+        `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
+      );
+    }
+  };
+  if (traceGc) {
+    inspector.connect();
+    inspectorConnected = true;
+    // The preload runs before Gateway entry and its workers. Identify V8's
+    // main-isolate address with a forced GC outside every measured capture.
+    markGc("identify-start");
+    await inspector.post("HeapProfiler.collectGarbage");
+    markGc("identify-stop");
+  }
   const active = new Set<GatewayProfileCommand["kind"]>();
   const diagnosticCaptures = new Map<
     GatewayProfileCommand["kind"],
@@ -80,6 +114,23 @@ if (isMainThread) {
     }
     if (message.kind === "resource-usage" && message.action === "sample") {
       void (async () => {
+        let sessionCensus: GatewayResourceSnapshot["sessionCensus"];
+        if (message.sessionCensus || message.clearPromptCacheObservations) {
+          if (!message.collectGarbage || message.initial) {
+            throw new Error("Session attribution requires a current forced-GC resource sample");
+          }
+          const sourceEntry = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
+          if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(sourceEntry)) {
+            throw new Error(
+              "Session attribution requires --entry src/entry.ts; bundled modules have a different identity",
+            );
+          }
+        }
+        if (message.clearPromptCacheObservations) {
+          const { clearPromptCacheObservations } =
+            await import("../../src/agents/embedded-agent-runner/prompt-cache-observability.js");
+          clearPromptCacheObservations();
+        }
         if (message.collectGarbage) {
           if (!inspectorConnected) {
             inspector.connect();
@@ -87,7 +138,26 @@ if (isMainThread) {
           }
           await inspector.post("HeapProfiler.collectGarbage");
         }
-        const resources = message.initial ? initialResources : sampleResources();
+        if (message.sessionCensus) {
+          // Match the source runtime's module identities; count-only queries never retain instances.
+          const [{ SessionManager }, { AgentSession }, { Agent }] = await Promise.all([
+            import("../../src/agents/sessions/session-manager.js"),
+            import("../../src/agents/sessions/agent-session.js"),
+            import("../../src/agents/runtime/index.js"),
+          ]);
+          sessionCensus = {
+            scope: "source-main-isolate",
+            SessionManager: queryObjects(SessionManager, { format: "count" }),
+            AgentSession: queryObjects(AgentSession, { format: "count" }),
+            Agent: queryObjects(Agent, { format: "count" }),
+          };
+        }
+        const resources = message.initial
+          ? initialResources
+          : {
+              ...sampleResources(),
+              ...(sessionCensus ? { sessionCensus } : {}),
+            };
         if (message.snapshotPath) {
           writeHeapSnapshot(message.snapshotPath);
         }
@@ -136,6 +206,7 @@ if (isMainThread) {
           return;
         }
         namedDiagnostics.set(captureId, startGatewayBenchDiagnostics());
+        markGc("diagnostics-start", captureId);
         reply();
       } else {
         const stopDiagnostics = namedDiagnostics.get(captureId);
@@ -143,6 +214,7 @@ if (isMainThread) {
           reply("Gateway diagnostics have not started");
           return;
         }
+        markGc("diagnostics-stop", captureId);
         const result = stopDiagnostics();
         namedDiagnostics.delete(captureId);
         process.send?.({
@@ -179,12 +251,11 @@ if (isMainThread) {
           });
           await inspector.post("Profiler.start");
         } else {
-          // Include dead allocations as well as survivors: retained heap alone
-          // misses the short-lived objects that cause busy-Gateway GC pressure.
+          // Churn includes dead allocations; retention captures only survivors.
           const options = {
-            samplingInterval: GATEWAY_HEAP_SAMPLE_INTERVAL,
-            includeObjectsCollectedByMajorGC: true,
-            includeObjectsCollectedByMinorGC: true,
+            samplingInterval: message.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
+            includeObjectsCollectedByMajorGC: message.includeCollectedObjects ?? true,
+            includeObjectsCollectedByMinorGC: message.includeCollectedObjects ?? true,
           };
           await inspector.post("HeapProfiler.startSampling", options);
         }
@@ -194,9 +265,16 @@ if (isMainThread) {
         }
         diagnosticCaptures.set(message.kind, startGatewayBenchDiagnostics());
         workerMessageStarts.set(message.kind, getWorkerMessageMetrics());
+        if (message.kind === "heap") {
+          markGc("heap-start", message.profilePath);
+        }
       } else if (message.action === "stop") {
         if (!active.has(message.kind)) {
           throw new Error(`Gateway ${message.kind} profile has not started`);
+        }
+        if (message.kind === "heap") {
+          // Exclude diagnostics aggregation and profile materialization from promotion.
+          markGc("heap-stop", message.profilePath);
         }
         const diagnostics = diagnosticCaptures.get(message.kind)?.();
         diagnosticCaptures.delete(message.kind);

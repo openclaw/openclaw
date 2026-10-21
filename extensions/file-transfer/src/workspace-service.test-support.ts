@@ -7,10 +7,10 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { handleFileCreate } from "./node-host/file-create.js";
 import { handleFileFetch } from "./node-host/file-fetch.js";
-import { createWorkspaceCommand } from "./node-host/workspace-memory.js";
+import { handleWorkspaceCommand } from "./node-host/workspace-memory.js";
 import { createFileTransferNodeInvokePolicy } from "./shared/node-invoke-policy.js";
 import { createCtx } from "./shared/node-invoke-policy.test-support.js";
-import { createWorkspaceWorkerPolicy } from "./shared/workspace-memory-policy.js";
+import { handleWorkspaceWorkerPolicy } from "./shared/workspace-memory-policy.js";
 
 /** Real policy and file handlers; only the paired connection is replaced here. */
 export function createNodeWorkspaceTestTransport(
@@ -64,10 +64,12 @@ export function createNodeWorkspaceTestTransport(
         return {
           ok: true,
           payload: JSON.parse(
-            await createWorkspaceCommand(
+            await handleWorkspaceCommand(
               nodeApi,
               request.command === "workspace.memory" ? "memory" : "skills",
-            ).handle(JSON.stringify(params ?? request.params), io),
+              JSON.stringify(params ?? request.params),
+              io,
+            ),
           ),
         };
       }
@@ -79,13 +81,13 @@ export function createNodeWorkspaceTestTransport(
             : await handleFileCreate(params as Record<string, unknown>, io),
       };
     });
-    const policy =
+    const closed = Promise.resolve(
       request.command === "workspace.memory"
-        ? createWorkspaceWorkerPolicy("memory")
+        ? handleWorkspaceWorkerPolicy("memory", ctx)
         : request.command === "workspace.skills"
-          ? createWorkspaceWorkerPolicy("skills")
-          : createFileTransferNodeInvokePolicy();
-    const closed = Promise.resolve(policy.handle(ctx)).then((result) => {
+          ? handleWorkspaceWorkerPolicy("skills", ctx)
+          : createFileTransferNodeInvokePolicy().handle(ctx),
+    ).then((result) => {
       if (!result.ok) {
         throw new Error(`${result.code}: ${result.message}`);
       }

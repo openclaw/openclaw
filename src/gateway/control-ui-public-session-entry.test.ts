@@ -19,13 +19,18 @@ function openReader(
     probe?: Promise<{ status: number }>;
     unavailable?: boolean;
     blockedStorage?: boolean;
+    messages?: unknown[];
   } = {},
 ) {
   const basePath = options.basePath ?? "/control";
   const dom = new JSDOM(
     renderPublicSessionDocument({
       title: "Conversation unavailable",
-      messages: [],
+      messages: options.messages ?? [],
+      widgetUrls: new Map([
+        ["cv_size", "/control/share/session/media?widget=size"],
+        ["cv_other", "/control/share/session/media?widget=other"],
+      ]),
       truncated: false,
       unavailable: options.unavailable !== false,
       latestUrl: "/control/chat/main/private",
@@ -74,7 +79,7 @@ function openReader(
   readers.push(dom);
   const loginVisibility = () =>
     dom.window.getComputedStyle(document.getElementById("session-login")!).visibility;
-  return { replace, fetch, document, loginVisibility };
+  return { replace, fetch, document, loginVisibility, window: dom.window };
 }
 
 const device = JSON.stringify({
@@ -91,6 +96,37 @@ function expectUnavailable(f: ReturnType<typeof openReader>) {
 }
 
 describe("public reader operator handoff", () => {
+  it("resizes only the sending widget frame and ignores unrelated or invalid messages", () => {
+    const f = openReader({
+      unavailable: false,
+      messages: [
+        { role: "assistant", content: '[embed ref="cv_size" /] [embed ref="cv_other" /]' },
+      ],
+    });
+    const [frame, other] = Array.from(f.document.querySelectorAll("iframe"));
+    const send = (data: unknown, source = frame!.contentWindow) =>
+      f.window.dispatchEvent(new f.window.MessageEvent("message", { data, source }));
+    send({ type: "openclaw:widget-size", height: 730 });
+    expect(frame!.style.height).toBe("730px");
+    expect(other!.style.height).toBe("420px");
+    send({ type: "openclaw:widget-size", height: 1 });
+    expect(frame!.style.height).toBe("48px");
+    send({ type: "openclaw:widget-size", height: 9000 });
+    expect(frame!.style.height).toBe("8000px");
+    for (const data of [
+      null,
+      { type: "openclaw:widget-prompt", height: 500 },
+      { type: "openclaw:widget-size", height: "500" },
+      { type: "openclaw:widget-size", height: Infinity },
+    ]) {
+      send(data);
+    }
+    send({ type: "openclaw:widget-size", height: 500 }, other!.contentWindow);
+    expect(other!.style.height).toBe("500px");
+    send({ type: "openclaw:widget-size", height: 600 }, null);
+    expect(frame!.style.height).toBe("8000px");
+    expect(other!.style.height).toBe("500px");
+  });
   it.each([204, 401])(
     "keeps the unavailable result pending through a delayed %s handoff",
     async (status) => {

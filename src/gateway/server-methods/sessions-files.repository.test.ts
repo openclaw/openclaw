@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
@@ -17,10 +18,7 @@ import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspac
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import {
-  resolveIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -76,30 +74,11 @@ import {
 } from "./sessions-files.test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  load: vi.fn(),
   workspace: vi.fn(),
   store: vi.fn(),
   open: vi.fn(),
   beforeWrite: vi.fn<() => Promise<void>>(),
 }));
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    mocks.load(params.key, { agentId: params.agentId }),
-}));
-vi.mock("../../config/sessions/session-entry-read-facts.js", async (original) => {
-  const { createRepositorySessionEntryReader } =
-    await import("./sessions-files.repository.test-support.js");
-  const actual =
-    await original<typeof import("../../config/sessions/session-entry-read-facts.js")>();
-  return {
-    ...actual,
-    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
-      actual.readRetainedSessionEntryFacts,
-      () => mocks.load(),
-    ),
-  };
-});
 vi.mock("../../infra/fs-safe.js", async (original) => {
   const actual = await original<typeof import("../../infra/fs-safe.js")>();
   return {
@@ -297,14 +276,6 @@ beforeEach(async () => {
   await publishCheckpoint(base);
   mocks.store.mockReturnValue(store);
   mocks.workspace.mockReturnValue(gatewayRoot);
-  mocks.load.mockImplementation(() => ({
-    agentId: "main",
-    canonicalKey: sessionKey,
-    cfg: {},
-    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-    storeKeys: [sessionKey],
-    entry: repositoryEntry(),
-  }));
   context = requestContext();
   setRuntimeConfigSnapshot(context.getRuntimeConfig());
   await persistSessionEntry();
@@ -616,7 +587,13 @@ it.each(["reset", "archive", "lifecycle revision"])(
       }
       await persistSessionEntry();
     };
-    await expect(files.request("set", edit("unowned"))).rejects.toThrow("owner changed");
+    await expect(files.request("set", edit("unowned"))).rejects.toMatchObject({
+      name: "SessionMutationAuthorizationChangedError",
+      error: {
+        code: "FORBIDDEN",
+        message: "Session workspace changed during file access",
+      },
+    });
     expect(run).not.toHaveBeenCalled();
     expect(readFile("changed.txt")).toBe("before\n");
   },
@@ -645,7 +622,7 @@ it.each(["stop", "reset"])(
     let mutationEntered = false;
     let contentAtMutation: string | undefined;
     const mutating = runSessionMutation({
-      scope: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+      scope: resolveDefaultSessionStorePath("main"),
       identities: [sessionKey, identity.sessionId],
       run: async () => {
         mutationEntered = true;
@@ -748,7 +725,10 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     }
     return result;
   });
-  await expect(files.request("get", "second.txt")).rejects.toThrow("workspace owner changed");
+  expect(await files.error("get", "second.txt")).toEqual({
+    code: "FORBIDDEN",
+    message: "Session workspace changed during file access",
+  });
 });
 
 it.each(["symlink", "hardlink"])(
@@ -850,7 +830,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
   let stopEntered = false;
   let contentAtStop: string | undefined;
   const stopping = runSessionMutation({
-    scope: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    scope: resolveDefaultSessionStorePath("main"),
     identities: [sessionKey, identity.sessionId],
     run: async () => {
       stopEntered = true;

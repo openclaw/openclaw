@@ -87,10 +87,6 @@ import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-re
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
-type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
-  note?: typeof note;
-};
-
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
 function resolveSessionRuntimeDirectories(
@@ -577,13 +573,12 @@ export function stateIntegrityIssueToRepairEffect(
 /** Emits state integrity warnings and applies selected runtime repairs. */
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
-  prompter: DoctorPrompterLike,
+  prompter: Pick<DoctorPrompter, "confirmRuntimeRepair">,
   configPath?: string,
   options?: { stateDirExistedAtStart?: boolean },
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
-  const noteFn = prompter.note ?? note;
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
@@ -1020,10 +1015,10 @@ export async function noteStateIntegrity(
   }
 
   if (warnings.length > 0) {
-    noteFn(warnings.join("\n"), "State integrity");
+    note(warnings.join("\n"), "State integrity");
   }
   if (changes.length > 0) {
-    noteFn(changes.join("\n"), "Doctor changes");
+    note(changes.join("\n"), "Doctor changes");
   }
 }
 

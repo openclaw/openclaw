@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyQueueDropPolicy,
-  applyQueueRuntimeSettings,
   countPendingQueueItems,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
@@ -12,12 +11,6 @@ function createQueue<T>(items: T[], cap: number, dropPolicy: "old" | "summarize"
   return { items, cap, dropPolicy, droppedCount: 0, summaryLines };
 }
 
-const runtimeSettings = () => ({
-  mode: "followup",
-  debounceMs: 1000,
-  cap: 20,
-  dropPolicy: "summarize" as const,
-});
 type Item = { id: string; protected?: boolean };
 function dropItems(queue: ReturnType<typeof createQueue<Item>>, inFlight?: Set<Item>) {
   const dropped: string[] = [];
@@ -30,21 +23,6 @@ function dropItems(queue: ReturnType<typeof createQueue<Item>>, inFlight?: Set<I
   });
   return { admitted, dropped };
 }
-
-describe("applyQueueRuntimeSettings", () => {
-  it.each([
-    { mode: "collect", debounceMs: -12, cap: 9.8, dropPolicy: "new" },
-    { mode: "queue", cap: 0 },
-  ] as const)("normalizes supplied settings and retains omitted/invalid values: %j", (settings) => {
-    const target = runtimeSettings();
-    applyQueueRuntimeSettings({ target, settings });
-    expect(target).toEqual(
-      settings.mode === "collect"
-        ? { mode: "collect", debounceMs: 0, cap: 9, dropPolicy: "new" }
-        : { mode: "queue", debounceMs: 1000, cap: 20, dropPolicy: "summarize" },
-    );
-  });
-});
 
 describe("queue summary helpers", () => {
   it("preserves ordered summary elisions at the default limit", () => {
@@ -79,7 +57,7 @@ describe("queue summary helpers", () => {
 
   it("renders pending summary state without mutating it", () => {
     const state = { droppedCount: 2, summaryLines: ["first", "second"] };
-    const prompt = previewQueueSummaryPrompt({ state, noun: "message" });
+    const prompt = previewQueueSummaryPrompt(state);
 
     expect(prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
     expect(prompt).toContain("first");
@@ -96,6 +74,53 @@ describe("queue summary helpers", () => {
 });
 
 describe("waitForQueueDebounce", () => {
+  it("resolves and removes the pending timer when cancelled", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const wait = waitForQueueDebounce(
+        { debounceMs: 1_000, lastEnqueuedAt: Date.now() },
+        controller.signal,
+      );
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      controller.abort(new Error("turn cancelled"));
+
+      await expect(wait).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("waits for a full quiet window after another item is enqueued", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.useFakeTimers();
+    try {
+      const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
+      let settled = false;
+      const wait = waitForQueueDebounce(queue).then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(500);
+      queue.lastEnqueuedAt = Date.now();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await wait;
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("settles one debounce window after the system clock moves backward", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     vi.useFakeTimers();

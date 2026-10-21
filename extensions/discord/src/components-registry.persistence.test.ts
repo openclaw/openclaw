@@ -2,40 +2,67 @@ import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  discordComponentRegistryState,
+  discordComponentRegistryState as registry,
   type DiscordRegistryStore,
 } from "./components-registry-state.js";
 import {
   registerDiscordComponentEntries,
-  resolveDiscordComponentEntryWithPersistence,
-  resolveDiscordModalEntryWithPersistence,
+  resolveDiscordComponentEntryWithPersistence as resolveComponent,
+  resolveDiscordModalEntryWithPersistence as resolveModal,
 } from "./components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "./components-registry.test-support.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 afterEach(() => clearDiscordComponentEntriesForTest());
 
+function button(id: string, options: Partial<DiscordComponentEntry> = {}): DiscordComponentEntry {
+  return { id, kind: "button", label: id, ...options };
+}
+function modal(id: string, options: Partial<DiscordModalEntry> = {}): DiscordModalEntry {
+  return { id, title: id, fields: [], ...options };
+}
+
+function gate<T = void>() {
+  const started = createDeferred<void>();
+  const done = createDeferred<T>();
+  const wait = () => {
+    started.resolve();
+    return done.promise;
+  };
+  return { ...done, started: started.promise, wait };
+}
+
+function register(entries: DiscordComponentEntry[], modals: DiscordModalEntry[] = []) {
+  return registerDiscordComponentEntries({ entries, modals });
+}
+
+function track<T>(promise: Promise<T>) {
+  const work = {
+    completed: false,
+    promise: promise.then((value) => {
+      work.completed = true;
+      return value;
+    }),
+  };
+  return work;
+}
+
 it("retires unclicked expired component and modal entries during registration", async () => {
   const now = 1_700_000_000_000;
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
   try {
-    await registerDiscordComponentEntries({
-      entries: [
-        { id: "expired", kind: "button", label: "Expired", expiresAt: now + 1 },
-        { id: "live", kind: "button", label: "Live", expiresAt: now + 1_000 },
-      ],
-      modals: [
-        { id: "expired", title: "Expired", fields: [], expiresAt: now + 1 },
-        { id: "live", title: "Live", fields: [], expiresAt: now + 1_000 },
-      ],
-    });
+    const lifetimes = [
+      ["expired", now + 1],
+      ["live", now + 1_000],
+    ] as const;
+    await register(
+      lifetimes.map(([id, expiresAt]) => button(id, { expiresAt })),
+      lifetimes.map(([id, expiresAt]) => modal(id, { expiresAt })),
+    );
     clock.mockReturnValue(now + 2);
-    await registerDiscordComponentEntries({
-      entries: [{ id: "fresh", kind: "button", label: "Fresh" }],
-      modals: [{ id: "fresh", title: "Fresh", fields: [] }],
-    });
-    expect([...discordComponentRegistryState.componentEntries.keys()]).toEqual(["live", "fresh"]);
-    expect([...discordComponentRegistryState.modalEntries.keys()]).toEqual(["live", "fresh"]);
+    await register([button("fresh")], [modal("fresh")]);
+    expect([...registry.componentEntries.keys()]).toEqual(["live", "fresh"]);
+    expect([...registry.modalEntries.keys()]).toEqual(["live", "fresh"]);
   } finally {
     clock.mockRestore();
   }
@@ -60,44 +87,26 @@ function store<T extends { id: string }>() {
 it("waits for both component and modal registration before completing", async () => {
   const components = store<DiscordComponentEntry>();
   const modals = store<DiscordModalEntry>();
-  discordComponentRegistryState.persistentComponentStore = components;
-  discordComponentRegistryState.persistentModalStore = modals;
-  const componentStarted = createDeferred<void>();
-  const modalStarted = createDeferred<void>();
-  const componentDone = createDeferred<void>();
-  const modalDone = createDeferred<void>();
-  vi.spyOn(components, "register").mockImplementation(async () => {
-    componentStarted.resolve();
-    await componentDone.promise;
-  });
-  vi.spyOn(modals, "register").mockImplementation(async () => {
-    modalStarted.resolve();
-    await modalDone.promise;
-  });
-  let completed = false;
-  const registration = Promise.resolve(
-    registerDiscordComponentEntries({
-      entries: [{ id: "button", kind: "button", label: "Choose" }],
-      modals: [{ id: "modal", title: "Details", fields: [] }],
-    }),
-  ).then(() => {
-    completed = true;
-  });
+  registry.persistentComponentStore = components;
+  registry.persistentModalStore = modals;
+  const componentDone = gate();
+  const modalDone = gate();
+  vi.spyOn(components, "register").mockImplementation(componentDone.wait);
+  vi.spyOn(modals, "register").mockImplementation(modalDone.wait);
+  const registration = track(register([button("button")], [modal("modal")]));
   try {
-    await componentStarted.promise;
-    await setImmediate();
-    expect(completed).toBe(false);
-    componentDone.resolve();
-    await modalStarted.promise;
-    await setImmediate();
-    expect(completed).toBe(false);
-    modalDone.resolve();
-    await registration;
-    expect(completed).toBe(true);
+    for (const pending of [componentDone, modalDone]) {
+      await pending.started;
+      await setImmediate();
+      expect(registration.completed).toBe(false);
+      pending.resolve();
+    }
+    await registration.promise;
+    expect(registration.completed).toBe(true);
   } finally {
     componentDone.resolve();
     modalDone.resolve();
-    await registration;
+    await registration.promise;
   }
 });
 
@@ -105,124 +114,95 @@ it.each([false, true])(
   "consumes a group once while its persistent cleanup waits (memory=%s)",
   async (inMemory) => {
     const components = store<DiscordComponentEntry>();
-    discordComponentRegistryState.persistentComponentStore = components;
-    const entries: DiscordComponentEntry[] = ["confirm", "cancel"].map((id) => ({
-      id,
-      kind: "button",
-      label: id,
-      consumptionGroupId: "choice",
-      consumptionGroupEntryIds: ["confirm", "cancel"],
-    }));
-    await registerDiscordComponentEntries({ entries, modals: [] });
+    registry.persistentComponentStore = components;
+    const entries = ["confirm", "cancel"].map((id) =>
+      button(id, {
+        consumptionGroupId: "choice",
+        consumptionGroupEntryIds: ["confirm", "cancel"],
+      }),
+    );
+    await register(entries);
     if (!inMemory) {
-      discordComponentRegistryState.componentEntries.clear();
+      registry.componentEntries.clear();
     }
-    const deleting = createDeferred<void>();
-    const deleted = createDeferred<void>();
+    const deleted = gate();
     const remove = components.delete;
     vi.spyOn(components, "delete").mockImplementation(async (id) => {
-      deleting.resolve();
-      await deleted.promise;
+      await deleted.wait();
       return remove(id);
     });
-    let completed = false;
-    const first = resolveDiscordComponentEntryWithPersistence({ id: "confirm" }).then((entry) => {
-      completed = true;
-      return entry;
-    });
+    const first = track(resolveComponent({ id: "confirm" }));
     let sibling: Promise<DiscordComponentEntry | null> | undefined;
     try {
-      await deleting.promise;
-      sibling = resolveDiscordComponentEntryWithPersistence({ id: "cancel" });
+      await deleted.started;
+      sibling = resolveComponent({ id: "cancel" });
       await setImmediate();
-      expect(completed).toBe(false);
+      expect(first.completed).toBe(false);
       deleted.resolve();
-      expect((await first)?.id).toBe("confirm");
+      expect((await first.promise)?.id).toBe("confirm");
       expect(await sibling).toBeNull();
       expect(await components.lookup("cancel")).toBeUndefined();
     } finally {
       deleted.resolve();
-      await Promise.allSettled([first, sibling]);
+      await Promise.allSettled([first.promise, sibling]);
     }
   },
 );
 
 it("awaits modal deletion and keeps in-memory fallback when persistence rejects", async () => {
   const modals = store<DiscordModalEntry>();
-  discordComponentRegistryState.persistentModalStore = modals;
-  await registerDiscordComponentEntries({
-    entries: [],
-    modals: [{ id: "modal", title: "Details", fields: [] }],
-  });
-  const deleting = createDeferred<void>();
-  const deletion = createDeferred<boolean>();
-  vi.spyOn(modals, "delete").mockImplementation(() => {
-    deleting.resolve();
-    return deletion.promise;
-  });
-  let completed = false;
-  const consumed = resolveDiscordModalEntryWithPersistence({ id: "modal" }).then((entry) => {
-    completed = true;
-    return entry;
-  });
+  registry.persistentModalStore = modals;
+  await register([], [modal("modal")]);
+  const deletion = gate<boolean>();
+  vi.spyOn(modals, "delete").mockImplementation(deletion.wait);
+  const consumed = track(resolveModal({ id: "modal" }));
   try {
-    await deleting.promise;
+    await deletion.started;
     await setImmediate();
-    expect(completed).toBe(false);
+    expect(consumed.completed).toBe(false);
     deletion.reject(new Error("synthetic persistence failure"));
-    expect((await consumed)?.id).toBe("modal");
-    expect(discordComponentRegistryState.persistentRegistryDisabled).toBe(true);
-    expect(await resolveDiscordModalEntryWithPersistence({ id: "modal" })).toBeNull();
+    expect((await consumed.promise)?.id).toBe("modal");
+    expect(registry.persistentRegistryDisabled).toBe(true);
+    expect(await resolveModal({ id: "modal" })).toBeNull();
   } finally {
     deletion.resolve(false);
-    await consumed;
+    await consumed.promise;
   }
 });
 
 it("captures registration entries and message id before waiting for earlier persistence", async () => {
   const components = store<DiscordComponentEntry>();
   const modals = store<DiscordModalEntry>();
-  discordComponentRegistryState.persistentComponentStore = components;
-  discordComponentRegistryState.persistentModalStore = modals;
-  const started = createDeferred<void>();
-  const release = createDeferred<void>();
-  vi.spyOn(components, "register").mockImplementationOnce(async () => {
-    started.resolve();
-    await release.promise;
-  });
-  const earlier = registerDiscordComponentEntries({
-    entries: [{ id: "earlier", kind: "button", label: "Earlier" }],
-    modals: [],
-  });
+  registry.persistentComponentStore = components;
+  registry.persistentModalStore = modals;
+  const release = gate();
+  vi.spyOn(components, "register").mockImplementationOnce(release.wait);
+  const earlier = register([button("earlier")]);
   let queued: Promise<void> | undefined;
   try {
-    await started.promise;
-    const entry: DiscordComponentEntry = { id: "captured", kind: "button", label: "Captured" };
-    const modal: DiscordModalEntry = { id: "captured-modal", title: "Captured modal", fields: [] };
-    const params = { entries: [entry], modals: [modal], messageId: "captured-message" };
+    await release.started;
+    const entry = button("captured", { label: "Captured" });
+    const form = modal("captured-modal", { title: "Captured modal" });
+    const params = { entries: [entry], modals: [form], messageId: "captured-message" };
     queued = registerDiscordComponentEntries(params);
     entry.label = "Changed";
-    modal.title = "Changed";
-    params.entries.push({ id: "late", kind: "button", label: "Late" });
+    form.title = "Changed";
+    params.entries.push(button("late"));
     params.modals = [];
     params.messageId = "changed-message";
     release.resolve();
     await Promise.all([earlier, queued]);
-    expect(
-      await resolveDiscordComponentEntryWithPersistence({ id: "captured", consume: false }),
-    ).toMatchObject({ label: "Captured", messageId: "captured-message" });
-    expect(await components.lookup("captured")).toMatchObject({
-      entry: { label: "Captured", messageId: "captured-message" },
-    });
-    expect(
-      await resolveDiscordModalEntryWithPersistence({ id: "captured-modal", consume: false }),
-    ).toMatchObject({ title: "Captured modal", messageId: "captured-message" });
-    expect(await modals.lookup("captured-modal")).toMatchObject({
-      entry: { title: "Captured modal", messageId: "captured-message" },
-    });
-    expect(
-      await resolveDiscordComponentEntryWithPersistence({ id: "late", consume: false }),
-    ).toBeNull();
+    const expectedButton = { label: "Captured", messageId: "captured-message" };
+    const expectedModal = { title: "Captured modal", messageId: "captured-message" };
+    expect(await resolveComponent({ id: "captured", consume: false })).toMatchObject(
+      expectedButton,
+    );
+    expect(await components.lookup("captured")).toMatchObject({ entry: expectedButton });
+    expect(await resolveModal({ id: "captured-modal", consume: false })).toMatchObject(
+      expectedModal,
+    );
+    expect(await modals.lookup("captured-modal")).toMatchObject({ entry: expectedModal });
+    expect(await resolveComponent({ id: "late", consume: false })).toBeNull();
   } finally {
     release.resolve();
     await Promise.allSettled([earlier, queued]);

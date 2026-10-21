@@ -455,6 +455,7 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
     ];
     overlay.bindSurface(dialog);
     overlay.setParent(findOverlayParent(host));
+    // Modal layering and return focus settle with the accepted transition, before completion events.
     overlay.subscribe((open) => {
       setModalLayer(host, open && host.isConnected);
       if (!open) {
@@ -561,9 +562,6 @@ export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogM
 export const OpenClawModalDialog = ModalDialog.Element;
 
 declare global {
-  interface Document {
-    openClawModalLayers?: Set<HTMLElement>;
-  }
   interface HTMLElementTagNameMap {
     "openclaw-modal-dialog": OpenClawModalDialog;
   }

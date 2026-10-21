@@ -267,7 +267,7 @@ function createHarness(
       clientId: "test-app",
       token: "test-token",
       requestOptions: { fetch },
-      eventQueue: { slowListenerThreshold: 30_000 },
+      eventQueue: {},
     },
     {},
   );

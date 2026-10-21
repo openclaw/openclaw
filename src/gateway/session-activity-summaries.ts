@@ -126,8 +126,6 @@ export function createSessionActivitySummaries(deps: {
   getConfig: () => OpenClawConfig;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
   onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
-  prepareModel?: typeof defaultPrepareModel;
-  completeModel?: typeof defaultCompleteModel;
 }): SessionActivitySummaryService {
   const states = new Map<string, Tracked>();
   const queue: Tracked[] = [];
@@ -379,14 +377,14 @@ export function createSessionActivitySummaries(deps: {
             assertCurrentEntry(state, state.entry);
           };
           const execute = async () => {
-            const prepared = await (deps.prepareModel ?? defaultPrepareModel)({
+            const prepared = await defaultPrepareModel({
               cfg: deps.getConfig(),
               agentId: state.agentId,
               modelRef: ref,
               useUtilityModel: true,
             });
             assertRequestCurrent();
-            const result = await (deps.completeModel ?? defaultCompleteModel)({
+            const result = await defaultCompleteModel({
               ...prepared,
               purpose: "session-activity-summary",
               config: deps.getConfig(),

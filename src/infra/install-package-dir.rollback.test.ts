@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -97,6 +98,100 @@ describe("installPackageDir rollback", () => {
     await fixtureRootTracker.cleanup();
   });
 
+  it.each([false, true])(
+    "restores a held install after displacement fails (partial=%s) and permits retry",
+    async (partial) => {
+      const { sourceDir, targetDir } = await createFixture("held-displacement");
+      await fs.mkdir(path.join(targetDir, "nested"));
+      await writeText(path.join(targetDir, "nested"), "keep nested", "index.js");
+      await writeText(targetDir, "keep config", "openclaw.plugin.json");
+      const heldError = Object.assign(new Error("held plugin file"), { code: "EBUSY" });
+      const unlink = fs.unlink.bind(fs);
+      let held = false;
+      vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+        if (samePath(file, path.join(targetDir, "marker.txt"))) {
+          // Model Windows refusing a later child after earlier entries were removed.
+          if (partial) {
+            await fs.rm(path.join(targetDir, "nested"), { recursive: true, force: true });
+            await fs.rm(path.join(targetDir, "openclaw.plugin.json"), { force: true });
+          }
+          held = true;
+          throw heldError;
+        }
+        return unlink(file);
+      });
+
+      const result = await installPackageDir(updateOptions(sourceDir, targetDir));
+      expect(held).toBe(true);
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("stop the Gateway and retry"),
+      });
+      expect(result).not.toHaveProperty("recoveryIncomplete");
+      await expectText(targetDir, "old");
+      await expectText(targetDir, "keep config", "openclaw.plugin.json");
+      await expectText(path.join(targetDir, "nested"), "keep nested", "index.js");
+      expect(
+        await fs.readdir(path.join(path.dirname(targetDir), ".openclaw-install-backups")),
+      ).toEqual([]);
+
+      vi.restoreAllMocks();
+      expect(await installPackageDir(updateOptions(sourceDir, targetDir))).toEqual({ ok: true });
+      await expectText(targetDir, "new");
+    },
+  );
+
+  it.each(["I/O failure", "closed owner"])(
+    "retains the complete recovery backup when backfill hits %s",
+    async (failure) => {
+      const { sourceDir, targetDir } = await createFixture("held-recovery-failure");
+      await writeText(targetDir, "keep config", "openclaw.plugin.json");
+      let recovering = false;
+      const unlink = fs.unlink.bind(fs);
+      vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+        if (samePath(file, path.join(targetDir, "marker.txt"))) {
+          await fs.rm(path.join(targetDir, "openclaw.plugin.json"), { force: true });
+          recovering = true;
+          throw Object.assign(new Error("held plugin file"), { code: "EPERM" });
+        }
+        return unlink(file);
+      });
+      const copy = fsSync.cpSync.bind(fsSync);
+      vi.spyOn(fsSync, "cpSync").mockImplementation((source, destination, options) => {
+        if (recovering && failure === "I/O failure") {
+          throw Object.assign(new Error("recovery disk full"), { code: "ENOSPC" });
+        }
+        return copy(source, destination, options);
+      });
+      const result = await installPackageDir(
+        requestDeferredPackageDirInstall(updateOptions(sourceDir, targetDir), () => {
+          if (recovering && failure === "closed owner") {
+            throw new Error("recovery owner closed");
+          }
+        }),
+      );
+      const backupRoot = path.join(path.dirname(targetDir), ".openclaw-install-backups");
+      const backups = await fs.readdir(backupRoot);
+      expect(backups).toHaveLength(1);
+      const backup = path.join(backupRoot, expectDefined(backups[0], "recovery backup"));
+      expect(result).toMatchObject({
+        ok: false,
+        recoveryIncomplete: true,
+        error: expect.stringContaining(`backup recovery path: ${backup}`),
+      });
+      expect(result).toHaveProperty(
+        "error",
+        expect.stringContaining(
+          failure === "I/O failure" ? "recovery disk full" : "recovery owner closed",
+        ),
+      );
+      await expectText(backup, "old");
+      await expectText(backup, "keep config", "openclaw.plugin.json");
+      await expectMissing(path.join(targetDir, "openclaw.plugin.json"));
+      await expectText(targetDir, "old");
+    },
+  );
+
   async function createFixture(name: string) {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make(name);
@@ -164,23 +259,38 @@ describe("installPackageDir rollback", () => {
     },
   );
 
-  it("reports incomplete recovery when a deferred backup cannot be restored", async () => {
-    const { install, targetDir } = await createFixture("deferred-restore-blocked");
-    const result = await install({
-      afterBackup: async () => {
-        await fs.mkdir(targetDir, { recursive: true });
-        await writeText(targetDir, "successor", "successor.txt");
-        return { ok: false as const, error: "backup rejected" };
-      },
-    });
+  it.each([false, true])(
+    "reports incomplete recovery when a deferred backup cannot be restored (inode reused=%s)",
+    async (reuseIdentity) => {
+      const { install, targetDir } = await createFixture("deferred-restore-blocked");
+      const original = await fs.lstat(targetDir, { bigint: true });
+      const result = await install({
+        afterBackup: async () => {
+          await fs.mkdir(targetDir, { recursive: true });
+          await writeText(targetDir, "successor", "successor.txt");
+          if (reuseIdentity) {
+            const lstat = fsSync.lstatSync.bind(fsSync);
+            vi.spyOn(fsSync, "lstatSync").mockImplementation((candidate, options) => {
+              const current = lstat(candidate, options);
+              if (samePath(candidate, targetDir) && current && typeof current.ino === "bigint") {
+                Object.defineProperty(current, "ino", { value: original.ino });
+              }
+              return current;
+            });
+          }
+          return { ok: false as const, error: "backup rejected" };
+        },
+      });
 
-    expect(result).toMatchObject({
-      ok: false,
-      recoveryIncomplete: true,
-      error: expect.stringContaining("backup retained"),
-    });
-    await expectText(targetDir, "successor", "successor.txt");
-  });
+      expect(result).toMatchObject({
+        ok: false,
+        recoveryIncomplete: true,
+        error: expect.stringContaining("backup retained"),
+      });
+      await expectText(targetDir, "successor", "successor.txt");
+      await expectMissing(path.join(targetDir, "marker.txt"));
+    },
+  );
 
   it("preserves the Windows EPERM backup copy fallback", async () => {
     const { sourceDir, targetDir } = await createFixture("windows-backup-eperm");

@@ -4,9 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as payloads from "../attachment-payload-store.ts";
 import "../../../lib/toast-host.ts";
 import {
@@ -423,6 +422,7 @@ describe("chat attachment read failures", () => {
     async (name, files, text, imageLimit, accepted, maxBytes = 1024) => {
       const onAttachmentsChange = vi.fn<(attachments: ChatAttachment[]) => void>();
       handleChatAttachmentPaste(pasteEventWithFiles(files, text), {
+        draft: "Review the attachment",
         attachmentLimits:
           imageLimit === undefined
             ? undefined
@@ -628,10 +628,10 @@ describe("attachment removal names", () => {
     document.body.append(container);
     onTestFinished(() => container.remove());
     const first = expectDefined(
-      container.querySelector<SolidBridgeElement<object>>("openclaw-chat-pasted-text"),
+      container.querySelector<HTMLElement>("openclaw-chat-pasted-text"),
       "pasted text attachment",
     );
-    await first.updateComplete;
+    flush();
     const remove = first?.querySelector<HTMLButtonElement>(".chat-attachment-remove");
     expect(remove?.getAttribute("aria-label")).toBe("Remove pasted-text-123.txt");
     remove?.click();

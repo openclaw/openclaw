@@ -8,20 +8,22 @@ import {
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withDiscordNativeAdminFixture } from "./discord-native-owner.test-support.js";
 
-it("carries current Team-admin authority through registered slash commands without bypassing admission", async () => {
-  await withDiscordNativeAdminFixture(async ({ cfg, profile, publishConfig, run, dispatch }) => {
+const user = "123456789012345678";
+const denied = "You are not authorized to use this command.";
+const unauthorized = { content: denied, ephemeral: true };
+
+it("carries current Team-admin authority through registered slash commands without bypassing admission", () =>
+  withDiscordNativeAdminFixture(async ({ cfg, profile, publishConfig, run, dispatch }) => {
     publishConfig();
     const expectDenied = async () => {
-      expect((await run()).followUp).toHaveBeenCalledWith({
-        content: "You are not authorized to use this command.",
-        ephemeral: true,
-      });
+      expect((await run()).followUp).toHaveBeenCalledWith(unauthorized);
       expect(dispatch).not.toHaveBeenCalled();
     };
     await run();
     expect(dispatch).toHaveBeenCalledOnce();
     const ctx = dispatch.mock.calls[0]![0].ctx;
-    expect(resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true })).toMatchObject({
+    const authorize = () => resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true });
+    expect(authorize()).toMatchObject({
       senderIsOwner: true,
       isAuthorizedSender: true,
     });
@@ -32,83 +34,65 @@ it("carries current Team-admin authority through registered slash commands witho
     publishConfig();
     setUserProfileRole(profile.id, "member");
     await expectDenied();
-    expect(resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true }).senderIsOwner).toBe(
-      false,
-    );
-  });
-});
+    expect(authorize().senderIsOwner).toBe(false);
+  }));
 
 it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
   "passes only live owner capabilities through native plugin dispatch: %s",
-  async (role) => {
-    await withDiscordNativeAdminFixture(async ({ cfg, profile, publishConfig, run }) => {
-      cfg.commands = { ...cfg.commands, allowFrom: { discord: ["user:123456789012345678"] } };
+  (role) =>
+    withDiscordNativeAdminFixture(async ({ cfg, profile, publishConfig, run }) => {
+      const commands = (cfg.commands ??= {});
+      commands.allowFrom = { discord: [`user:${user}`] };
       if (role !== "linked owner") {
         setUserProfileRole(profile.id, "member");
       }
       if (role === "configured owner") {
-        cfg.commands.ownerAllowFrom = ["discord:123456789012345678"];
+        commands.ownerAllowFrom = [`discord:${user}`];
       }
       publishConfig();
-      const handler = vi.fn(async () => ({ text: "PLUGIN-OWNER-CAPABILITY-OK" }));
-      expect(
-        registerPluginCommand("native-owner-probe", {
-          name: "ownerprobe",
-          description: "Native owner capability probe",
-          handler,
-        }),
-      ).toEqual({ ok: true });
+      const handler = vi.fn(async () => ({ text: "owner-ok" }));
+      const name = "ownerprobe";
+      const registered = registerPluginCommand(name, { name, description: "Owner", handler });
+      expect(registered).toEqual({ ok: true });
       const candidate = createPluginCommandRuntime()
         .listNativeCandidates("discord")
-        .find((entry) => entry.name === "ownerprobe");
-      if (!candidate) {
-        throw new Error("Expected native owner probe registration");
+        .find((entry) => entry.name === name)!;
+      expect(candidate).toBeDefined();
+      const selected = candidate.prepareDispatch();
+      if (selected.kind !== "plugin") {
+        throw new Error("Expected a plugin dispatch");
       }
-      const observedContexts: PluginCommandDispatchContext[] = [];
-      const command = {
-        ...candidate,
-        prepareDispatch: (args?: string) => {
-          const selected = candidate.prepareDispatch(args);
-          return selected.kind === "non-plugin"
-            ? selected
-            : {
-                ...selected,
-                execute: async (ctx: PluginCommandDispatchContext) => {
-                  observedContexts.push(ctx);
-                  return selected.execute(ctx);
-                },
-              };
-        },
-      };
+      const execute = vi.fn((ctx: PluginCommandDispatchContext) => selected.execute(ctx));
+      const command = { ...candidate, prepareDispatch: () => ({ ...selected, execute }) };
       const interaction = await run({ pluginCommand: command });
-      expect(observedContexts).toHaveLength(1);
-      const observed = observedContexts[0];
+      expect(execute).toHaveBeenCalledOnce();
+      const observed = execute.mock.calls[0]?.[0];
       expect(handler).toHaveBeenCalledOnce();
       expect(interaction.followUp).toHaveBeenCalledWith(
-        expect.objectContaining({ content: "PLUGIN-OWNER-CAPABILITY-OK" }),
+        expect.objectContaining({ content: "owner-ok" }),
       );
-      expect(observed?.isAuthorizedSender).toBe(true);
+      expect(observed).toMatchObject({
+        isAuthorizedSender: true,
+        senderIsOwner: role !== "allowlisted non-owner",
+      });
       if (role === "allowlisted non-owner") {
-        expect(observed?.senderIsOwner).toBe(false);
         expect(observed).not.toHaveProperty("assertOwnerCurrent");
       } else {
-        expect(observed?.senderIsOwner).toBe(true);
         expect(observed?.assertOwnerCurrent).toBeTypeOf("function");
         observed?.assertOwnerCurrent?.();
         if (role === "linked owner") {
           setUserProfileRole(profile.id, "member");
         } else {
-          cfg.commands.ownerAllowFrom = ["discord:999999999999999999"];
+          commands.ownerAllowFrom = ["discord:999999999999999999"];
           publishConfig();
         }
         expect(observed?.assertOwnerCurrent).toThrow("authority changed");
       }
-      cfg.commands.allowFrom = { discord: [] };
+      commands.allowFrom = { discord: [] };
       publishConfig();
       expect((await run({ pluginCommand: command })).followUp).toHaveBeenCalledWith(
-        expect.objectContaining({ content: "You are not authorized to use this command." }),
+        expect.objectContaining({ content: denied }),
       );
       expect(handler).toHaveBeenCalledOnce();
-    });
-  },
+    }),
 );

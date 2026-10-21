@@ -10,7 +10,10 @@ import {
 } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
@@ -43,6 +46,7 @@ async function remoteFixture(root: string, remote: { url: string; token?: string
 
 function seedDeviceAuth(root: string, stateDir: string, url: string, token: string) {
   const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
   const identity = loadOrCreateDeviceIdentity({ env });
   seedOriginDeviceToken({
     gatewayScope: gatewayOriginScope(url),
@@ -248,6 +252,7 @@ it("rejects invalid remote config before a node pairing mutation without opening
       type: "cli_error",
       message: expect.stringContaining("OpenClaw config is invalid:"),
     },
+    repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
     issues: [
       {
         path: "gateway.mode",
