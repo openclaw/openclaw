@@ -54,7 +54,7 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   sidebar.connected = true;
   await selectSidebarView(sidebar, "online");
   // Expected label, family, platform, mode, client ID, misleading host; duplicate tabs collapse.
-  const devices = [
+  const devices: [string, string | undefined, string, string, string?, string?][] = [
     ["Mac · Web app", "Mac", "MacIntel", "webchat"],
     ["Mac · Web app", "Mac", "MacIntel", "webchat"],
     ["iPad · Web app", "iPad", "MacIntel", "webchat"],
@@ -101,7 +101,9 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   expect(view.text(".person-activity-card__status")?.trim()).toBe("Online");
   const facts = view.all("dd");
   expect([...facts[0]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual(
-    [...new Set(devices.map(([label]) => label))].toSorted((a, b) => a.localeCompare(b)),
+    [...new Set(devices.map(([label]) => label))].toSorted((a, b) =>
+      a === b ? 0 : a < b ? -1 : 1,
+    ),
   );
   expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
   expect(facts[1]?.textContent?.trim()).toBe("Activity unavailable");
