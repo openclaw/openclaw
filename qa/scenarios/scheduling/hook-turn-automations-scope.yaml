@@ -18,6 +18,7 @@ scenario:
   successCriteria:
     - A POST to /hooks/agent completes its run successfully.
     - The hook turn's attempt to remove another automation is rejected by the tool scope.
+    - The hook turn's allowed automations list call succeeds and does not expose the other automation.
     - The other automation still exists after the hook turn.
   docsRefs:
     - docs/automation/cron-jobs/webhooks.md
@@ -32,7 +33,7 @@ scenario:
     isolationReason: Enables Gateway HTTP hooks and drives a hook turn against a sibling automation.
     channel: qa-channel
     retryCount: 0
-    summary: Create one automation, then prove a hook turn cannot remove it through the automations tool.
+    summary: Create one automation, then prove a hook turn cannot remove it through the automations tool while an allowed list call still works.
     config:
       requiredProviderMode: mock-openai
       hookToken: qa-hook-automations-scope-token
@@ -103,20 +104,30 @@ flow:
         - set: hookRequests
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
-        - set: removeRequest
+        - set: automationCalls
           value:
-            expr: "hookRequests.find((request) => { const args = request.plannedToolName === 'dispatch_action' ? request.plannedToolArgs?.args : request.plannedToolArgs; const target = request.plannedToolName === 'dispatch_action' ? request.plannedToolArgs?.id : request.plannedToolName; return target === 'automations' && args?.action === 'remove' && args?.jobId === siblingId; })"
-        - assert:
-            expr: "Boolean(removeRequest)"
-            message:
-              expr: "`expected the hook turn to request removal of ${siblingId}, got ${JSON.stringify(hookRequests.map((request) => ({ planned: request.plannedToolName, args: request.plannedToolArgs })))}`"
-        - set: toolResult
+            expr: "hookRequests.map((request) => { const dispatched = request.plannedToolName === 'dispatch_action'; return { target: dispatched ? request.plannedToolArgs?.id : request.plannedToolName, args: dispatched ? request.plannedToolArgs?.args : request.plannedToolArgs }; }).filter((call) => call.target === 'automations')"
+        - set: toolOutputs
           value:
-            expr: "hookRequests.map((request) => String(request.toolOutput ?? '')).find((output) => output.length > 0) ?? ''"
+            expr: "hookRequests.map((request) => String(request.toolOutput ?? '')).filter((output) => output.length > 0)"
         - assert:
-            expr: "toolResult.includes(config.scopeError)"
+            expr: "automationCalls[0]?.args?.action === 'remove' && automationCalls[0]?.args?.jobId === siblingId && automationCalls[1]?.args?.action === 'list' && automationCalls[1]?.args?.includeDisabled === true"
             message:
-              expr: "`expected the sibling removal to be rejected by the automations scope, got ${toolResult}`"
+              expr: "`expected the hook turn to request removal of ${siblingId} then list, got ${JSON.stringify(automationCalls)}`"
+        - set: removeResult
+          value:
+            expr: "toolOutputs[0] ?? ''"
+        - assert:
+            expr: "removeResult.includes(config.scopeError)"
+            message:
+              expr: "`expected the sibling removal to be rejected by the automations scope, got ${removeResult}`"
+        - set: listResult
+          value:
+            expr: "toolOutputs[1] ?? ''"
+        - assert:
+            expr: "listResult.includes('includeDisabled') && !listResult.includes(config.scopeError) && !listResult.includes(siblingId)"
+            message:
+              expr: "`expected the allowed list call to succeed without exposing ${siblingId}, got ${listResult}`"
         - set: remaining
           value:
             expr: "await env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 })"
@@ -130,4 +141,4 @@ flow:
             - id:
                 ref: siblingId
             - timeoutMs: 30000
-      detailsExpr: "`hook turn removal of ${siblingId} rejected: ${toolResult.slice(0, 200)}`"
+      detailsExpr: "`hook turn calls=${JSON.stringify(automationCalls)} remove=${JSON.stringify(removeResult.slice(0, 200))} list=${JSON.stringify(listResult.slice(0, 300))} siblingSurvived=true`"

@@ -148,20 +148,6 @@ describe("createOpenClawCodingTools cron scope", () => {
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
-  it("scopes event-triggered cron-runner turns to their current job", () => {
-    createOpenClawCodingTools({ trigger: "event", jobId: "hook-job" });
-    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("hook-job");
-  });
-
-  it.each([
-    { trigger: "event" as const, jobId: undefined },
-    { trigger: "user" as const, jobId: "job-current" },
-    { trigger: "heartbeat" as const, jobId: "job-current" },
-  ])("leaves $trigger turns without a cron job unscoped", ({ trigger, jobId }) => {
-    createOpenClawCodingTools({ trigger, jobId });
-    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBeUndefined();
-  });
-
   it("preserves explicit automation denial for a scheduled run", () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",

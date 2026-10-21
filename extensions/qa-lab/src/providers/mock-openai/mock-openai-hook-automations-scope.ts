@@ -6,7 +6,8 @@ const QA_HOOK_AUTOMATIONS_SCOPE_DONE_MARKER = "QA-HOOK-AUTOMATIONS-SCOPE-DONE";
 
 /**
  * Scripts a webhook turn that asks the automations tool to remove another job,
- * then finishes. The scenario asserts the tool result and the job's survival.
+ * then lists automations as an allowed control, then finishes. The scenario
+ * asserts both tool results and the other job's survival.
  */
 export function planHookAutomationsScopeTurn(params: {
   prompt: string;
@@ -18,9 +19,12 @@ export function planHookAutomationsScopeTurn(params: {
     return null;
   }
   const completed = params.input.filter((item) => item.type === "function_call_output").length;
+  // Deferred catalogs route these through dispatch_action.
   if (completed === 0) {
-    // Deferred catalogs route this through dispatch_action.
     return params.buildToolCall("automations", { action: "remove", jobId: target });
+  }
+  if (completed === 1) {
+    return params.buildToolCall("automations", { action: "list", includeDisabled: true });
   }
   return buildAssistantEvents(QA_HOOK_AUTOMATIONS_SCOPE_DONE_MARKER);
 }
