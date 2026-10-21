@@ -3,10 +3,7 @@ import { GatewayClientRequestError } from "../../../packages/gateway-client/src/
 import { GatewayLocalBackendSharedAuthUnavailableError } from "../../gateway/call.js";
 import { GatewayTransportError } from "../../gateway/transport-error.js";
 
-const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn(),
-  isImplicitLocalGatewayTarget: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ callGateway: vi.fn(), isImplicitLocalGatewayTarget: vi.fn() }));
 
 vi.mock("../../gateway/call.js", async () => {
   const requestErrors = await import("../../../packages/gateway-client/src/request-error.js");
@@ -20,6 +17,18 @@ vi.mock("../../gateway/call.js", async () => {
 });
 
 const { refreshRunningGatewayAuthState } = await import("./auth-refresh.js");
+const warn = vi.fn();
+async function expectRefresh(
+  outcome: Awaited<ReturnType<typeof refreshRunningGatewayAuthState>>,
+  warning?: string,
+  operation: "login" | "update" = "login",
+) {
+  const result = await refreshRunningGatewayAuthState("main", operation, { error: warn });
+  expect({ result, warnings: warn.mock.calls }).toEqual({
+    result: outcome,
+    warnings: warning ? [[warning]] : [],
+  });
+}
 
 describe("refreshRunningGatewayAuthState", () => {
   beforeEach(() => {
@@ -30,10 +39,7 @@ describe("refreshRunningGatewayAuthState", () => {
 
   it("acknowledges a published update", async () => {
     mocks.callGateway.mockResolvedValueOnce({ refreshed: true });
-    const warn = vi.fn();
-    await expect(refreshRunningGatewayAuthState("main", "update", { error: warn })).resolves.toBe(
-      "refreshed",
-    );
+    await expectRefresh("refreshed", undefined, "update");
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "models.authRefresh",
@@ -41,7 +47,6 @@ describe("refreshRunningGatewayAuthState", () => {
         requireLocalBackendSharedAuth: true,
       }),
     );
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("keeps restart guidance when legacy status refresh fails", async () => {
@@ -58,10 +63,9 @@ describe("refreshRunningGatewayAuthState", () => {
         throw new Error("legacy refresh failed");
       },
     );
-    const warn = vi.fn();
-
-    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
+    await expectRefresh(
       "gateway-rejected",
+      "Warning: Model auth changes were saved, but the running Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
     );
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(2);
@@ -72,9 +76,6 @@ describe("refreshRunningGatewayAuthState", () => {
         timeoutMs: 3000,
         requireLocalBackendSharedAuth: true,
       }),
-    );
-    expect(warn).toHaveBeenCalledWith(
-      "Warning: Model auth changes were saved, but the running Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
     );
   });
 
@@ -91,16 +92,11 @@ describe("refreshRunningGatewayAuthState", () => {
         },
       }),
     );
-    const warn = vi.fn();
-
-    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
-      "gateway-unreachable",
-    );
+    await expectRefresh("gateway-unreachable");
 
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({ requireLocalBackendSharedAuth: true }),
     );
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("directs remote clients to run auth changes on the gateway host", async () => {
@@ -110,28 +106,18 @@ describe("refreshRunningGatewayAuthState", () => {
         "local backend shared auth is limited to the configured local gateway",
       ),
     );
-    const warn = vi.fn();
-
-    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
+    await expectRefresh(
       "gateway-rejected",
-    );
-
-    expect(warn).toHaveBeenCalledWith(
       "Warning: Model auth changes were saved on this host, but the configured Gateway does not share this auth state. Run the auth command on the Gateway host (the far end of any SSH tunnel).",
     );
   });
 
   it("does not guess a restart host when target classification fails", async () => {
     mocks.isImplicitLocalGatewayTarget.mockRejectedValueOnce(new Error("invalid config"));
-    const warn = vi.fn();
-
-    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
+    await expectRefresh(
       "gateway-unreachable",
-    );
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
       "Warning: Model auth changes were saved, but the configured Gateway could not be identified or refreshed. Apply the auth change on the Gateway host, or restart it there.",
     );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 });

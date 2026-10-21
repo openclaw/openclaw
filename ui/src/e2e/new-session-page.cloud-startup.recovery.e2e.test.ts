@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
@@ -6,10 +8,12 @@ import type {
   SessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
+  captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
   createCloudAgentsListResponse,
@@ -85,6 +89,104 @@ function readRecovery(page: Page) {
 }
 
 suite.define(() => {
+  it("shows the worker diagnostic when recovering a failed cloud first turn", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const sessionKey = "agent:cloud:failed-first-turn";
+      const messageId = "failed-first-turn";
+      const message = "Review the worker startup logs";
+      const diagnostic = "Provider could not allocate the requested environment";
+      const sessions = createdSessionListResult(sessionKey);
+      const session = {
+        ...sessions.sessions[0],
+        sessionId: "session-failed-first-turn",
+        placement: {
+          ...activePlacement("failed-first-turn", "/workspace/cloud-proof"),
+          state: "failed",
+          recoveryError: diagnostic,
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        defaultAgentId: "cloud",
+        workspaceGit: true,
+        methodResponses: {
+          "agents.list": createCloudAgentsListResponse(),
+          "sessions.list": { ...sessions, sessions: [session] },
+          "sessions.describe": { session },
+          "sessions.reclaim": { ok: true },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await waitForGatewayRecoveryScope(page);
+      const owner = await evaluateControlUiContext(page, ({ gateway: appGateway }) => ({
+        gatewayUrl: appGateway.connection.gatewayUrl,
+        recoveryScope: appGateway.snapshot.client!.recoveryScope,
+      }));
+      const recovery: SessionPlacementRecovery = {
+        ...owner,
+        sessionKey,
+        messageId,
+        message,
+        agentId: "cloud",
+        target: { kind: "profile", profileId: "aws" },
+        phase: "dispatching",
+      };
+      const storageKey = sessionPlacementRecoveryExactStorageKey(
+        owner.gatewayUrl,
+        owner.recoveryScope,
+        sessionKey,
+      );
+      await page.evaluate(
+        ({ key, record }) => sessionStorage.setItem(key, JSON.stringify(record)),
+        { key: storageKey, record: recovery },
+      );
+      await page.reload();
+      await waitForCommittedChatRoute(page);
+      const initialTurn = page.locator(".chat-group.user", { hasText: message });
+      const retry = initialTurn.getByRole("button", { name: "Retry queued message" });
+      await retry.waitFor({ state: "visible" });
+      await pollLocatorText(initialTurn.locator(".chat-send-status")).toContain("Not sent");
+      const alert = page.getByRole("alert").filter({ hasText: "startup needs attention" });
+      await alert.waitFor({ state: "visible" });
+      await alert.locator("summary").click();
+      const details = alert.locator(".chat-error__diagnostic");
+      await details.waitFor({ state: "visible" });
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await pollDisabled(composer).toBe(false);
+      await composer.fill("Follow-up retained while worker recovery needs attention");
+      await expectRequest(gateway, "sessions.reclaim", { key: sessionKey, agentId: "cloud" });
+      if (captureUiProofEnabled) {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator("openclaw-chat-page"),
+          [initialTurn, details, composer],
+          { animations: "disabled", viewport: { width: 1280, height: 900 } },
+        );
+        await writeFile(path.join(suite.artifactDir, "failed-first-turn-recovery.png"), frame.png);
+      }
+      await pollLocatorText(details).toContain(diagnostic);
+      expect(await readRecovery(page)).toMatchObject({
+        ...recovery,
+        phase: "paused",
+        reason: "not-sent",
+        error: diagnostic,
+      });
+      expect(await initialTurn.count()).toBe(1);
+      expect(await composer.inputValue()).toBe(
+        "Follow-up retained while worker recovery needs attention",
+      );
+      expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
+      for (const method of [
+        "sessions.create",
+        "sessions.dispatch",
+        "sessions.send",
+        "chat.send",
+        "sessions.delete",
+      ]) {
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+      }
+    });
+  });
+
   it("retries a saved unsent cloud turn on its already-active worker", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const sessionKey = "agent:cloud:late-active-retry";

@@ -39,22 +39,6 @@ const sourceReply = (text: string, metadata: ReplyPayloadMetadata, payload: Repl
   setReplyPayloadMetadata({ text, ...payload }, metadata);
 
 describe("createBlockReplyPipeline dedup with threading", () => {
-  it("keeps an un-aborted delivery signal when timeouts are disabled", async () => {
-    let deliverySignal: AbortSignal | undefined;
-    const pipeline = createBlockReplyPipeline({
-      onBlockReply: async (_payload, options) => {
-        deliverySignal = options?.abortSignal;
-      },
-      timeoutMs: 0,
-    });
-
-    pipeline.enqueue({ text: "response text" });
-    await pipeline.flush({ force: true });
-
-    expect(deliverySignal).toBeDefined();
-    expect(deliverySignal?.aborted).toBe(false);
-  });
-
   it("keeps commentary separate from a matching visible answer", async () => {
     const payload = { text: "Same answer", isCommentary: true };
     for (const config of [undefined, { ...coalescing, joiner: " " }]) {

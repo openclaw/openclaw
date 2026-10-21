@@ -128,9 +128,7 @@ async function probeTcpReachability(rawUrl: string): Promise<QaStartupProbeStatu
         socket.destroy();
         reject(error);
       };
-      socket.setTimeout(700, () => {
-        socket.destroy(new Error("timeout"));
-      });
+      socket.setTimeout(700);
       socket.once("connect", () => {
         socket.end();
         resolve();

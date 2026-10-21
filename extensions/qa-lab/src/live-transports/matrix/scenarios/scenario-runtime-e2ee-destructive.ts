@@ -346,9 +346,8 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       });
       const initial = await restore("initial-restore-stores-key", setup.encodedRecoveryKey);
       assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "initial stored-key");
-      const mutation = await mutateMatrixQaCliStateLoss({
+      const accountRoot = await mutateMatrixQaCliStateLoss({
         deviceId: device.deviceId,
-        preserveRecoveryKey: true,
         runtime: cli,
         userId: device.userId,
       });
@@ -363,7 +362,7 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       return {
         details: [
           "Matrix crypto/runtime state was deleted while recovery-key.json survived",
-          `account root: ${mutation.accountRoot}`,
+          `account root: ${accountRoot}`,
           `restore imported/total: ${restored.payload.imported ?? 0}/${restored.payload.total ?? 0}`,
           "restore command supplied recovery key: no",
           `recovery key stored after restore: ${status.payload.recoveryKeyStored ? "yes" : "no"}`,

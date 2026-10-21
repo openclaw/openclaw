@@ -13,6 +13,7 @@ import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-sco
 import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+import { nativeAdmissionStateFor } from "./plugin-native-admission-state.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -152,10 +153,13 @@ export function createPluginModuleLoader(options: {
     immutableInstallIdentity?: string;
   };
   // Only uncached inspections of immutable installs may share evaluated code.
-  const inspectionSourceIdentity = (owner: Owner) =>
+  const inspection = (owner: Owner) =>
     getPluginRegistryInspectionResources(owner.registry) === undefined
-      ? undefined
-      : owner.immutableInstallIdentity;
+      ? {}
+      : {
+          inspectionSourceIdentity: owner.immutableInstallIdentity,
+          inspectionRetention: nativeAdmissionStateFor(cache).inspectionNativeEsm,
+        };
   const binding = (
     modulePath: string,
     owner: Owner,
@@ -167,7 +171,7 @@ export function createPluginModuleLoader(options: {
     rootDir: owner.rootDir,
     standalone: owner.standalone,
     expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
-    inspectionSourceIdentity: inspectionSourceIdentity(owner),
+    ...inspection(owner),
     devSourceRoot: captured.devSourceRoot,
     pluginSdkResolution: captured.pluginSdkResolution,
     createHostModuleLoader: () => createLoaderForModule(modulePath),
@@ -199,7 +203,9 @@ export function createPluginModuleLoader(options: {
           origin: owner.record.origin,
           source: modulePath,
           expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
-          inspectionSourceIdentity: inspectionSourceIdentity(owner),
+          ...inspection(owner),
+          devSourceRoot: captured.devSourceRoot,
+          pluginSdkResolution: captured.pluginSdkResolution,
           registry: owner.registry,
         });
       if (

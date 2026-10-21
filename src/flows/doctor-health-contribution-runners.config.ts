@@ -97,7 +97,6 @@ export async function runWriteConfigHealth(
     const renamedCron = await maybeRepairProviderRenameCronJobs({
       renames: providerRenames,
       env: ctx.env,
-      shouldRepair: true,
     });
     noteDoctorRepairResult(renamedCron, showDoctorNote);
     const renamedSessions = await maybeRepairCodexSessionRoutes({

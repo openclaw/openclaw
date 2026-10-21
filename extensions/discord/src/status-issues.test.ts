@@ -1,20 +1,15 @@
-// Discord tests cover status issues plugin behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { describe, expect, it } from "vitest";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 
+const collect = (fields: Record<string, unknown>) =>
+  collectDiscordStatusIssues([
+    { accountId: "ops", enabled: true, configured: true, ...fields } as ChannelAccountSnapshot,
+  ]);
+
 describe("collectDiscordStatusIssues", () => {
   it("reports an empty guild allowlist with the resolved account config path", () => {
-    const issues = collectDiscordStatusIssues([
-      {
-        accountId: "ops",
-        enabled: true,
-        configured: true,
-        groupPolicy: "allowlist",
-        guildsConfigured: 0,
-      } as ChannelAccountSnapshot,
-    ]);
-
+    const issues = collect({ groupPolicy: "allowlist", guildsConfigured: 0 });
     expect(issues).toEqual([
       {
         channel: "discord",
@@ -28,15 +23,7 @@ describe("collectDiscordStatusIssues", () => {
   });
 
   it("explains the top-level and explicit default-account guild config paths", () => {
-    const issues = collectDiscordStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        configured: true,
-        groupPolicy: "allowlist",
-        guildsConfigured: 0,
-      } as ChannelAccountSnapshot,
-    ]);
+    const issues = collect({ accountId: "default", groupPolicy: "allowlist", guildsConfigured: 0 });
 
     expect(issues[0]?.fix).toContain("channels.discord.guilds");
     expect(issues[0]?.fix).toContain(
@@ -46,21 +33,10 @@ describe("collectDiscordStatusIssues", () => {
   });
 
   it("reports disabled message content intent and unresolved channel ids", () => {
-    const issues = collectDiscordStatusIssues([
-      {
-        accountId: "ops",
-        enabled: true,
-        configured: true,
-        application: {
-          intents: {
-            messageContent: "disabled",
-          },
-        },
-        audit: {
-          unresolvedChannels: 2,
-        },
-      } as ChannelAccountSnapshot,
-    ]);
+    const issues = collect({
+      application: { intents: { messageContent: "disabled" } },
+      audit: { unresolvedChannels: 2 },
+    });
 
     expect(issues).toEqual([
       {
@@ -82,25 +58,20 @@ describe("collectDiscordStatusIssues", () => {
   });
 
   it("reports channel permission failures with match metadata", () => {
-    const issues = collectDiscordStatusIssues([
-      {
-        accountId: "ops",
-        enabled: true,
-        configured: true,
-        audit: {
-          channels: [
-            {
-              channelId: "123",
-              ok: false,
-              missing: ["ViewChannel", "SendMessages"],
-              error: "403",
-              matchKey: "alerts",
-              matchSource: "guilds.ops.channels",
-            },
-          ],
-        },
-      } as ChannelAccountSnapshot,
-    ]);
+    const issues = collect({
+      audit: {
+        channels: [
+          {
+            channelId: "123",
+            ok: false,
+            missing: ["ViewChannel", "SendMessages"],
+            error: "403",
+            matchKey: "alerts",
+            matchSource: "guilds.ops.channels",
+          },
+        ],
+      },
+    });
 
     expect(issues).toEqual([
       {

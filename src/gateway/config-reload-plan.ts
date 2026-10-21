@@ -154,6 +154,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy", "gateway.portals"],
     kind: "restart",
   },
+  // Gateway tools capture this deployment policy when they are assembled.
+  { prefixes: ["tools.gatewayPolicy"], kind: "restart" },
   {
     // These policies use the published snapshot or an existing committed owner;
     // listener and service replacement requires an explicit action below.

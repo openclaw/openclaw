@@ -45,13 +45,23 @@ import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-ali
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 type SourceBuilds = Map<string, PluginSourceBuild>;
-type RetainedNativeEsm = {
+export type RetainedNativeEsm = {
   artifact?: PluginGenerationArtifact;
   builds: SourceBuilds;
   modules: Map<string, unknown>;
   loaded: boolean;
   owners: Set<PluginInstanceModuleLoaderParams["instance"]>;
   knownOwners: WeakSet<PluginInstanceModuleLoaderParams["instance"]>;
+};
+
+export type InspectionNativeEsmPolicy = {
+  workspaces: ReadonlySet<string>;
+  sources: ReadonlyMap<string, string>;
+  devSourceRoot?: string | null;
+};
+
+export type InspectionNativeEsmRetention = InspectionNativeEsmPolicy & {
+  entries: Map<string, RetainedNativeEsm>;
 };
 
 const retainedNativeEsmModules = resolveGlobalMap<string, RetainedNativeEsm>(
@@ -66,6 +76,9 @@ type RetainedNativeEsmTarget = Pick<
   | "nativeRecovery"
   | "recoverySourceMap"
   | "inspectionSourceIdentity"
+  | "inspectionRetention"
+  | "devSourceRoot"
+  | "pluginSdkResolution"
 > & { registry: PluginRegistry | undefined };
 
 function isCatalogWorkerThread(): boolean {
@@ -77,22 +90,13 @@ function isCatalogWorkerThread(): boolean {
   );
 }
 
-function retainedNativeEsmKey(target: RetainedNativeEsmTarget): string | undefined {
+function retainedNativeEsmLocation(target: RetainedNativeEsmTarget) {
   // Explicit recovery keeps its own source custody and must not join an installed entry.
   if (target.nativeRecovery || target.recoverySourceMap) {
     return undefined;
   }
-  // Cold main-thread inspections (effective tool inventory, read-only prepared runtimes)
-  // otherwise evaluate another copy of an unchanged install on every request. Only
-  // installer-proven immutable installs in uncached inspection registries join; live
-  // registries and editable plugins (workspace, config-path, local or archive installs)
-  // keep their own evaluation.
-  const inspection =
-    isMainThread &&
-    target.inspectionSourceIdentity !== undefined &&
-    target.origin === "global" &&
-    target.registry !== undefined;
-  if (!inspection && !isCatalogWorkerThread()) {
+  const retention = isMainThread ? target.inspectionRetention : undefined;
+  if (!retention && !isCatalogWorkerThread()) {
     return undefined;
   }
   const extension = path.extname(target.source).toLowerCase();
@@ -100,32 +104,46 @@ function retainedNativeEsmKey(target: RetainedNativeEsmTarget): string | undefin
     return undefined;
   }
   const workspace = getPluginRuntimeLoadContextState(target.registry)?.workspaceDir;
-  if (!inspection) {
-    return `${fs.realpathSync(target.source)}\0${workspace ?? ""}`;
+  const source = fs.realpathSync(target.source);
+  if (!retention) {
+    return { entries: retainedNativeEsmModules, key: `${source}\0${workspace ?? ""}` };
   }
-  // A reinstall changes the install identity (or expected digest), so it never reuses older code.
-  return workspace === undefined
-    ? undefined
-    : `inspection\0${fs.realpathSync(target.source)}\0${workspace}\0${target.inspectionSourceIdentity}\0${target.expectedSourceDigest ?? ""}`;
+  // Only the inventory's admitted entry/workspace pairs can grow this map. A replacement
+  // inventory owns new code; old borrowers keep their capture until admission retires.
+  if (
+    target.origin !== "global" ||
+    target.inspectionSourceIdentity === undefined ||
+    retention.sources.get(source) !== target.inspectionSourceIdentity ||
+    workspace === undefined ||
+    !retention.workspaces.has(workspace) ||
+    retention.devSourceRoot !== target.devSourceRoot
+  ) {
+    return undefined;
+  }
+  return {
+    entries: retention.entries,
+    key: JSON.stringify([source, workspace, target.pluginSdkResolution ?? "auto"]),
+  };
 }
 
 /** Whether a load would reuse an already captured and retained native ESM artifact. */
 export function hasRetainedNativeEsmArtifact(target: RetainedNativeEsmTarget): boolean {
-  const key = retainedNativeEsmKey(target);
-  return key !== undefined && retainedNativeEsmModules.get(key)?.artifact !== undefined;
+  const location = retainedNativeEsmLocation(target);
+  return location !== undefined && location.entries.get(location.key)?.artifact !== undefined;
 }
 
 function retainedNativeEsmFor(
   params: PluginInstanceModuleLoaderParams,
 ): RetainedNativeEsm | undefined {
-  const key = retainedNativeEsmKey({
+  const location = retainedNativeEsmLocation({
     ...params,
     registry: getPluginInstanceOwner(params.instance)?.registry,
   });
-  if (key === undefined) {
+  if (!location) {
     return undefined;
   }
-  let retained = retainedNativeEsmModules.get(key);
+  const { entries, key } = location;
+  let retained = entries.get(key);
   if (!retained) {
     retained = {
       builds: new Map(),
@@ -134,7 +152,7 @@ function retainedNativeEsmFor(
       owners: new Set(),
       knownOwners: new WeakSet(),
     };
-    retainedNativeEsmModules.set(key, retained);
+    entries.set(key, retained);
   }
   return retained;
 }
@@ -254,9 +272,8 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     });
     return;
   }
-  // Native ESM jobs cannot be unloaded. Keep their capture and compiled helpers for this
-  // worker or main-thread inspection key, but let each generation own its admission and
-  // resolver hooks.
+  // Native ESM jobs cannot be unloaded. Reuse code within its worker or inspection
+  // inventory, while each registration owns its authority and resolver hooks.
   const retained = retainedNativeEsmFor(params);
   const sourceBuilds: SourceBuilds = retained?.builds ?? new Map();
   const { sourceForOutput, moduleSource } = createSourceOutputLookup(sourceBuilds);

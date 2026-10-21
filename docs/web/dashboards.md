@@ -419,6 +419,10 @@ Gateway's `/__openclaw__/a2ui/` asset route, so the renderer bundle is not
 copied into each widget. The Canvas plugin and its hosted routes must be
 enabled; both are enabled by default.
 
+The v0.9 basic catalog supports bound form controls, lists, tabs, media, and
+dialogs. Text bodies render basic Markdown; raw HTML, links, and images in
+Markdown are not rendered. Use the catalog's Image component for images.
+
 A2UI actions use the normal widget bridge. By default, clicks become quiet
 session notices that the agent sees on its next turn. If the widget declares
 and receives the `prompt` grant, its actions can instead send a visible prompt

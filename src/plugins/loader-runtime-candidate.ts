@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import {
@@ -519,7 +520,11 @@ export function* loadRuntimePluginCandidate(params: {
       rootDir: moduleRoot,
       registry,
       standalone: manifestRecord.manifestPath === candidate.source,
-      immutableInstallIdentity: resolveImmutableInstallIdentity(candidate, context.installRecords),
+      immutableInstallIdentity: resolveImmutableInstallIdentity(
+        candidate.origin,
+        resolvePluginCandidateInstallOwner(candidate),
+        context.installRecords,
+      ),
     };
     if (!recovery && candidate.origin !== "bundled") {
       // Host callers await acquisition after selection and policy checks. Synchronous

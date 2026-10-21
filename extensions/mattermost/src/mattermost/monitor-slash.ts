@@ -168,7 +168,6 @@ export async function registerMattermostMonitorSlashCommands(params: {
 
     activateSlashCommands({
       account: params.account,
-      commandTokens: registered.map((cmd) => cmd.token).filter(Boolean),
       registeredCommands: registered,
       triggerMap: buildTriggerMap(dedupedCommands),
       api: { cfg: params.cfg, runtime: params.runtime },

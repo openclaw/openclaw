@@ -63,6 +63,7 @@ type ProxySerializableStreamOptions = Pick<
   | "maxTokens"
   | "reasoning"
   | "cacheRetention"
+  | "promptCacheTtl"
   | "sessionId"
   | "promptCacheKey"
   | "metadata"
@@ -106,6 +107,7 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
     maxTokens: options.maxTokens,
     reasoning: options.reasoning,
     cacheRetention: options.cacheRetention,
+    promptCacheTtl: options.promptCacheTtl,
     sessionId: options.sessionId,
     promptCacheKey: options.promptCacheKey,
     metadata: options.metadata,

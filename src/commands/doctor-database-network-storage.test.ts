@@ -12,7 +12,8 @@ vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
   note: vi.fn(),
 }));
-vi.mock("./doctor-database-engine-inspection.js", () => ({
+vi.mock("./doctor-database-engine-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-database-engine-inspection.js")>()),
   inspectDoctorDatabaseEngines: vi.fn(),
 }));
 vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({

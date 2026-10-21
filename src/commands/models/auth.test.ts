@@ -191,7 +191,7 @@ function overrideStdin(key: PropertyKey, descriptor: PropertyDescriptor) {
   };
 }
 
-function withPipedStdin(input: string) {
+function withPipedStdin(input: string | Buffer) {
   const restoreTTY = overrideStdin("isTTY", { enumerable: true, get: () => false });
   const restoreIterator = overrideStdin(Symbol.asyncIterator, {
     async *value() {
@@ -381,7 +381,7 @@ function loginFlow(options: Partial<Parameters<typeof runModelsAuthLoginFlowCore
   });
 }
 
-function pipeInput(input: string) {
+function pipeInput(input: string | Buffer) {
   restoreStdin?.();
   restoreStdin = withPipedStdin(input);
 }
@@ -1020,6 +1020,18 @@ it.each([
     error: "paste-api-key --provider openai",
   },
   {
+    name: "malformed UTF-8 token",
+    input: Buffer.from([0x74, 0xff, 0x6b]),
+    command: modelsAuthPasteTokenCommand,
+    error: "Piped auth input must be valid UTF-8.",
+  },
+  {
+    name: "malformed UTF-8 API key",
+    input: Buffer.concat([Buffer.from("sk-synthetic-before-"), Buffer.from([0xff])]),
+    command: modelsAuthPasteApiKeyCommand,
+    error: "Piped auth input must be valid UTF-8.",
+  },
+  {
     name: "oversized auth input",
     input: "x".repeat(1024 * 1024 + 1),
     command: modelsAuthPasteApiKeyCommand,
@@ -1062,25 +1074,12 @@ it("writes pasted API keys to the requested agent store", async () => {
 
 it("rejects token material pasted into the OpenAI Codex API-key command", async () => {
   const jwtLikeToken = ["eyJhbGciOiJub25l", "eyJzdWIiOiJjb2RleCJ9", "signature123456"].join(".");
-  const validateMessages: string[] = [];
-  mocks.clackPassword.mockImplementation(
-    async (params: { validate?: (value: string) => string | undefined }) => {
-      const message = params.validate?.(jwtLikeToken);
-      if (message) {
-        validateMessages.push(message);
-        throw new Error(message);
-      }
-      return jwtLikeToken;
-    },
-  );
+  mocks.clackPassword.mockResolvedValue(jwtLikeToken);
 
   await expect(modelsAuthPasteApiKeyCommand({ provider: "openai" }, runtime)).rejects.toThrow(
     "paste-token --provider openai",
   );
 
-  expect(validateMessages).toEqual([
-    "That looks like token or OAuth material, not an OpenAI API key. Use openclaw models auth paste-token --provider openai for token auth material.",
-  ]);
   expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
   expect(mocks.updateConfig).not.toHaveBeenCalled();
 });

@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -337,7 +338,9 @@ describe("ClickClack gateway", () => {
     expect(client.websocket).toHaveBeenLastCalledWith("workspace-1", "cursor-501");
   });
 
-  it("skips malformed websocket frames without stopping the monitor", async () => {
+  it("skips malformed frames and dispatches with the scoped context builder", async () => {
+    const { channel } = createPluginRuntimeMock();
+    ctx.channelRuntime = channel;
     let runError: unknown;
     run = startClickClackGatewayAccount(ctx).catch((error: unknown) => {
       runError = error;
@@ -355,6 +358,7 @@ describe("ClickClack gateway", () => {
     emitMessageEvent(socket, 1);
 
     await waitForState(() => expect(inbound).toHaveBeenCalledTimes(1));
+    expect(inbound.mock.calls[0]?.[0].buildContext).toBe(channel.inbound.buildContext);
     expect(inbound.mock.calls[0]?.[0].access).toEqual({
       shouldDispatch: true,
       commandAuthorized: true,

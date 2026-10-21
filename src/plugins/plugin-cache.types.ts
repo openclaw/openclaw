@@ -9,6 +9,7 @@ import type {
 import type { PluginCacheManagement } from "./plugin-cache-management.js";
 import type { PluginCacheMetadata } from "./plugin-cache-metadata.js";
 import type { PluginCacheSdk } from "./plugin-cache-sdk.js";
+import type { InspectionNativeEsmPolicy } from "./plugin-instance-module-loader.js";
 import type { PluginInstanceResource, PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 
 export type PluginRootCacheRecord = PluginRootArtifactCache & {
@@ -29,6 +30,7 @@ export interface PluginCache
   setupModules: Map<string, PluginModuleLoaderOwner>;
   instances: Set<PluginInstanceResource>;
   sourceAdmissions?: { invalidate(): void; dispose(): Promise<void> };
+  inspectionNativeEsmPolicy?: InspectionNativeEsmPolicy & { viewKeys: ReadonlySet<string> };
   retirement?: Promise<PluginHostCleanupResult>;
   [Symbol.asyncDispose](): Promise<void>;
 }

@@ -132,6 +132,14 @@ describe("FRV cancellation tree", () => {
   }
   const sentIds = () => fixture.sent.map(([id]) => id);
 
+  it("authenticates a plan sealed by a pre-seal recovery attempt", async () => {
+    fixture.retained.plan.sealParentRunAttempt = 2;
+    fixture.retained.plan.sha256 = releaseExecutionPlanSha256(fixture.retained.plan);
+    fixture.sealer.run_attempt = 2;
+    await cancel(true);
+    expect(sentIds()).toEqual(["303", "77"]);
+  });
+
   it("includes earlier Telegram descendants beside runnerless rerun copies", async () => {
     fixture = cancellationFixture({ nested: true });
     fixture.runs.get("303")!.run_attempt = 2;

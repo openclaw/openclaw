@@ -22,27 +22,17 @@ export function createQaLabCaptureMock() {
         return acc;
       }, {}),
     ).map(([value, count]) => ({ value, count }));
-  const countMatching = <T>(values: T[], predicate: (value: T) => boolean) => {
-    let count = 0;
-    for (const value of values) {
-      if (predicate(value)) {
-        count += 1;
-      }
-    }
-    return count;
-  };
-
   const store = {
-    upsertSession(session: Record<string, unknown>) {
+    upsertSession: (session: Record<string, unknown>) => {
       sessions.push({ ...session });
     },
-    recordEvent(event: Record<string, unknown>) {
+    recordEvent: (event: Record<string, unknown>) => {
       events.push({ ...event });
     },
     async listSessions(limit: number) {
       return sessions.slice(0, limit).map((session) =>
         Object.assign({}, session, {
-          eventCount: countMatching(events, (event) => event.sessionId === session.id),
+          eventCount: events.filter((event) => event.sessionId === session.id).length,
         }),
       );
     },
@@ -55,7 +45,7 @@ export function createQaLabCaptureMock() {
       return {
         sessionId,
         totalEvents: selected.length,
-        unlabeledEventCount: countMatching(metas, (meta) => !meta.provider && !meta.model),
+        unlabeledEventCount: metas.filter((meta) => !meta.provider && !meta.model).length,
         providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
         apis: countValues(metas.map((meta) => meta.api as string | undefined)),
         models: countValues(metas.map((meta) => meta.model as string | undefined)),
@@ -72,20 +62,13 @@ export function createQaLabCaptureMock() {
         return [];
       }
       const selected = events.filter((event) => !sessionId || event.sessionId === sessionId);
-      const counts = selected.reduce<Record<string, number>>((acc, event) => {
-        const host = typeof event.host === "string" ? event.host : "";
-        if (host) {
-          acc[host] = (acc[host] ?? 0) + 1;
-        }
-        return acc;
-      }, {});
-      return Object.entries(counts)
-        .filter(([, duplicateCount]) => duplicateCount > 1)
-        .map(([host, duplicateCount]) => ({ host, duplicateCount }));
+      return countValues(
+        selected.map((event) => (typeof event.host === "string" ? event.host : undefined)),
+      )
+        .filter(({ count }) => count > 1)
+        .map(({ value: host, count: duplicateCount }) => ({ host, duplicateCount }));
     },
-    async readBlob() {
-      return null;
-    },
+    readBlob: async () => null,
     close: vi.fn(async () => {}),
     async deleteSessions(sessionIds: string[]) {
       const ids = new Set(sessionIds);

@@ -15,6 +15,7 @@ import { stateDir } from "../../gateway/server-methods/requester-cron-authority.
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
+import { runCronSessionTurn } from "../session-run.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import * as harness from "./run.test-harness.js";
 
@@ -114,14 +115,23 @@ export function createAuthorityCronService(
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
+    runSessionEvent: (request) =>
+      runCronSessionTurn({
+        ...request,
+        cfg: config,
+        agentId: "main",
+        sessionKey: expectDefined(
+          resolveCronSessionTargetSessionKey(request.job.sessionTarget),
+          "explicit Cron session target",
+        ),
+      }),
     runIsolatedAgentJob: (request) =>
       runCron({
         ...request,
         cfg: config,
         deps: {},
         agentId: "main",
-        sessionKey:
-          resolveCronSessionTargetSessionKey(request.job.sessionTarget) ?? `cron:${request.job.id}`,
+        sessionKey: `cron:${request.job.id}`,
       }),
     ...overrides,
   });

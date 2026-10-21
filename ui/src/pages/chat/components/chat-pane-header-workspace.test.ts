@@ -2,8 +2,11 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
+import {
+  canRevealSessionWorkspace,
+  resolveChatPaneParentSession,
+} from "./chat-pane-header-identity.tsx";
 import { chatPaneHeaderSessionRow as row } from "./chat-pane-header.test-support.ts";
-import { canRevealSessionWorkspace, resolveChatPaneParentSession } from "./chat-pane-header.tsx";
 
 it("omits unresolved and self-referential parents", () => {
   const child = row({ key: "agent:main:child", parentSessionKey: "agent:main:missing" });

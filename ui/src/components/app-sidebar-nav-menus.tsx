@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, onCleanup } from "solid-js";
+import { createUniqueId, onSettled } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
@@ -66,7 +66,8 @@ export type SidebarDropdownProps = {
 export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
   const id = createUniqueId();
   let removeListeners: (() => void)[] = [];
-  onCleanup(() => removeListeners.forEach((stop) => stop()));
+  // Menu publishes its handle after settled setup has registered this teardown.
+  onSettled(() => () => removeListeners.forEach((stop) => stop()));
   return (
     <Menu
       controls={params.controls}
@@ -153,7 +154,6 @@ export function renderSidebarNavLink(params: {
   onPreload?: (event: Event, immediate?: boolean) => void;
   onCancelPreload?: (event: Event) => void;
 }): JSX.Element {
-  const onPreload = params.onPreload;
   return (
     <a
       ref={(element) => params.ref?.(element)}
@@ -161,11 +161,11 @@ export function renderSidebarNavLink(params: {
       href={params.href}
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
-      onFocus={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onBlur={params.onCancelPreload}
-      onPointerEnter={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onPointerLeave={params.onCancelPreload}
-      onTouchStart={onPreload ? (event: TouchEvent) => onPreload(event, true) : undefined}
+      onFocus={(event) => params.onPreload?.(event)}
+      onBlur={(event) => params.onCancelPreload?.(event)}
+      onPointerEnter={(event) => params.onPreload?.(event)}
+      onPointerLeave={(event) => params.onCancelPreload?.(event)}
+      onTouchStart={(event) => params.onPreload?.(event, true)}
       onClick={(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;

@@ -1,4 +1,3 @@
-// Binding target tests cover channel binding target extraction and validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ensureConfiguredBindingTargetReady,
@@ -14,141 +13,80 @@ const acp = vi.hoisted(() => ({
 vi.mock("./acp-stateful-target-driver.js", () => acp);
 
 function createBindingResolution(driverId: string): ConfiguredBindingResolution {
+  const conversation = { channel: "demo-binding", accountId: "default", conversationId: "123" };
+  const target = { conversationId: "123" };
+  const statefulTarget = {
+    kind: "stateful" as const,
+    driverId,
+    sessionKey: `agent:codex:${driverId}`,
+    agentId: "codex",
+  };
+  const record = {
+    bindingId: "binding:123",
+    targetSessionKey: statefulTarget.sessionKey,
+    targetKind: "session" as const,
+    conversation,
+    status: "active" as const,
+    boundAt: 0,
+  };
   return {
-    conversation: {
-      channel: "demo-binding",
-      accountId: "default",
-      conversationId: "123",
-    },
+    conversation,
     compiledBinding: {
       channel: "demo-binding",
       binding: {
         type: "acp" as const,
         agentId: "codex",
-        match: {
-          channel: "demo-binding",
-          peer: {
-            kind: "channel" as const,
-            id: "123",
-          },
-        },
-        acp: {
-          mode: "persistent",
-        },
+        match: { channel: "demo-binding", peer: { kind: "channel", id: "123" } },
+        acp: { mode: "persistent" },
       },
       bindingConversationId: "123",
-      target: {
-        conversationId: "123",
-      },
+      target,
       agentId: "codex",
       provider: {
-        compileConfiguredBinding: () => ({
-          conversationId: "123",
-        }),
-        matchInboundConversation: () => ({
-          conversationId: "123",
-        }),
+        compileConfiguredBinding: () => target,
+        matchInboundConversation: () => target,
       },
       targetFactory: {
         driverId,
-        materialize: () => ({
-          record: {
-            bindingId: "binding:123",
-            targetSessionKey: `agent:codex:${driverId}`,
-            targetKind: "session",
-            conversation: {
-              channel: "demo-binding",
-              accountId: "default",
-              conversationId: "123",
-            },
-            status: "active",
-            boundAt: 0,
-          },
-          statefulTarget: {
-            kind: "stateful",
-            driverId,
-            sessionKey: `agent:codex:${driverId}`,
-            agentId: "codex",
-          },
-        }),
+        materialize: () => ({ record, statefulTarget }),
       },
     },
-    match: {
-      conversationId: "123",
-    },
-    record: {
-      bindingId: "binding:123",
-      targetSessionKey: `agent:codex:${driverId}`,
-      targetKind: "session",
-      conversation: {
-        channel: "demo-binding",
-        accountId: "default",
-        conversationId: "123",
-      },
-      status: "active",
-      boundAt: 0,
-    },
-    statefulTarget: {
-      kind: "stateful",
-      driverId,
-      sessionKey: `agent:codex:${driverId}`,
-      agentId: "codex",
-    },
+    match: target,
+    record,
+    statefulTarget,
   };
 }
 
-beforeEach(() => {
-  vi.resetAllMocks();
-});
+beforeEach(() => vi.resetAllMocks());
 
 describe("configured ACP binding targets", () => {
   it("delegates readiness to the ACP owner", async () => {
     const ensureReady = acp.ensureConfiguredAcpBindingTargetReady.mockResolvedValue({ ok: true });
     const bindingResolution = createBindingResolution("acp");
-    await expect(
-      ensureConfiguredBindingTargetReady({
-        cfg: {} as never,
-        bindingResolution,
-      }),
-    ).resolves.toEqual({ ok: true });
+    const params = { cfg: {}, bindingResolution };
+    await expect(ensureConfiguredBindingTargetReady(params)).resolves.toEqual({ ok: true });
     expect(ensureReady).toHaveBeenCalledTimes(1);
-    expect(ensureReady).toHaveBeenCalledWith({
-      cfg: {} as never,
-      bindingResolution,
-    });
+    expect(ensureReady).toHaveBeenCalledWith(params);
   });
 
   it("resolves resets through the ACP session-key lookup", async () => {
     const resetInPlace = acp.resetConfiguredAcpBindingTargetInPlace.mockResolvedValue({ ok: true });
-    acp.resolveAcpBindingTargetBySessionKey.mockResolvedValue({
+    const bindingTarget = {
       kind: "stateful",
       driverId: "acp",
       sessionKey: "agent:codex:acp",
       agentId: "codex",
-    });
-
-    await expect(
-      resetConfiguredBindingTargetInPlace({
-        cfg: {} as never,
-        sessionKey: "agent:codex:acp",
-        reason: "reset",
-        commandSource: "discord:native",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(resetInPlace).toHaveBeenCalledTimes(1);
-    expect(resetInPlace).toHaveBeenCalledWith({
-      cfg: {} as never,
+    };
+    acp.resolveAcpBindingTargetBySessionKey.mockResolvedValue(bindingTarget);
+    const params = {
+      cfg: {},
       sessionKey: "agent:codex:acp",
-      reason: "reset",
+      reason: "reset" as const,
       commandSource: "discord:native",
-      bindingTarget: {
-        kind: "stateful",
-        driverId: "acp",
-        sessionKey: "agent:codex:acp",
-        agentId: "codex",
-      },
-    });
+    };
+    await expect(resetConfiguredBindingTargetInPlace(params)).resolves.toEqual({ ok: true });
+    expect(resetInPlace).toHaveBeenCalledTimes(1);
+    expect(resetInPlace).toHaveBeenCalledWith({ ...params, bindingTarget });
   });
 
   it("returns a typed error for an unsupported target driver", async () => {

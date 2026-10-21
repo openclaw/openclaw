@@ -168,6 +168,24 @@ async function maintainWorktreePacks(
     lowerPriority: true,
     env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
   };
+  const packDirectory = await withContentGitSlot(
+    () => resolveGitMetadataPath(repoRoot, "objects/pack", options),
+    params.signal,
+  );
+  // Git rejects an empty pack directory; inspect only this shallow metadata directory.
+  const readPacks = () =>
+    fs.readdir(packDirectory).catch((error: unknown) => {
+      if (isMissingPathError(error)) {
+        return [];
+      }
+      throw error;
+    });
+  if ((await readPacks()).length === 0) {
+    // Packs arriving after this inventory can wait until the next maintenance pass.
+    assertCurrent();
+    await report(0, 0);
+    return;
+  }
   const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
   // Fetch must not replace the MIDX between batch publication and expiry.
   await enqueueGitRefMutation(
@@ -175,14 +193,7 @@ async function maintainWorktreePacks(
     commonDir,
     () =>
       withContentGitSlot(async () => {
-        const packDirectory = await resolveGitMetadataPath(repoRoot, "objects/pack", options);
-        // Git rejects an empty pack directory; inspect only this shallow metadata directory.
-        const packs = await fs.readdir(packDirectory).catch((error: unknown) => {
-          if (isMissingPathError(error)) {
-            return [];
-          }
-          throw error;
-        });
+        const packs = await readPacks();
         assertCurrent();
         const before = packs.filter((name) => name.endsWith(".pack")).length;
         await report(before);

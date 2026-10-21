@@ -34,7 +34,6 @@ import {
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
-  openSessionEntryReadView,
   readSessionTranscriptWatermark,
   readSessionIdentityEvidenceBatch,
   replaceSessionEntrySync,
@@ -74,6 +73,44 @@ afterEach(async () => {
 });
 
 describe("session accessor readonly listing", () => {
+  it("reads borrowed exact-key entries without alias resolution and lists their projections", async () => {
+    const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";
+    const skillsSnapshot = { prompt: "saved skill prompt", skills: [] };
+    const scope = {
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-session-exact-projection-") },
+      clone: false,
+    };
+    await upsertSessionEntryCore(
+      { ...scope, sessionKey: mixedKey },
+      { sessionId: "mixed-session", updatedAt: 10, skillsSnapshot },
+    );
+    const entry = loadExactSessionEntryReadOnly({ ...scope, sessionKey: mixedKey })?.entry;
+
+    expect(entry?.sessionId).toBe("mixed-session");
+    expect(entry?.skillsSnapshot).toEqual(skillsSnapshot);
+    // Exact reads never resolve folded aliases or canonical-key alternatives.
+    expect(
+      loadExactSessionEntryReadOnly({ ...scope, sessionKey: mixedKey.toLowerCase() }),
+    ).toBeUndefined();
+    expect(listSessionEntriesCore(scope)).toEqual([
+      { sessionKey: mixedKey, entry: expect.objectContaining({ sessionId: "mixed-session" }) },
+    ]);
+    const metadata = { ...scope, projection: "list" as const };
+    const metadataEntry = loadExactSessionEntryReadOnly({
+      ...metadata,
+      sessionKey: mixedKey,
+    })?.entry;
+    expect(metadataEntry).toMatchObject({ sessionId: "mixed-session" });
+    expect(metadataEntry?.skillsSnapshot).toBeUndefined();
+    const metadataEntries = listSessionEntriesCore(metadata);
+    expect(metadataEntries).toEqual([
+      { sessionKey: mixedKey, entry: expect.objectContaining({ sessionId: "mixed-session" }) },
+    ]);
+    expect(metadataEntries).toEqual([{ sessionKey: mixedKey, entry: metadataEntry }]);
+    expect(metadataEntries[0]?.entry.skillsSnapshot).toBeUndefined();
+  });
+
   it.each([false, true])(
     "closes a shared-store reader and revokes inherited async reuse (throws: %s)",
     async (throws) => {
@@ -204,7 +241,7 @@ describe("session accessor readonly listing", () => {
     clearRegisteredAgentDatabases(env);
 
     expect(listSessionEntriesReadOnly(listScope)).toEqual(writableEntries);
-    expect(openSessionEntryReadView(listScope).entries()).toEqual(writableEntries);
+    expect(listSessionEntriesCore({ ...listScope, clone: false })).toEqual(writableEntries);
     expect(readSessionStoreSummaryReadOnly(listScope, summaryOptions)).toEqual(expectedSummary);
     expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(listScope))).toBe(false);
     expect(countRegisteredAgentDatabases(env)).toBe(0);
@@ -218,7 +255,7 @@ describe("session accessor readonly listing", () => {
     clearRegisteredAgentDatabases(env);
 
     expect(listSessionEntriesReadOnly({ agentId, env })).toEqual([]);
-    expect(openSessionEntryReadView({ agentId, env }).entries()).toEqual([]);
+    expect(listSessionEntriesCore({ agentId, env, clone: false })).toEqual([]);
     expect(
       loadExactSessionEntryReadOnly({ agentId, env, sessionKey: `agent:${agentId}:main` }),
     ).toBeUndefined();

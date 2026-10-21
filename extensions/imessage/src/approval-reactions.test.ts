@@ -4,18 +4,30 @@ import {
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listPendingIMessageApprovalReactionPollTargets as listTargets } from "./approval-reaction-poll-targets.js";
-import {
-  addIMessageApprovalReactionHintToStructuredPayload,
-  buildIMessageApprovalConversationKeyForTarget,
-  clearIMessageApprovalReactionTargetsForTest,
-  handleIMessageApprovalReaction,
-  registerIMessageApprovalReactionTargetForDeliveredPayload as bindDelivered,
-  registerIMessageApprovalReactionTarget as registerRaw,
-  resolveIMessageApprovalReactionTargetWithPersistence as lookupTarget,
-} from "./approval-reactions.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import { resolvedApproval } from "./test-support/approval.js";
+
+let listTargets: typeof import("./approval-reaction-poll-targets.js").listPendingIMessageApprovalReactionPollTargets;
+let addIMessageApprovalReactionHintToStructuredPayload: typeof import("./approval-reactions.js").addIMessageApprovalReactionHintToStructuredPayload;
+let buildIMessageApprovalConversationKeyForTarget: typeof import("./approval-reactions.js").buildIMessageApprovalConversationKeyForTarget;
+let handleIMessageApprovalReaction: typeof import("./approval-reactions.js").handleIMessageApprovalReaction;
+let bindDelivered: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTargetForDeliveredPayload;
+let registerRaw: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTarget;
+let lookupTarget: typeof import("./approval-reactions.js").resolveIMessageApprovalReactionTargetWithPersistence;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ listPendingIMessageApprovalReactionPollTargets: listTargets } =
+    await import("./approval-reaction-poll-targets.js"));
+  ({
+    addIMessageApprovalReactionHintToStructuredPayload,
+    buildIMessageApprovalConversationKeyForTarget,
+    handleIMessageApprovalReaction,
+    registerIMessageApprovalReactionTargetForDeliveredPayload: bindDelivered,
+    registerIMessageApprovalReactionTarget: registerRaw,
+    resolveIMessageApprovalReactionTargetWithPersistence: lookupTarget,
+  } = await import("./approval-reactions.js"));
+});
 
 const resolverMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 const identity = { accountId: "default", conversation: { handle: "+15551230000" } };
@@ -113,7 +125,6 @@ async function resolveReaction(
 
 describe("iMessage approval reactions", () => {
   beforeEach(() => {
-    clearIMessageApprovalReactionTargetsForTest();
     resolverMocks.resolve.mockReset().mockImplementation(resolvedApproval);
   });
 

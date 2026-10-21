@@ -1,4 +1,3 @@
-// Gateway restart-handoff command registration and machine JSON contract tests.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
@@ -22,8 +21,24 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 function registerGatewayRestartHandoffCli(program: Command): void {
-  const gateway = program.command("gateway");
-  addGatewayRestartHandoffCommands(gateway);
+  addGatewayRestartHandoffCommands(program.command("gateway"));
+}
+
+const run = (...args: string[]) =>
+  runRegisteredCli({
+    register: registerGatewayRestartHandoffCli,
+    argv: ["gateway", "restart-handoff", ...args, "--json"],
+  });
+const protocol = { protocol: "openclaw.gateway.restart-handoff", protocolVersion: 1 };
+function expectJson(fields: Record<string, unknown>) {
+  expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
+    ...protocol,
+    ...fields,
+  });
+}
+function expectError(reason: string, exitCode: number) {
+  expectJson({ ok: false, status: "error", reason });
+  expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(exitCode);
 }
 
 describe("gateway restart-handoff commands", () => {
@@ -43,106 +58,31 @@ describe("gateway restart-handoff commands", () => {
   });
 
   it("reports protocol version 1 capabilities", async () => {
-    await runRegisteredCli({
-      register: registerGatewayRestartHandoffCli,
-      argv: ["gateway", "restart-handoff", "capabilities", "--json"],
-    });
+    await run("capabilities");
 
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: true,
-      protocol: "openclaw.gateway.restart-handoff",
-      protocolVersion: 1,
-      operations: ["consume"],
-    });
+    expectJson({ ok: true, operations: ["consume"] });
   });
 
   it("forwards a validated expected PID and wraps the consume result", async () => {
-    mocks.consumeGatewayRestartHandoffSync.mockReturnValue({
-      status: "none",
-      reason: "missing",
-    });
+    mocks.consumeGatewayRestartHandoffSync.mockReturnValue({ status: "none", reason: "missing" });
+    await run("consume", "--expected-pid", "4242");
 
-    await runRegisteredCli({
-      register: registerGatewayRestartHandoffCli,
-      argv: ["gateway", "restart-handoff", "consume", "--expected-pid", "4242", "--json"],
-    });
-
-    expect(mocks.consumeGatewayRestartHandoffSync).toHaveBeenCalledWith({
-      expectedPid: 4242,
-    });
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: true,
-      protocol: "openclaw.gateway.restart-handoff",
-      protocolVersion: 1,
-      status: "none",
-      reason: "missing",
-    });
+    expect(mocks.consumeGatewayRestartHandoffSync).toHaveBeenCalledWith({ expectedPid: 4242 });
+    expectJson({ ok: true, status: "none", reason: "missing" });
   });
 
   it.each([
-    {
-      name: "missing",
-      argv: ["gateway", "restart-handoff", "consume", "--json"],
-    },
-    {
-      name: "valueless",
-      argv: ["gateway", "restart-handoff", "consume", "--expected-pid", "--json"],
-    },
-    {
-      name: "unsafe",
-      argv: [
-        "gateway",
-        "restart-handoff",
-        "consume",
-        "--expected-pid",
-        "9007199254740992",
-        "--json",
-      ],
-    },
-    {
-      name: "dash-prefixed malformed",
-      argv: ["gateway", "restart-handoff", "consume", "--expected-pid", "-invalid", "--json"],
-    },
-    {
-      name: "valid with an unknown option",
-      argv: [
-        "gateway",
-        "restart-handoff",
-        "consume",
-        "--expected-pid",
-        "4242",
-        "--unknown",
-        "--json",
-      ],
-    },
-    {
-      name: "repeated",
-      argv: [
-        "gateway",
-        "restart-handoff",
-        "consume",
-        "--expected-pid",
-        "111",
-        "--expected-pid",
-        "222",
-        "--json",
-      ],
-    },
-  ])("rejects $name expected PID values before touching the handoff store", async ({ argv }) => {
-    await runRegisteredCli({
-      register: registerGatewayRestartHandoffCli,
-      argv,
-    });
+    { name: "missing", args: [] },
+    { name: "valueless", args: ["--expected-pid"] },
+    { name: "unsafe", args: ["--expected-pid", "9007199254740992"] },
+    { name: "dash-prefixed malformed", args: ["--expected-pid", "-invalid"] },
+    { name: "valid with an unknown option", args: ["--expected-pid", "4242", "--unknown"] },
+    { name: "repeated", args: ["--expected-pid", "111", "--expected-pid", "222"] },
+  ])("rejects $name expected PID values before touching the handoff store", async ({ args }) => {
+    await run("consume", ...args);
 
     expect(mocks.consumeGatewayRestartHandoffSync).not.toHaveBeenCalled();
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      protocol: "openclaw.gateway.restart-handoff",
-      protocolVersion: 1,
-      status: "error",
-      reason: "invalid-expected-pid",
-    });
-    expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(2);
+    expectError("invalid-expected-pid", 2);
   });
 
   it("returns a stable machine error when the handoff store is unavailable", async () => {
@@ -150,21 +90,11 @@ describe("gateway restart-handoff commands", () => {
       throw new Error("database locked");
     });
 
-    await runRegisteredCli({
-      register: registerGatewayRestartHandoffCli,
-      argv: ["gateway", "restart-handoff", "consume", "--expected-pid", "4242", "--json"],
-    });
+    await run("consume", "--expected-pid", "4242");
 
     expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
       "Gateway restart handoff consume failed: Error: database locked",
     );
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      protocol: "openclaw.gateway.restart-handoff",
-      protocolVersion: 1,
-      status: "error",
-      reason: "store-unavailable",
-    });
-    expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expectError("store-unavailable", 1);
   });
 });

@@ -271,3 +271,41 @@ it("stays inert while disabled", async () => {
   expect(isOpen(element)).toBe(false);
   expect(props.onOpen).not.toHaveBeenCalled();
 });
+
+it("keeps the scroll position when the pointer highlights a clipped edge row", async () => {
+  const { element } = await createMultiSelect({
+    options: Array.from({ length: 60 }, (_, index) => ({
+      value: `fixture/model-${index}`,
+      label: `Model ${index}`,
+    })),
+    value: [],
+  });
+  const settle = () =>
+    new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  await userEvent.click(input(element));
+  const list = element.querySelector<HTMLElement>(".multi-select__menu")!;
+  await waitForSolid(() => expect(list.scrollHeight).toBeGreaterThan(list.clientHeight));
+  const rows = [...element.querySelectorAll<HTMLElement>(".multi-select__option")];
+  const bounds = list.getBoundingClientRect();
+  const rowHeight = rows[1]!.offsetTop - rows[0]!.offsetTop;
+  // Leave half a row clipped at the bottom edge, as a wheel or trackpad scroll does.
+  const edgeRow = rows.find((row) => row.offsetTop + rowHeight > list.clientHeight * 3)!;
+  list.scrollTop = edgeRow.offsetTop + rowHeight / 2 - list.clientHeight;
+  await settle();
+  const top = list.scrollTop;
+  const rect = edgeRow.getBoundingClientRect();
+  expect(rect.bottom).toBeGreaterThan(bounds.bottom);
+  // Hover the menu at the clipped row's visible sliver; hovering the row
+  // itself would let Playwright scroll it into view before moving.
+  await userEvent.hover(list, {
+    position: { x: 24, y: Math.round((rect.top + bounds.bottom) / 2 - bounds.top) },
+  });
+  await waitForSolid(() => expect(edgeRow.hasAttribute("data-highlighted")).toBe(true));
+  await settle();
+  expect(list.scrollTop).toBe(top);
+  // Keyboard navigation after a pointer highlight still reveals the next row.
+  await pressKey(element, "ArrowDown");
+  await waitForSolid(() => expect(list.scrollTop).toBeGreaterThan(top));
+});

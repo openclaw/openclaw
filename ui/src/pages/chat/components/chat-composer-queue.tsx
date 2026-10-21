@@ -1,4 +1,4 @@
-import { For, createMemo, createUniqueId, onCleanup, onSettled } from "solid-js";
+import { For, createMemo, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
@@ -213,7 +213,7 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
         : null;
   });
   let scrollRegion: HTMLDivElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     if (queueDragScroll?.container === scrollRegion) {
       stopQueueDragAutoScroll();
     }

@@ -1,6 +1,6 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   sanitizeToolCallInputs,
   makeMissingToolResult,
@@ -36,6 +36,7 @@ const partialCall = (id: string, partialJson: string, args: Record<string, unkno
 });
 const signedRead = { allowedToolNames: ["read"], allowProviderOwnedThinkingReplay: true };
 const roles = (messages: AgentMessage[]) => messages.map(({ role }) => role);
+afterEach(() => vi.restoreAllMocks());
 
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
@@ -58,6 +59,7 @@ function getAssistantToolCallBlocks(
 
 describe("sanitizeToolUseResultPairing", () => {
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
+    vi.spyOn(Date, "now").mockReturnValue(5_000);
     const input = castAgentMessages([
       sparseAssistant([
         { type: "text", text: "checking" },
@@ -74,6 +76,7 @@ describe("sanitizeToolUseResultPairing", () => {
     });
 
     expect(result.added.map((message) => message.toolCallId)).toEqual(["call_1", "call_3"]);
+    expect(result.added.map((message) => message.timestamp)).toEqual([5_000, 5_000]);
     expect(roles(result.messages)).toEqual([
       "assistant",
       "toolResult",
@@ -94,6 +97,20 @@ describe("sanitizeToolUseResultPairing", () => {
       { toolCallId: "call_3" },
     ]);
     expect(JSON.stringify(result.added)).not.toContain("missing tool result");
+  });
+
+  it("keeps sparse legacy replay stable while preserving recorded synthetic creation times", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const source = castAgentMessages([sparseAssistant([toolCall("legacy")])]);
+    const first = sanitizeToolUseResultPairing(source);
+    clock.mockReturnValue(2_000);
+    expect(sanitizeToolUseResultPairing(source)).toEqual(first);
+    expect(first[1]).toMatchObject({ toolCallId: "legacy", timestamp: 0 });
+
+    const recorded = makeMissingToolResult({ toolCallId: "legacy", toolName: "read" });
+    expect(recorded.timestamp).toBe(2_000);
+    clock.mockReturnValue(3_000);
+    expect(sanitizeToolUseResultPairing([...source, recorded])[1]).toBe(recorded);
   });
 
   it("keeps parallel tool results when code-mode display turns arrive first", () => {

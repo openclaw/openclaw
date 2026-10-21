@@ -5,12 +5,14 @@ import { fixtureReceiptWorkerClientSource } from "../../../test/helpers/fixture-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import { apiKey, authStore } from "../model-catalog-fixtures.test-support.js";
 import {
   EXTERNAL_AUTH_PATH_ENV,
   REF_ONLY_API_ENV,
   REF_ONLY_TOKEN_ENV,
   createCatalogFixture,
   PROVIDER_ID,
+  writeFixtureFiles,
 } from "../prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -39,18 +41,16 @@ export function createCatalogFleetFixture(
       {},
       { asyncSyntheticAuth: options.asyncSyntheticAuth, receiptBroadcastName: broadcastName },
     );
+    const { root, agentDir, workspaceDir, env } = fixture;
+    const individual = options.publication === "individual";
     if (stableCatalog) {
-      fs.writeFileSync(
-        path.join(fixture.root, "plugin", "openclaw.plugin.json"),
-        JSON.stringify({
+      writeFixtureFiles(path.join(root, "plugin"), {
+        "openclaw.plugin.json": {
           id: PROVIDER_ID,
           providers: [PROVIDER_ID],
           configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(fixture.root, "plugin", "index.cjs"),
-        `const fs = require("node:fs");
+        },
+        "index.cjs": `const fs = require("node:fs");
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   api.registerProvider({ id: ${JSON.stringify(PROVIDER_ID)}, label: "Retained catalog", auth: [],
     catalog: { async run(ctx) {
@@ -74,8 +74,8 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     } },
   });
 } };`,
-      );
-      saveAuthProfileStore({ version: 1, profiles: {} }, fixture.agentDir);
+      });
+      saveAuthProfileStore(authStore(), agentDir);
     }
     for (const name of [
       "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
@@ -85,24 +85,22 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       REF_ONLY_API_ENV,
       REF_ONLY_TOKEN_ENV,
     ] as const) {
-      vi.stubEnv(name, fixture.env[name]);
+      vi.stubEnv(name, env[name]);
     }
     const agentIds = ["fleet-a", "fleet-b", "fleet-c", "fleet-d"].slice(0, options.agentCount ?? 4);
-    const entries = Object.fromEntries(
-      agentIds.map(
-        (id) =>
-          [
-            id,
-            {
-              agentDir: path.join(fixture.env.OPENCLAW_STATE_DIR!, "agents", id, "agent"),
-              workspace:
-                options.publication === "individual"
-                  ? fixture.workspaceDir
-                  : path.join(fixture.root, `${id}-workspace`),
-            },
-          ] as const,
-      ),
-    );
+    const entries: Record<string, { agentDir: string; workspace: string }> = {};
+    for (const id of agentIds) {
+      const entry = (entries[id] = {
+        agentDir: path.join(env.OPENCLAW_STATE_DIR!, "agents", id, "agent"),
+        workspace: individual ? workspaceDir : path.join(root, `${id}-workspace`),
+      });
+      fs.mkdirSync(entry.workspace, { recursive: true });
+      const profiles = { [`fleet:${id}`]: apiKey("fleet-proof", `synthetic-${id}`) };
+      if (stableCatalog) {
+        profiles[`${PROVIDER_ID}:default`] = apiKey(PROVIDER_ID, `synthetic-catalog-${id}`);
+      }
+      saveAuthProfileStore(authStore(profiles), entry.agentDir);
+    }
     const config = {
       ...fixture.config,
       agents: {
@@ -111,47 +109,10 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         entries,
       },
     } satisfies OpenClawConfig;
-    for (const id of agentIds) {
-      fs.mkdirSync(entries[id]!.workspace, { recursive: true });
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            [`fleet:${id}`]: { type: "api_key", provider: "fleet-proof", key: `synthetic-${id}` },
-            ...(stableCatalog
-              ? {
-                  [`${PROVIDER_ID}:default`]: {
-                    type: "api_key" as const,
-                    provider: PROVIDER_ID,
-                    key: `synthetic-catalog-${id}`,
-                  },
-                }
-              : {}),
-          },
-        },
-        entries[id]!.agentDir,
-      );
-    }
     onBeforePublication?.(fixture);
     const snapshots: PreparedModelRuntimeSnapshot[] = [];
-    if (options.publication === "individual") {
-      // Fleet refresh deliberately renews every credentialed provider after publication.
-      // Cold scoped tests use the individual lifecycle publisher and one loader workspace.
-      for (const agentId of agentIds) {
-        snapshots.push(
-          await publishPreparedModelRuntimeSnapshot(
-            {
-              agentId,
-              agentDir: entries[agentId]!.agentDir,
-              workspaceDir: entries[agentId]!.workspace,
-              config,
-              allowGatewaySubagentBinding: true,
-            },
-            { provenance: "configured", catalogMode: "static" },
-          ),
-        );
-      }
-    } else {
+    // Cold scoped tests publish individually; fleet refresh renews all credentialed providers.
+    if (!individual) {
       await refreshPreparedModelRuntimeSnapshots(config, {
         gatewayLifecycle: true,
         allowGatewaySubagentBinding: true,
@@ -159,18 +120,24 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         pluginMetadataSnapshot: loadPluginMetadataSnapshot({
           config,
           env: process.env,
-          workspaceDir: fixture.workspaceDir,
+          workspaceDir,
         }),
       });
-      for (const agentId of agentIds) {
-        snapshots.push(
-          getPreparedModelRuntimeSnapshot({
-            agentId,
-            agentDir: entries[agentId]!.agentDir,
-            config,
-          })!,
-        );
-      }
+    }
+    for (const agentId of agentIds) {
+      const input = { agentId, agentDir: entries[agentId]!.agentDir, config };
+      snapshots.push(
+        individual
+          ? await publishPreparedModelRuntimeSnapshot(
+              {
+                ...input,
+                workspaceDir: entries[agentId]!.workspace,
+                allowGatewaySubagentBinding: true,
+              },
+              { provenance: "configured", catalogMode: "static" },
+            )
+          : getPreparedModelRuntimeSnapshot(input)!,
+      );
     }
     return { ...fixture, config, entries, snapshots, agentIds };
   };

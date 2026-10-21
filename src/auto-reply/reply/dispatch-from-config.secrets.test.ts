@@ -1,10 +1,9 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import * as questionDispatch from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
-import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
@@ -34,7 +33,6 @@ beforeEach(async () => {
   );
   askUserMocks.isAskUserPromptPending.mockImplementation(actual.isAskUserPromptPending);
 });
-afterEach(() => resetPendingAskUserQuestionsForTest());
 
 const settledResult = <T>(promise: Promise<T>) =>
   promise.then(

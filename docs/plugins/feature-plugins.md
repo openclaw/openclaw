@@ -572,6 +572,9 @@ activation reports from currently connected Control UI clients. A report names t
 revision and either `activated` or `failed`; it is a browser activation receipt,
 not proof that every feature operation has been exercised. No connected browser
 means no browser activation receipt yet.
+Each catalog refresh sends its activation receipts together after the plugins
+finish initializing or reach their activation deadline. Healthy plugins become
+available immediately while other plugins are still initializing.
 
 For the underlying manifest fields, see [Plugin manifest](/plugins/manifest).
 For install, update, and removal, see [Manage plugins](/plugins/manage-plugins).

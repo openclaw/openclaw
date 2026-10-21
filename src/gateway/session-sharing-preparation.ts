@@ -1,5 +1,4 @@
 import path from "node:path";
-import { ok } from "@openclaw/normalization-core/result";
 import { readSessionEntryCreatedEntry } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -367,7 +366,7 @@ export async function prepareSessionMutationFacts(
             const store = Object.fromEntries(
               loaded.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
             );
-            read.result = ok(store);
+            read.result = store;
             if (loaded.sharing) {
               const source = loaded.databaseIdentity;
               if (

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onCleanup, onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { liveValue as createLiveValue } from "../lib/reactive/live-value.ts";
 
@@ -90,10 +90,10 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
   );
   onSettled(() => {
     props.onInputRef(textarea);
-  });
-  onCleanup(() => {
-    // A replacement field can mount before the old interop root is disposed.
-    props.onInputRef(undefined, textarea);
+    return () => {
+      // A replacement field can mount before the old interop root is disposed.
+      props.onInputRef(undefined, textarea);
+    };
   });
   return (
     <div ref={(element) => (entry = element)} class="cmd-palette__entry">

@@ -13,7 +13,7 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
-import { clawCreatorFlow } from "../pages/claws/creator-flow.ts";
+import { clawCreatorAction } from "../pages/claws/creator-flow.ts";
 import { canCreateClawDraft } from "../pages/claws/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
@@ -141,7 +141,7 @@ export function SidebarAgentRoster(props: RosterProps) {
       await currentContext.agents.refreshList();
     }
   };
-  const agentMenu = (card: () => { id: string; name: string }) => (
+  const agentMenu = (card: () => { id: string; name: string }, pinned = false) => (
     <Menu
       id={`sidebar-agent-roster-${card().id}`}
       class="sidebar-customize-menu sidebar-agent-roster__menu"
@@ -170,7 +170,7 @@ export function SidebarAgentRoster(props: RosterProps) {
             host().onNavigate?.("sessions");
             break;
           case "create-claw":
-            void clawCreatorFlow(context).start(card().id);
+            clawCreatorAction(context, card().id)?.();
             break;
           case "settings":
             context.navigate("agents", {
@@ -183,42 +183,50 @@ export function SidebarAgentRoster(props: RosterProps) {
         }
       }}
       items={[
-        {
-          id: "pin",
-          label: t("nav.pin"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="pin" />,
-        },
-        {
-          id: "sessions",
-          label: t("agentsHome.viewSessions"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="listTree" />,
-        },
+        ...(!pinned
+          ? [
+              {
+                id: "pin",
+                label: t("nav.pin"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="pin" />,
+              },
+              {
+                id: "sessions",
+                label: t("agentsHome.viewSessions"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="listTree" />,
+              },
+            ]
+          : []),
         ...(canCreateClawDraft(context)
           ? [
               {
                 id: "create-claw",
                 label: t("clawsDraft.title"),
                 class: "sidebar-customize-menu__item",
-                icon: <Icon name="box" />,
+                icon: <Icon name="share" />,
               },
             ]
           : []),
-        {
-          id: "settings",
-          label: t("nav.settings"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="settings" />,
-        },
-        {
-          id: "delete",
-          label: t("common.delete"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="trash" />,
-          variant: "danger",
-          disabled: !canDeleteAgent(card().id),
-        },
+        ...(!pinned
+          ? [
+              {
+                id: "settings",
+                label: t("nav.settings"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="settings" />,
+              },
+              {
+                id: "delete",
+                label: t("common.delete"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="trash" />,
+                variant: "danger" as const,
+                disabled: !canDeleteAgent(card().id),
+              },
+            ]
+          : []),
       ]}
     />
   );
@@ -294,6 +302,9 @@ export function SidebarAgentRoster(props: RosterProps) {
                           </span>
                         </span>
                       </openclaw-tooltip>
+                      <Show when={canCreateClawDraft(context)}>
+                        <span class="sidebar-pinned-agent__actions">{agentMenu(card, true)}</span>
+                      </Show>
                     </div>
                   );
                 }}

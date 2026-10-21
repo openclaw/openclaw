@@ -4,6 +4,7 @@ import type {
   PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
+import type { InspectionNativeEsmRetention } from "./plugin-instance-module-loader.js";
 import type {
   PluginModuleLoaderOwner,
   PluginModuleLoaderRecovery,
@@ -29,6 +30,7 @@ export type PluginInstanceModuleLoaderParams = {
    * is an uncached inspection. Loads with the same identity may share evaluated code.
    */
   inspectionSourceIdentity?: string;
+  inspectionRetention?: InspectionNativeEsmRetention;
   preparedArtifact?: {
     artifact: PluginGenerationArtifact;
     attachModuleSource: (resolve: (filename: string) => string) => void;

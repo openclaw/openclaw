@@ -8,9 +8,39 @@ import {
   makeCapabilities,
   makeMenu,
 } from "./chat-composer-menu.test-support.ts";
+import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps as Menu } from "./chat-composer-plus-menu.types.ts";
 import { createSlashMenu, SlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
+
+it("uses the current focus policy on a retained suggestion option", () => {
+  let setPreserveFocus!: (value: boolean) => void;
+  const view = mountSolid(() => {
+    const [preserveFocus, update] = createSignal(true);
+    setPreserveFocus = update;
+    return (
+      <ComposerMenuOption
+        id="retained-option"
+        active={false}
+        preserveFocus={preserveFocus()}
+        select={vi.fn()}
+        hover={vi.fn()}
+        icon={undefined}
+        name="Suggestion"
+        description=""
+      />
+    );
+  });
+  const option = view.getByRole("option");
+  for (const preserve of [true, false, true]) {
+    setPreserveFocus(preserve);
+    flush();
+    expect(view.getByRole("option")).toBe(option);
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    option.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(preserve);
+  }
+});
 
 it("retains the slash viewport during selection changes and resets it when switching mode", () => {
   const command = { key: "status", name: "status", description: "Show status" };

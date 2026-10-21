@@ -25,7 +25,6 @@ import {
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import { currentSessionApprovalReplay } from "./session-approval-projection.ts";
 
 describe("chat pane approval replay subscriptions", () => {
   it("preserves live approval transitions received while session replay is awaiting publication", async () => {
@@ -85,13 +84,10 @@ describe("chat pane approval replay subscriptions", () => {
     });
     await sync;
     expect(state.chatSessionApprovalQueue?.map((entry) => entry.id)).toEqual(["exec:new-live"]);
-    expect(currentSessionApprovalReplay(state, "main")?.complete).toBe(true);
-    state.connectionEpoch += 1;
-    expect(currentSessionApprovalReplay(state, "main")).toBeUndefined();
   });
 
   it.each([false, true])(
-    "uses the global pending queue only when the session replay is truncated (%s)",
+    "uses the global pending queue for truncated or retired session replays (%s)",
     async (truncated) => {
       const key = "agent:main:pending-replay";
       const client = createTestGatewayClient(async (method) =>
@@ -133,6 +129,9 @@ describe("chat pane approval replay subscriptions", () => {
         expect(await syncSelectedSessionMessageSubscription(state)).toBe(true);
         pane.render();
         expect(pane.chatProps?.inlineApproval).toBe(truncated ? approval : null);
+        state.connectionEpoch += 1;
+        pane.render();
+        expect(pane.chatProps?.inlineApproval).toBe(approval);
       } finally {
         if (state.chatSessionMessageSubscription) {
           await state.sessions.unsubscribeMessages(state.chatSessionMessageSubscription);

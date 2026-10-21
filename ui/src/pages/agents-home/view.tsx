@@ -1,10 +1,10 @@
 import { For, Show } from "solid-js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context-types.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
-import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
@@ -42,10 +42,6 @@ export function AgentsHomeView(props: AgentsHomeProps) {
     locale.revision();
     return titleForRoute("agents-home");
   };
-  const subtitle = () => {
-    locale.revision();
-    return subtitleForRoute("agents-home");
-  };
   const avatarContext = projectSource(undefined, {
     read: () => undefined,
     subscribe: (_, notify) => registerAvatarGatewayReset(notify),
@@ -68,48 +64,47 @@ export function AgentsHomeView(props: AgentsHomeProps) {
   );
   return (
     <>
-      <div class="agents-home__header">
-        <SettingsPageHeader
-          stacked
-          title={title()}
-          subtitle={subtitle()}
-          actions={
-            <>
-              {props.showExplore ? (
-                <button
-                  type="button"
-                  class="btn btn--icon"
-                  data-claws-open-catalog
-                  aria-label={t("clawsCatalog.search")}
-                  title={t("clawsCatalog.search")}
-                  aria-haspopup="dialog"
-                  disabled={!props.connected}
-                  onClick={props.onOpenCatalog}
-                >
-                  <Icon name="search" />
-                </button>
-              ) : undefined}
-              {manage()}
-              <ReasonedDisabledControl
-                reason={!props.canCreate ? t("custodian.accessRequired") : undefined}
+      <HubPageHeader
+        active="agents-home"
+        wide
+        docsUrl="https://docs.openclaw.ai/concepts/multi-agent"
+        class="agents-home__header"
+        actions={
+          <>
+            {props.showExplore ? (
+              <button
+                type="button"
+                class="btn btn--icon"
+                data-claws-open-catalog
+                aria-label={t("clawsCatalog.search")}
+                title={t("clawsCatalog.search")}
+                aria-haspopup="dialog"
+                disabled={!props.connected}
+                onClick={() => props.onOpenCatalog()}
               >
-                <button
-                  class="btn primary"
-                  disabled={!props.canCreate}
-                  title={!props.canCreate ? t("custodian.accessRequired") : undefined}
-                  onClick={() => {
-                    if (props.canCreate) {
-                      props.context.navigate("custodian", { search: "?intent=new-agent" });
-                    }
-                  }}
-                >
-                  {t("agentsHome.create")}
-                </button>
-              </ReasonedDisabledControl>
-            </>
-          }
-        />
-      </div>
+                <Icon name="search" />
+              </button>
+            ) : undefined}
+            {manage()}
+            <ReasonedDisabledControl
+              reason={!props.canCreate ? t("custodian.accessRequired") : undefined}
+            >
+              <button
+                class="btn primary"
+                disabled={!props.canCreate}
+                title={!props.canCreate ? t("custodian.accessRequired") : undefined}
+                onClick={() => {
+                  if (props.canCreate) {
+                    props.context.navigate("custodian", { search: "?intent=new-agent" });
+                  }
+                }}
+              >
+                {t("agentsHome.create")}
+              </button>
+            </ReasonedDisabledControl>
+          </>
+        }
+      />
       <section class="agents-home" aria-label={title()}>
         <Show when={!props.connected}>
           <div class="callout warn" role="status">

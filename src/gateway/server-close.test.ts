@@ -8,7 +8,6 @@ import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runt
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { registerDispatcher } from "../auto-reply/reply/dispatcher-registry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
@@ -50,23 +49,8 @@ import {
 } from "./server-close.test-support.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
-type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
+const { mocks } = await vi.hoisted(() => import("./server-close.mocks.test-support.js"));
 
-const mocks = vi.hoisted(() => ({
-  logInfo: vi.fn(),
-  logWarn: vi.fn(),
-  listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
-  disposeAllCodeModeRuns: vi.fn(),
-  disposeAgentHarnesses: vi.fn<() => Promise<void>>(async () => undefined),
-  closeProviderTransportDispatcherPool: vi.fn(async () => undefined),
-  disposeAllSessionMcpRuntimes: vi.fn<() => Promise<void>>(async () => undefined),
-  triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
-  disposeAllBundleLspRuntimes: vi.fn<() => Promise<void>>(async () => undefined),
-  drainRetainedEmbeddingProviders: vi.fn<() => Promise<void>>(async () => undefined),
-  stopGmailWatcher: vi.fn(async () => undefined),
-  disposeAcpSessionManager: vi.fn(async (_reason: string) => undefined),
-  fenceSessionSuspensionWritesForGatewayShutdown: vi.fn(),
-}));
 const sharedStateLifecycle = resolveGlobalMap<string, boolean>(
   Symbol("gateway-close-shared-state"),
   "shared-state",
@@ -78,76 +62,6 @@ const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
 const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
 const AGENT_HARNESS_CLOSE_GRACE_MS = 5_000;
-
-vi.mock("../channels/plugins/index.js", async () => ({
-  ...(await vi.importActual<typeof import("../channels/plugins/index.js")>(
-    "../channels/plugins/index.js",
-  )),
-  listChannelPlugins: mocks.listChannelPlugins,
-}));
-
-vi.mock("../hooks/gmail-watcher.js", () => ({
-  stopGmailWatcher: mocks.stopGmailWatcher,
-}));
-
-vi.mock("../hooks/internal-hooks.js", async () => {
-  const actual = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
-    "../hooks/internal-hooks.js",
-  );
-  return {
-    ...actual,
-    triggerInternalHook: mocks.triggerInternalHook,
-  };
-});
-
-vi.mock("../agents/harness/registry.js", () => ({
-  disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
-}));
-
-vi.mock("../agents/code-mode-state.js", () => ({
-  disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
-}));
-
-vi.mock("../agents/provider-transport-dispatcher-pool.js", () => ({
-  closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
-}));
-
-vi.mock("../agents/agent-bundle-mcp-tools.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/agent-bundle-mcp-tools.js")>(
-    "../agents/agent-bundle-mcp-tools.js",
-  )),
-  disposeAllSessionMcpRuntimes: mocks.disposeAllSessionMcpRuntimes,
-}));
-
-vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/agent-bundle-lsp-runtime.js")>(
-    "../agents/agent-bundle-lsp-runtime.js",
-  )),
-  disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
-}));
-
-vi.mock("./embeddings-provider-lifetime.js", () => ({
-  drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
-}));
-
-vi.mock("../agents/session-suspension.js", () => ({
-  fenceSessionSuspensionWritesForGatewayShutdown:
-    mocks.fenceSessionSuspensionWritesForGatewayShutdown,
-}));
-
-vi.mock("../acp/control-plane/manager.js", () => ({
-  disposeAcpSessionManager: mocks.disposeAcpSessionManager,
-}));
-
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) =>
-      createMockSubsystemLogger(subsystem, { info: mocks.logInfo, warn: mocks.logWarn }),
-  };
-});
 
 const closeGateway = createGatewayCloseTestHandlerFactory(await import("./server-close.js"));
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");

@@ -246,8 +246,13 @@ describe("Team Reports storage", () => {
 
   it("reads half-open day ranges and indexes newest first without projecting week rows onto people", async () => {
     const { store } = await openStore();
-    for (const key of ["2026-08-18", "2026-08-19", "2026-08-20"]) {
-      await store.upsertPeriod({ report: report(key), markdown: key });
+    for (const [index, key] of ["2026-08-18", "2026-08-19", "2026-08-20"].entries()) {
+      const day = report(key);
+      day.totals.github = counts((index + 1) * day.members.length);
+      for (const member of day.members) {
+        member.github = { ...counts(index + 1), items: [] };
+      }
+      await store.upsertPeriod({ report: day, markdown: key });
     }
     const week = report();
     week.period = {
@@ -258,14 +263,21 @@ describe("Team Reports storage", () => {
       untilMs: Date.parse("2026-08-24T00:00:00Z"),
     };
     await store.upsertPeriod({ report: week, markdown: "week" });
-    expect(
-      (
-        await store.getDayReports(
-          Date.parse("2026-08-19T00:00:00Z"),
-          Date.parse("2026-08-20T00:00:00Z"),
-        )
-      ).map((day) => day.period.key),
-    ).toEqual(["2026-08-19"]);
+    const aggregated = await store.aggregatePeriod({
+      period: {
+        ...week.period,
+        sinceMs: Date.parse("2026-08-19T00:00:00Z"),
+        untilMs: Date.parse("2026-08-20T00:00:00Z"),
+      },
+      nowMs: week.period.untilMs,
+      orgs: ["example"],
+      roster: buildRoster([{ github: ["alice"] }, { github: ["bob"] }]),
+    });
+    expect(aggregated.totals.github.total).toBe(4);
+    expect(aggregated.members.map((member) => [member.login, member.github.total])).toEqual([
+      ["alice", 2],
+      ["bob", 2],
+    ]);
     expect(
       (await store.listPeriods({ period: "day", limit: 2 })).map((entry) => entry.key),
     ).toEqual(["2026-08-20", "2026-08-19"]);

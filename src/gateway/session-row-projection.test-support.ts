@@ -60,6 +60,13 @@ export function createSessionRowProjectionFixture(params: {
   let revisionToken = {};
   const id = (row: Pick<Row, "agentId" | "key" | "storeTarget">) =>
     `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`;
+  const matching = (query: { agentId?: string; key?: string; storePath?: string }) =>
+    [...rows.values()].filter(
+      (row) =>
+        (!query.agentId || row.agentId === query.agentId) &&
+        (!query.key || row.key === query.key) &&
+        (!query.storePath || row.storeTarget.storePath === query.storePath),
+    );
   const describe: SessionRowProjection["describe"] = (
     { agentId, key, storePath: path },
     captured,
@@ -68,18 +75,9 @@ export function createSessionRowProjectionFixture(params: {
       return undefined;
     }
     const canonical = resolveStoredSessionKeyForAgentStore({ cfg, agentId, sessionKey: key });
-    const exact = [...rows.values()].find(
-      (row) =>
-        row.agentId === agentId && row.key === key && (!path || row.storeTarget.storePath === path),
-    );
+    const candidates = matching({ storePath: path }).filter((row) => row.agentId === agentId);
     return (
-      exact ??
-      [...rows.values()].find(
-        (row) =>
-          row.agentId === agentId &&
-          row.key === canonical &&
-          (!path || row.storeTarget.storePath === path),
-      )
+      candidates.find((row) => row.key === key) ?? candidates.find((row) => row.key === canonical)
     );
   };
   function setEntry(key: string, entry: SessionEntry | undefined) {
@@ -126,11 +124,9 @@ export function createSessionRowProjectionFixture(params: {
     rows.set(id(fields), {
       ...createSessionRow(fields, entry),
       entry,
-      storedEntry: entry,
       materialized: materializeSessionRow(inputs),
       materializedSequence: revision,
       fallbackModel: presentation.activeModel,
-      membership: new Set(),
       parents: new Set(
         [
           entry.spawnedBy,
@@ -163,11 +159,8 @@ export function createSessionRowProjectionFixture(params: {
           )
           .map((row) => row.key),
       );
-    const selected = [...rows.values()].filter(
+    const selected = matching(query).filter(
       (row) =>
-        (!query.agentId || row.agentId === query.agentId) &&
-        (!query.storePath || row.storeTarget.storePath === query.storePath) &&
-        (!query.key || row.key === query.key) &&
         (!matchingKeys || matchingKeys.has(row.key)) &&
         (!query.parentSessionKey || row.parents.has(query.parentSessionKey)),
     );
@@ -175,11 +168,8 @@ export function createSessionRowProjectionFixture(params: {
   };
   const projection: SessionRowProjection = {
     findUrlCandidates(selection, agentId) {
-      return [...rows.values()]
+      return matching({ agentId })
         .filter((row) => {
-          if (agentId && row.agentId !== agentId) {
-            return false;
-          }
           const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
           return "shortId" in selection
             ? Boolean(

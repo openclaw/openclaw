@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -36,7 +36,7 @@ export function createDesktopPictureInPicture(
     activePopup = null;
     popup?.close();
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     pending = undefined;
     release();
   });

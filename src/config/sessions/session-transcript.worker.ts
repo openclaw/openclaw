@@ -1,3 +1,5 @@
+import { channel as diagnosticsChannel } from "node:diagnostics_channel";
+import { getHeapStatistics } from "node:v8";
 import { workerData } from "node:worker_threads";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import {
@@ -34,6 +36,7 @@ if (startup?.databaseEngineSelection) {
 let releaseReadValidation:
   | typeof import("../../state/openclaw-agent-db-validation-cache.js").releaseOpenClawAgentDatabaseReadValidation
   | undefined;
+const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
 
 serveOwnedWorkerTasks(
   async (
@@ -43,6 +46,12 @@ serveOwnedWorkerTasks(
   ): Promise<
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
+    // Pressure stays inside this isolate and drops decoded caches before the next snapshot.
+    // Bun's compatibility probe walks the heap instead of describing a V8 allocation limit.
+    const heap = process.versions.bun ? undefined : getHeapStatistics();
+    if (heap && heap.used_heap_size >= heap.heap_size_limit * 0.8) {
+      memoryPressure.publish(undefined);
+    }
     // Install cleanup before this worker can acquire either a cached or explicit reader.
     releaseReadValidation ??= (await import("../../state/openclaw-agent-db-validation-cache.js"))
       .releaseOpenClawAgentDatabaseReadValidation;

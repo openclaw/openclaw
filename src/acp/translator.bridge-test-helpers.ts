@@ -16,26 +16,14 @@ import {
   createAcpGatewayAgent,
 } from "./translator.test-helpers.js";
 
-/** Builds a minimal ACP new-session request for translator tests. */
 export function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
-  return {
-    cwd,
-    mcpServers: [],
-    _meta: {},
-  } as unknown as NewSessionRequest;
+  return { cwd, mcpServers: [], _meta: {} } as unknown as NewSessionRequest;
 }
 
-/** Builds a minimal ACP load-session request for translator tests. */
 export function createLoadSessionRequest(sessionId: string, cwd = "/tmp"): LoadSessionRequest {
-  return {
-    sessionId,
-    cwd,
-    mcpServers: [],
-    _meta: {},
-  } as unknown as LoadSessionRequest;
+  return { sessionId, ...createNewSessionRequest(cwd) } as unknown as LoadSessionRequest;
 }
 
-/** Builds a minimal ACP prompt request for translator tests. */
 export function createPromptRequest(
   sessionId: string,
   text: string,
@@ -48,33 +36,21 @@ export function createPromptRequest(
   } as unknown as PromptRequest;
 }
 
-/** Builds a minimal ACP set-session-mode request for translator tests. */
 export function createSetSessionModeRequest(
   sessionId: string,
   modeId: string,
 ): SetSessionModeRequest {
-  return {
-    sessionId,
-    modeId,
-    _meta: {},
-  } as unknown as SetSessionModeRequest;
+  return { sessionId, modeId, _meta: {} } as unknown as SetSessionModeRequest;
 }
 
-/** Builds a minimal ACP set-session-config-option request for translator tests. */
 export function createSetSessionConfigOptionRequest(
   sessionId: string,
   configId: string,
   value: string | boolean,
 ): SetSessionConfigOptionRequest {
-  return {
-    sessionId,
-    configId,
-    value,
-    _meta: {},
-  } as unknown as SetSessionConfigOptionRequest;
+  return { sessionId, configId, value, _meta: {} } as unknown as SetSessionConfigOptionRequest;
 }
 
-/** Builds a Gateway tool event fixture for translator tests. */
 export function createToolEvent(params: {
   sessionKey: string;
   phase: "start" | "update" | "result";
@@ -103,15 +79,8 @@ export function createToolEvent(params: {
   } as unknown as EventFrame;
 }
 
-/** Builds a Gateway final chat event fixture for translator tests. */
 export function createChatFinalEvent(sessionKey: string): EventFrame {
-  return {
-    event: "chat",
-    payload: {
-      sessionKey,
-      state: "final",
-    },
-  } as unknown as EventFrame;
+  return { event: "chat", payload: { sessionKey, state: "final" } } as unknown as EventFrame;
 }
 
 export async function expectOversizedPromptRejected(params: { sessionId: string; text: string }) {
@@ -141,13 +110,11 @@ export function requireAcpObject(value: unknown, label: string): Record<string, 
   return value as Record<string, unknown>;
 }
 
-function configOptions(value: unknown) {
-  expect(Array.isArray(value), "config options").toBe(true);
-  return value as Array<Record<string, unknown>>;
-}
-
 export function expectConfigOption(options: unknown, id: string, fields: Record<string, unknown>) {
-  const option = configOptions(options).find((candidate) => candidate.id === id);
+  expect(Array.isArray(options), "config options").toBe(true);
+  const option = (options as Array<Record<string, unknown>>).find(
+    (candidate) => candidate.id === id,
+  );
   if (!option) {
     throw new Error(`Expected config option ${id}`);
   }
@@ -164,10 +131,9 @@ export function sessionUpdatePayloads(source: MockCallSource, updateType?: strin
       update: requireAcpObject(envelope.update, `session update ${index}`),
     };
   });
-  if (!updateType) {
-    return payloads;
-  }
-  return payloads.filter((payload) => payload.update.sessionUpdate === updateType);
+  return updateType
+    ? payloads.filter((payload) => payload.update.sessionUpdate === updateType)
+    : payloads;
 }
 
 export function expectSessionUpdate(source: MockCallSource, sessionId: string, updateType: string) {

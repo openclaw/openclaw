@@ -25,27 +25,37 @@ const { runClawsInspectCommand } = await import("./claws-cli.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+const preflight = {
+  ok: true,
+  action: "install",
+  integrity: `sha256:${"a".repeat(64)}`,
+  installId: "audit",
+  detectedFormat: "claude",
+  mapped: ["commands", "skills"],
+  unavailable: ["agents"],
+  adapterIdentity: "openclaw/test",
+  declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+  capabilityGrants: emptyPluginCapabilityEvidence.grants,
+  capabilityGrantsByPluginId: emptyPluginCapabilityEvidence.grantsByPluginId,
+};
+
+async function writeJson(root: string, name: string, value: unknown) {
+  await writeFile(join(root, name), JSON.stringify(value), "utf8");
+}
+
 async function createInspectFixture(format: "claude" | "openclaw", packages: ClawPackage[] = []) {
   const root = tempDirs.make("openclaw-claws-inspect-extension-");
   await mkdir(join(root, "profiles"));
-  await writeFile(
-    join(root, "package.json"),
-    JSON.stringify({
-      name: "@acme/demo-agent",
-      version: "1.2.3",
-      openclaw: { claw: "openclaw.claw.json" },
-    }),
-    "utf8",
-  );
-  await writeFile(
-    join(root, "openclaw.claw.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      agent: { id: "demo-agent" },
-      ...(packages.length ? { packages } : {}),
-    }),
-    "utf8",
-  );
+  await writeJson(root, "package.json", {
+    name: "@acme/demo-agent",
+    version: "1.2.3",
+    openclaw: { claw: "openclaw.claw.json" },
+  });
+  await writeJson(root, "openclaw.claw.json", {
+    schemaVersion: 1,
+    agent: { id: "demo-agent" },
+    ...(packages.length ? { packages } : {}),
+  });
   await writeFile(
     join(root, "profiles", "openclaw.yml"),
     [
@@ -82,19 +92,7 @@ describe("claws inspect extensions", () => {
 
   it("reports canonical profile extension mappings", async () => {
     const { root, values, runtime } = await createInspectFixture("claude");
-    mocks.preflightClawPackage.mockResolvedValue({
-      ok: true,
-      action: "install",
-      integrity: `sha256:${"a".repeat(64)}`,
-      installId: "audit",
-      detectedFormat: "claude",
-      mapped: ["commands", "skills"],
-      unavailable: ["agents"],
-      adapterIdentity: "openclaw/test",
-      declaredCapabilities: emptyPluginCapabilityEvidence.declared,
-      capabilityGrants: emptyPluginCapabilityEvidence.grants,
-      capabilityGrantsByPluginId: emptyPluginCapabilityEvidence.grantsByPluginId,
-    });
+    mocks.preflightClawPackage.mockResolvedValue(preflight);
     await runClawsInspectCommand(root, { json: true });
 
     expect(values[0]).toMatchObject({
@@ -121,14 +119,10 @@ describe("claws inspect extensions", () => {
     const { root, runtime } = await createInspectFixture("claude");
     // Drop the fixture's extension so the report path needs no package preflight.
     await rm(join(root, "profiles", "openclaw.yml"));
-    await writeFile(
-      join(root, "openclaw.claw.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "demo-agent", name: "Agent\u001b]0;INJECTED_TITLE\u0007CLAW_MARKER_9F3E2D" },
-      }),
-      "utf8",
-    );
+    await writeJson(root, "openclaw.claw.json", {
+      schemaVersion: 1,
+      agent: { id: "demo-agent", name: "Agent\u001b]0;INJECTED_TITLE\u0007CLAW_MARKER_9F3E2D" },
+    });
 
     await runClawsInspectCommand(root, {});
 
@@ -141,15 +135,11 @@ describe("claws inspect extensions", () => {
 
   it("strips terminal controls from reported manifest diagnostics", async () => {
     const { root, runtime } = await createInspectFixture("claude");
-    await writeFile(
-      join(root, "openclaw.claw.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "demo-agent" },
-        metadata: { "key\u001b]0;INJECTED_TITLE\u0007DIAG_MARKER": 1 },
-      }),
-      "utf8",
-    );
+    await writeJson(root, "openclaw.claw.json", {
+      schemaVersion: 1,
+      agent: { id: "demo-agent" },
+      metadata: { "key\u001b]0;INJECTED_TITLE\u0007DIAG_MARKER": 1 },
+    });
 
     await runClawsInspectCommand(root, {});
 
@@ -163,17 +153,11 @@ describe("claws inspect extensions", () => {
       { kind: "plugin", source: "clawhub", ref: "@owner/audit", version: "2.0.1" },
     ]);
     mocks.preflightClawPackage.mockResolvedValue({
-      ok: true,
-      action: "install",
-      integrity: `sha256:${"a".repeat(64)}`,
-      installId: "audit",
+      ...preflight,
       detectedFormat: "openclaw",
       mapped: ["skills"],
       unavailable: [],
       adapterIdentity: "openclaw/test",
-      declaredCapabilities: emptyPluginCapabilityEvidence.declared,
-      capabilityGrants: emptyPluginCapabilityEvidence.grants,
-      capabilityGrantsByPluginId: emptyPluginCapabilityEvidence.grantsByPluginId,
     });
     await runClawsInspectCommand(root, { json: true });
 

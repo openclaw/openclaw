@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import type { SQLInputValue } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pg from "pg";
@@ -33,9 +32,25 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION as schemaVersion } from "./openclaw-agent
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { readOpenClawAgentDatabaseIdentity as readIdentity } from "./openclaw-agent-db-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import { loadOwners } from "./openclaw-agent-db.postgres.test-support.js";
+import {
+  createDatabaseOpener,
+  expectAnchorOnly,
+  loadOwners,
+} from "./openclaw-agent-db.postgres.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+const closeReceipts = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => {
+      const logger = actual.createSubsystemLogger(name);
+      return name === "state/agent-db" ? { ...logger, info: closeReceipts } : logger;
+    },
+  };
+});
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -43,6 +58,7 @@ const prefix = `agenttest_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 let root: string;
 let client: pg.Client;
 let owners: Awaited<ReturnType<typeof loadOwners>>;
+let openDatabase: ReturnType<typeof createDatabaseOpener>;
 
 const targetFor = (sessionId: string, agentId = "actor", key = sessionId) => ({
   agentId,
@@ -58,24 +74,6 @@ async function createSession(sessionId: string, agentId = "actor", key = session
   return target;
 }
 
-function openDatabase(options: { agentId: string; path?: string }) {
-  const database = admit(() => owners.openOpenClawAgentDatabase(options));
-  const statement = (sql: string) => database.db.prepare(sql);
-  return {
-    ...database,
-    get: (sql: string, ...values: SQLInputValue[]) => admit(() => statement(sql).get(...values)),
-    run: (sql: string, ...values: SQLInputValue[]) => admit(() => statement(sql).run(...values)),
-    write: (sql: string, ...values: SQLInputValue[]) =>
-      admit(() =>
-        owners.runOpenClawAgentWriteTransaction(
-          ({ db }) => db.prepare(sql).run(...values),
-          options,
-        ),
-      ),
-    [Symbol.dispose]: () => closeDatabase(database.path),
-  };
-}
-
 const closeDatabase = (databasePath: string) =>
   admit(() => owners.closeOpenClawAgentDatabaseByPath(databasePath));
 
@@ -86,13 +84,6 @@ function exportFts(database: { db: EngineConnection }, sessionId: string) {
       owners.selectSessionTranscriptFtsRows(database.db, sessionId),
     ),
   );
-}
-
-function expectAnchorOnly(databasePath: string) {
-  using db = openNodeSqliteDatabase(databasePath, { readOnly: true });
-  expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
-    { name: "openclaw_engine_anchor" },
-  ]);
 }
 
 async function inspectSchema(pathname: string, agentId?: string) {
@@ -118,6 +109,7 @@ async function queryRows<T extends pg.QueryResultRow = pg.QueryResultRow>(
 }
 if (connection) {
   owners = await loadOwners();
+  openDatabase = createDatabaseOpener(owners);
 }
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -320,8 +312,13 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         expect(retained.claim.isCurrent()).toBe(true);
         retained.claim.release();
         const anchor = database.db.anchor;
+        closeReceipts.mockClear();
         expect(owners.closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
         expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
+        expect(closeReceipts).toHaveBeenCalledWith(
+          `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
+          expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
+        );
         const reopened = owners.openOpenClawAgentDatabase(options);
         assert(isPostgresSqlConnection(reopened.db));
         expect(postgresFacts(reopened.db)?.namespace).toBe(facts?.namespace);
@@ -762,7 +759,9 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     ]);
     await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 2 });
     await owners.upsertSessionEntryCore(sibling, { previousSessionId: undefined });
-    expect(await owners.deleteSessionEntryLifecycle(removal)).toMatchObject({ deleted: true });
+    expect(
+      await owners.deleteSessionEntryLifecycle({ ...removal, archiveTranscript: true }),
+    ).toMatchObject({ deleted: true, archivedTranscripts: [expect.anything()] });
     expect((await find()).hits).toEqual([
       expect.objectContaining({ sessionId: sibling.sessionId, messageId: "search-sibling-user" }),
     ]);

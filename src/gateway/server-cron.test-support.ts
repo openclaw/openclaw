@@ -26,6 +26,7 @@ const {
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
   runCronIsolatedAgentTurnMock,
+  runCronSessionTurnMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
@@ -62,6 +63,9 @@ const {
     status: "ok",
     summary: "ok",
   })),
+  runCronSessionTurnMock: vi.fn<typeof import("../cron/session-run.js").runCronSessionTurn>(
+    async () => ({ status: "ok", summary: "ok" }),
+  ),
   runCronChangedMock: vi.fn(async (_event: unknown, _context?: unknown) => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
@@ -184,6 +188,13 @@ vi.mock("../cron/delivery.js", async () => {
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
+
+// mock-isolation: Adapter routing retains Cron custody without invoking controller/model execution.
+vi.mock("../cron/session-run.js", () => ({
+  runCronSessionTurn: runCronSessionTurnMock,
+}));
+
+export { runCronIsolatedAgentTurnMock, runCronSessionTurnMock };
 
 // mock-isolation: Hooks are fixture-owned so registered host plugins cannot run during cron tests.
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -312,6 +323,15 @@ export function addSystemEventJob(
   return addCronJob(service, name, { kind: "systemEvent", text }, overrides);
 }
 
+export function addAgentTurnJob(
+  service: CronServiceFixture,
+  name: string,
+  message: string,
+  overrides: CronJobOverrides = {},
+) {
+  return addCronJob(service, name, { kind: "agentTurn", message }, overrides);
+}
+
 function runExit(overrides: Partial<RunExit> = {}): RunExit {
   return {
     reason: "manual-cancel",
@@ -372,6 +392,7 @@ export function resetGatewayCronMocks() {
   fetchWithSsrFGuardMock.mockClear();
   sendCronAnnouncePayloadStrictMock.mockClear();
   runCronIsolatedAgentTurnMock.mockClear();
+  runCronSessionTurnMock.mockClear();
   runCronChangedMock.mockClear();
   getGlobalHookRunnerMock.mockClear();
   abortAndDrainEmbeddedAgentRunMock.mockClear();

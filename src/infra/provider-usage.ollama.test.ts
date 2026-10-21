@@ -32,17 +32,24 @@ describe("Ollama provider usage integration", () => {
       models: { providers: { "ollama-cloud": config.models.providers.ollama } },
     };
   };
+  const balanceFetch = () =>
+    vi.fn(async () => Response.json({ included: { session: { remaining_percent: 80 } } }));
+  const load = (
+    options: Omit<NonNullable<Parameters<typeof loadProviderUsageSummary>[0]>, "providers">,
+  ) => loadProviderUsageSummary({ providers: ["ollama"], env: {}, timeoutMs: 5000, ...options });
+  const expectRequest = (fetchFn: ReturnType<typeof balanceFetch>, url: string, key?: string) =>
+    expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
+      `${url}/api/balance`,
+      expect.objectContaining({
+        headers: { Accept: "application/json", ...(key && { Authorization: `Bearer ${key}` }) },
+      }),
+    );
 
   it("loads balance through the configured local provider", async () => {
-    const fetchFn = vi.fn(async () =>
-      Response.json({ included: { session: { remaining_percent: 80 } } }),
-    );
-    const summary = await loadProviderUsageSummary({
-      providers: ["ollama"],
+    const fetchFn = balanceFetch();
+    const summary = await load({
       config: configFor("http://127.0.0.1:11434/v1", "ollama-local"),
-      env: {},
       fetch: fetchFn,
-      timeoutMs: 5000,
     });
     expect(summary.providers).toEqual([
       expect.objectContaining({
@@ -50,18 +57,13 @@ describe("Ollama provider usage integration", () => {
         windows: [{ label: "Session", usedPercent: 20 }],
       }),
     ]);
-    expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
-      "http://127.0.0.1:11434/api/balance",
-      expect.objectContaining({ headers: { Accept: "application/json" } }),
-    );
+    expectRequest(fetchFn, "http://127.0.0.1:11434");
   });
 
   it.each([401, 404])("omits unavailable Cloud balance for HTTP %i", async (status) => {
     const fetchFn = vi.fn(async () => new Response("private", { status }));
-    const summary = await loadProviderUsageSummary({
-      providers: ["ollama"],
+    const summary = await load({
       config: configFor("http://127.0.0.1:11434", "ollama-local"),
-      env: {},
       fetch: fetchFn,
     });
     expect(summary.providers).toEqual([]);
@@ -73,34 +75,17 @@ describe("Ollama provider usage integration", () => {
     ["OLLAMA_API_KEY", { Accept: "application/json" }],
     ["endpoint-key", { Accept: "application/json", Authorization: "Bearer endpoint-key" }],
   ])("keeps ambient Cloud auth off LAN requests with %s", async (apiKey, headers) => {
-    const fetchFn = vi.fn(async () =>
-      Response.json({ included: { session: { remaining_percent: 80 } } }),
-    );
-    const summary = await loadProviderUsageSummary({
-      providers: ["ollama"],
+    const fetchFn = balanceFetch();
+    const summary = await load({
       config: configFor("http://10.0.0.5:11434", apiKey),
       env: { OLLAMA_API_KEY: "ambient-cloud-key" },
       fetch: fetchFn,
-      timeoutMs: 5000,
     });
     expect(summary.providers[0]?.error).toBeUndefined();
     expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
       "http://10.0.0.5:11434/api/balance",
       expect.objectContaining({ headers }),
     );
-  });
-
-  it("does not query a local daemon for hosted-only credentials", async () => {
-    const fetchFn = vi.fn();
-    const summary = await loadProviderUsageSummary({
-      providers: ["ollama"],
-      config: hostedOnlyConfig(),
-      env: {},
-      fetch: fetchFn,
-      timeoutMs: 5000,
-    });
-    expect(summary.providers).toEqual([]);
-    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -111,11 +96,8 @@ describe("Ollama provider usage integration", () => {
     ["ollama-local", {}],
     ["ollama-local", { OLLAMA_API_KEY: "ambient-cloud-key" }],
   ])("uses stored endpoint credentials with local key %s and env %j", async (apiKey, env) => {
-    const fetchFn = vi.fn(async () =>
-      Response.json({ included: { session: { remaining_percent: 80 } } }),
-    );
-    const summary = await loadProviderUsageSummary({
-      providers: ["ollama"],
+    const fetchFn = balanceFetch();
+    const summary = await load({
       config: configFor("http://10.0.0.5:11434", apiKey),
       authStore: {
         version: 1,
@@ -127,63 +109,32 @@ describe("Ollama provider usage integration", () => {
       fetch: fetchFn,
     });
     expect(summary.providers[0]?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
-    expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
-      "http://10.0.0.5:11434/api/balance",
-      expect.objectContaining({
-        headers: { Accept: "application/json", Authorization: "Bearer endpoint-key" },
-      }),
-    );
+    expectRequest(fetchFn, "http://10.0.0.5:11434", "endpoint-key");
   });
 
-  it("does not treat an ambient Cloud key alone as local-daemon ownership", async () => {
-    const fetchFn = vi.fn();
-    const summary = await loadProviderUsageSummary({
-      providers: ["ollama"],
-      config: { plugins: { allow: ["ollama"], entries: { ollama: { enabled: true } } } },
-      env: { OLLAMA_API_KEY: "ambient-cloud-key" },
-      fetch: fetchFn,
-      timeoutMs: 5000,
-    });
-    expect(summary.providers).toEqual([]);
-    expect(fetchFn).not.toHaveBeenCalled();
-  });
-
-  it("keeps an implicit local marker usable alongside hosted configuration", async () => {
-    const fetchFn = vi.fn(async () =>
-      Response.json({ included: { session: { remaining_percent: 80 } } }),
-    );
-    const summary = await loadProviderUsageSummary({
-      providers: ["ollama"],
-      config: hostedOnlyConfig(),
-      env: { OLLAMA_API_KEY: "ollama-local" },
-      fetch: fetchFn,
-      timeoutMs: 5000,
-    });
-    expect(summary.providers[0]?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
-    expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
-      "http://127.0.0.1:11434/api/balance",
-      expect.objectContaining({ headers: { Accept: "application/json" } }),
-    );
-  });
-
-  it("recognizes an explicitly selected local model beside hosted credentials", async () => {
-    const fetchFn = vi.fn(async () =>
-      Response.json({ included: { session: { remaining_percent: 80 } } }),
-    );
-    const summary = await loadProviderUsageSummary({
-      providers: ["ollama"],
-      config: {
+  it.each([
+    ["hosted-only credentials", hostedOnlyConfig(), undefined, false],
+    ["ambient Cloud key alone", { plugins: configFor("").plugins }, "ambient-cloud-key", false],
+    ["implicit local marker", hostedOnlyConfig(), "ollama-local", true],
+    [
+      "selected local model",
+      {
         ...hostedOnlyConfig(),
         agents: { defaults: { model: { primary: "ollama/test" } } },
       },
-      env: { OLLAMA_API_KEY: "ambient-cloud-key" },
-      fetch: fetchFn,
-      timeoutMs: 5000,
-    });
-    expect(summary.providers[0]?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
-    expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
-      "http://127.0.0.1:11434/api/balance",
-      expect.objectContaining({ headers: { Accept: "application/json" } }),
-    );
+      "ambient-cloud-key",
+      true,
+    ],
+  ] as const)("resolves local-daemon ownership for %s", async (_name, config, apiKey, local) => {
+    const fetchFn = local ? balanceFetch() : vi.fn();
+    const env = apiKey ? { OLLAMA_API_KEY: apiKey } : {};
+    const summary = await load({ config, env, fetch: fetchFn });
+    if (local) {
+      expect(summary.providers[0]?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
+      expectRequest(fetchFn, "http://127.0.0.1:11434");
+    } else {
+      expect(summary.providers).toEqual([]);
+      expect(fetchFn).not.toHaveBeenCalled();
+    }
   });
 });

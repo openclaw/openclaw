@@ -36,10 +36,7 @@ export function createTranslatorScenario(
   const agent = createAcpGatewayAgent(
     connection,
     createAcpGateway(request as GatewayClient["request"]),
-    {
-      ...options,
-      sessionStore,
-    },
+    { ...options, sessionStore },
   );
   return { agent, sessionStore, sessionUpdate };
 }

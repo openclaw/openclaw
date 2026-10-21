@@ -30,17 +30,44 @@ import {
 } from "./openclaw-agent-db.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const ftsRowsSql = "SELECT rowid, * FROM session_transcript_fts";
+const malformedFts = "malformed inverted index for FTS5 table main.session_transcript_fts";
+const repairHint = "openclaw doctor --session-sqlite recover --session-sqlite-agent main";
 
-afterEach(async () => {
+async function closeDatabases() {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+}
+
+function expectContents(pathname: string, rows: unknown, integrity: string) {
+  using db = openRawDatabase(pathname, { readOnly: true });
+  expect(db.prepare(ftsRowsSql).all()).toEqual(rows);
+  expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: integrity }]);
+}
+
+function backupPaths(pathname: string) {
+  const directory = path.dirname(pathname);
+  return fs
+    .readdirSync(directory)
+    .filter((name) => name.startsWith("openclaw-index-recovery-"))
+    .map((name) => path.join(directory, name, "database.sqlite"));
+}
+
+function expectRefusal(env: NodeJS.ProcessEnv) {
+  const refused = readAgentDatabaseAdmissionRefusal("main", { env });
+  expect(refused?.code).toBe("agent-database-inspection-failed");
+  expect(refused?.repairHint).toContain(repairHint);
+  return refused;
+}
+
+afterEach(async () => {
+  await closeDatabases();
   await flushLogger();
   clearRuntimeConfigSnapshot();
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
 });
 
 async function createFixture(failure?: "mixed" | "backup" | "rebuild" | "writer") {
@@ -59,25 +86,23 @@ async function createFixture(failure?: "mixed" | "backup" | "rebuild" | "writer"
   setLoggerOverride({ level: "warn", file: logPath, consoleLevel: "silent" });
   const session = { agentId: "main", env, sessionKey: "agent:main:retained" };
   const entry = await replaceSessionEntry(session, { sessionId: "retained", updatedAt: 1 });
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
+  await closeDatabases();
   const pathname = fixture.agentPath();
   let rows: unknown;
   {
     using db = openRawDatabase(pathname);
     db.exec("INSERT INTO session_transcript_fts(text) VALUES ('ab'||char(65534)||'cd')");
-    rows = db.prepare("SELECT rowid, * FROM session_transcript_fts").all();
+    rows = db.prepare(ftsRowsSql).all();
   }
   installSqliteFtsTokenizerMismatch(pathname, "session_transcript_fts");
   retireSqliteDatabaseAdmissionForPath(pathname);
   if (failure === "mixed") {
-    using db = openRawDatabase(pathname);
-    db.exec(
-      "CREATE TABLE probe(value TEXT); CREATE INDEX idx_probe ON probe(value); INSERT INTO probe VALUES ('abcdefgh')",
-    );
-  }
-  if (failure === "mixed") {
+    {
+      using db = openRawDatabase(pathname);
+      db.exec(
+        "CREATE TABLE probe(value TEXT); CREATE INDEX idx_probe ON probe(value); INSERT INTO probe VALUES ('abcdefgh')",
+      );
+    }
     corruptSqliteIndexKey(pathname, "idx_probe", "abcdefgh", "abcdzzzz");
   }
   if (failure === "backup" || failure === "rebuild") {
@@ -132,7 +157,7 @@ async function createFixture(failure?: "mixed" | "backup" | "rebuild" | "writer"
         await owner.stop();
       }
     });
-  return { ...fixture, config, session, entry, pathname, rows, logPath, start, foreignLease };
+  return { env, session, entry, pathname, rows, logPath, start, foreignLease };
 }
 
 it("admits a tokenizer-mismatched agent at Gateway startup with preserved content and backup", async () => {
@@ -144,25 +169,10 @@ it("admits a tokenizer-mismatched agent at Gateway startup with preserved conten
     "Rebuilt stale SQLite FTS indexes (agent main): session_transcript_fts=1",
   );
   expect(loadSessionEntry(session)).toEqual(entry);
-  {
-    using db = openRawDatabase(pathname, { readOnly: true });
-    expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
-    expect(db.prepare("SELECT rowid, * FROM session_transcript_fts").all()).toEqual(rows);
-    const backupDir = fs
-      .readdirSync(path.dirname(pathname))
-      .find((name) => name.startsWith("openclaw-index-recovery-"));
-    expect(backupDir).toBeDefined();
-    using backup = openRawDatabase(
-      path.join(path.dirname(pathname), backupDir!, "database.sqlite"),
-      {
-        readOnly: true,
-      },
-    );
-    expect(backup.prepare("SELECT rowid, * FROM session_transcript_fts").all()).toEqual(rows);
-    expect(backup.prepare("PRAGMA integrity_check").all()).toEqual([
-      { integrity_check: "malformed inverted index for FTS5 table main.session_transcript_fts" },
-    ]);
-  }
+  expectContents(pathname, rows, "ok");
+  const backup = backupPaths(pathname)[0];
+  expect(backup).toBeDefined();
+  expectContents(backup!, rows, malformedFts);
   await closeOpenClawAgentDatabasesAsync();
   await flushLogger();
   const log = fs.readFileSync(logPath, "utf8");
@@ -174,24 +184,10 @@ it("admits a tokenizer-mismatched agent at Gateway startup with preserved conten
   installSqliteFtsTokenizerMismatch(pathname, "session_transcript_fts");
   retireSqliteDatabaseAdmissionForPath(pathname);
   await fixture.start();
-  const refused = readAgentDatabaseAdmissionRefusal("main", { env });
-  expect(refused?.code).toBe("agent-database-inspection-failed");
+  const refused = expectRefusal(env);
   expect(refused?.reason).toContain("Startup FTS repair failed");
-  expect(refused?.repairHint).toContain(
-    "openclaw doctor --session-sqlite recover --session-sqlite-agent main",
-  );
-  {
-    using db = openRawDatabase(pathname, { readOnly: true });
-    expect(db.prepare("SELECT rowid, * FROM session_transcript_fts").all()).toEqual(rows);
-    expect(db.prepare("PRAGMA integrity_check").all()).toEqual([
-      { integrity_check: "malformed inverted index for FTS5 table main.session_transcript_fts" },
-    ]);
-  }
-  expect(
-    fs
-      .readdirSync(path.dirname(pathname))
-      .filter((name) => name.startsWith("openclaw-index-recovery-")),
-  ).toHaveLength(1);
+  expectContents(pathname, rows, malformedFts);
+  expect(backupPaths(pathname)).toHaveLength(1);
 });
 
 it.each(["mixed", "backup", "rebuild", "writer"] as const)(
@@ -200,24 +196,14 @@ it.each(["mixed", "backup", "rebuild", "writer"] as const)(
     const fixture = await createFixture(failure);
     try {
       await fixture.start();
-      const refusal = readAgentDatabaseAdmissionRefusal("main", { env: fixture.env });
-      expect(refusal?.code).toBe("agent-database-inspection-failed");
-      expect(refusal?.repairHint).toContain(
-        "openclaw doctor --session-sqlite recover --session-sqlite-agent main",
-      );
+      expectRefusal(fixture.env);
       expect(() => loadSessionEntry(fixture.session)).toThrow(/integrity_check|quarantined/);
       using db = openRawDatabase(fixture.pathname, { readOnly: true });
-      expect(db.prepare("SELECT rowid, * FROM session_transcript_fts").all()).toEqual(fixture.rows);
+      expect(db.prepare(ftsRowsSql).all()).toEqual(fixture.rows);
       expect(db.prepare("PRAGMA integrity_check").all()).toContainEqual({
-        integrity_check: "malformed inverted index for FTS5 table main.session_transcript_fts",
+        integrity_check: malformedFts,
       });
-      const backups = fs
-        .readdirSync(path.dirname(fixture.pathname))
-        .filter(
-          (name) =>
-            name.startsWith("openclaw-index-recovery-") &&
-            fs.existsSync(path.join(path.dirname(fixture.pathname), name, "database.sqlite")),
-        );
+      const backups = backupPaths(fixture.pathname).filter((pathname) => fs.existsSync(pathname));
       expect(backups).toHaveLength(failure === "rebuild" ? 1 : 0);
     } finally {
       if (fixture.foreignLease) {

@@ -12,21 +12,13 @@ import type {
 
 export async function countFailedChannelIngressQueueEntries(
   stateDir?: string,
-  context?: OpenClawStateWorkerContext,
 ): Promise<ChannelIngressFailedHealth[]> {
-  const cache = context ? channelIngressHealthCache(context) : undefined;
-  if (cache?.failed) {
-    return cache.failed;
-  }
   const reply = await executeExistingOpenClawStateRead(
     { env: resolveChannelIngressStateEnv(stateDir) },
     { type: "channelIngress.failedHealth" },
   );
   if (!reply) {
     return [];
-  }
-  if (cache) {
-    cache.failed = reply.result;
   }
   return reply.result;
 }

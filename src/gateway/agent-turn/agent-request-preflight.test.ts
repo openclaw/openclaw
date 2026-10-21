@@ -3,7 +3,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import * as acpSessionMeta from "../../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as scheduler from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as swarmScheduler } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -205,7 +204,6 @@ function runCollector(options: Parameters<typeof runPreflight>[2] = {}) {
 describe("agent request Swarm preflight", () => {
   afterEach(async () => {
     await scheduler.closeSwarmScheduler();
-    swarmScheduler.reset();
   });
   beforeEach(() => {
     subagentRuns.clear();

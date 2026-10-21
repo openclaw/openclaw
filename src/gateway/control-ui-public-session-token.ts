@@ -21,6 +21,10 @@ const PUBLIC_SESSION_TOKEN_AAD = Buffer.from(
   "openclaw.public-session-share-locator.aad.v1",
   "utf8",
 );
+const PUBLIC_SESSION_WIDGET_TOKEN_AAD = Buffer.from(
+  "openclaw.public-session-widget-locator.aad.v1",
+  "utf8",
+);
 const PUBLIC_SESSION_TOKEN_KEY_SALT = Buffer.from(
   "openclaw.public-session-share-locator.salt.v1",
   "utf8",
@@ -33,6 +37,7 @@ const PUBLIC_SESSION_TOKEN_MAX_PLAINTEXT_BYTES = 5_000;
 const PUBLIC_SESSION_TOKEN_CODEC_CACHE_LIMIT = 32;
 const PUBLIC_SESSION_LOCATOR_KEYS = ["agentId", "sessionId", "sessionKey", "shareId"].toSorted();
 const PUBLIC_SESSION_CLAIM_KEYS = [...PUBLIC_SESSION_LOCATOR_KEYS, "v"].toSorted();
+const PUBLIC_SESSION_WIDGET_CLAIM_KEYS = [...PUBLIC_SESSION_CLAIM_KEYS, "doc"].toSorted();
 
 export type PublicSessionShareLocator = {
   agentId: string;
@@ -44,6 +49,12 @@ export type PublicSessionShareLocator = {
 export type PublicSessionShareTokenCodec = {
   mint: (locator: PublicSessionShareLocator) => string;
   resolve: (token: string) => PublicSessionShareLocator | null;
+};
+
+type PublicSessionWidgetLocator = { locator: PublicSessionShareLocator; docId: string };
+type PublicSessionTokenCodec = PublicSessionShareTokenCodec & {
+  mintWidget: (locator: PublicSessionShareLocator, docId: string) => string;
+  resolveWidget: (token: string) => PublicSessionWidgetLocator | null;
 };
 
 function hasExactKeys(value: object, keys: readonly string[]): boolean {
@@ -70,11 +81,14 @@ function isValidLocator(value: unknown): value is PublicSessionShareLocator {
   );
 }
 
-function parseClaims(value: unknown): PublicSessionShareLocator | null {
+function parseClaims(
+  value: unknown,
+  keys: readonly string[] = PUBLIC_SESSION_CLAIM_KEYS,
+): PublicSessionShareLocator | null {
   if (!isRecord(value)) {
     return null;
   }
-  if (value.v !== 1 || !hasExactKeys(value, PUBLIC_SESSION_CLAIM_KEYS) || !isValidLocator(value)) {
+  if (value.v !== 1 || !hasExactKeys(value, keys) || !isValidLocator(value)) {
     return null;
   }
   return {
@@ -83,6 +97,16 @@ function parseClaims(value: unknown): PublicSessionShareLocator | null {
     sessionId: value.sessionId,
     shareId: value.shareId,
   };
+}
+
+function isValidWidgetDocumentId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= 128 &&
+    /^[A-Za-z0-9._-]+$/u.test(value) &&
+    value !== "." &&
+    value !== ".."
+  );
 }
 
 function derivePublicSessionTokenKey(identity: DeviceIdentity): Buffer {
@@ -102,98 +126,125 @@ function derivePublicSessionTokenKey(identity: DeviceIdentity): Buffer {
   }
 }
 
-/** Validate the exact encoded claims before a publication grant becomes durable. */
-export function encodePublicSessionShareLocator(locator: PublicSessionShareLocator): Buffer {
+function encodePublicSessionLocator(locator: PublicSessionShareLocator, docId?: string): Buffer {
   if (!isValidLocator(locator) || !hasExactKeys(locator, PUBLIC_SESSION_LOCATOR_KEYS)) {
     throw new Error("invalid public session locator");
   }
-  const plaintext = Buffer.from(JSON.stringify({ v: 1, ...locator }), "utf8");
+  const claims = docId === undefined ? { v: 1, ...locator } : { v: 1, ...locator, doc: docId };
+  const plaintext = Buffer.from(JSON.stringify(claims), "utf8");
   if (plaintext.byteLength > PUBLIC_SESSION_TOKEN_MAX_PLAINTEXT_BYTES) {
     throw new Error("public session locator exceeds the maximum length");
   }
   return plaintext;
 }
 
+/** Validate the exact encoded claims before a publication grant becomes durable. */
+export function encodePublicSessionShareLocator(locator: PublicSessionShareLocator): Buffer {
+  return encodePublicSessionLocator(locator);
+}
+
 /** Creates a domain-separated opaque-locator codec from one durable Gateway identity. */
-function createPublicSessionShareTokenCodec(
-  identity: DeviceIdentity,
-): PublicSessionShareTokenCodec {
+function createPublicSessionShareTokenCodec(identity: DeviceIdentity): PublicSessionTokenCodec {
   const key = derivePublicSessionTokenKey(identity);
+  function seal(plaintext: Buffer, aad: Buffer, locator: PublicSessionShareLocator): string {
+    const nonce = randomBytes(PUBLIC_SESSION_TOKEN_NONCE_BYTES);
+    const cipher = createCipheriv(PUBLIC_SESSION_TOKEN_CIPHER, key, nonce);
+    cipher.setAAD(aad);
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    const token = `${PUBLIC_SESSION_TOKEN_PREFIX}${Buffer.concat([
+      nonce,
+      cipher.getAuthTag(),
+      ciphertext,
+    ]).toString("base64url")}`;
+    if (token.length > CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH) {
+      throw new Error("public session token exceeds the maximum length");
+    }
+    registerSecretValueForRedaction(locator.shareId);
+    registerSecretValueForRedaction(token);
+    return token;
+  }
+  function open(token: string, aad: Buffer): unknown {
+    if (
+      token.length > CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH ||
+      !token.startsWith(PUBLIC_SESSION_TOKEN_PREFIX)
+    ) {
+      return null;
+    }
+    const encoded = token.slice(PUBLIC_SESSION_TOKEN_PREFIX.length);
+    if (!encoded || !/^[A-Za-z0-9_-]+$/u.test(encoded)) {
+      return null;
+    }
+    const sealed = Buffer.from(encoded, "base64url");
+    if (
+      sealed.toString("base64url") !== encoded ||
+      sealed.byteLength <= PUBLIC_SESSION_TOKEN_NONCE_BYTES + PUBLIC_SESSION_TOKEN_TAG_BYTES
+    ) {
+      return null;
+    }
+    const nonce = sealed.subarray(0, PUBLIC_SESSION_TOKEN_NONCE_BYTES);
+    const tag = sealed.subarray(
+      PUBLIC_SESSION_TOKEN_NONCE_BYTES,
+      PUBLIC_SESSION_TOKEN_NONCE_BYTES + PUBLIC_SESSION_TOKEN_TAG_BYTES,
+    );
+    const ciphertext = sealed.subarray(
+      PUBLIC_SESSION_TOKEN_NONCE_BYTES + PUBLIC_SESSION_TOKEN_TAG_BYTES,
+    );
+    if (ciphertext.byteLength > PUBLIC_SESSION_TOKEN_MAX_PLAINTEXT_BYTES) {
+      return null;
+    }
+    try {
+      const decipher = createDecipheriv(PUBLIC_SESSION_TOKEN_CIPHER, key, nonce);
+      decipher.setAAD(aad);
+      decipher.setAuthTag(tag);
+      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      if (plaintext.byteLength > PUBLIC_SESSION_TOKEN_MAX_PLAINTEXT_BYTES) {
+        return null;
+      }
+      return JSON.parse(plaintext.toString("utf8"));
+    } catch {
+      return null;
+    }
+  }
   return {
-    mint(locator) {
-      const plaintext = encodePublicSessionShareLocator(locator);
-      const nonce = randomBytes(PUBLIC_SESSION_TOKEN_NONCE_BYTES);
-      const cipher = createCipheriv(PUBLIC_SESSION_TOKEN_CIPHER, key, nonce);
-      cipher.setAAD(PUBLIC_SESSION_TOKEN_AAD);
-      const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-      const token = `${PUBLIC_SESSION_TOKEN_PREFIX}${Buffer.concat([
-        nonce,
-        cipher.getAuthTag(),
-        ciphertext,
-      ]).toString("base64url")}`;
-      if (token.length > CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH) {
-        throw new Error("public session token exceeds the maximum length");
-      }
-      registerSecretValueForRedaction(locator.shareId);
-      registerSecretValueForRedaction(token);
-      return token;
-    },
+    mint: (locator) =>
+      seal(encodePublicSessionShareLocator(locator), PUBLIC_SESSION_TOKEN_AAD, locator),
     resolve(token) {
-      if (
-        token.length > CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH ||
-        !token.startsWith(PUBLIC_SESSION_TOKEN_PREFIX)
-      ) {
-        return null;
-      }
-      const encoded = token.slice(PUBLIC_SESSION_TOKEN_PREFIX.length);
-      if (!encoded || !/^[A-Za-z0-9_-]+$/u.test(encoded)) {
-        return null;
-      }
-      const sealed = Buffer.from(encoded, "base64url");
-      if (
-        sealed.toString("base64url") !== encoded ||
-        sealed.byteLength <= PUBLIC_SESSION_TOKEN_NONCE_BYTES + PUBLIC_SESSION_TOKEN_TAG_BYTES
-      ) {
-        return null;
-      }
-      const nonce = sealed.subarray(0, PUBLIC_SESSION_TOKEN_NONCE_BYTES);
-      const tag = sealed.subarray(
-        PUBLIC_SESSION_TOKEN_NONCE_BYTES,
-        PUBLIC_SESSION_TOKEN_NONCE_BYTES + PUBLIC_SESSION_TOKEN_TAG_BYTES,
-      );
-      const ciphertext = sealed.subarray(
-        PUBLIC_SESSION_TOKEN_NONCE_BYTES + PUBLIC_SESSION_TOKEN_TAG_BYTES,
-      );
-      if (ciphertext.byteLength > PUBLIC_SESSION_TOKEN_MAX_PLAINTEXT_BYTES) {
-        return null;
-      }
-      try {
-        const decipher = createDecipheriv(PUBLIC_SESSION_TOKEN_CIPHER, key, nonce);
-        decipher.setAAD(PUBLIC_SESSION_TOKEN_AAD);
-        decipher.setAuthTag(tag);
-        const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-        if (plaintext.byteLength > PUBLIC_SESSION_TOKEN_MAX_PLAINTEXT_BYTES) {
-          return null;
-        }
-        const locator = parseClaims(JSON.parse(plaintext.toString("utf8")));
-        if (!locator) {
-          return null;
-        }
+      const locator = parseClaims(open(token, PUBLIC_SESSION_TOKEN_AAD));
+      if (locator) {
         registerSecretValueForRedaction(token);
         registerSecretValueForRedaction(locator.shareId);
-        return locator;
-      } catch {
+      }
+      return locator;
+    },
+    mintWidget(locator, docId) {
+      if (!isValidWidgetDocumentId(docId)) {
+        throw new Error("invalid public session widget document");
+      }
+      return seal(
+        encodePublicSessionLocator(locator, docId),
+        PUBLIC_SESSION_WIDGET_TOKEN_AAD,
+        locator,
+      );
+    },
+    resolveWidget(token) {
+      const claims = open(token, PUBLIC_SESSION_WIDGET_TOKEN_AAD);
+      const locator = parseClaims(claims, PUBLIC_SESSION_WIDGET_CLAIM_KEYS);
+      if (!locator || !isRecord(claims) || !isValidWidgetDocumentId(claims.doc)) {
         return null;
       }
+      registerSecretValueForRedaction(token);
+      registerSecretValueForRedaction(locator.shareId);
+      return { locator, docId: claims.doc };
     },
   };
 }
 
-const codecsByDatabasePath = new Map<string, PublicSessionShareTokenCodec>();
+const codecsByDatabasePath = new Map<string, PublicSessionTokenCodec>();
 const missingIdentityDatabasePaths = new Map<string, true>();
 const previewTokens = new WeakMap<PublicSessionShareTokenCodec, Map<string, string>>();
+const widgetTokens = new WeakMap<PublicSessionTokenCodec, Map<string, string>>();
 
-function cacheCodec(databasePath: string, identity: DeviceIdentity): PublicSessionShareTokenCodec {
+function cacheCodec(databasePath: string, identity: DeviceIdentity): PublicSessionTokenCodec {
   const cached = codecsByDatabasePath.get(databasePath);
   if (cached) {
     return cached;
@@ -208,7 +259,7 @@ function cacheCodec(databasePath: string, identity: DeviceIdentity): PublicSessi
 function resolveProcessCodec(params: {
   create: boolean;
   env?: NodeJS.ProcessEnv;
-}): PublicSessionShareTokenCodec | null | Promise<PublicSessionShareTokenCodec | null> {
+}): PublicSessionTokenCodec | null | Promise<PublicSessionTokenCodec | null> {
   const options = params.env ? { env: params.env } : {};
   const { databasePath } = resolveDeviceIdentityStore(options);
   const cached = codecsByDatabasePath.get(databasePath);
@@ -290,4 +341,42 @@ export async function mintExistingPublicSessionShareToken(
     tokens.set(key, token);
   }
   return token;
+}
+
+/** Widget frames carry only a document-scoped credential, never the publication bearer. */
+export async function mintPublicSessionWidgetToken(
+  locator: PublicSessionShareLocator,
+  docId: string,
+): Promise<string | undefined> {
+  // Shortcode references are model-authored; an unmintable one omits its frame
+  // instead of failing the whole public page.
+  if (!isValidWidgetDocumentId(docId)) {
+    return undefined;
+  }
+  const codec = await resolveProcessCodec({ create: false });
+  if (!codec) {
+    return undefined;
+  }
+  let tokens = widgetTokens.get(codec);
+  if (!tokens) {
+    tokens = new Map();
+    widgetTokens.set(codec, tokens);
+  }
+  const key = JSON.stringify([
+    Object.entries(locator).toSorted(([left], [right]) => left.localeCompare(right)),
+    docId,
+  ]);
+  let token = tokens.get(key);
+  if (!token) {
+    token = codec.mintWidget(locator, docId);
+    pruneMapToMaxSize(tokens, 127);
+    tokens.set(key, token);
+  }
+  return token;
+}
+
+export async function resolvePublicSessionWidgetToken(
+  token: string,
+): Promise<PublicSessionWidgetLocator | null> {
+  return (await resolveProcessCodec({ create: false }))?.resolveWidget(token) ?? null;
 }

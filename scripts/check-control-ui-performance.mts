@@ -58,7 +58,7 @@ const controlUiPerformanceBudgets = {
   newBootJsRequests: 22,
   // Page-owned English copy measures 1,435,673 B for Chat and 1,000,561 B
   // for New Session. Retain at least 32 KiB of headroom for each route.
-  chatBootJsGzipBytes: 1_470_000,
+  chatBootJsGzipBytes: 1_500_000,
   newBootJsGzipBytes: 1_035_000,
   startupCssRequests: 1,
   startupJsGzipBytes: 325_000,

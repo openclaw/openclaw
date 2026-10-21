@@ -9,7 +9,8 @@ type BrowserNodeRequest = {
 };
 
 type BrowserNodeResponse = {
-  payload: { result: { ok: true; profile?: string } };
+  payload?: unknown;
+  payloadJSON?: unknown;
 };
 
 type BrowserGatewayCall = (
@@ -175,13 +176,31 @@ describe("Browser node proxy nested watchdogs", () => {
     },
   );
 
-  it("names the selected node and host-status recovery for an invalid proxy envelope", async () => {
-    runtime.callGatewayTool.mockResolvedValueOnce({
-      payload: {},
-    } as unknown as BrowserNodeResponse);
-    const proxy = createSessionProxy({ node: { commands: undefined, label: "Studio Node" } });
+  it.each([
+    { payload: {} },
+    { payloadJSON: "{" },
+    { payloadJSON: " " },
+    { payloadJSON: "null" },
+    { payloadJSON: "[]" },
+    { payloadJSON: "42" },
+    { payload: null, payloadJSON: '{"result":{"ok":true}}' },
+  ])("rejects an invalid proxy envelope without host fallback: %j", async (response) => {
+    runtime.callGatewayTool.mockResolvedValueOnce(response);
+    const proxy = createSessionProxy({
+      node: { commands: undefined, label: "Studio Node" },
+      fallback: true,
+    });
 
     await expect(proxy(snapshot)).rejects.toThrow(/Studio Node.*action=status.*target="host"/i);
+    expect(runtime.fetchBrowserJson).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { payloadJSON: '{"result":{"source":"json"}}', expected: "json" },
+    { payload: { result: { source: "direct" } }, payloadJSON: "{", expected: "direct" },
+  ])("uses the decoded proxy result with direct-payload precedence: %j", async (response) => {
+    runtime.callGatewayTool.mockResolvedValueOnce(response);
+    await expect(createSessionProxy()(snapshot)).resolves.toEqual({ source: response.expected });
   });
 
   it("rejects node file transfer failures without activating host fallback", async () => {

@@ -8,7 +8,8 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
-import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
+import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
@@ -191,6 +192,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             }
           : {}),
       });
+      // A canonical speech final owns synthesis, including a channel veto or failed attempt.
+      if (
+        isReplyPayloadTerminalContent(reply) &&
+        !getReplyPayloadMetadata(reply)?.precedingInputAnswer &&
+        (getReplyPayloadMetadata(reply)?.tts ?? extractTtsDirectiveFacts(reply.text ?? "").facts)
+      ) {
+        deferredTtsTextPending = "";
+      }
       if (finalReply.dispatcherOutcome) {
         const operation = state.getDispatchReplyOperation();
         void finalReply.dispatcherOutcome.then(
@@ -340,18 +349,28 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // settle owner still runs it from finally (#89115).
     throwIfDispatchOperationAborted();
   }
-  if (!explicitSilence && !suppressDelivery && !channelTransformSuppressed) {
-    const ttsMode = resolveConfiguredTtsMode(cfg, {
+  if (
+    !explicitSilence &&
+    !suppressDelivery &&
+    !channelTransformSuppressed &&
+    deferredTtsTextPending.trim()
+  ) {
+    const { autoMode, config: ttsConfig } = resolveTtsSettingsSnapshot({
+      cfg,
+      preparedTtsPreferences: state.preparedTtsPreferences,
+      sessionAuto: state.sessionTtsAuto,
       agentId: sessionAgentId,
       channelId: deliveryChannel,
       accountId: replyRoute.accountId,
     });
-    // Final payloads in separate lanes must not strand the deferred answer.
+    const taggedBlockSpeech =
+      autoMode === "tagged" &&
+      state.cleanBlockTtsDirectiveText &&
+      extractTtsDirectiveFacts(deferredTtsTextPending).facts;
+    // Cleaned block text cannot carry tagged speech, even in all mode.
     if (
-      ttsMode === "final" &&
-      state.progressState.blockCount > 0 &&
-      deferredTtsTextPending.trim() &&
-      (replies.length === 0 || deferFinalTtsText)
+      taggedBlockSpeech ||
+      (ttsConfig.mode === "final" && (replies.length === 0 || deferFinalTtsText))
     ) {
       const sendTtsFinal = async (payload: ReplyPayload) => {
         const finalReply = await state.sendFinalPayload(payload, {
@@ -371,17 +390,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         throwIfDispatchOperationAborted();
         let ttsOnlyPayload: ReplyPayload | undefined;
         if (ttsSyntheticReply.mediaUrl || (deferFinalTtsText && ttsSyntheticReply.text?.trim())) {
+          const spokenText = ttsSyntheticReply.spokenText ?? ttsSyntheticReply.text;
           const ttsPayload = deferFinalTtsText
             ? ttsSyntheticReply
             : {
                 mediaUrl: ttsSyntheticReply.mediaUrl,
                 audioAsVoice: ttsSyntheticReply.audioAsVoice,
-                spokenText: deferredTtsTextPending,
+                spokenText,
                 trustedLocalMedia: true,
               };
           ttsOnlyPayload =
             !deferFinalTtsText && turnLedger.resolveTerminalDelivery() === "delivered"
-              ? markReplyPayloadAsTtsSupplement(ttsPayload, deferredTtsTextPending, {
+              ? markReplyPayloadAsTtsSupplement(ttsPayload, spokenText, {
                   visibleTextAlreadyDelivered: true,
                 })
               : ttsPayload;

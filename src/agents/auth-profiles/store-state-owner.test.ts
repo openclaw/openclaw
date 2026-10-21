@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import {
   activateSecretsRuntimeSnapshotState as activateSnapshot,
   getActiveSecretsRuntimeSnapshotState as activeSnapshot,
   getActiveSecretsRuntimeSnapshotRevisionState as activeRevision,
   graftActiveSecretsRuntimeAuthState as graftAuthState,
+  getPreparedSecretsRuntimeSnapshotRefreshContext,
   prepareSecretsRuntimeSnapshotRestoreState as prepareRestore,
   activateSecretsRuntimeSnapshotStateIfCurrent as restoreIfCurrent,
 } from "../../secrets/runtime-state.js";
+import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import {
   loadPersistedAuthProfileStore as readPersistedStore,
   loadPersistedSharedAuthProfileStore as readSharedStore,
@@ -62,19 +63,18 @@ function ownedBy(root: Root) {
 function bindSnapshot(root: Root, agentDir: string) {
   withEnv(root.env, () => setSnapshot(readStore(agentDir), agentDir));
 }
-function prepare(
+async function prepare(
   root: Root,
   agentDir: string,
   loadAuthStore = () => withEnv(root.env, () => readStore(agentDir)),
 ) {
-  const prepared = prepareSecretsRuntimeFastPathSnapshot({
+  const snapshot = await prepareSecretsRuntimeSnapshot({
     config: {},
     env: root.env,
     agentDirs: [agentDir],
     loadAuthStore,
   });
-  assert(prepared, "missing prepared snapshot");
-  return prepared;
+  return { snapshot, refreshContext: getPreparedSecretsRuntimeSnapshotRefreshContext(snapshot) };
 }
 function commitShared(root: Root, baseline: ReturnType<typeof capturePersistence>, key: string) {
   return saveIfUnchanged({
@@ -127,7 +127,7 @@ describe("explicit auth state ownership", () => {
         await update(second, undefined, { usageStats: { shared: { lastUsed: 40 } } });
       }
       bindSnapshot(second, agentDir);
-      const prepared = prepare(first, agentDir);
+      const prepared = await prepare(first, agentDir);
       expect(prepared.snapshot.authStores[0]?.store?.runtimeInheritsMainState === true).toBe(
         bookkeepingOwner === "mixed-live",
       );
@@ -203,13 +203,13 @@ describe("explicit auth state ownership", () => {
           await update(root, undefined, { usageStats: { shared: { lastUsed } } });
         }
       }
-      const activate = (root: typeof first) => {
-        const prepared = prepare(root, agentDir);
+      const activate = async (root: typeof first) => {
+        const prepared = await prepare(root, agentDir);
         activateSnapshot({ ...prepared, refreshHandler: null });
       };
-      activate(first);
+      await activate(first);
       const baseline = activeSnapshot()!;
-      activate(second);
+      await activate(second);
       const owned = activeSnapshot()!;
       const revision = activeRevision();
       const expected = mode === "rollback" ? first : third;
@@ -222,7 +222,7 @@ describe("explicit auth state ownership", () => {
       }
       vi.stubEnv("OPENCLAW_STATE_DIR", third.stateDir);
       if (mode === "graft") {
-        const prepared = prepare(first, agentDir);
+        const prepared = await prepare(first, agentDir);
         graftAuthState(prepared.snapshot);
         activateSnapshot({ ...prepared, refreshHandler: null });
       } else {
@@ -247,7 +247,7 @@ describe("explicit auth state ownership", () => {
     const second = await seedRoot("same");
     const agentDir = tempDirs.make("openclaw-auth-owner-stale-preparation-");
     withEnv(first.env, () => setSnapshot(store("same"), agentDir));
-    const prepared = prepare(first, agentDir, () => store("same"));
+    const prepared = await prepare(first, agentDir, () => store("same"));
     withEnv(second.env, () => setSnapshot(store("same"), agentDir));
     expect(() => activateSnapshot({ ...prepared, refreshHandler: null })).toThrow("stale");
   });
@@ -255,15 +255,15 @@ describe("explicit auth state ownership", () => {
   it("retains a removed snapshot owner through secrets activation rollback", async () => {
     const first = await seedRoot("first");
     const second = await seedRoot("second");
-    const captured = withEnv(first.env, () => {
-      const activate = (authStores: Array<{ agentDir: string; store: AuthProfileStore }>) => {
-        const prepared = prepare(first, first.agentDir);
+    const captured = await withEnvAsync(first.env, async () => {
+      const activate = async (authStores: Array<{ agentDir: string; store: AuthProfileStore }>) => {
+        const prepared = await prepare(first, first.agentDir);
         prepared.snapshot.authStores = prepareRuntimeAuthProfileStoreSnapshots(authStores);
         activateSnapshot({ ...prepared, refreshHandler: null });
       };
-      activate([{ agentDir: first.agentDir, store: readStore(first.agentDir) }]);
+      await activate([{ agentDir: first.agentDir, store: readStore(first.agentDir) }]);
       const baseline = activeSnapshot();
-      activate([]);
+      await activate([]);
       const owned = activeSnapshot();
       assert(baseline && owned, "missing activated secrets snapshot");
       return { baseline, owned, revision: activeRevision() };
