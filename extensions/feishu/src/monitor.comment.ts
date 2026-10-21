@@ -484,281 +484,316 @@ function formatWholeCommentTimelinePromptLines(params: {
   });
 }
 
-async function fetchDriveCommentContext(
-  params: DriveCommentPageRequest & {
-    commentId: string;
-    replyId?: string;
-    botOpenIds?: Iterable<string | undefined>;
-    abortSignal?: AbortSignal;
-  },
-) {
-  const [metaResponse, commentResponse] = await Promise.all([
-    requestFeishuOpenApi<FeishuDriveMetaBatchQueryResponse>({
-      client: params.client,
-      method: "POST",
-      url: "/open-apis/drive/v1/metas/batch_query",
-      data: {
-        request_docs: [{ doc_token: params.fileToken, doc_type: params.fileType }],
-        with_url: true,
-      },
-      timeoutMs: params.timeoutMs,
-      logger: params.logger,
-      errorLabel: `feishu[${params.accountId}]: failed to fetch drive metadata for ${params.fileToken}`,
-    }),
-    requestFeishuOpenApi<FeishuDriveCommentBatchQueryResponse>({
-      client: params.client,
-      method: "POST",
-      url:
-        `/open-apis/drive/v1/files/${encodeURIComponent(params.fileToken)}/comments/batch_query` +
-        encodeQuery({ file_type: params.fileType, user_id_type: "open_id" }),
-      data: {
-        comment_ids: [params.commentId],
-      },
-      timeoutMs: params.timeoutMs,
-      logger: params.logger,
-      errorLabel: `feishu[${params.accountId}]: failed to fetch drive comment ${params.commentId}`,
-    }),
-  ]);
-  const wikiCache: CommentContentContext["wikiCache"] = new Map();
+export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEventParams) {
+  const { cfg, accountId, event, botOpenId, logger, abortSignal } = params;
+  const eventId = event.event_id?.trim();
+  const commentId = event.comment_id?.trim();
+  const replyId = event.reply_id?.trim();
+  const noticeType = event.notice_meta?.notice_type?.trim();
+  const fileToken = event.notice_meta?.file_token?.trim();
+  const fileType = normalizeCommentFileType(event.notice_meta?.file_type);
+  const senderId = event.notice_meta?.from_user_id?.open_id?.trim();
+  const senderUserId = normalizeString(event.notice_meta?.from_user_id?.user_id);
+  if (!eventId || !commentId || !noticeType || !fileToken || !fileType || !senderId) {
+    logger?.(
+      `feishu[${accountId}]: drive comment notice missing required fields event=${eventId ?? "unknown"} comment=${commentId ?? "unknown"}`,
+    );
+    return null;
+  }
+  if (noticeType !== "add_comment" && noticeType !== "add_reply") {
+    logger?.(`feishu[${accountId}]: unsupported drive comment notice type ${noticeType}`);
+    return null;
+  }
+  const configuredBotOpenId = botOpenId?.trim();
+  const eventRecipientBotOpenId = event.notice_meta?.to_user_id?.open_id?.trim();
+  // Mentioned comment notices identify their recipient even when the startup
+  // identity probe is unavailable. Keep this fallback event-local so an
+  // unverified envelope can never seed process or persisted bot identity.
+  const effectiveBotOpenId =
+    configuredBotOpenId || (event.is_mentioned === true ? eventRecipientBotOpenId : undefined);
+  if (!effectiveBotOpenId) {
+    logger?.(
+      `feishu[${accountId}]: skipping drive comment notice because bot open_id is unavailable ` +
+        `event=${eventId}`,
+    );
+    return null;
+  }
+  if (senderId === effectiveBotOpenId) {
+    logger?.(
+      `feishu[${accountId}]: ignoring self-authored drive comment notice event=${eventId} sender=${senderId}`,
+    );
+    return null;
+  }
 
-  const commentCard =
-    commentResponse?.code === 0
-      ? (commentResponse.data?.items ?? []).find(
-          (item) => item.comment_id?.trim() === params.commentId,
-        )
-      : undefined;
-  const embeddedReplies = commentCard?.reply_list?.replies ?? [];
-  const embeddedTargetReply = params.replyId
-    ? embeddedReplies.find((reply) => reply.reply_id?.trim() === params.replyId)
-    : embeddedReplies.at(-1);
+  const client = createFeishuClient(
+    (await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }),
+  );
+  const botOpenIds = [effectiveBotOpenId, event.notice_meta?.to_user_id?.open_id];
+  const pageRequest: DriveCommentPageRequest = {
+    client,
+    fileToken,
+    fileType,
+    timeoutMs: FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
+    logger,
+    accountId,
+  };
+  const fetchDriveCommentContext = async () => {
+    const [metaResponse, commentResponse] = await Promise.all([
+      requestFeishuOpenApi<FeishuDriveMetaBatchQueryResponse>({
+        client,
+        method: "POST",
+        url: "/open-apis/drive/v1/metas/batch_query",
+        data: {
+          request_docs: [{ doc_token: fileToken, doc_type: fileType }],
+          with_url: true,
+        },
+        timeoutMs: pageRequest.timeoutMs,
+        logger,
+        errorLabel: `feishu[${accountId}]: failed to fetch drive metadata for ${fileToken}`,
+      }),
+      requestFeishuOpenApi<FeishuDriveCommentBatchQueryResponse>({
+        client,
+        method: "POST",
+        url:
+          `/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}/comments/batch_query` +
+          encodeQuery({ file_type: fileType, user_id_type: "open_id" }),
+        data: {
+          comment_ids: [commentId],
+        },
+        timeoutMs: pageRequest.timeoutMs,
+        logger,
+        errorLabel: `feishu[${accountId}]: failed to fetch drive comment ${commentId}`,
+      }),
+    ]);
+    const wikiCache: CommentContentContext["wikiCache"] = new Map();
 
-  let replies = embeddedReplies;
-  let fetchedMatchedReply = params.replyId ? embeddedTargetReply : undefined;
-  const needsExtraReplies = !embeddedTargetReply || commentCard?.has_more === true;
-  if (needsExtraReplies) {
-    const fetched = await fetchDriveCommentPages({ ...params, kind: "replies" });
-    if (fetched.length > 0) {
-      replies = fetched;
-      fetchedMatchedReply = params.replyId
-        ? replies.find((reply) => reply.reply_id?.trim() === params.replyId)
+    const commentCard =
+      commentResponse?.code === 0
+        ? (commentResponse.data?.items ?? []).find((item) => item.comment_id?.trim() === commentId)
         : undefined;
-    }
-    if (params.replyId && !embeddedTargetReply && !fetchedMatchedReply) {
-      for (let attempt = 1; attempt <= FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT; attempt += 1) {
-        if (params.abortSignal?.aborted) {
-          break;
-        }
-        params.logger?.(
-          `feishu[${params.accountId}]: retrying comment reply lookup comment=${params.commentId} ` +
-            `requested_reply=${params.replyId} attempt=${attempt}/${FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT} ` +
-            `delay_ms=${FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS}`,
-        );
-        const delayElapsed = await waitForAbortableDelay(
-          FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS,
-          params.abortSignal,
-        );
-        if (!delayElapsed) {
-          break;
-        }
-        const retried = await fetchDriveCommentPages({ ...params, kind: "replies" });
-        if (retried.length > 0) {
-          replies = retried;
-        }
-        fetchedMatchedReply = replies.find((reply) => reply.reply_id?.trim() === params.replyId);
-        if (fetchedMatchedReply) {
-          break;
+    const embeddedReplies = commentCard?.reply_list?.replies ?? [];
+    const embeddedTargetReply = replyId
+      ? embeddedReplies.find((reply) => reply.reply_id?.trim() === replyId)
+      : embeddedReplies.at(-1);
+
+    let replies = embeddedReplies;
+    let fetchedMatchedReply = replyId ? embeddedTargetReply : undefined;
+    const needsExtraReplies = !embeddedTargetReply || commentCard?.has_more === true;
+    if (needsExtraReplies) {
+      const fetched = await fetchDriveCommentPages({ ...pageRequest, commentId, kind: "replies" });
+      if (fetched.length > 0) {
+        replies = fetched;
+        fetchedMatchedReply = replyId
+          ? replies.find((reply) => reply.reply_id?.trim() === replyId)
+          : undefined;
+      }
+      if (replyId && !embeddedTargetReply && !fetchedMatchedReply) {
+        for (let attempt = 1; attempt <= FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT; attempt += 1) {
+          if (abortSignal?.aborted) {
+            break;
+          }
+          logger?.(
+            `feishu[${accountId}]: retrying comment reply lookup comment=${commentId} ` +
+              `requested_reply=${replyId} attempt=${attempt}/${FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT} ` +
+              `delay_ms=${FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS}`,
+          );
+          const delayElapsed = await waitForAbortableDelay(
+            FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS,
+            abortSignal,
+          );
+          if (!delayElapsed) {
+            break;
+          }
+          const retried = await fetchDriveCommentPages({
+            ...pageRequest,
+            commentId,
+            kind: "replies",
+          });
+          if (retried.length > 0) {
+            replies = retried;
+          }
+          fetchedMatchedReply = replies.find((reply) => reply.reply_id?.trim() === replyId);
+          if (fetchedMatchedReply) {
+            break;
+          }
         }
       }
     }
-  }
 
-  const rootReply = replies[0] ?? embeddedReplies[0];
-  const targetReply = params.replyId
-    ? (embeddedTargetReply ?? fetchedMatchedReply)
-    : (replies.at(-1) ?? embeddedTargetReply ?? rootReply);
-  const meta = metaResponse?.code === 0 ? metaResponse.data?.metas?.[0] : undefined;
-  const currentDocument = {
-    fileType: params.fileType,
-    fileToken: params.fileToken,
-  };
-  const contentContext: CommentContentContext = {
-    botOpenIds: params.botOpenIds,
-    currentDocument,
-    client: params.client,
-    wikiCache,
-    logger: params.logger,
-    accountId: params.accountId,
-  };
-  const normalizedBotOpenIds = new Set(
-    normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])),
-  );
-  const resolvedReplies = await Promise.all(
-    replies.map(async (reply): Promise<ResolvedCommentReplyContext> => {
-      const userId = normalizeString(reply.user_id);
-      return {
-        replyId: normalizeString(reply.reply_id),
-        userId,
-        createTime: typeof reply.create_time === "number" ? reply.create_time : undefined,
-        isBotAuthored: userId !== undefined && normalizedBotOpenIds.has(userId),
-        content: await resolveParsedCommentContent({
-          ...contentContext,
-          elements: isRecord(reply.content) ? reply.content.elements : undefined,
-        }),
-      };
-    }),
-  );
-  resolvedReplies.sort((left, right) =>
-    compareCommentTimelineEntries(left, right, (reply) => reply.replyId),
-  );
-  const rootReplyContext =
-    resolvedReplies.find((reply) => reply.replyId === normalizeString(rootReply?.reply_id)) ??
-    resolvedReplies[0];
-  const targetReplyContext =
-    resolvedReplies.find((reply) => reply.replyId === normalizeString(targetReply?.reply_id)) ??
-    (params.replyId ? undefined : (resolvedReplies.at(-1) ?? rootReplyContext));
-
-  let wholeCommentTimeline: ResolvedWholeCommentTimelineEntry[] = [];
-  if (commentCard?.is_whole === true) {
-    const allComments = await fetchDriveCommentPages({
-      ...params,
-      kind: "whole-comments",
-    });
-    const wholeComments = allComments.filter((comment) => comment.is_whole === true);
-    wholeCommentTimeline = await Promise.all(
-      wholeComments.map(async (comment) => {
-        const rootWholeReply = comment.reply_list?.replies?.[0];
-        const content = await resolveParsedCommentContent({
-          ...contentContext,
-          elements: isRecord(rootWholeReply?.content) ? rootWholeReply.content.elements : undefined,
-        });
-        const commentUserId =
-          normalizeString(rootWholeReply?.user_id) || normalizeString(comment.user_id);
+    const rootReply = replies[0] ?? embeddedReplies[0];
+    const targetReply = replyId
+      ? (embeddedTargetReply ?? fetchedMatchedReply)
+      : (replies.at(-1) ?? embeddedTargetReply ?? rootReply);
+    const meta = metaResponse?.code === 0 ? metaResponse.data?.metas?.[0] : undefined;
+    const currentDocument = {
+      fileType,
+      fileToken,
+    };
+    const contentContext: CommentContentContext = {
+      botOpenIds,
+      currentDocument,
+      client,
+      wikiCache,
+      logger,
+      accountId,
+    };
+    const normalizedBotOpenIds = new Set(normalizeTrimmedStringList(botOpenIds));
+    const resolvedReplies = await Promise.all(
+      replies.map(async (reply): Promise<ResolvedCommentReplyContext> => {
+        const userId = normalizeString(reply.user_id);
         return {
-          commentId: normalizeString(comment.comment_id) ?? "",
-          userId: commentUserId,
-          createTime:
-            typeof comment.create_time === "number"
-              ? comment.create_time
-              : typeof rootWholeReply?.create_time === "number"
-                ? rootWholeReply.create_time
-                : undefined,
-          isBotAuthored: commentUserId !== undefined && normalizedBotOpenIds.has(commentUserId),
-          content,
+          replyId: normalizeString(reply.reply_id),
+          userId,
+          createTime: typeof reply.create_time === "number" ? reply.create_time : undefined,
+          isBotAuthored: userId !== undefined && normalizedBotOpenIds.has(userId),
+          content: await resolveParsedCommentContent({
+            ...contentContext,
+            elements: isRecord(reply.content) ? reply.content.elements : undefined,
+          }),
         };
       }),
     );
-    wholeCommentTimeline = wholeCommentTimeline
-      .filter((entry) => Boolean(entry.commentId))
-      .toSorted((left, right) =>
-        compareCommentTimelineEntries(left, right, (entry) => entry.commentId),
+    resolvedReplies.sort((left, right) =>
+      compareCommentTimelineEntries(left, right, (reply) => reply.replyId),
+    );
+    const rootReplyContext =
+      resolvedReplies.find((reply) => reply.replyId === normalizeString(rootReply?.reply_id)) ??
+      resolvedReplies[0];
+    const targetReplyContext =
+      resolvedReplies.find((reply) => reply.replyId === normalizeString(targetReply?.reply_id)) ??
+      (replyId ? undefined : (resolvedReplies.at(-1) ?? rootReplyContext));
+
+    let wholeCommentTimeline: ResolvedWholeCommentTimelineEntry[] = [];
+    if (commentCard?.is_whole === true) {
+      const allComments = await fetchDriveCommentPages({
+        ...pageRequest,
+        kind: "whole-comments",
+      });
+      const wholeComments = allComments.filter((comment) => comment.is_whole === true);
+      wholeCommentTimeline = await Promise.all(
+        wholeComments.map(async (comment) => {
+          const rootWholeReply = comment.reply_list?.replies?.[0];
+          const content = await resolveParsedCommentContent({
+            ...contentContext,
+            elements: isRecord(rootWholeReply?.content)
+              ? rootWholeReply.content.elements
+              : undefined,
+          });
+          const commentUserId =
+            normalizeString(rootWholeReply?.user_id) || normalizeString(comment.user_id);
+          return {
+            commentId: normalizeString(comment.comment_id) ?? "",
+            userId: commentUserId,
+            createTime:
+              typeof comment.create_time === "number"
+                ? comment.create_time
+                : typeof rootWholeReply?.create_time === "number"
+                  ? rootWholeReply.create_time
+                  : undefined,
+            isBotAuthored: commentUserId !== undefined && normalizedBotOpenIds.has(commentUserId),
+            content,
+          };
+        }),
       );
-  }
+      wholeCommentTimeline = wholeCommentTimeline
+        .filter((entry) => Boolean(entry.commentId))
+        .toSorted((left, right) =>
+          compareCommentTimelineEntries(left, right, (entry) => entry.commentId),
+        );
+    }
 
-  const currentWholeCommentIndex = wholeCommentTimeline.findIndex(
-    (entry) => entry.commentId === params.commentId,
-  );
+    const currentWholeCommentIndex = wholeCommentTimeline.findIndex(
+      (entry) => entry.commentId === commentId,
+    );
 
-  return {
-    documentTitle: normalizeString(meta?.title),
-    documentUrl: normalizeString(meta?.url),
-    isWholeComment: commentCard?.is_whole,
-    quoteText: normalizeString(commentCard?.quote),
-    rootCommentText: rootReplyContext?.content.semanticText ?? rootReplyContext?.content.plainText,
-    targetReplyText:
-      targetReplyContext?.content.semanticText ?? targetReplyContext?.content.plainText,
-    targetReplyContent: targetReplyContext?.content,
-    currentCommentThreadReplies: resolvedReplies,
-    wholeCommentTimeline,
-    nearestBotWholeCommentAfter:
-      currentWholeCommentIndex >= 0
-        ? findNearestBotTimelineEntry({
-            entries: wholeCommentTimeline,
-            currentIndex: currentWholeCommentIndex,
-            direction: "after",
-          })
-        : undefined,
-    nearestBotWholeCommentBefore:
-      currentWholeCommentIndex >= 0
-        ? findNearestBotTimelineEntry({
-            entries: wholeCommentTimeline,
-            currentIndex: currentWholeCommentIndex,
-            direction: "before",
-          })
-        : undefined,
+    return {
+      documentTitle: normalizeString(meta?.title),
+      documentUrl: normalizeString(meta?.url),
+      isWholeComment: commentCard?.is_whole,
+      quoteText: normalizeString(commentCard?.quote),
+      rootCommentText:
+        rootReplyContext?.content.semanticText ?? rootReplyContext?.content.plainText,
+      targetReplyText:
+        targetReplyContext?.content.semanticText ?? targetReplyContext?.content.plainText,
+      targetReplyContent: targetReplyContext?.content,
+      currentCommentThreadReplies: resolvedReplies,
+      wholeCommentTimeline,
+      nearestBotWholeCommentAfter:
+        currentWholeCommentIndex >= 0
+          ? findNearestBotTimelineEntry({
+              entries: wholeCommentTimeline,
+              currentIndex: currentWholeCommentIndex,
+              direction: "after",
+            })
+          : undefined,
+      nearestBotWholeCommentBefore:
+        currentWholeCommentIndex >= 0
+          ? findNearestBotTimelineEntry({
+              entries: wholeCommentTimeline,
+              currentIndex: currentWholeCommentIndex,
+              direction: "before",
+            })
+          : undefined,
+    };
   };
-}
-
-function buildDriveCommentSurfacePrompt(
-  params: Awaited<ReturnType<typeof fetchDriveCommentContext>> & {
-    noticeType: "add_comment" | "add_reply";
-    fileType: CommentFileType;
-    fileToken: string;
-    commentId: string;
-    replyId?: string;
-    isMentioned?: boolean;
-  },
-): string {
-  const documentLabel = params.documentTitle
-    ? `"${params.documentTitle}"`
-    : `${params.fileType} document ${params.fileToken}`;
-  const actionLabel = params.noticeType === "add_reply" ? "reply" : "comment";
+  const context = await fetchDriveCommentContext();
+  const documentLabel = context.documentTitle
+    ? `"${context.documentTitle}"`
+    : `${fileType} document ${fileToken}`;
+  const actionLabel = noticeType === "add_reply" ? "reply" : "comment";
   const firstLine = `The user added a ${actionLabel} in ${documentLabel}.`;
   const lines = [firstLine];
-  if (params.targetReplyText) {
-    lines.push(`Current user comment text: ${formatPromptTextValue(params.targetReplyText)}`);
+  if (context.targetReplyText) {
+    lines.push(`Current user comment text: ${formatPromptTextValue(context.targetReplyText)}`);
   }
   if (
-    params.noticeType === "add_reply" &&
-    params.rootCommentText &&
-    params.rootCommentText !== params.targetReplyText
+    noticeType === "add_reply" &&
+    context.rootCommentText &&
+    context.rootCommentText !== context.targetReplyText
   ) {
-    lines.push(`Original comment text: ${formatPromptTextValue(params.rootCommentText)}`);
+    lines.push(`Original comment text: ${formatPromptTextValue(context.rootCommentText)}`);
   }
-  if (params.quoteText) {
-    lines.push(`Quoted content: ${formatPromptTextValue(params.quoteText)}`);
+  if (context.quoteText) {
+    lines.push(`Quoted content: ${formatPromptTextValue(context.quoteText)}`);
   }
-  if (params.isMentioned === true) {
+  if (event.is_mentioned === true) {
     lines.push("This comment mentioned you.");
   }
-  if (params.documentUrl) {
-    lines.push(`Document link: ${params.documentUrl}`);
+  if (context.documentUrl) {
+    lines.push(`Document link: ${context.documentUrl}`);
+  }
+  lines.push("Current commented document:", `- file_type=${fileType}`, `- file_token=${fileToken}`);
+  if (context.documentTitle) {
+    lines.push(`- title=${context.documentTitle}`);
+  }
+  if (context.documentUrl) {
+    lines.push(`- url=${context.documentUrl}`);
   }
   lines.push(
-    "Current commented document:",
-    `- file_type=${params.fileType}`,
-    `- file_token=${params.fileToken}`,
+    `Event type: ${noticeType}`,
+    `file_token: ${fileToken}`,
+    `file_type: ${fileType}`,
+    `comment_id: ${commentId}`,
   );
-  if (params.documentTitle) {
-    lines.push(`- title=${params.documentTitle}`);
-  }
-  if (params.documentUrl) {
-    lines.push(`- url=${params.documentUrl}`);
-  }
-  lines.push(
-    `Event type: ${params.noticeType}`,
-    `file_token: ${params.fileToken}`,
-    `file_type: ${params.fileType}`,
-    `comment_id: ${params.commentId}`,
-  );
-  if (params.isWholeComment === true) {
+  if (context.isWholeComment === true) {
     lines.push("This is a whole-document comment.");
   }
-  if (params.replyId) {
-    lines.push(`reply_id: ${params.replyId}`);
+  if (replyId) {
+    lines.push(`reply_id: ${replyId}`);
   }
-  if (params.targetReplyContent?.semanticText) {
+  if (context.targetReplyContent?.semanticText) {
     lines.push(
       `Current user comment semantic text: ${formatPromptTextValue(
-        params.targetReplyContent.semanticText,
+        context.targetReplyContent.semanticText,
       )}`,
     );
   }
-  if (params.targetReplyContent?.botMentioned) {
+  if (context.targetReplyContent?.botMentioned) {
     lines.push(
       "Bot routing mention detected in the current user comment. Treat that mention as routing only, not task content.",
     );
   }
-  const nonBotMentions = (params.targetReplyContent?.mentions ?? [])
+  const nonBotMentions = (context.targetReplyContent?.mentions ?? [])
     .filter((mention) => !mention.isBotMention)
     .map((mention) => mention.displayText);
   if (nonBotMentions.length > 0) {
@@ -767,31 +802,31 @@ function buildDriveCommentSurfacePrompt(
   lines.push(
     ...formatLinkedDocumentsPromptLines({
       title: "Referenced documents from current user comment:",
-      linkedDocuments: params.targetReplyContent?.linkedDocuments ?? [],
+      linkedDocuments: context.targetReplyContent?.linkedDocuments ?? [],
     }),
   );
-  if (!params.isWholeComment && params.currentCommentThreadReplies.length > 0) {
+  if (!context.isWholeComment && context.currentCommentThreadReplies.length > 0) {
     lines.push(
       "Current comment card timeline (primary context for follow-ups on this comment card):",
       ...formatCommentThreadPromptLines({
-        replies: params.currentCommentThreadReplies,
-        targetReplyId: params.replyId,
+        replies: context.currentCommentThreadReplies,
+        targetReplyId: replyId,
       }),
       "For this non-whole comment, use the current comment card timeline above as the primary source for phrases like 'above', 'previous result', 'that summary', or 'insert it'.",
       "Document-level session history is auxiliary background only. Do not use another comment card's recent output as the primary referent.",
     );
   }
-  if (params.isWholeComment && params.wholeCommentTimeline.length > 0) {
+  if (context.isWholeComment && context.wholeCommentTimeline.length > 0) {
     lines.push(
       "Whole-document comment timeline (primary context for whole-comment follow-ups):",
       ...formatWholeCommentTimelinePromptLines({
-        entries: params.wholeCommentTimeline,
-        currentCommentId: params.commentId,
+        entries: context.wholeCommentTimeline,
+        currentCommentId: commentId,
       }),
     );
     for (const [direction, entry] of [
-      ["after", params.nearestBotWholeCommentAfter],
-      ["before", params.nearestBotWholeCommentBefore],
+      ["after", context.nearestBotWholeCommentAfter],
+      ["before", context.nearestBotWholeCommentBefore],
     ] as const) {
       if (entry) {
         lines.push(
@@ -860,74 +895,7 @@ function buildDriveCommentSurfacePrompt(
   lines.push(
     "Choose one outcome: output the final plain-text reply, edit the document and then post a user-visible follow-up in the comment thread, or output exactly NO_REPLY.",
   );
-  return lines.join("\n");
-}
-
-export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEventParams) {
-  const { cfg, accountId, event, botOpenId, logger, abortSignal } = params;
-  const eventId = event.event_id?.trim();
-  const commentId = event.comment_id?.trim();
-  const replyId = event.reply_id?.trim();
-  const noticeType = event.notice_meta?.notice_type?.trim();
-  const fileToken = event.notice_meta?.file_token?.trim();
-  const fileType = normalizeCommentFileType(event.notice_meta?.file_type);
-  const senderId = event.notice_meta?.from_user_id?.open_id?.trim();
-  const senderUserId = normalizeString(event.notice_meta?.from_user_id?.user_id);
-  if (!eventId || !commentId || !noticeType || !fileToken || !fileType || !senderId) {
-    logger?.(
-      `feishu[${accountId}]: drive comment notice missing required fields event=${eventId ?? "unknown"} comment=${commentId ?? "unknown"}`,
-    );
-    return null;
-  }
-  if (noticeType !== "add_comment" && noticeType !== "add_reply") {
-    logger?.(`feishu[${accountId}]: unsupported drive comment notice type ${noticeType}`);
-    return null;
-  }
-  const configuredBotOpenId = botOpenId?.trim();
-  const eventRecipientBotOpenId = event.notice_meta?.to_user_id?.open_id?.trim();
-  // Mentioned comment notices identify their recipient even when the startup
-  // identity probe is unavailable. Keep this fallback event-local so an
-  // unverified envelope can never seed process or persisted bot identity.
-  const effectiveBotOpenId =
-    configuredBotOpenId || (event.is_mentioned === true ? eventRecipientBotOpenId : undefined);
-  if (!effectiveBotOpenId) {
-    logger?.(
-      `feishu[${accountId}]: skipping drive comment notice because bot open_id is unavailable ` +
-        `event=${eventId}`,
-    );
-    return null;
-  }
-  if (senderId === effectiveBotOpenId) {
-    logger?.(
-      `feishu[${accountId}]: ignoring self-authored drive comment notice event=${eventId} sender=${senderId}`,
-    );
-    return null;
-  }
-
-  const client = createFeishuClient(
-    (await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }),
-  );
-  const context = await fetchDriveCommentContext({
-    client,
-    fileToken,
-    fileType,
-    commentId,
-    replyId,
-    botOpenIds: [effectiveBotOpenId, event.notice_meta?.to_user_id?.open_id],
-    timeoutMs: FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
-    logger,
-    accountId,
-    abortSignal,
-  });
-  const prompt = buildDriveCommentSurfacePrompt({
-    noticeType,
-    fileType,
-    fileToken,
-    commentId,
-    replyId,
-    isMentioned: event.is_mentioned,
-    ...context,
-  });
+  const prompt = lines.join("\n");
   return {
     eventId,
     messageId: `drive-comment:${eventId}`,
