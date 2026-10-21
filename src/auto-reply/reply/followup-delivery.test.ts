@@ -225,7 +225,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       });
       expect(decision).toMatchObject({ kind: "suppress", reason: "silent" });
       expect(failMock).toHaveBeenCalledTimes(
-        expectation === "result-required" && providerStarted !== false ? 1 : 0,
+        expectation === "result-required" && providerStarted ? 1 : 0,
       );
     },
   );
