@@ -194,6 +194,7 @@ function resolveDefaultUsageFetch(): typeof fetch {
   return (input: RequestInfo | URL, init?: RequestInit) =>
     bundledFetch(
       input instanceof Request ? input.url : input,
+      // SAFETY: undici's RequestInit extends the web RequestInit shape.
       init as Parameters<typeof bundledFetch>[1],
-    ) as Promise<Response>;
+    ) as Promise<Response>; // SAFETY: undici's Response satisfies the web Response.
 }
