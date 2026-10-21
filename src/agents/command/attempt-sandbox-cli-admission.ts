@@ -12,7 +12,7 @@ import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
  * fails closed once the resolved child model is known, but fallback candidates
  * and post-spawn runtime overrides can still land on a CLI backend when the
  * run starts, so the run seam owns the invariant: refuse the CLI candidate for
- * any session that is a delegated child and whose sandbox classification (the
+ * any session with spawn provenance and whose sandbox classification (the
  * configured sandbox mode covering this session key, or a creation-stamped
  * `sandbox: "required"`) claims containment. Recovery is configuration: pick an
  * API-backed child model, or change the agent's sandbox policy explicitly.
@@ -31,10 +31,12 @@ export function assertSandboxedDelegatedChildNotCli(params: {
   if (!params.useCliExecution) {
     return;
   }
+  // Spawn provenance only: hidden children carry a subagent key and spawnedBy;
+  // visible spawns receive spawnedBy from the trusted spawn policy. A bare
+  // parentSessionKey is general topology (dashboard chats parent to main), not
+  // delegation, so operator-created sessions keep their CLI runtime.
   const delegatedChild =
-    isSubagentSessionKey(params.sessionKey) ||
-    params.sessionEntry?.spawnedBy !== undefined ||
-    params.sessionEntry?.parentSessionKey !== undefined;
+    isSubagentSessionKey(params.sessionKey) || Boolean(params.sessionEntry?.spawnedBy?.trim());
   if (!delegatedChild) {
     return;
   }

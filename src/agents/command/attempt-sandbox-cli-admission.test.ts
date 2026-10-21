@@ -67,7 +67,7 @@ describe("sandboxed delegated-child CLI admission", () => {
     ).toThrowError(/cannot honor the sandbox/);
   });
 
-  it("rejects a CLI candidate for a visible child identified by parent lineage", () => {
+  it("rejects a CLI candidate for a visible child stamped with spawn provenance", () => {
     expect(() =>
       assertSandboxedDelegatedChildNotCli({
         useCliExecution: true,
@@ -75,9 +75,25 @@ describe("sandboxed delegated-child CLI admission", () => {
         cfg: makeConfig("all"),
         sessionKey: "agent:main:dashboard:child",
         sessionAgentId,
-        sessionEntry: makeSessionEntry({ parentSessionKey: "agent:main:main" }),
+        sessionEntry: makeSessionEntry({
+          parentSessionKey: "agent:main:main",
+          spawnedBy: "agent:main:main",
+        }),
       }),
     ).toThrowError(/cannot honor the sandbox/);
+  });
+
+  it("keeps CLI execution for an operator dashboard session parented to main", () => {
+    expect(() =>
+      assertSandboxedDelegatedChildNotCli({
+        useCliExecution: true,
+        cliExecutionProvider: "claude-cli",
+        cfg: makeConfig("all"),
+        sessionKey: "agent:main:dashboard:operator-chat",
+        sessionAgentId,
+        sessionEntry: makeSessionEntry({ parentSessionKey: "agent:main:main" }),
+      }),
+    ).not.toThrow();
   });
 
   it("keeps CLI execution for a sandbox-classified non-delegated session", () => {
