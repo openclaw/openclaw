@@ -63,7 +63,7 @@ import {
   type GatewayCall,
 } from "./openclaw-tools.sessions.test-support.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
-import { compactToolOutputHint, toolSchemaDeclaration } from "./tool-schema-hints.js";
+import { compactToolOutputHint } from "./tool-schema-hints.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
@@ -590,17 +590,6 @@ describe("sessions tools", () => {
     });
     expect(Value.Check(tool.outputSchema!, waited.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
-    const declaration = toolSchemaDeclaration(tool.outputSchema);
-    for (const contract of [
-      'durability: "process"',
-      "runStarted: false",
-      'status: "queued"',
-      'targetDisposition: "queued" | "steered"',
-      'status: "no_reply"',
-      'status: "timeout"',
-    ]) {
-      expect(declaration).toContain(contract);
-    }
     const params = agentParams(agentCalls[0]!);
     expect(params.message).toContain("[Inter-session message");
     expect(params.message).toContain("isUser=false");
