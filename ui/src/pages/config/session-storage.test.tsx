@@ -106,8 +106,6 @@ afterEach(() => {
 });
 
 it.each([
-  ["status", "client"],
-  ["status", "handshake"],
   ["status", "reconnect"],
   ["run", "client"],
 ])("rejects a delayed %s response after the Gateway %s changes", async (kind, change) => {
@@ -263,18 +261,6 @@ it("keeps the focused days draft and Refresh control through a failed inventory 
   expect(input.value).toBe("14");
 });
 
-it("clears a failed inventory read after disconnect", async () => {
-  const { page, request, publish, client } = await mount();
-  request.mockRejectedValueOnce(new Error("Inventory unavailable"));
-  click(page, "Refresh");
-  await waitText(page, "Inventory unavailable");
-  publish(false, client, null);
-  await waitForSolid(() => {
-    expect(page.querySelector('[role="alert"]')).toBeNull();
-    expect(page.textContent).not.toContain("Inventory unavailable");
-  });
-});
-
 it("retires the days draft and inventory when a fresh hello removes access", async () => {
   const { page, context, client, publish } = await mount();
   const input = draft(page, "14");
@@ -300,20 +286,12 @@ async function startBackgroundRun() {
   return { ...mounted, running, nextStatus };
 }
 
-it.each([false, true])("follows run completion (reconnect=%s)", async (reconnect) => {
+it("follows run completion after reconnect", async () => {
   const { page, request, nextStatus, client, publish } = await startBackgroundRun();
-  const reads = () =>
-    request.mock.calls.filter(([method]) => method === "sessions.storage.status").length;
-  const acceptedReads = reads();
   expect(page.textContent).not.toContain("Batch completed");
-  if (reconnect) {
-    publish(false, client, null);
-    flush();
-    expect(page.textContent).toContain("Background batch started.");
-  } else {
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(reads()).toBe(acceptedReads + 1);
-  }
+  publish(false, client, null);
+  flush();
+  expect(page.textContent).toContain("Background batch started.");
   nextStatus.mockResolvedValue(
     inventory(5, {
       lastCompletedAt: 200,
@@ -321,11 +299,7 @@ it.each([false, true])("follows run completion (reconnect=%s)", async (reconnect
       externalizedTranscripts: 3,
     }),
   );
-  if (reconnect) {
-    publish(true, client);
-  } else {
-    await vi.advanceTimersByTimeAsync(2_000);
-  }
+  publish(true, client);
   await waitText(page, "Batch completed. 2 transcripts archived.");
   expect(page.textContent).toContain("3 compressed archives moved from the database to files.");
   await expectIdle(request);

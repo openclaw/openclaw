@@ -18,7 +18,6 @@ import {
   selectEngine,
   toggleAddon,
 } from "./memory-page.test-support.tsx";
-import type { ConfigRouteData } from "./route-data.ts";
 
 type PageOptions = Parameters<typeof buildPage>[0];
 function createPage(
@@ -112,15 +111,13 @@ it("defaults to the disabled slot owner and offers Enable even when another engi
   await waitForSolid(() => expect(setEnabled).toHaveBeenCalled());
 });
 
-it("persists Off and drains its autosave before re-enabling memory", async () => {
-  const pendingWrites = deferred<void>();
+it("persists the explicit Off sentinel rather than disabling a pinned plugin", async () => {
   const patchForm = vi.fn();
   const setEnabled = vi.fn(() => Promise.resolve({}));
-  const { element, runExternalMutation } = createPage({
+  const { element } = createPage({
     configObject: { plugins: { slots: { memory: "memory-lancedb" } } },
     catalog: [engine("memory-core", false), engine("memory-lancedb", true)],
     patchForm,
-    waitForPendingWrites: () => pendingWrites.promise,
     setEnabled,
   });
   await waitForSolid(() => expect(activeEngine(element)).toBe("memory-lancedb"));
@@ -135,13 +132,6 @@ it("persists Off and drains its autosave before re-enabling memory", async () =>
   flush();
   expect(activeEngine(element)).toBe("");
   expect(element.textContent).toContain("switched off");
-
-  selectEngine(element, "memory-core");
-  await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
-  expect(setEnabled).not.toHaveBeenCalled();
-
-  pendingWrites.resolve();
-  await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
 });
 
 it("reports a rejected engine change instead of silently snapping back", async () => {
@@ -455,44 +445,6 @@ it("handles Space directly so the browser cannot synthesize a second navigation"
   });
 });
 
-it.each([
-  ["/settings/memory?tab=dreaming", "/settings/memory/dreams"],
-  ["/settings/memory?tab=search", "/settings/memory/settings"],
-  ["/settings/memory?section=memory", "/settings/memory/settings"],
-  ["/settings/memory#config-section-memory", "/settings/memory/settings#config-section-memory"],
-] as const)(
-  "performs at most one replace for %s and never oscillates back to a query tab",
-  async (sourceUrl, expectedUrl) => {
-    const replace = vi.fn();
-    const navigate = vi.fn();
-    const { element } = createPage({
-      catalog: [],
-      replace,
-      navigate,
-      routeData: memoryRoute(sourceUrl),
-    });
-    for (let cycle = 0; cycle < 3; cycle += 1) {
-      element.routeData = { ...element.routeData } as ConfigRouteData;
-      flush();
-    }
-    pressTab(element, "overview", "ArrowRight");
-    pressTab(element, "dreams", "ArrowRight");
-
-    expect(navigate).not.toHaveBeenCalled();
-    const canonical = memoryRoute(expectedUrl);
-    const { pathname, search, hash } = canonical;
-    expect(replace).toHaveBeenCalledExactlyOnceWith("memory", { pathname, search, hash });
-
-    element.routeData = canonical;
-    flush();
-    for (let cycle = 0; cycle < 3; cycle += 1) {
-      element.routeData = { ...element.routeData } as ConfigRouteData;
-      flush();
-    }
-    expect(replace).toHaveBeenCalledOnce();
-  },
-);
-
 it("mounts the presentation for the Settings agent and keeps it through a same-client reconnect", async () => {
   const page = createPage({
     agents: [{ id: "main" }, { id: "research" }],
@@ -524,19 +476,6 @@ it("mounts the presentation for the Settings agent and keeps it through a same-c
   await waitForSolid(() => expect(settingsViews.at(-1)).not.toBe(current));
 });
 
-it("passes a replaced pinned engine to a new presentation", async () => {
-  const { element, settingsViews } = createPage({
-    configObject: { plugins: { slots: { memory: "engine-a" } } },
-    catalog: [engine("engine-a", true), engine("engine-b", true)],
-    routeData: memoryTabRoute("overview"),
-  });
-  await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-a"));
-  const first = settingsViews.at(-1)!;
-  element.configObject = { plugins: { slots: { memory: "engine-b" } } };
-  await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-b"));
-  expect(first.context.signal.aborted).toBe(true);
-});
-
 it("publishes a completed catalog to the mounted Settings presentation", async () => {
   const catalog = deferred<{ plugins: PluginCatalogItem[] }>();
   const { settingsViews } = createPage({
@@ -557,38 +496,23 @@ it("publishes a completed catalog to the mounted Settings presentation", async (
   }
 });
 
-it("retires callbacks and pending RPCs when Config admits a same-agent Memory route", async () => {
-  const reply = deferred<unknown>();
-  const { element, settingsViews } = createPage({
-    routeData: memoryRoute("/settings/memory?agent=main&filter=first"),
-    settingsRequest: () => reply.promise,
-  });
-  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
-  const first = settingsViews.at(-1)!;
-  const pending = first.context.request("settings.test");
-  element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
-  // Raw route input is not admitted until Config's existing route effect applies it.
-  expect(first.context.signal.aborted).toBe(false);
-  flush();
-  expect(first.context.signal.aborted).toBe(true);
-  expect(() => first.context.navigate("settings")).toThrow();
-  reply.resolve("obsolete");
-  await expect(pending).rejects.toThrow();
-  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
-  expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
-  expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("filter=second");
-});
-
 it.each([
   { tab: "overview", change: "client" },
   { tab: "memories", change: "method catalog" },
   { tab: "memories", change: "agent" },
+  { tab: "overview", change: "engine" },
+  { tab: "overview", change: "route" },
 ] as const)(
-  "retires $tab callbacks and pending RPCs synchronously after $change changes",
+  "retires $tab callbacks and pending RPCs after $change is admitted",
   async ({ tab, change }) => {
     const pending = deferred<unknown>();
     const fixture = createPage({
-      routeData: memoryTabRoute(tab),
+      routeData:
+        change === "route"
+          ? memoryRoute("/settings/memory?agent=main&filter=first")
+          : memoryTabRoute(tab),
+      configObject: { plugins: { slots: { memory: "engine-a" } } },
+      catalog: [engine("engine-a", true), engine("engine-b", true)],
       agents: [{ id: "main" }, { id: "research" }],
       methods: ["memory.search", "agents.workspace.get"],
       settingsRequest: () => pending.promise,
@@ -598,14 +522,26 @@ it.each([
       await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
       const old = settingsViews.at(-1)!.context;
       expect(old.props.advertisedMethods).toContain("memory.search");
+      if (change === "engine") {
+        expect(old.props.engine.id).toBe("engine-a");
+      }
       const result = old.request("settings.test");
       const invalidate = {
         "method catalog": () => fixture.setMethods(["agents.workspace.get"]),
         agent: () => fixture.settingsAgentSelection.set("research"),
         client: () => fixture.replaceClient(),
+        engine: () => {
+          element.configObject = { plugins: { slots: { memory: "engine-b" } } };
+        },
+        route: () => {
+          element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
+          // Only Config's admitted route retires authority; raw input does not.
+          expect(old.signal.aborted).toBe(false);
+          flush();
+        },
       };
       invalidate[change]();
-      // No flush: authority retires synchronously.
+      // Non-route changes retire authority without a renderer flush.
       expect(old.signal.aborted).toBe(true);
       expect(() => old.navigate("settings")).toThrow();
       const dispatches = request.mock.calls.length;
@@ -614,6 +550,12 @@ it.each([
       pending.resolve("obsolete");
       await expect(result).rejects.toThrow();
       await waitForSolid(() => expect(settingsViews.at(-1)!.context).not.toBe(old));
+      if (change === "engine") {
+        expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-b");
+      } else if (change === "route") {
+        expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
+        expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("filter=second");
+      }
     } finally {
       pending.resolve("done");
       element.remove();

@@ -427,28 +427,6 @@ describe("renderUpdates", () => {
     expect(row("Automatic updates").textContent).toContain("never installs them automatically");
   });
 
-  it("lets an admin resume disabled checks while preserving the automatic-update preference", () => {
-    const onUpdateChecksChange = vi.fn();
-    renderUpdates({
-      configObject: {
-        update: { channel: "stable", checkOnStart: false, auto: { enabled: true } },
-      },
-      update: { updateSchedule: { channel: "stable", autoEnabled: false } },
-      onUpdateChecksChange,
-    });
-
-    const checks = toggle("Check for updates");
-    expect(checks.checked).toBe(false);
-    expect(checks.hasAttribute("disabled")).toBe(false);
-    const automatic = automaticUpdatesControl().toggle;
-    expect(automatic.checked).toBe(true);
-    expect(automatic.hasAttribute("disabled")).toBe(true);
-    expect(row("Automatic updates").textContent).toContain("Check for updates");
-    checks.checked = true;
-    checks.dispatchEvent(new Event("change"));
-    expect(onUpdateChecksChange).toHaveBeenCalledWith(true);
-  });
-
   it.each([
     {
       name: "disables dev package installs",

@@ -18,14 +18,16 @@ function setup(overrides: Partial<ConfigProps> = {}) {
   };
   props.onViewStateChange = vi.fn(() => rerender());
   rerender();
-  return { props, container, rerender };
+  const q = <T extends HTMLElement = HTMLElement>(selector: string) =>
+    container.querySelector<T>(selector)!;
+  return { props, container, rerender, q };
 }
 
 describe("config raw editing and redaction", () => {
   beforeAll(() => warmJson5().then(() => undefined));
 
   function text(container: HTMLElement, selector?: string): string {
-    const target = selector ? element(container, selector, HTMLElement) : container;
+    const target = selector ? container.querySelector<HTMLElement>(selector)! : container;
     return target.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
@@ -39,27 +41,14 @@ describe("config raw editing and redaction", () => {
     return button;
   }
 
-  function element<T extends Element>(
-    container: HTMLElement,
-    selector: string,
-    constructor: new () => T,
-  ): T {
-    const found = container.querySelector(selector);
-    expect(found).toBeInstanceOf(constructor);
-    if (!(found instanceof constructor)) {
-      throw new Error(`Expected element matching "${selector}"`);
-    }
-    return found;
-  }
-
   function openDiff(container: HTMLElement) {
-    const details = element(container, ".config-diff", HTMLDetailsElement);
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff")!;
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
   }
 
   function expectDiff(container: HTMLElement, path: string, from: string, to: string) {
-    const item = element(container, ".config-diff__item", HTMLElement);
+    const item = container.querySelector<HTMLElement>(".config-diff__item")!;
     expect(["path", "from", "to"].map((part) => text(item, `.config-diff__${part}`))).toEqual([
       path,
       from,
@@ -84,7 +73,8 @@ describe("config raw editing and redaction", () => {
     formValue: { token: `TOKEN_${name}_AFTER` },
   });
   const redacted = "[redacted - click reveal to view]";
-  const rawInput = (container: HTMLElement) => element(container, "textarea", HTMLTextAreaElement);
+  const rawInput = (container: HTMLElement) =>
+    container.querySelector<HTMLTextAreaElement>("textarea")!;
   function expectMode(container: HTMLElement, form: boolean) {
     expect(["Form", "Raw"].map((label) => findButton(container, label).ariaPressed)).toEqual([
       String(form),
@@ -109,11 +99,7 @@ describe("config raw editing and redaction", () => {
       formValue: { gateway: { opaque: "custom" }, agents: { opaque: "off-scope" } },
       onFormModeChange,
     });
-    const banner = element(
-      populated.container,
-      ".config-content-callout .callout.info",
-      HTMLElement,
-    );
+    const banner = populated.q<HTMLElement>(".config-content-callout .callout.info");
     expect(text(banner)).toBe(
       "1 setting in this config can only be edited as text: gateway.opaque Open Raw editor",
     );
@@ -131,13 +117,13 @@ describe("config raw editing and redaction", () => {
   });
 
   it("keeps explicit open/save/discard controls in raw mode", () => {
-    const { container, props } = setup({
+    const { container, props, q } = setup({
       ...changedRaw(),
       onOpenFile: vi.fn(),
     });
 
     expectMode(container, false);
-    const actions = element(container, ".config-raw-actions", HTMLElement);
+    const actions = q<HTMLElement>(".config-raw-actions");
     expect(
       [...actions.querySelectorAll("button")].map((button) => button.textContent?.trim()),
     ).toEqual(["Open", "Discard", "Save"]);
@@ -204,7 +190,7 @@ describe("config raw editing and redaction", () => {
     const onRawChange = vi.fn();
     const formValue = { openai: { apiKey: "supersecret" } };
     const secretRaw = JSON.stringify(formValue);
-    const { container } = setup({
+    const { container, q } = setup({
       raw: secretRaw,
       originalRaw: secretRaw,
       formValue,
@@ -213,7 +199,7 @@ describe("config raw editing and redaction", () => {
 
     expectHidden(container);
 
-    const revealButton = element(container, ".config-raw-toggle", HTMLButtonElement);
+    const revealButton = q<HTMLButtonElement>(".config-raw-toggle");
     expect(revealButton.getAttribute("aria-pressed")).toBe("false");
     revealButton.click();
 
@@ -230,7 +216,7 @@ describe("config raw editing and redaction", () => {
       formValue: { gateway: { mode: "remote" } },
     });
 
-    const details = element(container, ".config-diff", HTMLDetailsElement);
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff")!;
     expect(details.querySelector(".config-diff__summary span")?.textContent?.trim()).toBe(
       "View pending changes",
     );
@@ -263,7 +249,7 @@ describe("config raw editing and redaction", () => {
       after: { integrations: { "foo.bar": { credential: "TOKEN_AFTER" } } },
     },
   ])("redacts pending changes under $hint until revealed", ({ path, hint, before, after }) => {
-    const { container } = setup({
+    const { container, q } = setup({
       raw: JSON.stringify(after),
       originalRaw: JSON.stringify(before),
       uiHints: { [hint]: { sensitive: true, advanced: false } },
@@ -271,19 +257,19 @@ describe("config raw editing and redaction", () => {
     });
     openDiff(container);
     expectDiff(container, path, redacted, redacted);
-    element(container, ".config-raw-toggle", HTMLButtonElement).click();
+    q<HTMLButtonElement>(".config-raw-toggle").click();
     flush();
     expectDiff(container, path, '"TOKEN_BEFORE"', '"TOKEN_AFTER"');
   });
 
   it("resets raw reveal state when the config context changes", () => {
-    const { container, props, rerender } = setup({
+    const { container, props, rerender, q } = setup({
       configPath: "/tmp/openclaw-a.json5",
       ...tokenSnapshot("A"),
       uiHints: { token: { sensitive: true } },
     });
     openDiff(container);
-    const revealButton = element(container, ".config-raw-toggle", HTMLButtonElement);
+    const revealButton = q<HTMLButtonElement>(".config-raw-toggle");
     revealButton.click();
     expectDiff(container, "token", '"TOKEN_A_BEFORE"', '"TOKEN_A_AFTER"');
 
@@ -291,7 +277,7 @@ describe("config raw editing and redaction", () => {
     rerender();
 
     expectHidden(container);
-    const nextDetails = element(container, ".config-diff", HTMLDetailsElement);
+    const nextDetails = container.querySelector<HTMLDetailsElement>(".config-diff")!;
     expect(nextDetails.open).toBe(false);
 
     openDiff(container);
@@ -300,14 +286,14 @@ describe("config raw editing and redaction", () => {
 
   it("renders structured SecretRef values without stringifying", () => {
     const token = { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" };
-    const { container, props, rerender } = setup({
+    const { container, props, rerender, q } = setup({
       schema: object({ channels: object({ discord: object({ token: { type: "string" } }) }) }),
       uiHints: { "channels.discord.token": { sensitive: true, advanced: false } },
       formMode: "form",
       formValue: { channels: { discord: { token } } },
     });
 
-    const input = element(container, ".settings-input", HTMLInputElement);
+    const input = q<HTMLInputElement>(".settings-input");
     expect(input).toMatchObject({
       readOnly: true,
       value: "",
@@ -331,21 +317,21 @@ describe("config raw editing and redaction", () => {
     rawButton.click();
     expect(props.onFormModeChange).not.toHaveBeenCalled();
 
-    const rawUnavailableInput = element(container, ".settings-input", HTMLInputElement);
+    const rawUnavailableInput = q<HTMLInputElement>(".settings-input");
     expect(rawUnavailableInput.placeholder).toBe(
       "Structured value (SecretRef) - edit the config file directly",
     );
   });
 
   it("keeps malformed non-SecretRef object values editable when raw mode is unavailable", () => {
-    const { container, props } = setup({
+    const { props, q } = setup({
       rawAvailable: false,
       schema: object({ gateway: object({ mode: { type: "string" } }) }),
       uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: { malformed: true } } },
     });
 
-    const input = element(container, ".settings-input", HTMLInputElement);
+    const input = q<HTMLInputElement>(".settings-input");
     expect(input).toMatchObject({
       readOnly: false,
       value: '{  "malformed": true}',

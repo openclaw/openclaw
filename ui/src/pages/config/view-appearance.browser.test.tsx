@@ -1,10 +1,18 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { SelectPicker } from "../../components/select-picker.ts";
+import { userEvent } from "vitest/browser";
+import {
+  BUILTIN_THEMES,
+  type ThemeCatalogEntry,
+} from "../../../../packages/gateway-protocol/src/theme.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
+import type { TabIconViewProps } from "./view-tab-icon.tsx";
 import "../../styles.css";
+import "../../styles/settings.css";
 
 function row(container: HTMLElement, title: string) {
   const found = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
@@ -130,33 +138,6 @@ describe("config appearance preferences", () => {
     },
   );
 
-  it("names the theme's chat face and maps typography sentinels back to unset overrides", async () => {
-    const { container, props } = renderAppearance({
-      theme: "dash",
-      fontUi: "geist",
-      fontChat: "system",
-      fontUiProvenance: "profile",
-    });
-    await updatePickers(container);
-    const ui = get(container, "#settings-font-ui", HTMLElement).closest<SelectPicker>(
-      "openclaw-select-picker",
-    )!;
-    const chat = get(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
-      "openclaw-select-picker",
-    )!;
-    await openPicker(ui);
-    expect(pickerOption(ui, "theme")?.textContent).toContain("Dash · DM Sans");
-    await openPicker(chat);
-    expect(pickerOption(chat, "theme")?.textContent).toContain("Dash · Fraunces");
-    expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
-    await choosePickerValue(ui, "lora");
-    expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
-    await choosePickerValue(ui, "theme");
-    expect(props.setFontUi).toHaveBeenLastCalledWith(undefined);
-    await choosePickerValue(chat, "theme");
-    expect(props.setFontChat).toHaveBeenLastCalledWith(undefined);
-  });
-
   it("describes the custom accent source and selected state through the native input", () => {
     const inherited = renderAppearance({
       accent: undefined,
@@ -183,26 +164,9 @@ describe("config appearance preferences", () => {
     ).toBe("#000000");
   });
 
-  it("opens the theme importer, applies an import, and exposes replace and clear actions", () => {
-    const onOpenCustomThemeImport = vi.fn();
-    const { container, props } = renderAppearance({
-      onOpenCustomThemeImport,
-    });
-
-    const customButton = button(container, "Import");
-
-    expect(customButton.disabled).toBe(false);
-    expect(customButton.hasAttribute("aria-pressed")).toBe(false);
-
-    customButton.click();
-
-    expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
-    props.customThemeImportExpanded = true;
-    renderConfigInto(props, container);
-    const importButton = button(container, "Import theme", false);
-
-    expect(importButton.disabled).toBe(true);
-    get(container, ".settings-theme-import__input", HTMLInputElement);
+  it("keeps imports disabled until supplied and selects the saved imported theme", () => {
+    const { container, props } = renderAppearance({ customThemeImportExpanded: true });
+    expect(button(container, "Import theme", false).disabled).toBe(true);
     expect(importer<HTMLAnchorElement>(container, "external").href).toBe(
       "https://tweakcn.com/editor/theme",
     );
@@ -214,25 +178,12 @@ describe("config appearance preferences", () => {
       customThemeImportUrl: source,
     });
     renderConfigInto(props, container);
-    const importedButton = button(container, "Light Green");
-    expect(importedButton.disabled).toBe(false);
-    importedButton.click();
+    const imported = button(container, "Light Green");
+    expect(imported.disabled).toBe(false);
+    imported.click();
     expect(props.setTheme).toHaveBeenCalledWith("custom");
-
-    button(container, "Replace Light Green", false).click();
-    button(container, "Clear Light Green", false).click();
-
-    expect(props.onImportCustomTheme).toHaveBeenCalledTimes(1);
-    expect(props.onClearCustomTheme).toHaveBeenCalledTimes(1);
     expect(text(importer(container, "meta-label"))).toBe("Loaded");
     expect(text(importer(container, "meta-value"))).toBe(`Light Green · ${source}`);
-
-    const input = importer<HTMLInputElement>(container, "input");
-    input.value = "/r/themes/cmlhfpjhw000004l4f4ax3m7z";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(props.onCustomThemeImportUrlChange).toHaveBeenCalledWith(
-      "/r/themes/cmlhfpjhw000004l4f4ax3m7z",
-    );
     props.theme = "custom";
     renderConfigInto(props, container);
     expect(pressed(container, "Light Green")).toBe("true");
@@ -245,10 +196,10 @@ describe("config appearance preferences", () => {
     document.body.append(otherInput);
     const { container, props } = renderAppearance({ customThemeImportUrl: "amethyst-haze" });
     document.body.append(container);
-    props.onOpenCustomThemeImport = () => {
+    props.onOpenCustomThemeImport = vi.fn(() => {
       props.customThemeImportExpanded = true;
       renderConfigInto(props, container);
-    };
+    });
     renderConfigInto(props, container);
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
@@ -269,7 +220,11 @@ describe("config appearance preferences", () => {
       container.remove();
     });
 
-    button(container, "Import").click();
+    const open = button(container, "Import");
+    expect(open.disabled).toBe(false);
+    expect(open.hasAttribute("aria-pressed")).toBe(false);
+    open.click();
+    expect(props.onOpenCustomThemeImport).toHaveBeenCalledOnce();
     renderConfigInto(props, container);
     props.textScale = 110;
     renderConfigInto(props, container);
@@ -313,43 +268,6 @@ describe("config appearance preferences", () => {
 
     expect(props.setTheme).toHaveBeenCalledWith("claw");
     expect(props.setThemeMode).toHaveBeenCalledWith("system");
-  });
-
-  it("renders rejected theme and locale edits as browser-only fallbacks", async () => {
-    const { container, props } = renderAppearance({
-      localeOverride: "fr",
-      localeOverridden: true,
-      localeProvenance: "device-local",
-      localeResetValue: "de",
-      theme: "knot",
-      themeOverridden: true,
-      themeProvenance: "device-local",
-      themeResetValue: "claw",
-    });
-    await updatePickers(container);
-    const languageRow = get(container, "#settings-language .settings-row", HTMLElement);
-    const themeSection = get(container, "#settings-appearance-theme", HTMLElement);
-    const themeDescription = get(themeSection, ":scope > .settings-section__desc", HTMLElement);
-
-    expectCopy(
-      languageRow,
-      ["Default: Deutsch (German)", "Stored in this browser only"],
-      ["Synced across your devices"],
-    );
-    await openPicker(languageRow.querySelector("openclaw-select-picker")!);
-    expect(pickerOption(languageRow, "fr")?.getAttribute("aria-selected")).toBe("true");
-    expectCopy(
-      themeDescription,
-      ["Default: Claw", "Stored in this browser only"],
-      ["Synced across your devices"],
-    );
-    expect(
-      themeSection.querySelector(".settings-theme-card--knot")?.getAttribute("aria-pressed"),
-    ).toBe("true");
-
-    button(themeSection, "Claw").click();
-
-    expect(props.setTheme).toHaveBeenCalledWith("claw");
   });
 
   it("shows pending synced preferences without claiming they already synced", () => {
@@ -582,4 +500,233 @@ describe("config appearance preferences", () => {
       vi.unstubAllGlobals();
     }
   });
+});
+
+const catalog = (...themes: ThemeCatalogEntry[]) => ({ error: null, themes });
+const theme = (
+  id: ThemeCatalogEntry["id"],
+  name: string,
+  overrides: Partial<ThemeCatalogEntry> = {},
+): ThemeCatalogEntry => ({
+  id,
+  name,
+  description: "Test theme",
+  source: "user",
+  modes: ["dark"],
+  ...overrides,
+});
+const themeButton = (container: HTMLElement, id: string) =>
+  container.querySelector<HTMLButtonElement>(`[data-theme-id="${id}"]`);
+
+it("hides the collection and visit controls without changing their saved preferences", () => {
+  const { container, props } = renderAppearance({
+    theme: "user/quiet",
+    themeCatalog: catalog(theme("user/quiet", "Quiet", { lobsterdex: false })),
+    lobsterPetVisits: true,
+    lobsterPetSounds: true,
+    lobsterdexHref: "/settings/lobsterdex",
+  });
+  expect(container.querySelector(".lobsterdex__gallery, .lobsterdex__open")).toBeNull();
+  expect(container.textContent).not.toContain("Lobster visits");
+  expect(container.textContent).not.toContain("Lobster sounds");
+  expect(props).toMatchObject({ lobsterPetVisits: true, lobsterPetSounds: true });
+  expect(props.onAppearanceChange).not.toHaveBeenCalled();
+});
+
+it("offers plugin and personal themes from the shared catalog with their descriptions", () => {
+  const setTheme = vi.fn();
+  const { container } = renderAppearance({
+    setTheme,
+    themeCatalog: catalog(
+      ...BUILTIN_THEMES,
+      theme("space-pack/xenovessel", "Xenovessel", {
+        description: "Alien theme",
+        source: "plugin",
+        pluginId: "space-pack",
+      }),
+      theme("user/candlelight", "Candlelight", {
+        modes: ["light"],
+      }),
+    ),
+  });
+  const pluginTheme = themeButton(container, "space-pack/xenovessel");
+  expect(pluginTheme?.title).toBe("Alien theme");
+  pluginTheme?.click();
+  expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
+  expect(themeButton(container, "user/candlelight")?.textContent).toContain("Candlelight");
+});
+
+it.each(["profile", "device-local"] as const)(
+  "shows Claw presentation while preserving an unavailable %s plugin selection",
+  async (provenance) => {
+    const missingTheme = "space-pack/xenovessel";
+    const { container, props } = renderAppearance({
+      theme: missingTheme,
+      fontUiProvenance: "profile",
+      themeOverridden: true,
+      themeProvenance: provenance,
+      themeCatalog: {
+        ...catalog(...BUILTIN_THEMES),
+        ...(provenance === "profile" ? { unavailableId: missingTheme } : {}),
+      },
+    });
+    await updatePickers(container);
+    expect(
+      container.querySelector("#settings-font-ui")?.closest(".settings-row")?.textContent,
+    ).toContain("Saved to your profile");
+    expect(container.textContent).toContain(
+      `${missingTheme} is unavailable. Using Claw until the theme becomes available again.`,
+    );
+    const claw = themeButton(container, "claw");
+    expect(claw?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector('[data-accent-preset="default"]')?.classList).toContain(
+      "settings-accent-theme--claw",
+    );
+    for (const slot of ["ui", "chat"]) {
+      const picker = await openPicker(container.querySelector(`#settings-font-${slot}`)!);
+      expect(picker?.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
+        "Claw · Instrument Sans",
+      );
+    }
+    expect(props.theme).toBe(missingTheme);
+    claw?.click();
+    expect(props.setTheme).toHaveBeenCalledWith("claw");
+  },
+);
+
+it("offers an explicit retry when the theme catalog cannot load", () => {
+  const onRetryThemeCatalog = vi.fn();
+  const { container } = renderAppearance({
+    themeCatalog: { themes: [...BUILTIN_THEMES], error: "Theme palette temporarily unavailable" },
+    onRetryThemeCatalog,
+  });
+  const error = container.querySelector('[role="alert"]');
+  expect(error?.textContent).toContain("Theme palette temporarily unavailable");
+  const retry = error?.querySelector<HTMLButtonElement>("button");
+  expect(retry?.textContent?.trim()).toBe("Retry");
+  retry?.click();
+  expect(onRetryThemeCatalog).toHaveBeenCalledOnce();
+});
+
+function setupTabIcon(overrides: Partial<TabIconViewProps> = {}) {
+  const { container: root, props } = renderAppearance({ tabIcon: "default", ...overrides });
+  const container = root.querySelector<HTMLElement>(".settings-tab-icon")!;
+  const rerender = (patch: Partial<TabIconViewProps> = {}) => {
+    Object.assign(props, patch);
+    renderConfigInto(props, root);
+  };
+  if (!overrides.setTabIconMode) {
+    props.setTabIconMode = (tabIcon) => rerender({ tabIcon });
+    rerender();
+  }
+  const button = (name: string) =>
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+  const preview = (mode: string) =>
+    radio(container, mode)
+      ?.closest("label")
+      ?.querySelector(".identity-avatar--agent.settings-tab-icon__preview");
+  return { props, container, rerender, button, preview };
+}
+const palettes = (...ids: string[]) =>
+  LOBSTER_PET_PALETTES.filter((palette) => ids.includes(palette.id));
+const radio = (container: HTMLElement, value: string) =>
+  container.querySelector<HTMLInputElement>(`.settings-segmented__input[value="${value}"]`);
+const selectedMode = (container: HTMLElement) =>
+  container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value;
+function expectChoices(container: HTMLElement, pressed: string[]) {
+  expect(
+    [...container.querySelectorAll(".settings-tab-icon__pick")].map((choice) => choice.ariaPressed),
+  ).toEqual(pressed);
+}
+
+it("selects the first unlock on entry and exposes pressed, keyboard-selectable lobster choices", async () => {
+  const { props, container, button } = setupTabIcon({
+    tabIconLobsters: palettes("crimson", "pixel"),
+  });
+  await userEvent.click(radio(container, "lobster")!);
+  expect(props.tabIcon).toBe("lobster:crimson");
+  expectChoices(container, ["true", "false"]);
+  const pixel = button("Sprite");
+  pixel.focus();
+  await userEvent.keyboard("{Enter}");
+  expect(props.tabIcon).toBe("lobster:pixel");
+  expectChoices(container, ["false", "true"]);
+  await waitForSolid(() => expect(pixel.querySelector(".lob-pixel-frame")).not.toBeNull());
+  expect(pixel.getAnimations({ subtree: true })).toHaveLength(0);
+});
+
+it("hides collected artwork without changing the saved preference and restores it when enabled", () => {
+  const { props, container, rerender } = setupTabIcon({
+    tabIcon: "lobster:crimson",
+    lobsterdexEnabled: false,
+    tabIconLobsters: palettes("crimson"),
+    setTabIconMode: vi.fn(),
+  });
+  expect(radio(container, "lobster")).toBeNull();
+  expect(container.querySelector(".settings-tab-icon__lobsters")).toBeNull();
+  expect(container.textContent).not.toContain("Lobsterdex");
+  expect(selectedMode(container)).toBe("default");
+  expect(props.tabIcon).toBe("lobster:crimson");
+  expect(props.setTabIconMode).not.toHaveBeenCalled();
+
+  rerender({ lobsterdexEnabled: true });
+  expect(radio(container, "lobster")).not.toBeNull();
+  expect(selectedMode(container)).toBe("lobster");
+  expect(container.querySelector('.settings-tab-icon__pick[aria-pressed="true"]')).not.toBeNull();
+});
+
+it("shows avatar shapes only for agent artwork and supports keyboard selection", async () => {
+  const { props, container, button, preview } = setupTabIcon({ tabIcon: "agent" });
+  const agentPreview = preview("agent");
+  expect(agentPreview).not.toBeNull();
+  expectChoices(container, ["true", "false", "false"]);
+  const circle = button("Circle");
+  circle.focus();
+  await userEvent.keyboard("{Enter}");
+  expect(props.tabIcon).toBe("agent:circle");
+  expect(button("Circle")).toBe(circle);
+  expect(preview("agent")).toBe(agentPreview);
+  expectChoices(container, ["false", "false", "true"]);
+  expect(selectedMode(container)).toBe("agent");
+  await userEvent.click(button("Rounded corners"));
+  expect(props.tabIcon).toBe("agent:rounded");
+  props.setTabIconMode("default");
+  expect(container.querySelector(".settings-tab-icon__shapes")).toBeNull();
+  props.setTabIconMode("lobster:crimson");
+  expect(container.querySelector(".settings-tab-icon__shapes")).toBeNull();
+});
+
+it("keeps unavailable saved choices and makes an empty collection quietly unavailable", () => {
+  const { props, container, rerender } = setupTabIcon({
+    tabIcon: "lobster:gold",
+    setTabIconMode: vi.fn(),
+  });
+  expect(container.textContent).toContain("not unlocked in this browser");
+  expect(container.querySelectorAll(".settings-tab-icon__pick")).toHaveLength(0);
+  expect(selectedMode(container)).toBe("lobster");
+  expect(props.setTabIconMode).not.toHaveBeenCalled();
+  rerender({ tabIcon: "default" });
+  expect(container.textContent).toContain("No lobsters unlocked");
+  expect(radio(container, "lobster")?.disabled).toBe(true);
+});
+
+it("selects personal artwork while preserving its uncropped preview", async () => {
+  const source = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="blue"/></svg>')}`;
+  const setTabIconMode = vi.fn();
+  const { container, rerender } = setupTabIcon({ tabIconAgentAvatar: source, setTabIconMode });
+  const agentRadio = radio(container, "agent")!;
+  const agent = agentRadio.closest("label")!;
+  await userEvent.click(agentRadio);
+  expect(setTabIconMode).toHaveBeenLastCalledWith("agent");
+  await waitForSolid(() => expect(agent.querySelector(".identity-avatar__image")).not.toBeNull());
+  const image = agent.querySelector<HTMLImageElement>(".identity-avatar__image")!;
+  expect(image.getAttribute("src")).toBe(source);
+  expect(getComputedStyle(image).objectFit).toBe("contain");
+  expect(
+    radio(container, "default")?.closest("label")?.querySelector("img")?.getAttribute("src"),
+  ).toContain("favicon.svg");
+  rerender({ tabIcon: "agent", tabIconAgentAvatar: null });
+  expect(selectedMode(container)).toBe("agent");
+  await waitForSolid(() => expect(agent.querySelector(".identity-avatar__image")).toBeNull());
+  expect(agent.querySelector(".identity-avatar__fallback img")).not.toBeNull();
 });

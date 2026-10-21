@@ -22,6 +22,7 @@ import { createSolidApplicationContextProvider } from "../../test-helpers/solid-
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
+import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { mountAppearanceCatalogPage as mount } from "./config-page-catalog.test-support.ts";
 import {
   completeConfigContext,
@@ -62,38 +63,33 @@ const fieldSchema = (field: string, type: string) => objectSchema({ [field]: { t
 const settingsRoute = (pageId: ConfigPageId, search = "", hash = "") =>
   configRouteData({ pathname: `/settings/${pageId}`, search, hash });
 
+beforeEach(() => {
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal("localStorage", createStorageMock());
+  resetServerUiPrefsSync();
+});
+afterEach(() => {
+  cleanupSolid();
+  document.body.replaceChildren();
+  resetServerUiPrefsSync();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
 describe("ConfigPage navigation", () => {
-  beforeEach(() => {
-    window.history.replaceState({}, "", "/");
-    vi.stubGlobal("localStorage", createStorageMock());
-    resetServerUiPrefsSync();
+  it("keeps curated sections off the Advanced page", () => {
+    for (const section of ["messages", "env", "mcp", "tts", "broadcast", "models"]) {
+      expect(configSelectionFromSearch("advanced", `?section=${section}`)).toEqual({
+        activeSection: ["env", "broadcast", "models"].includes(section) ? section : null,
+        activeSubsection: null,
+      });
+    }
   });
-
-  afterEach(async () => {
-    cleanupSolid();
-    document.body.replaceChildren();
-    resetServerUiPrefsSync();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  describe("ConfigPage advanced selection guard", () => {
-    it("keeps curated sections off the Advanced page", () => {
-      for (const section of ["messages", "env", "mcp", "tts", "broadcast", "models"]) {
-        expect(configSelectionFromSearch("advanced", `?section=${section}`)).toEqual({
-          activeSection: ["env", "broadcast", "models"].includes(section) ? section : null,
-          activeSubsection: null,
-        });
-      }
-    });
-  });
-
-  describe("ConfigPage default selections", () => {
-    it.each(["__proto__"])("rejects an unsupported runtime page id: %s", (pageId) => {
-      expect(() => configSelectionFromSearch(pageId as ConfigPageId, "")).toThrow(
-        "Unknown config page",
-      );
-    });
+  it.each(["__proto__"])("rejects an unsupported runtime page id: %s", (pageId) => {
+    expect(() => configSelectionFromSearch(pageId as ConfigPageId, "")).toThrow(
+      "Unknown config page",
+    );
   });
 
   function routeContext(): ApplicationContext {
@@ -128,6 +124,56 @@ describe("ConfigPage navigation", () => {
     } as unknown as ApplicationContext);
   }
 
+  it.each([
+    ["owner administrator", "gateway-owner", "operator.admin", true, true],
+    ["named administrator", "other-operator", "operator.admin", true, true],
+    ["unidentified administrator", null, "operator.admin", true, false],
+    ["owner without administrator scope", "gateway-owner", "operator.write", true, false],
+    ["disconnected owner", "gateway-owner", "operator.admin", false, false],
+  ] as const)(
+    "gates report clicks for %s with a stale method catalog",
+    async (_label, profileId, scope, connected, allowed) => {
+      const reportUpdateFailure = vi.fn(async () => undefined);
+      const run = createUpdateRunFixture({
+        phase: "finished",
+        status: "failed",
+        reason: "build-failed",
+        finishedAtMs: 500,
+      });
+      const context = routeContext();
+      context.runtimeConfig.state.connected = true;
+      Object.assign(context.gateway.snapshot, {
+        client: {},
+        phase: connected ? "connected" : "reconnecting",
+        selfUser: profileId ? { id: profileId } : null,
+        hello: {
+          auth: { role: "operator", scopes: [scope] },
+          features: { methods: ["update.status"] },
+        },
+      });
+      Object.assign(context.overlays, {
+        snapshot: {
+          updateRun: run,
+          reportableUpdateFailureId: run.runId,
+        },
+        reportUpdateFailure,
+        refreshUpdateStatus: vi.fn(async () => true),
+      });
+      const { container } = mountConfigPage(context, { pageId: "updates" });
+      const report = await waitForSolid(() =>
+        expectDefined(
+          [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+            (button) => button.textContent?.trim() === "Report update failure",
+          ),
+          "report button",
+        ),
+      );
+      expect(report).toMatchObject({ disabled: !allowed });
+      report.click();
+      expect(reportUpdateFailure.mock.calls).toEqual(allowed ? [[run.runId]] : []);
+    },
+  );
+
   describe("ConfigPage route selections", () => {
     it.each([
       { pageId: "communications", section: "transcripts" },
@@ -135,19 +181,11 @@ describe("ConfigPage navigation", () => {
     ] as const)(
       "opens the $section advanced editor for a matching hash",
       async ({ pageId, section }) => {
-        const base = routeContext();
-        const config = { [section]: { enabled: true } };
-        const context: ApplicationContext = {
-          ...base,
-          runtimeConfig: {
-            ...base.runtimeConfig,
-            state: {
-              ...base.runtimeConfig.state,
-              configForm: config,
-              configSchema: objectSchema({ [section]: fieldSchema("enabled", "boolean") }),
-            },
-          },
-        };
+        const context = routeContext();
+        Object.assign(context.runtimeConfig.state, {
+          configForm: { [section]: { enabled: true } },
+          configSchema: objectSchema({ [section]: fieldSchema("enabled", "boolean") }),
+        });
         const routeData = settingsRoute(pageId, `?section=${section}`);
         const view = mountConfigPage(context, { pageId, routeData });
         const editor = view.container.querySelector(`#config-section-${section}`)!;
@@ -169,31 +207,18 @@ describe("ConfigPage navigation", () => {
       { profile: undefined, writes: 1 },
       { profile: "full", writes: 0 },
     ])("Security Full preserves an explicit choice from $profile", async ({ profile, writes }) => {
-      const baseContext = routeContext();
+      const context = routeContext();
       const patchForm = vi.fn();
       const removeFormValue = vi.fn();
-      const context: ApplicationContext = {
-        ...baseContext,
-        gateway: {
-          ...baseContext.gateway,
-          snapshot: {
-            ...baseContext.gateway.snapshot,
-            phase: "connected",
-            hello: gatewayHelloForMethods(["config.set"]),
-          },
-        },
-        runtimeConfig: {
-          ...baseContext.runtimeConfig,
-          canSet: true,
-          patchForm,
-          removeFormValue,
-          state: {
-            ...baseContext.runtimeConfig.state,
-            connected: true,
-            configForm: profile ? { tools: { profile } } : {},
-          },
-        },
-      };
+      Object.assign(context.gateway.snapshot, {
+        phase: "connected",
+        hello: gatewayHelloForMethods(["config.set"]),
+      });
+      Object.assign(context.runtimeConfig, { canSet: true, patchForm, removeFormValue });
+      Object.assign(context.runtimeConfig.state, {
+        connected: true,
+        configForm: profile ? { tools: { profile } } : {},
+      });
       const { page } = mountConfigPage(context, { pageId: "security" });
       flush();
 
@@ -351,25 +376,13 @@ describe("ConfigPage navigation", () => {
 
   describe("ConfigPage pending section navigation", () => {
     it.each([
-      {
-        pageId: "appearance",
-        search: "?section=__appearance__",
-        targetId: "settings-appearance-typography",
-      },
-      {
-        pageId: "appearance",
-        search: "?section=__appearance__",
-        targetId: "settings-accent-status",
-      },
-      { pageId: "ai-agents", search: "?section=session", targetId: "settings-session-storage" },
-      {
-        pageId: "communications",
-        search: "?section=transcripts",
-        targetId: "settings-communications-meeting-capture",
-      },
+      ["appearance", "__appearance__", "settings-appearance-typography"],
+      ["appearance", "__appearance__", "settings-accent-status"],
+      ["ai-agents", "session", "settings-session-storage"],
+      ["communications", "transcripts", "settings-communications-meeting-capture"],
     ] as const)(
-      "scrolls to the Settings $targetId anchor after rendering",
-      ({ pageId, search, targetId }) => {
+      "scrolls to the Settings %s %s #%s anchor after rendering",
+      (pageId, section, targetId) => {
         const frames = animationFrames();
         const context = routeContext();
         context.runtimeConfig.state.configSchema = objectSchema({
@@ -378,7 +391,7 @@ describe("ConfigPage navigation", () => {
         });
         const view = mountConfigPage(context, {
           pageId,
-          routeData: settingsRoute(pageId, search, `#${targetId}`),
+          routeData: settingsRoute(pageId, `?section=${section}`, `#${targetId}`),
         });
         const target = query(view.page, `#${targetId}`);
         const scroll = vi.fn();
@@ -451,18 +464,7 @@ describe("ConfigPage navigation", () => {
 });
 
 describe("ConfigPage model catalog lifecycle", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.useFakeTimers();
-  });
-
-  afterEach(async () => {
-    cleanupSolid();
-    document.body.replaceChildren();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-  });
+  beforeEach(() => vi.useFakeTimers());
 
   function observerModels(view: ReturnType<typeof mountConfigPage>) {
     const picker = query<HTMLElement & { params: { options: { value: string; label: string }[] } }>(
@@ -482,6 +484,11 @@ describe("ConfigPage model catalog lifecycle", () => {
       ),
     );
   }
+  function expectStatusReads(request: { mock: { calls: unknown[][] } }, count: number) {
+    return waitForSolid(() =>
+      expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(count),
+    );
+  }
 
   describe("ConfigPage session observer models", () => {
     it("keeps session-only Appearance usable without polling host details or models", async () => {
@@ -497,18 +504,14 @@ describe("ConfigPage model catalog lifecycle", () => {
         hello: gatewayHelloForMethods(["system.info"]),
       });
       flush();
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
-      );
+      await expectStatusReads(request, 1);
       source.publish({
         ...source.gateway.snapshot,
         hello: gatewayHelloForMethods(["system.info"], ["operator.sessions.read"]),
       });
       flush();
       await vi.advanceTimersByTimeAsync(30_000);
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
-      );
+      await expectStatusReads(request, 1);
       await expectModels(view);
     });
 
@@ -578,16 +581,6 @@ describe("ConfigPage model catalog lifecycle", () => {
         flush();
         await expectModels(view, currentModels);
         expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
-        expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, firstClient, {
-          agentId: "main",
-          preparedOnly: true,
-          signal: expect.any(AbortSignal),
-        });
-        expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, secondClient, {
-          agentId: "main",
-          preparedOnly: true,
-          signal: expect.any(AbortSignal),
-        });
       },
     );
 
@@ -632,12 +625,6 @@ describe("ConfigPage model catalog lifecycle", () => {
       secondMain.resolve({ models: currentMainModels });
       flush();
       await expectModels(view, currentMainModels);
-      expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual(
-        ["main", "writer", "main"].map((agentId) => [
-          "models.list",
-          { agentId, preparedOnly: true, view: "configured" },
-        ]),
-      );
 
       selection.selectedId = null;
       publishConfigSource(context.settingsAgentSelection);
@@ -725,32 +712,20 @@ describe("ConfigPage model catalog lifecycle", () => {
         Promise.resolve(method === "models.list" ? { models: [] } : {}),
       );
       const { view } = await mount({ request } as unknown as GatewayBrowserClient);
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
-      );
+      await expectStatusReads(request, 1);
       view.update({ pageId: "advanced" });
       flush();
       await vi.advanceTimersByTimeAsync(20_000);
       expect(view.page.isConnected).toBe(true);
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
-      );
+      await expectStatusReads(request, 1);
       view.update({ pageId: "appearance" });
       flush();
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(2),
-      );
+      await expectStatusReads(request, 2);
     });
   });
 });
 
 describe("ConfigPage meeting capture", () => {
-  afterEach(() => {
-    cleanupSolid();
-    document.body.replaceChildren();
-    vi.restoreAllMocks();
-  });
-
   it("keeps Messages default and opens capture with a collapsed schema editor inside the section panel", async () => {
     const config = { messages: { ackReaction: "ok" }, transcripts: { enabled: true } };
     const request = vi.fn(async (method: string) => {

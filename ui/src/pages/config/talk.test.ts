@@ -14,6 +14,7 @@ import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
+import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { TalkSettingsPage } from "./talk-page.tsx";
@@ -69,6 +70,9 @@ type TalkPageElement = HTMLElement & {
 };
 
 type TalkMutationHarnessOptions = {
+  configSaving?: boolean;
+  speakerVoice?: string | null;
+  providerOption?: Partial<TalkCatalogResult["realtime"]["providers"][number]>;
   nativeDeviceSettings?: NativeDeviceSettingsCapability;
   voiceWakeRequest?: (
     method: string,
@@ -127,6 +131,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
           },
           transports: options.transports ?? ["gateway-relay"],
           defaultModel: options.defaultModel ?? "gpt-live-test-canary",
+          ...options.providerOption,
         },
         {
           id: "xai",
@@ -185,6 +190,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
           : { model: options.model === undefined ? "gpt-realtime-2.1" : options.model }),
         transport: options.transport === undefined ? "gateway-relay" : options.transport,
         consultRouting: options.consultRouting,
+        speakerVoice: options.speakerVoice,
         providers: options.openAIProviderModel
           ? { openai: { model: options.openAIProviderModel } }
           : undefined,
@@ -197,7 +203,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
       configForm,
       configSnapshot: options.configSnapshot ?? { hash: "hash" },
       configLoading: false,
-      configSaving: false,
+      configSaving: options.configSaving ?? false,
       configApplying: false,
     },
     patchForm: vi.fn(),
@@ -333,6 +339,80 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+async function readyTalk(options: TalkMutationHarnessOptions = {}) {
+  const harness = createTalkMutationHarness(options);
+  await waitForSolid(() =>
+    expect(harness.page.querySelector("openclaw-select-picker")).not.toBeNull(),
+  );
+  await updatePickers(harness.page);
+  return harness;
+}
+
+it("locks every curated picker while config is saving", async () => {
+  const { page } = await readyTalk({ configSaving: true, speakerVoice: "marin" });
+  expect(page.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(true);
+  expect([...page.querySelectorAll("select")]).toMatchObject([{ disabled: true }]);
+  expect(page.querySelector<HTMLButtonElement>("openclaw-select-picker button")?.disabled).toBe(
+    true,
+  );
+});
+
+it("commits provider-local model ids without qualifying them", async () => {
+  const { page, runtimeConfig } = await readyTalk({
+    providerOption: { models: ["gpt-live", "gpt-realtime"] },
+  });
+  await choosePickerValue(
+    page.querySelector<SelectPicker>("openclaw-select-picker")!,
+    "gpt-realtime",
+  );
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
+    ["talk", "realtime", "model"],
+    "gpt-realtime",
+  );
+});
+
+it.each([
+  ["gpt-live", true],
+  [" GPT-LIVE-test-canary ", true],
+  ["gpt-liveish", false],
+] as const)("renders the GPT-Live hint only for the exact family: %s", async (model, showsHint) => {
+  const { page } = await readyTalk({ model });
+  expect(page.textContent?.includes(t("talkPage.gptLive.hint"))).toBe(showsHint);
+  if (showsHint) {
+    const row = [...page.querySelectorAll(".settings-row")].find((entry) =>
+      entry.textContent?.includes("Released browser/Gateway-owned WebRTC"),
+    );
+    expect(row?.textContent).toContain("GPT-Live");
+    expect(row?.textContent).toContain("Ready");
+    expect(row?.textContent).not.toContain("talkPage.");
+  }
+});
+
+it.each([
+  ["model", "gpt-live-1-codex", "spruce", ["arbor", "spruce"]],
+  ["provider", "gpt-live-private-example", null, ["other-voice"]],
+] satisfies [string, string, string | null, string[]][])(
+  "resolves the %s voice catalog",
+  async (kind, model, speakerVoice, voices) => {
+    const { page } = await readyTalk({
+      model,
+      speakerVoice,
+      provider: kind === "model" ? "openai" : "other",
+      providerOption:
+        kind === "model"
+          ? { voicesByModel: { [model]: voices } }
+          : { id: "other", voices, activeVoices: ["active-only"], modelFamilySettings: undefined },
+    });
+    expect(readVoiceOptions(page)).toEqual(["", ...voices]);
+    expect(
+      [...page.querySelectorAll<HTMLOptionElement>("select option")].map((option) => option.value),
+    ).toEqual(["", ...voices]);
+    if (kind === "provider") {
+      expect(page.textContent).not.toContain(t("talkPage.gptLive.hint"));
+    }
+  },
+);
 
 describe("Talk catalog boundaries", () => {
   it("keeps the trigger editor mounted through catalog failure and focus recovery", async () => {
