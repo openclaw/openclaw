@@ -668,7 +668,6 @@
 ["extensions/matrix/src/matrix/actions/client.test.ts","../client-bootstrap.js","03ca4f255336f0de3994ec796821f383371903274f2dbec3b2e4d4b011689ba6",1]
 ["extensions/matrix/src/matrix/actions/client.test.ts","../send.js","d8292972ed837c0853290c64e9166a58883696c748775b5700af2be429c9c874",1]
 ["extensions/matrix/src/matrix/actions/devices.test.ts","./client.js","fe3efd22546625a79f990a5ba77ba3fb75e467f8fcd6bfeae023cb34942a6069",1]
-["extensions/matrix/src/matrix/actions/profile.test.ts","../profile.js","9081c95dbc655069079149c3dd5778ba37d0bf3bfa1f34cf709b5385f28b884e",1]
 ["extensions/matrix/src/matrix/actions/verification.test.ts","./client.js","fe3efd22546625a79f990a5ba77ba3fb75e467f8fcd6bfeae023cb34942a6069",1]
 ["extensions/matrix/src/matrix/client-bootstrap.test.ts","../runtime.js","83f2a426138843376dc981a55ba3b1726f3a494ff066f84eedea01329619d952",1]
 ["extensions/matrix/src/matrix/client.test.ts","./client/create-client.js","7e3e63d295850b50b505b5897d1e05a793c88c5beddb21e0f31da5b16689895c",1]
