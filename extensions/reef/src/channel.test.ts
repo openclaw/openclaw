@@ -2,8 +2,6 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
@@ -49,14 +47,6 @@ const ingress = (id: string, text: string, replyTo?: string) =>
     provenance,
     autonomy: "bounded",
   });
-
-function stateRuntime(stateDir: string) {
-  const runtime = createRuntime(stateDir);
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("reef", { ...options, env });
-  return runtime;
-}
 
 describe("Reef inbound dispatch content", () => {
   it("keeps provenance model-visible without storing it in the transcript body", () => {
@@ -124,11 +114,11 @@ it("keeps contextual Reef replies on the inbound message thread", () => {
 
 describe("Reef conversation directory", () => {
   let stateDir = "";
-  let runtime: ReturnType<typeof stateRuntime>;
+  let runtime: ReturnType<typeof createRuntime>;
 
   beforeEach(async () => {
     stateDir = createStateTestDirectory();
-    runtime = stateRuntime(stateDir);
+    runtime = createRuntime(stateDir);
     setReefRuntime(runtime);
     await openReefTrustStore(runtime, resolveReefConfig(directoryConfig)).set(
       "molty",
@@ -228,7 +218,7 @@ describe("Reef gateway account ownership", () => {
     activeReefSlot.clearRuntime();
     stateDir = createStateTestDirectory();
     vi.stubEnv("REEF_TEST_GUARD_KEY", "test-only-credential");
-    const runtime = stateRuntime(stateDir);
+    const runtime = createRuntime(stateDir);
     runtime.state.resolveStateDir = () => stateDir;
     await generateAndStoreKeys(runtime);
     await finalizeReefIdentityBinding(
