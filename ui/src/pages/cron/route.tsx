@@ -5,5 +5,9 @@ export const page = definePage({
   ...routePageSpec("cron"),
   loaderDeps: (_context, { search }) => search,
   loader: (_context, { deps }) => deps,
-  component: () => import("./cron-page.tsx"),
+  component: async () => {
+    const entry = await import("./cron-page-entry.tsx");
+    await entry.CronPage.preload();
+    return entry;
+  },
 });

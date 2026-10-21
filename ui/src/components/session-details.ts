@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, createStore, onCleanup } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type {
@@ -22,7 +22,7 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
   row: () => DetailRow | undefined;
   agentId: (row: DetailRow, scope: Scope) => string;
 }) {
-  const [state, setState] = createSignal<DetailRequestState>({ loading: false, error: null });
+  const [state, setState] = createStore<DetailRequestState>({ loading: false, error: null });
   const [rowRevision, setRowRevision] = createSignal(0);
   const rowChanged = () => setRowRevision((value) => value + 1);
   let loading = false;
@@ -35,7 +35,10 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
   };
   const reset = () => {
     release();
-    setState({ loading: false, error: null });
+    setState((draft) => {
+      draft.loading = false;
+      draft.error = null;
+    });
     rowChanged();
   };
   onCleanup(release);
@@ -74,7 +77,10 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
         return;
       }
       loading = true;
-      setState({ loading: true, error: null });
+      setState((draft) => {
+        draft.loading = true;
+        draft.error = null;
+      });
       let error: string | null = null;
       try {
         if (observation?.isCurrent()) {
@@ -89,7 +95,10 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
       }
       if (current()) {
         loading = false;
-        setState({ loading: false, error });
+        setState((draft) => {
+          draft.loading = false;
+          draft.error = error;
+        });
       }
     };
     activeBinding = binding;
@@ -108,8 +117,8 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
     }
   }
   return {
-    error: () => state().error,
-    loading: () => state().loading,
+    error: () => state.error,
+    loading: () => state.loading,
     reset,
     synchronize,
     row() {

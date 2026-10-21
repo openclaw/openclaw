@@ -10,6 +10,7 @@ import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   actionOpacity,
   actionPointerEvents,
@@ -556,13 +557,9 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
-      await page.locator(".sidebar-identity-card").click();
-      const retryConnection = page.locator(
-        '.sidebar-identity-menu [data-value="command:retry-connect"]',
-      );
-      await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
-      await gateway.closeLatest(1006, "synthetic failed attempt");
-      await retryConnection.click();
+      const reconnectSocketCount = await gateway.getSocketCount();
+      await replaceGatewayClient(page);
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(reconnectSocketCount);
       await expect.poll(() => pinnedEntry.count()).toBe(1);
       await captureUiProof(suite, page, "sidebar-sessions-during-client-replacement.png");
 

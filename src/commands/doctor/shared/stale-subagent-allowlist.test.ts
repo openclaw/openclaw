@@ -14,13 +14,13 @@ function config(
 }
 
 describe("stale subagent allowlist doctor repair", () => {
-  it("keeps wildcard, configured OpenClaw agents, and configured ACP targets", () => {
+  it("keeps wildcard, configured OpenClaw agents, and normalized ACP targets", () => {
     const cfg = config(["*", "main", "planner", "codex", "claude", "writer", "stale"], {
       main: {},
       planner: {},
-      "writer-agent": { runtime: { type: "acp", acp: { agent: "writer" } } },
+      "writer-agent": { runtime: { type: "acp", acp: { agent: " Writer " } } },
     });
-    cfg.acp = { defaultAgent: "claude", allowedAgents: ["codex"] };
+    cfg.acp = { defaultAgent: " CLAUDE ", allowedAgents: [" CODEX ", "*", "codex"] };
     expect(scanStaleSubagentAllowlistReferences(cfg)).toStrictEqual([
       {
         pathLabel: "agents.defaults.subagents.allowAgents",

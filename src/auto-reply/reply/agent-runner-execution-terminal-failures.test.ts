@@ -14,6 +14,10 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import {
+  MISSING_REPLY_NOTICE_TEXT,
+  MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+} from "../../agents/reply-completion.js";
+import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
@@ -72,6 +76,40 @@ async function finalPayload(params: Parameters<typeof runTurn>[0] = {}) {
   assert(result.kind === "final");
   return result.payload;
 }
+
+it.each([
+  { message: MISSING_REPLY_NOTICE_TEXT, expected: MISSING_REPLY_NOTICE_TEXT },
+  {
+    message: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+    expected: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+  },
+  { message: "private provider detail", expected: "Agent run failed" },
+])(
+  "egresses only host missing-reply copy from an incomplete turn",
+  async ({ message, expected }) => {
+    state.runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: {
+          error: { kind: "incomplete_turn", message, fallbackSafe: false },
+          terminalReply: { disposition: "empty" },
+          terminalReplyExpectation: "result-required",
+        },
+      },
+      provider: "openai",
+      model: "test-model",
+      attempts: [],
+    });
+
+    const result = await runRawTurn(createRunAgentTurnParams(createFollowupRun()));
+
+    expect(terminalEvents(result.runId)).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "error", error: expected }),
+      }),
+    ]);
+  },
+);
 
 it("preserves disabled retry exhaustion through returned provider payloads", async () => {
   const rawError = "429 rate limit exceeded. Please try again in 221ms.";

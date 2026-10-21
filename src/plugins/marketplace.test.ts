@@ -332,6 +332,50 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it.each([
+    ["install", "frontend-design"],
+    ["update", " frontend-design "],
+  ] as const)(
+    "rejects only ambiguous marketplace selections during %s",
+    async (mode, duplicateName) => {
+      await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+        const { pluginDir, manifestPath } = await writeLocalMarketplaceFixture(rootDir);
+        await writeMarketplaceManifest(rootDir, {
+          plugins: [
+            { name: pluginName, source: relativePlugin },
+            { name: duplicateName, source: "./plugins/other" },
+            { name: "Frontend-design", source: relativePlugin },
+          ],
+        });
+        mockSuccessfulMarketplaceInstall();
+
+        await expect(listMarketplacePlugins({ marketplace: manifestPath })).resolves.toMatchObject({
+          ok: true,
+          manifest: {
+            plugins: [{ name: pluginName }, { name: pluginName }, { name: "Frontend-design" }],
+          },
+        });
+        await expect(
+          installPluginFromMarketplace({ marketplace: manifestPath, plugin: pluginName, mode }),
+        ).resolves.toEqual({
+          ok: false,
+          error: `plugin "${pluginName}" is ambiguous in marketplace ${manifestPath}: 2 entries share this name; remove or rename the duplicate entries`,
+        });
+        expect(installPluginFromPathMock).not.toHaveBeenCalled();
+
+        await expect(
+          installPluginFromMarketplace({
+            marketplace: manifestPath,
+            plugin: "Frontend-design",
+            mode,
+          }),
+        ).resolves.toMatchObject({ ok: true, marketplacePlugin: "Frontend-design" });
+        expect(installPluginInput()).toMatchObject({ path: pluginDir, mode });
+        expectNoNetwork();
+      });
+    },
+  );
+
   it("does not publish a marketplace plugin after authority closes during artifact review", async () => {
     await withTempDir("openclaw-marketplace-guard-", async (rootDir) => {
       const { pluginDir, extensionsDir } = createBundleInstallFixtureFactory(() => rootDir)({

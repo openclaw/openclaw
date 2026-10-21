@@ -108,7 +108,11 @@ suite.define(() => {
               const before = Number(current.currentTime);
               const transform = getComputedStyle(element).transform;
               await new Promise<void>((resolve) => {
-                element.addEventListener("animationiteration", () => resolve(), { once: true });
+                element.addEventListener(
+                  "animationiteration",
+                  () => requestAnimationFrame(() => resolve()),
+                  { once: true },
+                );
               });
               return {
                 advanced: Number(current.currentTime) > before,

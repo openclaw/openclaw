@@ -153,7 +153,7 @@ export function retireCronStatusFeedback(state: CronStatusState) {
 export async function loadCronStatus(
   state: CronStatusState,
   opts?: { coalesce?: boolean },
-): Promise<void> {
+): Promise<string | null | void> {
   const client = state.client;
   if (!client || !state.connected || state.canRefresh?.() === false) {
     return;
@@ -207,6 +207,7 @@ export async function loadCronStatus(
     } else {
       state.cronError = formatUiError(err);
     }
+    return state.cronError;
   } finally {
     await selectedJobRead;
     const reload = isCurrent();
@@ -219,7 +220,7 @@ export async function loadCronStatus(
       if (reload && !request.reportErrors) {
         retireCronStatusFeedback(state);
       }
-      request.queued.resolve(trailing);
+      request.queued.resolve(trailing?.then(() => {}));
     }
   }
 }

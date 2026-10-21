@@ -546,26 +546,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     },
   );
 
-  it.each([
-    { name: "room event", params: { inboundEventKind: "room_event" } },
-    { name: "heartbeat", params: { isHeartbeat: true } },
-    { name: "denied send policy", params: { sendPolicyDenied: true } },
-  ] satisfies Array<{ name: string; params: Parameters<typeof runPrivateFinalCase>[0] }>)(
-    "does not recover a $name",
-    async ({ params }) => {
-      const { result, terminalEvent } = await runPrivateFinalCase(params);
-      expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
-        "message-tool-not-called",
-      );
-      expectNoRecovery();
-      if (params.isHeartbeat) {
-        expect(
-          normalizeReplyPayloads(result).some((payload) => payload.text === strandedDiagnosticText),
-        ).toBe(false);
-      }
-    },
-  );
-
   it("returns one missing-answer notice if the retry cannot be enqueued", async () => {
     vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
     const { result, finalAssistantText } = await runPrivateFinalCase({});

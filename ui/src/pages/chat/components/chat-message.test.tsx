@@ -534,6 +534,7 @@ describe("grouped chat rendering", () => {
         onToggleAssistantMessageExpanded: vi.fn(),
       });
     });
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(
         elements(".chat-text a, .chat-message-image").map((node) =>
@@ -563,6 +564,7 @@ describe("grouped chat rendering", () => {
     });
     const list = requireElement(".chat-text ol", HTMLOListElement);
     expect(list.querySelectorAll(":scope > li")).toHaveLength(2);
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(list.querySelector("li:first-child .chat-message-image")).not.toBeNull(),
     );
@@ -587,6 +589,7 @@ describe("grouped chat rendering", () => {
     );
     expect(view.textContent).toContain("Literal OPENCLAWMEDIASLOT0END");
     expect(view.textContent).not.toContain("OPENCLAWMEDIASLOTX");
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expectCount(".chat-message-image", 1));
   });
 
@@ -605,6 +608,7 @@ describe("grouped chat rendering", () => {
     await markdownRenderMock.withImplementation(renderMarkdownHtml, async () => {
       await streamingMarkdownRenderMock.withImplementation(renderStreamingMarkdown, async () => {
         renderTurn("Checking", true);
+        await vi.dynamicImportSettled();
         const image = await waitForSolid(() =>
           requireElement(".chat-message-image", HTMLImageElement),
         );
@@ -1631,20 +1635,24 @@ describe("grouped chat rendering", () => {
   it("renders assistant MEDIA attachments without a strip for an unresolved current reply", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenImage = vi.fn();
-    renderAssistantMessage(
-      createAssistantMessage(
-        "Here is the image.\nMEDIA:https://example.com/photo.png\nMEDIA:https://example.com/voice.ogg",
-        {
-          id: "assistant-media-inline",
-          openclawDelivery: { replyToCurrent: true },
-        },
-      ),
-      { showToolCalls: false, onOpenImage },
-      container,
-    );
+    await markdownRenderMock.withImplementation(renderMarkdownHtml, async () => {
+      renderAssistantMessage(
+        createAssistantMessage(
+          "Here is the image.\nMEDIA:https://example.com/photo.png\nMEDIA:https://example.com/voice.ogg",
+          {
+            id: "assistant-media-inline",
+            openclawDelivery: { replyToCurrent: true },
+          },
+        ),
+        { showToolCalls: false, onOpenImage },
+        container,
+      );
+      await vi.dynamicImportSettled();
+    });
 
     expect(container.querySelector(".chat-reply-attribution")).toBeNull();
-    expect(elementText(".chat-text", container)?.trim()).toBe("Here is the image.");
+    expect(elementText(".chat-text > p:first-child", container)?.trim()).toBe("Here is the image.");
+    expect(elementText(".chat-text", container)).not.toContain("MEDIA:");
     await waitForSolid(() =>
       expect(requireElement(".chat-message-image", HTMLImageElement, container).src).toBe(
         "https://example.com/photo.png",
@@ -1657,13 +1665,10 @@ describe("grouped chat rendering", () => {
         title: "photo.png",
       }),
     );
-    const audioPlayer = requireElement(
-      "openclaw-chat-audio-player",
-      HTMLElement,
-      container,
-    ) as HTMLElement & { updateComplete: Promise<unknown> };
-    await audioPlayer.updateComplete;
-    expect(elementText(".chat-assistant-attachment-card__title", container)).toBe("voice.ogg");
+    await waitForSolid(() =>
+      expect(elementText(".chat-assistant-attachment-card__title", container)).toBe("voice.ogg"),
+    );
+    requireElement("openclaw-chat-audio-player", HTMLElement, container);
   });
 
   it("keeps a persisted reply preview busy until its target resolves, then opens it", () => {
@@ -1730,7 +1735,10 @@ describe("grouped chat rendering", () => {
       container,
     );
 
-    await flushAttachmentChecks();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull(),
+    );
     expect(resolveArtifactDownload).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       artifactId,
@@ -1778,7 +1786,11 @@ describe("grouped chat rendering", () => {
       });
     });
     const container = mountManagedAudio(source, artifactId, resolveArtifactDownload);
-    await flushAttachmentChecks();
+    await vi.dynamicImportSettled();
+    await waitForSolid(
+      () => expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull(),
+      { interval: 0 },
+    );
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
     expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
 
@@ -1822,7 +1834,11 @@ describe("grouped chat rendering", () => {
         );
       });
       const container = mountManagedAudio(source, artifactId, resolveArtifactDownload);
-      await flushAttachmentChecks();
+      await vi.dynamicImportSettled();
+      await waitForSolid(
+        () => expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull(),
+        { interval: 0 },
+      );
       await advanceAttachments(5_000);
       if (refreshFails) {
         expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
@@ -1845,14 +1861,17 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("does not render an unticketed managed attachment without an artifact resolver", () => {
+  it("does not render an unticketed managed attachment without an artifact resolver", async () => {
     const source = managedSource();
     renderAssistantMessage(nativeAudio(source, `artifact_managed_media_${crypto.randomUUID()}`), {
       showToolCalls: false,
     });
 
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(elementText(".chat-assistant-attachment-card--blocked")).toContain("Unavailable"),
+    );
     expectAbsent("openclaw-chat-audio-player");
-    expect(elementText(".chat-assistant-attachment-card--blocked")).toContain("Unavailable");
   });
 
   it("keeps server-rejected outside-allowed-folders media blocked", async () => {
@@ -1874,7 +1893,8 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await flushAttachmentChecks();
 
     await vi.waitFor(() => {

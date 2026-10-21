@@ -1,11 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { loginHarness, openLogin, openPicker } from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
+  createAuthStatus,
+  createHarness,
+  waitForProviders,
   modelPicker,
   openModelPicker,
   submitCredential,
@@ -181,3 +185,69 @@ it.each(["close", "cancel", "complete"] as const)(
     ).toHaveLength(usageReads);
   },
 );
+
+it("retains search and Retry controls through admitted core error feedback", async () => {
+  const { context, request } = createHarness("main");
+  const initialRequest = request.getMockImplementation()!;
+  request.mockImplementation(async (method, ...args) =>
+    method === "models.authStatus" ? createAuthStatus() : initialRequest(method, ...args),
+  );
+  const page = appendPage(context);
+  await waitForProviders(page);
+  const row = page.querySelector('[data-provider-id="openai"]');
+  const primary = modelPicker(page, "primary");
+  const refresh = page.querySelector<HTMLButtonElement>(".model-providers__refresh-button")!;
+  const search = page.querySelector<HTMLInputElement>(".model-providers__search input")!;
+  search.value = "openai";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  search.focus();
+  const first = createDeferred<unknown>();
+  const retry = createDeferred<unknown>();
+  let reads = 0;
+  const originalRequest = request.getMockImplementation()!;
+  request.mockImplementation(async (method, ...args) => {
+    if (method === "models.authStatus") {
+      return reads++ === 0 ? first.promise : retry.promise;
+    }
+    return originalRequest(method, ...args);
+  });
+  page.view.props.onRefresh();
+  await waitForSolid(() => expect(reads).toBe(1));
+  await waitForSolid(() => expect(refresh.disabled).toBe(true));
+  expect(page.querySelector('[data-provider-id="openai"]')).toBe(row);
+  expect(modelPicker(page, "primary")).toBe(primary);
+  expect(page.querySelector(".model-providers__search input")).toBe(search);
+  expect(document.activeElement).toBe(search);
+  first.reject(new Error("Core status unavailable"));
+  await waitForSolid(() =>
+    expect(page.renderRoot.textContent).toContain("Core status unavailable"),
+  );
+  expect(refresh.disabled).toBe(false);
+  const receipt = page.view.props.coreReceipt;
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  expect(page.view.props.coreReceipt).toBe(receipt);
+  expect(
+    page.querySelectorAll(".model-providers__provider-list .provider-usage-error"),
+  ).toHaveLength(1);
+  const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+    (candidate) => candidate.textContent?.trim() === "Retry",
+  )!;
+  button.focus();
+  button.click();
+  await waitForSolid(() => expect(reads).toBe(2));
+  await waitForSolid(() => expect(refresh.disabled).toBe(true));
+  expect(button.isConnected).toBe(true);
+  expect(document.activeElement).toBe(button);
+  expect(page.renderRoot.textContent).toContain("Core status unavailable");
+  expect(page.querySelector(".model-providers__search input")).toBe(search);
+  expect(search.value).toBe("openai");
+  retry.resolve(createAuthStatus());
+  await waitForSolid(() =>
+    expect(page.renderRoot.textContent).not.toContain("Core status unavailable"),
+  );
+  expect(refresh.disabled).toBe(false);
+  expect(modelPicker(page, "primary")).toBe(primary);
+  expect(page.querySelector('[data-provider-id="openai"]')).not.toBeNull();
+  expect(page.querySelector(".model-providers__search input")).toBe(search);
+});

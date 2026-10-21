@@ -141,8 +141,11 @@ suite.define(() => {
       await page.locator(".chat-queue__item").waitFor();
       await page
         .locator(".sidebar-shell__footer .gateway-status")
-        .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
+        .getByText("Reconnecting… · 1 queued", { exact: true })
         .waitFor();
+      expect(
+        await page.locator(".sidebar-shell__footer .gateway-status").getByRole("button").count(),
+      ).toBe(0);
       expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
     });
