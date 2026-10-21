@@ -79,16 +79,23 @@ it("retains an accepted run without redirecting a replaced Workshop page", async
   const sender = { send: vi.fn((data: string) => sent.resolve(JSON.parse(data) as RequestFrame)) };
   onTestFinished(() => pending.flush(new Error("Workshop test complete")));
   let signal: AbortSignal | undefined;
-  const client = createTestGatewayClient((method, params, options) => {
-    if (method === "sessions.create") {
-      signal = options?.signal;
-      return pending.request(sender, method, params, options);
-    }
-    return method === "sessions.list" ? Promise.resolve(sessionsResult([])) : unresolved();
-  });
-  const context = learningContext(vi.fn(client.request));
+  const request = vi.fn(
+    (method: string, params?: unknown, options?: Parameters<typeof pending.request>[3]) => {
+      if (method === "sessions.create") {
+        signal = options?.signal;
+        return pending.request(sender, method, params, options);
+      }
+      return method === "sessions.list" ? Promise.resolve(sessionsResult([])) : unresolved();
+    },
+  );
+  const client = createTestGatewayClient(request);
+  const context = learningContext(request);
   const { gateway } = createGatewayHarness(client, ["sessions.create"], {
-    initial: { ...context.gateway.snapshot, client },
+    initial: {
+      hello: context.gateway.snapshot.hello,
+      sessionKey: "global",
+      assistantAgentId: "research",
+    },
   });
   const sessions = createTestSessionCapability(gateway, "research");
   Object.assign(context, { gateway, sessions });

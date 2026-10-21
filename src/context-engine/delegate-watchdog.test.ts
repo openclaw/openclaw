@@ -16,10 +16,12 @@ import {
 } from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
 
-const { compactRuntime } = vi.hoisted(() => ({ compactRuntime: vi.fn() }));
+const { compactEmbeddedAgentSessionOnDemandMock } = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionOnDemandMock: vi.fn(),
+}));
 
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
-  compactEmbeddedAgentSessionOnDemand: compactRuntime,
+  compactEmbeddedAgentSessionOnDemand: compactEmbeddedAgentSessionOnDemandMock,
 }));
 
 const timeoutMs = 60;
@@ -32,9 +34,9 @@ beforeAll(() => captureContextEngineRegistryStateForTests());
 
 beforeEach(async () => {
   await registerLegacyContextEngine();
-  compactRuntime.mockReset();
+  compactEmbeddedAgentSessionOnDemandMock.mockReset();
   // Native staged compaction: each serial request fits the window; together they exceed it.
-  compactRuntime.mockImplementation(
+  compactEmbeddedAgentSessionOnDemandMock.mockImplementation(
     async (params: { abortSignal?: AbortSignal; compactionTimeoutReset?: () => void }) => {
       for (let stage = 0; stage < 3; stage += 1) {
         params.compactionTimeoutReset?.();
@@ -97,7 +99,7 @@ it.each(
   const settled = expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
   await vi.advanceTimersByTimeAsync(10 + 3 * stageMs);
   await settled;
-  expect(compactRuntime).toHaveBeenCalledOnce();
+  expect(compactEmbeddedAgentSessionOnDemandMock).toHaveBeenCalledOnce();
 });
 
 it("keeps plugin-owned work after the delegate under one host window", async () => {

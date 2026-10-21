@@ -59,7 +59,7 @@ it("adds Step 3.7 Flash without changing existing defaults", () => {
   } as Context;
   const payloadFor = (reasoning: string | undefined, maxTokens?: number) =>
     buildOpenAICompletionsParams(transportModel, context, { reasoning, maxTokens } as never);
-  const lowPayload = payloadFor(standardModel.thinkingLevelMap?.off, 128);
+  const lowPayload = payloadFor(standardModel.thinkingLevelMap?.off ?? undefined, 128);
   expect(lowPayload).toMatchObject({ reasoning_effort: "low", max_tokens: 128 });
   expect(lowPayload).not.toHaveProperty("max_completion_tokens");
   expect(lowPayload).not.toHaveProperty("store");

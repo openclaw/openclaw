@@ -111,6 +111,7 @@ export function createSqliteWorkerBackend(
         return { sent, failure: failure instanceof Error ? failure.message : undefined };
       }
     }
+    return undefined;
   }
   return {
     execute({ input: operation }): PostgresFixtureReply {
