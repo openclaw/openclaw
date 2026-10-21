@@ -838,7 +838,6 @@ extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	3
 extensions/venice/models.ts	1
-extensions/vllm/stream.ts	1
 extensions/voice-call/index.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1

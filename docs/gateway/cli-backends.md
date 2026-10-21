@@ -405,6 +405,12 @@ Explicit account selections and empty account orders remain authoritative. API k
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
 
+Model catalog readiness honors the effective primary model's `@profile` pin,
+including inherited defaults and agent overrides. An explicit session account or
+personal provider default takes precedence. The pin applies only to that primary;
+other models retain their own account selection. An invalid pin remains unavailable
+even when native Claude login is ready.
+
 Fresh plugin completions, including Memory Dreaming, use the same account order.
 An explicit profile on the requested model stays authoritative; an empty account
 order preserves native Claude login.
