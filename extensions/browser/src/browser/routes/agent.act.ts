@@ -133,6 +133,7 @@ export function registerBrowserAgentActRoutes(
         targetId,
         // Batch stays guarded because nested actions can read or return page data.
         enforceCurrentUrlAllowed: action.kind !== "resize" && action.kind !== "close",
+        reuseAdmittedUrlForResponse: true,
         run: async ({ cdpUrl, tab, signal, resolveTabUrl, assertCurrent }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
           const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
