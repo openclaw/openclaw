@@ -503,70 +503,66 @@ esac
     });
   });
 
-  it("records one successful batch before overrides and final validation", () => {
-    const scenario = "configured-plugin-installs";
-    const version = "2026.6.34";
-    const { result, summary, loggedArgs } = runRecipeFixture({ scenario, version });
-    expectSuccess(result);
-    const steps = baselineSteps(scenario, version);
-    expect(loggedArgs).toEqual(steps.map((step) => step.argv));
-    expect(stepIds(summary.steps)).toEqual([
-      ...sharedIds,
-      "channels",
-      "tools-tool-search",
-      "plugins-configured-installs",
-      "channels-whatsapp-unset",
-      "channels-matrix",
-      "validate",
-    ]);
-    expect(summary.steps.find((step: { id: string }) => step.id === "channels")).toMatchObject({
-      id: "channels",
-      ok: true,
-      status: 0,
-      intents: ["discord-channel", "telegram-channel", "whatsapp-channel"],
-    });
-    expect(summary.acceptedIntents).toEqual([
-      ...sharedIntents,
-      "discord-channel",
-      "telegram-channel",
-      "whatsapp-channel",
-      "tool-search",
-      "configured-plugin-installs",
-      "validate",
-    ]);
-  });
-
   it.each([
-    { version: "2026.6.34", batched: true },
-    { version: "2026.6.1", batched: false },
+    { version: "2026.6.34", batched: true, failPath: undefined },
+    { version: "2026.6.34", batched: true, failPath: "channels.telegram" },
+    { version: "2026.6.1", batched: false, failPath: "channels.telegram" },
   ])(
-    "preserves failure receipts and aborts without fallback for $version",
-    ({ version, batched }) => {
+    "records recipe receipts and stops at the first failure ($version, $failPath)",
+    ({ version, batched, failPath }) => {
+      const scenario = "configured-plugin-installs";
       const { result, summary, loggedArgs } = runRecipeFixture({
-        scenario: "configured-plugin-installs",
+        scenario,
         version,
-        failPath: "channels.telegram",
+        failPath,
       });
-      expect(result.status).toBe(1);
+      const failed = failPath !== undefined;
+      expect(result.status, result.stdout + result.stderr).toBe(failed ? 1 : 0);
       expect(stepIds(summary.steps)).toEqual([
         ...sharedIds,
         ...(batched ? ["channels"] : ["channels-discord", "channels-telegram"]),
+        ...(failed
+          ? []
+          : [
+              "tools-tool-search",
+              "plugins-configured-installs",
+              "channels-whatsapp-unset",
+              "channels-matrix",
+              "validate",
+            ]),
       ]);
-      expect(summary.steps.slice(0, -1).every((step: { ok: boolean }) => step.ok)).toBe(true);
-      expect(summary.steps.at(-1)).toMatchObject({
-        id: batched ? "channels" : "channels-telegram",
-        ok: false,
-        status: 17,
-      });
       expect(summary.acceptedIntents).toEqual([
         ...sharedIntents,
-        ...(batched ? [] : ["discord-channel"]),
+        ...(failed
+          ? batched
+            ? []
+            : ["discord-channel"]
+          : [
+              "discord-channel",
+              "telegram-channel",
+              "whatsapp-channel",
+              "tool-search",
+              "configured-plugin-installs",
+              "validate",
+            ]),
       ]);
-      const steps = baselineSteps("configured-plugin-installs", version);
-      expect(loggedArgs).toEqual(steps.slice(0, batched ? 9 : 10).map((step) => step.argv));
-      expect(result.stderr).toContain(
-        `baseline config recipe failed at ${batched ? "channels" : "channels-telegram"}: 17`,
+      const steps = baselineSteps(scenario, version);
+      expect(loggedArgs).toEqual(
+        (failed ? steps.slice(0, batched ? 9 : 10) : steps).map((step) => step.argv),
       );
+      if (failed) {
+        expect(summary.steps.slice(0, -1).every((step: { ok: boolean }) => step.ok)).toBe(true);
+        const id = batched ? "channels" : "channels-telegram";
+        expect(summary.steps.at(-1)).toMatchObject({ id, ok: false, status: 17 });
+        expect(result.stderr).toContain(`baseline config recipe failed at ${id}: 17`);
+      } else {
+        expect(summary.steps.find((step: { id: string }) => step.id === "channels")).toMatchObject({
+          id: "channels",
+          ok: true,
+          status: 0,
+          intents: ["discord-channel", "telegram-channel", "whatsapp-channel"],
+        });
+      }
     },
   );
 });
