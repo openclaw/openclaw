@@ -127,27 +127,18 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
-  it("preserves all-offloaded image order without inline payloads", async () => {
-    const result = await resolve({ images: [], imageOrder: ["offloaded", "offloaded"] });
-
-    expect(result).toEqual({
-      imageOrder: ["offloaded", "offloaded"],
-    });
-  });
-
-  it("preserves interleaved offloaded slots around inline image payloads", async () => {
-    const inlineImages = ["first", "second"].map((data) => image(data));
-
-    const result = await resolve({
-      images: inlineImages,
-      imageOrder: ["inline", "offloaded", "inline"],
-    });
-
-    expect(result).toEqual({
-      images: inlineImages,
-      imageOrder: ["inline", "offloaded", "inline"],
-    });
-  });
+  it.each([
+    { images: [], imageOrder: ["offloaded", "offloaded"] },
+    { images: [image("first"), image("second")], imageOrder: ["inline", "offloaded", "inline"] },
+  ] satisfies Parameters<typeof resolve>[])(
+    "preserves provided image slots: $imageOrder",
+    async (input) => {
+      expect(await resolve(input)).toEqual({
+        ...(input.images.length ? { images: input.images } : {}),
+        imageOrder: input.imageOrder,
+      });
+    },
+  );
 
   it("does not rehydrate a managed copy of an already-provided inline image", async () => {
     vi.mocked(resolveAgentTurnAttachments).mockClear();
