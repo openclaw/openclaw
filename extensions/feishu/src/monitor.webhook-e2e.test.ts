@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -11,12 +10,15 @@ import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
   createFeishuWebhookTestAccount,
+  createHeldWebhookDispatch,
+  expectWebhookJson as expectJson,
   getGatewayPort,
   getGatewayServer,
   postSignedPayload,
   sendRawSignedFeishuRequest,
   signFeishuPayload,
   waitForWebhookRoute,
+  waitForWebhookResponseClose,
   withRunningWebhookMonitor,
 } from "./monitor.webhook.test-helpers.js";
 
@@ -186,11 +188,6 @@ function postSigned(url: string, rawBody: string, encryptKey = "encrypt_key") {
 async function expectText(response: Response, status: number, body: string) {
   expect(response.status).toBe(status);
   expect(await response.text()).toBe(body);
-}
-
-async function expectJson(response: Response, value: unknown) {
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual(value);
 }
 
 function expectAccepted(response: Response, value: string | null = "durable") {
@@ -432,15 +429,13 @@ describe("Feishu webhook signed-request e2e", () => {
   });
 
   it("acks durable envelopes only after ingress admission resolves", async () => {
-    const admission = createDeferred<void>();
-    const invoke = vi.fn(async () => await admission.promise);
-    const invokeWebhookEvent = async () => {
-      await invoke();
-      return { kind: "durable" as const, value: undefined };
-    };
+    const admission = createHeldWebhookDispatch({ kind: "durable" as const, value: undefined });
     await withTransport(
       "durable-ack-ordering",
-      { eventDispatcher: { invoke } as never, invokeWebhookEvent },
+      {
+        eventDispatcher: { invoke: admission.handler } as never,
+        invokeWebhookEvent: admission.handler,
+      },
       async (url) => {
         const payload = eventPayload(
           "im.message.receive_v1",
@@ -452,19 +447,20 @@ describe("Feishu webhook signed-request e2e", () => {
           acceptedResponseReceived = true;
           return response;
         });
-        await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+        await admission.started;
+        expect(admission.handler).toHaveBeenCalledTimes(1);
         expect(acceptedResponseReceived).toBe(false);
-        admission.resolve();
+        admission.release();
         expectAccepted(await acceptedRequest);
       },
-      () => admission.resolve(),
+      admission.release,
     );
   });
 
   it("filters prototype-bearing keys without changing the Lark webhook envelope", async () => {
     const accountId = "prototype-guard";
     const encryptKey = "encrypt_key";
-    const account = createFeishuWebhookTestAccount(accountId, `/hook-${accountId}`);
+    const account = createFeishuWebhookTestAccount(accountId);
     const handler = vi.fn(async () => ({ accepted: true }));
     const dispatcher = new Lark.EventDispatcher({
       encryptKey,
@@ -583,13 +579,6 @@ function rateLimitKey(clientIp?: string) {
     accountId: "rate-limit-key",
     path: "/hook-rate-limit-key",
     clientIp,
-  });
-}
-
-function waitForWebhookResponseClose(): Promise<void> {
-  const server = getGatewayServer();
-  return new Promise<void>((resolve) => {
-    server.once("request", (_req, res) => res.once("close", resolve));
   });
 }
 
@@ -755,11 +744,11 @@ describe("Feishu webhook security hardening", () => {
 
   it("releases pre-auth capacity before signed event dispatch", { timeout: 15_000 }, async () => {
     preAuthInFlightLimit.value = 1;
-    const dispatchGate = createDeferred<void>();
-    const invokeWebhookEvent = vi.fn(async () => {
-      await dispatchGate.promise;
-      return { kind: "durable" as const, value: { accepted: true } };
+    const dispatch = createHeldWebhookDispatch({
+      kind: "durable" as const,
+      value: { accepted: true },
     });
+    const invokeWebhookEvent = dispatch.handler;
     let signedRequest: Promise<Response> | undefined;
     await withTransport(
       "pre-auth-dispatch",
@@ -767,20 +756,18 @@ describe("Feishu webhook security hardening", () => {
       async (url) => {
         const rawBody = JSON.stringify(eventPayload("test.pre_auth_dispatch"));
         signedRequest = postSigned(url, rawBody);
-        await vi.waitFor(() => expect(invokeWebhookEvent).toHaveBeenCalledOnce(), {
-          timeout: 5_000,
-          interval: 10,
-        });
+        await dispatch.started;
+        expect(invokeWebhookEvent).toHaveBeenCalledOnce();
 
         const admittedInvalidSignature = await postRaw(url, "{}");
         expect(admittedInvalidSignature.status).toBe(401);
         expect(invokeWebhookEvent).toHaveBeenCalledOnce();
 
-        dispatchGate.resolve();
+        dispatch.release();
         expect((await signedRequest).status).toBe(200);
       },
       async () => {
-        dispatchGate.resolve();
+        dispatch.release();
         if (signedRequest) {
           await signedRequest.catch(() => undefined);
         }
