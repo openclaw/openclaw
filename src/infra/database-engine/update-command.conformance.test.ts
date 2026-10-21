@@ -64,6 +64,7 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
         OPENCLAW_CONFIG_PATH: path.join(selectedState, "openclaw.json"),
       };
       if (managedProfile) {
+        const entrypoint = path.join(fixture.root, "dist", "index.js");
         vi.mocked(servicePlan.isGatewayServiceManagementAllowedForUpdate).mockReturnValue(true);
         vi.spyOn(servicePlan, "readManagedGatewayServiceForUpdate").mockResolvedValue({
           installed: true,
@@ -71,11 +72,7 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
           running: false,
           env,
           command: {
-            programArguments: [
-              process.execPath,
-              path.join(fixture.root, "dist", "index.js"),
-              "gateway",
-            ],
+            programArguments: [process.execPath, entrypoint, "gateway"],
             environment: env,
           },
           verdict: {
@@ -121,9 +118,9 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
         expect(before).toEqual([{ name: "openclaw_engine_anchor" }]);
 
         await expect(update()).rejects.toMatchObject({ code: 1 });
-        expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-          expect.objectContaining({ status: "error", reason: "unsupported-package-target" }),
-        );
+        expect(vi.mocked(defaultRuntime.writeJson).mock.lastCall).toMatchObject([
+          { status: "error", reason: "unsupported-package-target" },
+        ]);
 
         expect(
           (await client.query(`SELECT phase, status, reason FROM "${namespace}".update_runs`)).rows,
@@ -162,16 +159,16 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
   it("refuses unreadable configuration before defaulting to native state", async () => {
     await fs.mkdir(process.env.OPENCLAW_CONFIG_PATH!, { recursive: true });
     await expect(update()).rejects.toMatchObject({ code: 1 });
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({
+    expect(vi.mocked(defaultRuntime.writeJson).mock.lastCall).toMatchObject([
+      {
         status: "error",
         reason: "config-read-failed",
-        failedStep: expect.objectContaining({
+        failedStep: {
           name: "config-read-failed",
-          failureFacts: [expect.objectContaining({ check: "config", code: "EISDIR" })],
-        }),
-      }),
-    );
+          failureFacts: [{ check: "config", code: "EISDIR" }],
+        },
+      },
+    ]);
     await expectNoNativeState();
   });
 });

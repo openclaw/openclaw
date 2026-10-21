@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readSessionTranscriptJsonlBytesInDatabase } from "../../config/sessions/session-accessor.sqlite-maintenance-store.js";
@@ -8,6 +8,7 @@ import {
   getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
+  type ResolvedTranscriptScope,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsFromDatabase } from "../../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
@@ -34,10 +35,7 @@ const message = (id: string, parentId: string | null, role: string, content: str
 function withTranscript(
   scope: ReturnType<typeof scopeFor>,
   events: unknown[],
-  inspect: (
-    database: OpenClawAgentDatabase,
-    resolved: ReturnType<typeof resolveSqliteTranscriptScope>,
-  ) => void,
+  inspect: (database: OpenClawAgentDatabase, resolved: ResolvedTranscriptScope) => void,
 ) {
   withEngineStoreAdmission(() => {
     const resolved = resolveSqliteTranscriptScope(scope);
@@ -115,18 +113,15 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           ).toHaveLength(engine === "sqlite" ? 2 : 0);
         },
       );
-      const observed: unknown[] = [];
+      const selectReport = vi.fn();
       await expect(
         appendSessionTranscriptReport(scope, {
           kind: "custom",
           customTypes: ["status"],
-          selectReport(latest) {
-            observed.push(latest);
-            return undefined;
-          },
+          selectReport,
         }),
       ).resolves.toEqual({ ok: true, value: undefined });
-      expect(observed).toEqual([selected]);
+      expect(selectReport).toHaveBeenCalledExactlyOnceWith(selected);
     });
   },
 );
