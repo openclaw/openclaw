@@ -2654,7 +2654,7 @@ export const en: TranslationMap & {
     catalogOutputTruncated: "[Output truncated]",
     onboardingDisabled: "Disabled during setup",
     commandPaletteTitle: "Search or jump to… (⌘K)",
-    openCommandPalette: "Open command palette",
+    openCommandPalette: "Command palette",
     updating: "Updating…",
     actions: {
       copyAsMarkdown: "Copy as markdown",
