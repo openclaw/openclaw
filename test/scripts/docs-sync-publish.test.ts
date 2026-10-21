@@ -9,6 +9,7 @@ import {
   reportOrphanLocaleDocs,
 } from "../../scripts/docs-sync-publish.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { files } from "./docs-fixture.test-support.js";
 
 const slugifyPackage = "@sindresorhus/slugify";
 const sourceSlugifyVersion = JSON.parse(
@@ -24,23 +25,6 @@ const navGroup = (name: string, pages: NavGroup["pages"]): NavGroup => ({ group:
 const navFixture = (tab: string, name: string, pages: NavGroup["pages"]) => ({
   tabs: [{ tab, groups: [navGroup(name, pages)] }],
 });
-function files(root: string) {
-  return {
-    read: (name: string) => fs.readFileSync(path.join(root, name), "utf8"),
-    json: (name: string) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8")),
-    append: (name: string, text: string) => fs.appendFileSync(path.join(root, name), text),
-    write: (name: string, content: string) => {
-      fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
-      fs.writeFileSync(path.join(root, name), content);
-    },
-    exists: (name: string) => fs.existsSync(path.join(root, name)),
-    linkDependencies: (
-      type: "junction" | "dir" = process.platform === "win32" ? "junction" : "dir",
-    ) => {
-      fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), type);
-    },
-  };
-}
 function publisherFixture(
   version = sourceSlugifyVersion,
   { sourceSha, index }: { sourceSha?: string; index?: string } = { index: "# ClawHub\n" },

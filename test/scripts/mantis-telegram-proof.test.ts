@@ -139,6 +139,24 @@ async function ingressFixture() {
   const revoked = createDeferred<Error>();
   const forwarded: string[] = [];
   let healthy = true;
+  const privateNames = { first_name: "Private tester", last_name: "Private surname" };
+  const message = {
+    message_id: 99,
+    chat: { id: 43, type: "private", first_name: "Private tester" },
+    from: { id: 43, ...privateNames, username: "private_tester" },
+    text: "Unchanged scenario text",
+  };
+  const replies: Record<string, unknown> = {
+    sendMessage: { message_id: 100, chat: { id: 43, type: "private" } },
+    getUpdates: [{ update_id: 1, message }],
+    getMe: {
+      id: 42,
+      ...privateNames,
+      first_name: "Private bot",
+      is_bot: true,
+      username: "selected_bot",
+    },
+  };
   const fixture = await makeIngress(root, {
     lease: {
       assertHealthy() {
@@ -152,38 +170,7 @@ async function ingressFixture() {
       const url = new URL(input instanceof Request ? input.url : input);
       forwarded.push(url.pathname);
       const method = url.pathname.split("/").at(-1);
-      return Response.json({
-        ok: true,
-        result:
-          method === "sendMessage"
-            ? { message_id: 100, chat: { id: 43, type: "private" } }
-            : method === "getUpdates"
-              ? [
-                  {
-                    update_id: 1,
-                    message: {
-                      message_id: 99,
-                      chat: { id: 43, type: "private", first_name: "Private tester" },
-                      from: {
-                        id: 43,
-                        first_name: "Private tester",
-                        last_name: "Private surname",
-                        username: "private_tester",
-                      },
-                      text: "Unchanged scenario text",
-                    },
-                  },
-                ]
-              : method === "getMe"
-                ? {
-                    id: 42,
-                    is_bot: true,
-                    first_name: "Private bot",
-                    last_name: "Private surname",
-                    username: "selected_bot",
-                  }
-                : true,
-      });
+      return Response.json({ ok: true, result: replies[method ?? ""] ?? true });
     },
   });
   return {

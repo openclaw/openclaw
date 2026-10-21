@@ -46,7 +46,7 @@ function makeTimeoutBin(command = "timeout", plain = false) {
   return dir;
 }
 
-function expectedRunArgs(wrapper: string[], cpus = "16") {
+function expectedRunArgs(wrapper: string[], cpus = "16", pids = "2048") {
   return [
     ...wrapper,
     "42s",
@@ -58,7 +58,7 @@ function expectedRunArgs(wrapper: string[], cpus = "16") {
     "--cpus",
     cpus,
     "--pids-limit",
-    "2048",
+    pids,
   ];
 }
 
@@ -103,7 +103,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     expect(invalid.stderr).toContain("invalid OPENCLAW_LIVE_SAMPLE_SECONDS: 30s");
   });
 
-  it("collects default and provider-filtered auth under Bash 3 nounset", () => {
+  it("collects default and disabled auth under Bash 3 nounset", () => {
     const homeDir = tempDirs.make("openclaw-live-docker-auth-home-");
     const result = runBash(
       [
@@ -113,9 +113,6 @@ describe("scripts/lib/live-docker-auth.sh", () => {
         'openclaw_live_collect_auth_for_providers ","',
         "openclaw_live_finalize_auth_mounts",
         'printf "default-dirs=%s\\ndefault-files=%s\\ndefault-mounts=%s\\n" "$AUTH_DIRS_CSV" "$AUTH_FILES_CSV" "${#EXTERNAL_AUTH_MOUNTS[@]}"',
-        'openclaw_live_collect_auth_for_providers "openai, gemini"',
-        "openclaw_live_finalize_auth_mounts",
-        'printf "filtered-dirs=%s\\nfiltered-files=%s\\nfiltered-mounts=%s\\n" "$AUTH_DIRS_CSV" "$AUTH_FILES_CSV" "${#EXTERNAL_AUTH_MOUNTS[@]}"',
         "OPENCLAW_DOCKER_AUTH_DIRS=none",
         "openclaw_live_collect_auth_for_providers openai",
         "openclaw_live_finalize_auth_mounts",
@@ -129,9 +126,6 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "default-dirs=.factory,.gemini,.minimax",
       "default-files=.codex/auth.json,.codex/config.toml,.claude.json,.claude/.credentials.json,.claude/settings.json,.claude/settings.local.json,.gemini/settings.json",
       "default-mounts=0",
-      "filtered-dirs=.gemini",
-      "filtered-files=.codex/auth.json,.codex/config.toml",
-      "filtered-mounts=0",
       "none-dirs=",
       "none-files=",
       "none-mounts=0",
@@ -153,7 +147,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
         sourceAuth,
         "unset OPENCLAW_DOCKER_AUTH_DIRS",
         "DOCKER_AUTH_PRESTAGED=0",
-        'openclaw_live_collect_auth_for_providers "openai,gemini"',
+        'openclaw_live_collect_auth_for_providers "openai, gemini"',
         "openclaw_live_finalize_auth_mounts",
         'printf "dirs=%s\\nfiles=%s\\nprestaged=%s\\n" "$AUTH_DIRS_CSV" "$AUTH_FILES_CSV" "$DOCKER_AUTH_PRESTAGED"',
         'printf "%s\\n" "${EXTERNAL_AUTH_MOUNTS[@]}"',
@@ -176,16 +170,17 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     }
   });
 
-  it("caps default CPU limits using live capacity before shared capacity", () => {
+  it("normalizes pids and caps default CPUs using live capacity before shared capacity", () => {
     const result = runBash(initArgs, {
       PATH: makeTimeoutBin(),
       OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS: "8",
       OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS: "6",
+      OPENCLAW_LIVE_DOCKER_PIDS_LIMIT: "0008",
     });
 
     expect(result.status).toBe(0);
     expect(result.stdout.trimEnd().split("\n")).toEqual(
-      expectedRunArgs(["timeout", "--kill-after=30s"], "8"),
+      expectedRunArgs(["timeout", "--kill-after=30s"], "8", "8"),
     );
   });
 
@@ -227,21 +222,6 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     );
     expect(args).not.toContain("");
     expect(args).not.toContain("--memory");
-  });
-
-  it("normalizes live Docker pids limits", () => {
-    const result = runBash(
-      [
-        sourceAuth,
-        "ARGS=()",
-        "OPENCLAW_LIVE_DOCKER_PIDS_LIMIT=0008 openclaw_live_init_docker_run_args ARGS 42s",
-        "printf '%s\\n' \"${ARGS[@]}\"",
-      ],
-      { PATH: makeTimeoutBin() },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout.trimEnd().split("\n")).toContain("8");
   });
 
   it("rejects invalid live Docker pids limits before live Docker setup", () => {

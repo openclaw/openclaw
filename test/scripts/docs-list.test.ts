@@ -1,20 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { files } from "./docs-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const docsListScriptPath = path.resolve(import.meta.dirname, "../../scripts/docs-list.js");
 
-function makeDocs(files: Record<string, string>) {
+function makeDocs(contents: Record<string, string>) {
   const root = tempDirs.make("openclaw-docs-list-");
   const docs = path.join(root, "docs");
-  for (const [file, content] of Object.entries(files)) {
-    const target = path.join(docs, file);
-    mkdirSync(path.dirname(target), { recursive: true });
-    writeFileSync(target, content, "utf8");
+  for (const [file, content] of Object.entries(contents)) {
+    files(docs).write(file, content);
   }
   return { root, docs };
 }

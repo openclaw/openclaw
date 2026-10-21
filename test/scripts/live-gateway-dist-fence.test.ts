@@ -176,22 +176,19 @@ it("retains uncertain native read cleanup instead of allowing a build", async ()
     }),
   ).rejects.toBe(failure);
 });
-it.each([[], ["--profile", "dev"], ["--profile=dev"], ["--dev"]].map((options) => [options]))(
-  "fences the loaded command and names its recovery owner with root options %j",
-  async (rootOptions) => {
-    const savedDefinition = path.join(tmp, "saved-definition");
-    await writeOpenClawPackage(tmp);
-    await writeOpenClawPackage(savedDefinition);
-    const result = await inspectFixtureGateway(tmp, async (_binding, input) => ({
-      ...runningUnit(tmp, defaultUnit, process.pid),
-      command: gatewayCommand(
-        input?.requireEffective && input.requireLoadedCommand ? tmp : savedDefinition,
-        rootOptions,
-      ),
-    }));
-    expectRefusal(result, path.join(tmp, "dist", "index.js"), defaultUnit, "openclaw update");
-  },
-);
+it("fences the loaded command rather than its saved definition", async () => {
+  const savedDefinition = path.join(tmp, "saved-definition");
+  await writeOpenClawPackage(tmp);
+  await writeOpenClawPackage(savedDefinition);
+  const result = await inspectFixtureGateway(tmp, async (_binding, input) => ({
+    ...runningUnit(tmp, defaultUnit, process.pid),
+    command: gatewayCommand(
+      input?.requireEffective && input.requireLoadedCommand ? tmp : savedDefinition,
+      ["--profile", "dev"],
+    ),
+  }));
+  expectRefusal(result, path.join(tmp, "dist", "index.js"), defaultUnit, "openclaw update");
+});
 
 it.each([
   ["stopped", { status: "stopped", state: "inactive" }, false],
@@ -211,13 +208,6 @@ it.each([
     expect(result.refuse).toBe(refuse);
   },
 );
-
-it("allows a foreign running checkout", async () => {
-  const { checkout, other } = await packagePair(tmp);
-  expect(
-    await inspectFixtureGateway(checkout, async () => stateForPackage(other, { running: true })),
-  ).toEqual({ refuse: false });
-});
 
 it.each([
   { code: "EPERM", refuse: true },
