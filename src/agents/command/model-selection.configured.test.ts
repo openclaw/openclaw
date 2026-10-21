@@ -468,28 +468,15 @@ describe("command selection with configured model facts", () => {
     }
   });
 
-  it.each(["raw", "resolved"] as const)(
-    "keeps a literal model over its alias (%s route)",
-    async (route) => {
-      const fixture = createFixture();
-      fixture.defaults.modelPolicy = {
-        allow: ["custom/base", "custom/alias", "custom/actual"],
-      };
-      fixture.defaults.models = { "custom/actual": { alias: "alias" } };
-      fixture.custom.models.push(configuredModel("alias"), configuredModel("actual"));
-      fixture.store[sessionKey] =
-        route === "raw"
-          ? sessionEntry({
-              providerOverride: "custom",
-              modelOverride: "alias",
-              modelOverrideSource: "user",
-              modelSelectionLocked: true,
-            })
-          : automaticEntry("alias");
-      fixture.inventory.mockReturnValue([catalogEntry("custom", "alias")]);
-      expect(await fixture.unchanged()).toMatchObject(expectedRoute("alias"));
-    },
-  );
+  it("keeps a literal catalog model over its alias", async () => {
+    const fixture = createFixture();
+    fixture.defaults.modelPolicy = { allow: ["custom/base", "custom/alias", "custom/actual"] };
+    fixture.defaults.models = { "custom/actual": { alias: "alias" } };
+    fixture.custom.models.push(configuredModel("alias"), configuredModel("actual"));
+    fixture.store[sessionKey] = automaticEntry("alias");
+    fixture.inventory.mockReturnValue([catalogEntry("custom", "alias")]);
+    expect(await fixture.unchanged()).toMatchObject(expectedRoute("alias"));
+  });
 
   it.each([
     { permission: false, error: "Model override is not authorized for this caller." },

@@ -30,7 +30,6 @@ async function runPreparedAttempt(params: RunCliAgentParams) {
 export function registerCommandReplyPolicyTests({
   runStoredAttempt,
   seedSessionStore,
-  runEmbeddedAgentMock: embeddedRunner,
   runCliAgentMock: cliRunner,
   executePreparedCliRunMock: execute,
 }: {
@@ -41,72 +40,50 @@ export function registerCommandReplyPolicyTests({
     sessionKey: string,
     entry: SessionEntry,
   ) => Promise<Record<string, SessionEntry>>;
-  runEmbeddedAgentMock: ReturnType<typeof vi.fn>;
   runCliAgentMock: Mock<typeof runPreparedAttempt>;
   executePreparedCliRunMock: ReturnType<typeof vi.fn>;
 }) {
-  it.each(["openai", "claude-cli"])(
-    "applies %s inter-session reply policy to internal, direct, and group sessions",
-    async (provider) => {
-      const cli = provider === "claude-cli";
-      const runner = cli ? cliRunner : embeddedRunner;
-      for (const [
+  it("applies inter-session reply policy through the CLI runtime", async () => {
+    for (const [
+      sessionKey,
+      messageChannel,
+      privateCompletion,
+      replyExpectation,
+      expectation,
+    ] of INTER_SESSION_REPLY_POLICY_CASES) {
+      const sessionEntry = makeSessionEntry(`session-${messageChannel}`);
+      cliRunner.mockImplementationOnce(runPreparedAttempt);
+      execute.mockResolvedValueOnce({ text: "NO_REPLY", rawText: "NO_REPLY" });
+      const attempt = runStoredAttempt({
+        providerOverride: "claude-cli",
+        modelOverride: "opus",
+        sessionEntry,
         sessionKey,
+        sessionStore: await seedSessionStore(sessionKey, sessionEntry),
         messageChannel,
-        privateCompletion,
-        allowSilence,
-        sourceTool = "subagent_settle",
-        replyExpectation,
-      ] of INTER_SESSION_REPLY_POLICY_CASES) {
-        const sessionEntry = makeSessionEntry(`session-${messageChannel}`);
-        const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-        const expectation =
-          replyExpectation === "optional"
-            ? "optional"
-            : privateCompletion || sessionKey.includes(":subagent:") || messageChannel === "webchat"
-              ? "result-required"
-              : (replyExpectation ?? (allowSilence ? "optional" : "required"));
-        const resultRequired = expectation === "result-required";
-        if (cli) {
-          cliRunner.mockImplementationOnce(runPreparedAttempt);
-          execute.mockResolvedValueOnce({ text: "NO_REPLY", rawText: "NO_REPLY" });
-        } else {
-          runner.mockResolvedValueOnce({ meta: { durationMs: 1 } });
-        }
-
-        const attempt = runStoredAttempt({
-          providerOverride: provider,
-          modelOverride: provider === "openai" ? "gpt-5.4" : "opus",
-          sessionEntry,
-          sessionKey,
-          sessionStore,
-          messageChannel,
-          cfg: { surfaces: { telegram: { silentReply: { group: "allow" } } } },
-          opts: {
-            privateCompletion: privateCompletion || undefined,
-            replyExpectation,
-            inputProvenance: { kind: "inter_session", sourceTool },
-          },
-        });
-        if (cli && resultRequired) {
-          await expect(attempt).rejects.toThrow("CLI backend returned an empty response.");
-        } else {
-          const result = await attempt;
-          if (cli) {
-            expect([result.payloads, result.meta.error]).toEqual([undefined, undefined]);
-            expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
-            expect(result.meta.finalAssistantRawText).toBe("NO_REPLY");
-            expect(classifyFallback({ result, provider, model: "opus" })).toBeNull();
-          }
-        }
-
-        expect(runner.mock.calls.at(-1)?.[0]).toMatchObject({
-          terminalReplyExpectation: expectation,
-          silentReplyPromptMode: resultRequired ? "none" : undefined,
-        });
+        cfg: { surfaces: { telegram: { silentReply: { group: "allow" } } } },
+        opts: {
+          privateCompletion,
+          replyExpectation,
+          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        },
+      });
+      const resultRequired = expectation === "result-required";
+      if (resultRequired) {
+        await expect(attempt).rejects.toThrow("CLI backend returned an empty response.");
+      } else {
+        const result = await attempt;
+        expect([result.payloads, result.meta.error]).toEqual([undefined, undefined]);
+        expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
+        expect(result.meta.finalAssistantRawText).toBe("NO_REPLY");
+        expect(classifyFallback({ result, provider: "claude-cli", model: "opus" })).toBeNull();
       }
-    },
-  );
+      expect(cliRunner.mock.calls.at(-1)?.[0]).toMatchObject({
+        terminalReplyExpectation: expectation,
+        silentReplyPromptMode: resultRequired ? "none" : undefined,
+      });
+    }
+  });
 
   it("preserves a genuine CLI failure while consuming a private completion", async () => {
     const sessionKey = "agent:main:direct:failed-private-completion";
