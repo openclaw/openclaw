@@ -91,7 +91,6 @@ it.each([false, true])(
         Provider: "telegram",
         Surface: "telegram",
         ChatType: "group",
-        From: "chat-1",
         OriginatingTo: "chat-1",
         NativeChannelId: "chat-1",
         AccountId: "acct",
@@ -123,10 +122,10 @@ it.each([false, true])(
 
     expectDispatched(result);
     if (prepared) {
-      const durableRequests = sendBatch.mock.calls.map(([request]) => request);
-      expect(durableRequests).toHaveLength(2);
+      const requests = sendBatch.mock.calls.map(([request]) => request);
+      expect(requests).toHaveLength(2);
       for (const agentId of ["alice", "bob"]) {
-        const request = durableRequests.find((entry) => entry.session?.agentId === agentId);
+        const request = requests.find((entry) => entry.session?.agentId === agentId);
         expect(request).toMatchObject({
           channel: "telegram",
           accountId: "acct",

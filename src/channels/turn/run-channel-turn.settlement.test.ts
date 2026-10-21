@@ -5,15 +5,16 @@ import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import * as deliveryCompletion from "../../infra/outbound/delivery-completion.js";
+import { createPendingFinalFixture } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { dispatchAssembledChannelTurn } from "./lifecycle.js";
 import {
   createCtx,
   createDispatcherBackedDispatch,
+  expectDispatched,
 } from "./run-channel-turn.delivery.test-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-channel-settlement-");
-
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
@@ -24,38 +25,26 @@ it.each([
   const storePath = path.join(sessionDirs.make(), "sessions.json");
   const sessionKey = "agent:main:telegram:direct:chat-1";
   const scope = { sessionKey, storePath };
-  const completion = {
-    deliveryId: "delivery-1",
-    intentId: "intent-1",
-    sessionId: "session-1",
-    ...scope,
-  };
   const noticeContext = { channel: "telegram", to: "chat-1", accountId: "default" };
+  const { completion, entry } = createPendingFinalFixture(storePath, "delivery-1", sessionKey, {
+    text: "the final answer",
+    context: noticeContext,
+  });
+  if (sibling) {
+    entry.pendingFinalDelivery.deliveries.push({ id: "delivery-2", state: "prepared" });
+  }
   const deliveries = (state: "prepared" | "unknown" | "delivered") => [
     { id: completion.deliveryId, state },
     ...(sibling ? [{ id: "delivery-2", state: "prepared" as const }] : []),
   ];
-  await replaceSessionEntry(scope, {
-    sessionId: completion.sessionId,
-    updatedAt: 1,
-    pendingFinalDelivery: {
-      kind: "replayable",
-      text: "the final answer",
-      createdAt: 1,
-      intentId: completion.intentId,
-      context: noticeContext,
-      deliveries: deliveries("prepared"),
-    },
-  });
+  await replaceSessionEntry(scope, entry);
   const readEntry = () => readSessionEntryReadOnlyInWorker(scope);
-  const expectedPending = sibling ? deliveries("delivered") : undefined;
+  const expectedPending = sibling
+    ? { ...entry.pendingFinalDelivery, deliveries: deliveries("delivered") }
+    : undefined;
   const observerError = new Error("post-delivery observer failed");
   const onDelivered = vi.fn(async () => {
-    const entry = await readEntry();
-    expect(entry?.pendingFinalDelivery?.deliveries).toEqual(expectedPending);
-    if (!sibling) {
-      expect(entry?.pendingFinalDelivery).toBeUndefined();
-    }
+    expect((await readEntry())?.pendingFinalDelivery).toEqual(expectedPending);
     if (observerThrows) {
       throw observerError;
     }
@@ -73,20 +62,14 @@ it.each([
   });
   const onError = vi.fn();
   const settlement = vi.spyOn(deliveryCompletion, "settlePendingFinalDelivery");
-  const assertDeliveredOnce = () => {
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(onDelivered).toHaveBeenCalledOnce();
-  };
+  const once = () => [deliver, onDelivered].forEach((fn) => expect(fn).toHaveBeenCalledOnce());
+  const createMetadata = () => ({
+    pendingFinalDeliveryCompletion: { ...completion },
+    pendingFinalDeliveryCleanup: { preserveActivity: true },
+  });
   const dispatch = createDispatcherBackedDispatch(
     () => {},
-    () =>
-      setReplyPayloadMetadata(
-        { text: "the final answer" },
-        {
-          pendingFinalDeliveryCompletion: { ...completion },
-          pendingFinalDeliveryCleanup: { preserveActivity: true },
-        },
-      ),
+    () => setReplyPayloadMetadata({ text: "the final answer" }, createMetadata()),
   );
   const run = () =>
     dispatchAssembledChannelTurn({
@@ -96,38 +79,28 @@ it.each([
       channel: "telegram",
       accountId: "default",
       routeSessionKey: sessionKey,
-      ctxPayload: createCtx({
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
-      }),
+      ctxPayload: createCtx({ SessionKey: sessionKey, Provider: "telegram", Surface: "telegram" }),
       recordInboundSession: async () => undefined,
       dispatchReplyWithBufferedBlockDispatcher: dispatch,
       delivery: { deliver, onDelivered, onError },
     });
 
   const first = await run();
-  expect(first).toMatchObject({
-    dispatched: true,
-    dispatchResult: {
-      settledReceipt: {
-        anyVisibleDelivered: true,
-        counts: { final: observerThrows ? { failedAfterSend: 1 } : { delivered: 1 } },
-      },
-    },
+  expectDispatched(first);
+  expect(first.dispatchResult.settledReceipt).toMatchObject({
+    anyVisibleDelivered: true,
+    counts: { final: observerThrows ? { failedAfterSend: 1 } : { delivered: 1 } },
   });
-  assertDeliveredOnce();
+  once();
   expect(settlement.mock.calls.some(([, state]) => state === "queued")).toBe(false);
-  expect((await readEntry())?.pendingFinalDelivery?.deliveries).toEqual(expectedPending);
+  expect((await readEntry())?.pendingFinalDelivery).toEqual(expectedPending);
+  expect(onError.mock.calls).toEqual(observerThrows ? [[observerError, { kind: "final" }]] : []);
   if (observerThrows) {
-    expect(onError).toHaveBeenCalledExactlyOnceWith(observerError, { kind: "final" });
     expect(observerError).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
-  } else {
-    expect(onError).not.toHaveBeenCalled();
   }
   expect(settlement.mock.calls.filter(([, state]) => state === "delivered")).toEqual([
     [
-      { kind: "pending-final", ...completion },
+      completion,
       "delivered",
       undefined,
       { preserveActivity: true, clearAfterSettled: { recoveryRunId: undefined } },
@@ -136,8 +109,8 @@ it.each([
 
   // A fresh payload identity consults durable custody rather than the retained receipt.
   await run();
-  assertDeliveredOnce();
-  expect((await readEntry())?.pendingFinalDelivery?.deliveries).toEqual(expectedPending);
+  once();
+  expect((await readEntry())?.pendingFinalDelivery).toEqual(expectedPending);
   expect((await readEntry())?.updatedAt).toBe(1);
 
   // Replaying a crash-ambiguous attempt must not restore it to sendable custody.
@@ -145,7 +118,7 @@ it.each([
   await replaceSessionEntry(scope, admitted);
   await run();
   await run();
-  assertDeliveredOnce();
+  once();
   const afterReplay = await readEntry();
   expect(afterReplay?.pendingFinalDelivery).toEqual(admitted.pendingFinalDelivery);
   expect(afterReplay?.pendingDeliveryNotice).toEqual(admitted.pendingDeliveryNotice);

@@ -1,26 +1,24 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatchSettledCounts } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import type {
-  ReplyDispatchKind,
-  ReplyDispatchReceipt,
-  ReplyDispatchSettledCounts,
-} from "../../auto-reply/reply/reply-dispatcher.types.js";
+import type { ReplyDispatchReceipt } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { resolveOutboundDurableFinalDeliverySupport } from "../../infra/outbound/deliver.js";
 import type { DurableMessageSendContextParams } from "../message/send.js";
 import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult } from "./types.js";
+type Counts = ReplyDispatchReceipt["counts"];
 
 export type DurableSendRequest = Partial<DurableMessageSendContextParams>;
 export type DurableSupportRequest = Partial<
   Parameters<typeof resolveOutboundDurableFinalDeliverySupport>[0]
 >;
 
-export function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
-  return {
+export const createCtx = (overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext =>
+  ({
     Body: "hello",
     RawBody: "hello",
     CommandBody: "hello",
@@ -30,22 +28,17 @@ export function createCtx(overrides: Partial<FinalizedMsgContext> = {}): Finaliz
     Provider: "test",
     Surface: "test",
     ...overrides,
-  } as FinalizedMsgContext;
-}
+  }) as FinalizedMsgContext;
 
 export function createRecordInboundSession(events: string[] = []): RecordInboundSession {
-  return vi.fn<RecordInboundSession>(async () => {
-    events.push("record");
-  });
+  return vi.fn<RecordInboundSession>(async () => void events.push("record"));
 }
 
-export function createDurableSendResult(messageIds: string[]) {
-  return {
-    status: "sent",
-    results: messageIds.map((messageId) => ({ messageId })),
-    receipt: { platformMessageIds: messageIds, parts: [], sentAt: 1 },
-  };
-}
+export const createDurableSendResult = (messageIds: string[]) => ({
+  status: "sent",
+  results: messageIds.map((messageId) => ({ messageId })),
+  receipt: { platformMessageIds: messageIds, parts: [], sentAt: 1 },
+});
 
 export function expectDispatched<TDispatchResult>(
   result: ChannelTurnResult<TDispatchResult>,
@@ -62,11 +55,7 @@ export function createDispatch(
     events.push("dispatch");
     const delivery = await params.dispatcherOptions.deliver(deliverPayload, { kind: "final" });
     onDelivery?.(delivery);
-    const deliveredNotVisible =
-      typeof delivery === "object" &&
-      delivery !== null &&
-      "visibleReplySent" in delivery &&
-      delivery.visibleReplySent === false;
+    const deliveredNotVisible = asOptionalObjectRecord(delivery)?.visibleReplySent === false;
     return {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
@@ -102,17 +91,15 @@ export function createDispatcherBackedDispatch(
 }
 
 export function createReplyDispatchReceipt(
-  outcomes: Partial<Record<ReplyDispatchKind, Partial<ReplyDispatchSettledCounts>>>,
+  outcomes: Partial<{ [K in keyof Counts]: Partial<Counts[K]> }>,
 ): ReplyDispatchReceipt {
-  const counts = (kind: ReplyDispatchKind): ReplyDispatchSettledCounts => ({
+  const counts = (kind: keyof Counts) => ({
     ...createReplyDispatchSettledCounts(),
     ...outcomes[kind],
   });
   const receipt = { tool: counts("tool"), block: counts("block"), final: counts("final") };
-  const anyVisibleDelivered = Object.values(receipt).some(
-    (entry) => entry.delivered > 0 || entry.failedAfterSend > 0,
-  );
-  return { counts: receipt, anyVisibleDelivered };
+  const visible = Object.values(receipt).some((c) => c.delivered > 0 || c.failedAfterSend > 0);
+  return { counts: receipt, anyVisibleDelivered: visible };
 }
 
 export function expectNonVisibleFinalReceipt(result: unknown) {
