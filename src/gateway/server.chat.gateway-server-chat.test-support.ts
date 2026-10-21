@@ -10,7 +10,10 @@ import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-wr
 import { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
-import { createMainChatSessionStoreFixture } from "./server.chat-session-store.test-support.js";
+import {
+  createMainChatSessionStoreFixture,
+  writeMainChatSessionTranscript,
+} from "./server.chat-session-store.test-support.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -59,15 +62,44 @@ export function installGatewayServerChatTestSuite(
   afterAll(mainSessionStore.dispose);
 
   const socket = () => expectDefined(ws, "connected Gateway socket");
-  const request = async (method: string, params: unknown, status?: string, target = socket()) => {
+  const request = async (
+    method: string,
+    params: unknown,
+    expected?: string | Record<string, unknown>,
+    target = socket(),
+  ) => {
     const res = await rpcReq(target, method, params);
     expect(res.ok).toBe(true);
-    if (status !== undefined) {
-      expect(res.payload?.status).toBe(status);
+    if (typeof expected === "string") {
+      expect(res.payload?.status).toBe(expected);
+    } else if (expected !== undefined) {
+      expect(res.payload).toMatchObject(expected);
     }
     return res;
   };
   return {
+    request,
+    sendChat: (
+      idempotencyKey: string,
+      message = "hello",
+      fields: Record<string, unknown> = {},
+      target = socket(),
+    ) => rpcReq(target, "chat.send", { sessionKey: "main", message, idempotencyKey, ...fields }),
+    readHistory: async (sessionKey = "main") => {
+      const res = await rpcReq<{ messages?: unknown[]; sessionId?: string }>(
+        socket(),
+        "chat.history",
+        { sessionKey },
+      );
+      expect(res.ok).toBe(true);
+      return res.payload;
+    },
+    replaceMainTranscriptMessages: (messages: Record<string, unknown>[]) =>
+      writeMainChatSessionTranscript(
+        messages.map((message, index) => ({ message, id: `message-${index}`, type: "message" })),
+        "sess-main",
+        { sessionKey: "main" },
+      ),
     abortChatRun: (runId: string) => request("chat.abort", { sessionKey: "main", runId }),
     expectAgentWaitStartedAt: (res: Awaited<ReturnType<typeof rpcReq>>, startedAt: number) =>
       expect(res).toMatchObject({ ok: true, payload: { status: "ok", startedAt } }),

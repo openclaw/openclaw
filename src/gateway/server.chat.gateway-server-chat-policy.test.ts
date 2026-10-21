@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -100,13 +101,9 @@ const {
   withMainSessionStore,
 } = gatewaySuite;
 
-function sessionEntry(sessionKey = "agent:main:main") {
-  const storePath = testState.sessionStorePath;
-  if (!storePath) {
-    throw new Error("session store path was not initialized");
-  }
-  return loadSessionEntry({ sessionKey, storePath });
-}
+const sessionStorePath = () => expectDefined(testState.sessionStorePath, "session store path");
+const sessionEntry = (sessionKey = "agent:main:main") =>
+  loadSessionEntry({ sessionKey, storePath: sessionStorePath() });
 
 async function withOperator(scopes: string[], run: (socket: WebSocket) => Promise<void>) {
   const socket = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -237,78 +234,62 @@ test("chat.send preserves sessions and denies operator.write reset triggers", as
   const message = "/reset soft Create a note";
   await useRealReply();
   const replyRun = await import("../auto-reply/reply/get-reply-run.js");
-  const runSpy = vi.spyOn(replyRun, "runPreparedReply").mockResolvedValue(undefined);
+  using runSpy = vi.spyOn(replyRun, "runPreparedReply").mockResolvedValue(undefined);
   // Keep real command/session dispatch; only intercept the model-run boundary.
-  try {
-    await withMainSessionStore(async () => {
-      const sessionStorePath = testState.sessionStorePath;
-      if (!sessionStorePath) {
-        throw new Error("session store path was not initialized");
-      }
-      const resetState = {
-        lifecycleRevision: "before-reset",
-        cliSessionIds: { "claude-cli": "existing-cli-binding" },
-      };
-      expect(
-        await updateSessionEntry(
-          { sessionKey: "agent:main:main", storePath: sessionStorePath },
-          () => resetState,
-        ),
-      ).not.toBeNull();
-      await withOperator(["operator.read", "operator.write"], async (scopedWs) => {
-        const runId = `idem-write-scope-reset-${message}`;
-        const { sent: sendRes, settled: final } = await sendUntilTerminal(
-          scopedWs,
-          runId,
-          message,
-          ["final"],
-        );
-        expect(sendRes).toMatchObject({ ok: true, payload: { status: "started" } });
+  await withMainSessionStore(async () => {
+    const resetState = {
+      lifecycleRevision: "before-reset",
+      cliSessionIds: { "claude-cli": "existing-cli-binding" },
+    };
+    expect(
+      await updateSessionEntry(
+        { sessionKey: "agent:main:main", storePath: sessionStorePath() },
+        () => resetState,
+      ),
+    ).not.toBeNull();
+    await withOperator(["operator.read", "operator.write"], async (scopedWs) => {
+      const runId = `idem-write-scope-reset-${message}`;
+      const { sent: sendRes, settled: final } = await sendUntilTerminal(scopedWs, runId, message, [
+        "final",
+      ]);
+      expect(sendRes).toMatchObject({ ok: true, payload: { status: "started" } });
 
-        expect(await waitForRun(scopedWs, runId)).toMatchObject({
-          ok: true,
-          payload: { status: "ok" },
-        });
-
-        expect(sessionEntry()).toMatchObject({ sessionId: "sess-main", ...resetState });
-        expect(runSpy).not.toHaveBeenCalled();
-        expect(extractFirstTextBlock(final.payload?.message)).toMatch(/not authorized/i);
-        expect(extractFirstTextBlock(final.payload?.message)).toContain("operator.admin");
-        const stored = await history(scopedWs);
-        expect(stored?.sessionId).toBe("sess-main");
-        expect(collectHistoryTextValues(stored?.messages ?? [])).toContain(
-          extractFirstTextBlock(final.payload?.message),
-        );
+      expect(await waitForRun(scopedWs, runId)).toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
       });
+
+      expect(sessionEntry()).toMatchObject({ sessionId: "sess-main", ...resetState });
+      expect(runSpy).not.toHaveBeenCalled();
+      const denial = extractFirstTextBlock(final.payload?.message);
+      expect(denial).toMatch(/not authorized/i);
+      expect(denial).toContain("operator.admin");
+      const stored = await history(scopedWs);
+      expect(stored?.sessionId).toBe("sess-main");
+      expect(collectHistoryTextValues(stored?.messages ?? [])).toContain(denial);
     });
-  } finally {
-    runSpy.mockRestore();
-  }
+  });
 });
 
 test("chat.send /reset on an idle session finishes post-commit cleanup and records the turn", async () => {
   await useRealReply();
   // Observe the harness reset that initSessionState runs after the reset commits.
-  const harnessReset = vi.spyOn(harnessRegistry, "resetRegisteredAgentHarnessSessions");
-  try {
-    await withMainSessionStore(async () => {
-      const runId = "idem-admin-reset-idle";
-      const { settled } = await sendUntilTerminal(ws, runId, "/reset", ["final", "error"]);
-      await waitForAgentRunDrained(runId);
+  using harnessReset = vi.spyOn(harnessRegistry, "resetRegisteredAgentHarnessSessions");
+  await withMainSessionStore(async () => {
+    const runId = "idem-admin-reset-idle";
+    const { settled } = await sendUntilTerminal(ws, runId, "/reset", ["final", "error"]);
+    await waitForAgentRunDrained(runId);
 
-      expect(settled.payload?.state).toBe("final");
-      expect(extractFirstTextBlock(settled.payload?.message) ?? "").toContain("Session reset");
-      expect(harnessReset).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: "sess-main", sessionKey: "agent:main:main" }),
-      );
-      const stored = await history(ws);
-      expect(stored?.messages?.filter((message) => message.role === "user")).toMatchObject([
-        { content: "/reset" },
-      ]);
-    });
-  } finally {
-    harnessReset.mockRestore();
-  }
+    expect(settled.payload?.state).toBe("final");
+    expect(extractFirstTextBlock(settled.payload?.message) ?? "").toContain("Session reset");
+    expect(harnessReset).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "sess-main", sessionKey: "agent:main:main" }),
+    );
+    const stored = await history(ws);
+    expect(stored?.messages?.filter((message) => message.role === "user")).toMatchObject([
+      { content: "/reset" },
+    ]);
+  });
 });
 
 test.for(["agent", "chat"] as const)(

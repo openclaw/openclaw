@@ -3,7 +3,6 @@ import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import {
@@ -14,7 +13,7 @@ import {
   createGatewayHistoryDeliveryMirror,
   hasGatewayHistoryMessageToolMirror,
 } from "./session-history-fixtures.test-support.js";
-import { dispatchInboundMessageMock, onceMessage, rpcReq, testState } from "./test-helpers.js";
+import { dispatchInboundMessageMock, onceMessage } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 const YAML_PARTS = ["```yaml\nroot:\n", "  nested:\n    value: true\n```"];
 
@@ -35,7 +34,7 @@ let ws: WebSocket;
 const gatewaySuite = installGatewayServerChatTestSuite((started) => {
   ws = started.ws;
 });
-const { expectRecordFields, withMainSessionStore } = gatewaySuite;
+const { expectRecordFields, withMainSessionStore, replaceMainTranscriptMessages } = gatewaySuite;
 
 describe("gateway server chat", () => {
   const waitForChatEvent = (runId: string, sideResult = false) =>
@@ -49,14 +48,12 @@ describe("gateway server chat", () => {
       8_000,
     );
   const sendChat = async (idempotencyKey: string, message: string) => {
-    const res = await rpcReq(ws, "chat.send", { sessionKey: "main", message, idempotencyKey });
+    const res = await gatewaySuite.sendChat(idempotencyKey, message);
     expect(res.ok, JSON.stringify(res)).toBe(true);
     return res;
   };
   const readHistory = async () => {
-    const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey: "main" });
-    expect(res.ok).toBe(true);
-    return res.payload?.messages ?? [];
+    return (await gatewaySuite.readHistory())?.messages ?? [];
   };
 
   const loadChatHistoryWithMessages = (messages: Record<string, unknown>[]) =>
@@ -64,16 +61,6 @@ describe("gateway server chat", () => {
       await replaceMainTranscriptMessages(messages);
       return readHistory();
     });
-  const replaceMainTranscriptMessages = async (messages: Record<string, unknown>[]) => {
-    const storePath = testState.sessionStorePath;
-    if (!storePath) {
-      throw new Error("session store path was not initialized");
-    }
-    await replaceTranscriptEvents(
-      { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
-      messages.map((message, index) => ({ message, id: `message-${index}`, type: "message" })),
-    );
-  };
 
   test("chat.history omits argument-derived replies for partial broadcasts and retains diagnostics", async () => {
     const result = {

@@ -233,19 +233,9 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   };
   await runQaGatewayFixture(
     runProof,
-    async () => {
-      if (gateway) {
-        await disconnectGatewayClient(gateway.client);
-      }
-    },
-    async () => {
-      await gateway?.server.close();
-    },
-    async () => {
-      if (providerServer.listening) {
-        await closeProvider(providerServer);
-      }
-    },
+    () => gateway && disconnectGatewayClient(gateway.client),
+    () => gateway?.server.close(),
+    () => providerServer.listening && closeProvider(providerServer),
     () => state.cleanup(),
   );
 }, 90_000);

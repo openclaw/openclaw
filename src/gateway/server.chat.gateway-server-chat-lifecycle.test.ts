@@ -53,6 +53,8 @@ const gatewaySuite = installGatewayServerChatTestSuite((started) => {
 const {
   expectAgentWaitTimeout,
   expectRecordFields,
+  request,
+  sendChat,
   sendChatAndExpectStarted,
   settleGatewayFixture,
   waitForAgentRunDrained,
@@ -99,8 +101,14 @@ async function expectRpc(
   params: unknown,
   payload: Record<string, unknown>,
 ) {
-  const response = await rpcReq(browser, method, params);
-  expect(response).toMatchObject({ ok: true, payload });
+  return request(method, params, payload, browser);
+}
+
+async function sendStarted(browser: WebSocket, runId: string, message: string) {
+  expect(await sendChat(runId, message, {}, browser)).toMatchObject({
+    ok: true,
+    payload: { runId, status: "started" },
+  });
 }
 
 const emitLifecycle = (runId: string, data: Record<string, unknown>) =>
@@ -152,16 +160,7 @@ describe("gateway server chat lifecycle", () => {
 
       const stoppedTerminal = terminalEvent(browser, stoppedRunId);
       try {
-        await expectRpc(
-          browser,
-          "chat.send",
-          {
-            sessionKey: "main",
-            message: "hold this restart-safe turn before adoption",
-            idempotencyKey: stoppedRunId,
-          },
-          { runId: stoppedRunId, status: "started" },
-        );
+        await sendStarted(browser, stoppedRunId, "hold this restart-safe turn before adoption");
         await preparationEntered.promise;
 
         const stopping = rpcReq(browser, "sessions.abort", {
@@ -191,16 +190,7 @@ describe("gateway server chat lifecycle", () => {
         });
 
         const successorTerminal = terminalEvent(browser, successorRunId);
-        await expectRpc(
-          browser,
-          "chat.send",
-          {
-            sessionKey: "main",
-            message: "run after the stopped pre-adoption turn",
-            idempotencyKey: successorRunId,
-          },
-          { runId: successorRunId, status: "started" },
-        );
+        await sendStarted(browser, successorRunId, "run after the stopped pre-adoption turn");
         const terminal = await successorTerminal;
         expect(terminal.payload).toMatchObject({ runId: successorRunId, state: "final" });
         await embeddedEntered.promise;
@@ -459,9 +449,7 @@ describe("gateway server chat lifecycle", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
-      entries: {
-        main: { sessionId: "sess-main", updatedAt: Date.now(), verboseLevel: "off" },
-      },
+      entries: { main: { sessionId: "sess-main", updatedAt: Date.now(), verboseLevel: "off" } },
     });
     const webchatWs = await openBrowser(GATEWAY_CLIENT_NAMES.WEBCHAT);
     try {
@@ -470,23 +458,22 @@ describe("gateway server chat lifecycle", () => {
         verboseLevel: "on",
       });
 
-      {
-        const agentEvtP = onceMessage(
-          webchatWs,
-          (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
-          8000,
-        );
+      const agentEvtP = onceMessage(
+        webchatWs,
+        (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
+        8000,
+      );
 
-        emitAgentEvent({
-          runId: "run-tool-1",
-          stream: "assistant",
-          data: { text: "hello" },
-        });
+      emitAgentEvent({
+        runId: "run-tool-1",
+        stream: "assistant",
+        data: { text: "hello" },
+      });
 
-        const evt = await agentEvtP;
-        const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
-        expect(payload).toMatchObject({ sessionKey: "main", stream: "assistant" });
-      }
+      expect((await agentEvtP).payload).toMatchObject({
+        sessionKey: "main",
+        stream: "assistant",
+      });
 
       const agentJobs = await import("./agent-turn/agent-job.js");
       for (const cached of [false, true]) {
@@ -520,12 +507,12 @@ describe("gateway server chat lifecycle", () => {
           payload: { status: "ok", startedAt: 200, endedAt: 210 },
         });
       }
-      expect(
-        await rpcReq(webchatWs, "agent.wait", { runId: "run-wait-empty", timeoutMs: 30 }),
-      ).toMatchObject({
-        ok: true,
-        payload: { status: "timeout" },
-      });
+      await expectRpc(
+        webchatWs,
+        "agent.wait",
+        { runId: "run-wait-empty", timeoutMs: 30 },
+        { status: "timeout" },
+      );
       const runId = "run-wait-start";
       const waiting = rpcReq(webchatWs, "agent.wait", { runId, timeoutMs: 200 });
       emitLifecycle(runId, { phase: "start", startedAt: 123 });

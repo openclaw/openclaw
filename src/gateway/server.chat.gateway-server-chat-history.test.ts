@@ -31,7 +31,13 @@ const gatewaySuite = installGatewayServerChatTestSuite((started) => {
   ws = started.ws;
   port = started.port;
 });
-const { settleGatewayFixture, waitForAgentRunDrained, withMainSessionStore } = gatewaySuite;
+const {
+  settleGatewayFixture,
+  waitForAgentRunDrained,
+  withMainSessionStore,
+  readHistory,
+  replaceMainTranscriptMessages,
+} = gatewaySuite;
 const assistantContent = (text: string, timestamp: number, type = "text") => ({
   role: "assistant",
   content: [{ type, text }],
@@ -50,13 +56,6 @@ async function sendChat(idempotencyKey: string, fields: Record<string, unknown> 
     ...fields,
   });
 }
-async function readHistory() {
-  const res = await rpcReq<{ messages?: unknown[]; sessionId?: string }>(ws, "chat.history", {
-    sessionKey: "main",
-  });
-  expect(res.ok).toBe(true);
-  return res.payload;
-}
 const textFieldReply = (content: string, timestamp: number) => ({
   role: "assistant",
   text: "real text field reply",
@@ -73,16 +72,6 @@ describe("gateway server chat", () => {
 
       return (await readHistory())?.messages ?? [];
     });
-  };
-
-  const replaceMainTranscriptMessages = async (
-    messages: Record<string, unknown>[],
-  ): Promise<void> => {
-    await writeMainChatSessionTranscript(
-      messages.map((message, index) => ({ message, id: `message-${index}`, type: "message" })),
-      "sess-main",
-      { sessionKey: "main" },
-    );
   };
 
   test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
