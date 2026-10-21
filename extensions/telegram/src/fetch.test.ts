@@ -248,7 +248,7 @@ function expectNoLoggerMessageContaining(logger: ReturnType<typeof vi.fn>, fragm
 
 async function expectNoStickyRetryWithSameDispatcher(params: {
   resolved: ReturnType<typeof resolveTelegramFetch>;
-  expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
+  expectedAgentCtor: typeof ProxyAgentCtor;
   field: "connect" | "proxyTls" | "requestTls";
 }) {
   await expect(params.resolved("https://api.telegram.org/botx/getMe")).rejects.toThrow(
