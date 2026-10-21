@@ -20,7 +20,9 @@ function mountWidget(canMutate = true, presented = true) {
   const mounted = createWorkboardWidget(fixture.host, "card")(container, context);
   onTestFinished(() => container.remove());
   onTestFinished(() => mounted?.dispose?.());
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   const notify = () => {
     fixture.notify();
     flush();

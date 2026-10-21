@@ -67,10 +67,12 @@ async function prepareGate(consumeTimeoutMs?: number) {
 }
 
 const gateTest = it.skipIf(process.platform === "win32");
-gateTest.each(["cleanup", "release"])("consumes the gate on %s", async (mode, { signal }) => {
+gateTest.for(["cleanup", "release"])("consumes the gate on %s", async (mode, { signal }) => {
   const { gate, gatePath, published } = await prepareGate();
   const pending =
-    mode === "cleanup" ? gate.cleanup() : Promise.all([gate.release(), gate.release()]);
+    mode === "cleanup"
+      ? gate.cleanup()
+      : Promise.all([gate.release(), gate.release()]).then(() => undefined);
   try {
     await withinTest(published, signal);
     expect((await stat(gatePath)).isDirectory()).toBe(true);

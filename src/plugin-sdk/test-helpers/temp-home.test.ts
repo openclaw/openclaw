@@ -76,7 +76,8 @@ it.each(["joined", "kill-error", "exit-timeout"])(
       const runtimeCleanupFailure = await runtime.cleanup().catch((error: unknown) => error);
 
       expect(hasUnjoinedWork(failure)).toBe(unjoined);
-      expect(process.env).toMatchObject({ HOME, OPENCLAW_STATE_DIR });
+      expect(process.env.HOME).toBe(HOME);
+      expect(process.env.OPENCLAW_STATE_DIR).toBe(OPENCLAW_STATE_DIR);
       if (unjoined) {
         expect(failure).toMatchObject({ cause: inputFailure });
         expect(child).toMatchObject({ exitCode: null, signalCode: null });

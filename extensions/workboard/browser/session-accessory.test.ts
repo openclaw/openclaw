@@ -62,7 +62,9 @@ it.each(["global", "unknown"])("ignores bare %s sessions despite an ambient owne
 
 it("refreshes only the visible session and ignores stale lookups after navigation", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const initialListeners = new Set(workboardTestHost().listeners);
   const sessionKey = "agent:main:workboard-card";
   const card = createWorkboardCard({ status: "review", sessionKey });
