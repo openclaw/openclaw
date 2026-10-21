@@ -21,7 +21,6 @@ import * as onboardInference from "../commands/onboard-inference.js";
 import * as codexRuntimePlugin from "../commands/runtime-plugin-install.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as installRecordCommit from "../plugins/install-record-commit.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
@@ -59,7 +58,6 @@ export async function fixture(
     localService?: boolean;
     authMethod?: "oauth" | "api_key";
     profiles?: ProviderAuthResult["profiles"];
-    restartRequired?: boolean;
     addProviderDuringLogin?: boolean;
     fresh?: boolean;
     surface?: "cli" | "gateway";
@@ -346,18 +344,6 @@ export async function fixture(
     );
   }
   const prompter = createWizardPrompter();
-  if (options.restartRequired) {
-    const transform = installRecordCommit.transformConfigWithPendingPluginInstalls;
-    vi.spyOn(installRecordCommit, "transformConfigWithPendingPluginInstalls").mockImplementation(
-      async (params) => {
-        const result = await transform(params);
-        return {
-          ...result,
-          followUp: { mode: "restart", requiresRestart: true, reason: "Plugin source changed" },
-        };
-      },
-    );
-  }
   const activate = (
     kind: Parameters<typeof activateSetupInference>[0]["kind"] = "provider-auth",
     activationConfirmed?: true,

@@ -113,17 +113,10 @@ it("commits enablement and only the selected agent's consent without changing mo
   await setupNativeRuntime(params);
   expect(io.write).toHaveBeenCalledOnce();
   const [committed, options] = io.write.mock.calls[0]!;
-  expect(committed).toEqual({
-    ...config,
-    agents: {
-      ...config.agents,
-      entries: {
-        main: {},
-        research: { model: "stable/model", nativeRuntimeConsent: [harness.id] },
-      },
-    },
-    ...pluginPatch(),
-  });
+  const expected = structuredClone(config);
+  expected.agents!.entries!.research!.nativeRuntimeConsent = [harness.id];
+  expected.plugins = pluginPatch().plugins;
+  expect(committed).toEqual(expected);
   expect(options.baseSnapshot.sourceConfig).toBe(config);
   expect(params.onCommitStarted).toHaveBeenCalledOnce();
   expect(config.plugins?.entries?.fixture?.config).toEqual({ enabled: false });

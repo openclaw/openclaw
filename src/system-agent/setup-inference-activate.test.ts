@@ -25,25 +25,16 @@ import {
   mergePluginDeclaredSurfaces,
 } from "../plugins/capability-summary.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveConfiguredRoute } from "./inference-route.js";
-import {
-  credential,
-  fixture,
-  modelRef,
-  tempDirs,
-} from "./setup-inference-activate.test-support.js";
+import { credential, fixture, modelRef } from "./setup-inference-activate.test-support.js";
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
 } from "./setup-inference-core.js";
 import * as credentialActivation from "./setup-inference-credential-access.js";
+import { resetSetupInferenceState } from "./setup-inference-state.test-support.js";
 import * as activationTransition from "./setup-inference-transition.js";
 import { codexRuntimeArtifactAuth, pluginRecord } from "./verified-inference.test-support.js";
 
@@ -69,15 +60,7 @@ async function writeConfig(setup: Setup, value: Setup["config"] | string) {
   clearConfigCache();
 }
 
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  tempDirs.cleanup();
-  clearConfigCache();
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
-});
+afterEach(resetSetupInferenceState);
 
 describe("setup activation credentials and configuration", () => {
   it.each([

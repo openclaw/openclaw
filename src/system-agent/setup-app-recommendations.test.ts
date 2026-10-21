@@ -253,28 +253,26 @@ describe("official catalog candidates", () => {
 });
 
 describe("setup app recommendation matcher", () => {
-  const inventorySource = async () => [{ label: "Notes", bundleId: "com.example.notes" }];
-  const candidateDeps = {
-    ...emptyCatalogs,
-    searchSkills: async () => [skill({ summary: "Work with notes" })],
-  };
+  const recommend = (text: string) =>
+    getSetupAppRecommendations({
+      inventorySource: async () => [{ label: "Notes", bundleId: "com.example.notes" }],
+      deps: {
+        ...emptyCatalogs,
+        searchSkills: async () => [skill({ summary: "Work with notes" })],
+        complete: completeText(text),
+      },
+    });
 
   it("tolerates fenced JSON with extra keys and long reasons", async () => {
     const reason = `${"a".repeat(118)}🤖suffix`;
-    const result = await getSetupAppRecommendations({
-      inventorySource,
-      deps: {
-        ...candidateDeps,
-        complete: completeText(
-          [
-            "Here you go:",
-            "```json",
-            JSON.stringify({ matches: [{ ...match(undefined, reason), confidence: "high" }] }),
-            "```",
-          ].join("\n"),
-        ),
-      },
-    });
+    const result = await recommend(
+      [
+        "Here you go:",
+        "```json",
+        JSON.stringify({ matches: [{ ...match(undefined, reason), confidence: "high" }] }),
+        "```",
+      ].join("\n"),
+    );
     assert(result.status === "ok");
     expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
     expect(result.matches[0]?.reason).toBe(`${"a".repeat(118)}…`);
@@ -282,42 +280,20 @@ describe("setup app recommendation matcher", () => {
   });
 
   it("uses the first complete object when prose contains later JSON", async () => {
-    const result = await getSetupAppRecommendations({
-      inventorySource,
-      deps: {
-        ...candidateDeps,
-        complete: completeText(
-          `${JSON.stringify({
-            matches: [
-              { ...match(undefined, "Connects directly to your notes"), tier: "recommended" },
-            ],
-          })}\nDiagnostics: {"tokens":12}`,
-        ),
-      },
-    });
+    const result = await recommend(
+      `${JSON.stringify({
+        matches: [{ ...match(undefined, "Connects directly to your notes"), tier: "recommended" }],
+      })}\nDiagnostics: {"tokens":12}`,
+    );
 
     assert(result.status === "ok");
     expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
   });
 
-  it("skips garbage model output", async () => {
-    await expect(
-      getSetupAppRecommendations({
-        inventorySource,
-        deps: { ...candidateDeps, complete: completeText("not json") },
-      }),
-    ).resolves.toEqual({ status: "skipped", reason: "model-failed" });
-  });
-
-  it("drops unknown candidate ids", async () => {
-    await expect(
-      getSetupAppRecommendations({
-        inventorySource,
-        deps: {
-          ...candidateDeps,
-          complete: completeText(JSON.stringify({ matches: [match("unknown")] })),
-        },
-      }),
-    ).resolves.toEqual({ status: "skipped", reason: "no-matches" });
+  it.each([
+    ["garbage model output", "not json", "model-failed"],
+    ["unknown candidate ids", JSON.stringify({ matches: [match("unknown")] }), "no-matches"],
+  ])("skips %s", async (_name, text, reason) => {
+    await expect(recommend(text)).resolves.toEqual({ status: "skipped", reason });
   });
 });

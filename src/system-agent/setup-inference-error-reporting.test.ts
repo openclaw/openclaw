@@ -200,9 +200,9 @@ async function observeScenario(scenario: Scenario, json: boolean) {
       message = text.slice(0, -guidance.length - 1);
     }
     expect(message.startsWith("OpenClaw requires working inference: ")).toBe(true);
-    expect(message).not.toContain(syntheticToken);
-    expect(message).not.toContain(syntheticStructuredValue);
-    expect(message).not.toContain(syntheticCustomValue);
+    for (const secret of [syntheticToken, syntheticStructuredValue, syntheticCustomValue]) {
+      expect(message).not.toContain(secret);
+    }
     if (scenario === "drift") {
       expect(message).toContain("verified inference owner changed");
       return;
@@ -232,12 +232,9 @@ describe("setup inference failure reporting", () => {
     ["callback", false],
   ] as const)("preserves %s cause in JSON=%s", observeScenario);
 
-  it("preserves a successful synthetic verification", async () => {
-    await observeScenario("success", true);
-  });
-  it("keeps a real synthetic artifact mismatch rejected", async () => {
-    await observeScenario("drift", true);
-  });
+  it.each(["success", "drift"] as const)("verifies synthetic %s", (scenario) =>
+    observeScenario(scenario, true),
+  );
   it("fully masks explicitly supplied known values", async () => {
     const known = "opaque-140392-placeholder";
     expect(await redactSetupInferenceError(`before ${known} after`, known)).toBe(

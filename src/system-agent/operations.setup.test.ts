@@ -1,12 +1,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyLocalSetupWorkspaceConfig } from "../commands/onboard-config.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { executeSystemAgentOperation as executeOperation } from "./operations.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 import type { SystemAgentOverview } from "./overview.js";
 import type { SystemAgentSetupApplyResult } from "./setup-apply.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
@@ -64,20 +66,12 @@ const mockConfig = vi.hoisted(() => {
     const copy = structuredClone(config);
     bind(copy);
     return {
-      path: "/tmp/openclaw.json",
+      ...createSnapshot({ sourceConfig: copy, hash }),
       exists,
       valid: exists,
-      hash,
       raw: exists ? `${JSON.stringify(copy)}\n` : null,
-      parsed: copy,
-      sourceConfig: copy,
       sourceConfigBeforeMigrations: copy,
-      resolved: copy,
-      runtimeConfig: copy,
-      config: copy,
       issues: exists ? [] : [{ path: "", message: "missing config" }],
-      warnings: [],
-      legacyIssues: [],
     };
   };
   const read = vi.fn(async () => snapshot());
@@ -191,10 +185,8 @@ const withModel = (primary = model): OpenClawConfig => ({
 });
 function overview(defaultModel: string | undefined = model): SystemAgentOverview {
   const command = { command: "unused", found: false, error: "not found" };
-  return {
-    defaultAgentId: "main",
+  return createSystemAgentOverviewFixture({
     defaultModel,
-    agents: [],
     config: { path: configPath, exists: true, valid: true, issues: [], hash: null },
     tools: {
       codex: command,
@@ -203,11 +195,7 @@ function overview(defaultModel: string | undefined = model): SystemAgentOverview
       apiKeys: { openai: true, anthropic: false },
     },
     gateway: { url: "ws://127.0.0.1:18789", source: "local loopback", reachable: false },
-    references: {
-      docsUrl: "https://docs.openclaw.ai",
-      sourceUrl: "https://github.com/openclaw/openclaw",
-    },
-  };
+  });
 }
 function setupResult(
   overrides: Partial<SystemAgentSetupApplyResult> = {},

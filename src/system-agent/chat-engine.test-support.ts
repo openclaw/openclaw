@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as authStore from "../agents/auth-profiles/store-runtime.js";
 import * as cliAuthEpoch from "../agents/cli-auth-epoch.js";
@@ -299,6 +299,36 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
       verifiedInference: explicitBinding ?? sharedFixture.binding,
     });
   }
+}
+
+export function createChatEngine(options: TestSystemAgentChatEngineOptions = {}, dispose = false) {
+  const engine = new SystemAgentChatEngine({
+    ...options,
+    deps: { loadOverview: fakeOverviewLoader(), ...options.deps },
+  });
+  if (dispose) {
+    onTestFinished(() => engine.dispose());
+  }
+  return engine;
+}
+
+export function inferenceConfig(model = "openai/gpt-5.5"): OpenClawConfig {
+  return {
+    agents: { defaults: { model } },
+    models: { providers: structuredClone(sharedVerifiedInferenceConfig.models.providers) },
+  };
+}
+
+export function setupResult() {
+  return {
+    configPath: "/tmp/openclaw.json",
+    configHashBefore: "before",
+    configHashAfter: "after",
+    bootstrapPending: true,
+    workspaceReady: true,
+    gateway: { status: "ready" as const, action: "reused" as const },
+    lines: ["Workspace: /tmp/hatch-work"],
+  };
 }
 
 export async function advanceGatewayWizardToSecretStorage(engine: SystemAgentChatEngine) {

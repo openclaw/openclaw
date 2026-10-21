@@ -2,7 +2,8 @@ import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   operationMocks,
-  fakeOverviewLoader,
+  createChatEngine,
+  inferenceConfig,
   classifySystemAgentApprovalText,
   useTempStateDir,
   configSnapshot,
@@ -17,13 +18,8 @@ import {
 } from "./chat-engine.test-support.js";
 import * as hostedSetup from "./hosted-setup.runtime.js";
 
-function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
-  return new SystemAgentChatEngine({
-    runAgentTurn: async () => null,
-    ...options,
-    deps: { loadOverview: fakeOverviewLoader(), ...options.deps },
-  });
-}
+const createEngine = (options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) =>
+  createChatEngine({ runAgentTurn: async () => null, ...options });
 
 function tokenWizard(sensitive = false, initialValue?: string) {
   return async (_channel: string, prompter: WizardPrompter) => {
@@ -40,12 +36,7 @@ async function startGatewayWizard(
   options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {},
   run: typeof hostedSetup.runHostedChannelSetup = tokenWizard(),
 ) {
-  vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(run);
-  const engine = createEngine({
-    surface: "gateway",
-    ...options,
-  });
-  const prompt = await engine.handle("connect telegram");
+  const { engine, prompt } = await startWizard(run, { surface: "gateway", ...options });
   return {
     engine,
     prompt,
@@ -53,51 +44,38 @@ async function startGatewayWizard(
   };
 }
 
+async function startWizard(
+  run: typeof hostedSetup.runHostedChannelSetup,
+  options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {},
+  command = "connect telegram",
+) {
+  vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(run);
+  const engine = createEngine(options);
+  return { engine, prompt: await engine.handle(command) };
+}
+
 describe("SystemAgentChatEngine wizard", () => {
-  it("recommends the confirm option matching the initial value", async () => {
-    let enabled: boolean | undefined;
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(
-      async (_channel, prompter) => {
-        enabled = await prompter.confirm({
-          message: "Enable delegated auth?",
-          initialValue: false,
-        });
+  it.each([false, undefined])(
+    "recommends the confirm option for initial value %s",
+    async (initialValue) => {
+      let enabled: boolean | undefined;
+      const { engine, prompt } = await startWizard(async (_channel, prompter) => {
+        enabled = await prompter.confirm({ message: "Enable delegated auth?", initialValue });
         return "applied";
-      },
-    );
-    const engine = createEngine();
-
-    const confirmStep = await engine.handle("connect telegram");
-
-    expect(confirmStep.question).toEqual({
-      id: expect.any(String),
-      header: "Confirm",
-      question: "Enable delegated auth?",
-      options: [
-        { label: "Yes", reply: "yes" },
-        { label: "No", reply: "no", recommended: true },
-      ],
-    });
-
-    await engine.handle("no");
-    expect(enabled).toBe(false);
-
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(
-      async (_channel, prompter) => {
-        await prompter.confirm({ message: "Continue?" });
-        return "applied";
-      },
-    );
-    const defaultEngine = createEngine();
-
-    const defaultConfirmStep = await defaultEngine.handle("connect telegram");
-
-    expect(defaultConfirmStep.question?.options).toEqual([
-      { label: "Yes", reply: "yes", recommended: true },
-      { label: "No", reply: "no" },
-    ]);
-    await defaultEngine.handle("yes");
-  });
+      });
+      expect(prompt.question).toEqual({
+        id: expect.any(String),
+        header: "Confirm",
+        question: "Enable delegated auth?",
+        options: [
+          { label: "Yes", reply: "yes", ...(initialValue === false ? {} : { recommended: true }) },
+          { label: "No", reply: "no", ...(initialValue === false ? { recommended: true } : {}) },
+        ],
+      });
+      await engine.handle(initialValue === false ? "no" : "yes");
+      expect(enabled).toBe(initialValue !== false);
+    },
+  );
 
   it("rejects non-decimal menu numbers in hosted wizard choices", async () => {
     useTempStateDir();
@@ -140,20 +118,14 @@ describe("SystemAgentChatEngine wizard", () => {
 
   it("marks sensitive hosted-wizard replies and auto-advances notes", async () => {
     useTempStateDir();
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(
+    const { prompt: tokenStep } = await startWizard(
       async (_channel, prompter) => {
         await prompter.note("Before entering the token, open the provider console.");
         await prompter.text({ message: "Bot token", sensitive: true });
         return "applied";
       },
+      { surface: "gateway" },
     );
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const tokenStep = await engine.handle("connect telegram");
 
     expect(tokenStep.text).toContain("Before entering the token");
     expect(tokenStep.text).toContain("Bot token");
@@ -163,19 +135,13 @@ describe("SystemAgentChatEngine wizard", () => {
 
   it("marks a non-card hosted-wizard step as pending input", async () => {
     useTempStateDir();
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(
+    const { prompt: textStep } = await startWizard(
       async (_channel, prompter) => {
         await prompter.text({ message: "Bot label" });
         return "applied";
       },
+      { surface: "gateway" },
     );
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const textStep = await engine.handle("connect telegram");
 
     expect(textStep.text).toContain("Bot label");
     expect(textStep.question).toBeUndefined();
@@ -185,12 +151,7 @@ describe("SystemAgentChatEngine wizard", () => {
 
   it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {
     useTempStateDir();
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(tokenWizard(true));
-    const engine = createEngine({
-      surface: "cli",
-    });
-
-    const reply = await engine.handle("connect telegram");
+    const { engine, prompt: reply } = await startWizard(tokenWizard(true), { surface: "cli" });
     expect(reply.text).toContain("Sensitive input is not accepted");
     expect(reply.text).toContain("openclaw channels add --channel telegram");
     expect(reply.sensitive).toBeUndefined();
@@ -255,18 +216,13 @@ describe("SystemAgentChatEngine wizard", () => {
 
   it("keeps hosted-wizard validation errors on the current prompt", async () => {
     useTempStateDir();
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(
-      async (_channel, prompter) => {
-        await prompter.text({
-          message: "Port",
-          validate: (value) => (value === "18789" ? undefined : "Enter port 18789"),
-        });
-        return "applied";
-      },
-    );
-    const engine = createEngine();
-
-    const prompt = await engine.handle("connect telegram");
+    const { engine, prompt } = await startWizard(async (_channel, prompter) => {
+      await prompter.text({
+        message: "Port",
+        validate: (value) => (value === "18789" ? undefined : "Enter port 18789"),
+      });
+      return "applied";
+    });
     expect(prompt.text).toContain("Port");
     const invalid = await engine.handle("banana");
     expect(invalid.text).toContain("Enter port 18789");
@@ -279,19 +235,14 @@ describe("SystemAgentChatEngine wizard", () => {
 
   it("hints cancel once per message, only while a step awaits an answer", async () => {
     useTempStateDir();
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(
-      async (_channel, prompter) => {
-        await prompter.note("Open the linked-devices screen.", "Step 1");
-        await prompter.note("Scan the code shown next.", "Step 2");
-        await prompter.note("Keep the phone online.", "Step 3");
-        await prompter.text({ message: "Phone number" });
-        await prompter.note("Linked.", "Step 4");
-        return "applied";
-      },
-    );
-    const engine = createEngine();
-
-    const prompt = await engine.handle("connect telegram");
+    const { engine, prompt } = await startWizard(async (_channel, prompter) => {
+      await prompter.note("Open the linked-devices screen.", "Step 1");
+      await prompter.note("Scan the code shown next.", "Step 2");
+      await prompter.note("Keep the phone online.", "Step 3");
+      await prompter.text({ message: "Phone number" });
+      await prompter.note("Linked.", "Step 4");
+      return "applied";
+    });
     expect(prompt.text).toContain("Step 3");
     expect(prompt.text).toContain("Phone number");
     expect(countCancelHints(prompt.text)).toBe(1);
@@ -306,33 +257,13 @@ describe("SystemAgentChatEngine wizard", () => {
 
   it("drops the cancel hint from the cancellation message", async () => {
     useTempStateDir();
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(tokenWizard());
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const prompt = await engine.handle("connect discord");
+    const { engine, prompt } = await startWizard(tokenWizard(), {}, "connect discord");
+    expect(prompt.text).toContain("Bot token");
     expect(countCancelHints(prompt.text)).toBe(1);
 
     const cancelled = await engine.handle("cancel");
     expect(cancelled.text).toContain("cancelled");
     expect(countCancelHints(cancelled.text)).toBe(0);
-  });
-
-  it("cancels a hosted wizard mid-flight", async () => {
-    useTempStateDir();
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(tokenWizard());
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const tokenStep = await engine.handle("connect discord");
-    expect(tokenStep.text).toContain("Bot token");
-
-    const cancelled = await engine.handle("cancel");
-    expect(cancelled.text).toContain("cancelled");
   });
 
   it("voids a stale host proposal before an exact wizard, including cancellation", async () => {
@@ -408,10 +339,9 @@ describe("SystemAgentChatEngine wizard", () => {
   it("omits the wizard step outside an awaiting hosted wizard", async () => {
     useTempStateDir();
     vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(tokenWizard());
-    const engine = new SystemAgentChatEngine({
+    const engine = createEngine({
       surface: "gateway",
       runAgentTurn: async () => ({ text: "*click* Everything looks healthy." }),
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const ordinary = await engine.handle("how is my setup looking?");
@@ -447,15 +377,7 @@ describe("SystemAgentChatEngine wizard", () => {
 
   it("cancels the current hosted wizard through a typed direct action", async () => {
     useTempStateDir();
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(tokenWizard());
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const prompt = await engine.handle("connect telegram");
-    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    const { engine, stepId } = await startGatewayWizard();
     const cancelled = await engine.cancelWizard({ stepId });
 
     expect(cancelled.text).toContain("cancelled");
@@ -466,19 +388,7 @@ describe("SystemAgentChatEngine wizard", () => {
 
   it("cancels the local hosted wizard after its inference binding drifts", async () => {
     useTempStateDir();
-    const baseConfig = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "test-key",
-            auth: "api-key",
-            models: [],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const baseConfig = inferenceConfig();
     const changedConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
     } satisfies OpenClawConfig;
@@ -533,25 +443,16 @@ describe("SystemAgentChatEngine wizard", () => {
   it("keeps the numbered text grammar for text-only wizard clients", async () => {
     useTempStateDir();
     let selected: unknown;
-    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(
-      async (_channel, prompter) => {
-        selected = await prompter.select({
-          message: "Choose one",
-          options: [
-            { value: "alpha", label: "Alpha" },
-            { value: "beta", label: "Beta" },
-          ],
-        });
-        return "applied";
-      },
-    );
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
+    const { engine } = await startGatewayWizard({}, async (_channel, prompter) => {
+      selected = await prompter.select({
+        message: "Choose one",
+        options: [
+          { value: "alpha", label: "Alpha" },
+          { value: "beta", label: "Beta" },
+        ],
+      });
+      return "applied";
     });
-
-    await engine.handle("connect telegram");
     await engine.handle("2");
 
     expect(selected).toBe("beta");

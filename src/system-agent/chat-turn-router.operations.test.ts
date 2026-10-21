@@ -1,5 +1,5 @@
 import "./chat-engine.mocks.test-support.js";
-import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as authStore from "../agents/auth-profiles/store-runtime.js";
 import * as cliRunner from "../agents/cli-runner.js";
 import { extractToolResultText } from "../agents/embedded-agent-tool-results.js";
@@ -9,6 +9,9 @@ import type { SystemAgentTurnRunner } from "./agent-turn.js";
 import {
   operationMocks,
   fakeOverviewLoader,
+  createChatEngine,
+  inferenceConfig,
+  setupResult,
   sharedVerifiedInferenceConfig,
   classifySystemAgentApprovalText,
   runSystemAgentTurn,
@@ -18,7 +21,6 @@ import {
   createAmbientVerifiedBinding,
   createOAuthVerifiedBinding,
   createCliVerifiedBinding,
-  SystemAgentChatEngine,
   expectDefined,
   SystemAgentInferenceUnavailableError,
   verifyConfigAfterSystemAgentWrite,
@@ -32,6 +34,9 @@ import { describeSystemAgentPersistentOperation } from "./operations.js";
 import * as operations from "./operations.js";
 import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
 
+const createEngine = (options: Parameters<typeof createChatEngine>[0] = {}) =>
+  createChatEngine(options, true);
+
 const nativeExecuteOperation = operations.executeSystemAgentOperation;
 
 function mockApprovedOperation(execute: typeof nativeExecuteOperation) {
@@ -44,15 +49,6 @@ vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/cli-runner.js")>()),
   runCliAgent: vi.fn(),
 }));
-
-function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
-  const engine = new SystemAgentChatEngine({
-    ...options,
-    deps: { loadOverview: fakeOverviewLoader(), ...options.deps },
-  });
-  onTestFinished(() => engine.dispose());
-  return engine;
-}
 
 describe("SystemAgentChatEngine operations", () => {
   it("keeps a utility-only agent handoff in setup", async () => {
@@ -235,19 +231,7 @@ describe("SystemAgentChatEngine operations", () => {
   });
 
   it("rejects an agent directive when the verified route changes during its turn", async () => {
-    const baseConfig = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "test-key",
-            auth: "api-key",
-            models: [],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const baseConfig = inferenceConfig();
     const changedConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
     } satisfies OpenClawConfig;
@@ -268,15 +252,12 @@ describe("SystemAgentChatEngine operations", () => {
     const runChannelSetupWizard = vi
       .spyOn(hostedSetup, "runHostedChannelSetup")
       .mockResolvedValueOnce("applied");
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       verifiedInference,
       runAgentTurn: async () => ({
         text: "Telegram it is.",
         directive: { kind: "channel-setup" as const, channel: "telegram" },
       }),
-      deps: {
-        loadOverview: fakeOverviewLoader(),
-      },
     });
 
     await expect(engine.handle("please connect a messaging channel")).rejects.toBeInstanceOf(
@@ -285,105 +266,72 @@ describe("SystemAgentChatEngine operations", () => {
     expect(runChannelSetupWizard).not.toHaveBeenCalled();
   });
 
-  it("rejects an approved agent operation when OAuth rotates at the persistent-apply boundary", async () => {
-    const config = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8@anthropic:oauth" } },
-      auth: { profiles: { "anthropic:oauth": { provider: "anthropic", mode: "oauth" } } },
-    } satisfies OpenClawConfig;
-    let credential = {
-      type: "oauth" as const,
-      provider: "anthropic",
-      access: "access-a",
-      refresh: "refresh-a",
-      expires: 1,
-    };
-    const configFixture = await createInferenceConfigFixture(config);
-    const snapshot = configFixture.snapshot;
-    const verifiedInference = await createOAuthVerifiedBinding(
-      snapshot.runtimeConfig ?? snapshot.config,
-      credential,
-      snapshot,
-    );
-    mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
-    const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
-    let authReads = 0;
-    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => {
-      authReads += 1;
-      // The fourth read is the persistent-apply guard, after the turn checks.
-      if (authReads === 4) {
-        credential = { ...credential, access: "access-b", refresh: "refresh-b" };
-      }
-      return { version: 1, profiles: { "anthropic:oauth": credential } };
-    });
-    const engine = new SystemAgentChatEngine({
-      verifiedInference,
-      runAgentTurn: async () => ({
-        text: "Applying the approved port change.",
-        directive: {
-          kind: "approved-operation" as const,
-          operation: { kind: "config-set" as const, path: "gateway.port", value: "19001" },
-        },
-      }),
-      deps: {
-        loadOverview: fakeOverviewLoader(),
-      },
-    });
-
-    await expect(engine.handle("yes, apply that exact port change")).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
-    expect(runConfigSet).not.toHaveBeenCalled();
-  });
-
-  it("applies an approved agent operation across a stable-identity OAuth refresh", async () => {
-    useTempStateDir();
-    const config = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8@anthropic:oauth" } },
-      auth: { profiles: { "anthropic:oauth": { provider: "anthropic", mode: "oauth" } } },
-    } satisfies OpenClawConfig;
-    let credential = {
-      type: "oauth" as const,
-      provider: "anthropic",
-      access: "access-a",
-      refresh: "refresh-a",
-      expires: 1,
-      accountId: "account-1",
-    };
-    const configFixture = await createInferenceConfigFixture(config);
-    const snapshot = configFixture.snapshot;
-    const verifiedInference = await createOAuthVerifiedBinding(
-      snapshot.runtimeConfig ?? snapshot.config,
-      credential,
-      snapshot,
-    );
-    mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
-    const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
-    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => ({
-      version: 1,
-      profiles: { "anthropic:oauth": credential },
-    }));
-    const engine = new SystemAgentChatEngine({
-      verifiedInference,
-      runAgentTurn: async () => {
-        credential = { ...credential, access: "access-b", refresh: "refresh-b", expires: 2 };
-        return {
-          text: "Applying the approved port change.",
-          directive: {
-            kind: "approved-operation" as const,
-            operation: { kind: "config-set" as const, path: "gateway.port", value: "19001" },
-          },
+  it.each([false, true])(
+    "revalidates OAuth at apply with stable identity: %s",
+    async (stableIdentity) => {
+      useTempStateDir();
+      const config = {
+        agents: { defaults: { model: "anthropic/claude-opus-4-8@anthropic:oauth" } },
+        auth: { profiles: { "anthropic:oauth": { provider: "anthropic", mode: "oauth" } } },
+      } satisfies OpenClawConfig;
+      let credential = {
+        type: "oauth" as const,
+        provider: "anthropic",
+        access: "access-a",
+        refresh: "refresh-a",
+        expires: 1,
+        ...(stableIdentity ? { accountId: "account-1" } : {}),
+      };
+      const configFixture = await createInferenceConfigFixture(config);
+      const snapshot = configFixture.snapshot;
+      const verifiedInference = await createOAuthVerifiedBinding(
+        snapshot.runtimeConfig ?? snapshot.config,
+        credential,
+        snapshot,
+      );
+      mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
+      const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
+      const rotate = () => {
+        credential = {
+          ...credential,
+          access: "access-b",
+          refresh: "refresh-b",
+          ...(stableIdentity ? { expires: 2 } : {}),
         };
-      },
-      deps: {
-        loadOverview: fakeOverviewLoader(),
-      },
-    });
-
-    const reply = await engine.handle("yes, apply that exact port change");
-
-    expect(runConfigSet).toHaveBeenCalledOnce();
-    expect(reply.text).toContain("[openclaw] done: config.set");
-  });
+      };
+      let authReads = 0;
+      vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => {
+        // Without stable identity, rotate only at the fourth (persistent-apply) guard.
+        if (++authReads === 4 && !stableIdentity) {
+          rotate();
+        }
+        return { version: 1, profiles: { "anthropic:oauth": credential } };
+      });
+      const engine = createChatEngine({
+        verifiedInference,
+        runAgentTurn: async () => {
+          if (stableIdentity) {
+            rotate();
+          }
+          return {
+            text: "Applying the approved port change.",
+            directive: {
+              kind: "approved-operation" as const,
+              operation: { kind: "config-set" as const, path: "gateway.port", value: "19001" },
+            },
+          };
+        },
+      });
+      const result = engine.handle("yes, apply that exact port change");
+      if (stableIdentity) {
+        expect((await result).text).toContain("[openclaw] done: config.set");
+        expect(runConfigSet).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+        expect(runConfigSet).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("proves delegated config persistence stops when async preparation closes authority", async () => {
     const persisted: string[] = [];
@@ -410,9 +358,8 @@ describe("SystemAgentChatEngine operations", () => {
       },
     );
     const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
     const approve = async () => {
       engine.propose(operation);
@@ -504,7 +451,7 @@ describe("SystemAgentChatEngine operations", () => {
     const runAgentTurn = vi.fn(async (params) => {
       return { text: `using ${params.session.verifiedInference.execution.modelLabel}` };
     });
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       verifiedInference,
       runAgentTurn,
       classifyApproval: async () => "approve",
@@ -535,10 +482,9 @@ describe("SystemAgentChatEngine operations", () => {
     const runConfigUnset = operationMocks.runConfigUnset.mockImplementation(async () => {
       throw new Error("fixture schema error");
     });
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       operatorApprovalOnly: true,
       runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
     await engine.handle("config unset agents.defaults.fastModeDefault");
     const reply = expectDefined(
@@ -596,10 +542,9 @@ describe("SystemAgentChatEngine operations", () => {
       });
       throw writerError;
     });
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       yes: true,
       runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
     const reply = await engine.handle("config set gateway.port 18789");
     expect(reply.applied).toBe(false);
@@ -632,9 +577,8 @@ describe("SystemAgentChatEngine operations", () => {
     operationMocks.runConfigSet.mockImplementation(async () => {
       throw new Error(validationError);
     });
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "banana" });
 
@@ -654,77 +598,68 @@ describe("SystemAgentChatEngine operations", () => {
     expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("[config-verify]");
   });
 
-  it("reports an applied invalid write when inference cannot propose a repair", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      path: "/tmp/openclaw.json",
-      hash: "h",
-      config: {},
-      sourceConfig: {},
-      issues: [{ path: "gateway.port", message: "Expected number, received string" }],
-    } as never);
+  it.each(["unavailable", "empty"] as const)(
+    "guides repair when inference is %s",
+    async (failure) => {
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: false,
+        path: "/tmp/openclaw.json",
+        hash: "h",
+        config: {},
+        sourceConfig: {},
+        issues: [
+          {
+            path: "gateway.port",
+            message:
+              failure === "unavailable" ? "Expected number, received string" : "Expected number",
+          },
+        ],
+      } as never);
+      const reply = await verifyConfigAfterSystemAgentWrite(async () => {
+        if (failure === "unavailable") {
+          throw new SystemAgentInferenceUnavailableError("agent-turn");
+        }
+        return { text: "" };
+      });
+      expect(reply).toContain("openclaw doctor --fix");
+      if (failure === "unavailable") {
+        expect(reply).toContain("failed validation");
+        expect(reply).toContain("The write was applied");
+      } else {
+        expect(reply).toContain("with OpenClaw stopped");
+        expect(reply).toContain("machine running it");
+      }
+    },
+  );
 
-    const reply = await verifyConfigAfterSystemAgentWrite(async () => {
-      throw new SystemAgentInferenceUnavailableError("agent-turn");
-    });
-
-    expect(reply).toContain("failed validation");
-    expect(reply).toContain("The write was applied");
-    expect(reply).toContain("openclaw doctor --fix");
-  });
-
-  it("keeps doctor repair outside OpenClaw when no post-write repair is proposed", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      path: "/tmp/openclaw.json",
-      hash: "h",
-      config: {},
-      sourceConfig: {},
-      issues: [{ path: "gateway.port", message: "Expected number" }],
-    } as never);
-
-    const reply = await verifyConfigAfterSystemAgentWrite(async () => ({ text: "" }));
-
-    expect(reply).toContain("with OpenClaw stopped");
-    expect(reply).toContain("openclaw doctor --fix");
-    expect(reply).toContain("machine running it");
-  });
-
-  it("warns when an applied write leaves no config to verify", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: false,
-      valid: true,
-      path: "/tmp/openclaw.json",
-      hash: null,
-      config: {},
-      sourceConfig: {},
-      issues: [],
-    } as never);
-    const resolveRepair = vi.fn(async () => ({ text: "unused" }));
-
-    const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
-
-    expect(resolveRepair).not.toHaveBeenCalled();
-    expect(reply).toContain("The write was applied");
-    expect(reply).toContain("post-write verification is unavailable");
-    expect(reply).toContain("openclaw.json was not found");
-    expect(reply).toContain("openclaw doctor --fix");
-  });
-
-  it("warns when the applied write cannot be read back for verification", async () => {
-    mocks.readConfigFileSnapshot.mockRejectedValue(new Error("snapshot read failed"));
-    const resolveRepair = vi.fn(async () => ({ text: "unused" }));
-
-    const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
-
-    expect(resolveRepair).not.toHaveBeenCalled();
-    expect(reply).toContain("The write was applied");
-    expect(reply).toContain("post-write verification is unavailable");
-    expect(reply).toContain("openclaw.json could not be read");
-    expect(reply).toContain("openclaw doctor --fix");
-  });
+  it.each(["missing", "unreadable"] as const)(
+    "warns when written config is %s",
+    async (failure) => {
+      if (failure === "missing") {
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: false,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          hash: null,
+          config: {},
+          sourceConfig: {},
+          issues: [],
+        } as never);
+      } else {
+        mocks.readConfigFileSnapshot.mockRejectedValue(new Error("snapshot read failed"));
+      }
+      const resolveRepair = vi.fn(async () => ({ text: "unused" }));
+      const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
+      expect(resolveRepair).not.toHaveBeenCalled();
+      expect(reply).toContain("The write was applied");
+      expect(reply).toContain("post-write verification is unavailable");
+      expect(reply).toContain(
+        failure === "missing" ? "openclaw.json was not found" : "openclaw.json could not be read",
+      );
+      expect(reply).toContain("openclaw doctor --fix");
+    },
+  );
 });
 
 describe("SystemAgentChatEngine CLI loop backends", () => {
@@ -765,7 +700,7 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
     }));
     vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
     mocks.readConfigFileSnapshot.mockImplementation(async () => snapshot);
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       verifiedInference: inference.binding,
       runAgentTurn: runSystemAgentTurn,
       deps: {
@@ -815,10 +750,9 @@ describe("SystemAgentChatEngine handoff", () => {
         directive: { kind: "model-accounts" as const },
       }));
       const executeOperation = vi.spyOn(operations, "executeSystemAgentOperation");
-      const engine = new SystemAgentChatEngine({
+      const engine = createChatEngine({
         surface,
         runAgentTurn,
-        deps: { loadOverview: fakeOverviewLoader() },
       });
 
       const reply = await engine.handle(
@@ -840,10 +774,9 @@ describe("SystemAgentChatEngine handoff", () => {
 
   it("handles the exact agent handoff without consulting a model", async () => {
     const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       surface: "gateway",
       runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const reply = await engine.handle("talk to agent");
@@ -863,16 +796,8 @@ describe("SystemAgentChatEngine handoff", () => {
       modelRef: "openai/gpt-5.5",
       latencyMs: 100,
     }));
-    const applySetup = operationMocks.applySetup.mockImplementation(async () => ({
-      configPath: "/tmp/openclaw.json",
-      configHashBefore: "before",
-      configHashAfter: "after",
-      bootstrapPending: true,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: ["Workspace: /tmp/hatch-work"],
-    }));
-    const engine = new SystemAgentChatEngine({
+    const applySetup = operationMocks.applySetup.mockImplementation(async () => setupResult());
+    const engine = createChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),

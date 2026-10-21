@@ -1,19 +1,24 @@
 import "./chat-engine.mocks.test-support.js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SystemAgentTurnRunner } from "./agent-turn.js";
 import {
   operationMocks,
   fakeOverviewLoader,
+  createChatEngine,
+  SystemAgentChatEngine,
+  setupResult,
   classifySystemAgentApprovalText,
   mocks,
   useTempStateDir,
-  SystemAgentChatEngine,
   SystemAgentInferenceUnavailableError,
   expectDefined,
   hashSystemAgentOperation,
 } from "./chat-engine.test-support.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
 import * as operations from "./operations.js";
+
+const createEngine = (options: Parameters<typeof createChatEngine>[0] = {}) =>
+  createChatEngine(options, true);
 
 const nativeExecuteOperation = operations.executeSystemAgentOperation;
 
@@ -23,15 +28,6 @@ function mockApprovedOperation() {
       ? Promise.resolve({ applied: true })
       : nativeExecuteOperation(...args),
   );
-}
-
-function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
-  const engine = new SystemAgentChatEngine({
-    ...options,
-    deps: { loadOverview: fakeOverviewLoader(), ...options.deps },
-  });
-  onTestFinished(() => engine.dispose());
-  return engine;
 }
 
 describe("SystemAgentChatEngine approval", () => {
@@ -78,7 +74,7 @@ describe("SystemAgentChatEngine approval", () => {
       const armed: boolean[] = [];
       const observedInputs: string[] = [];
       const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
-      const engine = new SystemAgentChatEngine({
+      const engine = createChatEngine({
         operatorApprovalOnly: true,
         runAgentTurn: async (params) => {
           armed.push(params.approvalArmed);
@@ -89,7 +85,6 @@ describe("SystemAgentChatEngine approval", () => {
           }
           return { text: "Change ready." };
         },
-        deps: { loadOverview: fakeOverviewLoader() },
       });
 
       await engine.handle("Change port.");
@@ -158,10 +153,9 @@ describe("SystemAgentChatEngine approval", () => {
         config: {},
         configPath: "/tmp/openclaw.json",
       }));
-      const engine = new SystemAgentChatEngine({
+      const engine = createChatEngine({
         runAgentTurn: async () => ({ text: "noted" }),
         classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-        deps: { loadOverview: fakeOverviewLoader() },
         ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
       });
       engine.propose({
@@ -208,19 +202,9 @@ describe("SystemAgentChatEngine approval", () => {
     let applied = false;
     const applySetup = operationMocks.applySetup.mockImplementation(async () => {
       applied = true;
-      return {
-        configPath: "/tmp/openclaw.json",
-        configHashBefore: "before",
-        configHashAfter: "after",
-        bootstrapPending: true,
-        workspaceReady: true,
-        gateway: { status: "ready" as const, action: "reused" as const },
-        lines: ["Workspace: /tmp/hatch-work"],
-      };
+      return setupResult();
     });
-    // The written config turns out invalid: post-write verification must hold
-    // the user in setup instead of hatching into an agent that cannot answer.
-    // Reads stay valid through preflight/apply and flip only after the write.
+    // Flip only after the write: preflight succeeds, but hatching must not.
     const validSnapshot = mocks.readConfigFileSnapshot.getMockImplementation()!;
     mocks.readConfigFileSnapshot.mockImplementation(async () => {
       const snapshot = await validSnapshot();
@@ -232,7 +216,7 @@ describe("SystemAgentChatEngine approval", () => {
           } as never)
         : snapshot;
     });
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       runAgentTurn: async () => ({ text: "repair suggestion" }),
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
@@ -251,10 +235,9 @@ describe("SystemAgentChatEngine approval", () => {
   });
 
   it("keeps provider setup non-mutating and directs the operator to Models", async () => {
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       surface: "gateway",
       runAgentTurn: async () => ({ text: "noted" }),
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const reply = await engine.handle("configure model provider workspace /tmp/gateway-work");
@@ -405,9 +388,8 @@ describe("SystemAgentChatEngine approval", () => {
       useTempStateDir();
       const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({ text: "still pending" }));
       const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
-      const engine = new SystemAgentChatEngine({
+      const engine = createChatEngine({
         runAgentTurn,
-        deps: { loadOverview: fakeOverviewLoader() },
       });
 
       const proposed = await engine.handle(`config set ${path} ${value}`);
@@ -436,13 +418,12 @@ describe("SystemAgentChatEngine approval", () => {
   it("keeps valid SecretRef ids out of pending context and later history", async () => {
     const rawRef = "123:actual-gateway-token";
     const observedInputs: string[] = [];
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       classifyApproval: async () => "other",
       runAgentTurn: async (params) => {
         observedInputs.push(params.input);
         return { text: "still pending" };
       },
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(`config set-ref gateway.auth.token exec ${rawRef}`);
@@ -463,9 +444,8 @@ describe("SystemAgentChatEngine approval", () => {
 
   it("keeps malformed config read paths off model and history", async () => {
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       runAgentTurn: runAgentTurn as never,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const reply = await engine.handle('config schema gateway.auth["token=abcDEF123"]');
@@ -476,9 +456,7 @@ describe("SystemAgentChatEngine approval", () => {
   });
 
   it("redacts vulnerable config command text when persisted history is seeded", () => {
-    const engine = new SystemAgentChatEngine({
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+    const engine = createChatEngine({});
 
     engine.seedHistory([
       { role: "user", text: "config set-ref gateway.auth.token exec 123:actual-gateway-token" },
@@ -497,9 +475,8 @@ describe("SystemAgentChatEngine approval", () => {
   ])("keeps malformed sensitive config write %s away from every model path", async (command) => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const engine = new SystemAgentChatEngine({
+    const engine = createChatEngine({
       runAgentTurn: runAgentTurn as never,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(command);
@@ -529,10 +506,9 @@ describe("SystemAgentChatEngine approval", () => {
     "keeps sensitive dynamic or unknown-owner path %s out of model paths, responses, and history",
     async (command) => {
       const runAgentTurn = vi.fn(async () => ({ text: "noted" }));
-      const engine = new SystemAgentChatEngine({
+      const engine = createChatEngine({
         runAgentTurn,
         classifyApproval: async () => "other",
-        deps: { loadOverview: fakeOverviewLoader() },
       });
 
       const proposed = await engine.handle(command);
