@@ -179,7 +179,9 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
       const received = once(client, "message");
       let sent: Promise<void>;
       try {
-        sent = promisify(socket.send.bind(socket))(frame, { binary: false });
+        sent = new Promise<void>((resolve, reject) => {
+          socket.send(frame, { binary: false }, (error) => (error ? reject(error) : resolve()));
+        });
       } finally {
         assembled.mockRestore();
       }

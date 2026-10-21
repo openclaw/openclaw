@@ -20,23 +20,28 @@ const turnPage = (items: CodexThreadItem[], backwardsCursor?: string, nextCursor
 });
 
 function nativeItemControl(source: CodexThreadItem[]) {
-  const listItemPage: CodexSessionCatalogControl["listItemPage"] = async ({ cursor, limit }) => {
-    const newestFirst = source.toReversed();
-    const anchor = cursor ? newestFirst.findIndex((item) => cursor === `native:${item.id}`) : -1;
-    expect(cursor === undefined || anchor >= 0).toBe(true);
-    const selected = newestFirst.slice(anchor + 1, anchor + 1 + limit);
-    const last = selected.at(-1);
-    return {
-      data: selected.map((item) => ({ turnId: "turn-1", item })),
-      ...(last && anchor + 1 + selected.length < source.length
-        ? { nextCursor: `native:${last.id}` }
-        : {}),
-    };
+  const listItemPage = vi.fn<CodexSessionCatalogControl["listItemPage"]>(
+    async ({ cursor, limit }) => {
+      const newestFirst = source.toReversed();
+      const anchor = cursor ? newestFirst.findIndex((item) => cursor === `native:${item.id}`) : -1;
+      expect(cursor === undefined || anchor >= 0).toBe(true);
+      const selected = newestFirst.slice(anchor + 1, anchor + 1 + limit);
+      const last = selected.at(-1);
+      return {
+        data: selected.map((item) => ({ turnId: "turn-1", item })),
+        ...(last && anchor + 1 + selected.length < source.length
+          ? { nextCursor: `native:${last.id}` }
+          : {}),
+      };
+    },
+  );
+  return {
+    listItemPage,
+    control: createEligibleControl({
+      requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
+      listItemPage,
+    }),
   };
-  return createEligibleControl({
-    requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
-    listItemPage: vi.fn(listItemPage),
-  });
 }
 
 function readTranscript(control: CodexSessionCatalogControl, limit: number, cursor?: string) {
@@ -53,7 +58,7 @@ function readTranscript(control: CodexSessionCatalogControl, limit: number, curs
 it("cuts native pages by wire bytes without losing raw output or advancing past omitted items", async () => {
   const output = "海🌱\n".repeat(80_000);
   const source = Array.from({ length: 36 }, (_, index) => commandItem(`tool-${index}`, output));
-  const control = nativeItemControl(source);
+  const { control, listItemPage } = nativeItemControl(source);
   const first = await readTranscript(control, 50);
   const second = await readTranscript(control, 7, first.nextCursor);
   const third = await readTranscript(control, 50, second.nextCursor);
@@ -66,7 +71,7 @@ it("cuts native pages by wire bytes without losing raw output or advancing past 
   expect(first.items.length).toBeGreaterThan(0);
   expect(first.items.length).toBeLessThan(source.length);
   expect(first.nextCursor).toBe(`native:${first.items.at(-1)?.id}`);
-  expect(vi.mocked(control.listItemPage).mock.calls[1]?.[0].limit).toBeLessThan(50);
+  expect(listItemPage.mock.calls[1]?.[0].limit).toBeLessThan(50);
   expect(delivered.map((item) => item.id)).toEqual(source.toReversed().map((item) => item.id));
   expect(pages.at(-1)?.nextCursor).toBeUndefined();
   for (const page of pages) {
@@ -83,7 +88,7 @@ it("cuts native pages by wire bytes without losing raw output or advancing past 
 });
 
 it("fails visibly when one complete raw item cannot fit the wire budget", async () => {
-  const control = nativeItemControl([commandItem("oversized", "x".repeat(20 * 1024 * 1024))]);
+  const { control } = nativeItemControl([commandItem("oversized", "x".repeat(20 * 1024 * 1024))]);
 
   await expect(readTranscript(control, 1)).rejects.toThrow(
     "Codex transcript item exceeds the safe response size",
