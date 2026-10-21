@@ -20,6 +20,9 @@ describe("leading-@ host and mounted sandbox paths", () => {
       const siblingPath = path.join(workspaceDir, "existing.md");
       const literalParent = path.join(workspaceDir, "@notes");
       const siblingParent = path.join(workspaceDir, "notes");
+      const file = (name: string) => path.join(workspaceDir, name);
+      const expectFile = (name: string, text: string) =>
+        expect(fs.readFile(file(name), "utf8")).resolves.toBe(text);
       await fs.mkdir(literalParent);
       await fs.mkdir(siblingParent);
       await fs.writeFile(literalPath, "literal original", "utf8");
@@ -32,49 +35,30 @@ describe("leading-@ host and mounted sandbox paths", () => {
           config: { tools: { fs: { workspaceOnly } } },
         }),
       );
+      let callId = 0;
+      const read = async (filePath: string, text: string) =>
+        expect(
+          getTextContent(await readTool.execute(`read-${++callId}`, { path: filePath })),
+        ).toContain(text);
+      const write = (filePath: string, content: string) =>
+        writeTool.execute(`write-${++callId}`, { path: filePath, content });
+      const edit = (filePath: string, oldText: string, newText: string) =>
+        editTool.execute(`edit-${++callId}`, { path: filePath, edits: [{ oldText, newText }] });
 
-      expect(
-        getTextContent(await readTool.execute("at-existing-read", { path: "@existing.md" })),
-      ).toContain("literal original");
-      expect(
-        getTextContent(await readTool.execute("at-reference-read", { path: "@reference.md" })),
-      ).toContain("reference");
-      await writeTool.execute("at-existing-write", {
-        path: "@existing.md",
-        content: "literal updated",
-      });
-      await editTool.execute("at-existing-edit", {
-        path: "@existing.md",
-        edits: [{ oldText: "updated", newText: "edited" }],
-      });
-      await writeTool.execute("at-parent-write", {
-        path: "@notes/nested/../new.md",
-        content: "literal child",
-      });
-
-      await expect(fs.readFile(literalPath, "utf8")).resolves.toBe("literal edited");
-      await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("sibling original");
-      await expect(fs.readFile(path.join(literalParent, "new.md"), "utf8")).resolves.toBe(
-        "literal child",
-      );
-      await expect(fs.readFile(path.join(siblingParent, "new.md"), "utf8")).resolves.toBe(
-        "sibling child",
-      );
-      expect(
-        getTextContent(
-          await readTool.execute("at-reference-literal-read", { path: "@@existing.md" }),
-        ),
-      ).toContain("literal edited");
-      await writeTool.execute("at-reference-literal-write", {
-        path: "@@existing.md",
-        content: "referenced original",
-      });
-      await editTool.execute("at-reference-literal-edit", {
-        path: "@@existing.md",
-        edits: [{ oldText: "original", newText: "edited" }],
-      });
-      await expect(fs.readFile(literalPath, "utf8")).resolves.toBe("referenced edited");
-      await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("sibling original");
+      await read("@existing.md", "literal original");
+      await read("@reference.md", "reference");
+      await write("@existing.md", "literal updated");
+      await edit("@existing.md", "updated", "edited");
+      await write("@notes/nested/../new.md", "literal child");
+      await expectFile("@existing.md", "literal edited");
+      await expectFile("existing.md", "sibling original");
+      await expectFile("@notes/new.md", "literal child");
+      await expectFile("notes/new.md", "sibling child");
+      await read("@@existing.md", "literal edited");
+      await write("@@existing.md", "referenced original");
+      await edit("@@existing.md", "original", "edited");
+      await expectFile("@existing.md", "referenced edited");
+      await expectFile("existing.md", "sibling original");
     },
   );
 
@@ -86,6 +70,8 @@ describe("leading-@ host and mounted sandbox paths", () => {
     const workspaceDir = tempDirs.make("openclaw-at-host-");
     const literalParent = path.join(workspaceDir, "@notes");
     const siblingParent = path.join(workspaceDir, "notes");
+    const expectLiteral = (text: string) =>
+      expect(fs.readFile(path.join(literalParent, "new.md"), "utf8")).resolves.toBe(text);
     await fs.mkdir(literalParent);
     await fs.mkdir(siblingParent);
     await fs.writeFile(path.join(siblingParent, "new.md"), "sibling before\n", "utf8");
@@ -108,9 +94,7 @@ describe("leading-@ host and mounted sandbox paths", () => {
       });
 
     await runPatch("at-patch-add", ["*** Add File: @notes/new.md", "+literal before"]);
-    await expect(fs.readFile(path.join(literalParent, "new.md"), "utf8")).resolves.toBe(
-      "literal before\n",
-    );
+    await expectLiteral("literal before\n");
 
     await runPatch("at-patch-update", [
       "*** Update File: @notes/new.md",
@@ -118,9 +102,7 @@ describe("leading-@ host and mounted sandbox paths", () => {
       "-literal before",
       "+literal after",
     ]);
-    await expect(fs.readFile(path.join(literalParent, "new.md"), "utf8")).resolves.toBe(
-      "literal after\n",
-    );
+    await expectLiteral("literal after\n");
 
     await runPatch("at-patch-delete", ["*** Delete File: @notes/new.md"]);
     await expect(fs.stat(path.join(literalParent, "new.md"))).rejects.toMatchObject({
