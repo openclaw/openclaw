@@ -46,6 +46,8 @@ import { followupQueueSources, followupSourceRunners } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import { isFollowupRunAborted, type FollowupRun } from "./types.js";
 
+type AdmissionSessionRebind = { from: string; to: string };
+
 // Overflow retries must reuse one transcript identity, while the same provider-local
 // message ID on a different channel route remains an independent user turn.
 function buildOverflowTranscriptIdempotencyKey(source: FollowupRun, prompt: string): string {
@@ -98,6 +100,7 @@ function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun[
 async function executeClaim(
   claim: SessionControllerMailboxClaim,
   execute: (run: FollowupRun) => Promise<void>,
+  admissionSessionRebind?: AdmissionSessionRebind,
 ): Promise<void> {
   const queue = claim.mailbox;
   const generation = queue.abortController;
@@ -204,6 +207,9 @@ async function executeClaim(
   let adoptionRefused = false;
   let waitForFreshKick = false;
   try {
+    if (admissionSessionRebind && run.run.sessionId === admissionSessionRebind.from) {
+      run = { ...run, admissionSessionId: admissionSessionRebind.to };
+    }
     const runFollowup =
       (source.controllerInput && followupSourceRunners.get(source.controllerInput)) ?? execute;
     await runFollowup(run);
@@ -290,6 +296,7 @@ export function rememberFollowupDrainCallback(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
   captured?: SessionControllerMailbox,
+  admissionSessionRebind?: AdmissionSessionRebind,
 ): void {
   const mailbox = captured ?? getExistingSessionControllerMailbox(key);
   if (!mailbox) {
@@ -312,7 +319,9 @@ export function rememberFollowupDrainCallback(
             // Consume this request; a kick during execution re-enables dispatch.
             mailbox.dispatchEnabled = false;
             // The retiring turn may wake this mailbox from its own async context.
-            return runWithSessionControllerCleanup(() => executeClaim(claim, runFollowup));
+            return runWithSessionControllerCleanup(() =>
+              executeClaim(claim, runFollowup, admissionSessionRebind),
+            );
           }),
         "session:mailbox-turn",
       );
@@ -350,12 +359,13 @@ export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
   owner?: SessionControllerEntry,
+  admissionSessionRebind?: AdmissionSessionRebind,
 ): void {
   const mailbox = owner ? owner.mailbox : getExistingSessionControllerMailbox(key);
   if (!mailbox) {
     return;
   }
-  rememberFollowupDrainCallback(key, runFollowup, mailbox);
+  rememberFollowupDrainCallback(key, runFollowup, mailbox, admissionSessionRebind);
   mailbox.dispatchEnabled = true;
   mailbox.wake();
 }
