@@ -270,7 +270,7 @@ if (isMainThread) {
         }
         active.add(message.kind);
         if (message.includeWorkers) {
-          await workers.start(message.kind, message.profilePath);
+          await workers.start(message.kind, message.profilePath, message);
         }
         diagnosticCaptures.set(message.kind, startGatewayBenchDiagnostics());
         workerMessageStarts.set(message.kind, getWorkerMessageMetrics());
@@ -304,10 +304,13 @@ if (isMainThread) {
           })
           .filter((counter) => counter.messages > 0);
         try {
-          const { profile } =
+          // Stop worker sampling before materializing the main profile and its sidecars.
+          const [{ profile }] = await Promise.all([
             message.kind === "cpu"
-              ? await inspector.post("Profiler.stop")
-              : await inspector.post("HeapProfiler.stopSampling");
+              ? inspector.post("Profiler.stop")
+              : inspector.post("HeapProfiler.stopSampling"),
+            workers.stop(message.kind),
+          ]);
           active.delete(message.kind);
           writeFileSync(message.profilePath, JSON.stringify(profile), { mode: 0o600 });
           writeFileSync(

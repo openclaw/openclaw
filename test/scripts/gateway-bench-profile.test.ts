@@ -64,12 +64,18 @@ const workerIdentities = (manifest: WorkerProfileManifest) =>
     .toSorted((left, right) => left.threadId - right.threadId);
 
 type WorkerProfileManifest = {
+  samplingIntervalBytes?: number;
+  includeCollectedObjects?: boolean;
   workers: Array<{
     completed?: boolean;
     error?: string;
     inspectorWorkerId: string;
+    title: string;
     profilePath: string;
     threadId: number;
+    startedAt: number;
+    samplingStartedAt?: number;
+    samplingStoppedAt?: number;
   }>;
   samples: Array<{
     workers: Array<{
@@ -80,6 +86,21 @@ type WorkerProfileManifest = {
     }>;
   }>;
 };
+
+function heapBytesUnder(
+  node: HeapProfiler.SamplingHeapProfileNode,
+  functionName: string,
+  inside = false,
+): number {
+  const matches = inside || node.callFrame.functionName === functionName;
+  return (
+    (matches ? node.selfSize : 0) +
+    node.children.reduce(
+      (total, childNode) => total + heapBytesUnder(childNode, functionName, matches),
+      0,
+    )
+  );
+}
 
 it("measures fixed CPU work including a retired Worker without starting the inspector", async () => {
   const { child, stderr } = spawnFixture([fixturePath("gateway-bench-cpu-usage")]);
@@ -195,7 +216,9 @@ let worker, idle;
 function createWorker() {
     worker = new Worker(\`
       const { parentPort } = require('node:worker_threads');
+      const { Session } = require('node:inspector/promises');
       let total = 0;
+      let retainedRows;
       function allocateForProfile() {
         const until = Date.now() + 500;
         while (Date.now() < until) {
@@ -204,9 +227,25 @@ function createWorker() {
         }
         parentPort.postMessage(total);
       }
-      parentPort.on('message', allocateForProfile);
+      function retainedWorkerAllocation() {
+        return Array.from({length: 100000}, (_, i) => ({i, values: [i, i + 1]}));
+      }
+      function discardedWorkerAllocation() {
+        const rows = Array.from({length: 100000}, (_, i) => ({i, values: [i, i + 1]}));
+        return rows[rows.length - 1].values[1];
+      }
+      parentPort.on('message', async message => {
+        if (message !== 'fixed-allocations') return allocateForProfile();
+        total += discardedWorkerAllocation();
+        retainedRows = retainedWorkerAllocation();
+        const inspector = new Session();
+        inspector.connect();
+        await inspector.post('HeapProfiler.collectGarbage');
+        inspector.disconnect();
+        parentPort.postMessage({retained: retainedRows.length, total});
+      });
     \`, {eval: true, execArgv: []});
-    worker.once('message', () => process.send({complete: true, threadId: worker.threadId}));
+    worker.on('message', result => process.send({complete: true, threadId: worker.threadId, result}));
 }
 process.on('message', (message) => {
   if (message.prepare) {
@@ -221,6 +260,7 @@ process.on('message', (message) => {
       worker.once('online', () => worker.postMessage('run'));
     }
   }
+  if (message.fixedAllocations) worker.postMessage('fixed-allocations');
   if (message.retire) Promise.all([worker, idle].filter(Boolean).map(w => w.terminate()))
     .then(() => process.send({retired: true}));
 });
@@ -276,8 +316,13 @@ it.each([
         completed: true,
         inspectorWorkerId: expect.any(String),
         threadId: expect.any(Number),
+        samplingStartedAt: expect.any(Number),
+        samplingStoppedAt: expect.any(Number),
       });
       expect(recording.error).toBeUndefined();
+      expect(recording.title).toContain(`[worker ${recording.threadId}]`);
+      expect(recording.samplingStartedAt).toBeGreaterThanOrEqual(recording.startedAt);
+      expect(recording.samplingStoppedAt).toBeGreaterThan(recording.samplingStartedAt!);
       if (kind === "cpu") {
         const profile = await readJson<Profiler.Profile>(recording.profilePath);
         if (profile.nodes.some((node) => node.callFrame.functionName === "allocateForProfile")) {
@@ -311,6 +356,39 @@ it.each([
     ).toBe(true);
     expect(await readFile(profilePath, "utf8")).not.toBe("");
 
+    if (kind === "heap") {
+      for (const includeCollectedObjects of [true, false]) {
+        const fixedPath = path.join(directory, `heap-collected-${includeCollectedObjects}`);
+        const samplingIntervalBytes = 1024;
+        await controlGatewayProfile(child, "heap", "start", fixedPath, {
+          includeWorkers: true,
+          includeCollectedObjects,
+          samplingIntervalBytes,
+        });
+        expect(await sendMessage(child, { fixedAllocations: true })).toMatchObject({
+          complete: true,
+          result: { retained: 100000 },
+        });
+        await controlGatewayProfile(child, "heap", "stop", fixedPath);
+        const fixedManifest = await readJson<WorkerProfileManifest>(`${fixedPath}.workers.json`);
+        expect(fixedManifest).toMatchObject({ includeCollectedObjects, samplingIntervalBytes });
+        const recording = fixedManifest.workers.find(
+          ({ threadId }) => threadId === completed.threadId,
+        );
+        expect(recording).toMatchObject({ completed: true });
+        const profile = await readJson<HeapProfiler.SamplingHeapProfile>(recording!.profilePath);
+        expect(heapBytesUnder(profile.head, "retainedWorkerAllocation")).toBeGreaterThan(1_000_000);
+        const discardedBytes = heapBytesUnder(profile.head, "discardedWorkerAllocation");
+        if (includeCollectedObjects) {
+          expect(discardedBytes).toBeGreaterThan(1_000_000);
+        } else {
+          expect(discardedBytes).toBe(0);
+        }
+        // The fixed retained workload yields thousands of 1 KiB samples, versus hundreds at 32 KiB.
+        expect(profile.samples.length).toBeGreaterThan(2000);
+      }
+    }
+
     const retiredPath = path.join(directory, `${kind}-retired`);
     await controlGatewayProfile(child, kind, "start", retiredPath, { includeWorkers: true });
     expect(await sendMessage(child, { retire: true })).toMatchObject({ retired: true });
@@ -320,6 +398,7 @@ it.each([
     for (const recording of incomplete.workers) {
       expect(recording.completed).not.toBe(true);
       expect(recording.error).toBeTruthy();
+      expect(recording.samplingStoppedAt).toBeUndefined();
     }
   },
   30_000,
@@ -411,22 +490,8 @@ it("separates discarded allocation churn from retained objects and cleans up fai
   await readGatewayResources(child, { collectGarbage: true });
   await controlGatewayProfile(child, "heap", "stop", retainedPath);
   const retained = await readJson<HeapProfiler.SamplingHeapProfile>(retainedPath);
-  const bytesUnder = (
-    node: HeapProfiler.SamplingHeapProfileNode,
-    functionName: string,
-    inside = false,
-  ): number => {
-    const matches = inside || node.callFrame.functionName === functionName;
-    return (
-      (matches ? node.selfSize : 0) +
-      node.children.reduce(
-        (total, childNode) => total + bytesUnder(childNode, functionName, matches),
-        0,
-      )
-    );
-  };
-  expect(bytesUnder(retained.head, "retainedAllocation")).toBeGreaterThan(1_000_000);
-  expect(bytesUnder(retained.head, "discardedAllocation")).toBe(0);
+  expect(heapBytesUnder(retained.head, "retainedAllocation")).toBeGreaterThan(1_000_000);
+  expect(heapBytesUnder(retained.head, "discardedAllocation")).toBe(0);
   child.disconnect();
   await closed;
   const logPath = path.join(directory, "gateway.log");

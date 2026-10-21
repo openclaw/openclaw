@@ -1346,6 +1346,25 @@ results do not establish natural steady-state GC behavior. Sampling retains
 native sample metadata and adds stack-capture overhead; confirm marginal
 GC/latency results with a matching soak without allocation profiling.
 
+For allocation work that executes in a worker, add `--worker-allocations` to
+`memory-soak --allocations`. It uses the existing private inspector channel and
+the same collected-object sampling interval in every isolate. The
+`wholeSoakAllocation.workerManifestPath` artifact lists each worker's native
+thread ID, inspector title, acknowledged sampling boundaries, completion/error,
+and profile path. Join native IDs to the existing memory samples' `workerHeaps`
+and `workerMemoryMissing` script identities before attributing bytes to an owner.
+Read successful worker profiles with `readGatewayHeapProfile` and report main,
+owner-worker, all-worker, and combined bytes per completed foreground turn
+separately. Retired or unidentified workers are missing evidence, never zero
+allocation. Worker profiling also samples worker resource usage every 100 ms;
+enable it identically on both sides of a comparison.
+
+`--soak-rounds <n>` runs exactly that many measured cohorts instead of admitting
+cohorts until the duration deadline. The continuous diagnostics/allocation window
+still lasts at least `--duration-ms`, including any final idle gap. Use equal
+cohort counts and session-reset counts when comparing promotion and GC, and size
+the workload for at least 200 observations per side for p95 (1,000 for p99).
+
 Run at least twenty measured minutes per side and compare at least two concurrent
 pairs with swapped CPU halves. Compare B minus A within each pair for allocation,
 promotion, minor/major GC, loop p99/max, every RPC tail, and turn latency. A lower

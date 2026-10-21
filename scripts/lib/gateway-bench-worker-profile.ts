@@ -9,7 +9,12 @@ import {
   type GatewayProfileCommand,
 } from "./gateway-bench-profile.ts";
 
-type WorkerTarget = { sessionId: string; inspectorWorkerId: string; threadId?: number };
+type WorkerTarget = {
+  sessionId: string;
+  inspectorWorkerId: string;
+  title: string;
+  threadId?: number;
+};
 type WorkerSample = {
   threadId: number;
   cpu?: NodeJS.CpuUsage;
@@ -21,6 +26,8 @@ type WorkerRecording = {
   threadId?: number;
   profilePath: string;
   startedAt: number;
+  samplingStartedAt?: number;
+  samplingStoppedAt?: number;
   pending: Promise<void>;
   completed?: boolean;
   error?: string;
@@ -28,6 +35,7 @@ type WorkerRecording = {
 type Capture = {
   kind: GatewayProfileCommand["kind"];
   profilePath: string;
+  heapOptions: Pick<GatewayProfileCommand, "samplingIntervalBytes" | "includeCollectedObjects">;
   recordings: WorkerRecording[];
   samples: Array<{
     at: number;
@@ -82,6 +90,7 @@ export class GatewayBenchWorkerProfiler {
         const target = {
           sessionId: params.sessionId,
           inspectorWorkerId: params.workerInfo.workerId,
+          title: params.workerInfo.title,
           threadId: Number.isSafeInteger(threadId) ? threadId : undefined,
         };
         this.targets.set(target.sessionId, target);
@@ -142,7 +151,11 @@ export class GatewayBenchWorkerProfiler {
     });
   }
 
-  async start(kind: GatewayProfileCommand["kind"], profilePath: string): Promise<void> {
+  async start(
+    kind: GatewayProfileCommand["kind"],
+    profilePath: string,
+    heapOptions: Capture["heapOptions"] = {},
+  ): Promise<void> {
     if (this.captures.has(kind)) {
       throw new Error(`Worker ${kind} profiling already started`);
     }
@@ -150,7 +163,7 @@ export class GatewayBenchWorkerProfiler {
     // instead detach cleanly, letting us record incomplete capture without changing retirement.
     this.enabled ??= this.inspector.post("NodeWorker.enable", { waitForDebuggerOnStart: false });
     await this.enabled;
-    const capture: Capture = { kind, profilePath, recordings: [], samples: [] };
+    const capture: Capture = { kind, profilePath, heapOptions, recordings: [], samples: [] };
     this.captures.set(kind, capture);
     for (const target of this.targets.values()) {
       this.record(target, capture);
@@ -183,11 +196,13 @@ export class GatewayBenchWorkerProfiler {
           await this.post(target, "Profiler.start");
         } else {
           await this.post(target, "HeapProfiler.startSampling", {
-            samplingInterval: GATEWAY_HEAP_SAMPLE_INTERVAL,
-            includeObjectsCollectedByMajorGC: true,
-            includeObjectsCollectedByMinorGC: true,
+            samplingInterval:
+              capture.heapOptions.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
+            includeObjectsCollectedByMajorGC: capture.heapOptions.includeCollectedObjects ?? true,
+            includeObjectsCollectedByMinorGC: capture.heapOptions.includeCollectedObjects ?? true,
           });
         }
+        recording.samplingStartedAt = performance.now();
       } catch (error) {
         recording.error = errorMessage(error);
       }
@@ -238,6 +253,7 @@ export class GatewayBenchWorkerProfiler {
             recording.target,
             kind === "cpu" ? "Profiler.stop" : "HeapProfiler.stopSampling",
           );
+          recording.samplingStoppedAt = performance.now();
           if (!result?.profile) {
             throw new Error("Worker profiler returned no profile");
           }
@@ -252,11 +268,19 @@ export class GatewayBenchWorkerProfiler {
       `${capture.profilePath}.workers.json`,
       JSON.stringify({
         kind,
+        ...(kind === "heap"
+          ? {
+              samplingIntervalBytes:
+                capture.heapOptions.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
+              includeCollectedObjects: capture.heapOptions.includeCollectedObjects ?? true,
+            }
+          : {}),
         sampleIntervalMs: 100,
         sampleClock: "performance.now",
         cpuCounters: "cumulative-microseconds",
         workers: capture.recordings.map(({ pending: _pending, target, ...row }) => ({
           inspectorWorkerId: target.inspectorWorkerId,
+          title: target.title,
           ...row,
         })),
         samples: capture.samples,
