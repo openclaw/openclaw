@@ -49,7 +49,13 @@ function themeConfigResponse(
   accent?: string,
 ) {
   const config = {
-    ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode, accent } },
+    ui: {
+      prefs: {
+        ...(family === "claw" ? {} : { theme: family }),
+        themeMode: mode,
+        ...(accent === undefined ? {} : { accent }),
+      },
+    },
   };
   const hash = `theme-contrast-${family}-${mode}-${accent ?? "default"}`;
   return configSnapshot(config, hash, true);
