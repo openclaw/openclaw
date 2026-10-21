@@ -63,11 +63,13 @@ async function allocation(count: number) {
   });
   await run(count);
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  const ownerNodes = new Set<number>();
+  let total = 0;
+  let owner = 0;
   function visit(node: HeapProfiler.SamplingHeapProfileNode, owned = false) {
     const underOwner = owned || node.callFrame.url.includes("/ws-connection-diagnostics.");
+    total += node.selfSize;
     if (underOwner) {
-      ownerNodes.add(node.id);
+      owner += node.selfSize;
     }
     for (const child of node.children) {
       visit(child, underOwner);
@@ -75,13 +77,8 @@ async function allocation(count: number) {
   }
   visit(profile.head);
   return {
-    total: profile.samples.reduce((sum, sample) => sum + sample.size, 0) / (count * frames),
-    owner:
-      profile.samples.reduce(
-        (sum, sample) => sum + (ownerNodes.has(sample.nodeId) ? sample.size : 0),
-        0,
-      ) /
-      (count * frames),
+    total: total / (count * frames),
+    owner: owner / (count * frames),
   };
 }
 
