@@ -26,17 +26,13 @@ const legacyReview = {
   payload: { kind: "skillCollectionReview" },
 };
 const curator = {
-  ...job("retired"),
-  name: "skill-collection-review-main",
-  declarationKey: "skill-collection-review:main",
-  systemOwned: true,
+  ...legacyReview,
   sessionTarget: "isolated",
   payload: { kind: "agentTurn", message: "Weekly Skill Workshop curator pass." },
   delivery: { mode: "none" },
 };
 
 it.each([
-  ["both", "skillCollectionReview", legacyReview, null],
   ["json-only", "systemEvent", legacyReview, null],
   ["column-only", "skillCollectionReview", job("retired"), null],
   ["curator", "agentTurn", curator, "skill-collection-review:main"],

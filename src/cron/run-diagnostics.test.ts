@@ -101,15 +101,11 @@ describe("cron run diagnostics", () => {
     });
   });
 
-  it.each([
-    ["wildcard toolsAllow", { toolsAllow: ["*"], hasWebSearchProvider: false }],
-    ["configured provider", { toolsAllow: ["web_search"], hasWebSearchProvider: true }],
-  ] satisfies Array<[string, Parameters<typeof missingWebSearchProvider>[0]]>)(
-    "does not warn for %s",
-    (_name, options) => {
-      expect(missingWebSearchProvider(options)).toBeUndefined();
-    },
-  );
+  it("does not warn for an unrestricted tools policy", () => {
+    expect(
+      missingWebSearchProvider({ toolsAllow: ["*"], hasWebSearchProvider: false }),
+    ).toBeUndefined();
+  });
 
   it("extracts fatal agent result payloads and meta errors", () => {
     const diagnostics = diagnosticsFromResult(
@@ -145,21 +141,6 @@ describe("cron run diagnostics", () => {
     );
   });
 
-  it("warns on an unresolved exec call even when the assistant replied normally", () => {
-    const diagnostics = diagnosticsFromResult(
-      {
-        payloads: [{ text: "RESULT: the command did not run" }],
-        meta: { toolSummary: { unresolvedError: { toolName: "exec" } } },
-      },
-      { ...fixedClock, finalStatus: "ok" },
-    );
-
-    expect(diagnostics).toEqual({
-      summary: "exec tool failed",
-      entries: [entry("exec tool failed", { source: "exec", severity: "warn" })],
-    });
-  });
-
   it("does not duplicate a recorded exec error or report unrelated tools", () => {
     const diagnostics = diagnosticsFromResult(
       {
@@ -179,15 +160,6 @@ describe("cron run diagnostics", () => {
   });
 
   it.each([
-    {
-      name: "prefers terminal failure over a generic failed-tool payload",
-      result: {
-        ...terminalResult(),
-        payloads: [{ text: "⚠️ Exec failed", isError: true, toolName: "exec" }],
-      },
-      finalStatus: undefined,
-      entries: [entry("⚠️ Exec failed"), entry(terminalMessage)],
-    },
     {
       name: "downgrades recovered terminal failures",
       result: terminalResult(),

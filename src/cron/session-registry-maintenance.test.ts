@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +14,6 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
-import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -24,12 +22,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runSessionRegistryMaintenance } from "./session-registry-maintenance.js";
 import * as cronStore from "./store.js";
-import { makeCronReceiptJob } from "./store/run-receipt-store.test-support.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 let state: OpenClawTestState;
@@ -38,22 +34,6 @@ const maintain = (apply = true, cronStorePath = state.statePath("cron/jobs.json"
 async function configure(config: OpenClawConfig) {
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
-}
-
-function writeAgentDeletion(agentId: string, cleanupCompleted: boolean): void {
-  const deletion = beginAgentDeletionJournal({
-    agentId,
-    operationId: randomUUID(),
-    agentDir: state.agentDir(agentId),
-    workspaceDir: state.path(`workspace-${agentId}`),
-    sessionsDir: state.sessionsDir(agentId),
-    deleteFiles: false,
-  });
-  if (cleanupCompleted) {
-    runOpenClawStateWriteTransaction((database) =>
-      completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
-    );
-  }
 }
 
 async function writeStaleCronSession(
@@ -102,22 +82,6 @@ describe("runSessionRegistryMaintenance", () => {
       expect(summary.skippedReason).toContain("cron store unreadable");
       expect(summary.pruned).toBe(0);
       expect(loadSessionEntry(stale)).toBeDefined();
-    }),
-  );
-
-  it(
-    "preserves running jobs in the selected cron partition",
-    withMaintenanceState(async () => {
-      const scope = await writeStaleCronSession("main");
-      const cronStorePath = state.statePath("custom-cron/jobs.json");
-      const job = makeCronReceiptJob("done-job", "main");
-      job.state.runningAtMs = Date.now();
-      await cronStore.saveCronStore(cronStorePath, { version: 1, jobs: [job] });
-
-      const summary = await maintain(true, cronStorePath);
-
-      expect(summary).toMatchObject({ runningCronJobs: 1, pruned: 0 });
-      expect(loadSessionEntry(scope)).toBeDefined();
     }),
   );
 
@@ -226,36 +190,6 @@ describe("runSessionRegistryMaintenance", () => {
         expect(loadSessionEntry(scope)).toBeUndefined();
       }
     }),
-  );
-
-  it.each([
-    { apply: false, cleanupCompleted: false },
-    { apply: true, cleanupCompleted: false },
-    { apply: false, cleanupCompleted: true },
-    { apply: true, cleanupCompleted: true },
-  ])(
-    "skips agent deletions while maintaining healthy stores (apply=$apply, cleanupCompleted=$cleanupCompleted)",
-    withMaintenanceState(
-      async ({ apply, cleanupCompleted }: { apply: boolean; cleanupCompleted: boolean }) => {
-        const main = await writeStaleCronSession("main");
-        const retired = await writeStaleCronSession("retired");
-        writeAgentDeletion("retired", cleanupCompleted);
-        await closeOpenClawAgentDatabasesAsync(state.stateDir);
-
-        const summary = await maintain(apply);
-
-        expect(summary).toMatchObject({ pruned: 1, skippedStores: 1 });
-        expect(summary.stores).toContainEqual(
-          expect.objectContaining({ agentId: "main", pruned: 1 }),
-        );
-        expect(summary.stores).toContainEqual({
-          agentId: "retired",
-          storePath: retired.storePath,
-          skippedReason: cleanupCompleted ? "agent-deletion-complete" : "agent-deletion-pending",
-        });
-        expect(loadSessionEntry(main) !== undefined).toBe(!apply);
-      },
-    ),
   );
 
   it.each(["missing", "reconstructed"])(

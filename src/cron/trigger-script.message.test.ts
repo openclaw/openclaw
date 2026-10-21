@@ -23,6 +23,7 @@ async function messageFixture(accountPolicy = false) {
   });
   const accounts = {
     work: { botToken: "synthetic-work-token" },
+    personal: { botToken: "synthetic-personal-token" },
     disabled: { enabled: false, botToken: "synthetic-disabled-token" },
   };
   const config: OpenClawConfig = {
@@ -125,9 +126,11 @@ it.each(["trigger", "payload"] as const)(
     const { config, registry, sendText } = await messageFixture(true);
     const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
     const signal = new AbortController().signal;
+    const script =
+      'await message({ action: "send", channel: "telegram", accountId: trigger.state.accountId, target: "123", message: "Scheduled report" }); return { fire: false };';
     const invoke = async (accountId: string, callerOrigin?: CronScheduledToolCallerOrigin) => {
-      const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { fire: false };`;
-      const jobId = `account-${entry}-${accountId}`;
+      const state = { accountId };
+      const jobId = `account-${entry}`;
       const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
       const ownerSessionKey = `agent:main:telegram:${accountId}:direct:123`;
       const job = makeCronJob({
@@ -138,6 +141,7 @@ it.each(["trigger", "payload"] as const)(
             ? { kind: "agentTurn", message: "Collect the report", toolsAllow: ["message"] }
             : { kind: "script", script, toolsAllow: ["message"] },
         delivery: { mode: "none", channel: "slack", accountId: "delivery" },
+        state: { triggerState: state },
         owner: { agentId: "main", sessionKey: ownerSessionKey, accountId },
         scheduledToolPolicy: {
           version: 1,
@@ -152,7 +156,7 @@ it.each(["trigger", "payload"] as const)(
       const params = {
         job,
         script,
-        state: null,
+        state,
         abortSignal: signal,
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         executionIdentity: {
@@ -176,16 +180,17 @@ it.each(["trigger", "payload"] as const)(
       ["work", "slack", 'Scheduled account "work" is unavailable', 1],
       ["work", undefined, 'Scheduled account "work" is unavailable', 1],
       ["work", "telegram", undefined, 2],
-      ["missing", "telegram", 'Scheduled account "missing" is unavailable', 2],
-      ["disabled", "telegram", "disabled", 2],
+      ["personal", "telegram", undefined, 3],
+      ["missing", "telegram", 'Scheduled account "missing" is unavailable', 3],
+      ["disabled", "telegram", "disabled", 3],
     ] as const) {
       const result = await invoke(accountId, channel ? { kind: "external", channel } : undefined);
       expect(result, JSON.stringify(result)).toMatchObject(
         error ? { kind: "error", error: expect.stringContaining(error) } : expected,
       );
       expect(sendText).toHaveBeenCalledTimes(sends);
-      if (!error && sends === 1) {
-        expect(sendText.mock.calls[0]?.[0]).toMatchObject({ accountId: "work" });
+      if (!error) {
+        expect(sendText.mock.lastCall?.[0]).toMatchObject({ accountId });
       }
     }
   },

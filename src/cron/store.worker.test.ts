@@ -24,6 +24,7 @@ import {
   saveCronJobsStoreChanges,
   saveCronJobsStoreWithRevision,
 } from "./store.js";
+import { expectPathMissing } from "./store.test-support.js";
 import { withCronStore } from "./store.worker.test-support.js";
 import { prepareCronJobNameResolver } from "./store/job-name.js";
 import { serializeCronLoadError } from "./store/load-error.js";
@@ -217,11 +218,22 @@ it("loads the current default cron partition after in-process writes without hos
 it("persists full, changed, and runtime-only cron saves off the host through reopen", async () => {
   await withCronStore("cron-worker-save", async (state) => {
     const { storePath } = state;
-    const otherPath = state.statePath("other", "jobs.json");
+    const otherPath = state.statePath("other", "jobs");
     const original = cronWorkerFixture();
+    original.jobs[0]!.state = {
+      nextRunAtMs: 60_001,
+      startupCatchupAtMs: 60_001,
+      pacedNextRunAtMs: 60_001,
+      queuedAtMs: 60_002,
+      lastStatus: "ok",
+    };
     const sql = observeMainThreadSql();
     try {
       await saveCronJobsStore(storePath, original);
+      await saveCronJobsStore(storePath, original);
+      const queued = (await state.load()).store.jobs[0]!.state;
+      expect(queued).toEqual({ ...original.jobs[0]!.state, lastRunStatus: "ok" });
+      expect(queued.runningAtMs).toBeUndefined();
       await saveCronJobsStore(otherPath, original);
       const updated = structuredClone(original);
       updated.jobs[0]!.name = "changed configuration";
@@ -232,20 +244,45 @@ it("persists full, changed, and runtime-only cron saves off the host through reo
         state: { nextRunAtMs: 90_001 },
       });
       const runtime = structuredClone(committed);
+      runtime.jobs = runtime.jobs.slice(0, 1);
       runtime.jobs[0]!.name = "runtime-only must not replace this name";
-      runtime.jobs[0]!.state.nextRunAtMs = 120_001;
+      runtime.jobs[0]!.updatedAtMs += 60_000;
+      runtime.jobs[0]!.state = {
+        nextRunAtMs: 120_001,
+        lastRunAtMs: 90_001,
+        runningAtMs: 90_002,
+        lastStatus: "error",
+        consecutiveErrors: 10,
+        autoDisabled: { reason: "consecutive-failures", atMs: 90_001, consecutiveErrors: 10 },
+      };
+      await saveCronJobsStore(storePath, runtime, { stateOnly: true });
       await saveCronJobsStore(storePath, runtime, { stateOnly: true });
       const loaded = await state.load();
+      expect(loaded.store.jobs.map(({ id }) => id)).toEqual(["first", "second"]);
       expect(loaded.store.jobs[0]).toMatchObject({
         name: "changed configuration",
         state: { nextRunAtMs: 120_001 },
       });
+      expect(loaded.store.jobs[0]?.state).toEqual({
+        ...runtime.jobs[0]!.state,
+        lastRunStatus: "error",
+      });
+      expect(loaded.store.jobs[0]?.state.queuedAtMs).toBeUndefined();
       expect((await loadCronJobsStoreWithConfigJobs(otherPath)).store.jobs[0]?.name).toBe("first");
       sql.expectIdle();
       await state.close();
       sql.clear();
       expect(await state.load()).toEqual(loaded);
       sql.expectIdle();
+      for (const path of [
+        storePath,
+        storePath.replace(/\.json$/, "-state.json"),
+        `${storePath}.bak`,
+        otherPath,
+        `${otherPath}-state.json`,
+      ]) {
+        await expectPathMissing(path);
+      }
     } finally {
       sql.restore();
     }
