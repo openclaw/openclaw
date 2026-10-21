@@ -48,7 +48,7 @@ it.each([
   ["launchctl", 120_000, 120_000, 120_000],
 ] as const)(
   "bounds %s command duration",
-  async (operation, deadline, cap, elapsed, closeCode: number | undefined = undefined) => {
+  async (operation, deadline, cap, elapsed, closeCode?: number) => {
     const helper = createHelper(closeCode);
     const scheduled = operation.startsWith("/");
     const settled = vi.fn<(result: CommandResult) => void>();
