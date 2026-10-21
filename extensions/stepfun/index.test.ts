@@ -1,7 +1,7 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import * as plugins from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import stepfunPlugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -16,9 +16,7 @@ it("adds Step 3.7 Flash without changing existing defaults", () => {
   const plan = catalog.buildStepFunPlanProvider();
   const standardModel = standard.models?.find((model) => model.id === "step-3.7-flash");
   const planModel = plan.models?.find((model) => model.id === "step-3.7-flash");
-  if (!standardModel) {
-    throw new Error("StepFun Standard catalog did not provide Step 3.7 Flash");
-  }
+  assert(standardModel, "StepFun Standard catalog did not provide Step 3.7 Flash");
 
   expect(catalog.STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.5-flash");
   expect(catalog.STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
@@ -59,10 +57,9 @@ it("adds Step 3.7 Flash without changing existing defaults", () => {
     systemPrompt: "system",
     messages: [{ role: "user", content: "hi", timestamp: 1 }],
   } as Context;
-  const lowPayload = buildOpenAICompletionsParams(transportModel, context, {
-    reasoning: standardModel.thinkingLevelMap?.off,
-    maxTokens: 128,
-  } as never);
+  const payloadFor = (reasoning: string | undefined, maxTokens?: number) =>
+    buildOpenAICompletionsParams(transportModel, context, { reasoning, maxTokens } as never);
+  const lowPayload = payloadFor(standardModel.thinkingLevelMap?.off, 128);
   expect(lowPayload).toMatchObject({ reasoning_effort: "low", max_tokens: 128 });
   expect(lowPayload).not.toHaveProperty("max_completion_tokens");
   expect(lowPayload).not.toHaveProperty("store");
@@ -71,10 +68,7 @@ it("adds Step 3.7 Flash without changing existing defaults", () => {
     expect.objectContaining({ role: "system", content: "system" }),
   );
   expect(lowPayload.messages).not.toContainEqual(expect.objectContaining({ role: "developer" }));
-  expect(
-    buildOpenAICompletionsParams(transportModel, context, { reasoning: "high" } as never)
-      .reasoning_effort,
-  ).toBe("high");
+  expect(payloadFor("high").reasoning_effort).toBe("high");
 });
 
 it("keeps manifest auth choices aligned with runtime provider methods", async () => {
@@ -84,13 +78,8 @@ it("keeps manifest auth choices aligned with runtime provider methods", async ()
     return provider.auth.map((method) => [provider.id, method.id, method.wizard?.choiceId]);
   });
 
-  const manifestChoices = manifest.providerAuthChoices.map((choice) => [
-    choice.provider,
-    choice.method,
-    choice.choiceId,
-  ]);
-
-  expect(runtimeChoices).toEqual(manifestChoices);
+  const choices = manifest.providerAuthChoices.map((c) => [c.provider, c.method, c.choiceId]);
+  expect(runtimeChoices).toEqual(choices);
   expect(manifest.setup.providers).toEqual([
     { id: "stepfun", envVars: ["STEPFUN_API_KEY"] },
     { id: "stepfun-plan", envVars: ["STEPFUN_API_KEY"] },
@@ -104,9 +93,7 @@ it.each([
   const { providers } = await registerStepFun();
   const provider = plugins.requireRegisteredProvider(providers, providerId);
   const method = provider.auth.find((entry) => entry.id === methodId);
-  if (!method?.runNonInteractive || !method.wizard?.choiceId) {
-    throw new Error(`expected StepFun non-interactive auth method ${methodId}`);
-  }
+  assert(method?.runNonInteractive && method.wizard?.choiceId, `Missing auth method ${methodId}`);
 
   const primary = "anthropic/claude-sonnet-4-6";
   const model = { primary, fallbacks: ["openai/gpt-5.6-luna"] };
