@@ -1,5 +1,39 @@
 # Team-shaped synthetic state
 
+## Workboard dashboard reads
+
+`workboard-read-measure.ts` exercises the real source Gateway and Workboard SQLite
+owner over signed synthetic WebSocket connections. Run it on an approved benchmark
+host. Prepare each fixture outside the measurement CPU allocation:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/workboard-read-measure.ts \
+  --root /path/to/new-fixture --port 41510 --prepare --boards 24 --cards 50
+node --import ./scripts/tsx.mjs scripts/perf/workboard-read-measure.ts \
+  --root /path/to/new-fixture --port 41510 --clients 12 --waves 80 \
+  --interval-ms 250 --start-at <future-epoch-ms> --output /path/to/result.json
+```
+
+Preparation creates 1,200 synthetic cards through public RPCs; their example PR
+URLs cause no GitHub requests. Measurements warm all board pages, then replay
+concurrent `workboard.boards.list` and `workboard.cards.list` calls, first without
+writes and then after one card status change per wave. Every response verifies
+card counts, board status aggregates, and changed card status. Reuse an untouched
+prepared fixture for each sample; measured status writes remain in its state.
+
+Reports include calls, errors, round-trip and handler p50/p99, response JSON bytes,
+Gateway process CPU, worker request classes, and observed board aggregate/metadata
+read commands on the existing worker transport. Handler seconds per 15 minutes
+are extrapolated from this replay's request rate, not a production forecast.
+Diagnostic loss, missing handler observations, stale data, and missed scheduled
+phase starts fail the run. This measures server RPCs, not browser rendering.
+
+For A/B comparisons use separate identical fixtures, ports, and source checkouts.
+Hold the host's exclusive measurement lock around each concurrent pair, use the
+same `--start-at` on both sides, and swap CPU halves for the next pair. Both warm
+and mutation phases have independent shared start times. Compare paired
+differences across at least two pairs; record outside load for context.
+
 ## Usage metadata bursts
 
 `chat-metadata-burst-measure.ts` requests `sessions.usage` on a cold 5,000-session
