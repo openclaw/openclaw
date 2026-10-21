@@ -185,7 +185,7 @@ The button counts active owner and status filters; **Reset** restores the defaul
 
 **Group by** offers **Category**, **Project**, **Person**, and **None**; **Person**
 appears when the Gateway supports multiple owners. **Hide empty groups** can hide
-empty destinations **When filtering** by owner, **Always**, or **Never**.
+empty destinations **When filtering** by owner or status, **Always**, or **Never**.
 **Sort → Created** is the default, with newest threads first; threads without a
 creation date follow dated threads. Choose **Last updated** to sort by recent
 activity instead, or **People** to sort by owner when available. Pinned threads

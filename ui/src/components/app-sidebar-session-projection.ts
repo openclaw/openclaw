@@ -504,8 +504,10 @@ export class SidebarSessionProjection {
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
     const hideEmptyGroups =
-      input.emptyGroupsMode === "always" ||
-      (input.emptyGroupsMode === "filtering" && input.ownerFiltered);
+      input.listLoaded &&
+      (input.emptyGroupsMode === "always" ||
+        (input.emptyGroupsMode === "filtering" &&
+          (input.ownerFiltered || input.statusFilter !== "all")));
     const sections =
       input.sections ??
       groupSidebarSessionRows(input.rows, {
