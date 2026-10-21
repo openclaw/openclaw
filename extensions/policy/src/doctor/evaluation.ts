@@ -196,7 +196,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...mcpServerFindings(policy, policyFile.ocDocName, evidence),
     ...modelProviderFindings(policy, policyFile.ocDocName, evidence),
     ...networkFindings(policy, policyFile.ocDocName, evidence),
-    ...routingFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
+    ...routingFindings(routing, policyFile.displayName, policyFile.ocDocName, evidence),
     ...ingressFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...gatewayExposureFindings(policy, policyFile.ocDocName, evidence),
     ...agentWorkspaceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),

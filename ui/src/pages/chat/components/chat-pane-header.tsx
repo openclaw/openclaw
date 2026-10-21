@@ -1,4 +1,4 @@
-import { Show, onSettled, onCleanup, type Element } from "solid-js";
+import { Show, onSettled, type Element } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
@@ -12,6 +12,7 @@ import { StandalonePersonLink } from "../../../components/person-activity-link-s
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
 import "../../../components/tooltip.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -46,19 +47,11 @@ export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
 
 function DetailsGlyph() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.6"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon stroke-width="1.6" aria-hidden="true">
       <circle cx="5" cy="7" r="3" />
       <circle cx="5" cy="17" r="3" />
       <path d="M13 7h8M13 17h8" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
@@ -76,8 +69,8 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   );
   onSettled(() => {
     props.setDashboardControls?.(dashboardControls);
+    return () => props.setDashboardControls?.(undefined);
   });
-  onCleanup(() => props.setDashboardControls?.(undefined));
   const incognito = () =>
     (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
   const Details = (detailsProps: {

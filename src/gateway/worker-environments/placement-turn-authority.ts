@@ -408,7 +408,8 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
     }
     const byId = new Map(Array.from(records, (record) => [record.sessionId, record]));
     for (const sessionId of requestedIds ?? byId.keys()) {
-      if ((owner.placements.get(sessionId)?.sequence ?? -1) <= sequence) {
+      // A pending writer reserves its sequence before COMMIT; its receipt wins a tie.
+      if ((owner.placements.get(sessionId)?.sequence ?? -1) < sequence) {
         owner.placements.set(sessionId, {
           placement: withLocalPlacementTurn(owner, sessionId, byId.get(sessionId)),
           sequence,

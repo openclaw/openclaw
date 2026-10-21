@@ -72,23 +72,29 @@ describe("discord model picker preferences", () => {
   it("prunes older stored models beyond the recent limit", async () => {
     const userScope = { userId: "limited-user" };
     for (const modelRef of [
-      "openai/model-a",
-      "openai/model-b",
-      "openai/model-c",
-      "openai/model-d",
+      "openai/a",
+      "openai/b",
+      "openai/c",
+      "openai/d",
+      "openai/e",
+      "openai/f",
     ]) {
-      await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef, limit: 2 });
+      await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef });
     }
 
-    await expect(
-      readDiscordModelPickerRecentModels({ env, scope: userScope, limit: 10 }),
-    ).resolves.toEqual(["openai/model-d", "openai/model-c"]);
+    await expect(readDiscordModelPickerRecentModels({ env, scope: userScope })).resolves.toEqual([
+      "openai/f",
+      "openai/e",
+      "openai/d",
+      "openai/c",
+      "openai/b",
+    ]);
     const store = createPluginStateKeyedStoreForTests<unknown>("discord", {
       namespace: "model-picker-preferences",
       maxEntries: 2_000,
       env,
     });
-    expect(await store.entries()).toHaveLength(2);
+    expect(await store.entries()).toHaveLength(5);
   });
 
   it("falls back to empty recents when stored state is malformed", async () => {

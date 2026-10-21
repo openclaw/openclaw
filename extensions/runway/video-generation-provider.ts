@@ -40,7 +40,6 @@ const MAX_DURATION_SECONDS = 10;
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 type RunwayTaskDetailResponse = {
-  id?: unknown;
   status?: unknown;
   output?: unknown;
   failure?: unknown;

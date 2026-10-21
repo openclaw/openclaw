@@ -6,7 +6,6 @@ import {
   createMemo,
   createSignal,
   lazy,
-  onCleanup,
   onSettled,
   type Element,
 } from "solid-js";
@@ -511,17 +510,28 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       props.setRef(undefined);
       layout.disconnect();
       stop.forEach((dispose) => dispose());
+      hide();
+      const frame = props.elements?.frame;
+      frame?.style.removeProperty("--chat-details-space");
+      frame?.style.removeProperty("--chat-details-frame-width");
+      frame?.removeAttribute("data-details-instant");
+      frame?.removeAttribute("data-details-restoring");
+      surface.remove();
     };
   });
-  onCleanup(() => {
-    hide();
-    const frame = props.elements?.frame;
-    frame?.style.removeProperty("--chat-details-space");
-    frame?.style.removeProperty("--chat-details-frame-width");
-    frame?.removeAttribute("data-details-instant");
-    frame?.removeAttribute("data-details-restoring");
-    surface.remove();
-  });
+  function SessionContent(content: { children: Element }) {
+    return (
+      <Show when={sessionOpened()}>
+        <Loading
+          fallback={
+            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+          }
+        >
+          {content.children}
+        </Loading>
+      </Show>
+    );
+  }
   return (
     <openclaw-chat-details
       ref={(element) => (host = element)}
@@ -583,25 +593,15 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                     when={props.mobileHost && props.chat}
                     fallback={
                       <>
-                        <Show when={sessionOpened()}>
-                          <Loading
-                            fallback={
-                              <PanelLoadingSkeleton
-                                variant="file-list"
-                                label={t("common.loading")}
-                                compact
-                              />
+                        <SessionContent>
+                          <ChatDetailsSession
+                            props={props.chat}
+                            presented={isPresented() && opened()}
+                            dismissed={
+                              props.mobileHost ? !props.mobileHost.open : intent() === "closed"
                             }
-                          >
-                            <ChatDetailsSession
-                              props={props.chat}
-                              presented={isPresented() && opened()}
-                              dismissed={
-                                props.mobileHost ? !props.mobileHost.open : intent() === "closed"
-                              }
-                            />
-                          </Loading>
-                        </Show>
+                          />
+                        </SessionContent>
                         <Show
                           when={props.chat?.progressCard || props.chat?.progressCardInitialLoading}
                         >
@@ -624,54 +624,34 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                   >
                     <Show when={presentation()} keyed>
                       {(_identity) => (
-                        <Show when={sessionOpened()}>
-                          <Loading
-                            fallback={
-                              <PanelLoadingSkeleton
-                                variant="file-list"
-                                label={t("common.loading")}
-                                compact
-                              />
-                            }
-                          >
-                            <ChatDetailsMobileHostContent
-                              details={props.chat!}
-                              host={props.mobileHost!}
-                              bindings={props.mobileBindings}
-                              presented={isPresented() && opened()}
-                            />
-                          </Loading>
-                        </Show>
+                        <SessionContent>
+                          <ChatDetailsMobileHostContent
+                            details={props.chat!}
+                            host={props.mobileHost!}
+                            bindings={props.mobileBindings}
+                            presented={isPresented() && opened()}
+                          />
+                        </SessionContent>
                       )}
                     </Show>
                   </Show>
                 }
               >
-                <Show when={sessionOpened()}>
-                  <Loading
-                    fallback={
-                      <PanelLoadingSkeleton
-                        variant="file-list"
-                        label={t("common.loading")}
-                        compact
-                      />
-                    }
-                  >
-                    <ChatDetailsDesktopComposition
-                      props={props.chat}
-                      presented={isPresented() && opened()}
-                      dismissed={intent() === "closed"}
-                      progressMenuRef={(menu) => {
-                        progressMenu = menu;
-                      }}
-                      onHideProgress={() => {
-                        if (!docked()) {
-                          close(true);
-                        }
-                      }}
-                    />
-                  </Loading>
-                </Show>
+                <SessionContent>
+                  <ChatDetailsDesktopComposition
+                    props={props.chat}
+                    presented={isPresented() && opened()}
+                    dismissed={intent() === "closed"}
+                    progressMenuRef={(menu) => {
+                      progressMenu = menu;
+                    }}
+                    onHideProgress={() => {
+                      if (!docked()) {
+                        close(true);
+                      }
+                    }}
+                  />
+                </SessionContent>
               </Show>
             )}
           </Show>

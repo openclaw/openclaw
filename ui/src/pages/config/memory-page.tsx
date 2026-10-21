@@ -19,6 +19,7 @@ import { projectAgentSelection, projectGateway } from "../../lib/reactive/applic
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { ControlUiSettingsPresentation } from "../../plugins/control-ui-settings-view.solid.tsx";
 import {
   resolveConfiguredDreaming,
@@ -37,8 +38,6 @@ import {
   type MemoryTab,
 } from "./memory-schema.ts";
 import {
-  buildMemoryAddonRows,
-  buildMemoryEngineOptions,
   Memory,
   findMemoryCatalogPlugin as findMemoryPlugin,
   resolveMemoryPluginState as pluginState,
@@ -89,8 +88,19 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const dreamingConfigOwner = createMemo(
     () => resolveConfiguredDreaming(currentConfigObject(runtime.read().state)).pluginId,
   );
-  const [catalog, setCatalog] = createSignal<MemoryCatalog>({
-    kind: "unavailable",
+  // The accepted receipt serves synchronous mutation and plugin-settings policy.
+  // Rendering observes only the owner-issued read, never a second data cache.
+  const initialCatalog: MemoryCatalog = { kind: "unavailable" };
+  const catalogState: {
+    value: MemoryCatalog;
+    read: MemoryCatalog | Promise<MemoryCatalog>;
+  } = { value: initialCatalog, read: initialCatalog };
+  const catalogSource = projectMutableSource(catalogState, (state) => state);
+  const catalog = createMemo(async () => catalogSource.read().read);
+  let pageConnection: CatalogConnection | null = null;
+  const catalogScope = createMemo(() => {
+    catalogSource.revision();
+    return pageConnection;
   });
 
   const [engineBusy, setEngineBusy] = createSignal(false);
@@ -116,9 +126,16 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     publishSettings();
   }
 
-  const [support, setSupport] = createSignal<DreamingConfigPathSupport>("unknown");
-
-  let pageConnection: CatalogConnection | null = null;
+  const supportState: {
+    value: DreamingConfigPathSupport;
+    read: DreamingConfigPathSupport | Promise<DreamingConfigPathSupport>;
+  } = { value: "unknown", read: "unknown" };
+  const supportSource = projectMutableSource(supportState, (state) => state.read);
+  const support = createMemo(() => {
+    const read = supportSource.read();
+    // Each admitted read starts unknown without replacing the editable panel.
+    return createMemo<DreamingConfigPathSupport>(() => read, { loadingValue: "unknown" });
+  });
 
   let pagePluginGeneration: number | undefined = undefined;
 
@@ -169,15 +186,15 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     });
     retireSettingsReads();
     if (!client || !connected) {
-      setCatalog({
-        kind: "unavailable",
-      });
+      catalogState.value = { kind: "unavailable" };
+      catalogState.read = catalogState.value;
+      catalogSource.publish();
       onSettled(publishSettings);
       return;
     }
-    setCatalog({
-      kind: "loading",
-    });
+    catalogState.value = { kind: "loading" };
+    catalogState.read = catalogState.value;
+    catalogSource.publish();
     onSettled(publishSettings);
     setAddonOutcomes((draft) => {
       for (const [pluginId, notice] of Object.entries(draft.notices)) {
@@ -200,17 +217,20 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   async function loadCatalog(client: GatewayClient, connection: CatalogConnection) {
     const request = ++pageCatalogRequest;
-    try {
+    const read = (async (): Promise<MemoryCatalog> => {
       const result = await loadPluginCatalog(client);
-      applyCatalog(connection, request, {
+      return {
         kind: "ready",
         plugins: result.plugins,
         mutationAllowed: result.mutationAllowed,
-      });
+      };
+    })();
+    catalogState.read = read;
+    catalogSource.publish();
+    try {
+      applyCatalog(connection, request, await read);
     } catch {
-      applyCatalog(connection, request, {
-        kind: "unavailable",
-      });
+      applyCatalog(connection, request, { kind: "unavailable" }, read);
     }
   }
 
@@ -218,11 +238,14 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     connection: CatalogConnection,
     request: number,
     nextCatalog: MemoryCatalog,
+    read: MemoryCatalog | Promise<MemoryCatalog> = nextCatalog,
   ) {
     if (!active || pageConnection !== connection || pageCatalogRequest !== request) {
       return;
     }
-    setCatalog(nextCatalog);
+    catalogState.value = nextCatalog;
+    catalogState.read = read;
+    catalogSource.publish();
     onSettled(publishSettings);
   }
 
@@ -230,7 +253,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     const engineId = selectedEngineId(selection);
     return engineId === null
       ? "unknown"
-      : pluginState(catalog(), findMemoryPlugin(catalog(), engineId));
+      : pluginState(catalogState.value, findMemoryPlugin(catalogState.value, engineId));
   }
 
   function applyPluginRefreshOutcome(
@@ -269,14 +292,14 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     if (
       addonOutcomes.busy[pluginId] ||
       props.mutationDisabled ||
-      catalog().kind !== "ready" ||
+      catalogState.value.kind !== "ready" ||
       !catalogCanMutate() ||
       !readGatewayOperatorAccess(application.gateway.snapshot).canAdmin
     ) {
       return;
     }
-    const entry = findMemoryPlugin(catalog(), pluginId);
-    const addonState = pluginState(catalog(), entry);
+    const entry = findMemoryPlugin(catalogState.value, pluginId);
+    const addonState = pluginState(catalogState.value, entry);
     const connection = pageConnection;
     const client = connection?.connected ? connection.client : null;
     if (!connection || !client || (addonState !== "enabled" && addonState !== "disabled")) {
@@ -344,11 +367,11 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   }
 
   function catalogCanMutate() {
-    const current = catalog();
+    const current = catalogState.value;
     return current.kind === "ready" && current.mutationAllowed;
   }
   function catalogBlocksMutation() {
-    const current = catalog();
+    const current = catalogState.value;
     return current.kind === "ready" && !current.mutationAllowed;
   }
   function canDispatchPluginMutation(connection: CatalogConnection) {
@@ -410,11 +433,13 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   function syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     const pluginId = resolveConfiguredDreaming(currentConfigObject(runtimeConfig.state)).pluginId;
-    let currentSupport = support();
+    let currentSupport = supportState.value;
     if (pluginId !== pageSupportPluginId) {
       pageSupportPluginId = pluginId;
       currentSupport = "unknown";
-      setSupport("unknown");
+      supportState.value = "unknown";
+      supportState.read = "unknown";
+      supportSource.publish();
     }
     const connected = runtimeConfig.state.connected;
     if (pageSupportProbe && (pageSupportProbe.pluginId !== pluginId || !connected)) {
@@ -427,13 +452,20 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       pluginId,
     };
     pageSupportProbe = probe;
-    void resolveDreamingConfigPathSupport(runtimeConfig, pluginId).then((resolvedSupport) => {
+    const read = resolveDreamingConfigPathSupport(runtimeConfig, pluginId).then((resolved) =>
+      active && pageSupportProbe === probe ? resolved : supportState.value,
+    );
+    supportState.read = read;
+    supportSource.publish();
+    void read.then((resolvedSupport) => {
       if (pageSupportProbe !== probe) {
         return;
       }
       pageSupportProbe = null;
       if (active) {
-        setSupport(resolvedSupport);
+        supportState.value = resolvedSupport;
+        supportState.read = resolvedSupport;
+        supportSource.publish();
       }
     });
   }
@@ -477,7 +509,6 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   });
 
   const engineSelection = () => resolveMemoryEngineSelection(props.configObject);
-  const currentEngineState = () => engineState(engineSelection());
   const agentId = () => agentSelection.read().state.selectedId;
   function readSettingsSnapshot(): ControlUiSettingsSnapshot {
     // Read authority directly from each live owner.
@@ -485,7 +516,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       currentConfigObject(application.runtimeConfig.state) ?? {},
     );
     const id = selectedEngineId(selection);
-    const entry = findMemoryPlugin(catalog(), id);
+    const entry = findMemoryPlugin(catalogState.value, id);
     const routeData = props.admittedRoute.read();
     return {
       agentId: application.settingsAgentSelection.state.selectedId,
@@ -495,7 +526,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         kind: selection.kind,
         id,
         availability:
-          catalog().kind === "ready" && id && !entry?.installed
+          catalogState.value.kind === "ready" && id && !entry?.installed
             ? "missing"
             : engineState(selection),
       },
@@ -524,17 +555,15 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       <Memory
         activeTab={activeTab()}
         onTabChange={navigateTab}
-        engineOptions={buildMemoryEngineOptions(catalog(), engineSelection())}
+        catalog={catalog()}
+        catalogScope={catalogScope()}
+        addonOutcomes={addonOutcomes}
         engineSelection={engineSelection()}
-        engineState={currentEngineState()}
-        engineBusy={engineBusy() || props.mutationDisabled || catalogBlocksMutation()}
+        engineBusy={engineBusy() || props.mutationDisabled}
         engineOutcome={engineOutcome()}
         onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
-        addons={buildMemoryAddonRows(catalog(), addonOutcomes)}
         canToggleAddons={
-          catalogCanMutate() &&
-          !props.mutationDisabled &&
-          readGatewayOperatorAccess(gateway.read().snapshot).canAdmin
+          !props.mutationDisabled && readGatewayOperatorAccess(gateway.read().snapshot).canAdmin
         }
         onAddonChange={(pluginId, enabled) => void changeAddon(pluginId, enabled)}
         pluginsHref={props.pluginsHref}
@@ -587,7 +616,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
               parameters={{ configOwner: dreamingConfigOwner() }}
               messageParameters={{ plugin: dreamingConfigOwner() }}
               config={currentConfigObject(runtime.read().state)}
-              support={support()}
+              support={support()()}
               disabled={props.mutationDisabled}
               onPatch={editCuratedSettings}
             />

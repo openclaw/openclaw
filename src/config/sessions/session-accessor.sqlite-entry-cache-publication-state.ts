@@ -269,7 +269,7 @@ export function publishRetainedSessionEntryChange(
       entry &&
       previous?.entry &&
       previous.entry.sessionId === entry.sessionId &&
-      previous.entry.lifecycleRevision === entry.lifecycleRevision
+      (read.followLifecycle || previous.entry.lifecycleRevision === entry.lifecycleRevision)
         ? { entry, membership: previous.membership }
         : undefined;
   }
@@ -280,6 +280,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   const key = `${params.databaseIdentity}\0${params.sessionKey}`;
   const initial = "acquiring" in params ? undefined : params;
   const read: PreparedSessionSharingRead = {
+    followLifecycle: params.followLifecycle,
     predicate: params.predicate,
     pending: new Set(),
     facts: initial && {

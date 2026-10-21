@@ -4,9 +4,12 @@ import {
   getSqliteDatabaseAdmission,
   getOrLoadSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
-  type SqliteDatabaseFactKey,
 } from "../sqlite-database-admission.js";
 import type { StoreSchema } from "./contract.js";
+import {
+  postgresPhysicalFactsKey as admissionKey,
+  type PostgresPhysicalFacts,
+} from "./physical-facts-contract.js";
 import type { PostgresCatalogFact } from "./postgres-catalog.js";
 import {
   admitPostgresCapabilities,
@@ -15,25 +18,11 @@ import {
   verifyPostgresSchema,
   withPostgresSearchExtensions,
   retainPostgresSchema,
-  type PostgresCapabilities,
 } from "./postgres-schema.js";
 
-export type PostgresPhysicalFacts = {
-  engine: "postgres";
-  admissionId: string;
-  store: string;
-  namespace: string;
-  storeId: string;
-  version: number;
-  capabilities: PostgresCapabilities;
-  catalog: readonly PostgresCatalogFact[];
-};
+export type { PostgresPhysicalFacts } from "./physical-facts-contract.js";
 const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
-const admissionKey: SqliteDatabaseFactKey<PostgresPhysicalFacts> = {
-  name: "database.engine.schema",
-  schemaDependent: true,
-};
 
 export function getPostgresPhysicalFacts(db: EngineConnection) {
   return getSqliteDatabaseAdmission(db, admissionKey);

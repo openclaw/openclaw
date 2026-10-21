@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { fetchDiscord } from "../api.js";
 import { createDiscordRestClient } from "../client.js";
 import { withDiscordRequestAuthority } from "./request-authority.js";
@@ -17,12 +17,20 @@ afterEach(() => {
 });
 
 type AuthorityKind = "read" | "action";
+const token = "synthetic-token";
 
 function authority(kind: AuthorityKind = "read") {
   const source = new AbortController();
+  const assert = () => source.signal.throwIfAborted();
+  const run = <T>(callback: () => T) => withAuthority(kind, assert, callback);
+  const method = kind === "read" ? "get" : "put";
+  const path = kind === "read" ? "/channels/100/messages" : "/channels/100/pins/200";
   return {
-    assert: () => source.signal.throwIfAborted(),
     revoke: () => source.abort(new Error(`${kind} authority revoked`)),
+    run,
+    request: (client: RequestClient) => run(() => client[method](path)),
+    rejected: (pending: Promise<unknown>) =>
+      expect(pending).rejects.toThrow(`${kind} authority revoked`),
   };
 }
 
@@ -39,143 +47,99 @@ function withAuthority<T>(kind: AuthorityKind, assertCurrent: () => void, run: (
   }
 }
 
-function submitRequest(client: RequestClient, kind: AuthorityKind) {
-  return kind === "read"
-    ? client.get("/channels/100/messages")
-    : client.put("/channels/100/pins/200");
-}
+it.each([
+  ["read", "action"],
+  ["action", "read"],
+] as const)("retains queued %s authority with active %s", async (source, companion) => {
+  const releaseWorkers = createDeferred<void>();
+  const fetch = vi.fn(async () => {
+    if (fetch.mock.calls.length <= 4) {
+      await releaseWorkers.promise;
+    }
+    return Response.json({ id: "other" });
+  });
+  const sharedClient = new RequestClient(token, { fetch });
+  const { rest: client } = createDiscordRestClient({ cfg: {}, token, rest: sharedClient });
+  const active = Array.from({ length: 4 }, (_, index) =>
+    sharedClient.get(`/channels/blocked-${index}/messages`),
+  );
+  const caller = authority(source);
+  const queued = authority(companion).run(() => caller.request(client));
+  const rejected = caller.rejected(queued);
+  try {
+    caller.revoke();
+    releaseWorkers.resolve();
+    await Promise.all(active);
+    await rejected;
+    expect(fetch).toHaveBeenCalledTimes(4);
+    // The revoked caller must not poison ordinary traffic on the same client.
+    await expect(client.put("/channels/100/pins/200")).resolves.toEqual({ id: "other" });
+  } finally {
+    releaseWorkers.resolve();
+    await Promise.allSettled([...active, queued, rejected]);
+  }
+});
 
-describe("Discord request authority", () => {
-  it.each([
-    { name: "read with active action", source: "read", companion: "action" },
-    { name: "action with active read", source: "action", companion: "read" },
-  ] as const)(
-    "retains queued $name authority on an injected shared client",
-    async ({ source, companion }) => {
-      const releaseWorkers = createDeferred<void>();
-      const fetch = vi.fn(async () => {
-        if (fetch.mock.calls.length <= 4) {
-          await releaseWorkers.promise;
-          return Response.json([]);
-        }
-        return Response.json({ id: "other" });
-      });
-      const sharedClient = new RequestClient("synthetic-token", {
-        fetch,
-      });
-      const { rest: client } = createDiscordRestClient({
-        cfg: {},
-        token: "synthetic-token",
-        rest: sharedClient,
-      });
-      const active = Array.from({ length: 4 }, (_, index) =>
-        sharedClient.get(`/channels/blocked-${index}/messages`),
-      );
-      const caller = authority(source);
-      const queued = withAuthority(companion, authority(companion).assert, () =>
-        withAuthority(source, caller.assert, () => submitRequest(client, source)),
-      );
-      const rejected = expect(queued).rejects.toThrow(`${source} authority revoked`);
-      try {
-        caller.revoke();
-        releaseWorkers.resolve();
-        await Promise.all(active);
-        await rejected;
-        expect(fetch).toHaveBeenCalledTimes(4);
-        // The revoked caller must not poison ordinary traffic on the same client.
-        await expect(client.put("/channels/100/pins/200")).resolves.toEqual({ id: "other" });
-      } finally {
-        releaseWorkers.resolve();
-        await Promise.allSettled([...active, queued, rejected]);
-      }
+it("passes read authority through asynchronous transport preparation", async () => {
+  const caller = authority();
+  const transport = vi.fn();
+  const fetch = vi.fn(
+    async (_input: string | URL | Request, _init?: RequestInit, beforeRequest?: () => void) => {
+      caller.revoke();
+      await Promise.resolve();
+      beforeRequest?.();
+      transport();
+      return Response.json([]);
     },
   );
+  const client = new RequestClient(token, { fetch });
+  await caller.rejected(caller.request(client));
+  expect(transport).not.toHaveBeenCalled();
+});
 
-  it("passes read authority through asynchronous transport preparation", async () => {
-    const caller = authority();
-    const transport = vi.fn();
-    const fetch = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit, beforeRequest?: () => void) => {
-        caller.revoke();
-        await Promise.resolve();
-        beforeRequest?.();
-        transport();
-        return Response.json([]);
-      },
-    );
-    const client = new RequestClient("synthetic-token", { fetch });
-    await expect(
-      withAuthority("read", caller.assert, () => submitRequest(client, "read")),
-    ).rejects.toThrow("read authority revoked");
-    expect(transport).not.toHaveBeenCalled();
+it.each(["REST", "directory"])("fences %s retries after revocation", async (route) => {
+  vi.useFakeTimers();
+  const caller = authority();
+  const fetch = vi.fn(async () => {
+    caller.revoke();
+    scope.current = undefined;
+    const headers = route === "REST" ? { "retry-after": "0.001" } : undefined;
+    return Response.json({ retry_after: 0.001 }, { status: 429, headers });
   });
+  const rejected = caller.rejected(
+    caller.run(() =>
+      route === "REST"
+        ? new RequestClient(token, { fetch }).get("/channels/100/messages")
+        : fetchDiscord("/users/@me/guilds", token, fetch, {
+            retry: { attempts: 2, minDelayMs: 1, maxDelayMs: 1, jitter: 0 },
+          }),
+    ),
+  );
+  await vi.runAllTimersAsync();
+  await rejected;
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
 
-  it("does not retry read requests after rate-limit revocation", async () => {
-    vi.useFakeTimers();
-    const caller = authority();
-    const fetch = vi.fn(async () => {
-      caller.revoke();
-      return Response.json(
-        { retry_after: 0.001 },
-        { status: 429, headers: { "retry-after": "0.001" } },
-      );
-    });
-    const client = new RequestClient("synthetic-token", { fetch });
-    const rejected = expect(
-      withAuthority("read", caller.assert, () => submitRequest(client, "read")),
-    ).rejects.toThrow("read authority revoked");
-    await vi.runAllTimersAsync();
-    await rejected;
+it("settles an already-dispatched PUT after source authority closes", async () => {
+  const caller = authority("action");
+  const dispatched = createDeferred<void>();
+  const response = createDeferred<Response>();
+  const fetch = vi.fn((_input: string | URL | Request, _init?: RequestInit) => {
+    dispatched.resolve();
+    return response.promise;
+  });
+  const client = new RequestClient(token, { fetch });
+  const pending = caller.request(client);
+  try {
+    await Promise.race([dispatched.promise, pending]);
+    caller.revoke();
+    expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+    response.resolve(new Response(null, { status: 204 }));
+    await expect(pending).resolves.toBeUndefined();
+    await caller.rejected(caller.run(() => client.put("/channels/100/pins/201")));
     expect(fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("settles an already-dispatched PUT after source authority closes", async () => {
-    const source = new AbortController();
-    const dispatched = createDeferred<void>();
-    const response = createDeferred<Response>();
-    let requestSignal: AbortSignal | null | undefined;
-    const fetch = vi.fn((_input: string | URL | Request, init?: RequestInit) => {
-      requestSignal = init?.signal;
-      dispatched.resolve();
-      return response.promise;
-    });
-    const client = new RequestClient("synthetic-token", { fetch });
-    const assertCurrent = () => source.signal.throwIfAborted();
-    const pending = withDiscordRequestAuthority(assertCurrent, () =>
-      client.put("/channels/100/pins/200"),
-    );
-    try {
-      await Promise.race([dispatched.promise, pending]);
-      source.abort(new Error("action authority revoked"));
-      expect(requestSignal?.aborted).toBe(false);
-      response.resolve(new Response(null, { status: 204 }));
-      await expect(pending).resolves.toBeUndefined();
-      await expect(
-        withDiscordRequestAuthority(assertCurrent, () => client.put("/channels/100/pins/201")),
-      ).rejects.toThrow("action authority revoked");
-      expect(fetch).toHaveBeenCalledTimes(1);
-    } finally {
-      response.resolve(new Response(null, { status: 204 }));
-      await Promise.allSettled([pending]);
-    }
-  });
-
-  it("fences directory helper retries after authority is revoked", async () => {
-    vi.useFakeTimers();
-    const reader = authority();
-    const fetcher = vi.fn(async () => {
-      reader.revoke();
-      scope.current = undefined;
-      return Response.json({ retry_after: 0.001 }, { status: 429 });
-    });
-    scope.current = reader.assert;
-    const rejected = expect(
-      fetchDiscord("/users/@me/guilds", "synthetic-token", fetcher, {
-        retry: { attempts: 2, minDelayMs: 1, maxDelayMs: 1, jitter: 0 },
-      }),
-    ).rejects.toThrow("read authority revoked");
-    await vi.runAllTimersAsync();
-    await rejected;
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
+  } finally {
+    response.resolve(new Response(null, { status: 204 }));
+    await Promise.allSettled([pending]);
+  }
 });

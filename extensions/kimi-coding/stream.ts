@@ -205,14 +205,6 @@ function rewriteKimiTaggedToolCallsInMessage(message: AssistantMessage): void {
   }
 }
 
-function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    mapAssistantMessageStream(underlying(model, context, options), (stream) =>
-      transformProviderStreamMessages(stream, rewriteKimiTaggedToolCallsInMessage),
-    );
-}
-
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const configured = normalizeKimiThinkingConfig(ctx.extraParams?.thinking);
   const extraBody = asOptionalObjectRecord(
@@ -224,7 +216,7 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       ctx.extraParams?.chatTemplateKwargs,
   );
   const underlying = ctx.streamFn ?? streamSimple;
-  return createKimiToolCallMarkupWrapper((model, context, options) => {
+  return (model, context, options) => {
     const api = ctx.sourceApi ?? model.api;
     const anthropic = api === "anthropic-messages";
     const k3 = anthropic && isKimiK3ModelId(model.id);
@@ -252,7 +244,7 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       : openaiK3
         ? { ...model, thinkingLevelMap: { ...KIMI_K3_THINKING_EFFORTS, ...model.thinkingLevelMap } }
         : model;
-    return streamWithPayloadPatch(
+    const stream = streamWithPayloadPatch(
       underlying,
       runtimeModel,
       context,
@@ -302,7 +294,10 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
         }
       },
     );
-  });
+    return mapAssistantMessageStream(stream, (resolved) =>
+      transformProviderStreamMessages(resolved, rewriteKimiTaggedToolCallsInMessage),
+    );
+  };
 }
 
 function stripContentArrayCacheControl(value: unknown): void {

@@ -228,7 +228,7 @@ export async function touchTelegramConversationRoute(
   await bindings.touchAsync(captured.bindingId, undefined, captured.conversation);
 }
 
-export function resolveTelegramConversationBaseSessionKey(
+function resolveTelegramConversationBaseSessionKey(
   params: Parameters<typeof resolveTelegramNamedAccountBaseSessionKey>[1],
 ): string {
   return resolveTelegramNamedAccountBaseSessionKey(

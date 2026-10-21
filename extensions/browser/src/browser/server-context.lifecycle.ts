@@ -29,7 +29,7 @@ type ProfileLifecycleActor = {
   starts: Map<string, Promise<void>>;
   leases: Set<Promise<void>>;
   handles: Set<RunningChrome>;
-  cleanupChromeMcp: Set<string>;
+  cleanupChromeMcp: string | undefined;
   cleanupPlaywright: Map<string, PlaywrightConnectionRetirement>;
   cleanupRelays: Set<ExtensionRelayResource>;
   terminal: ProfileLifecycleTerminal | null;
@@ -71,7 +71,7 @@ function createProfileLifecycleActor(): ProfileLifecycleActor {
     starts: new Map(),
     leases: new Set(),
     handles: new Set(),
-    cleanupChromeMcp: new Set(),
+    cleanupChromeMcp: undefined,
     cleanupPlaywright: new Map(),
     cleanupRelays: new Set(),
     terminal: null,
@@ -375,7 +375,7 @@ export function beginProfileTransition(
   const closeSharedAdapters = params.closeSharedAdapters !== false;
   const usesChromeMcp = getBrowserProfileCapabilities(ownerProfile).usesChromeMcp;
   if (closeSharedAdapters && usesChromeMcp) {
-    actor.cleanupChromeMcp.add(ownerProfile.name);
+    actor.cleanupChromeMcp = ownerProfile.name;
   }
   const shouldClosePlaywright =
     closeSharedAdapters && params.captureProfileResources !== false && !usesChromeMcp;
@@ -431,13 +431,12 @@ export function beginProfileTransition(
           }
         }
 
-        if (cleanupActor.cleanupChromeMcp.size > 0) {
+        if (cleanupActor.cleanupChromeMcp) {
           try {
             const chromeMcp = await getChromeMcpModule.peek();
-            for (const profileName of cleanupActor.cleanupChromeMcp) {
-              stopped = (await chromeMcp?.closeChromeMcpSession(profileName)) || stopped;
-              cleanupActor.cleanupChromeMcp.delete(profileName);
-            }
+            stopped =
+              (await chromeMcp?.closeChromeMcpSession(cleanupActor.cleanupChromeMcp)) || stopped;
+            cleanupActor.cleanupChromeMcp = undefined;
           } catch (err) {
             firstError ??= toLifecycleError(err, "Chrome MCP cleanup failed.");
           }

@@ -11,78 +11,52 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
     __openclaw: { seq },
   };
 }
+function expectPrepend(older: unknown[], current: unknown[], expected: unknown[]) {
+  expect(prependUniqueNativeMessages(older, current)).toEqual(expected);
+}
 
 it("keeps multiple projected messages from the same transcript sequence", () => {
-  const projected = [
-    {
-      ...nativeHistoryMessage(1, "Same routed send"),
-      openclawMessageToolMirror: { toolName: "message", toolCallId: "call-a" },
-    },
-    {
-      ...nativeHistoryMessage(1, "Same routed send"),
-      openclawMessageToolMirror: { toolName: "message", toolCallId: "call-b" },
-    },
-  ];
-
-  expect(prependUniqueNativeMessages(projected, [nativeHistoryMessage(2)])).toEqual([
-    ...projected,
-    nativeHistoryMessage(2),
-  ]);
-  expect(prependUniqueNativeMessages(projected, projected)).toEqual(projected);
-  expect(prependUniqueNativeMessages(projected, [projected[1], nativeHistoryMessage(2)])).toEqual([
-    projected[0],
-    projected[1],
-    nativeHistoryMessage(2),
-  ]);
-
+  const projected = ["call-a", "call-b"].map((toolCallId) =>
+    Object.assign(nativeHistoryMessage(1, "Same routed send"), {
+      openclawMessageToolMirror: { toolName: "message", toolCallId },
+    }),
+  );
+  const next = nativeHistoryMessage(2);
+  expectPrepend(projected, [next], [...projected, next]);
+  expectPrepend(projected, projected, projected);
+  expectPrepend(projected, [projected[1], next], [...projected, next]);
   const current = [...projected, projected[1]];
-  expect(prependUniqueNativeMessages([...projected, projected[1], projected[1]], current)).toEqual([
-    projected[1],
-    ...current,
-  ]);
+  expectPrepend([...projected, projected[1], projected[1]], current, [projected[1], ...current]);
   const unidentified = { role: "assistant", content: "No source identity" };
-  expect(prependUniqueNativeMessages([unidentified], [unidentified])).toEqual([
-    unidentified,
-    unidentified,
-  ]);
+  expectPrepend([unidentified], [unidentified], [unidentified, unidentified]);
 });
 
 it("deduplicates byte-different live-event and history projections of one transcript row", () => {
   const liveEventProjection = {
-    role: "assistant",
-    content: [{ type: "text", text: "One stored reply" }],
-    __openclaw: {
-      id: "assistant-message-42",
-      idempotencyKey: "run-42",
-      seq: 42,
-    },
+    ...nativeHistoryMessage(42, "One stored reply"),
+    __openclaw: { id: "assistant-message-42", idempotencyKey: "run-42", seq: 42 },
   };
   const historyProjection = {
-    role: "assistant",
-    content: [{ type: "text", text: "One stored reply" }],
+    ...liveEventProjection,
     openclawResponsesInputReplay: { items: ["server replay state"] },
     __openclaw: {
-      id: "assistant-message-42",
-      idempotencyKey: "run-42",
+      ...liveEventProjection["__openclaw"],
       recordTimestampMs: 1_786_000_000_000,
-      seq: 42,
     },
   };
 
   expect(nativeHistoryMessageIdentity(liveEventProjection)).toBe(
     nativeHistoryMessageIdentity(historyProjection),
   );
-  expect(prependUniqueNativeMessages([historyProjection], [liveEventProjection])).toEqual([
-    liveEventProjection,
-  ]);
+  expectPrepend([historyProjection], [liveEventProjection], [liveEventProjection]);
 });
 
 it.each([0, 50])("bounds prepend serialization with %i overlapping rows", (overlap) => {
   const text = "Synthetic history content. ".repeat(300);
-  const older = Array.from({ length: 1000 }, (_, index) => nativeHistoryMessage(index + 1, text));
-  const current = Array.from({ length: 1000 }, (_, index) =>
-    nativeHistoryMessage(1001 - overlap + index, text),
-  );
+  const page = (start: number) =>
+    Array.from({ length: 1000 }, (_, index) => nativeHistoryMessage(start + index, text));
+  const older = page(1),
+    current = page(1001 - overlap);
   const stringify = JSON.stringify;
   let serializedCharacters = 0;
   const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {

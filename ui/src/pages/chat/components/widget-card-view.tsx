@@ -1,5 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, onSettled, Show, untrack, useContext } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+  untrack,
+  useContext,
+} from "solid-js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
@@ -40,6 +50,10 @@ import {
 import { exportWidget } from "./widget-export.ts";
 
 registerMcpAppEnglish();
+
+const YouTubeVideoCard = lazy(() => import("./youtube-video-card.tsx"), {
+  export: "YouTubeVideoCard",
+});
 
 type WidgetCardOptions = {
   rawText?: string | null;
@@ -671,30 +685,20 @@ export function ToolPreview(props: ToolPreviewProps) {
                 }
               >
                 {(item) => {
-                  const [player, setPlayer] =
-                    createSignal<typeof import("./youtube-video-card.tsx").YouTubeVideoCard>();
-                  void import("./youtube-video-card.tsx").then(
-                    ({ YouTubeVideoCard }) => setPlayer(() => YouTubeVideoCard),
-                    (error: unknown) =>
-                      console.error("[openclaw] failed to load YouTube player", error),
+                  const Fallback = () => (
+                    <openclaw-youtube-video>
+                      <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
+                        {preview().title?.trim() || t("chat.youtube.video")}
+                        <Icon name="externalLink" />
+                      </a>
+                    </openclaw-youtube-video>
                   );
                   return (
                     <Show when={`${props.options?.sessionKey ?? ""}\0${item().watchUrl}`} keyed>
                       {(_key) => (
-                        <Show
-                          when={player()}
-                          keyed
-                          fallback={
-                            <openclaw-youtube-video>
-                              <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
-                                {preview().title?.trim() || t("chat.youtube.video")}
-                                <Icon name="externalLink" />
-                              </a>
-                            </openclaw-youtube-video>
-                          }
-                        >
-                          {(Player) => (
-                            <Player
+                        <Errored fallback={<Fallback />}>
+                          <Loading fallback={<Fallback />}>
+                            <YouTubeVideoCard
                               video={item()}
                               videoTitle={preview().title ?? ""}
                               enabled={
@@ -702,8 +706,8 @@ export function ToolPreview(props: ToolPreviewProps) {
                                 preview().sandbox !== "strict"
                               }
                             />
-                          )}
-                        </Show>
+                          </Loading>
+                        </Errored>
                       )}
                     </Show>
                   );

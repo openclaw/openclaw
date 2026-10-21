@@ -115,31 +115,34 @@ function runDevicePairingStoreMutation<T>(
   baseDir: string | undefined,
   mutate: (database: OpenClawStateDatabase) => DevicePairingStoreMutation<T>,
 ): T {
+  const bound = boundDatabase.getStore();
+  const apply = (transactionDatabase: OpenClawStateDatabase) => {
+    const result = mutate(transactionDatabase);
+    if (result.pairedChanged) {
+      const revision = bumpDevicePairingStoreRevision(transactionDatabase.db);
+      if (bound?.revision) {
+        bound.revision.value = revision;
+      }
+    }
+    if (result.mutated) {
+      // Transaction-local reads bypass the cache; only real commits invalidate it.
+      stageSqliteTransactionState(transactionDatabase.db, {
+        commit: () => {
+          invalidateDevicePairingStoreCache(transactionDatabase);
+          invalidateDevicePairingNodeSnapshot(transactionDatabase.path);
+        },
+      });
+    }
+    return result.value;
+  };
+  if (bound) {
+    // Bound failures abort the outer transaction; callers that catch and continue
+    // need their own savepoint to keep PostgreSQL usable.
+    return apply(bound.database);
+  }
   const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
   const database = openOpenClawStateDatabase(databaseOptions);
-  return runOpenClawStateWriteTransaction(
-    (transactionDatabase) => {
-      const result = mutate(transactionDatabase);
-      if (result.pairedChanged) {
-        const revision = bumpDevicePairingStoreRevision(transactionDatabase.db);
-        const bound = boundDatabase.getStore();
-        if (bound?.database.db === transactionDatabase.db && bound.revision) {
-          bound.revision.value = revision;
-        }
-      }
-      if (result.mutated) {
-        // Transaction-local reads bypass the cache; only real commits invalidate it.
-        stageSqliteTransactionState(transactionDatabase.db, {
-          commit: () => {
-            invalidateDevicePairingStoreCache(transactionDatabase);
-            invalidateDevicePairingNodeSnapshot(transactionDatabase.path);
-          },
-        });
-      }
-      return result.value;
-    },
-    { ...databaseOptions, database },
-  );
+  return runOpenClawStateWriteTransaction(apply, { ...databaseOptions, database });
 }
 
 export function readDevicePairingStoreStateFromDatabase(

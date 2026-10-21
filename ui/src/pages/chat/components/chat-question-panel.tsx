@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
@@ -65,7 +65,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       !isCollapsed && (previous !== undefined || initialModel.autoFocus !== false),
     focus: () => panel?.focus({ preventScroll: true }),
   });
-  onCleanup(() => {
+  onSettled(() => () => {
     live = false;
   });
   const setCollapsed = (value: boolean) => {
