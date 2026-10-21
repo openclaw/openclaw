@@ -270,17 +270,20 @@ try {
         cpuMs: 0,
         workerRequests: {},
         workboardReads: {},
-        methods: Object.fromEntries(
-          methods.map((method) => [
-            method,
-            {
-              roundTripMs: [],
-              handlerMs: [],
-              responseBytes: 0,
-              errors: 0,
-            },
-          ]),
-        ) as Record<Method, Samples>,
+        methods: {
+          "workboard.boards.list": {
+            roundTripMs: [],
+            handlerMs: [],
+            responseBytes: 0,
+            errors: 0,
+          },
+          "workboard.cards.list": {
+            roundTripMs: [],
+            handlerMs: [],
+            responseBytes: 0,
+            errors: 0,
+          },
+        },
       };
       active = phase;
       const started = performance.now();
