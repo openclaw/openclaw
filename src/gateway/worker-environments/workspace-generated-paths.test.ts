@@ -96,7 +96,7 @@ it("excludes only generated runtime roots from capture and transfer", async () =
   const local = await readActualWorkspaceManifestImpl({
     root: workspace,
     baseCommit: null,
-    buildCacheInputs: authoredBuildCacheInputs,
+    buildCacheInputs: new Set(authoredBuildCacheInputs),
   });
   const result = parseChangedWorkspaceResult(
     { version: 1, baseCommit: null, entries: [] },
@@ -194,7 +194,7 @@ it.skipIf(process.platform === "win32")(
       const local = await readActualWorkspaceManifestImpl({
         root: workspace,
         baseCommit: null,
-        buildCacheInputs: [],
+        buildCacheInputs: new Set(),
       });
       expect(local.manifest.entries.map((entry) => entry.path).toSorted()).toEqual(
         Object.keys(useful).toSorted(),
@@ -216,7 +216,7 @@ it.skipIf(process.platform === "win32")(
         readActualWorkspaceManifestImpl({
           root: workspace,
           baseCommit: null,
-          buildCacheInputs: [],
+          buildCacheInputs: new Set(),
         }),
       ).rejects.toThrow("EACCES");
       const failed = await runManifest(["", "all"]);
@@ -257,7 +257,7 @@ it("omits cache-only ancestry from remote capture while retaining empty director
     const local = await readActualWorkspaceManifestImpl({
       root: workspace,
       baseCommit: null,
-      buildCacheInputs: [],
+      buildCacheInputs: new Set(),
     });
     expect(
       raw.entries.filter((entry) => entry.type === "directory").map((entry) => entry.path),
@@ -329,3 +329,23 @@ it.each([false, true])(
     );
   },
 );
+
+it("retains build-cache inputs staged after the requested base", async () => {
+  const { workspace, readManifest, runManifest } = await createScriptWorkspace(
+    tempDirs.make("workspace-staged-cache-input-"),
+  );
+  const authored = ".artifacts/build-all-cache/newly-staged.txt";
+  await writeWorkspaceFiles(workspace, { "source.txt": "source" });
+  const baseCommit = await initializeScriptGitWorkspace(workspace, ".");
+  await writeWorkspaceFiles(workspace, { [authored]: "authored after base" });
+  const staged = await runCommandWithTimeout(
+    ["git", "-C", workspace, "add", "--force", "--", authored],
+    { timeoutMs: 10_000 },
+  );
+  expect(staged.code, staged.stderr).toBe(0);
+
+  const captured = await runManifest([baseCommit, "all"]);
+  expect(captured.code, captured.stderr).toBe(0);
+  const manifest = await readManifest(captured.stdout.trim());
+  expect(manifest.entries.some((entry) => entry.path === authored)).toBe(true);
+});

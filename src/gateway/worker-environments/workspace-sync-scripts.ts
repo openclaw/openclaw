@@ -336,17 +336,20 @@ async function eligiblePaths() {
 async function initializeRetainedBuildCacheInputs() {
   if (!fs.existsSync(path.join(root, ".git"))) return;
   excludeBuildCaches = true;
-  let paths;
+  let paths = [];
   if (requestedBaseCommit && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(requestedBaseCommit)) {
     try {
       paths = await nulPathsFrom(["ls-tree", "-r", "-z", "--name-only", requestedBaseCommit]);
     } catch {
       // A caller can retain an authenticated manifest for a base object this shallow
-      // worker copy does not have. Its current index still identifies tracked inputs.
+      // worker copy does not have. The current index still identifies tracked inputs.
     }
   }
-  paths ??= await nulPaths(["--full-name", "--cached"]);
-  rememberBuildCacheInputs(paths);
+  // The index also admits inputs staged after the requested base commit.
+  rememberBuildCacheInputs([
+    ...paths,
+    ...(await nulPaths(["--full-name", "--cached"])),
+  ]);
 }
 function assertSerializedManifestBudget(baseCommit, entries) {
   let bytes = Buffer.byteLength(JSON.stringify({ version: 1, baseCommit, entries: [] }));
