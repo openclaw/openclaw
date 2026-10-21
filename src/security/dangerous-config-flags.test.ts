@@ -29,38 +29,34 @@ function writeDangerousWorkspacePlugin(workspaceDir: string) {
 describe("collectEnabledInsecureOrDangerousFlags", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("keeps plugin contract checks enabled for a malformed roster", () => {
-    const inheritedWorkspaceDir = tempDirs.make("openclaw-dangerous-inherited-workspace-");
-    const explicitWorkspaceDir = tempDirs.make("openclaw-dangerous-explicit-workspace-");
-    writeDangerousWorkspacePlugin(inheritedWorkspaceDir);
-    const flags = collectEnabledInsecureOrDangerousFlags({
-      agents: {
-        defaults: { workspace: inheritedWorkspaceDir },
-        entries: { alpha: { workspace: explicitWorkspaceDir }, beta: {} },
-      },
-      plugins: {
-        entries: {
-          acpx: { config: { permissionMode: "approve-all" } },
-          ...pluginEntries,
+  it.each(["malformed", "rosterless"])(
+    "finds workspace plugin flags with a %s roster",
+    (roster) => {
+      const workspace = tempDirs.make("openclaw-dangerous-workspace-");
+      writeDangerousWorkspacePlugin(workspace);
+      const malformed = roster === "malformed";
+      const agents: OpenClawConfig["agents"] = { defaults: { workspace } };
+      if (malformed) {
+        agents.entries = {
+          alpha: { workspace: tempDirs.make("openclaw-dangerous-explicit-workspace-") },
+          beta: {},
+        };
+      }
+      const flags = collectEnabledInsecureOrDangerousFlags({
+        agents,
+        plugins: {
+          entries: {
+            ...pluginEntries,
+            ...(malformed ? { acpx: { config: { permissionMode: "approve-all" } } } : {}),
+          },
         },
-      },
-    });
-
-    expect(flags).toContain("plugins.entries.acpx.config.permissionMode=approve-all");
-    expect(flags).toContain("plugins.entries.workspace-danger.config.mode=danger");
-  });
-
-  it("uses the implicit main workspace for a rosterless compatibility config", () => {
-    const workspaceDir = tempDirs.make("openclaw-dangerous-rosterless-");
-    writeDangerousWorkspacePlugin(workspaceDir);
-
-    const flags = collectEnabledInsecureOrDangerousFlags({
-      agents: { defaults: { workspace: workspaceDir } },
-      plugins: { entries: pluginEntries },
-    });
-
-    expect(flags).toContain("plugins.entries.workspace-danger.config.mode=danger");
-  });
+      });
+      expect(flags).toContain("plugins.entries.workspace-danger.config.mode=danger");
+      if (malformed) {
+        expect(flags).toContain("plugins.entries.acpx.config.permissionMode=approve-all");
+      }
+    },
+  );
 
   it("ignores plugin config values that are not declared as dangerous", () => {
     const configContractsById = new Map([["other", { configContracts: { dangerousFlags } }]]);
@@ -83,15 +79,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
             },
           },
         },
-        entries: {
-          worker: {
-            sandbox: {
-              docker: {
-                dangerouslyAllowExternalBindSources: true,
-              },
-            },
-          },
-        },
+        entries: { worker: { sandbox: { docker: { dangerouslyAllowExternalBindSources: true } } } },
       },
       hooks: { allowRequestSessionKey: true },
       browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
