@@ -238,7 +238,7 @@ it("holds an empty main fallback against a foreign writer through shared commit"
     admit(request, grant);
   });
   try {
-    await prepare();
+    await sqlite.prepareAuthProfileWriteTransactionAsync(undefined, { env, config });
     expect(blocked).toBe(2);
     expect(ownership()).toEqual(committedOwner);
     foreign.exec("BEGIN IMMEDIATE; ROLLBACK");
