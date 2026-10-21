@@ -551,35 +551,6 @@ const freshUsage = (totalTokens: number) => ({
   totalTokensFresh: true,
   totalTokensVersion: 1 as const,
 });
-function transcriptScope(agentId: string, sessionId: string) {
-  return {
-    agentId,
-    sessionId,
-    sessionKey: `agent:${agentId}:main`,
-    storePath: resolveSessionStorePathCore(undefined, { agentId }),
-  };
-}
-
-async function buildTranscriptUsageStatusMessage(args: StatusTestArgs): Promise<string> {
-  const sessionId = args.sessionEntry?.sessionId;
-  if (!sessionId) {
-    throw new Error("Transcript status needs a session id");
-  }
-  const sessionKey = "sessionKey" in args ? args.sessionKey : statusContext.sessionKey;
-  const agentId =
-    args.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-  const transcriptUsage = await readRecentSessionUsageFromTranscriptAsync(
-    {
-      agentId,
-      sessionId,
-      sessionKey,
-      storePath: resolveSessionStorePathCore(undefined, { agentId }),
-    },
-    256 * 1024,
-  );
-  return buildStatusMessage({ ...args, transcriptUsage });
-}
-
 function withStatusHome(run: () => Promise<void>) {
   return withTempHome(
     async () => {
@@ -591,59 +562,72 @@ function withStatusHome(run: () => Promise<void>) {
 }
 
 describe("status transcript usage and model context", () => {
-  function writeTranscriptUsageLog(params: {
-    agentId: string;
-    sessionId: string;
-    model?: string;
-    usage?: ReturnType<typeof usage>;
-  }) {
-    const scope = transcriptScope(params.agentId, params.sessionId);
-    replaceSessionEntrySync(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
-    appendTranscriptMessageSync(scope, {
-      message: {
-        role: "assistant",
-        model: params.model ?? "claude-opus-4-6",
-        usage: params.usage ?? baselineTranscriptUsage,
-      },
+  function transcriptFixture(
+    params: {
+      agentId?: string;
+      model?: string;
+      usage?: ReturnType<typeof usage>;
+    } = {},
+  ) {
+    const agentId = params.agentId ?? "main";
+    const scope = {
+      agentId,
+      sessionId: "status-transcript",
+      sessionKey: `agent:${agentId}:main`,
+      storePath: resolveSessionStorePathCore(undefined, { agentId }),
+    };
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+    const append = (message: Parameters<typeof appendTranscriptMessageSync>[1]["message"]) =>
+      appendTranscriptMessageSync(scope, { message });
+    append({
+      role: "assistant",
+      model: params.model ?? "claude-opus-4-6",
+      usage: params.usage ?? usage(1, 2, 1000, 1003),
     });
+    return {
+      append,
+      render: async (args: StatusTestArgs = {}) => {
+        const sessionKey = "sessionKey" in args ? args.sessionKey : statusContext.sessionKey;
+        const readerAgentId =
+          args.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
+        const transcriptUsage = await readRecentSessionUsageFromTranscriptAsync(
+          {
+            agentId: readerAgentId,
+            sessionId: scope.sessionId,
+            sessionKey,
+            storePath: resolveSessionStorePathCore(undefined, { agentId: readerAgentId }),
+          },
+          256 * 1024,
+        );
+        return buildStatusMessage({
+          ...args,
+          sessionEntry: { sessionId: scope.sessionId, ...args.sessionEntry },
+          transcriptUsage,
+        });
+      },
+    };
   }
 
-  const baselineTranscriptUsage = usage(1, 2, 1000, 1003);
-
-  async function buildTranscriptStatusText(params: { sessionId: string; sessionKey: string }) {
-    return buildTranscriptUsageStatusMessage({
-      sessionEntry: {
-        sessionId: params.sessionId,
-        totalTokens: 3,
-        modelProvider: "anthropic",
-        model: "claude-opus-4-6",
-        agentHarnessId: "openclaw",
-        contextTokens: 32_000,
-        contextTokensSource: "runtime",
-      },
-      sessionKey: params.sessionKey,
-      resolvedHarness: "openclaw",
-    });
-  }
+  const runtimeEntry = {
+    totalTokens: 3,
+    modelProvider: "anthropic",
+    model: "claude-opus-4-6",
+    agentHarnessId: "openclaw" as const,
+    contextTokens: 32_000,
+    contextTokensSource: "runtime" as const,
+  };
 
   it("reads transcript usage for non-default agents", async () => {
     await withStatusHome(async () => {
-      const sessionId = "sess-worker1";
-      writeTranscriptUsageLog({ agentId: "worker1", sessionId });
-      const text = await buildTranscriptStatusText({
-        sessionId,
+      const { render, append } = transcriptFixture({ agentId: "worker1" });
+      const args: StatusTestArgs = {
+        sessionEntry: runtimeEntry,
         sessionKey: "agent:worker1:telegram:12345",
-      });
-
-      expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
-      appendTranscriptMessageSync(transcriptScope("worker1", sessionId), {
-        message: { role: "assistant", usage: { input: 2_000, output: 20, totalTokens: 2_000 } },
-      });
-      const updated = await buildTranscriptStatusText({
-        sessionId,
-        sessionKey: "agent:worker1:telegram:12345",
-      });
-      expect(normalizeTestText(updated)).toContain("Context: 2.0k/32k");
+        resolvedHarness: "openclaw",
+      };
+      expect(normalizeTestText(await render(args))).toContain("Context: 1.0k/32k");
+      append({ role: "assistant", usage: { input: 2_000, output: 20, totalTokens: 2_000 } });
+      expect(normalizeTestText(await render(args))).toContain("Context: 2.0k/32k");
     });
   });
 
@@ -675,11 +659,10 @@ describe("status transcript usage and model context", () => {
     },
   ])("$name", async ({ transcript, entry, present, absent }) => {
     await withStatusHome(async () => {
-      const sessionId = "transcript-context";
-      writeTranscriptUsageLog({ agentId: "main", sessionId, usage: transcript });
+      const { render } = transcriptFixture({ usage: transcript });
       const text = normalizeTestText(
-        await buildTranscriptUsageStatusMessage({
-          sessionEntry: { sessionId, contextTokens: 1_000_000, ...entry },
+        await render({
+          sessionEntry: { contextTokens: 1_000_000, ...entry },
         }),
       );
       present.forEach((snippet) => expect(text).toContain(snippet));
@@ -689,19 +672,17 @@ describe("status transcript usage and model context", () => {
 
   it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
     await withStatusHome(async () => {
-      const sessionId = "sess-cache-delivery-mirror";
-      writeTranscriptUsageLog({ agentId: "main", sessionId });
-      appendTranscriptMessageSync(transcriptScope("main", sessionId), {
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          usage: usage(0, 0, 0, 0),
-        },
+      const { render, append } = transcriptFixture();
+      append({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: usage(0, 0, 0, 0),
       });
 
-      const text = await buildTranscriptStatusText({
-        sessionId,
+      const text = await render({
+        sessionEntry: runtimeEntry,
+        resolvedHarness: "openclaw",
         sessionKey: "agent:main:main",
       });
 
@@ -729,18 +710,15 @@ describe("status transcript usage and model context", () => {
     "keeps transcript-derived %s model ids in their admitted provider catalog",
     async (_kind, model, args, context, otherContext) => {
       await withStatusHome(async () => {
-        const sessionId = "catalog-context";
-        writeTranscriptUsageLog({
-          agentId: "main",
-          sessionId,
+        const { render } = transcriptFixture({
           model,
           usage: usage(2, 3, 1200, 1205),
         });
         const normalized = normalizeTestText(
-          await buildTranscriptUsageStatusMessage({
+          await render({
             ...args,
             thinkingCatalog: [...args.thinkingCatalog],
-            sessionEntry: { sessionId, totalTokens: 5 },
+            sessionEntry: { totalTokens: 5 },
           }),
         );
         expect(normalized).toContain(`Context: 1.2k/${context}`);

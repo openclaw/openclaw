@@ -260,22 +260,17 @@ describe("chunkMarkdownText", () => {
 });
 
 describe("chunkByNewline", () => {
+  const [one, two, three] = ["Line one", "Line two", "Line three"] as const;
   it.each([
-    [
-      "line breaks",
-      "Line one\nLine two\nLine three",
-      1000,
-      ["Line one", "Line two", "Line three"],
-      undefined,
-    ],
+    ["line breaks", `${one}\n${two}\n${three}`, 1000, [one, two, three], undefined],
     [
       "blank folding",
-      "Line one\n\n\nLine two\n\nLine three",
+      `${one}\n\n\n${two}\n\n${three}`,
       1000,
-      ["Line one", "\n\nLine two", "\nLine three"],
+      [one, `\n\n${two}`, `\n${three}`],
       undefined,
     ],
-    ["trim", "  Line one  \n  Line two  ", 1000, ["Line one", "Line two"], undefined],
+    ["trim", `  ${one}  \n  ${two}  `, 1000, [one, two], undefined],
     [
       "whole whitespace graphemes",
       " \u0301line\u0600  \n next ",
@@ -283,14 +278,8 @@ describe("chunkByNewline", () => {
       [" \u0301line\u0600 ", "next"],
       undefined,
     ],
-    [
-      "leading blank lines",
-      "\n\nLine one\nLine two",
-      1000,
-      ["\n\nLine one", "Line two"],
-      undefined,
-    ],
-    ["trailing blank lines", "Line one\n\n", 1000, ["Line one\n\n"], undefined],
+    ["leading blank lines", `\n\n${one}\n${two}`, 1000, [`\n\n${one}`, two], undefined],
+    ["trailing blank lines", `${one}\n\n`, 1000, [`${one}\n\n`], undefined],
     ["capped blank lines", "x" + "\n".repeat(50), 10, ["x" + "\n".repeat(9)], undefined],
     ["astral suffix budget", "😀\n\n", 3, ["😀\n"], undefined],
     ["astral leading budget", "\n😀", 2, ["😀"], undefined],
