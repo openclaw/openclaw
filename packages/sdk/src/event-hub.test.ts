@@ -27,12 +27,7 @@ it("releases retired payloads but lets a closed hub drain", async ({ signal }) =
     },
   );
   expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
-  expect(JSON.parse(result.stdout)).toMatchObject({
-    verdict: "passed",
-    controlRetained: false,
-    hubCloseDrained: true,
-    cleanupErrors: [],
-  });
+  expect(JSON.parse(result.stdout)).toEqual({ verdict: "passed", cleanupErrors: [] });
 }, 30_000);
 
 it("keeps buffered bursts ordered when publishing resumes during a partial drain", async () => {

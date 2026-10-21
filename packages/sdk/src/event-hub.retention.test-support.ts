@@ -11,14 +11,7 @@ type Held = {
   refs: Array<{ kind: Payload["kind"]; value: WeakRef<Payload> }>;
 };
 const held: Held[] = [];
-const report = {
-  controlRetained: null as boolean | null,
-  observations: [] as Array<{ mode: Mode; kind: Payload["kind"]; retained: boolean }>,
-  hubCloseDrained: false,
-  cleanupErrors: [] as string[],
-  error: null as string | null,
-  verdict: "incomplete",
-};
+const cleanupErrors: string[] = [];
 const reason = (error: unknown) =>
   error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 
@@ -58,7 +51,7 @@ async function prepare(mode: Mode) {
   }
 }
 
-const failures: unknown[] = [];
+let passed = false;
 try {
   const gc = globalThis.gc;
   assert.ok(gc, "The retirement probe requires --expose-gc");
@@ -72,14 +65,10 @@ try {
     gc();
     await setImmediate();
   }
-  report.controlRetained = control.deref() !== undefined;
-  report.observations = held.flatMap(({ mode, refs }) =>
+  const observations = held.flatMap(({ mode, refs }) =>
     refs.map(({ kind, value }) => ({ mode, kind, retained: value.deref() !== undefined })),
   );
-  if (report.controlRetained) {
-    report.verdict = "gc-inconclusive";
-    throw new Error("Uncached control retained; no payload-retention conclusion");
-  }
+  assert.equal(control.deref(), undefined, "Uncached control retained; no retention conclusion");
   for (const { mode, iterator, refs } of held) {
     if (mode === "hub-close") {
       const expected = refs[0]?.value.deref();
@@ -87,7 +76,6 @@ try {
       const next = await iterator.next();
       assert.equal(next.done, false);
       assert.equal(next.value, expected);
-      report.hubCloseDrained = true;
     }
     if (mode === "filter-error") {
       await assert.rejects(iterator.next(), /synthetic filter retirement/);
@@ -95,32 +83,26 @@ try {
       assert.deepEqual(await iterator.next(), { done: true, value: undefined });
     }
   }
-  report.verdict = "retention-failed";
   assert.deepEqual(
-    report.observations.filter(({ mode, retained }) => mode !== "hub-close" && retained),
+    observations.filter(({ mode, retained }) => mode !== "hub-close" && retained),
     [],
     "Retired iterators must release backlog and reentrant payloads",
   );
-  report.verdict = "passed";
-} catch (error) {
-  failures.push(error);
-  report.error = reason(error);
+  passed = true;
 } finally {
   for (const { hub, iterator } of held) {
     try {
       await iterator.return?.();
     } catch (error) {
-      report.cleanupErrors.push(reason(error));
-      failures.push(error);
+      cleanupErrors.push(reason(error));
     } finally {
       hub.close();
     }
   }
-  if (report.cleanupErrors.length > 0) {
-    report.verdict = "cleanup-failed";
+  process.stdout.write(
+    `${JSON.stringify({ verdict: passed && cleanupErrors.length === 0 ? "passed" : "failed", cleanupErrors })}\n`,
+  );
+  if (passed) {
+    assert.deepEqual(cleanupErrors, [], "Iterator cleanup failed");
   }
-  process.stdout.write(`${JSON.stringify(report)}\n`);
-}
-if (failures.length > 0) {
-  throw failures[0];
 }
