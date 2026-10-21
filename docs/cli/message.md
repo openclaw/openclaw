@@ -126,6 +126,10 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | `search`        | Discord, Microsoft Teams                                                                                        | `--query`                                                      | `--guild-id` (Discord; resolved from `--channel-id` when omitted), `--channel-id` (required for Microsoft Teams as Graph `<team-id>/<channel-id>`), `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`.                                                                       |
 | `member info`   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--user-id`                                                    | `--channel-id` (required for Matrix and Microsoft Teams), `--guild-id` (Discord).                                                                                                                                                                                                                      |
 
+Google Chat also supports `edit` with `--message-id`, `--message`, and `--target`.
+Use a full `spaces/<spaceId>/messages/<messageId>` resource name from the same
+target space; only the selected app's messages can be edited.
+
 Reaction listings show labels, counts, and available users as plain terminal text.
 Use `--json` for the complete channel result.
 

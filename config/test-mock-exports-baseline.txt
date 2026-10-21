@@ -569,7 +569,6 @@
 ["extensions/google/speech-provider.test.ts","openclaw/plugin-sdk/media-runtime","99cdfd03b56718b76c3621561a1bf94af7e86788f68e4981710c6cde88eea9d1",1]
 ["extensions/google/video-generation-provider.test.ts","./google-genai-runtime.js","b1a7ce8a9b5ece694e3872d2036744ec5f9bf27a4e8d7365e8e029dc6c4afa86",1]
 ["extensions/googlechat/src/actions.test.ts","./accounts.js","d00e10b7cc3ab36abd9d89e56923e727306f922a5be03a935c881cf48bb9dea6",1]
-["extensions/googlechat/src/actions.test.ts","./api.js","b37e234533ec1667618465811e090c9ee2806c27c8113e061bcaf8de0b78a251",1]
 ["extensions/googlechat/src/actions.test.ts","./targets.js","5fc5601a2ecd775b304456641e85afa39c8cd062eef9e77000b8d3407210df7d",1]
 ["extensions/googlechat/src/approval-card-click.test.ts","./api.js","ae9278401a7207388e85a3b616dccfd9cff6d009b8dd9542dade7851a8ed99b5",1]
 ["extensions/googlechat/src/approval-card-click.test.ts","openclaw/plugin-sdk/approval-gateway-runtime","3f06e20ac80627fd216972c45c4a7f277193429674830283dce0c6483019eb03",1]

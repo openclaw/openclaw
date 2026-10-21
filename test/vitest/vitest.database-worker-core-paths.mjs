@@ -1306,6 +1306,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/cli-message-authority.integration.test.ts",
   "test/cron-message-read.integration.test.ts",
   "test/cron-conversation-delivery.codex.integration.test.ts",
+  "test/googlechat-message-edit.integration.test.ts",
   "test/imessage-reply-alias.integration.test.ts",
   "test/matrix-channel-read-authority.integration.test.ts",
   "test/telegram-history-read.integration.test.ts",
