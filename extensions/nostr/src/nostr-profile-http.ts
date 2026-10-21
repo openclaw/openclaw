@@ -415,7 +415,6 @@ async function handleImportProfile(
   const result = await importProfileFromRelays({
     pubkey,
     relays,
-    timeoutMs: 10_000,
   });
 
   if (!result.ok) {

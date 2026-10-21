@@ -55,10 +55,11 @@ export type ChatDetailsViewProps = {
   mobileHost?: ChatMobileHost;
   mobileBindings?: MobileDetailsBindings;
   conversationVisible?: boolean;
+  conversationMain?: boolean;
   externalTrigger?: boolean;
   triggerContent?: Element;
 };
-export type ChatDetails = { open(source: HTMLElement): void };
+export type ChatDetails = { open(source: HTMLElement): void; close(): void };
 let nextId = 0;
 
 const DETAILS_WIDTH = 300;
@@ -72,7 +73,12 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const isPresented = usePanePresentation(() => props.presentation);
   // Stable layout facts keep chat updates from reopening the inspector's child menu.
   const isMobile = createMemo(() => props.mobile);
-  const isConversationVisible = createMemo(() => props.conversationVisible !== false);
+  // Details follows main, even when the conversation remains visible in a side panel.
+  const isConversationAnchor = createMemo(
+    () =>
+      props.conversationVisible !== false &&
+      (props.nativePresentation !== "desktop" || props.conversationMain !== false),
+  );
   const hasExternalTrigger = createMemo(() => props.externalTrigger ?? false);
   const layoutElements = createMemo(() => props.elements);
   const presentation = createMemo(
@@ -111,7 +117,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     setChoice((previous) => ({ ...previous, intent: nextIntent }));
   };
   const [wideEnough, setWideEnough] = createSignal(false);
-  const canDock = () => !isMobile() && isConversationVisible() && wideEnough();
+  const canDock = () => !isMobile() && isConversationAnchor() && wideEnough();
   const opened = () =>
     isPresented() &&
     (props.mobileHost
@@ -142,7 +148,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   let progressMenu: MenuHandle | undefined;
   const readLayout = () => ({
     mobile: isMobile(),
-    conversationVisible: isConversationVisible(),
+    conversationVisible: isConversationAnchor(),
     externalTrigger: hasExternalTrigger(),
     elements: layoutElements(),
     presentation: presentation(),
@@ -226,10 +232,15 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         ? elements?.getComposerInput?.()?.getBoundingClientRect()
         : undefined;
       const viewport = window.visualViewport;
-      const headerBottom = !conversationVisible
-        ? elements?.header?.getBoundingClientRect().bottom
+      const headerBounds = !conversationVisible
+        ? elements?.header?.getBoundingClientRect()
         : undefined;
-      const top = Math.max((headerBottom ?? bounds.top) + 8, (viewport?.offsetTop ?? 0) + 8);
+      // The header occupies the main grid column, excluding any visible side panel.
+      const horizontalBounds = headerBounds ?? bounds;
+      const top = Math.max(
+        (headerBounds?.bottom ?? bounds.top) + 8,
+        (viewport?.offsetTop ?? 0) + 8,
+      );
       const bottom = Math.min(
         docked() && composer && composer.height > 0
           ? composer.bottom
@@ -240,12 +251,12 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight) - 8,
       );
       const right = Math.min(
-        bounds.right - DETAILS_DESKTOP_INLINE_INSET,
+        horizontalBounds.right - DETAILS_DESKTOP_INLINE_INSET,
         (viewport?.offsetLeft ?? 0) +
           (viewport?.width ?? window.innerWidth) -
           DETAILS_DESKTOP_INLINE_INSET,
       );
-      const width = Math.max(0, Math.min(DETAILS_WIDTH, right - bounds.left - 8));
+      const width = Math.max(0, Math.min(DETAILS_WIDTH, right - horizontalBounds.left - 8));
       panel.style.left = `${right - width - (conversationVisible ? bounds.left : 0)}px`;
       panel.style.top = `${top - (conversationVisible ? bounds.top : 0)}px`;
       panel.style.width = `${width}px`;
@@ -363,7 +374,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         opened(),
         docked(),
         isMobile(),
-        isConversationVisible(),
+        isConversationAnchor(),
         hasExternalTrigger(),
         Boolean(props.mobileHost),
         props.mobileHost?.detailsMount,
@@ -470,6 +481,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     () =>
       [
         props.elements?.pane,
+        props.elements?.header,
         props.elements?.frame,
         props.elements?.footer,
         props.elements?.getComposerInput?.(),
@@ -477,7 +489,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     reposition,
   );
   onSettled(() => {
-    props.setRef({ open: openFrom });
+    props.setRef({ open: openFrom, close: () => close(true) });
     const pane = layoutElements()?.pane;
     // The pane publishes target geometry in its class/style before CSS starts
     // interpolating. ResizeObserver remains responsible for actual placement.

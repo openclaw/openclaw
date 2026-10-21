@@ -166,20 +166,13 @@ describe("startGatewayTailscaleExposure", () => {
     expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
   });
 
-  it("claims Serve when preserveFunnel is true but no Funnel route exists for the port", async () => {
-    mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(false);
+  it("claims Serve without an existing Funnel and owns its tailnet-only origin", async () => {
+    mocks.getTailnetHostnameAfterServe.mockResolvedValue("node.tailnet.ts.net");
 
-    await startGatewayTailscaleExposure({ preserveFunnel: true });
+    const cleanup = await startGatewayTailscaleExposure({ preserveFunnel: true });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
     expectClaim("serve");
-  });
-
-  it("prepares one tailnet-only Serve origin for the Gateway lifecycle", async () => {
-    mocks.getTailnetHostnameAfterServe.mockResolvedValue("node.tailnet.ts.net");
-
-    const cleanup = await startGatewayTailscaleExposure();
-
     expect(getTailscalePublishedOrigin()).toMatchObject({
       origin: "https://node.tailnet.ts.net",
       mode: "serve",

@@ -1,6 +1,5 @@
 import { compareParityBehavior, stableHash } from "./parity-shared.js";
 import type { RuntimeParityCell, RuntimeParityDrift } from "./runtime-parity.js";
-import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
 export type HarnessParityDrift =
   | RuntimeParityDrift
@@ -76,7 +75,6 @@ function harnessSurfaceHashes(cell: HarnessRuntimeParityCell) {
 export function classifyHarnessParityDrift(params: {
   left: HarnessRuntimeParityCell;
   right: HarnessRuntimeParityCell;
-  comparisonMode?: RuntimeParityComparisonMode;
 }): HarnessParityDrift {
   if (
     params.left.transportErrorClass ||
@@ -100,9 +98,6 @@ export function classifyHarnessParityDrift(params: {
   return compareParityBehavior({
     left: params.left,
     right: params.right,
-    compareStructure:
-      params.comparisonMode !== "codex-native-workspace" &&
-      params.comparisonMode !== "outcome-only",
     transcriptMode: "messages",
   }).drift;
 }

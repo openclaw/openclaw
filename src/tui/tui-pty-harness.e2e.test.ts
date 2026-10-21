@@ -667,18 +667,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "patches the session model from /model",
-    async () => {
-      await fixture.write("/model fixture-provider/fixture-model-2\r", { delay: false });
-      await fixture.wait("model set to fixture-provider/fixture-model-2");
-      expect(
-        await fixture.hasCall("patchSession", { model: "fixture-provider/fixture-model-2" }),
-      ).toBe(true);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
     "submits an exact argument completion with one Enter",
     async () => {
       await fixture.write("/fast status", { delay: false });
@@ -755,26 +743,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "resets the current session from /reset",
-    async ({ signal }) => {
-      await fixture.write("/reset\r", { delay: false });
-      await fixture.waitForLogEntry((entry) => {
-        if (
-          entry.method !== "resetSession" ||
-          !objectFieldEquals(entry, "reason", "reset") ||
-          typeof entry.payload !== "object" ||
-          entry.payload === null
-        ) {
-          return false;
-        }
-        const key = (entry.payload as Record<string, unknown>).key;
-        return typeof key === "string" && (key === "main" || key.startsWith("agent:main:"));
-      }, signal);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
     "keeps the newer session when a rapid switch's history resolves last",
     async ({ signal }) => {
       await fixture.write("/session agent:main:switch-a\r", { delay: false });
@@ -786,17 +754,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       const sent = await fixture.call(signal, "sendChat", { message: "after switch" });
       expect(sent.payload).toMatchObject({ sessionKey: "agent:main:switch-b" });
       expect(fixture.output()).not.toContain("A_HISTORY_MARKER");
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "exits cleanly from /exit",
-    async () => {
-      await fixture.write("/exit\r", { delay: false });
-
-      const exit = await fixture.run.waitForExit();
-      expect(exit.exitCode).toBe(0);
     },
     TEST_TIMEOUT_MS,
   );

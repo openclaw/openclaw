@@ -30,6 +30,11 @@ import {
 } from "./auth-profiles/runtime-materializations.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import {
+  harnessRegistry,
+  model as configuredModel,
+  providerConfig as configuredProvider,
+} from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -70,27 +75,11 @@ function baseConfig(): OpenClawConfig {
 }
 
 function providerConfig(maxTokens: number, api?: "openai-completions") {
-  return {
-    models: {
-      providers: {
-        custom: {
-          ...(api ? { api } : {}),
-          baseUrl: "https://synthetic.example.test/v1",
-          models: [
-            {
-              id: model.id,
-              name: model.name,
-              reasoning: false,
-              input: ["text" as const],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 32_000,
-              maxTokens,
-            },
-          ],
-        },
-      },
-    },
-  };
+  return configuredProvider("custom", {
+    ...(api ? { api } : {}),
+    baseUrl: "https://synthetic.example.test/v1",
+    models: [configuredModel(model.id, model.name, { contextWindow: 32_000, maxTokens })],
+  });
 }
 
 function publish(config: OpenClawConfig) {
@@ -250,19 +239,12 @@ describe("catalog publication session rows", () => {
         }
         return [{ ...model, nativeRuntime: "synthetic-native" }];
       });
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "synthetic-native",
-        source: "fixture",
-        harness: {
-          id: "synthetic-native",
-          label: "Synthetic native runtime",
-          authBootstrap: "harness",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-          loadModelCatalog: loadNative,
-          readModelCatalogReadiness: () => (ready ? { accountType: "apiKey" } : undefined),
-        },
+      const registry = harnessRegistry("synthetic-native", {
+        label: "Synthetic native runtime",
+        authBootstrap: "harness",
+        runAttempt: vi.fn(),
+        loadModelCatalog: loadNative,
+        readModelCatalogReadiness: () => (ready ? { accountType: "apiKey" } : undefined),
       });
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.modelRegistry.fork.mockImplementation((authStorage) => ({
@@ -361,19 +343,12 @@ describe("catalog publication session rows", () => {
 
   it("keeps configured API facts through native observations", async () => {
     const loadModelCatalog = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "synthetic-native",
-      source: "fixture",
-      harness: {
-        id: "synthetic-native",
-        label: "Synthetic native runtime",
-        supports: () => ({ supported: true }),
-        async runAttempt() {
-          throw new Error("catalog-only fixture");
-        },
-        loadModelCatalog,
+    const registry = harnessRegistry("synthetic-native", {
+      label: "Synthetic native runtime",
+      async runAttempt() {
+        throw new Error("catalog-only fixture");
       },
+      loadModelCatalog,
     });
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
     mocks.authStorage.getAll.mockReturnValue({});

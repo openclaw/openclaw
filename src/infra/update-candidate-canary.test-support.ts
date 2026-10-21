@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -6,10 +8,62 @@ import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import { resolveUpdateResultNextAction } from "../cli/update-cli/update-recovery-guidance.js";
 import type { SpawnResult } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as diskSpace from "./disk-space.js";
+import { tryListenOnPort } from "./ports-probe.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import type { UpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+export function holdCanaryProgress(matches: (step: UpdateRunStep) => boolean) {
+  const entered = createDeferredCore();
+  const receipt = createDeferredCore();
+  const onProgress = vi.fn((step: UpdateRunStep) => {
+    if (matches(step)) {
+      entered.resolve();
+      return receipt.promise;
+    }
+    return undefined;
+  });
+  return { entered: entered.promise, receipt, onProgress };
+}
+
+export async function createCanaryProcessFixture(
+  root: string,
+  source: string,
+): Promise<UpdateCandidateRehearsal> {
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(stateDir, "openclaw.json");
+  await fs.mkdir(stateDir);
+  await fs.writeFile(configPath, "{}");
+  await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), '{"version":"2026.9.5","type":"module"}');
+  await fs.writeFile(
+    path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"),
+    "console.log(JSON.stringify({state: 2, agent: 3}));",
+  );
+  await fs.writeFile(path.join(root, "dist", "index.js"), source);
+  return {
+    stateDir,
+    configPath,
+    workspaceDir: stateDir,
+    port: await tryListenOnPort({ port: 0, host: "127.0.0.1" }),
+    env: buildUpdateRehearsalPathEnv(stateDir),
+    snapshotCapacity: {
+      reason: "explicit-tmpdir",
+      sqliteBytes: 0,
+      pluginBytes: 0,
+      requiredBytes: 0,
+      candidates: [],
+      selection: { kind: "explicit-tmpdir", directory: stateDir },
+    },
+    cleanupDirectories: [],
+    cleanup: async () => {},
+  };
+}
 
 export class FakeChild extends EventEmitter {
   pid: number;

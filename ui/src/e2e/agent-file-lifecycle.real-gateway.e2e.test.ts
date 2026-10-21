@@ -337,7 +337,6 @@ suite.define(() => {
               defaults: {
                 workspace: "~/.openclaw/workspace-main",
                 systemAgent: { agentId: "main" },
-                heartbeat: { agentId: "main" },
                 sessionStore: { agentId: "main" },
               },
               entries: {

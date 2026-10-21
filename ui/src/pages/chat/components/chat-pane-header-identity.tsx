@@ -284,9 +284,12 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
       label={t("chat.sessionHeader.workspaceAria", { workspace: props.workspaceLabel ?? "" })}
       triggerClass={`chat-pane__workspace-chip${!copied() && !props.workspaceIcon ? " chat-pane__workspace-chip--fallback-icon" : ""}`}
       triggerAttributes={{
-        title: props.mergedChrome
-          ? undefined
-          : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
+        title:
+          props.workspaceLabel === t("sessionHovercard.workspaceLabel")
+            ? props.workspaceLabel
+            : props.mergedChrome
+              ? undefined
+              : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
       }}
       items={items()}
       onSelect={(item) => {

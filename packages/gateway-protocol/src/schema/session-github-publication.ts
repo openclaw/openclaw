@@ -49,6 +49,9 @@ export const GITHUB_PULL_REQUEST_LOGIN_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9_-]{0
 export const GitHubPullRequestPrepareSchema = closedObject({
   action: Type.Literal("prepare_pr"),
   pullRequestUrl: GitHubPullRequestInspectSchema.properties.pullRequestUrl,
+  conflictsResolved: Type.Optional(Type.Boolean()),
+  // Acknowledges returned conflicts; never selects the source to import.
+  expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
 });
 const GitHubPullRequestRefSchema = closedObject({
   repository: NonEmptyString,
@@ -110,7 +113,7 @@ export const GitHubPublicationEditSchema = closedObject({
 });
 export const GitHubPublicationReviewRequestSchema = closedObject({
   action: Type.Literal("request_review"),
-  requestId: PersonalGitHubGenerationSchema,
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
 });
 export const GITHUB_PUBLICATION_EVIDENCE_MAX_BYTES = 10_000_000;
@@ -121,7 +124,7 @@ export const GitHubPublicationEvidenceSchema = closedObject({
 });
 export const GitHubPublicationEvidenceUploadSchema = closedObject({
   action: Type.Literal("upload_evidence"),
-  requestId: PersonalGitHubGenerationSchema,
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
   evidence: GitHubPublicationEvidenceSchema,
 });
@@ -172,11 +175,12 @@ export const SessionGitHubBaseRefreshResultSchema = closedObject({
   review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
 });
 export const SessionGitHubPullRequestPrepareResultSchema = closedObject({
-  status: Type.Literal("prepared"),
+  status: stringLiteralUnion(["prepared", "conflicts"]),
   url: NonEmptyString,
   headCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
   headChanged: Type.Boolean(),
   changedPaths: Type.Array(Type.String()),
+  conflictPaths: Type.Array(Type.String()),
   review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
 });
 
@@ -212,8 +216,7 @@ export const SessionGitHubPublicationPublishedSchema = closedObject({
   branch: NonEmptyString,
   headCommit: NonEmptyString,
 });
-export const SessionGitHubActionResultSchema = closedObject({
-  publication: SessionGitHubPublicationPublishedSchema,
+const SessionGitHubActionState = {
   publishingSessionKey: NonEmptyString,
   state: Type.Union([
     Type.Literal("draft"),
@@ -250,7 +253,21 @@ export const SessionGitHubActionResultSchema = closedObject({
       }),
     ]),
   ),
-});
+};
+export const SessionGitHubActionResultSchema = Type.Union([
+  closedObject({
+    ...SessionGitHubActionState,
+    publication: SessionGitHubPublicationPublishedSchema,
+  }),
+  closedObject({
+    ...SessionGitHubActionState,
+    pullRequest: closedObject({
+      url: NonEmptyString,
+      repository: NonEmptyString,
+      branch: NonEmptyString,
+    }),
+  }),
+]);
 export const SessionGitHubPublicationFailedSchema = closedObject({
   ...SessionGitHubPublicationBaseSchema,
   status: Type.Literal("failed"),

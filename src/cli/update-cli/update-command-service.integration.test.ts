@@ -585,7 +585,7 @@ describe("preserved update activation with real version guards", () => {
     expectUncalled(repair, mocks.restart, mocks.health);
   });
 
-  registerRecoveryTests({ root: () => root, configPath: () => configPath, run: () => run, mocks });
+  registerRecoveryTests(() => ({ root, configPath, run, mocks }));
 
   registerGenerationRecoveryTests(() => ({ root, configPath, mocks }));
 
