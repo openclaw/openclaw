@@ -26,6 +26,7 @@ const auditMaintenance = vi.hoisted(() => ({
 it("joins managed reload acquisition during Gateway close", async () => {
   const fixture = await createGatewayMetadataCloseFixture("managed-model-close");
   process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+  fixture.config.cron = { enabled: false };
   fixture.config.gateway = { reload: { mode: "hybrid" } };
   fixture.config.agents = {
     defaults: { workspace: fixture.state.workspaceDir, model: `${fixture.pluginId}/before` },
