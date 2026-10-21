@@ -163,7 +163,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             auth: auth,
             websiteDataStore: websiteDataStore,
             tlsParams: tlsParams,
-            browserSessionLease: browserSessionLease)
+            browserSessionLease: browserSessionLease,
+            deviceSettingsMessageHandler: deviceSettingsMessageHandler)
         { controller in
             for name in [
                 Self.linkMessageHandlerName,
@@ -177,8 +178,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 appLinkMessageHandler,
                 contentWorld: DashboardAppLinkMessageHandler.world,
                 name: DashboardAppLinkMessageHandler.name)
-            controller.addScriptMessageHandler(
-                deviceSettingsMessageHandler, contentWorld: .page, name: Self.deviceSettingsMessageHandlerName)
             controller.addScriptMessageHandler(
                 browserMessageHandler, contentWorld: .page, name: DashboardBrowserMessageHandler.name)
             if shouldEnableUpdateBridge {

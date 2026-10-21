@@ -1,4 +1,4 @@
-import { createMemo, For, onSettled } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
@@ -511,37 +511,41 @@ export function AppearanceSection(props: ConfigProps) {
         </p>
       </section>
       <Typography {...props} presentedTheme={presentedTheme()} /> <TabIconSection {...props} />
-      <section id={APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
-        <SettingsSectionHeader title={t("configView.appearance.textSize")} />
-        <p class="settings-section__desc">
-          <SettingsDefaultDescription
-            value={`${UI_APPEARANCE_DEFAULTS.textScale}%`}
-            overridden={props.textScaleOverridden}
-          />{" "}
-          {t("quickSettings.personal.browserOnly")}
-        </p>
-        <div class="settings-group">
-          <div class="settings-row settings-row--stacked">
-            <div class="settings-text-scale">
-              <div class="settings-text-scale__options">
-                <For each={TEXT_SCALE_STOPS}>
-                  {(stop) => (
-                    <button
-                      type="button"
-                      class={["settings-text-scale__btn", { active: stop === props.textScale }]}
-                      aria-pressed={stop === props.textScale ? "true" : "false"}
-                      onClick={() => props.setTextScale(stop)}
-                    >
-                      <span class="settings-text-scale__sample">{t(TEXT_SCALE_LABELS[stop])}</span>
-                      <span class="settings-text-scale__label">{stop}%</span>
-                    </button>
-                  )}
-                </For>
+      <Show when={!props.hostContentZoom}>
+        <section id={APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
+          <SettingsSectionHeader title={t("configView.appearance.textSize")} />
+          <p class="settings-section__desc">
+            <SettingsDefaultDescription
+              value={`${UI_APPEARANCE_DEFAULTS.textScale}%`}
+              overridden={props.textScaleOverridden}
+            />{" "}
+            {t("quickSettings.personal.browserOnly")}
+          </p>
+          <div class="settings-group">
+            <div class="settings-row settings-row--stacked">
+              <div class="settings-text-scale">
+                <div class="settings-text-scale__options">
+                  <For each={TEXT_SCALE_STOPS}>
+                    {(stop) => (
+                      <button
+                        type="button"
+                        class={["settings-text-scale__btn", { active: stop === props.textScale }]}
+                        aria-pressed={stop === props.textScale ? "true" : "false"}
+                        onClick={() => props.setTextScale(stop)}
+                      >
+                        <span class="settings-text-scale__sample">
+                          {t(TEXT_SCALE_LABELS[stop])}
+                        </span>
+                        <span class="settings-text-scale__label">{stop}%</span>
+                      </button>
+                    )}
+                  </For>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </Show>
       <SidebarPreferencesSection {...props} /> <LobsterPetSection {...props} />
       <ChatPreferencesSection {...props} /> <SessionSources {...props} />
       <section id={APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">

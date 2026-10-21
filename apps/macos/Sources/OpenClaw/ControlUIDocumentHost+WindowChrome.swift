@@ -13,7 +13,6 @@ private final class ControlUIWindowDragMessageHandler: NSObject, WKScriptMessage
 
 extension ControlUIDocumentHost {
     private static let windowDragMessageHandlerName = "openclawWindowDrag"
-    static let nativeTitlebarCSS = ":root { --openclaw-native-titlebar-height: 52px; }"
 
     func registerWindowChromeHandler() {
         let controller = self.webView.configuration.userContentController
@@ -25,13 +24,30 @@ extension ControlUIDocumentHost {
     /// Script refreshes replace URL-scoped chrome, while WebKit retains the handler.
     func installWindowChromeScript() {
         let controller = self.webView.configuration.userContentController
+        // Page zoom scales CSS pixels, but AppKit's titlebar and traffic lights
+        // remain in points. Keep their reserved band fixed through zoom and reload.
+        let zoom = self.webView.pageZoom
+        let css = """
+        :root {
+          --openclaw-native-titlebar-height: \(String(format: "%.8g", 52 / zoom))px;
+          --openclaw-native-controls-inset: \(String(format: "%.8g", 92 / zoom))px;
+          --openclaw-native-chrome-scale: \(String(format: "%.8g", 1 / zoom));
+        }
+        """
         // Start before the web header measures its band; document.head may not
         // exist yet, so attach to the root as soon as the parser creates it.
         let script = """
+        window.__OPENCLAW_NATIVE_CONTENT_ZOOM__ = {
+          supported: true,
+          adoptLegacyTextScale: async textScale => {
+            await window.webkit.messageHandlers.openclawDeviceSettings.postMessage({type: 'adopt-legacy-text-scale', textScale});
+          }
+        };
         const install = () => {
           if (!document.documentElement) return false;
-          const style = document.createElement('style');
-          style.textContent = \(WebViewJavaScriptSupport.jsValue(Self.nativeTitlebarCSS));
+          const style = document.getElementById('openclaw-native-titlebar') || document.createElement('style');
+          style.id = 'openclaw-native-titlebar';
+          style.textContent = \(WebViewJavaScriptSupport.jsValue(css));
           document.documentElement.appendChild(style);
           return true;
         };
@@ -42,10 +58,16 @@ extension ControlUIDocumentHost {
           observer.observe(document, {childList: true});
         }
         """
-        controller.addUserScript(WKUserScript(
+        let next = WKUserScript(
             source: Self.scopedDashboardScript(script, url: self.currentURL),
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: true))
+            forMainFrameOnly: true)
+        let scripts = controller.userScripts.filter { $0 !== self.windowChromeScript }
+        controller.removeAllUserScripts()
+        for existing in scripts { controller.addUserScript(existing) }
+        controller.addUserScript(next)
+        self.windowChromeScript = next
+        self.webView.evaluateJavaScript(Self.scopedDashboardScript(script, url: self.currentURL))
     }
 
     /// The Control UI's passive chrome and the native failure page's background

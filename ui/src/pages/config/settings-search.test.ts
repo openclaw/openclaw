@@ -25,6 +25,18 @@ function expectBlocks(actual: SettingsSearchBlock[], ...expected: Partial<Settin
 afterEach(async () => {
   await i18n.setLocale("en");
   setCurrentThemeBranding(resolveThemeBranding(undefined));
+  vi.unstubAllGlobals();
+});
+
+it("does not advertise the retired text-size control on a host-zoom desktop", () => {
+  const target = expect.objectContaining({ hash: "#settings-appearance-text-size" });
+  expect(search("text size")).toContainEqual(target);
+  vi.stubGlobal("window", {
+    __OPENCLAW_NATIVE_CONTENT_ZOOM__: {
+      supported: true,
+    },
+  });
+  expect(search("text size")).not.toContainEqual(target);
 });
 
 it("does not advertise hidden Lobsterdex choices while retaining the rest of tab icon settings", () => {

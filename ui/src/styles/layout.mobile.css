@@ -206,24 +206,29 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 /* Native macOS narrow widths (e.g. the in-app link browser splitting the
-   window): fold the titlebar clearance into one 58px row instead of stacking
-   it. body-qualified + !important outranks the Mac-app-injected topbar rules
+   window): fold the titlebar clearance into one 58-point row instead of stacking
+   it. Counter page zoom for this native chrome, not the page content below it.
+   body-qualified + !important outranks the Mac-app-injected topbar rules
    (DashboardWindowController), so shipped apps get the compact row too. The
    brand moves first, clears the traffic lights, and stays non-interactive
    under the AppKit drag region (x 78-254, y < 46); the drawer toggle and
    search sit to its right. */
 html.openclaw-native-macos body .shell--mobile-nav {
-  --shell-topbar-height: 58px;
+  --shell-topbar-height: calc(58px * var(--openclaw-native-chrome-scale, 1));
 }
 
 html.openclaw-native-macos body .shell--mobile-nav .topbar {
-  padding: 0 12px 0 92px !important;
+  padding: 0 calc(12px * var(--openclaw-native-chrome-scale, 1)) 0
+    var(--openclaw-native-controls-inset, 92px) !important;
 }
 
 html.openclaw-native-macos body .shell--mobile-nav .topnav-shell {
   display: flex;
+  flex: 1;
   gap: 8px;
+  width: auto;
   min-height: 58px;
+  zoom: var(--openclaw-native-chrome-scale, 1);
 }
 
 html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__content {

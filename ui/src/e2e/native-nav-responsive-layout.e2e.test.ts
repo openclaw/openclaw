@@ -109,6 +109,51 @@ suite.define(() => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
+  it("keeps native narrow-header controls reachable at 200 percent content zoom", async () => {
+    // A 640-point native viewport at pageZoom=2 exposes 320 CSS pixels.
+    // Chromium proves the real Control UI layout, not WKWebView shortcut delivery.
+    const page = await openPage({ webChrome: true, width: 320, height: 450 });
+    await page.evaluate(() => {
+      const style = document.documentElement.style;
+      style.setProperty("--openclaw-native-titlebar-height", "26px");
+      style.setProperty("--openclaw-native-controls-inset", "46px");
+      style.setProperty("--openclaw-native-chrome-scale", "0.5");
+    });
+    await shellHas(page, "shell--mobile-nav");
+    const header = page.locator(".topbar");
+    const toggle = header.getByRole("button", { name: "Expand sidebar", exact: true });
+    const search = header.locator(".topbar-search");
+    await toggle.waitFor({ state: "visible" });
+    await search.waitFor({ state: "visible" });
+    if (captureProof) {
+      const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [], {
+        animations: "disabled",
+      });
+      await writeFile(path.join(suite.artifactDir, "native-content-zoom-header.png"), frame.png);
+    }
+    const row = await header.boundingBox();
+    expect(row).not.toBeNull();
+    expect(row!.height * 2).toBeCloseTo(58, 0);
+    const content = await header.locator(".topnav-shell").boundingBox();
+    expect(content).not.toBeNull();
+    expect(content!.x * 2).toBeCloseTo(92, 0);
+    expect((320 - content!.x - content!.width) * 2).toBeCloseTo(12, 0);
+    for (const control of [toggle, search]) {
+      const box = await control.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(46);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(320);
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(row!.height);
+    }
+    await toggle.click();
+    await shellHas(page, "shell--nav-drawer-open");
+    await page.locator(".shell-nav-backdrop").click({ position: { x: 310, y: 100 } });
+    await shellHas(page, "shell--nav-drawer-open", false);
+    await search.click();
+    await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
+  });
+
   it.each([false, true])("keeps compact chat search reachable (phone: %s)", async (phone) => {
     const page = await openPage(
       phone ? { hasTouch: true, height: 852, phone, width: 393 } : { width: 900 },

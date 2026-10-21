@@ -126,6 +126,21 @@ struct OpenClawApp: App {
                 }
             }
             SidebarCommands()
+            CommandGroup(after: .sidebar) {
+                Divider()
+                Button("Zoom In") {
+                    (NSApp.keyWindow as? ExperienceWindow)?.zoomContentIn(nil)
+                }
+                .keyboardShortcut("=", modifiers: .command)
+                Button("Zoom Out") {
+                    (NSApp.keyWindow as? ExperienceWindow)?.zoomContentOut(nil)
+                }
+                .keyboardShortcut("-", modifiers: .command)
+                Button("Actual Size") {
+                    (NSApp.keyWindow as? ExperienceWindow)?.resetContentZoom(nil)
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
             CommandMenu("Navigate") {
                 Button(String(localized: "Reload")) {
                     DashboardManager.shared.reloadDashboard()

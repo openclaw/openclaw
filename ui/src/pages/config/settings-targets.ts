@@ -45,6 +45,7 @@ export type SettingsSearchTarget = {
   readonly requiresIdentity?: true;
   readonly requiresMultipleProfiles?: true;
   readonly requiresNativeDeviceSettings?: true;
+  readonly requiresTextSizeControl?: true;
 };
 
 // Keep destinations and translation keys together without importing page
@@ -344,6 +345,7 @@ export const SETTINGS_SEARCH_TARGETS = {
   },
   appearanceTextSize: {
     ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.textSize),
+    requiresTextSizeControl: true,
     labelKey: "configView.appearance.textSize",
     searchKeys: [
       "configView.textSizes.small",

@@ -7,6 +7,11 @@ import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import {
+  HOST_CONTENT_ZOOM_MEDIA_QUERY,
+  nativeContentZoomHost,
+  usesHostContentZoom,
+} from "./native-web-chrome.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
 import {
   bindUiPreferences,
@@ -66,7 +71,10 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   // with data-theme-mode before their lazy stylesheet loads.
   root.dataset.themeResolved = root.dataset.themeMode;
   root.style.colorScheme = root.dataset.themeMode;
-  root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
+  root.style.setProperty(
+    "--control-ui-text-scale",
+    `${usesHostContentZoom() ? 1 : (settings.textScale ?? 100) / 100}`,
+  );
   const typefaces = resolveTypefaces(effectiveTheme, settings.fontUi, settings.fontChat);
   syncTypefaceStylesheets(typefaces);
   applyTypefaceOverrides(settings.fontUi, settings.fontChat);
@@ -180,6 +188,8 @@ export function createApplicationTheme(
     }
   };
 
+  const stopZoomInput = subscribeMediaQuery(HOST_CONTENT_ZOOM_MEDIA_QUERY, publish);
+
   const detachSystemThemeListener = () => {
     systemThemeCleanup?.();
     systemThemeCleanup = undefined;
@@ -242,6 +252,18 @@ export function createApplicationTheme(
     }
   });
   syncSystemThemeListener();
+  // Offer only the canonical local preference, once per document. The native owner
+  // chooses the foreground migration and never overwrites an existing zoom choice.
+  if (usesHostContentZoom()) {
+    void nativeContentZoomHost()
+      ?.adoptLegacyTextScale?.(initialPreferences.textScale ?? 100)
+      .catch((error: unknown) => {
+        console.warn(
+          "Could not adopt the saved text size into native zoom; reload to retry.",
+          error,
+        );
+      });
+  }
   publish();
   void loadCatalog();
 
@@ -283,6 +305,7 @@ export function createApplicationTheme(
       catalog?.dispose();
       stopPreferences();
       stopStorage?.();
+      stopZoomInput?.();
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();

@@ -11,6 +11,7 @@ import {
   type NativeChromeExtensionSetupAction,
   type NativeChromeExtensionSetupResult,
 } from "./native-chrome-setup.ts";
+import { nativeEmbedHost } from "./native-web-chrome.ts";
 
 const permissionIdSchema = z.enum([
   "notifications",
@@ -229,6 +230,7 @@ type NativePanel =
   | "watch";
 
 type NativeDeviceSettingsMessage =
+  | { type: "adopt-legacy-text-scale"; textScale: number }
   | { type: "status" }
   | { type: "set"; key: SettingKey; value: boolean | string | string[] | null }
   | { type: "request-permission"; id: PermissionId }
@@ -291,6 +293,11 @@ const CHANGE_EVENT = "openclaw:native-device-settings-changed";
 
 export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapability | null {
   if (typeof window === "undefined") {
+    return null;
+  }
+  // Mac conversation documents expose only preference adoption, not the Dashboard's settings UI.
+  const embed = nativeEmbedHost();
+  if (embed?.platform === "macos" && embed.surface === "conversation") {
     return null;
   }
   // SAFETY: the host adds optional WebKit fields; the handler and snapshot are validated below.

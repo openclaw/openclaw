@@ -9,6 +9,7 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
     typealias ReplyHandler = @MainActor (Any?, String?) -> Void
 
     weak var owner: DashboardWindowController?
+    weak var contentZoomOwner: ControlUIDocumentHost?
     private var observers: [NSObjectProtocol] = []
     private var observationGeneration = 0
     private let requests = DeviceSettingsRequestQueue()
@@ -21,6 +22,21 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
         didReceive message: WKScriptMessage,
         replyHandler: @escaping ReplyHandler)
     {
+        if let body = message.body as? [String: Any], body["type"] as? String == "adopt-legacy-text-scale" {
+            guard let document = self.contentZoomOwner,
+                  message.name == DashboardWindowController.deviceSettingsMessageHandlerName,
+                  message.webView === document.webView, message.frameInfo.isMainFrame,
+                  document.isAvailable(), document.hasCurrentBrowserSession,
+                  ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: document.currentURL),
+                  let percent = body["textScale"] as? Double, percent.isFinite, (50...200).contains(percent)
+            else {
+                replyHandler(nil, "Content zoom is unavailable for this document.")
+                return
+            }
+            document.webView.offerLegacyTextScale(percent)
+            replyHandler(NSNull(), nil)
+            return
+        }
         guard let owner = self.owner else {
             replyHandler(nil, "The device settings window is no longer available.")
             return

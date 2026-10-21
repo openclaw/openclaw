@@ -34,6 +34,17 @@ function publish(detail: unknown) {
 }
 
 describe("native device settings wire contract", () => {
+  it("does not advertise full settings from a Mac conversation's migration-only bridge", () => {
+    vi.stubGlobal("__OPENCLAW_NATIVE_EMBED__", {
+      platform: "macos",
+      formFactor: "desktop",
+      surface: "conversation",
+    });
+    const post = installBridge();
+    expect(capability).toBeNull();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, false, true])(
     "advertises AI setup only with explicit host support (%s)",
     (available) => {

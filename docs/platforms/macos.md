@@ -20,6 +20,20 @@ restores the normal titlebar and window controls.
 While the Dashboard loads, its empty canvas follows the native window's appearance.
 Once the page paints, the Dashboard's selected theme supplies its background.
 
+Use **View → Zoom In**, **Zoom Out**, or **Actual Size** to resize web content in
+the Dashboard and the full Native chat transcript. Press Cmd-+ (or Cmd-=), Cmd--,
+and Cmd-0 respectively. Zoom ranges from 50% to 200%; new windows restore the last
+size saved for the app profile. Existing windows keep their own size. The native
+sidebar, Connection window, Quick Chat, and offline native chat fallback do not scale.
+
+The app retires the former **Text size** control so its value cannot compound with
+page zoom. An existing native zoom preference takes precedence. Otherwise, the
+first foreground document adopts its saved local text size once: a 125% text
+preference becomes 125% whole-page zoom, a deliberate change to layout as well
+as fonts. Background preloads cannot choose this profile default, and a zoom
+shortcut used first takes precedence over migration. Cmd-0 still means 100%.
+The old local value is retained without changing shared or server preferences.
+
 The full native chat accepts image attachments through its picker, paste, and
 drag and drop. Assistant-generated images render inline through short-lived
 Gateway artifact URLs and open in a larger preview; iOS and macOS share the same

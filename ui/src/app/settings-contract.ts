@@ -127,7 +127,7 @@ export type UiSettings = {
   chatBubbleSessionKeys?: string[]; // Browser-local speech bubbles per canonical session, scoped to this Gateway
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
-  textScale?: TextScaleStop; // Browser-local text scale percentage
+  textScale?: TextScaleStop; // Browser-local legacy/touch text size; not compounded with desktop host zoom
   customTheme?: ImportedCustomTheme;
   locale?: string;
   lobsterPetVisits?: boolean; // Whether critters visit the new composer (default true)

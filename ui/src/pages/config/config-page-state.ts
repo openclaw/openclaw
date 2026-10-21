@@ -13,6 +13,7 @@ import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { usesHostContentZoom } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { resetServerUiPref, selectThemeSettings } from "../../app/server-prefs-controls.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
@@ -834,6 +835,7 @@ export function createConfigPage(
         applySettings({ tabIcon: preference });
       },
       textScale: settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
+      hostContentZoom: usesHostContentZoom(),
       textScaleOverridden: settings.textScale !== undefined,
       setTextScale: (value: number) =>
         applySettings({

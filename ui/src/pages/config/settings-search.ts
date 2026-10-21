@@ -9,6 +9,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { usesHostContentZoom } from "../../app/native-web-chrome.ts";
 import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
@@ -120,6 +121,7 @@ export function findSettingsSearchBlocks(params: {
             (params.identityAvailable || !block.requiresIdentity) &&
             (params.multipleProfiles || !block.requiresMultipleProfiles) &&
             (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
+            (!block.requiresTextSizeControl || !usesHostContentZoom()) &&
             isSettingsNavigationRouteVisible(
               block.routeId,
               params.canAdmin !== false,

@@ -42,6 +42,19 @@ Switching Gateway or account, signing out, or losing access clears the affected
 data and drafts. This retention does not add offline persistence or guarantee
 that page-local drafts survive a reload or closing the tab.
 
+## Desktop zoom
+
+Use your browser's standard zoom shortcuts: Cmd-+ / Cmd-- / Cmd-0 on macOS, or
+Ctrl-+ / Ctrl-- / Ctrl-0 on Windows and Linux. The Control UI does not intercept
+these shortcuts or add another text-scaling layer on desktop browsers.
+
+The former **Text size** control remains available on touch-capable browsers and
+embedded desktop hosts that have not supplied a standard zoom capability. Its
+saved value is retained, including when the control is hidden. Browser pages
+cannot convert that old text-size value into the browser's own zoom setting;
+choose your preferred browser zoom once after upgrading. Native Mac windows
+can adopt the old value into their profile-local zoom preference.
+
 ## Browser requirements
 
 Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
