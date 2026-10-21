@@ -2,6 +2,11 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceGatewayControl,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
@@ -139,6 +144,84 @@ export function createBroker(params?: {
     { claimAppend: vi.fn(() => true) },
   );
   return { realtime, sockets, socketRequests, logger, runAgentConsult };
+}
+
+export type TestBroker = ReturnType<typeof createBroker>["realtime"];
+type SessionRequest = Parameters<TestBroker["broker"]["createBrowserSession"]>[0];
+export const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+
+export async function reserveSession(
+  realtime: TestBroker,
+  request: SessionRequest,
+  auth: Parameters<TestBroker["broker"]["createBrowserSession"]>[1] = {
+    type: "api-key",
+    token: "platform-key",
+  },
+) {
+  const reservation = await realtime.broker.createBrowserSession(request, auth);
+  if (reservation.transport !== "webrtc") {
+    throw new Error("Expected WebRTC reservation");
+  }
+  return reservation;
+}
+
+export function reserveLiveSession(
+  realtime: TestBroker,
+  overrides: Pick<
+    RealtimeVoiceBrowserSessionCreateRequest,
+    "model" | "runAgentConsult" | "gatewayControl" | "voice"
+  > = {},
+) {
+  return reserveSession(realtime, {
+    providerConfig: {},
+    model: "gpt-live-test-canary",
+    runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    ...overrides,
+  });
+}
+
+export function reserveGaSession(
+  realtime: TestBroker,
+  createBridge: (params: {
+    apiKey: string;
+    callId: string;
+    onTerminal: () => void;
+  }) => RealtimeVoiceBridge,
+  gatewayControl: RealtimeVoiceGatewayControl = { bindBridge: vi.fn() },
+  ownerConnId?: string,
+) {
+  return reserveSession(realtime, {
+    providerConfig: {},
+    model: "gpt-realtime-2.1",
+    gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+    gaSideband: { createBridge },
+    clientControl: { owner: "gateway" },
+    gatewayControl,
+    ...(ownerConnId ? { ownerConnId } : {}),
+  });
+}
+
+export async function postOffer(realtime: TestBroker, params: Parameters<typeof createRequest>[0]) {
+  const response = createResponseHarness();
+  await realtime.handler(createRequest(params), response.res);
+  return response;
+}
+
+export function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}) {
+  return {
+    connect: vi.fn(async () => undefined),
+    close: vi.fn(),
+    sendAudio: vi.fn(),
+    setMediaTimestamp: vi.fn(),
+    submitToolResult: vi.fn(),
+    acknowledgeMark: vi.fn(),
+    isConnected: vi.fn(() => true),
+    ...overrides,
+  } satisfies RealtimeVoiceBridge;
+}
+
+export function requestTarget(url: string | URL | Request): string {
+  return typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
 }
 
 type DelegationOptions = ConstructorParameters<typeof OpenAIQuicksilverDelegationController>[0];

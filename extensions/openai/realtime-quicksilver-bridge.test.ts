@@ -1,4 +1,9 @@
 import { expect, it, vi } from "vitest";
+import {
+  delegation as delegationEvent,
+  publicDelegation as publicDelegationEvent,
+  turn,
+} from "./realtime-quicksilver-events.test-support.js";
 import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 
 const { captureWsEventAsyncMock } = vi.hoisted(() => ({
@@ -53,11 +58,7 @@ function closeOnSnapshot(harness: Harness) {
 }
 
 function publicDelegation(socket: FakeSocket, id: string, offset_ms: number) {
-  socket.serverEvent({
-    type: "session.delegation.created",
-    offset_ms,
-    delegation: { type: "delegation", target: "client", id },
-  });
+  socket.serverEvent(publicDelegationEvent(id, offset_ms));
 }
 
 function outputAudio(socket: FakeSocket, audio: Buffer) {
@@ -65,7 +66,7 @@ function outputAudio(socket: FakeSocket, audio: Buffer) {
 }
 
 function turnDone(socket: FakeSocket, role: "user" | "assistant", transcript: string) {
-  socket.serverEvent({ type: "turn.done", turn: { role, transcript } });
+  socket.serverEvent(turn(role, transcript));
 }
 
 function expectTransportError(error: unknown) {
@@ -127,15 +128,7 @@ function started(socket: FakeSocket) {
 }
 
 function delegation(socket: FakeSocket, id: string, text: string) {
-  socket.serverEvent({
-    type: "delegation.created",
-    item: {
-      type: "delegation",
-      target: "client",
-      id,
-      content: [{ type: "input_text", text }],
-    },
-  });
+  socket.serverEvent(delegationEvent(id, text));
 }
 
 it("connects directly to /v1/live and completes the Frameless Bidi handshake", async () => {

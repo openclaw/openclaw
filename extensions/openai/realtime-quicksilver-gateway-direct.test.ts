@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { openAIRealtimeHost } from "./realtime-host.js";
 import { OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "./realtime-quicksilver-audio-buffer.js";
-import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
+import { delegation } from "./realtime-quicksilver-events.test-support.js";
+import {
+  createGatewayHarness,
+  type GatewayConfig,
+} from "./realtime-quicksilver-gateway.test-support.js";
 import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
@@ -9,20 +12,19 @@ import {
 import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import { emitSideband, FakeSocket, parseSent } from "./realtime-quicksilver.test-helpers.js";
 
-type BridgeConfig = ConstructorParameters<typeof OpenAIQuicksilverGatewayBridge>[0];
 const canaryConfig = {
   model: "gpt-live-test-canary",
   voice: "marin",
   audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
   resolveAuth: async () => ({ type: "api-key", token: "platform-key" }),
-} satisfies Partial<BridgeConfig>;
+} satisfies Partial<GatewayConfig>;
 function readAudio(socket: FakeSocket) {
   return parseSent(socket)
     .filter((event) => event.type === "session.input_audio.append")
     .map((event) => Buffer.from(String(event.audio), "base64"));
 }
 
-function createHarness(overrides: Partial<BridgeConfig> = {}) {
+function createHarness(overrides: Partial<GatewayConfig> = {}) {
   let socket: FakeSocket | undefined;
   const webSocketFactory = vi.fn(() => (socket = new FakeSocket()));
   const callbacks = {
@@ -34,19 +36,11 @@ function createHarness(overrides: Partial<BridgeConfig> = {}) {
     createPeer: vi.fn(),
     fetchImpl: vi.fn<typeof fetch>(),
   };
-  const bridge = new OpenAIQuicksilverGatewayBridge(
-    {
-      providerConfig: {},
-      model: "gpt-live-1",
-      onClearAudio: vi.fn(),
-      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-      resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
-      ...callbacks,
-      mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
-      ...overrides,
-    },
-    openAIRealtimeHost,
-  );
+  const { bridge } = createGatewayHarness({
+    ...callbacks,
+    mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
+    ...overrides,
+  });
   return {
     ...callbacks,
     bridge,
@@ -333,15 +327,7 @@ describe("GPT-Live Gateway direct transport", () => {
       emitSideband(connectedSocket, { type: "output_audio.delta", audio: "AwQ=" });
       expect(onAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([0x03, 0x04]));
 
-      emitSideband(connectedSocket, {
-        type: "delegation.created",
-        item: {
-          type: "delegation",
-          target: "client",
-          id: "delegation-direct",
-          content: [{ type: "input_text", text: "Check the lights" }],
-        },
-      });
+      emitSideband(connectedSocket, delegation("delegation-direct", "Check the lights"));
       await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
       await vi.waitFor(() =>
         expect(

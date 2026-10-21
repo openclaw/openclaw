@@ -1,9 +1,5 @@
 import { ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceGatewayControl,
-} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import {
@@ -14,14 +10,13 @@ import {
   createBroker,
   createRequest,
   createResponseHarness,
+  AUDIO_ONLY_SDP,
+  requestTarget,
+  makeBridge as retirementBridge,
+  reserveGaSession,
 } from "./realtime-quicksilver.test-helpers.js";
 
-const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
 const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
-
-function requestTarget(url: string | URL | Request): string {
-  return typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
-}
 
 function callResponse(answer = "v=answer\r\n", callId = "rtc_retirement") {
   return new Response(answer, {
@@ -41,42 +36,6 @@ function retirementFetch(
 
 function offerRequest(token: string) {
   return createRequest({ token, body: AUDIO_ONLY_SDP });
-}
-
-function retirementBridge() {
-  return {
-    connect: vi.fn(async () => undefined),
-    close: vi.fn(),
-    sendAudio: vi.fn(),
-    setMediaTimestamp: vi.fn(),
-    submitToolResult: vi.fn(),
-    acknowledgeMark: vi.fn(),
-    isConnected: vi.fn(() => true),
-  } satisfies RealtimeVoiceBridge;
-}
-
-async function reserveRetirementSession(
-  realtime: ReturnType<typeof createBroker>["realtime"],
-  createBridge: (params: { onTerminal: () => void }) => RealtimeVoiceBridge,
-  ownerConnId?: string,
-  gatewayControl: RealtimeVoiceGatewayControl = { bindBridge: vi.fn() },
-) {
-  const reservation = await realtime.broker.createBrowserSession(
-    {
-      providerConfig: {},
-      model: "gpt-realtime-2.1",
-      gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
-      gaSideband: { createBridge },
-      clientControl: { owner: "gateway" },
-      gatewayControl,
-      ...(ownerConnId ? { ownerConnId } : {}),
-    },
-    { type: "api-key", token: "platform-key" },
-  );
-  if (reservation.transport !== "webrtc") {
-    throw new Error("Expected WebRTC reservation");
-  }
-  return reservation;
 }
 
 describe("GA Realtime call retirement", () => {
@@ -104,7 +63,7 @@ describe("GA Realtime call retirement", () => {
       { ...openAIRealtimeHost, resolveProviderRequestHeaders: originalHeaders },
     );
     try {
-      const reservation = await reserveRetirementSession(first, retirementBridge);
+      const reservation = await reserveGaSession(first, () => retirementBridge());
       const retained = acquireBroker(
         { getConfig: nextConfig, logger: nextLogger },
         { ...openAIRealtimeHost, resolveProviderRequestHeaders: replacementHeaders },
@@ -166,7 +125,7 @@ describe("GA Realtime call retirement", () => {
     const { realtime } = createBroker({ fetchImpl });
     try {
       const onClose = vi.fn();
-      const reservation = await reserveRetirementSession(
+      const reservation = await reserveGaSession(
         realtime,
         ({ onTerminal }) => {
           if (failure === "terminal during construction") {
@@ -177,7 +136,6 @@ describe("GA Realtime call retirement", () => {
           }
           return bridge;
         },
-        undefined,
         failure === "throwing error callback"
           ? {
               bindBridge: vi.fn(),
@@ -278,7 +236,7 @@ describe("GA Realtime call retirement", () => {
     });
     let handling: Promise<boolean> | undefined;
     try {
-      const reservation = await reserveRetirementSession(realtime, () => bridge);
+      const reservation = await reserveGaSession(realtime, () => bridge);
       request.headers.authorization = `Bearer ${reservation.clientSecret}`;
       handling = realtime.handler(request, response);
       await delivering.promise;
@@ -318,7 +276,7 @@ describe("GA Realtime call retirement", () => {
     const hangup = vi.fn(() => new Response(null, { status: 204 }));
     const { realtime } = createBroker({ fetchImpl: retirementFetch(hangup) });
     try {
-      const reservation = await reserveRetirementSession(realtime, () => bridge);
+      const reservation = await reserveGaSession(realtime, () => bridge);
       await realtime.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
       const closing = realtime.broker.cancelBrowserSession(reservation);
       const concurrent = realtime.cleanup();
@@ -348,7 +306,7 @@ describe("GA Realtime call retirement", () => {
     const { realtime } = createBroker({ fetchImpl });
     let reentered: Promise<void> | undefined;
     try {
-      const reservation = await reserveRetirementSession(realtime, ({ onTerminal }) => {
+      const reservation = await reserveGaSession(realtime, ({ onTerminal }) => {
         vi.mocked(bridge.close).mockImplementation(() => {
           onTerminal();
           reentered = Promise.resolve(realtime.broker.cancelBrowserSession(reservation));
@@ -404,7 +362,12 @@ describe("GA Realtime call retirement", () => {
       );
     try {
       for (let index = 0; index < count; index += 1) {
-        const reservation = await reserveRetirementSession(old, retirementBridge, ownerConnId);
+        const reservation = await reserveGaSession(
+          old,
+          () => retirementBridge(),
+          undefined,
+          ownerConnId,
+        );
         await old.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
       }
       await expect(releaseBroker(old)).rejects.toThrow();

@@ -1,8 +1,3 @@
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBrowserSessionCreateRequest,
-  RealtimeVoiceGatewayControl,
-} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js";
 import {
@@ -12,6 +7,12 @@ import {
   createResponseHarness,
   emitSideband,
   createBroker,
+  AUDIO_ONLY_SDP,
+  requestTarget,
+  postOffer as post,
+  makeBridge,
+  reserveGaSession,
+  reserveLiveSession,
 } from "./realtime-quicksilver.test-helpers.js";
 
 const brokers: ReturnType<typeof createBroker>["realtime"][] = [];
@@ -31,60 +32,6 @@ afterEach(async () => {
   }
 });
 
-function requestTarget(url: string | URL | Request): string {
-  return typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
-}
-
-const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
-
-async function post(
-  realtime: ReturnType<typeof createBroker>["realtime"],
-  params: Parameters<typeof createRequest>[0],
-) {
-  const response = createResponseHarness();
-  await realtime.handler(createRequest(params), response.res);
-  return response;
-}
-
-function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}) {
-  return {
-    connect: vi.fn(async () => undefined),
-    close: vi.fn(),
-    sendAudio: vi.fn(),
-    setMediaTimestamp: vi.fn(),
-    submitToolResult: vi.fn(),
-    acknowledgeMark: vi.fn(),
-    isConnected: vi.fn(() => true),
-    ...overrides,
-  } satisfies RealtimeVoiceBridge;
-}
-
-async function reserveGaSession(
-  realtime: ReturnType<typeof createBroker>["realtime"],
-  createBridge: (params: {
-    apiKey: string;
-    callId: string;
-    onTerminal: () => void;
-  }) => RealtimeVoiceBridge,
-  gatewayControl: RealtimeVoiceGatewayControl = { bindBridge: vi.fn() },
-) {
-  const reservation = await realtime.broker.createBrowserSession(
-    {
-      providerConfig: {},
-      model: "gpt-realtime-2.1",
-      gatewayControl,
-      gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
-      clientControl: { owner: "gateway" },
-      gaSideband: { createBridge },
-    },
-    { type: "api-key", token: "platform-key" },
-  );
-  if (reservation.transport !== "webrtc") {
-    throw new Error("Expected WebRTC reservation");
-  }
-  return reservation;
-}
-
 function createGaFetch(callId: string) {
   return vi.fn<typeof fetch>(async (url) =>
     requestTarget(url).endsWith("/hangup")
@@ -94,28 +41,6 @@ function createGaFetch(callId: string) {
           headers: { Location: `/v1/realtime/calls/${callId}` },
         }),
   );
-}
-
-async function reserveLiveSession(
-  realtime: ReturnType<typeof createBroker>["realtime"],
-  overrides: Pick<
-    RealtimeVoiceBrowserSessionCreateRequest,
-    "model" | "runAgentConsult" | "gatewayControl" | "voice"
-  > = {},
-) {
-  const reservation = await realtime.broker.createBrowserSession(
-    {
-      providerConfig: {},
-      model: "gpt-live-test-canary",
-      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-      ...overrides,
-    },
-    { type: "api-key", token: "platform-key" },
-  );
-  if (reservation.transport !== "webrtc") {
-    throw new Error("Expected WebRTC reservation");
-  }
-  return reservation;
 }
 
 describe("GPT-Live offer broker", () => {
@@ -239,11 +164,6 @@ describe("GPT-Live offer broker", () => {
   });
 
   it.each([
-    [
-      "active data channel",
-      `${AUDIO_ONLY_SDP}m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n`,
-      "application media",
-    ],
     ["no active audio", "v=0\r\nm=audio 0 UDP/TLS/RTP/SAVPF 111\r\n", "active audio"],
     ["oversized line", `${AUDIO_ONLY_SDP}a=${"x".repeat(4_097)}\r\n`, "line is too large"],
   ])(

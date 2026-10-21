@@ -1,7 +1,9 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
+import { delegation } from "./realtime-quicksilver-events.test-support.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
+import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
 import type {
   OpenAIQuicksilverAudioPeerCallbacks,
   OpenAIQuicksilverAudioPeerContract,
@@ -24,10 +26,7 @@ type TestableGatewayBridge = {
 };
 
 function delegate(socket: FakeSocket, id: string, text: string) {
-  emitSideband(socket, {
-    type: "delegation.created",
-    item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
-  });
+  emitSideband(socket, delegation(id, text));
 }
 
 type BridgeConfig = ConstructorParameters<typeof OpenAIQuicksilverGatewayBridge>[0];
@@ -46,22 +45,18 @@ function createBridge(overrides: Partial<BridgeConfig> = {}) {
   const fetchImpl = vi.fn<typeof fetch>(async () =>
     createCallResponse("v=answer\r\n", "rtc_bridge"),
   );
-  const bridge = new OpenAIQuicksilverGatewayBridge(
-    {
-      providerConfig: {},
-      model: "gpt-live-test-canary",
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      ...observed,
-      runAgentConsult: vi.fn(async () => ({ text: "done" })),
-      resolveAuth: async () => ({ type: "oauth", token: "oauth-token", accountId: "account-1" }),
-      createPeer: vi.fn(async () => peer),
-      fetchImpl,
-      webSocketFactory: createSocket,
-      ...overrides,
-    },
-    openAIRealtimeHost,
-  );
+  const { bridge } = createGatewayHarness({
+    model: "gpt-live-test-canary",
+    voice: "marin",
+    audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+    ...observed,
+    runAgentConsult: vi.fn(async () => ({ text: "done" })),
+    resolveAuth: async () => ({ type: "oauth", token: "oauth-token", accountId: "account-1" }),
+    createPeer: vi.fn(async () => peer),
+    fetchImpl,
+    socketFactory: createSocket,
+    ...overrides,
+  });
   return { bridge, peer, createSocket, fetchImpl, ...observed };
 }
 

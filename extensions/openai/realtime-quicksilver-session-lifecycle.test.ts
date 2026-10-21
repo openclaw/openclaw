@@ -9,9 +9,11 @@ import {
   emitSideband,
   parseSent,
   FakeSocket,
+  AUDIO_ONLY_SDP,
+  reserveSession,
+  type TestBroker as Broker,
 } from "./realtime-quicksilver.test-helpers.js";
 
-const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
 const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 const emptyCounts = { pending: 0, inFlight: 0, active: 0, reservations: 0 };
 const oauth = { type: "oauth", token: "synthetic-oauth", accountId: "synthetic-account" } as const;
@@ -21,7 +23,6 @@ function delegation(id: string, text: string) {
     item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
   };
 }
-type Broker = ReturnType<typeof createBroker>["realtime"];
 type SessionRequest = Parameters<Broker["broker"]["createBrowserSession"]>[0];
 const brokers: Broker[] = [];
 function makeBroker(params?: Parameters<typeof createBroker>[0]) {
@@ -57,17 +58,11 @@ afterEach(async () => {
   }
 });
 
-async function reserve(
+const reserve = (
   realtime: Broker,
   request: SessionRequest,
-  auth: Parameters<Broker["broker"]["createBrowserSession"]>[1] = oauth,
-) {
-  const reservation = await realtime.broker.createBrowserSession(request, auth);
-  if (reservation.transport !== "webrtc") {
-    throw new Error("Expected WebRTC reservation");
-  }
-  return reservation;
-}
+  auth: Parameters<typeof reserveSession>[2] = oauth,
+) => reserveSession(realtime, request, auth);
 
 function nativeRequest(
   runAgentConsult: SessionRequest["runAgentConsult"],
