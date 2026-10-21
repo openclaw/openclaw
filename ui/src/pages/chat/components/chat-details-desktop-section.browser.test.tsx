@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
@@ -108,10 +108,19 @@ it("reverses a pointer collapse, accommodates new content, and settles when park
 it("opens from the collapsed height and reverses from the visible height", async () => {
   const { disclosure, summary } = mount(false);
   const body = disclosure.querySelector<HTMLElement>(".chat-details-desktop-section__body")!;
+  const animate = body.animate.bind(body);
+  // Pause at creation before a resize callback can retarget advancing geometry.
+  const animationSpy = vi.spyOn(body, "animate").mockImplementation((frames, options) => {
+    const animation = animate(frames, options);
+    animation.pause();
+    return animation;
+  });
+  onTestFinished(() => {
+    animationSpy.mockRestore();
+  });
   await userEvent.click(summary);
   flush();
   const opening = body.getAnimations()[0]!;
-  opening.pause();
   opening.currentTime = 0;
   expect(body.getBoundingClientRect().height).toBe(0);
   opening.currentTime = Number(opening.effect!.getTiming().duration) / 2;
@@ -122,7 +131,6 @@ it("opens from the collapsed height and reverses from the visible height", async
   await userEvent.click(summary);
   flush();
   const closing = body.getAnimations()[0]!;
-  closing.pause();
   closing.currentTime = 0;
   expect(body.getBoundingClientRect().height).toBeCloseTo(visibleHeight, 0);
   const finished = new Promise<void>((resolve) => {
