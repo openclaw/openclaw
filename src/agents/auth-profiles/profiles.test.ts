@@ -1049,4 +1049,3 @@ describe("setAuthProfileOrder", () => {
       expect(loadPersisted(agentDir)?.order?.openai ?? null).toBeNull();
     }, true));
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

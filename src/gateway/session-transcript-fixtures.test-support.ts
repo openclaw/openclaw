@@ -42,7 +42,7 @@ export function useTranscriptFixture(prefix: string) {
         agentId: "main",
         path: state.statePath("openclaw-agent.sqlite"),
       }),
-    async writeTranscript(sessionId: string, events: unknown[]) {
+    async writeTranscript(this: void, sessionId: string, events: unknown[]) {
       const scope = scopeFor(sessionId);
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId },
