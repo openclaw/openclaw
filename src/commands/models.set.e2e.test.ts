@@ -142,6 +142,23 @@ describe("models set + fallbacks", () => {
     expect(getWrittenConfig().agents?.defaults?.models).toHaveProperty("ollama/site-local-model");
   });
 
+  it.each(fallbackGroups)(
+    "warns but saves an unknown model in models $name add",
+    async ({ name, key }) => {
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      mockDefaults({ [key]: { fallbacks: [] } });
+      await runFallbackCommand(name, "add", "openai/not-in-the-local-catalog");
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Model "openai/not-in-the-local-catalog" is not in the local model catalog',
+        ),
+      );
+      expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({
+        fallbacks: ["openai/not-in-the-local-catalog"],
+      });
+    },
+  );
+
   it("normalizes z-ai provider in models fallbacks add", async () => {
     const { name, key, label } = fallbackGroups[0];
     mockDefaults({ [key]: { fallbacks: [] } });

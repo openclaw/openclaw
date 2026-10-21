@@ -354,13 +354,12 @@ export function requireKnownModelProvider(
       `Unknown model provider "${inspection.provider}". Install a plugin that declares it or configure it under models.providers before selecting "${inspection.ref}". Config was not changed.`,
     );
   }
-  return {
-    ...inspection,
-    warning:
-      inspection.status === "unverified-provider"
-        ? `Warning: Provider "${inspection.provider}" could not be verified because the plugin registry is unavailable or has no loaded providers. The selection was saved; verify it after restoring the plugin registry.`
-        : undefined,
+  const warnings: Partial<Record<typeof inspection.status, string>> = {
+    "unverified-provider": `Warning: Provider "${inspection.provider}" could not be verified because the plugin registry is unavailable or has no loaded providers. The selection was saved; verify it after restoring the plugin registry.`,
+    "unknown-model": `Warning: Model "${inspection.ref}" is not in the local model catalog for provider "${inspection.provider}". The provider is installed or configured, so the selection was saved; verify the model ID if it is not a newly released or self-hosted model.`,
+    "uncatalogued-provider": `Note: Provider "${inspection.provider}" has no local model catalog, so "${inspection.ref}" could not be checked offline. The selection was saved.`,
   };
+  return { ...inspection, warning: warnings[inspection.status] };
 }
 
 export async function updateDefaultModelPrimaryConfig(params: {
@@ -375,17 +374,11 @@ export async function updateDefaultModelPrimaryConfig(params: {
         resolveCfg: context.runtimeConfig,
         modelRaw: params.modelRaw,
       });
-      const inspection = requireKnownModelProvider(
+      warning = requireKnownModelProvider(
         context.runtimeConfig,
         resolvedTarget,
         context.providerRegistryAvailable,
-      );
-      warning = inspection.warning;
-      if (inspection.status === "unknown-model") {
-        warning = `Warning: Model "${inspection.ref}" is not in the local model catalog for provider "${inspection.provider}". The provider is installed or configured, so the selection was saved; verify the model ID if it is not a newly released or self-hosted model.`;
-      } else if (inspection.status === "uncatalogued-provider") {
-        warning = `Note: Provider "${inspection.provider}" has no local model catalog, so "${inspection.ref}" could not be checked offline. The selection was saved.`;
-      }
+      ).warning;
       return applyDefaultModelPrimaryUpdate({
         cfg,
         resolveCfg: context.runtimeConfig,
