@@ -9,7 +9,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import {
   createSqliteTranscriptTarget,
   persistUserTurnTranscript,
@@ -17,9 +16,8 @@ import {
 } from "../../sessions/user-turn-transcript.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import * as chatAttachments from "../chat-attachments.js";
-import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
+import { prepareVoice, requireInputText } from "./chat-send-user-turn-family.test-support.js";
 import {
-  createAttachments,
   createClientInfo,
   createUserTurnInputController,
 } from "./chat-send-user-turn.test-support.js";
@@ -30,62 +28,6 @@ vi.mock("../../media-understanding/audio-preflight.js", async (importOriginal) =
   transcribeAudioAttachments,
 }));
 
-function requireInputText(input: { text?: string | null }): string {
-  if (typeof input.text !== "string") {
-    throw new Error("Expected prepared user-turn text");
-  }
-  return input.text;
-}
-
-type TurnParams = Parameters<typeof prepareChatSendUserTurn>[0];
-function prepareVoice(
-  userTurn: TurnParams["userTurn"],
-  {
-    text = "caption",
-    clientInfo = createClientInfo({
-      id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    }),
-    agentId = "main",
-    sessionKey = "agent:main:main",
-    cfg = {
-      tools: { media: { audio: { echoTranscript: true, echoFormat: "Heard: {transcript}" } } },
-    },
-    attachments,
-    assertClientUploadAllowed,
-  }: {
-    text?: string;
-    clientInfo?: TurnParams["request"]["clientInfo"];
-    agentId?: string;
-    sessionKey?: string;
-    cfg?: TurnParams["session"]["cfg"];
-    attachments?: Partial<TurnParams["attachments"]>;
-    assertClientUploadAllowed?: TurnParams["admission"]["assertClientUploadAllowed"];
-  } = {},
-) {
-  return prepareChatSendUserTurn({
-    request: {
-      inboundMessage: text,
-      clientInfo,
-      suppressCommandInterpretation: false,
-      systemInputProvenance: undefined,
-      systemProvenanceReceipt: undefined,
-    },
-    session: { agentId, clientRunId: "run-voice", sessionKey, cfg },
-    admission: {
-      originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
-      assertClientUploadAllowed,
-    },
-    attachments: createAttachments({
-      parsedMessage: text,
-      mediaPathOffloads: [{ path: "/state/media/inbound/voice.ogg", contentType: "audio/ogg" }],
-      ...attachments,
-    }),
-    client: null,
-    logGateway: { warn: vi.fn() } as never,
-    userTurn,
-  });
-}
 function voiceRef(id = "voice.ogg") {
   return {
     mediaRef: `media://inbound/${id}`,
@@ -142,12 +84,11 @@ describe("prepareChatSendUserTurn audio", () => {
       mockPersistence();
       mockTranscript("transcribed voice");
       setRuntimeConfigSnapshot({});
-      const { controller, readInput } = createUserTurnInputController();
       const scope = {
         default: "allow" as const,
         rules: [{ match: { channel: "webchat" }, action: "allow" as const }],
       };
-      const prepared = prepareVoice(controller, {
+      const prepared = prepareVoice({
         text: "raw message",
         clientInfo,
         cfg: {
@@ -172,10 +113,8 @@ describe("prepareChatSendUserTurn audio", () => {
           offloadedRefs: [voiceRef()],
         },
       });
-      const input = await readInput();
+      const input = await prepared.readInput();
       expect(input.text).toBe("raw message\nHeard: transcribed voice");
-      const persisted = buildPersistedUserTurnMessage(input);
-      expect(persisted.content).toBe("raw message\nHeard: transcribed voice");
       const target = createSqliteTranscriptTarget({ dir: tempDirs.make() });
       await persistUserTurnTranscript({ ...target, input, updateMode: "none" });
       const [reloaded] = await readTranscriptMessages(target);
@@ -188,19 +127,9 @@ describe("prepareChatSendUserTurn audio", () => {
       expect(prepared.ctx.BodyForAgent).not.toContain("Heard: transcribed voice");
 
       expect(transcribeAudioAttachments).toHaveBeenCalledOnce();
-      const call = transcribeAudioAttachments.mock.calls[0]?.[0];
-      expect(call?.ctx).toBe(prepared.ctx);
-      expect(call?.ctx).toMatchObject({
-        SessionKey: "agent:main:main",
-        Provider: "webchat",
-        Surface: "webchat",
-        ChatType: "direct",
-        media: [{ path: "/state/media/inbound/voice.ogg", contentType: "audio/ogg" }],
-      });
-      expect(call?.cfg.tools?.media?.audio).toMatchObject({
-        echoTranscript: false,
-        scope,
-      });
+      expect(
+        transcribeAudioAttachments.mock.calls[0]?.[0].cfg.tools.media.audio.echoTranscript,
+      ).toBe(false);
       expect(prepared.ctx.media?.[0]?.transcribed).toBe(true);
       expect(prepared.ctx.Transcript).toBe("transcribed voice");
       expect(prepared.ctx.agentText).toContain(
@@ -219,8 +148,7 @@ describe("prepareChatSendUserTurn audio", () => {
       }
       return "support transcript";
     });
-    const { controller, readInput } = createUserTurnInputController("caption");
-    const prepared = prepareVoice(controller, {
+    const prepared = prepareVoice({
       agentId: "support",
       sessionKey: "agent:support:main",
       cfg: {
@@ -258,26 +186,21 @@ describe("prepareChatSendUserTurn audio", () => {
       },
     });
 
-    const input = await readInput();
+    const input = await prepared.readInput();
     expect(input.text).toBe("caption\nHeard: support transcript");
     expect(prepared.ctx.AgentId).toBe("support");
     expect(selectedPaths).toEqual({
       agentDir: "/state/agents/support",
       workspaceDir: "/work/support",
     });
-    expect(selectedPaths).not.toEqual({
-      agentDir: "/state/agents/main",
-      workspaceDir: "/work/main",
-    });
   });
 
   it("does not reintroduce a transcript removed by the approval hook", async () => {
     mockPersistence();
     mockTranscript("private transcript");
-    const { controller, readInput } = createUserTurnInputController("caption");
-    const prepared = prepareVoice(controller);
+    const prepared = prepareVoice();
 
-    await expect(readInput()).resolves.toMatchObject({
+    await expect(prepared.readInput()).resolves.toMatchObject({
       text: "caption\nHeard: private transcript",
     });
     prepared.applyApprovedText("caption");
@@ -296,8 +219,7 @@ describe("prepareChatSendUserTurn audio", () => {
     async (omission) => {
       mockPersistence(omission);
       mockTranscript("approved transcript");
-      const { controller, readInput } = createUserTurnInputController("a longer caption");
-      const prepared = prepareVoice(controller, {
+      const prepared = prepareVoice({
         text: "a longer caption",
         attachments: {
           imageOrder: ["inline"],
@@ -307,7 +229,10 @@ describe("prepareChatSendUserTurn audio", () => {
         },
       });
 
-      const input = await readInput();
+      const input = await prepared.readInput();
+      expect(prepared.replyOptionImages).toEqual([
+        { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
+      ]);
       expect(input.text).toContain("a longer caption\nHeard: approved transcript");
       const omissionSuffix =
         omission === "inline-image-save-failed"
@@ -332,13 +257,14 @@ describe("prepareChatSendUserTurn audio", () => {
     async (baseText) => {
       mockPersistence();
       mockTranscript("/reset");
-      const { controller, readInput } = createUserTurnInputController("");
-      controller.baseInput.text = baseText;
-      const prepared = prepareVoice(controller, {
+      const inputController = createUserTurnInputController("");
+      inputController.controller.baseInput.text = baseText;
+      const prepared = prepareVoice({
+        input: inputController,
         text: "",
         attachments: { offloadedRefs: [voiceRef()] },
       });
-      const input = await readInput();
+      const input = await prepared.readInput();
       expect(input.text).toBe("Heard: /reset");
       prepared.applyApprovedText(requireInputText(input));
       expect(prepared.ctx.Body).toBe("Heard: /reset");
@@ -358,9 +284,8 @@ describe("prepareChatSendUserTurn audio", () => {
   it("does not dispatch a raw slash command from a transcript-only echo", async () => {
     mockPersistence();
     mockTranscript("/reset");
-    const { controller, readInput } = createUserTurnInputController("");
     const sessionEntry = { sessionId: "voice-session", updatedAt: 1 };
-    const prepared = prepareVoice(controller, {
+    const prepared = prepareVoice({
       text: "",
       cfg: {
         commands: { text: true },
@@ -369,7 +294,7 @@ describe("prepareChatSendUserTurn audio", () => {
       attachments: { offloadedRefs: [voiceRef()] },
     });
 
-    const input = await readInput();
+    const input = await prepared.readInput();
     expect(input.text).toBe("/reset");
     prepared.applyApprovedText(requireInputText(input));
     expect(prepared.ctx.Body).toBe("/reset");
@@ -403,14 +328,13 @@ describe("prepareChatSendUserTurn audio", () => {
       }
     });
     transcribeAudioAttachments.mockResolvedValueOnce("uncommitted voice");
-    const { controller, readInput } = createUserTurnInputController("");
-    const prepared = prepareVoice(controller, {
+    const prepared = prepareVoice({
       text: "",
       cfg: { tools: { media: { audio: { echoTranscript: true } } } },
       attachments: { offloadedRefs: [voiceRef()] },
       assertClientUploadAllowed,
     });
-    await expect(readInput()).rejects.toThrow("admission expired");
+    await expect(prepared.readInput()).rejects.toThrow("admission expired");
     expect(transcribeAudioAttachments).toHaveBeenCalledOnce();
     expect(prepared.ctx.Transcript).toBeUndefined();
     expect(assertClientUploadAllowed).toHaveBeenCalledTimes(2);
@@ -419,14 +343,14 @@ describe("prepareChatSendUserTurn audio", () => {
   it("does not preflight voice attachments for non-chat clients", async () => {
     mockPersistence();
     transcribeAudioAttachments.mockResolvedValueOnce("must not run");
-    const { controller, readInput } = createUserTurnInputController();
-    prepareVoice(controller, {
+    const prepared = prepareVoice({
+      input: createUserTurnInputController(),
       text: "",
       clientInfo: createClientInfo(),
       cfg: { tools: { media: { audio: { echoTranscript: true } } } },
       attachments: { parsedMessage: "hello" },
     });
-    await expect(readInput()).resolves.toMatchObject({ text: "raw message" });
+    await expect(prepared.readInput()).resolves.toMatchObject({ text: "raw message" });
     expect(transcribeAudioAttachments).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,6 @@ import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
 import * as subagentKill from "../../agents/subagents/registry/subagent-control-kill.js";
-import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
@@ -69,13 +68,11 @@ if (!abortSession) {
 }
 
 async function queueCollector(sessionKey: string, groupId: string, runId: string) {
-  enqueueSwarmRun({
+  fixture.queueRun({
     groupId,
     runId,
     start: vi.fn(async () => {}),
     activeRunIds: ["occupied-slot"],
-    maxConcurrent: 1,
-    onStartFailure: () => true,
   });
   await fixture.registerRun({
     runId,

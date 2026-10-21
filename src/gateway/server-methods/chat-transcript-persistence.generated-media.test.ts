@@ -85,22 +85,7 @@ async function seedTranscript(
   const warning = text(warningText);
   const mediaGroup = singleText ? [mediaBlock, warning] : [mediaBlock];
   const messages = [
-    assistant("older-answer", [text("An earlier answer.")], "older-run"),
     transcriptEvent("request", "user", [text("Make an avatar sheet.")]),
-    assistant(
-      "generation-tool-call",
-      [
-        text("Preparing the sheet.", "signed-progress"),
-        { type: "toolCall", id: "generate-call", name: "image_generate", arguments: {} },
-      ],
-      RUN_ID,
-      { stopReason: "toolUse" },
-    ),
-    transcriptEvent("generation-tool-result", "toolResult", [text("Generated one image.")], {
-      toolCallId: "generate-call",
-      toolName: "image_generate",
-      __openclaw: { runId: RUN_ID },
-    }),
     assistant(
       MESSAGE_ID,
       singleText

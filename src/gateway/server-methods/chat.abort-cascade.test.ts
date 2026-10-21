@@ -19,7 +19,7 @@ import {
 import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -64,6 +64,30 @@ const fixture = useChatAbortRegistryFixture();
 const { writeSession } = fixture;
 
 afterEach(() => resetPluginRuntimeStateForTest());
+
+function installNativeCancellation(
+  withDescendantCancellation: NonNullable<
+    ReturnType<
+      typeof createEmptyPluginRegistry
+    >["agentHarnesses"][number]["harness"]["withDescendantCancellation"]
+  >,
+) {
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "core",
+    source: "runtime",
+    harness: {
+      id: "native-cancellation-test",
+      label: "Native cancellation fixture",
+      supports: () => ({ supported: false }),
+      runAttempt: async () => {
+        throw new Error("No inference in cancellation proof");
+      },
+      withDescendantCancellation,
+    },
+  });
+  setActivePluginRegistry(registry);
+}
 
 describe("descendant cascade ownership", () => {
   it.for([
@@ -237,27 +261,14 @@ describe("descendant cascade ownership", () => {
         cancel: vi.fn(),
       })),
     );
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "core",
-      source: "runtime",
-      harness: {
-        id: "native-authorization-test",
-        label: "Native authorization fixture",
-        supports: () => ({ supported: false }),
-        runAttempt: async () => {
-          throw new Error("No inference in Stop proof");
-        },
-        withDescendantCancellation: (params, run) =>
-          run(async () => {
-            expect(params.requesterTurnRunId).toBeUndefined();
-            const selected = children.filter((child) => params.acceptsRequest(child.custody));
-            selected.forEach((child) => child.cancel());
-            return { killed: selected.length, cancelledRequesters: [] };
-          }),
-      },
-    });
-    setActivePluginRegistry(registry);
+    installNativeCancellation((params, run) =>
+      run(async () => {
+        expect(params.requesterTurnRunId).toBeUndefined();
+        const selected = children.filter((child) => params.acceptsRequest(child.custody));
+        selected.forEach((child) => child.cancel());
+        return { killed: selected.length, cancelledRequesters: [] };
+      }),
+    );
     const parent = createActiveRun(sessionKey, {
       sessionId: "main-session",
       agentId: "main",
@@ -412,13 +423,11 @@ describe("descendant cascade ownership", () => {
           task: "preserve exact requester ownership",
           queued: true,
         });
-        enqueueSwarmRun({
+        fixture.queueRun({
           groupId: "exec-continuation-ownership",
           runId,
-          maxConcurrent: 1,
           activeRunIds: ["held-continuation-capacity"],
           start,
-          onStartFailure: () => true,
         });
       };
       try {
@@ -450,7 +459,6 @@ describe("descendant cascade ownership", () => {
         });
         const nativeEntered = createDeferred();
         const nativeSettled = createDeferred();
-        const registry = createEmptyPluginRegistry();
         const cancelNative = vi.fn(async () => {
           nativeEntered.resolve();
           await nativeSettled.promise;
@@ -459,30 +467,17 @@ describe("descendant cascade ownership", () => {
           }
           return { killed: 1, cancelledRequesters: [] };
         });
-        registry.agentHarnesses.push({
-          pluginId: "core",
-          source: "runtime",
-          harness: {
-            id: "native-cascade-test",
-            label: "Native cascade fixture",
-            supports: () => ({ supported: false }),
-            runAttempt: async () => {
-              throw new Error("No inference in cascade proof");
-            },
-            withDescendantCancellation: (params, run) => {
-              expect(params).toMatchObject({
-                agentId: "main",
-                sessionKey,
-                sessionId: "main-session",
-                requesterTurnRunId: "original-command-request",
-              });
-              expect(params.acceptsRequest(withExecRequestOwners({}, originalOwners))).toBe(true);
-              expect(params.acceptsRequest(withExecRequestOwners({}, laterOwners))).toBe(false);
-              return run(cancelNative);
-            },
-          },
+        installNativeCancellation((params, run) => {
+          expect(params).toMatchObject({
+            agentId: "main",
+            sessionKey,
+            sessionId: "main-session",
+            requesterTurnRunId: "original-command-request",
+          });
+          expect(params.acceptsRequest(withExecRequestOwners({}, originalOwners))).toBe(true);
+          expect(params.acceptsRequest(withExecRequestOwners({}, laterOwners))).toBe(false);
+          return run(cancelNative);
         });
-        setActivePluginRegistry(registry);
         const respond = vi.fn();
         const stopping = invokeChatAbortHandler({
           handler: handleChatAbortRequestWithLifecycle,
@@ -569,13 +564,11 @@ describe("descendant cascade ownership", () => {
     const start = vi.fn(async () => {
       started.resolve();
     });
-    enqueueSwarmRun({
+    fixture.queueRun({
       groupId: "retained-stop",
       runId: "retained-stop-child",
-      maxConcurrent: 1,
       activeRunIds: ["held-capacity"],
       start,
-      onStartFailure: () => true,
     });
     let current = true;
     const parent = createActiveRun(sessionKey, {
@@ -844,13 +837,11 @@ describe("descendant cascade ownership", () => {
       await registerChild();
     }
     const start = vi.fn(async () => {});
-    enqueueSwarmRun({
+    fixture.queueRun({
       groupId: "cascade-ownership",
       runId: "cascade-queued",
-      maxConcurrent: 1,
       activeRunIds: ["capacity"],
       start,
-      onStartFailure: () => true,
     });
     const entered = createDeferred();
     const proceed = createDeferred();

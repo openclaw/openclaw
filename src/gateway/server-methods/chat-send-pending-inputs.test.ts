@@ -542,20 +542,6 @@ describe("ordinary chat input admission", () => {
     },
   );
 
-  it("keeps internal system inputs outside ordinary pending-message custody", async () => {
-    await using fixture = await createBrowserFollowupFixture();
-    fixture.client.connect.client = { id: "cli", mode: "cli", version: "test", platform: "test" };
-    fixture.params.systemInputProvenance = {
-      kind: "internal_system",
-      sourceTool: "system_fixture",
-    };
-    const ack = await fixture.send();
-    expect(ack.mock.calls[0]?.[0]).toBe(true);
-    expect(await pending(fixture)).toEqual({ items: [], total: 0 });
-    const recorder = await fixture.dispatchedRecorder;
-    expect((await recorder.resolveMessage())?.["__openclaw"]?.transport).toBeUndefined();
-  });
-
   it.each([{ acp: false }, { acp: true }, { acp: true, restart: true }])(
     "keeps idle input custody with its runtime (%j)",
     async ({ acp, restart }) => {

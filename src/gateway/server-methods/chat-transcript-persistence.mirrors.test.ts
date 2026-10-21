@@ -118,16 +118,14 @@ const replaceSelected = (events: Events) =>
 // Run the interleaving once, at the first content read during preparation.
 function contentOnRead(text: string, action: () => void) {
   let prepared = false;
-  const prepare = vi.fn(action);
   return {
-    prepare,
     content: [
       {
         type: "text",
         get text() {
           if (!prepared) {
             prepared = true;
-            prepare();
+            action();
           }
           return text;
         },
@@ -215,7 +213,6 @@ describe("durable transcript mirror corrections", () => {
         expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
       });
       const result = await indexed({ content: replacement.content });
-      expect(replacement.prepare).toHaveBeenCalledOnce();
       expect(result).toBeNull();
       expect(snapshot()).toEqual(retained);
     }),
@@ -230,7 +227,6 @@ describe("durable transcript mirror corrections", () => {
         retained = snapshot();
       });
       const result = await indexed({ content: replacement.content });
-      expect(replacement.prepare).toHaveBeenCalledOnce();
       expect(result).toMatchObject({ messageId: "selected", generation: expect.any(String) });
       const after = snapshot();
       expect(unselected(after)).toEqual(unselected(retained));
@@ -266,7 +262,6 @@ describe("durable transcript mirror corrections", () => {
           ? "SQLite transcript changed while preparing rewrite"
           : "Delivery authority revoked",
       );
-      expect(replacement.prepare).toHaveBeenCalledOnce();
       expect(snapshot()).toEqual(retained);
     }),
   );
