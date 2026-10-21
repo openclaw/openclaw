@@ -37,12 +37,6 @@ export function createFileAttachment(
   };
 }
 
-export function createPngBuffer(size: number): Buffer {
-  const buffer = Buffer.alloc(size);
-  buffer.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
-  return buffer;
-}
-
 export function getMessage(payload: unknown): Record<string, unknown> | undefined {
   if (!payload || typeof payload !== "object") {
     return undefined;

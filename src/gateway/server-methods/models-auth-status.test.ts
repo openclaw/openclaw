@@ -32,6 +32,7 @@ import {
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
+type Options = GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -61,31 +62,19 @@ const mocks = vi.hoisted(() => ({
     agentId === "main" ? "/tmp/agent" : `/tmp/agent-${agentId}`,
   ),
   resolveDefaultAgentId: vi.fn(() => "main"),
-  ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(
-    (agentDir?: string): AuthProfileStore => {
-      void agentDir;
-      return { version: 1, profiles: {} };
-    },
-  ),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync:
+    vi.fn<(agentDir?: string) => AuthProfileStore>(),
   listProfilesForProvider: vi.fn((): string[] => []),
   removeModelAuthCredentials: vi.fn(async () => {}),
   saveModelProviderApiKey:
     vi.fn<typeof import("../../commands/models/auth-api-key.js").saveModelProviderApiKey>(),
-  setAuthProfileOrder: vi.fn(async (): Promise<AuthProfileStore | null> => ({
-    version: 1,
-    profiles: {},
-  })),
+  setAuthProfileOrder: vi.fn<() => Promise<AuthProfileStore | null>>(),
   refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
   refreshRuntimeAuthProfileStoreSources: vi.fn(async () => {}),
   prepareModelRuntimeSnapshot: vi.fn(async () => {}),
   loadDeferredCatalog: vi.fn(),
   readPreparedCatalog: vi.fn(),
-  buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>((): AuthHealthSummary => ({
-    now: 0,
-    warnAfterMs: 0,
-    profiles: [],
-    providers: [],
-  })),
+  buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>(),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
   listProviderUsagePluginDescriptors: vi.fn(() => [
     { provider: "anthropic", displayName: "Claude" },
@@ -106,18 +95,13 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
-vi.mock("../../agents/auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
-    "../../agents/auth-profiles.js",
-  );
-  return {
-    ...actual,
-    ensureAuthProfileStoreWithoutExternalProfilesAsync:
-      mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync,
-    listProfilesForProvider: mocks.listProfilesForProvider,
-    setAuthProfileOrder: mocks.setAuthProfileOrder,
-  };
-});
+vi.mock("../../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync:
+    mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync,
+  listProfilesForProvider: mocks.listProfilesForProvider,
+  setAuthProfileOrder: mocks.setAuthProfileOrder,
+}));
 
 vi.mock("../../commands/models/auth-api-key.js", () => ({
   saveModelProviderApiKey: mocks.saveModelProviderApiKey,
@@ -127,15 +111,10 @@ vi.mock("../../commands/models/auth-logout.js", () => ({
   removeModelAuthCredentials: mocks.removeModelAuthCredentials,
 }));
 
-vi.mock("../../agents/auth-health.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/auth-health.js")>(
-    "../../agents/auth-health.js",
-  );
-  return {
-    ...actual,
-    buildAuthHealthSummary: mocks.buildAuthHealthSummary,
-  };
-});
+vi.mock("../../agents/auth-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-health.js")>()),
+  buildAuthHealthSummary: mocks.buildAuthHealthSummary,
+}));
 
 vi.mock("../../infra/provider-usage.load.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
@@ -168,7 +147,7 @@ import { registerModelAuthStatusUsageRefreshTests } from "./models-auth-status.u
 function createOptions(
   params: Record<string, unknown> = {},
   scopes: string[] = ["operator.admin"],
-): GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> } {
+): Options {
   const respond = vi.fn();
   return {
     req: { type: "req", id: "req-1", method: "models.authStatus", params },
@@ -177,7 +156,7 @@ function createOptions(
     isWebchatConnect: () => false,
     respond,
     context: { getRuntimeConfig: mocks.getRuntimeConfig } as unknown,
-  } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
+  } as unknown as Options;
 }
 
 const handler = expectDefined(
@@ -245,31 +224,21 @@ async function useRealHealth() {
   mocks.buildAuthHealthSummary.mockImplementation(actual.buildAuthHealthSummary);
 }
 
-function createLogoutOptions(
-  params: Record<string, unknown> = {},
-): GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> } {
-  const respond = vi.fn();
-  const context = {
-    getRuntimeConfig: mocks.getRuntimeConfig,
+function createLogoutOptions(params: Record<string, unknown> = {}): Options {
+  const opts = createOptions(params);
+  Object.assign(opts.req, { id: "req-logout", method: "models.authLogout" });
+  opts.client = null;
+  Object.assign(opts.context, {
     chatRunState: createChatRunState(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
-  };
-  return {
-    req: { type: "req", id: "req-logout", method: "models.authLogout", params },
-    params,
-    client: null,
-    isWebchatConnect: () => false,
-    respond,
-    context,
-  } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
+  });
+  return opts;
 }
 
-function createOrderOptions(
-  params: Record<string, unknown>,
-): GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> } {
+function createOrderOptions(params: Record<string, unknown>): Options {
   const opts = createOptions(params);
   opts.req.method = "models.authOrderSet";
   opts.client = null;
@@ -312,9 +281,7 @@ function createPreparedOwnerSnapshot(agentId: string) {
   };
 }
 
-function firstRespondCall(
-  opts: GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> },
-) {
+function firstRespondCall(opts: Options) {
   return opts.respond.mock.calls[0];
 }
 
@@ -881,101 +848,79 @@ describe("models.authStatus", () => {
     },
   );
 
-  it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
-    const runtimeConfig = {};
-    const plugins = [
-      {
-        id: "anthropic",
-        origin: "bundled" as const,
-        providerAuthAliases: { "claude-cli": "anthropic" },
+  it.each([
+    {
+      provider: "claude-cli",
+      authProvider: "anthropic",
+      displayName: "Claude",
+      health: {
+        provider: "claude-cli",
+        status: "ok" as const,
+        profiles: [healthProfile("claude-cli", "oauth", "ok", "claude-cli")],
       },
-    ];
-    setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins }));
-    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    const profile = healthProfile("claude-cli", "oauth", "ok", "claude-cli");
-    mockHealthProvider({ provider: "claude-cli", status: "ok", profiles: [profile] });
-    mocks.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: 0,
-      providers: [
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          plan: "Max (20x)",
-          accountEmail: "clawd@example.com",
-          windows: [{ label: "5h", usedPercent: 22 }],
-          billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
-        },
-      ],
-    });
-
-    const first = await readAuthStatus();
-    expect(first.providers[0]?.usage).toBeUndefined();
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      providers: ["anthropic"],
-      agentDir: "/tmp/agent",
-      authStore: preparedAuthStore,
-      config: runtimeConfig,
-      timeoutMs: 5_000,
-    });
-    let result: ModelAuthStatusResult | undefined;
-    await waitForFast(async () => {
-      result = await readAuthStatus();
-      expect(result.providers[0]?.usage).toBeDefined();
-    });
-    const refreshed = expectDefined(result, "refreshed auth status");
-    expect(refreshed.providers[0]?.displayName).toBe("Claude");
-    expect(refreshed.providers[0]?.authProvider).toBe("anthropic");
-    expect(refreshed.providers[0]?.usage).toEqual({
-      providerId: "anthropic",
-      windows: [{ label: "5h", usedPercent: 22 }],
-      plan: "Max (20x)",
-      billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
-      accountEmail: "clawd@example.com",
-    });
-
-    const readOnly = createOptions({}, ["operator.read"]);
-    await handler(readOnly);
-    const readOnlyResult = firstRespondCall(readOnly)?.[1] as ModelAuthStatusResult;
-    expect(readOnlyResult.providers[0]?.usage).not.toHaveProperty("accountEmail");
-  });
-
-  it("adds DeepSeek API-key balance summaries to auth status usage", async () => {
-    mockHealthProvider(createStaticApiKeyProvider("deepseek"));
-    mocks.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: 0,
-      providers: [
-        {
-          provider: "deepseek",
-          displayName: "DeepSeek",
-          windows: [],
-          summary: "Balance ¥42.50",
-        },
-      ],
-    });
-
-    const first = await readAuthStatus();
-    expect(first.providers[0]?.usage).toBeUndefined();
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      providers: ["deepseek"],
-      agentDir: "/tmp/agent",
-      authStore: preparedAuthStore,
-      config: expect.any(Object),
-      timeoutMs: 5_000,
-    });
-    let result: ModelAuthStatusResult | undefined;
-    await waitForFast(async () => {
-      result = await readAuthStatus();
-      expect(result.providers[0]?.usage).toBeDefined();
-    });
-    const refreshed = expectDefined(result, "refreshed auth status");
-    expect(refreshed.providers[0]?.usage).toEqual({
-      providerId: "deepseek",
-      windows: [],
-      summary: "Balance ¥42.50",
-    });
-  });
+      usage: {
+        windows: [{ label: "5h", usedPercent: 22 }],
+        plan: "Max (20x)",
+        billing: [
+          { type: "budget" as const, used: 157.85, limit: 400, unit: "USD", period: "month" },
+        ],
+        accountEmail: "clawd@example.com",
+      },
+    },
+    {
+      provider: "deepseek",
+      authProvider: "deepseek",
+      displayName: "DeepSeek",
+      health: createStaticApiKeyProvider("deepseek"),
+      usage: { windows: [], summary: "Balance ¥42.50" },
+    },
+  ])(
+    "projects $provider usage through its auth owner",
+    async ({ provider, authProvider, displayName, health, usage }) => {
+      const runtimeConfig = {};
+      mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+      if (provider !== authProvider) {
+        setPreparedMetadataSnapshot(
+          createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: authProvider,
+                origin: "bundled",
+                providerAuthAliases: { [provider]: authProvider },
+              },
+            ],
+          }),
+        );
+      }
+      mockHealthProvider(health);
+      mocks.loadProviderUsageSummary.mockResolvedValue({
+        updatedAt: 0,
+        providers: [{ provider: authProvider, displayName, ...usage }],
+      });
+      expect((await firstAuthStatusProvider())?.usage).toBeUndefined();
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+        providers: [authProvider],
+        agentDir: "/tmp/agent",
+        authStore: preparedAuthStore,
+        config: runtimeConfig,
+        timeoutMs: 5_000,
+      });
+      let refreshed: Awaited<ReturnType<typeof firstAuthStatusProvider>>;
+      await waitForFast(async () => {
+        refreshed = await firstAuthStatusProvider();
+        expect(refreshed?.usage).toBeDefined();
+      });
+      expect(refreshed?.usage).toEqual({ providerId: authProvider, ...usage });
+      if (provider !== authProvider) {
+        expect(refreshed).toMatchObject({ displayName, authProvider });
+        const readOnly = createOptions({}, ["operator.read"]);
+        await handler(readOnly);
+        expect(firstRespondCall(readOnly)?.[1]?.providers[0]?.usage).not.toHaveProperty(
+          "accountEmail",
+        );
+      }
+    },
+  );
 
   registerModelAuthStatusUsageRefreshTests({
     mocks,

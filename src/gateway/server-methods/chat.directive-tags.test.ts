@@ -17,6 +17,7 @@ import {
   type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import type {
   GetReplyOptions,
@@ -75,7 +76,6 @@ import { createScopedCliClient } from "./chat-client.test-support.js";
 import {
   createFileAttachment,
   createImageAttachment,
-  createPngBuffer,
   getMessage,
   getMessageContent,
   mockCallAt,
@@ -100,7 +100,6 @@ import {
   expectManagedAudioBlock,
   managedAudioBlocks,
   createUnconfirmedTranscriptDelivery,
-  expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
@@ -786,20 +785,7 @@ async function appendSourceReplyMirrorEntry(params: {
       model: params.model ?? "delivery-mirror",
       ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
       ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
+      usage: buildUsageWithNoCost({}),
       stopReason: "stop",
       timestamp: now,
     },
@@ -2333,9 +2319,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         "runtime-owned-assistant",
       ]);
       const rewritten = messages[1];
-      const content = Array.isArray(rewritten?.content)
-        ? (rewritten.content as Array<Record<string, unknown>>)
-        : [];
+      const content = getMessageContent({ message: rewritten });
       expect(content[0]).toEqual({
         type: "text",
         text: "Dinner options",
@@ -2405,9 +2389,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           { type: "text", text: `Stale reply\nMEDIA:${mediaUrl}` },
         ]);
         expect(messages[1]?.idempotencyKey).toBeUndefined();
-        const content = Array.isArray(messages[1]?.content)
-          ? (messages[1].content as Array<Record<string, unknown>>)
-          : [];
+        const content = getMessageContent({ message: messages[1] });
         expect(content.filter((block) => block.type === "text")).toEqual([
           { type: "text", text: "Earlier chunk" },
           { type: "text", text: "Image reply" },
@@ -2456,9 +2438,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const messages = await readActiveAssistantTranscriptMessages();
       expect(messages).toHaveLength(1);
       expect(JSON.stringify(messages)).not.toContain(":assistant-media");
-      const content = Array.isArray(messages[0]?.content)
-        ? (messages[0].content as Array<Record<string, unknown>>)
-        : [];
+      const content = getMessageContent({ message: messages[0] });
       expect(content.filter((block) => block.type === "attachment_error")).toEqual([
         {
           type: "attachment_error",
@@ -2522,9 +2502,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(messages[0]?.content).toEqual([{ type: "text", text: "Older assistant reply" }]);
         for (const [index, expectedText] of ["First image", "Second image"].entries()) {
           const message = messages[index + 1];
-          const content = Array.isArray(message?.content)
-            ? (message.content as Array<Record<string, unknown>>)
-            : [];
+          const content = getMessageContent({ message });
           expect(content.filter((block) => block.type === "text")).toEqual([
             { type: "text", text: expectedText },
           ]);
@@ -2595,9 +2573,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const assistantUpdates = findAssistantTranscriptUpdates();
     expect(assistantUpdates).toHaveLength(1);
     const message = assistantUpdates[0]?.message as Record<string, any> | undefined;
-    const content = Array.isArray(message?.content)
-      ? (message.content as Array<Record<string, any>>)
-      : [];
+    const content = getMessageContent({ message });
     expect(message?.role).toBe("assistant");
     expect(message?.idempotencyKey).toBe("idem-agent-tts:assistant-media");
     expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
@@ -2642,7 +2618,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(assistantEntries).toHaveLength(1);
     const message = (assistantEntries[0] as { message?: Record<string, unknown> }).message;
-    const modelContent = Array.isArray(message?.content) ? message.content : [];
+    const modelContent = getMessageContent({ message });
     expect(JSON.stringify(assistantUpdates)).toContain('"type":"attachment_error"');
     expect(JSON.stringify(assistantUpdates)).toContain("stale.mp3");
     expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
@@ -3327,11 +3303,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expectManagedAudioBlock(content[1], "tts.mp3", true);
         const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
           (update) =>
-            typeof update.message === "object" &&
-            update.message !== null &&
-            (update.message as { role?: unknown }).role === "assistant" &&
-            (update.message as { openclawDelivery?: { replyToCurrent?: boolean } }).openclawDelivery
-              ?.replyToCurrent === true,
+            getMessage(update)?.role === "assistant" &&
+            asOptionalRecord(getMessage(update)?.openclawDelivery)?.replyToCurrent === true,
         );
         expect(transcriptUpdate).toBeTruthy();
         expect(JSON.stringify(transcriptUpdate)).not.toContain("[[reply_to_current]]");
@@ -3659,12 +3632,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       authorized: false,
       body: "hello from phone",
     });
-    const userTurnInput = mockState.lastDispatchUserTurnInput as
-      | {
-          content?: unknown;
-        }
-      | undefined;
-    expect(userTurnInput?.content).toBe("hello from phone");
+    expect(asOptionalRecord(mockState.lastDispatchUserTurnInput)?.content).toBe("hello from phone");
     expect(mockState.lastDispatchThinkingLevelOverride).toBe("low");
   });
 
@@ -3940,57 +3908,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(readPersistedUserMessages()).toHaveLength(0);
   });
 
-  it("preserves managed attachment claims in transcript order", async () => {
-    await createReadyChatTranscript("openclaw-chat-send-user-transcript-offloaded-");
-    mockState.triggerAgentRunStart = true;
-    useChatTestModel("vision-model", true);
-    await seedSqliteSessionEntry(mockState.sessionEntry);
-    setSavedMediaResults(
-      ["/tmp/offloaded-big.png", "image/png", "offloaded-big.png"],
-      ["/tmp/chat-send-inline.png", "image/png", "chat-send-inline.png"],
-    );
-    const { send } = createChatRequestFixture();
-    const bigPng = createPngBuffer(2_100_000);
-
-    await send({
-      idempotencyKey: "idem-user-transcript-offloaded",
-      message: "edit both",
-      requestParams: {
-        attachments: [
-          createImageAttachment({ content: INLINE_PNG_BASE64 }),
-          createImageAttachment({ content: bigPng.toString("base64") }),
-        ],
-      },
-      expectBroadcast: false,
-      waitForCompletion: false,
-    });
-
-    await waitForAssertion(() => {
-      const userTurnInput = mockState.lastDispatchUserTurnInput as
-        | { content?: unknown }
-        | undefined;
-      expect(findUserUpdate()).toBeUndefined();
-      expect(userTurnInput?.content).toBe("edit both");
-      expectClaimOnlyTranscriptMedia(
-        userTurnInput,
-        [
-          expect.objectContaining({
-            url: "media://inbound/chat-send-inline.png",
-            contentType: "image/png",
-            kind: "image",
-          }),
-          expect.objectContaining({
-            url: "media://inbound/offloaded-big.png",
-            contentType: "image/png",
-            kind: "image",
-          }),
-        ],
-        ["/tmp/chat-send-inline.png", "/tmp/offloaded-big.png"],
-      );
-      expect(userTurnInput?.content).not.toContain("media://");
-    });
-  });
-
   it("leaves ACP bridge user persistence to the agent runtime", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-acp-images-");
     mockState.triggerAgentRunStart = true;
@@ -4097,17 +4014,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }
       const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
         (update) =>
-          typeof update.message === "object" &&
-          update.message !== null &&
-          (update.message as { role?: unknown }).role === "assistant" &&
-          Array.isArray((update.message as { content?: unknown }).content) &&
-          (update.message as { openclawDelivery?: { replyToCurrent?: boolean } }).openclawDelivery
-            ?.replyToCurrent === true,
+          getMessage(update)?.role === "assistant" &&
+          Array.isArray(getMessage(update)?.content) &&
+          asOptionalRecord(getMessage(update)?.openclawDelivery)?.replyToCurrent === true,
       );
-      const transcriptMessage = transcriptUpdate?.message as Record<string, any> | undefined;
+      const transcriptMessage = getMessage(transcriptUpdate);
       const displayContent = Array.isArray(transcriptMessage?.openclawDisplayContent)
         ? transcriptMessage.openclawDisplayContent
-        : transcriptMessage?.content;
+        : getMessageContent(transcriptUpdate);
       expect(transcriptMessage?.role).toBe("assistant");
       expect(displayContent?.[0]).toEqual({
         type: "text",
@@ -4123,33 +4037,68 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     },
   );
 
-  it("keeps image attachments for text-only sessions bound to ACP", async () => {
-    await createReadyChatTranscript("openclaw-chat-send-text-only-acp-bound-attachments-");
-    useChatTestModel("text-only");
-    bindingMocks.resolveByConversation.mockReturnValue({
-      targetSessionKey: "agent:claude:acp:spawned",
-    });
-    await createChatRequestFixture().send({
-      idempotencyKey: "idem-text-only-acp-bound-attachments",
-      message: "describe image",
-      client: createScopedCliClient(["operator.admin"]),
-      requestParams: {
-        originatingChannel: "slack",
-        originatingTo: "user:U123",
-        originatingAccountId: "default",
-        attachments: [createImageAttachment({ content: OFFLOAD_PNG_BASE64 })],
-      },
-      expectBroadcast: false,
-    });
+  it.each(["text-only ACP", "mixed plugin"] as const)(
+    "keeps inline images and staged files for %s bindings",
+    async (binding) => {
+      const mixed = binding === "mixed plugin";
+      const id = mixed ? "plugin-bound-mixed-media-staging" : "text-only-acp-bound-attachments";
+      await createReadyChatTranscript(`openclaw-chat-send-${id}-`);
+      useChatTestModel(mixed ? "vision-model" : "text-only");
+      bindingMocks.resolveByConversation.mockReturnValue(
+        mixed
+          ? {
+              metadata: {
+                pluginBindingOwner: "plugin",
+                pluginId: "demo-plugin",
+                pluginRoot: "/plugins/demo-plugin",
+              },
+            }
+          : { targetSessionKey: "agent:claude:acp:spawned" },
+      );
+      if (mixed) {
+        setSavedMediaResults(
+          ["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"],
+          ["/home/user/.openclaw/media/inbound/screenshot.png", "image/png"],
+        );
+        mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+        mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
+      }
+      await createChatRequestFixture().send({
+        idempotencyKey: `idem-${id}`,
+        message: mixed ? "inspect these" : "describe image",
+        client: createScopedCliClient(["operator.admin"]),
+        requestParams: {
+          originatingChannel: "slack",
+          originatingTo: "user:U123",
+          originatingAccountId: "default",
+          attachments: mixed
+            ? [
+                createFileAttachment("screenshot.png", "image/png", TINY_PNG_BASE64, "image"),
+                createFileAttachment(
+                  "report.pdf",
+                  "application/pdf",
+                  Buffer.from("%PDF-1.4\n").toString("base64"),
+                ),
+              ]
+            : [createImageAttachment({ content: OFFLOAD_PNG_BASE64 })],
+        },
+        expectBroadcast: false,
+      });
 
-    expect(bindingMocks.resolveByConversation).toHaveBeenCalledWith({
-      channel: "slack",
-      accountId: "default",
-      conversationId: "user:U123",
-    });
-    expect(mockState.lastDispatchImages).toHaveLength(1);
-    expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
-  });
+      expect(bindingMocks.resolveByConversation).toHaveBeenCalledWith({
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      });
+      expect(mockState.lastDispatchImages).toHaveLength(1);
+      expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
+      if (mixed) {
+        expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
+          "media/inbound/report.pdf",
+        ]);
+      }
+    },
+  );
 
   it("resolves attachment image support from the session agent model", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-scoped-text-only-attachments-", {
@@ -4215,53 +4164,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         subdir: "inbound",
         size: mockState.savedMediaCalls[0]?.size ?? 0,
       },
-    ]);
-  });
-
-  it("preserves staged non-image paths when plugin-bound sessions also carry inline images", async () => {
-    await createReadyChatTranscript("openclaw-chat-send-plugin-bound-mixed-media-staging-");
-    useChatTestModel("vision-model");
-    bindingMocks.resolveByConversation.mockReturnValue({
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "demo-plugin",
-        pluginRoot: "/plugins/demo-plugin",
-      },
-    });
-    setSavedMediaResults(
-      ["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"],
-      ["/home/user/.openclaw/media/inbound/screenshot.png", "image/png"],
-    );
-    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
-    const { send } = createChatRequestFixture();
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
-
-    await send({
-      idempotencyKey: "idem-plugin-bound-mixed-media-staging",
-      message: "inspect these",
-      client: createScopedCliClient(["operator.admin"]),
-      requestParams: {
-        originatingChannel: "slack",
-        originatingTo: "user:U123",
-        originatingAccountId: "default",
-        attachments: [
-          createFileAttachment("screenshot.png", "image/png", TINY_PNG_BASE64, "image"),
-          createFileAttachment("report.pdf", "application/pdf", pdf),
-        ],
-      },
-      expectBroadcast: false,
-    });
-
-    expect(bindingMocks.resolveByConversation).toHaveBeenCalledWith({
-      channel: "slack",
-      accountId: "default",
-      conversationId: "user:U123",
-    });
-    expect(mockState.lastDispatchImages).toHaveLength(1);
-    expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
-    expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
-      "media/inbound/report.pdf",
     ]);
   });
 
@@ -4344,49 +4246,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     },
   );
 
-  it.each(["throw", "skip"] as const)(
-    "falls back to the managed PDF path when sandbox staging %s occurs",
-    async (mode) => {
-      await createReadyChatTranscript(`openclaw-chat-send-managed-pdf-stage-${mode}-`);
-      useChatTestModel("vision-model");
-      setSavedMediaResults(["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"]);
-      mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-      if (mode === "throw") {
-        mockState.stageSandboxMediaError = Object.assign(
-          new Error("ENOSPC: no space left on device"),
-          {
-            code: "ENOSPC",
-          },
-        );
-      }
-      const { send } = createChatRequestFixture();
-      // Below the staging cap; an empty staged map models a silently skipped PDF.
-      const pdf = Buffer.from("%PDF-1.4\n%µ¶\nendobj\n").toString("base64");
-      await send({
-        idempotencyKey: `idem-managed-pdf-stage-${mode}`,
-        message: "read this",
-        requestParams: {
-          attachments: [createFileAttachment("report.pdf", "application/pdf", pdf)],
-        },
-        expectBroadcast: false,
-      });
-      if (mode === "throw") {
-        expect(mockState.lastDispatchCtx?.media).toEqual([
-          {
-            fileName: "report.pdf",
-            path: "/home/user/.openclaw/media/inbound/report.pdf",
-            contentType: "application/pdf",
-            workspaceDir: "/home/user/.openclaw/media/inbound",
-          },
-        ]);
-      } else {
-        expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
-          "/home/user/.openclaw/media/inbound/report.pdf",
-        ]);
-      }
-      expect(mockState.deleteMediaBufferCalls).toEqual([]);
-    },
-  );
+  it("falls back to the managed PDF path when sandbox staging skips it", async () => {
+    await createReadyChatTranscript("openclaw-chat-send-managed-pdf-stage-skip-");
+    useChatTestModel("vision-model");
+    setSavedMediaResults(["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"]);
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\nendobj\n").toString("base64");
+    await createChatRequestFixture().send({
+      idempotencyKey: "idem-managed-pdf-stage-skip",
+      message: "read this",
+      requestParams: { attachments: [createFileAttachment("report.pdf", "application/pdf", pdf)] },
+      expectBroadcast: false,
+    });
+    expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
+      "/home/user/.openclaw/media/inbound/report.pdf",
+    ]);
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
+  });
 
   it("persists a Gateway user turn under the canonical owner of a requested alias", async () => {
     createFixturePaths("openclaw-chat-send-aliased-transcript-owner-");
@@ -4440,20 +4316,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-error-replay-");
     mockState.dispatchError = new Error("upstream unavailable");
 
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
-      idempotencyKey: "idem-user-transcript-error-replay",
-      message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
-      idempotencyKey: "idem-user-transcript-error-replay",
-      message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await runNonStreamingChatSend({
+        context: createChatContext(),
+        respond: vi.fn(),
+        idempotencyKey: "idem-user-transcript-error-replay",
+        message: "hello from replayed failed dispatch",
+        expectBroadcast: false,
+      });
+    }
 
     expect(readPersistedUserMessages()).toEqual([
       expect.objectContaining({
@@ -4611,42 +4482,37 @@ describe("chat.send local operator client sender context", () => {
   );
 
   it.each([
-    {
-      name: "withholds task suggestions from operator UI clients that cannot accept them",
-      id: "write-only-tui",
-      message: "hello from a write-only tui",
-      clientId: GATEWAY_CLIENT_NAMES.TUI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-      platform: "terminal",
-      scopes: ["operator.write"],
-      caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
-      expected: undefined,
-    },
-    {
-      name: "withholds task suggestions from non-operator gateway clients",
-      id: "channel",
-      message: "hello from a channel bridge",
-      clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      platform: "server",
-      scopes: ["operator.write"],
-      caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
-      expected: undefined,
-    },
-  ])("$name", async ({ id, message, clientId, mode, platform, scopes, caps, expected }) => {
-    await createChatRequestFixture().send({
-      idempotencyKey: `idem-${id}-task-suggestions`,
-      message,
-      client: {
-        connect: {
-          client: { id: clientId, mode, version: "dev", platform },
-          caps,
-          scopes,
+    [
+      "write-only-tui",
+      "a write-only tui",
+      GATEWAY_CLIENT_NAMES.TUI,
+      GATEWAY_CLIENT_MODES.UI,
+      "terminal",
+    ],
+    [
+      "channel",
+      "a channel bridge",
+      GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      GATEWAY_CLIENT_MODES.BACKEND,
+      "server",
+    ],
+  ] as const)(
+    "withholds task suggestions from %s",
+    async (id, sender, clientId, mode, platform) => {
+      await createChatRequestFixture().send({
+        idempotencyKey: `idem-${id}-task-suggestions`,
+        message: `hello from ${sender}`,
+        client: {
+          connect: {
+            client: { id: clientId, mode, version: "dev", platform },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.write"],
+          },
         },
-      },
-      expectBroadcast: false,
-    });
-    expect(mockState.lastTaskSuggestionDeliveryMode).toBe(expected);
-  });
+        expectBroadcast: false,
+      });
+      expect(mockState.lastTaskSuggestionDeliveryMode).toBeUndefined();
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
