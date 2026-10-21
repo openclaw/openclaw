@@ -1,32 +1,48 @@
-// Signal tests cover approval handler plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const sendMocks = vi.hoisted(() => ({
-  sendTypingSignal: vi.fn(),
-  sendMessageSignal: vi.fn(),
-}));
+const sendMocks = vi.hoisted(() => ({ sendTypingSignal: vi.fn(), sendMessageSignal: vi.fn() }));
+// mock-isolation: Native approval delivery is observed through synthetic transport calls only.
+vi.mock("./send.js", () => sendMocks);
+const { transport } = (await import("./approval-handler.runtime.js")).signalApprovalNativeRuntime;
+const to = "+15551230000";
+const context = { baseUrl: "http://127.0.0.1:18080", account: "+15550001111" };
+const manualText =
+  "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny";
+const reactionText =
+  "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny";
 
-vi.mock("./send.js", () => ({
-  sendTypingSignal: sendMocks.sendTypingSignal,
-  sendMessageSignal: sendMocks.sendMessageSignal,
-}));
+function prepare(
+  cfg: OpenClawConfig | undefined,
+  target: string,
+  accountId?: string,
+  bound = true,
+) {
+  return transport.prepareTarget({
+    cfg,
+    plannedTarget: { target: { to: target } },
+    accountId,
+    context: bound ? context : { baseUrl: context.baseUrl },
+  } as never);
+}
 
-const { signalApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
-
-function buildPendingContent(params: {
-  manualText: string;
-  reactionText?: string;
-  allowedDecisions?: readonly ("allow-once" | "allow-always" | "deny")[];
-}) {
-  const allowedDecisions = params.allowedDecisions ?? ["allow-once"];
-  return {
-    manualFallbackPayload: { text: params.manualText },
-    reactionPayload: {
-      text: params.reactionText ?? params.manualText,
-      allowedDecisions,
-      reactionBindings: [],
+function deliver(
+  cfg: OpenClawConfig,
+  prepared: Awaited<ReturnType<typeof prepare>>,
+  text = "approval",
+) {
+  return transport.deliverPending({
+    cfg,
+    preparedTarget: prepared!.target,
+    pendingPayload: {
+      manualFallbackPayload: { text },
+      reactionPayload: {
+        text: text === manualText ? reactionText : text,
+        allowedDecisions: ["allow-once", "deny"],
+        reactionBindings: [],
+      },
     },
-  };
+  } as never);
 }
 
 describe("Signal approval native runtime", () => {
@@ -40,51 +56,14 @@ describe("Signal approval native runtime", () => {
   });
 
   it("resolves aliases before delivering native approval prompts", async () => {
-    const cfg = {
-      channels: {
-        signal: {
-          allowFrom: ["+15551230000"],
-          aliases: {
-            me: "+15551230000",
-          },
-        },
-      },
-    };
-    const prepared = await signalApprovalNativeRuntime.transport.prepareTarget({
-      cfg,
-      plannedTarget: { target: { to: "signal:me" } },
-      accountId: "default",
-      context: { baseUrl: "http://127.0.0.1:18080", account: "+15550001111" },
-    } as never);
-
-    expect(prepared?.target).toMatchObject({
-      to: "+15551230000",
-      accountId: "default",
-      baseUrl: "http://127.0.0.1:18080",
-      account: "+15550001111",
-    });
-
-    const entry = await signalApprovalNativeRuntime.transport.deliverPending({
-      cfg,
-      preparedTarget: prepared!.target,
-      pendingPayload: buildPendingContent({ manualText: "approval" }),
-    } as never);
-
-    expect(entry).toMatchObject({
-      to: "+15551230000",
-      conversationKey: "+15551230000",
-    });
-    expect(sendMocks.sendTypingSignal).toHaveBeenCalledWith("+15551230000", {
-      cfg,
-      accountId: "default",
-      baseUrl: "http://127.0.0.1:18080",
-      account: "+15550001111",
-    });
-    expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith("+15551230000", "approval", {
-      cfg,
-      accountId: "default",
-      baseUrl: "http://127.0.0.1:18080",
-      account: "+15550001111",
+    const cfg = { channels: { signal: { allowFrom: [to], aliases: { me: to } } } };
+    const prepared = await prepare(cfg, "signal:me", "default");
+    const options = { cfg, accountId: "default", ...context };
+    expect(prepared?.target).toMatchObject({ to, accountId: "default", ...context });
+    expect(await deliver(cfg, prepared)).toMatchObject({ to, conversationKey: to });
+    expect(sendMocks.sendTypingSignal).toHaveBeenCalledWith(to, options);
+    expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith(to, "approval", {
+      ...options,
       textMode: "markdown",
     });
   });
@@ -92,92 +71,31 @@ describe("Signal approval native runtime", () => {
   it("resolves default-account aliases before delivering native approval prompts", async () => {
     const cfg = {
       channels: {
-        signal: {
-          defaultAccount: "work",
-          accounts: {
-            work: {
-              aliases: {
-                ops: "+15551230000",
-              },
-            },
-          },
-        },
+        signal: { defaultAccount: "work", accounts: { work: { aliases: { ops: to } } } },
       },
     };
-    const prepared = await signalApprovalNativeRuntime.transport.prepareTarget({
-      cfg,
-      plannedTarget: { target: { to: "signal:ops" } },
-      context: { baseUrl: "http://127.0.0.1:18080", account: "+15550001111" },
-    } as never);
-
-    expect(prepared?.target).toMatchObject({
-      to: "+15551230000",
-      accountId: "work",
-      baseUrl: "http://127.0.0.1:18080",
-      account: "+15550001111",
-    });
-
-    await signalApprovalNativeRuntime.transport.deliverPending({
-      cfg,
-      preparedTarget: prepared!.target,
-      pendingPayload: buildPendingContent({ manualText: "approval" }),
-    } as never);
-
-    expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith("+15551230000", "approval", {
+    const prepared = await prepare(cfg, "signal:ops");
+    expect(prepared?.target).toMatchObject({ to, accountId: "work", ...context });
+    await deliver(cfg, prepared);
+    expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith(to, "approval", {
       cfg,
       accountId: "work",
-      baseUrl: "http://127.0.0.1:18080",
-      account: "+15550001111",
+      ...context,
       textMode: "markdown",
     });
   });
 
   it("only renders reaction hints when the Signal target author can be bound", async () => {
-    const cfg = { channels: { signal: { allowFrom: ["+15551230000"] } } };
-    const unbound = await signalApprovalNativeRuntime.transport.prepareTarget({
-      plannedTarget: { target: { to: "+15551230000" } },
-      accountId: "default",
-      context: { baseUrl: "http://127.0.0.1:18080" },
-    } as never);
-
-    await signalApprovalNativeRuntime.transport.deliverPending({
-      cfg,
-      preparedTarget: unbound!.target,
-      pendingPayload: buildPendingContent({
-        manualText:
-          "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
-        reactionText:
-          "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny",
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    } as never);
-
+    const cfg = { channels: { signal: { allowFrom: [to] } } };
+    await deliver(cfg, await prepare(undefined, to, "default", false), manualText);
     expect(sendMocks.sendMessageSignal).toHaveBeenLastCalledWith(
-      "+15551230000",
+      to,
       expect.not.stringContaining("React with:"),
       expect.any(Object),
     );
-
-    const bound = await signalApprovalNativeRuntime.transport.prepareTarget({
-      plannedTarget: { target: { to: "+15551230000" } },
-      accountId: "default",
-      context: { baseUrl: "http://127.0.0.1:18080", account: "+15550001111" },
-    } as never);
-
-    await signalApprovalNativeRuntime.transport.deliverPending({
-      cfg,
-      preparedTarget: bound!.target,
-      pendingPayload: buildPendingContent({
-        manualText:
-          "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
-        reactionText:
-          "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny",
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    } as never);
-
+    await deliver(cfg, await prepare(undefined, to, "default"), manualText);
     expect(sendMocks.sendMessageSignal).toHaveBeenLastCalledWith(
-      "+15551230000",
+      to,
       expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
       expect.any(Object),
     );

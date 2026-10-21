@@ -2886,17 +2886,22 @@ jobs:
           fi
           source .ci-harness/scripts/ci-collect-checks.sh
           prepare_ratchet_base_args "$base_ref"
-          run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
-          if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
-            run_check line-cap pnpm check:line-cap-ratchet "${ratchet_base_args[@]}"
+          if has_package_script check:baseline-ratchets; then
+            run_check baseline-ratchets pnpm check:baseline-ratchets "${ratchet_base_args[@]}"
+          else
+            # Frozen targets retain their original commands and parsers.
+            run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
+            if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
+              run_check line-cap pnpm check:line-cap-ratchet "${ratchet_base_args[@]}"
+            fi
+            run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
+            run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
+            run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
+            run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
+            run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
+            run_check config-docs pnpm config:docs:check
+            run_check plugin-inventory pnpm plugins:inventory:check
           fi
-          run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
-          run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
-          run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
-          run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
-          run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
-          run_check config-docs pnpm config:docs:check
-          run_check plugin-inventory pnpm plugins:inventory:check
           finish_checks
 
   checks-fast-core:

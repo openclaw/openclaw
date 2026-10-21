@@ -576,9 +576,11 @@ the update needs to replace the installation method or a separate serving root.
 The temporary candidate is removed without activating it.
 
 When replacement is needed, the updater retains its running worker files before
-changing the installed package. Linux OverlayFS installations use private copies
-so hard-link copy-up cannot invalidate the retained files’ identity checks.
-Other supported filesystems keep the hard-link fast path and copy fallback.
+changing the installed package. Ordinary files use hard links, with a copy
+fallback when linking is unavailable. If a linked file's identity changes, its
+size, mode, and content must match the inventory. A mismatch discards that runtime
+as a rollback source and logs the path and failed check; the update continues
+without using the unverified tree. Writes through the same inode remain best effort.
 
 SQLite read-only workers use that retained generation through post-install
 verification, even after the package manager removes the previous package path.

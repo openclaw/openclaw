@@ -41,7 +41,7 @@ export async function destroyAndWait(
 }
 
 export function createProviderFixtures(defaults: ProviderFixtureDependencies = {}) {
-  const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
+  const providers = new Set<Provider>();
   return {
     providers,
     createProvider: (dependencies: ProviderFixtureDependencies) => {
@@ -147,12 +147,8 @@ export function classProfile(
     architecture: "amd64",
     primary: {
       type: "native-8vcpu-16gb",
-      architecture: "amd64",
-      vcpu: null,
-      memory: null,
       ...primary,
     },
-    fallbacks: [],
     ...selectors,
   };
 }
