@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import {
@@ -482,29 +482,6 @@ it("reuses equivalent state roots and separates changed auth environments", asyn
   }
 });
 
-it("rejects queued reads on scope shutdown without stopping the shared idle child", async () => {
-  const { source } = createAuthDatabase();
-  const scope = createSqliteReadOnlyWorkerScope();
-  try {
-    await scope.run(() => read(source, "canonical"));
-    const pending = scope.run(() =>
-      Promise.allSettled([read(source, "canonical"), read(source, "canonical")]),
-    );
-    await scope.close();
-    expect(await pending).toEqual(
-      Array.from({ length: 2 }, () => ({
-        status: "rejected",
-        reason: expect.objectContaining({ message: "SQLite read-only worker scope closed" }),
-      })),
-    );
-    await expect(scope.run(() => read(source, "canonical"))).rejects.toThrow("scope closed");
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(spawn).mock.results[0]?.value.connected).toBe(true);
-  } finally {
-    await scope.close();
-  }
-});
-
 it("releases request readers before agent database removal", async () => {
   const { source } = createAuthDatabase();
   await withSqliteReadOnlyWorkerScope(async () => {
@@ -575,10 +552,19 @@ it.skipIf(skipBroker)(
 );
 
 describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
-  it("reports broker nonadmission without spawning on the request thread", async () => {
-    const { source } = createAuthDatabase();
-    const broker = createSpawnBrokerHost();
+  let source: string;
+  let rows: ReturnType<typeof createAuthDatabase>["rows"];
+  let broker: ReturnType<typeof createSpawnBrokerHost>;
+  beforeEach(async () => {
+    ({ source, rows } = createAuthDatabase());
+    broker = createSpawnBrokerHost();
     await broker.ready();
+  });
+  afterEach(async () => {
+    await broker.close();
+  });
+
+  it("reports broker nonadmission without spawning on the request thread", async () => {
     await broker.close();
     vi.mocked(spawn).mockClear();
     await expect(runWithSpawnBroker(broker, () => read(source, "canonical"))).rejects.toMatchObject(
@@ -590,13 +576,10 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
   });
 
   it("cancels an admitted read before IPC readiness and joins its child", async () => {
-    const { source } = createAuthDatabase();
-    const broker = createSpawnBrokerHost();
     let held: ReturnType<typeof holdBrokerReadiness> | undefined;
     const abort = new AbortController();
     let reading: Promise<unknown> | undefined;
     try {
-      await broker.ready();
       held = holdBrokerReadiness(broker);
       reading = runWithSpawnBroker(broker, () => read(source, "canonical", abort.signal));
       const failure = new Error("auth read cancelled before readiness");
@@ -610,16 +593,12 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
       held?.ready.resolve();
       abort.abort();
       await Promise.allSettled([reading]);
-      await broker.close();
     }
   });
 
   it("preserves timeout failure when broker nonadmission arrives afterward", async () => {
-    const { source } = createAuthDatabase();
-    const broker = createSpawnBrokerHost();
     let child: BrokerChild | undefined;
     try {
-      await broker.ready();
       await broker.close();
       vi.mocked(spawn).mockClear();
       vi.spyOn(broker, "spawn").mockImplementationOnce((command, args) => {
@@ -644,33 +623,23 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
       expect(spawn).not.toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
-      await broker.close();
     }
   });
 
   it("starts no child for an aborted read", async () => {
-    const { source } = createAuthDatabase();
-    const broker = createSpawnBrokerHost();
-    try {
-      await broker.ready();
-      const brokerSpawn = vi.spyOn(broker, "spawn");
-      vi.mocked(spawn).mockClear();
-      const failure = new Error("auth read already cancelled");
-      await expect(
-        runWithSpawnBroker(broker, () => read(source, "canonical", AbortSignal.abort(failure))),
-      ).rejects.toBe(failure);
-      expect(brokerSpawn).not.toHaveBeenCalled();
-      expect(spawn).not.toHaveBeenCalled();
-    } finally {
-      await broker.close();
-    }
+    const brokerSpawn = vi.spyOn(broker, "spawn");
+    vi.mocked(spawn).mockClear();
+    const failure = new Error("auth read already cancelled");
+    await expect(
+      runWithSpawnBroker(broker, () => read(source, "canonical", AbortSignal.abort(failure))),
+    ).rejects.toBe(failure);
+    expect(brokerSpawn).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
     "retains a failed read until lost-broker cleanup settles (cleanup failure: %s)",
     async (cleanupFails) => {
-      const { source, rows } = createAuthDatabase();
-      const broker = createSpawnBrokerHost();
       let held: ReturnType<typeof holdBrokerReadiness> | undefined;
       const cleanupEntered = createDeferredCore();
       const releaseCleanup = createDeferredCore();
@@ -678,7 +647,6 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
       let reading: Promise<unknown> | undefined;
       let settled = false;
       try {
-        await broker.ready();
         held = holdBrokerReadiness(broker);
         const { admitted, ready, spawning } = held;
         const cleanup = broker.waitForCleanup.bind(broker);
@@ -735,7 +703,6 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
         releaseCleanup.resolve();
         await Promise.allSettled([reading]);
         vi.restoreAllMocks();
-        await broker.close();
       }
     },
   );

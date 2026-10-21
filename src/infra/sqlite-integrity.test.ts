@@ -7,6 +7,7 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
 import {
   assertSqliteIntegrity,
   assertSqliteTableIntegrity,
@@ -17,17 +18,21 @@ import {
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function withMaintenanceCheck(check: "quick" | "full", run: () => void) {
+async function withMaintenanceCheck(
+  check: "quick" | "full" | undefined,
+  run: () => void | Promise<void>,
+) {
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     sqliteIntegrityCheck: check,
     assertOwnerCurrent() {},
   });
   try {
-    scope.run(run);
+    await scope.run(run);
   } finally {
     await scope.close();
   }
@@ -168,31 +173,6 @@ describe("assertSqliteIntegrity", () => {
         }
       },
     );
-  });
-
-  it("refuses structural damage in a table outside the migration scope", () => {
-    const databasePath = path.join(tempDirs.make("sqlite-quick-damage-"), "database.sqlite");
-    const writer = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    writer.exec(`
-      CREATE TABLE touched(value TEXT);
-      CREATE TABLE untouched(value TEXT);
-      INSERT INTO untouched VALUES ('retained');
-    `);
-    const pageSize = Number(writer.prepare("PRAGMA page_size").get()?.page_size);
-    const rootPage = Number(
-      writer.prepare("SELECT rootpage FROM sqlite_schema WHERE name='untouched'").get()?.rootpage,
-    );
-    writer.close();
-    const file = fs.openSync(databasePath, "r+");
-    try {
-      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
-    } finally {
-      fs.closeSync(file);
-    }
-    using database = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    expect(() =>
-      assertSqliteIntegrity(database, "migration source", { check: "quick", tables: ["touched"] }),
-    ).toThrow(expect.objectContaining({ name: "SqliteIntegrityError" }));
   });
 
   it.each([
@@ -552,5 +532,129 @@ describe("isTerminalSqliteIntegrityError", () => {
       });
       expect(isTerminalSqliteIntegrityError(failure)).toBe(terminal);
     }
+  });
+});
+
+describe("captured maintenance integrity", () => {
+  afterEach(() => vi.restoreAllMocks());
+  type Capture = (check?: "quick" | "full") => Promise<unknown>;
+  async function withCapture(run: (sourcePath: string, capture: Capture) => Promise<void>) {
+    const directory = fs.realpathSync(tempDirs.make("sqlite-maintenance-integrity-"));
+    const sourcePath = path.join(directory, "source.sqlite");
+    {
+      using source = openNodeSqliteDatabase(sourcePath);
+      source.exec("PRAGMA journal_mode = WAL");
+      for (const table of ["touched", "untouched"]) {
+        source.exec(
+          `CREATE TABLE ${table}(value INTEGER CHECK(value > 0)); INSERT INTO ${table} VALUES(1);`,
+        );
+      }
+    }
+    // Doctor's header preflight leaves an empty WAL behind after a read-only open.
+    {
+      using source = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+      source.prepare("PRAGMA user_version").get();
+    }
+    await withMaintenanceCheck(undefined, () =>
+      run(sourcePath, (check = "quick") =>
+        createVerifiedSqliteSnapshot({
+          sourcePath,
+          targetPath: path.join(directory, "backup.sqlite"),
+          preserveRowIds: true,
+          integrity: { check, tables: ["touched"] },
+          transform() {},
+        }),
+      ),
+    );
+  }
+
+  function checkSteps(
+    source: ReturnType<typeof openNodeSqliteDatabase>,
+    sourcePath: string,
+    check: "quick" | "full" = "quick",
+  ) {
+    return sqliteIntegrityCheckSteps(source, sourcePath, undefined, { check, tables: ["touched"] });
+  }
+
+  it.each(["quick", "full"] as const)(
+    "reuses only the captured QUICK source proof before migration (%s)",
+    async (check) => {
+      await withCapture(async (sourcePath, capture) => {
+        await capture(check);
+        using source = openNodeSqliteDatabase(sourcePath);
+        const prepare = vi.spyOn(source, "prepare");
+        runSqliteIntegrityOperationSync(checkSteps(source, sourcePath, check));
+        const checks = prepare.mock.calls.filter(([sql]) =>
+          /^PRAGMA (quick|integrity)_check;/.test(sql),
+        );
+        expect(checks).toHaveLength(check === "quick" ? 0 : 1);
+        expect(readSqliteDatabaseIntegrityVerification(source) !== undefined).toBe(
+          check === "full",
+        );
+      });
+    },
+  );
+
+  it("refuses untouched-table corruption before publishing a migration backup", async () => {
+    await withCapture(async (sourcePath, capture) => {
+      let offset: number;
+      {
+        using source = openNodeSqliteDatabase(sourcePath);
+        const root = source
+          .prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'untouched'")
+          .get();
+        const page = source.prepare("PRAGMA page_size").get();
+        offset = (Number(root?.rootpage) - 1) * Number(page?.page_size);
+      }
+      const bytes = fs.readFileSync(sourcePath);
+      bytes[offset] = 0xff;
+      fs.writeFileSync(sourcePath, bytes);
+      {
+        using source = openNodeSqliteDatabase(sourcePath);
+        expect(() =>
+          assertSqliteIntegrity(source, "migration source", {
+            check: "quick",
+            tables: ["touched"],
+          }),
+        ).toThrow(expect.objectContaining({ name: "SqliteIntegrityError" }));
+      }
+      await expect(capture()).rejects.toThrow(/malformed|quick_check/);
+    });
+  });
+
+  it.each([false, true])(
+    "invalidates captured proof after an unscoped write (uncommitted=%s)",
+    async (uncommitted) => {
+      await withCapture(async (sourcePath, capture) => {
+        await capture();
+        using source = openNodeSqliteDatabase(sourcePath);
+        source.exec(
+          `PRAGMA ignore_check_constraints = ON; ${uncommitted ? "BEGIN;" : ""} INSERT INTO untouched VALUES(-1); PRAGMA ignore_check_constraints = OFF;`,
+        );
+        try {
+          expect(() => runSqliteIntegrityOperationSync(checkSteps(source, sourcePath))).toThrow(
+            /quick_check.*CHECK constraint failed in untouched/s,
+          );
+        } finally {
+          if (source.isTransaction) {
+            source.exec("ROLLBACK");
+          }
+        }
+      });
+    },
+  );
+
+  it("keeps the post-migration scoped FULL check after reusing source proof", async () => {
+    await withCapture(async (sourcePath, capture) => {
+      await capture();
+      using source = openNodeSqliteDatabase(sourcePath);
+      expect(checkSteps(source, sourcePath).next().done).toBe(true);
+      source.exec(
+        "PRAGMA ignore_check_constraints = ON; INSERT INTO touched VALUES(-1); PRAGMA ignore_check_constraints = OFF;",
+      );
+      expect(() => assertSqliteTableIntegrity(source, sourcePath, "touched")).toThrow(
+        /integrity_check.*CHECK constraint failed in touched/s,
+      );
+    });
   });
 });

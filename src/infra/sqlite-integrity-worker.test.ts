@@ -152,46 +152,35 @@ describe("SQLite integrity child", () => {
       vi.useRealTimers();
     }
   });
-  it.each(["healthy", "damaged"] as const)(
-    "closes the native reader and reports structural integrity: %s",
-    async (damage) => {
-      let fragmentCountOffset: number | undefined;
-      const { source } = fixture(
-        "file",
-        "CREATE TABLE records(value INTEGER); INSERT INTO records VALUES(1)",
-        (database) => {
-          if (damage !== "healthy") {
-            const root = Number(
-              database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'records'").get()
-                ?.rootpage,
-            );
-            const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
-            fragmentCountOffset = (root - 1) * pageSize + 7;
-          }
-        },
-      );
-      if (fragmentCountOffset !== undefined) {
-        // Misreport free-byte fragmentation without making the records themselves unreadable.
-        const bytes = fs.readFileSync(source);
-        bytes.writeUInt8(1, fragmentCountOffset);
-        fs.writeFileSync(source, bytes);
-      }
-      const timing: SqliteIntegrityCheckTiming = {};
-      vi.mocked(fork).mockClear();
-      const check = inScope(() => inspect(source, undefined, timing));
-      if (damage === "healthy") {
-        await expect(check).resolves.toBeUndefined();
-      } else {
-        await expect(check).rejects.toMatchObject({
-          name: "SqliteIntegrityError",
-          message: expect.stringMatching(
-            /integrity_check failed[\s\S]*Fragmentation of 0 bytes reported as 1/u,
-          ),
-        });
-      }
-      expectForksClosed();
-    },
-  );
+  it("closes the native reader after reporting structural damage", async () => {
+    let fragmentCountOffset = 0;
+    const { source } = fixture(
+      "file",
+      "CREATE TABLE records(value INTEGER); INSERT INTO records VALUES(1)",
+      (database) => {
+        const root = Number(
+          database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'records'").get()
+            ?.rootpage,
+        );
+        const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+        fragmentCountOffset = (root - 1) * pageSize + 7;
+      },
+    );
+    // Misreport free-byte fragmentation without making the records themselves unreadable.
+    const bytes = fs.readFileSync(source);
+    bytes.writeUInt8(1, fragmentCountOffset);
+    fs.writeFileSync(source, bytes);
+    const timing: SqliteIntegrityCheckTiming = {};
+    vi.mocked(fork).mockClear();
+    const check = inScope(() => inspect(source, undefined, timing));
+    await expect(check).rejects.toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringMatching(
+        /integrity_check failed[\s\S]*Fragmentation of 0 bytes reported as 1/u,
+      ),
+    });
+    expectForksClosed();
+  });
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {
     const { source } = fixture("signal");

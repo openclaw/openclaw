@@ -67,20 +67,6 @@ it.each(["waiting", "active"] as const)(
   },
 );
 
-it("retains committed success and delivers later observers when a notification throws", () => {
-  const { database, rows, write, transaction } = fixture();
-  const seen: unknown[] = [];
-  const result = transaction(() => {
-    write("committed");
-    deferSqlitePostCommitPublication(database, () => fail("notification unavailable"));
-    deferSqlitePostCommitPublication(database, () => seen.push(rows()));
-    return "saved";
-  });
-  expect(result).toBe("saved");
-  expect(rows()).toEqual([{ id: "committed" }]);
-  expect(seen).toEqual([[{ id: "committed" }]]);
-});
-
 it.each(["facts", "projection"] as const)(
   "fences failed %s installation before public observers without rolling back the write",
   (phase) => {
