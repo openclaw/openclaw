@@ -25,6 +25,7 @@ import {
 } from "./tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 import {
   writeWorkspaceFiles as writeFiles,
   expectWorkspaceFiles as expectFiles,
@@ -595,4 +596,70 @@ describe("worker tunnel manager", () => {
       "Cloud workspace symlink is not portable or escapes the sync root",
     );
   }, 60_000);
+
+  it.skipIf(process.platform === "win32")(
+    "retains host-staged cache inputs through initial SSH setup and later captures",
+    async () => {
+      const { localPath, remoteHome } = await localWorkspace("worker-staged-cache-");
+      const authored = ".artifacts/build-all-cache/newly-staged.txt";
+      const generated = ".artifacts/build-all-cache/generated/output.js";
+      await writeFiles(localPath, { "source.txt": "source\n" });
+      await initializeGit(localPath, ".");
+      const baseCommit = await git(localPath, "rev-parse", "HEAD");
+      // The host stages the cache input without committing it; the SSH setup
+      // script then rebuilds the worker index from the base commit alone.
+      await writeFiles(localPath, { [authored]: "host staged\n" });
+      await git(localPath, "add", "--force", "--", authored);
+
+      const fake = localWorkspaceRunner(remoteHome);
+      const { handle } = await startTunnel(fake, "worker:staged-cache", 1);
+      const synced = await sync(handle, localPath, "staged-cache");
+      expect(synced.mode).toBe("git");
+      const remote = synced.remoteWorkspaceDir;
+      await expectFile(remote, authored, "host staged\n");
+
+      const readRemoteManifest = async (ref: string) =>
+        parseWorkerWorkspaceManifest(
+          await fs.readFile(
+            path.join(remoteHome, ".openclaw-worker", "manifests", `${ref.slice(7)}.json`),
+            "utf8",
+          ),
+          ref,
+        );
+      const initial = await readRemoteManifest(synced.manifestRef);
+      expect(initial.entries.some((entry) => entry.path === authored)).toBe(true);
+
+      const capture = async (priorDigest: string) => {
+        const captured = await handle.runWorkspaceCommand({
+          transportRetry: "never",
+          argv: [
+            "node",
+            "-e",
+            REMOTE_WORKSPACE_MANIFEST_JS,
+            remote,
+            baseCommit,
+            "eligible",
+            priorDigest,
+            "memo-v1",
+          ],
+          input: "[]",
+        });
+        expect(captured.code, captured.stderr).toBe(0);
+        return captured.stdout.trim();
+      };
+
+      // A generated file created during the turn stays excluded, while a
+      // worker edit to the admitted input changes the manifest that drives
+      // reconciliation.
+      await writeFiles(remote, { [generated]: "disposable\n" });
+      expect(await capture(synced.manifestRef.slice(7))).toBe(synced.manifestRef);
+      await writeFiles(remote, { [authored]: "worker edit\n" });
+      const afterEdit = await capture(synced.manifestRef.slice(7));
+      expect(afterEdit).not.toBe(synced.manifestRef);
+      const manifest = await readRemoteManifest(afterEdit);
+      expect(manifest.entries.some((entry) => entry.path === authored)).toBe(true);
+      expect(manifest.entries.some((entry) => entry.path === generated)).toBe(false);
+    },
+    60_000,
+  );
 });
