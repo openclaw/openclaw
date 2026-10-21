@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionUpstreamLinkAsync } from "openclaw/plugin-sdk/session-catalog";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -108,7 +109,7 @@ async function importHistory(turns: CodexTurn[], name?: string) {
 
 describe("fork boundaries from imported Codex history", () => {
   it.each([false, true])(
-    "forks a named source without inheriting its unique local label (materialized: %s)",
+    "imports a named fork, links before binding, and preserves source naming (materialized: %s)",
     async (materialized) => {
       const turns = [turn("turn-1", ["one"]), turn("turn-2", ["edit me"])];
       const name = "Native fork verification";
@@ -142,6 +143,16 @@ describe("fork boundaries from imported Codex history", () => {
         },
       });
       const sourceBinding = bindingStore.read(identity);
+      const events: string[] = [];
+      vi.mocked(upsertSessionUpstreamLinkAsync).mockImplementationOnce(async () => {
+        events.push("link");
+        return true;
+      });
+      const write = bindingStore.mutate.bind(bindingStore);
+      vi.spyOn(bindingStore, "mutate").mockImplementation(async (...args) => {
+        events.push("bind");
+        return write(...args);
+      });
       const response = forkResponse();
       const namedResponse = { ...response, thread: { ...response.thread, name } };
       const nativeThreads = new Map<string, CodexThread>([
@@ -160,25 +171,28 @@ describe("fork boundaries from imported Codex history", () => {
           data: nativeThreads.get(threadId)!.turns ?? [],
         }),
       } satisfies Partial<CodexSessionCatalogControl>);
-      const runtime = createForkTestRuntime(history.target.storePath);
+      const runtime = createForkTestRuntime(history.target.storePath, bindingStore, "codex-custom");
       const createSession = vi.mocked(runtime.agent.session.createSessionEntry);
       const targetKey = "agent:main:dashboard:forked";
 
       const result = await forkCodexUpstreamSession(
         {
           ...forkParams(),
+          sandbox: materialized ? "required" : undefined,
           targetKey,
           source: { ...history.target, entryId: history.users.at(-1)!.entryId },
         },
         {
           bindingStore,
           controlFactory,
-          harnessRuntimeId: "codex",
+          harnessRuntimeId: "codex-custom",
           resolveConfig: () => ({ session: { store: history.target.storePath } }),
           runtime,
         },
       );
       const child = await createSession.mock.results[0]!.value;
+      const childTarget = { ...history.target, sessionId: child.sessionId, sessionKey: child.key };
+      const createInput = createSession.mock.calls[0]?.[0];
       expect(result).toEqual({ status: "created", key: targetKey, editorText: "edit me" });
 
       expect(forkThread).toHaveBeenCalledExactlyOnceWith(
@@ -186,17 +200,37 @@ describe("fork boundaries from imported Codex history", () => {
           threadId: history.thread.id,
           beforeTurnId: "turn-2",
           excludeTurns: true,
+          ...(materialized ? { sandbox: "workspace-write" } : {}),
         },
         expect.any(Function),
       );
       expect(child.entry.label).toBeUndefined();
-      expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty("label");
-      expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty("displayName");
-      const childEntries = await readVisibleSessionTranscriptMessageEntries({
-        ...history.target,
-        sessionId: child.sessionId,
-        sessionKey: child.key,
+      expect(createInput).not.toHaveProperty("label");
+      expect(createInput).not.toHaveProperty("displayName");
+      expect(createInput).toMatchObject({
+        initialEntry: { agentHarnessId: "codex-custom" },
       });
+      expect(createInput).not.toHaveProperty("recoverMatchingInitialEntry");
+      expect(events).toEqual(["link", "bind"]);
+      expect(vi.mocked(upsertSessionUpstreamLinkAsync).mock.lastCall).toMatchObject([
+        {
+          marker: { turnId: "turn-1", userMessageCount: 1 },
+          sessionKey: targetKey,
+          threadId: response.thread.id,
+        },
+        { ifAbsent: true },
+      ]);
+      expect(bindingStore.read(sessionBindingIdentity(childTarget))).toMatchObject({
+        connectionScope: "supervision",
+        supervisionSourceThreadId: response.thread.id,
+        preserveNativeModel: true,
+        pendingSupervisionBranch: {
+          sourceThreadId: response.thread.id,
+          connectionFingerprint: "fingerprint",
+          lastTurnId: "turn-1",
+        },
+      });
+      const childEntries = await readVisibleSessionTranscriptMessageEntries(childTarget);
       expect(childEntries).toMatchObject([
         { role: "user", message: { content: "one" } },
         { role: "assistant" },

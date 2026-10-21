@@ -1,48 +1,14 @@
-import {
-  claimPendingAgentQuestionAnswer,
-  type AgentHarnessQuestionGatewayCall,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { claimPendingAgentQuestionAnswer } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexServerRequestResolvedError } from "./server-requests.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { createCodexUserInputTestParams as createParams } from "./user-input-bridge.test-support.js";
-
-type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
+import { createUserInputGateway as createGatewayStub } from "./user-input-gateway.test-support.js";
 
 afterEach(() => {
   vi.useRealTimers();
 });
-
-function createGatewayStub(waitAnswer?: () => Promise<unknown>) {
-  const calls: GatewayCallRecord[] = [];
-  const wait = createDeferred<unknown>();
-  const call: AgentHarnessQuestionGatewayCall = async (method, opts, params) => {
-    calls.push({ method, opts, params });
-    if (method === "question.request") {
-      return {
-        id: (params as { id: string }).id,
-        ...(waitAnswer ? {} : { expiresAtMs: Date.now() + 90_000 }),
-      };
-    }
-    if (method === "question.waitAnswer") {
-      return await (waitAnswer ? waitAnswer() : wait.promise);
-    }
-    if (method === "question.resolve") {
-      const resolveParams = params as {
-        answers?: { answers: Record<string, string[]> };
-        cancel?: boolean;
-      };
-      const result = resolveParams.cancel
-        ? { status: "cancelled" as const }
-        : { status: "answered" as const, answers: resolveParams.answers! };
-      wait.resolve(result);
-      return result;
-    }
-    throw new Error(`unexpected gateway method: ${method}`);
-  };
-  return { call, calls };
-}
 
 function requestParams(overrides: Record<string, unknown> = {}, secret = false) {
   return {

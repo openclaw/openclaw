@@ -97,24 +97,6 @@ describe("Codex app-server startup binding", () => {
     await fs.writeFile(rolloutPath, Array.isArray(records) ? records.join("\n") : records);
   }
 
-  async function writeLegacySessionRecord(
-    file: string,
-    record: { totalTokens: number; contextTokens?: number },
-  ) {
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(
-      path.join(path.dirname(file), "sessions.json"),
-      JSON.stringify({
-        "agent:main:session-1": {
-          sessionFile: file,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-          ...record,
-        },
-      }),
-    );
-  }
-
   it.each([
     { pressure: "bytes", authority: "expected" },
     { pressure: "bytes", authority: "ordinary" },
@@ -284,26 +266,22 @@ describe("Codex app-server startup binding", () => {
       maxBytes: "1mb",
     },
     {
-      name: "native before legacy window",
+      name: "large native window",
       records: [tokenRecord(300_000, 1_050_000)],
       maxBytes: "1mb",
-      legacyContextTokens: 272_000,
+      expectedContextTokens: 1_050_000,
     },
   ])("preserves the binding with $name", async (scenario) => {
     await writeExistingBinding({ dynamicToolsFingerprint: "[]" });
-    if (scenario.legacyContextTokens) {
-      await writeLegacySessionRecord(sessionFile, {
-        totalTokens: 12_000,
-        contextTokens: scenario.legacyContextTokens,
-      });
-    }
     await writeRollout([...scenario.records, ""]);
     const resolution = await resolveBinding({
       config: scenario.maxBytes ? byteLimitConfig(scenario.maxBytes) : undefined,
     });
     expect(resolution).toMatchObject({
       binding: { threadId: "thread-existing" },
-      ...(scenario.legacyContextTokens ? { startupContextTokens: 1_050_000 } : {}),
+      ...(scenario.expectedContextTokens
+        ? { startupContextTokens: scenario.expectedContextTokens }
+        : {}),
     });
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-existing",

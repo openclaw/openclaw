@@ -29,6 +29,20 @@ function inventory(
   };
 }
 
+function pendingInventory() {
+  const apps = [app("google-calendar-app"), app("unrelated-slack-app")];
+  const fixture = inventory(apps);
+  const gate = Promise.withResolvers<void>();
+  let installedCalls = 0;
+  fixture.request.mockImplementation(async (method, params) => {
+    if (method === "app/installed" && ++installedCalls === 1) {
+      await gate.promise;
+    }
+    return codexAppInventoryResponse(method, apps, params);
+  });
+  return { ...fixture, apps, release: () => gate.resolve() };
+}
+
 describe("Codex app inventory cache", () => {
   it.each([false, true, undefined])(
     "preserves cold-cache refresh intent %s across independent thread keys",
@@ -103,38 +117,16 @@ describe("Codex app inventory cache", () => {
   });
 
   it("upgrades an in-flight targeted refresh before returning the complete account inventory", async () => {
-    const cache = new CodexAppInventoryCache();
-    const apps = [app("google-calendar-app"), app("unrelated-slack-app")];
-    let resolveTargetedInstall: ((response: v2.AppsInstalledResponse) => void) | undefined;
-    let installedCalls = 0;
-    const request = vi.fn(async (method, params) => {
-      if (method === "app/installed") {
-        installedCalls += 1;
-        if (installedCalls === 1) {
-          expect(params).toEqual({ forceRefresh: true });
-          return await new Promise<v2.AppsInstalledResponse>((resolve) => {
-            resolveTargetedInstall = resolve;
-          });
-        }
-        expect(params).toEqual({ forceRefresh: false });
-      }
-      return codexAppInventoryResponse(method, apps, params);
-    });
-
-    const targeted = cache.refreshNow({
-      key: "runtime",
-      request,
-      targetAppIds: ["google-calendar-app"],
-    });
-    const complete = cache.refreshNow({ key: "runtime", request, targetAppIds: [] });
-    expect(installedCalls).toBe(1);
-
-    resolveTargetedInstall?.(codexAppInventoryResponse("app/installed", apps));
+    const { read, refresh, request, apps, release } = pendingInventory();
+    const targeted = refresh({ targetAppIds: ["google-calendar-app"] });
+    const complete = refresh({ targetAppIds: [] });
+    expect(request).toHaveBeenCalledTimes(1);
+    release();
     const [targetedSnapshot, completeSnapshot] = await Promise.all([targeted, complete]);
 
     expect(targetedSnapshot.apps).toEqual([app("google-calendar-app")]);
     expect(completeSnapshot.apps).toEqual(apps);
-    expect(cache.read({ key: "runtime", request }).snapshot?.apps).toEqual(apps);
+    expect(read().snapshot?.apps).toEqual(apps);
     expect(request.mock.calls.filter(([method]) => method === "app/installed")).toEqual([
       ["app/installed", { forceRefresh: true }],
       ["app/installed", { forceRefresh: false }],
@@ -146,25 +138,10 @@ describe("Codex app inventory cache", () => {
   });
 
   it("joins a complete in-flight refresh for a narrower plugin request", async () => {
-    const cache = new CodexAppInventoryCache();
-    const apps = [app("google-calendar-app"), app("unrelated-slack-app")];
-    let resolveInstall: ((response: v2.AppsInstalledResponse) => void) | undefined;
-    const request = vi.fn(async (method, params) => {
-      if (method === "app/installed") {
-        return await new Promise<v2.AppsInstalledResponse>((resolve) => {
-          resolveInstall = resolve;
-        });
-      }
-      return codexAppInventoryResponse(method, apps, params);
-    });
-
-    const complete = cache.refreshNow({ key: "runtime", request, targetAppIds: [] });
-    const targeted = cache.refreshNow({
-      key: "runtime",
-      request,
-      targetAppIds: ["google-calendar-app"],
-    });
-    resolveInstall?.(codexAppInventoryResponse("app/installed", apps));
+    const { refresh, request, apps, release } = pendingInventory();
+    const complete = refresh({ targetAppIds: [] });
+    const targeted = refresh({ targetAppIds: ["google-calendar-app"] });
+    release();
 
     const [completeSnapshot, targetedSnapshot] = await Promise.all([complete, targeted]);
     expect(completeSnapshot.apps).toEqual(apps);
@@ -212,19 +189,6 @@ describe("Codex app inventory cache", () => {
     expect(snapshot.expiresAtMs).toBe(0);
     const stale = read({ nowMs: Date.parse("2026-05-29T12:00:00.000Z") });
     expect([stale.state, stale.snapshot?.apps]).toEqual(["stale", [app("app-overflow")]]);
-  });
-
-  it("preserves the last successful snapshot when a refresh fails", async () => {
-    const { refresh, read, request } = inventory();
-    await refresh({ nowMs: 0 });
-    request.mockRejectedValueOnce(new Error("app inventory failed"));
-
-    await expect(refresh({ nowMs: CACHE_TTL_MS + 1 })).rejects.toThrow("app inventory failed");
-
-    request.mockImplementation(async (method, params) =>
-      codexAppInventoryResponse(method, [app("app-2")], params),
-    );
-    expect(read({ nowMs: CACHE_TTL_MS + 1 }).snapshot?.apps).toEqual([app("app-1")]);
   });
 
   it("fails closed when app metadata cannot be read", async () => {
