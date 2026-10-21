@@ -5,6 +5,7 @@ import path from "node:path";
 // Leave headroom below the per-environment-string limit on Linux.
 const MAX_CHANGED_PATHS_BYTES = 32 * 1024;
 const OXLINT_CHANGED_BASE_ENV = "OPENCLAW_OXLINT_CHANGED_BASE";
+const OXLINT_TRUSTED_POLICY_REF_ENV = "OPENCLAW_OXLINT_TRUSTED_POLICY_REF";
 
 export function isOxlintCommand(command: { args: string[]; bin?: string }) {
   return command.bin === "node"
@@ -15,9 +16,10 @@ export function isOxlintCommand(command: { args: string[]; bin?: string }) {
 type ChangedOxlintContext = {
   base?: string;
   cwd?: string;
+  trustedPolicyRef?: string;
 };
 
-export function isReleaseVersionOnlyPackageManifestUpdate(before: string, after: string) {
+function isReleaseVersionOnlyPackageManifestUpdate(before: string, after: string) {
   let beforeVersion: unknown;
   let afterVersion: unknown;
   try {
@@ -53,19 +55,43 @@ function isReleaseVersionOnlyPackageManifest(file: string, context: ChangedOxlin
   }
 }
 
+function matchesTrustedPolicyFile(file: string, context: ChangedOxlintContext) {
+  const trustedPolicyRef = context.trustedPolicyRef;
+  const cwd = context.cwd ?? process.cwd();
+  if (!trustedPolicyRef) {
+    return false;
+  }
+  try {
+    const trusted = execFileSync("git", ["show", `${trustedPolicyRef}:${file}`], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return fs.readFileSync(path.join(cwd, file), "utf8") === trusted;
+  } catch {
+    return false;
+  }
+}
+
+function isOxlintPolicyFile(file: string) {
+  return (
+    /(?:^|\/)(?:\.oxlintrc(?:\.[^/]*)?|oxlint\.config\.[^/]+|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.pnpmfile\.[cm]?js|\.npmrc)$/u.test(
+      file,
+    ) ||
+    file.startsWith("patches/") ||
+    /^scripts\/(?:check-changed|changed-lanes|run-lint|run-oxlint(?:-shards)?)\.m[jt]s$/u.test(
+      file,
+    ) ||
+    /^scripts\/lib\/(?:oxlint-changed-scope|check-limits|local-check-runtime)\.mts$/u.test(file)
+  );
+}
+
 function changesOxlintPolicy(paths: string[], context: ChangedOxlintContext = {}) {
   return paths.some(
     (file) =>
-      /(?:^|\/)(?:\.oxlintrc(?:\.[^/]*)?|oxlint\.config\.[^/]+|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.pnpmfile\.[cm]?js|\.npmrc)$/u.test(
-        file,
-      ) ||
+      (isOxlintPolicyFile(file) && !matchesTrustedPolicyFile(file, context)) ||
       (path.basename(file) === "package.json" &&
-        !isReleaseVersionOnlyPackageManifest(file, context)) ||
-      file.startsWith("patches/") ||
-      /^scripts\/(?:check-changed|changed-lanes|run-lint|run-oxlint(?:-shards)?)\.m[jt]s$/u.test(
-        file,
-      ) ||
-      /^scripts\/lib\/(?:oxlint-changed-scope|check-limits|local-check-runtime)\.mts$/u.test(file),
+        !isReleaseVersionOnlyPackageManifest(file, context)),
   );
 }
 
@@ -75,13 +101,18 @@ export function createChangedOxlintEnv(
   context: ChangedOxlintContext = {},
 ) {
   const serialized = JSON.stringify(paths);
+  const effectiveContext = {
+    ...context,
+    base: context.base ?? env.CHECKOUT_BASE_SHA,
+    trustedPolicyRef: context.trustedPolicyRef ?? env[OXLINT_TRUSTED_POLICY_REF_ENV],
+  };
   const scopeEnabled =
-    !changesOxlintPolicy(paths, context) &&
+    !changesOxlintPolicy(paths, effectiveContext) &&
     Buffer.byteLength(serialized) <= MAX_CHANGED_PATHS_BYTES;
   return {
     ...env,
     OPENCLAW_OXLINT_CHANGED_PATHS: scopeEnabled ? serialized : undefined,
-    [OXLINT_CHANGED_BASE_ENV]: scopeEnabled ? context.base : undefined,
+    [OXLINT_CHANGED_BASE_ENV]: scopeEnabled ? effectiveContext.base : undefined,
   };
 }
 
@@ -100,7 +131,10 @@ export function resolveUntouchedOxlintExclusions(configPath: string, env: NodeJS
   // These inputs can change caps or the linter itself without editing a reported file.
   if (
     paths.some((file) => path.resolve(file) === configPath) ||
-    changesOxlintPolicy(paths, { base: env[OXLINT_CHANGED_BASE_ENV] })
+    changesOxlintPolicy(paths, {
+      base: env[OXLINT_CHANGED_BASE_ENV],
+      trustedPolicyRef: env[OXLINT_TRUSTED_POLICY_REF_ENV],
+    })
   ) {
     return undefined;
   }
