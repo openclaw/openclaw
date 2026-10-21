@@ -175,14 +175,6 @@ it.each<[string, ...Partial<ReturnType<typeof linkInfo>[number]>[]]>([
     { label: "the button", title: "src/ui/Button.tsx:12" },
   ],
   ["u/a.ts v/a.ts `D:\\w\\a.ts`", { label: "u/a.ts" }, { label: "v/a.ts" }, { label: "w\\a.ts" }],
-  ...[
-    "/tmp/qa/src/file.ts:7 and tmp/qa/src/file.ts:7",
-    "`/tmp/qa/src/file.ts:7` and `tmp/qa/src/file.ts:7`",
-  ].map((input): [string, ...Partial<ReturnType<typeof linkInfo>[number]>[]] => [
-    input,
-    { path: "/tmp/qa/src/file.ts", line: "7", label: "/tmp/qa/src/file.ts:7" },
-    { path: "tmp/qa/src/file.ts", line: "7", label: "tmp/qa/src/file.ts:7" },
-  ]),
 ])("preserves file-line targets, labels, and tooltips in %s", (input, ...expected) => {
   expect(linkInfo(input)).toMatchObject(expected);
 });

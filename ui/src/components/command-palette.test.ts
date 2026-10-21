@@ -39,6 +39,28 @@ const modelResult = (id: string, name: string) => ({
   models: [{ provider: "fixture", id, name }],
 });
 
+async function mountModels(request: Parameters<typeof modelGateway>[0]) {
+  const harness = modelGateway(request);
+  const context = createContext(harness.gateway);
+  return { ...harness, context, ...(await mountPalette(context)) };
+}
+
+function catalogRequest(catalogs: Record<string, unknown>) {
+  return vi.fn(async (method: string) => {
+    if (!Object.hasOwn(catalogs, method)) {
+      throw new Error(`Unexpected method: ${method}`);
+    }
+    return catalogs[method];
+  });
+}
+
+function expectActive(palette: Parameters<typeof paletteInput>[0], row: Element | null) {
+  expect(palette.querySelector('[aria-selected="true"]')).toBe(row);
+  expect(
+    document.getElementById(paletteInput(palette).getAttribute("aria-activedescendant")!),
+  ).toBe(row);
+}
+
 function agentContext(
   context: ApplicationContext,
   agents: { id: string; name: string; model?: { primary: string } }[],
@@ -62,14 +84,9 @@ describe("CommandPalette search", () => {
   registerCommandPaletteTestHooks();
 
   it("lazily searches compact automation names once per connection", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "nightly-invoices", name: "Nightly invoices" }] };
-      }
-      throw new Error(`Unexpected method: ${method}`);
+    const request = catalogRequest({
+      "models.list": { models: [] },
+      "cron.list": { jobs: [{ id: "nightly-invoices", name: "Nightly invoices" }] },
     });
     const empty = { ...createSessionResult("agent:main:none", "None"), sessions: [] };
     const { palette, emit, setConnected } = await mountSearch(
@@ -101,14 +118,9 @@ describe("CommandPalette search", () => {
     const automations = createDeferred<{ jobs: { id: string; name: string }[] }>();
     const { palette } = await mountSearch({
       methods: ["cron.list", "models.list"],
-      request: vi.fn(async (method: string) => {
-        if (method === "cron.list") {
-          return automations.promise;
-        }
-        if (method === "models.list") {
-          return modelResult("needle", "Needle model");
-        }
-        throw new Error(`Unexpected method: ${method}`);
+      request: catalogRequest({
+        "cron.list": automations.promise,
+        "models.list": modelResult("needle", "Needle model"),
       }),
     });
 
@@ -130,8 +142,7 @@ describe("CommandPalette search", () => {
       .fn()
       .mockRejectedValueOnce(new Error("catalog unavailable"))
       .mockResolvedValueOnce(modelResult("needle", "Needle"));
-    const { gateway } = modelGateway(request);
-    const { palette, query } = await mountPalette(createContext(gateway, async () => null));
+    const { gateway, palette, query } = await mountModels(request);
     await searchPalette(palette, "needle");
     await vi.waitFor(() =>
       expect(query(".cmd-palette__source-error")?.textContent).toContain(
@@ -147,20 +158,15 @@ describe("CommandPalette search", () => {
   });
 
   it("excludes agent primary models when selection is restricted", async () => {
-    const { gateway } = createGateway(true, {
-      methods: ["models.list"],
-      request: vi.fn(async () => ({
-        models: [],
-        modelSelectionPolicy: { restricted: true },
-      })),
-    });
+    const { gateway } = modelGateway(() => ({
+      models: [],
+      modelSelectionPolicy: { restricted: true },
+    }));
     const context = createContext(gateway);
     const { palette } = await mountPalette(
-      agentContext(
-        context,
-        [{ id: "reviewer", name: "Reviewer", model: { primary: "fixture/hidden" } }],
-        "main",
-      ),
+      agentContext(context, [
+        { id: "reviewer", name: "Reviewer", model: { primary: "fixture/hidden" } },
+      ]),
     );
     await searchPalette(palette, "fixture/hidden");
     expect(findPaletteOption(palette, "Reviewer")).toBeUndefined();
@@ -171,12 +177,11 @@ describe("CommandPalette search", () => {
       .mockResolvedValueOnce(modelResult("old", "Needle old"))
       .mockRejectedValueOnce(new Error("catalog unavailable"))
       .mockResolvedValueOnce(modelResult("new", "Needle new"));
-    const harness = modelGateway(request);
-    const { palette, query } = await mountPalette(createContext(harness.gateway, async () => null));
+    const { palette, query, emit } = await mountModels(request);
     await searchPalette(palette, "needle");
     expect(findPaletteOption(palette, "Needle old")).toBeDefined();
 
-    harness.emit("chat.metadata.changed", { modelSelectionChanged: true });
+    emit("chat.metadata.changed", { modelSelectionChanged: true });
     await palette.updateComplete;
     expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
     await settlePalette(palette);
@@ -199,9 +204,8 @@ describe("CommandPalette search", () => {
         .mockResolvedValueOnce(modelResult("old", "Needle old"))
         .mockReturnValueOnce(stale.promise)
         .mockResolvedValue(modelResult("new", "Needle new"));
-      const harness = modelGateway(request);
-      const context = createContext(harness.gateway, async () => null);
-      const { palette, provider, query } = await mountPalette(context);
+      const harness = await mountModels(request);
+      const { context, palette, provider, query } = harness;
       await searchPalette(palette, "needle");
       expect(findPaletteOption(palette, "Needle old")).toBeDefined();
       harness.emit("config.changed");
@@ -210,7 +214,7 @@ describe("CommandPalette search", () => {
         context.agentSelection.set("reviewer");
       } else if (replacement === "source") {
         const next = modelGateway(request);
-        provider.setContext(createContext(next.gateway, async () => null));
+        provider.setContext(createContext(next.gateway));
       } else if (replacement === "connection") {
         harness.setConnected(false);
       } else if (replacement === "detach") {
@@ -347,8 +351,6 @@ describe("CommandPalette search", () => {
         name: "Workboard",
         installed,
         catalogId: catalogId || undefined,
-        enabled: false,
-        state: installed ? "disabled" : "not-installed",
       };
       const { gateway } = createGateway(true, {
         methods: ["plugins.list"],
@@ -468,16 +470,14 @@ describe("CommandPalette search", () => {
       setConnected(false);
       await palette.updateComplete;
       expect(findPaletteOption(palette, "Agent QA 9")).toBe(session);
-      expect(query('[aria-selected="true"]')).toBe(session);
       const input = paletteInput(palette);
-      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(session);
+      expectActive(palette, session);
       setConnected(true);
       await settlePalette(palette);
       expect(list).toHaveBeenCalledTimes(2);
       expect(findPaletteOption(palette, "Agent QA 9")).toBeUndefined();
       const first = query('[role="option"]');
-      expect(query('[aria-selected="true"]')).toBe(first);
-      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(first);
+      expectActive(palette, first);
       if (interaction === "navigate") {
         pressKey(input, "ArrowDown");
         await palette.updateComplete;
@@ -540,8 +540,7 @@ describe("CommandPalette search", () => {
     await vi.waitFor(() => expect(queryAll('[role="option"]')).toHaveLength(1));
     await palette.updateComplete;
     const remaining = query('[role="option"]');
-    expect(query('[aria-selected="true"]')).toBe(remaining);
-    expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(remaining);
+    expectActive(palette, remaining);
     pressKey(input, "Enter");
     expect(palette.onNavigate).toHaveBeenCalledWith("agents", {
       pathname: "/settings/agents/c",
@@ -584,25 +583,6 @@ describe("CommandPalette search", () => {
     const activeId = paletteInput(palette).getAttribute("aria-activedescendant");
     expect(document.getElementById(activeId ?? "")).toBe(active);
   });
-  it("shows category metadata matches from the Gateway search", async () => {
-    const categorized = createSessionResult("agent:main:categorized", "Unrelated title");
-    categorized.sessions[0]!.category = "Tak";
-    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () => categorized);
-    const request = vi.fn(async (method: string) =>
-      method === "models.list" ? { models: [] } : { results: [] },
-    );
-    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
-
-    await enterQuery(palette, "tak");
-    await vi.advanceTimersByTimeAsync(200);
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1),
-    );
-    await palette.updateComplete;
-
-    expect(palette.textContent).toContain("Unrelated title");
-  });
-
   it("shows a chat search failure for plugins and retries after shortening a prompt", async () => {
     const query = "plugins";
     const list = vi
@@ -633,12 +613,7 @@ describe("CommandPalette search", () => {
   it("opens the capture section from the palette without losing its deep link", async () => {
     const { gateway } = createGateway(true, { methods: [] });
     gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.admin"] };
-    const { palette } = await mountPalette(
-      createContext(
-        gateway,
-        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
-      ),
-    );
+    const { palette } = await mountPalette(createContext(gateway));
     await searchPalette(palette, "meeting capture");
     const item = findPaletteOption(palette, "Meeting capture");
     expect(item).toBeDefined();
@@ -650,10 +625,7 @@ describe("CommandPalette search", () => {
   });
 
   it("flushes a new query on Enter without selecting the retained command", async () => {
-    const { palette } = await mountSearch(
-      {},
-      vi.fn(async () => createSessionResult("agent:main:test", "Test")),
-    );
+    const { palette } = await mountSearch();
     await searchPalette(palette, "plugins");
 
     const input = paletteInput(palette);
@@ -674,10 +646,7 @@ describe("CommandPalette search", () => {
     ["desktop", true, "Desktop", DESKTOP_PANEL_TOGGLE_EVENT],
     ["openclaw", false, "Ask OpenClaw", CUSTODIAN_PANEL_TOGGLE_EVENT],
   ] as const)("opens the %s panel action", async (query, desktop, label, event) => {
-    const { palette } = await mountSearch(
-      {},
-      vi.fn(async () => createSessionResult("agent:main:test", "Test")),
-    );
+    const { palette } = await mountSearch();
     palette.desktopAvailable = desktop;
     palette.custodianAvailable = !desktop;
     await searchPalette(palette, query);

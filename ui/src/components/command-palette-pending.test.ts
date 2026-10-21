@@ -21,9 +21,9 @@ import {
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 
-describe("CommandPalette pending searches", () => {
-  registerCommandPaletteTestHooks({ mockScroll: false });
+registerCommandPaletteTestHooks({ mockScroll: false });
 
+describe("CommandPalette pending searches", () => {
   it.each([false, true])(
     "debounces input until the final key or IME commit: %s",
     async (composing) => {
@@ -367,4 +367,145 @@ describe("CommandPalette pending searches", () => {
       expect(findPaletteOption(palette, "zzfixtureunique stale")).toBeUndefined();
     },
   );
+});
+
+describe("CommandPalette session search", () => {
+  it.each([
+    {
+      name: "punctuation-normalized title",
+      query: "per session communi",
+      title: "Per-session communication controls in UI",
+      sameSession: true,
+    },
+    { name: "transcript-only match", serverMatch: false },
+    { name: "server metadata match", serverMatch: true },
+  ])("keeps metadata and transcript results selectable: $name", async (scenario) => {
+    const query = scenario.query ?? "needle";
+    const title = scenario.title ?? "needle";
+    const metadata = createSessionResult("agent:main:metadata", title);
+    const contextOnly = scenario.sameSession
+      ? metadata
+      : createSessionResult("agent:main:context", "Unrelated title");
+    const roster = {
+      ...metadata,
+      count: 2,
+      totalCount: 2,
+      sessions: [...metadata.sessions, ...contextOnly.sessions],
+    };
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
+      options?.search && !scenario.serverMatch ? metadata : roster,
+    );
+    const searchResult: SessionsSearchResult = {
+      ...transcriptResult(contextOnly, "The needle appears only in the conversation body."),
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return searchResult;
+    });
+    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
+    await searchPalette(palette, query);
+    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    const items = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
+    expect(items).toHaveLength(scenario.sameSession ? 1 : 2);
+    expect(items[0]?.textContent).toContain(title);
+    if (scenario.sameSession) {
+      const buttons = [...palette.querySelectorAll("button")];
+      expect(buttons.some((button) => button.textContent?.match(/Sessions\s*1/u))).toBe(true);
+      expect(buttons.some((button) => button.textContent?.match(/Messages\s*0/u))).toBe(true);
+    } else {
+      expect(items[1]?.textContent).toContain("Unrelated title");
+      expect(items[1]?.textContent).toContain("needle appears only in the conversation body");
+    }
+    expect(palette.textContent).not.toContain("Search notices");
+    expect(palette.textContent).not.toContain("may be incomplete");
+    expect(palette.textContent).not.toContain("Chat search failed");
+    findPaletteOption(palette, title)!.click();
+    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
+  });
+});
+
+describe("CommandPalette metadata publications", () => {
+  const model = (id: string) => ({ provider: "ollama", id, name: `Needle ${id}` });
+
+  it("refreshes open palette skills without reloading unchanged models", async () => {
+    let skillName = "Needle old skill";
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.status") {
+        return { skills: [{ skillKey: "needle", name: skillName }] };
+      }
+      if (method === "models.list") {
+        return { models: [{ provider: "fixture", id: "needle", name: "Needle model" }] };
+      }
+      return { results: [], sessions: [] };
+    });
+    const { palette, emit } = await mountSearch({
+      methods: ["skills.status", "models.list"],
+      request,
+    });
+    await searchPalette(palette, "needle");
+    expect(findPaletteOption(palette, "Needle old skill")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+
+    skillName = "Needle new skill";
+    emit("chat.metadata.changed", { modelCatalogChanged: false, authChanged: false });
+    await settlePalette(palette, 0);
+
+    expect(findPaletteOption(palette, "Needle new skill")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle old skill")).toBeUndefined();
+    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+    expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+  });
+
+  it("keeps returned model rows without refresh warnings or obsolete choices", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: [model("retained"), model("obsolete")] })
+      .mockResolvedValueOnce({
+        models: [model("retained"), model("current")],
+        refreshFailed: true,
+        providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
+      })
+      .mockResolvedValueOnce({
+        models: [],
+        providerOutcomes: [{ provider: "ollama", status: "ready" }],
+      });
+    const { palette, emit } = await mountSearch({
+      methods: ["models.list"],
+      request: (method, params) =>
+        method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+    });
+    await searchPalette(palette, "needle");
+    expect(findPaletteOption(palette, "Needle obsolete")).toBeDefined();
+    emit("chat.metadata.changed", {
+      agentId: "main",
+      usageUpdatedAt: 1,
+      modelCatalogChanged: false,
+      authChanged: false,
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(request).toHaveBeenCalledOnce();
+
+    emit("chat.metadata.changed");
+    await settlePalette(palette);
+    expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
+    expect(palette.querySelectorAll('[role="option"]')).toHaveLength(2);
+    expect(findPaletteOption(palette, "Needle retained")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle current")).toBeDefined();
+    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+    expect(palette.querySelector(".cmd-palette__no-results")).toBeNull();
+
+    await enterQuery(palette, "");
+    expect(findPaletteOption(palette, "Agents")).toBeDefined();
+    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+    await searchPalette(palette, "needle");
+
+    emit("chat.metadata.changed");
+    await settlePalette(palette);
+    expect(findPaletteOption(palette, "Needle retained")).toBeUndefined();
+    expect(findPaletteOption(palette, "Needle current")).toBeUndefined();
+    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+  });
 });
