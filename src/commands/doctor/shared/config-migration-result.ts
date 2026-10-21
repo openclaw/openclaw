@@ -79,9 +79,10 @@ export async function retainHeartbeatMigrationInput(
       const entry = candidate.agents?.entries?.[agentId];
       const fallback = resolveHeartbeatAutomationModel(candidate, agentId).fallback;
       if (entry && heartbeat) {
+        const { agentId: _agentId, ...perAgentHeartbeat } = heartbeat;
         // Materialize every inherited owner before changing any selector's billing provenance.
         entry.heartbeat = {
-          ...heartbeat,
+          ...perAgentHeartbeat,
           ...(fallback ? { model: fallback.defaultModel } : {}),
         };
       }
