@@ -412,23 +412,19 @@ describe("voice transcript events", () => {
           return true;
         },
       };
-      using source = vi
+      using _ = vi
         .spyOn(nodeEventSource, "withNodeEventSessionSource")
-        .mockImplementation(async (_evt, opts, consume) => {
+        .mockImplementation((_evt, opts, consume) => {
           const pending: Promise<unknown>[] = [];
-          try {
-            return await consume(opts, {
-              loaded: buildSessionLookup(sessionKey),
-              assertCurrent: () => {
-                if (opts === firstConnection && !current) {
-                  throw new Error("Node event session authority changed");
-                }
-              },
-              pending,
-            });
-          } finally {
-            await Promise.allSettled(pending);
-          }
+          return consume(opts, {
+            loaded: buildSessionLookup(sessionKey),
+            assertCurrent: () => {
+              if (opts === firstConnection && !current) {
+                throw new Error("Node event session authority changed");
+              }
+            },
+            pending,
+          }).finally(() => Promise.allSettled(pending));
         });
       const { emit } = nodeFixture();
       const first = emit(
