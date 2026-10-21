@@ -44,13 +44,15 @@ function assistantMessageAnnouncementText(message: unknown): string | null {
 
 export function latestTranscriptAnnouncement(
   items: readonly ChatRenderItem[],
+  liveItem?: ChatRenderItem,
 ): TranscriptAnnouncement | null {
   const announcement = (key: string, text: string): TranscriptAnnouncement => ({
     key,
     text: truncateUtf16Safe(text, ANNOUNCEMENT_MAX_CHARS),
   });
   for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-    const item = items[itemIndex];
+    const base = items[itemIndex];
+    const item = base?.key === liveItem?.key ? liveItem : base;
     if (!item) {
       continue;
     }

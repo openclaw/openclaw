@@ -49,6 +49,7 @@ function snapshot(step: number, memory = 100): GatewayResourceSnapshot {
     process: { user: step * 100, system: step * 10 },
     mainThread: { user: step * 50, system: step * 5 },
     memory: memoryUsage(memory),
+    heapSpaces: [],
     runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
     activeResources: { Timeout: 1 },
   };

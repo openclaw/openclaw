@@ -27,6 +27,7 @@ import {
 import type { DiscordConfig, DiscordDispatchReplyFromConfig } from "./native-command.types.js";
 
 export async function dispatchDiscordNativeAgentReply(params: {
+  assertAuthority?: () => void;
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
@@ -48,6 +49,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   let finalReplyOutcome: "accepted" | "failed" | "suppressed" | undefined;
   let hiddenFinalReply: ReplyPayload | undefined;
   const turnResult = await dispatchChannelInboundTurn({
+    assertAuthority: params.assertAuthority,
     cfg: params.cfg,
     channel: "discord",
     accountId: params.effectiveRoute.accountId,

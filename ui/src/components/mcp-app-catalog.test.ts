@@ -639,56 +639,79 @@ describe("app launch catalog", () => {
       expect(request).toHaveBeenCalledTimes(2);
     },
   );
-  it("onboards an app without crypto.randomUUID on insecure origins", async () => {
-    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
-    const read = createDeferred<McpAppDiscoverResult>();
-    const request = vi.fn().mockReturnValueOnce(read.promise).mockResolvedValue({});
-    const navigate = vi.fn();
-    const { element } = mountCatalog(
-      {
-        gateway: {
-          snapshot: {
-            client: { request },
-            phase: "connected",
-            hello: gatewayHelloForMethods(["mcp.app.discover"]),
-          },
-          connectionRevision: 1,
-          subscribe: () => () => {},
-          subscribeEvents: () => () => {},
-        },
-        agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
-        agents: { state: { agentsList: null } },
-        sessions: {
-          state: { result: null },
-          describe: async () => ({ session: { key: "agent:main:one" } }),
-        },
-        basePath: "",
-        navigate,
-      },
-      { sessionKey: "agent:main:one" },
-    );
-    await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
-    read.resolve({ servers: [], onboarding: [{ pluginId: "parts", title: "Parts plugin" }] });
-    const button = await waitForSolid(() => {
-      const candidate = [...element.querySelectorAll<HTMLButtonElement>("button")].find((control) =>
-        control.textContent?.includes("Parts plugin"),
+  it.each(["unchanged", "session changed", "agent changed"] as const)(
+    "onboards once without crypto.randomUUID and respects the current target (%s)",
+    async (target) => {
+      vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+      const read = createDeferred<McpAppDiscoverResult>();
+      const onboarding = createDeferred<Record<string, never>>();
+      const request = vi.fn((method: string) =>
+        method === "mcp.app.onboard" ? onboarding.promise : read.promise,
       );
-      expect(candidate).toBeDefined();
-      return candidate!;
-    });
-    button.click();
-    flush();
-    expect(request).toHaveBeenCalledWith("mcp.app.onboard", {
-      sessionKey: "agent:main:one",
-      agentId: "main",
-      pluginId: "parts",
-      idempotencyKey: expect.stringMatching(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      ),
-    });
-    await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object)));
-    expect(element.querySelector('[role="alert"]')).toBeNull();
-  });
+      const navigate = vi.fn();
+      const mounted = mountCatalog(
+        {
+          gateway: {
+            snapshot: {
+              client: { request },
+              phase: "connected",
+              hello: gatewayHelloForMethods(["mcp.app.discover"]),
+            },
+            connectionRevision: 1,
+            subscribe: () => () => {},
+            subscribeEvents: () => () => {},
+          },
+          agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+          agents: { state: { agentsList: null } },
+          sessions: {
+            state: { result: null },
+            describe: async () => ({ session: { key: "agent:main:one" } }),
+          },
+          basePath: "",
+          navigate,
+        },
+        { sessionKey: "agent:main:one" },
+      );
+      const { element } = mounted;
+      await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+      read.resolve({ servers: [], onboarding: [{ pluginId: "parts", title: "Parts plugin" }] });
+      const onboardingButton = () =>
+        [...element.querySelectorAll<HTMLButtonElement>("button")].find((control) =>
+          control.textContent?.includes("Parts plugin"),
+        );
+      const button = await waitForSolid(() => {
+        const candidate = onboardingButton();
+        expect(candidate).toBeDefined();
+        return candidate!;
+      });
+      button.click();
+      button.click();
+      flush();
+      expect(button.disabled).toBe(true);
+      expect(request.mock.calls.filter(([method]) => method === "mcp.app.onboard")).toHaveLength(1);
+      expect(request).toHaveBeenCalledWith("mcp.app.onboard", {
+        sessionKey: "agent:main:one",
+        agentId: "main",
+        pluginId: "parts",
+        idempotencyKey: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+        ),
+      });
+      if (target === "session changed") {
+        mounted.update({ sessionKey: "agent:main:two" });
+      } else if (target === "agent changed") {
+        mounted.update({ agentId: "other" });
+      }
+      onboarding.resolve({});
+      await waitForSolid(() => expect(onboardingButton()?.disabled).toBe(false));
+      if (target === "unchanged") {
+        await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object)));
+      } else {
+        expect(navigate).not.toHaveBeenCalled();
+      }
+      expect(element.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
   it.each(["file"] as const)(
     "hides unsupported %s controls after empty discovery",
     async (surface) => {

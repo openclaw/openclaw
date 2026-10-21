@@ -87,11 +87,15 @@ export function hidePersonalSidebarCatalog(
 }
 
 /** Descriptor snapshots last one connection; loaded rows always supersede them. */
-export function createSidebarPinnedSessions(host: {
-  readonly isConnected: boolean;
-  readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
-  readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
-}) {
+export function createSidebarPinnedSessions(
+  host: Pick<
+    PersonalNavigationHost,
+    "sessionDataContext" | "findSidebarSessionByKey" | "navigationCatalog"
+  > & {
+    readonly isConnected: boolean;
+    readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
+  },
+) {
   let source: ApplicationContext["sessions"] | undefined;
   let scope: SessionConnectionScope | null = null;
   const requested = new Map<string, "pending" | "settled">();
@@ -163,7 +167,12 @@ export function createSidebarPinnedSessions(host: {
         if (!current()) {
           return;
         }
-        if (!host.isConnected) {
+        // The roster can supply a pin while its lookup waits behind foreground bootstrap.
+        if (
+          !host.isConnected ||
+          host.findSidebarSessionByKey(key) ||
+          host.navigationCatalog.dashboards?.result?.sessions.some((row) => row.key === key)
+        ) {
           requested.delete(key);
           return;
         }
