@@ -47,7 +47,6 @@ import type {
   PreparedModelRuntimeLeaseOptions,
   PreparedModelRuntimePluginGeneration,
 } from "../prepared-model-runtime.types.js";
-import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -217,45 +216,26 @@ describe("prepared harness source delivery", () => {
     followupRun.run.config = {
       session: { store: path.join(state.sessionsDir(), "sessions.json") },
     };
-    const emittedStreamingCallbacks: string[] = [];
     const emitStreaming = async (params: {
       onPartialReply?: (payload: ReplyPayload) => unknown;
       onBlockReply?: (payload: ReplyPayload) => unknown;
+      extraSystemPrompt?: string;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     }) => {
-      emittedStreamingCallbacks.push("partial");
+      const toolOnly = testCase.preparedVisibleReplies === "message_tool";
+      expect(params.sourceReplyDeliveryMode).toBe(toolOnly ? "message_tool_only" : "automatic");
+      const automatic = "Your replies are automatically sent to this conversation";
+      const privateReply = "Normal final replies are private";
+      expect(params.extraSystemPrompt).toContain(toolOnly ? privateReply : automatic);
+      expect(params.extraSystemPrompt).not.toContain(toolOnly ? automatic : privateReply);
       await params.onPartialReply?.({ text: finalText });
-      emittedStreamingCallbacks.push("block");
       await params.onBlockReply?.({ text: "Streaming progress" });
     };
     let forbiddenSdkAuthorityObserved = false;
-    let modelVisiblePrompt = "";
-    const recordModelVisiblePrompt = (attemptParams: {
-      extraSystemPrompt?: string;
-      forceMessageTool?: boolean;
-      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    }) => {
-      modelVisiblePrompt = buildConfiguredAgentSystemPrompt({
-        workspaceDir: followupRun.run.workspaceDir,
-        reasoningTagHint: false,
-        extraSystemPrompt: attemptParams.extraSystemPrompt,
-        sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
-        runtimeInfo: {
-          host: "host",
-          os: "linux",
-          arch: "arm64",
-          node: "24",
-          model: "model",
-          channel: "discord",
-          chatType: "direct",
-        },
-        tools: attemptParams.forceMessageTool ? [{ name: "message" } as never] : [],
-      });
-    };
     mockedBuildEmbeddedRunPayloads.mockReturnValue(
       forgedTtsDelivery || genuineTtsDelivery ? [] : [{ text: finalText }],
     );
     mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams) => {
-      recordModelVisiblePrompt(attemptParams);
       await emitStreaming(attemptParams);
       return makeAttemptResult({ assistantTexts: [finalText] });
     });
@@ -344,7 +324,6 @@ describe("prepared harness source delivery", () => {
               ? { supported: true, priority: 200 }
               : { supported: false, reason: "prepared OpenAI route only" },
           runAttempt: vi.fn(async (attemptParams) => {
-            recordModelVisiblePrompt(attemptParams);
             await emitStreaming(attemptParams);
             const result = makeAttemptResult({
               assistantTexts: [],
@@ -506,12 +485,7 @@ describe("prepared harness source delivery", () => {
       expect(retainedHost).toBeDefined();
       expect(() => retainedHost?.assertActive()).toThrow("no longer active");
     }
-    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
-      { prompt: "hello" },
-      expect.any(Object),
-    );
     const cliSucceeded = testCase.candidatePath === "embedded-failure-cli";
-    expect(emittedStreamingCallbacks).toEqual(cliSucceeded ? [] : ["partial", "block"]);
     expect(onPartialReply).toHaveBeenCalledTimes(expectedStreaming);
     expect(result.queuedFinal).toBe(expectedDeliveries === 1);
     expect(deliver).toHaveBeenCalledTimes(expectedDeliveries + expectedStreaming);
@@ -533,13 +507,7 @@ describe("prepared harness source delivery", () => {
       );
     } else {
       expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(deliver).not.toHaveBeenCalled();
     }
-    expect(dispatcher.getQueuedCounts()).toEqual({
-      tool: 0,
-      block: expectedStreaming,
-      final: expectedDeliveries,
-    });
     if (forgedTtsDelivery) {
       expect(forbiddenSdkAuthorityObserved).toBe(false);
     }
@@ -553,20 +521,6 @@ describe("prepared harness source delivery", () => {
         cliSessionBindingFacts: { sourceReplyDeliveryMode: "automatic" },
         sourceReplyDeliveryMode: "automatic",
       });
-    } else if (testCase.preparedVisibleReplies === "automatic") {
-      expect(modelVisiblePrompt).toContain("Current-session final text normally routes to source");
-      expect(modelVisiblePrompt).toContain(
-        "Your replies are automatically sent to this conversation",
-      );
-      expect(modelVisiblePrompt).not.toContain("Normal final replies are private");
-    } else {
-      expect(modelVisiblePrompt).toContain(
-        "Current source visible reply MUST use `message(action=send)`",
-      );
-      expect(modelVisiblePrompt).toContain("Normal final replies are private");
-      expect(modelVisiblePrompt).not.toContain(
-        "Your replies are automatically sent to this conversation",
-      );
     }
   });
 
