@@ -190,7 +190,6 @@ it("inventories retained usage by transcript recency and logical agent after wri
   await expect(
     run(prepared, {
       kind: "refresh",
-      pricingFingerprint: await fingerprint(prepared.config, prepared.agentDir),
       maxFiles: 1,
     }),
   ).resolves.toMatchObject({
