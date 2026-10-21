@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
-import * as storageAccess from "../local-storage.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import { reloadAfterRenderErrorOnce } from "./stale-chunk-reload.ts";
@@ -9,11 +8,10 @@ const documentFetch = vi.fn<typeof fetch>();
 let storage: ReturnType<typeof createStorageMock>;
 let reload: ReturnType<typeof vi.fn<() => void>>;
 const attempt = (options: Parameters<typeof reloadAfterRenderErrorOnce>[0] = {}) =>
-  reloadAfterRenderErrorOnce({ reload, ...options });
+  reloadAfterRenderErrorOnce({ storage, reload, ...options });
 beforeEach(() => {
   vi.useFakeTimers();
   storage = createStorageMock();
-  vi.spyOn(storageAccess, "getSafeSessionStorage").mockReturnValue(storage);
   reload = vi.fn();
   vi.stubGlobal("fetch", documentFetch.mockReset().mockResolvedValue(new Response("ok")));
 });
@@ -38,10 +36,7 @@ it.each(["missing", "read", "write"])("does not reload with %s storage", async (
       throw new Error("unavailable");
     });
   }
-  if (failure === "missing") {
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(null);
-  }
-  expect(await attempt()).toBe(false);
+  expect(await attempt({ storage: failure === "missing" ? null : storage })).toBe(false);
   expect(reload).not.toHaveBeenCalled();
 });
 

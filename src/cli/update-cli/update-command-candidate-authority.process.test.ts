@@ -77,6 +77,7 @@ it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const
         env: {
           OPENCLAW_PROFILE: undefined,
           OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_TEST_RUNTIME_LOG: "1",
           OPENCLAW_GATEWAY_TOKEN: "candidate-authority-test-token",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: candidateAuthorityBundledPluginsDir,

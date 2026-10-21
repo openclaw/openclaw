@@ -196,6 +196,7 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
       const env = {
         ...process.env,
         OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_RUNTIME_LOG: "1",
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_CLAWHUB_URL: clawhub.url,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,

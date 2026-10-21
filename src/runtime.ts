@@ -24,6 +24,32 @@ export type OutputRuntimeEnv = RuntimeEnv & {
   writeJson: (value: unknown, space?: number) => void;
 };
 
+function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.VITEST !== "true") {
+    return true;
+  }
+  if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
+    return true;
+  }
+  const maybeMockedLog = console.log as typeof console.log & { mock?: unknown };
+  return typeof maybeMockedLog.mock === "object";
+}
+
+function shouldEmitRuntimeStdout(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.VITEST !== "true") {
+    return true;
+  }
+  if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
+    return true;
+  }
+  const stdout = process.stdout as NodeJS.WriteStream & {
+    write: {
+      mock?: unknown;
+    };
+  };
+  return typeof stdout.write.mock === "object";
+}
+
 function isPipeClosedError(err: unknown): boolean {
   const code = (err as { code?: string })?.code;
   return code === "EPIPE" || code === "EIO";
@@ -36,6 +62,9 @@ function hasRuntimeOutputWriter(
 }
 
 function writeStdout(value: string): void {
+  if (!shouldEmitRuntimeStdout()) {
+    return;
+  }
   clearActiveProgressLine();
   const line = value.endsWith("\n") ? value : `${value}\n`;
   try {
@@ -48,20 +77,25 @@ function writeStdout(value: string): void {
   }
 }
 
-const runtimeIo: Pick<OutputRuntimeEnv, "log" | "error" | "writeStdout" | "writeJson"> = {
-  log: (...args: Parameters<typeof console.log>) => {
-    clearActiveProgressLine();
-    console.log(...args);
-  },
-  error: (...args: Parameters<typeof console.error>) => {
-    clearActiveProgressLine();
-    console.error(...args);
-  },
-  writeStdout,
-  writeJson: (value: unknown, space = 2) => {
-    writeStdout(JSON.stringify(value, undefined, space > 0 ? space : undefined));
-  },
-};
+function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdout" | "writeJson"> {
+  return {
+    log: (...args: Parameters<typeof console.log>) => {
+      if (!shouldEmitRuntimeLog()) {
+        return;
+      }
+      clearActiveProgressLine();
+      console.log(...args);
+    },
+    error: (...args: Parameters<typeof console.error>) => {
+      clearActiveProgressLine();
+      console.error(...args);
+    },
+    writeStdout,
+    writeJson: (value: unknown, space = 2) => {
+      writeStdout(JSON.stringify(value, undefined, space > 0 ? space : undefined));
+    },
+  };
+}
 
 /** Keep terminal reset bytes off stdout when the invocation owns machine-readable output. */
 export function restoreRuntimeTerminalState(
@@ -77,7 +111,7 @@ export function restoreRuntimeTerminalState(
 }
 
 export const defaultRuntime: OutputRuntimeEnv = {
-  ...runtimeIo,
+  ...createRuntimeIo(),
   exit: (code, opts) => {
     restoreRuntimeTerminalState("runtime exit", {
       resumeStdinIfPaused: false,
@@ -102,7 +136,7 @@ export class ExitError extends Error {
 
 export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
-    ...runtimeIo,
+    ...createRuntimeIo(),
     exit: (code: number, _opts?: RuntimeExitOptions) => {
       throw new ExitError(code);
     },

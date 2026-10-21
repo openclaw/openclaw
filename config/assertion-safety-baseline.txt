@@ -2272,7 +2272,7 @@ src/proxy-capture/env.ts	1
 src/proxy-capture/store.sqlite.ts	2
 src/realtime-transcription/websocket-session.ts	2
 src/routing/binding-scope.ts	1
-src/runtime.ts	2
+src/runtime.ts	4
 src/secrets/audit.ts	1
 src/secrets/channel-contract-api.ts	1
 src/secrets/egress-proxy/stream-substitution.ts	1

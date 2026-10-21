@@ -214,10 +214,9 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
           getItem: (key: string) => entries.get(key) ?? null,
           setItem: (key: string, value: string) => void entries.set(key, value),
         };
-        vi.stubGlobal("sessionStorage", storage);
         return mode === "automatic"
-          ? scheduleStaleChunkReload({ reload })
-          : retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
+          ? scheduleStaleChunkReload({ storage, reload })
+          : retryStaleChunkReloadWhenReachable({ storage, reload, timeoutMs: 0 });
       };
       const createFile = (name: string): FileContent => {
         const file: FileContent = {

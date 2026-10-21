@@ -288,7 +288,7 @@ describe("agent exec command composition", () => {
       {
         cwd: path.resolve(import.meta.dirname, "../.."),
         encoding: "utf8",
-        env: { ...process.env },
+        env: { ...process.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
       },
     );
 

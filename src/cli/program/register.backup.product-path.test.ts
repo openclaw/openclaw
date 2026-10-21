@@ -37,7 +37,7 @@ function runBackupCli(
       "--verify",
       "--json",
     ],
-    env: { ...process.env, ...state.env, ...env },
+    env: { ...process.env, ...state.env, ...env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
   });
 }
 

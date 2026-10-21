@@ -1660,7 +1660,7 @@ describe("TUI PTY real backends", () => {
           [cliPath, "config", "validate", "--json"],
           {
             cwd: process.cwd(),
-            env: { ...fixture.env },
+            env: { ...fixture.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
             logOutput: false,
             timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
           },

@@ -741,6 +741,7 @@ describe("placement startup reload", () => {
         expect(
           await chunkRecovery.scheduleStaleChunkReload({
             reload,
+            storage: sessionStorage,
             buildId: `unsaved-${cause}`,
           }),
         ).toBe(false);
@@ -765,6 +766,7 @@ describe("placement startup reload", () => {
         expect(
           await chunkRecovery.scheduleStaleChunkReload({
             reload,
+            storage: sessionStorage,
             buildId: `unsaved-${cause}`,
           }),
         ).toBe(true);

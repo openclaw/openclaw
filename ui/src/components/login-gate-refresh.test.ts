@@ -176,7 +176,7 @@ it.each(["automatic first", "manual first"])("navigates once with %s", async (or
   vi.spyOn(Math, "random").mockReturnValue(0);
   const finish = deferredProbe();
   const element = await mountMismatch();
-  const deps = { buildId: "new-build", reload };
+  const deps = { storage: sessionStorage, buildId: "new-build", reload };
   let automatic: Promise<boolean>;
   if (order === "automatic first") {
     automatic = recovery.scheduleStaleChunkReload(deps);

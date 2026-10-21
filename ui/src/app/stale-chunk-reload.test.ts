@@ -89,7 +89,6 @@ function dispatchPreloadError(payload: unknown) {
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000 });
-  vi.spyOn(storageAccess, "getSafeSessionStorage").mockReturnValue(memoryStorage());
   vi.spyOn(Math, "random").mockReturnValue(0);
 });
 
@@ -125,8 +124,7 @@ describe("isStaleChunkImportError", () => {
         .mockImplementation(persistent ? failImport : async () => "loaded");
       const completion = retryControlUiImport(load).catch(async (error: unknown) => {
         expect(isStaleChunkImportError(error)).toBe(true);
-        vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(memoryStorage());
-        return scheduleStaleChunkReload({ reload });
+        return scheduleStaleChunkReload({ reload, storage: memoryStorage() });
       });
       try {
         await vi.advanceTimersByTimeAsync(5_000);
@@ -197,14 +195,13 @@ describe("document reload ownership", () => {
       vi.stubGlobal("fetch", fetchMock);
       const reload = vi.fn();
       const storage = memoryStorage();
-      vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
       let allowed = false;
       const onBlocked = vi.fn();
       const release = registerControlUiReloadGuard(() => allowed, onBlocked);
       const attempt = () =>
         mode === "automatic"
-          ? scheduleStaleChunkReload({ reload })
-          : retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
+          ? scheduleStaleChunkReload({ storage, reload })
+          : retryStaleChunkReloadWhenReachable({ storage, reload, timeoutMs: 0 });
       try {
         await expect(attempt()).resolves.toBe(false);
         expect(fetchMock).not.toHaveBeenCalled();
@@ -237,10 +234,7 @@ describe("document reload ownership", () => {
     const releaseSecond = registerControlUiReloadGuard(() => false, secondBlocked);
     const probe = stubDocumentFetch(new Response(null, { status: 200 }));
     const reload = vi.fn();
-    const retry = () => {
-      vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(memoryStorage());
-      return retryStaleChunkReloadWhenReachable({ reload });
-    };
+    const retry = () => retryStaleChunkReloadWhenReachable({ reload, storage: memoryStorage() });
     try {
       releaseFirst();
       await expect(retry()).resolves.toBe(false);
@@ -265,9 +259,8 @@ describe("scheduleStaleChunkReload", () => {
       vi.mocked(Math.random).mockReturnValue(draw);
       const reload = vi.fn();
       const storage = memoryStorage();
-      vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
       const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-      const recover = () => scheduleStaleChunkReload({ buildId: "new-build", reload });
+      const recover = () => scheduleStaleChunkReload({ buildId: "new-build", storage, reload });
       const first = recover();
       expect(fetchMock).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(100);
@@ -288,7 +281,7 @@ describe("scheduleStaleChunkReload", () => {
     const reload = vi.fn();
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
-    const pending = scheduleStaleChunkReload({ reload });
+    const pending = scheduleStaleChunkReload({ storage: memoryStorage(), reload });
     await vi.advanceTimersByTimeAsync(60_000);
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     if (signal === "online") {
@@ -305,14 +298,15 @@ describe("scheduleStaleChunkReload", () => {
   it("retires a generic wait when a newer build takes over", async () => {
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
     const fetchMock = stubDocumentFetch(
       new Response(null, { status: 503 }),
       new Response(null, { status: 200 }),
     );
-    const older = scheduleStaleChunkReload({ reload });
+    const older = scheduleStaleChunkReload({ storage, reload });
     await vi.advanceTimersByTimeAsync(0);
-    await expect(scheduleStaleChunkReload({ buildId: "new-build", reload })).resolves.toBe(true);
+    await expect(scheduleStaleChunkReload({ buildId: "new-build", storage, reload })).resolves.toBe(
+      true,
+    );
     await expect(older).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -322,13 +316,12 @@ describe("scheduleStaleChunkReload", () => {
   it("never schedules another automatic reload in a document already being replaced", async () => {
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
     const probe = stubDocumentFetch(new Response(null, { status: 200 }));
-    await expect(scheduleStaleChunkReload({ reload })).resolves.toBe(true);
+    await expect(scheduleStaleChunkReload({ storage, reload })).resolves.toBe(true);
     await vi.advanceTimersByTimeAsync(29_999);
-    await expect(scheduleStaleChunkReload({ reload })).resolves.toBe(false);
+    await expect(scheduleStaleChunkReload({ storage, reload })).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    await expect(scheduleStaleChunkReload({ reload })).resolves.toBe(false);
+    await expect(scheduleStaleChunkReload({ storage, reload })).resolves.toBe(false);
     expect(probe).toHaveBeenCalledOnce();
     expect(reload).toHaveBeenCalledOnce();
   });
@@ -337,9 +330,8 @@ describe("scheduleStaleChunkReload", () => {
     const reload = vi.fn();
     // A fresh document inherits only the persisted guard from the reload that created it.
     const storage = memoryStorage({ [GUARD_KEY]: guard(CONTROL_UI_BUILD_INFO.buildId) });
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
     const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const pending = scheduleStaleChunkReload({ reload });
+    const pending = scheduleStaleChunkReload({ storage, reload });
     await vi.advanceTimersByTimeAsync(29_999);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
@@ -352,14 +344,14 @@ describe("scheduleStaleChunkReload", () => {
     vi.useFakeTimers();
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
     stubDocumentFetch(new Response(null, { status: 503 }), new Response(null, { status: 200 }));
     const targeted = scheduleStaleChunkReload({
       buildId: "gateway-target",
+      storage,
       reload: () => reload("targeted"),
     });
     await vi.advanceTimersByTimeAsync(0);
-    const generic = scheduleStaleChunkReload({ reload: () => reload("generic") });
+    const generic = scheduleStaleChunkReload({ storage, reload: () => reload("generic") });
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(Promise.all([targeted, generic])).resolves.toEqual([true, false]);
     expect(reload).toHaveBeenCalledExactlyOnceWith("targeted");
@@ -369,10 +361,10 @@ describe("scheduleStaleChunkReload", () => {
   it("never lets a persisted build guard suppress recovery for a newer build", async () => {
     const reload = vi.fn();
     const storage = memoryStorage({ [GUARD_KEY]: guard("build-a") });
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
     stubDocumentFetch(new Response(null, { status: 200 }));
     const guardedRecovery = scheduleStaleChunkReload({
       buildId: "build-a",
+      storage,
       reload,
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -380,6 +372,7 @@ describe("scheduleStaleChunkReload", () => {
     await expect(
       scheduleStaleChunkReload({
         buildId: "build-b",
+        storage,
         reload,
       }),
     ).resolves.toBe(true);
@@ -391,19 +384,20 @@ describe("scheduleStaleChunkReload", () => {
   it("does not auto-reload when the guard cannot be persisted", async () => {
     const reload = vi.fn();
     stubDocumentFetch(new Response(null, { status: 200 }), new Response(null, { status: 200 }));
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValueOnce(null);
     await expect(
       scheduleStaleChunkReload({
+        storage: null,
         reload,
       }),
     ).resolves.toBe(false);
-    const deniedStorage = memoryStorage();
-    vi.spyOn(deniedStorage, "setItem").mockImplementation(() => {
-      throw new Error("quota exceeded");
-    });
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValueOnce(deniedStorage);
     await expect(
       scheduleStaleChunkReload({
+        storage: {
+          getItem: () => null,
+          setItem: () => {
+            throw new Error("quota exceeded");
+          },
+        },
         reload,
       }),
     ).resolves.toBe(false);
@@ -414,22 +408,25 @@ describe("scheduleStaleChunkReload", () => {
     vi.useFakeTimers();
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
-    const pending = scheduleStaleChunkReload({ buildId: "build-a", reload });
+    const pending = scheduleStaleChunkReload({ buildId: "build-a", storage, reload });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(pending).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
     expect(storage.getItem(GUARD_KEY)).toBeNull();
     const attempts = fetchMock.mock.calls.length;
     expect(attempts).toBeGreaterThan(1);
-    await expect(scheduleStaleChunkReload({ buildId: "build-a", reload })).resolves.toBe(false);
+    await expect(scheduleStaleChunkReload({ buildId: "build-a", storage, reload })).resolves.toBe(
+      false,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(attempts);
 
     await vi.advanceTimersByTimeAsync(5_000);
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
-    await expect(scheduleStaleChunkReload({ buildId: "build-a", reload })).resolves.toBe(true);
+    await expect(scheduleStaleChunkReload({ buildId: "build-a", storage, reload })).resolves.toBe(
+      true,
+    );
     expect(reload).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(attempts + 1);
   });
@@ -438,15 +435,16 @@ describe("scheduleStaleChunkReload", () => {
     vi.useFakeTimers();
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
-    const older = scheduleStaleChunkReload({ buildId: "build-a", reload });
+    const older = scheduleStaleChunkReload({ buildId: "build-a", storage, reload });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(older).resolves.toBe(false);
     const attempts = fetchMock.mock.calls.length;
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
-    await expect(scheduleStaleChunkReload({ buildId: "build-b", reload })).resolves.toBe(true);
+    await expect(scheduleStaleChunkReload({ buildId: "build-b", storage, reload })).resolves.toBe(
+      true,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(attempts + 1);
     expect(reload).toHaveBeenCalledOnce();
     expect(storage.getItem(GUARD_KEY)).toBe(guard("build-b"));
@@ -464,22 +462,23 @@ describe("scheduleStaleChunkReload", () => {
       vi.stubGlobal("fetch", fetchMock);
       const reload = vi.fn();
       const storage = memoryStorage();
-      vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
 
       const olderBuild = scheduleStaleChunkReload({
         buildId: "build-a",
+        storage,
         reload,
       });
       let ownsNewerBuild = true;
       const newerBuild = scheduleStaleChunkReload({
         buildId: "build-b",
+        storage,
         reload,
         canReload: () => ownsNewerBuild,
       });
       const results = [olderBuild, newerBuild];
       if (replaceOwner) {
         ownsNewerBuild = false;
-        results.push(scheduleStaleChunkReload({ buildId: "build-b", reload }));
+        results.push(scheduleStaleChunkReload({ buildId: "build-b", storage, reload }));
       }
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -501,14 +500,15 @@ describe("scheduleStaleChunkReload", () => {
     vi.stubGlobal("fetch", fetchMock);
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
 
     const olderBuild = scheduleStaleChunkReload({
       buildId: "build-a",
+      storage,
       reload,
     });
     const newerBuild = scheduleStaleChunkReload({
       buildId: "build-b",
+      storage,
       reload,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -529,17 +529,15 @@ describe("scheduleStaleChunkReload", () => {
     const reload = vi.fn();
     const firstStorage = memoryStorage();
     const secondStorage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage)
-      .mockReturnValueOnce(firstStorage)
-      .mockReturnValueOnce(secondStorage)
-      .mockReturnValue(firstStorage);
 
     const first = scheduleStaleChunkReload({
       buildId: "first-build",
+      storage: firstStorage,
       reload,
     });
     const second = scheduleStaleChunkReload({
       buildId: "second-build",
+      storage: secondStorage,
       reload,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -551,6 +549,7 @@ describe("scheduleStaleChunkReload", () => {
     await expect(
       retryStaleChunkReloadWhenReachable({
         reload,
+        storage: firstStorage,
         timeoutMs: 0,
       }),
     ).resolves.toBe(true);
@@ -567,14 +566,15 @@ describe("scheduleStaleChunkReload", () => {
     );
     const reload = vi.fn();
     const storage = memoryStorage({ [GUARD_KEY]: "displayed-build" });
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
 
     const automatic = scheduleStaleChunkReload({
       buildId: "target-build",
+      storage,
       reload: () => reload("automatic"),
     });
     const manual = retryStaleChunkReloadWhenReachable({
       reload: () => reload("manual"),
+      storage,
       timeoutMs: 0,
     });
     sharedProbe.resolve(new Response(null, { status: 200 }));
@@ -592,14 +592,15 @@ describe("scheduleStaleChunkReload", () => {
     );
     const reload = vi.fn();
     const storage = memoryStorage({ [GUARD_KEY]: "displayed-build" });
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
 
     const manual = retryStaleChunkReloadWhenReachable({
       reload: () => reload("manual"),
+      storage,
       timeoutMs: 0,
     });
     const automatic = scheduleStaleChunkReload({
       buildId: "target-build",
+      storage,
       reload: () => reload("automatic"),
     });
     sharedProbe.resolve(new Response(null, { status: 200 }));
@@ -610,6 +611,7 @@ describe("scheduleStaleChunkReload", () => {
     await expect(
       retryStaleChunkReloadWhenReachable({
         reload: () => reload("later"),
+        storage,
         timeoutMs: 0,
       }),
     ).resolves.toBe(false);
@@ -642,13 +644,14 @@ describe("scheduleStaleChunkReload", () => {
     vi.stubGlobal("fetch", fetchMock);
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
 
-    const automatic = scheduleStaleChunkReload({ buildId: "gateway-target", reload });
+    const automatic = scheduleStaleChunkReload({ buildId: "gateway-target", storage, reload });
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledOnce();
     const reloadedAt = Date.now();
-    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(true);
+    await expect(
+      retryStaleChunkReloadWhenReachable({ reload, storage, timeoutMs: 0 }),
+    ).resolves.toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(automatic).resolves.toBe(false);
 
@@ -665,17 +668,16 @@ describe("scheduleStaleChunkReload", () => {
     vi.stubGlobal("fetch", fetchMock);
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
 
-    const generic = scheduleStaleChunkReload({ reload });
+    const generic = scheduleStaleChunkReload({ storage, reload });
     await vi.advanceTimersByTimeAsync(0);
-    cancelStaleChunkRecovery();
+    cancelStaleChunkRecovery(storage);
     await expect(generic).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(reload).not.toHaveBeenCalled();
 
-    const targeted = scheduleStaleChunkReload({ buildId: "gateway-target", reload });
-    cancelStaleChunkRecovery();
+    const targeted = scheduleStaleChunkReload({ buildId: "gateway-target", storage, reload });
+    cancelStaleChunkRecovery(storage);
     await expect(targeted).resolves.toBe(true);
     expect(reload).toHaveBeenCalledOnce();
   });
@@ -689,13 +691,12 @@ describe("scheduleStaleChunkReload", () => {
     vi.stubGlobal("fetch", fetchMock);
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
 
-    const dismissed = scheduleStaleChunkReload({ reload });
+    const dismissed = scheduleStaleChunkReload({ storage, reload });
     await vi.advanceTimersByTimeAsync(0);
-    cancelStaleChunkRecovery();
+    cancelStaleChunkRecovery(storage);
     // The next failure arrives while the aborted probe is still in flight.
-    const rearmed = scheduleStaleChunkReload({ reload });
+    const rearmed = scheduleStaleChunkReload({ storage, reload });
     heldProbe.resolve(new Response(null, { status: 503 }));
     await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
 
@@ -712,10 +713,9 @@ describe("scheduleStaleChunkReload", () => {
     vi.stubGlobal("fetch", fetchMock);
     const reload = vi.fn();
     const storage = memoryStorage();
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
 
-    const automatic = scheduleStaleChunkReload({ reload });
-    const manual = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
+    const automatic = scheduleStaleChunkReload({ storage, reload });
+    const manual = retryStaleChunkReloadWhenReachable({ reload, storage, timeoutMs: 0 });
     await expect(manual).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -796,12 +796,11 @@ describe("retryStaleChunkReloadWhenReachable", () => {
     const reachable = deferred<Response>();
     const reload = vi.fn();
     const storage = memoryStorage({ [GUARD_KEY]: "replacement-build" });
-    vi.mocked(storageAccess.getSafeSessionStorage).mockReturnValue(storage);
     const probe = vi.fn<typeof fetch>(() => reachable.promise);
     vi.stubGlobal("fetch", probe);
     const retries = [
-      retryStaleChunkReloadWhenReachable({ reload }),
-      retryStaleChunkReloadWhenReachable({ reload }),
+      retryStaleChunkReloadWhenReachable({ reload, storage }),
+      retryStaleChunkReloadWhenReachable({ reload, storage }),
     ];
     reachable.resolve(new Response(null, { status: 200 }));
     await expect(Promise.all(retries)).resolves.toEqual([true, false]);

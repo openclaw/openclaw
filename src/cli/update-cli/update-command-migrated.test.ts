@@ -192,6 +192,7 @@ it.for([
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_TEST_RUNTIME_LOG: "1",
     };
     const root = legacy ? path.join(stateDir, "legacy-runtime") : candidateRoot;
     const legacyEffect = path.join(stateDir, "legacy-worker-effect");

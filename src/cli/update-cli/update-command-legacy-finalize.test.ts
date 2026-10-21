@@ -196,6 +196,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     const env: NodeJS.ProcessEnv = {
       ...legacyEnvironment(scratch),
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_TEST_RUNTIME_LOG: "1",
       ...(completed && { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" }),
       ...(scratchTemp && {
         ...tempEnvironment(ownedTemp ? workerTemp : normalTemp),

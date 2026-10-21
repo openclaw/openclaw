@@ -415,6 +415,7 @@ describe("enableConsoleCapture", () => {
   ])(
     "routes non-subsystem $name logs through one file and console sink",
     async ({ log, consoleMethod }) => {
+      vi.stubEnv("OPENCLAW_TEST_RUNTIME_LOG", "1");
       const logPath = tempLogPath();
       setLoggerOverride({ level: "info", file: logPath });
       const consoleSpy = vi.fn();

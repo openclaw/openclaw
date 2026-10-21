@@ -211,7 +211,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
             const source = [
               'import { spawnSync } from "node:child_process";',
               'import { writeFileSync } from "node:fs";',
-              `const result = spawnSync(${JSON.stringify(argv[0])}, ${JSON.stringify(argv.slice(1))}, { cwd: ${JSON.stringify(repoDir)}, env: { ...process.env }, encoding: "utf8", timeout: 240000 });`,
+              `const result = spawnSync(${JSON.stringify(argv[0])}, ${JSON.stringify(argv.slice(1))}, { cwd: ${JSON.stringify(repoDir)}, env: { ...process.env, OPENCLAW_TEST_RUNTIME_LOG: "1" }, encoding: "utf8", timeout: 240000 });`,
               `writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, marker: process.env.OPENCLAW_SUBAGENT_EXEC ?? null }));`,
               'process.stdout.write(result.stdout ?? "");',
               'process.stderr.write(result.stderr ?? "");',
@@ -313,7 +313,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
             }),
             {
               cwd: repoDir,
-              env: { ...state.env },
+              env: { ...state.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
               timeoutMs: 300000,
               maxOutputBytes: 64000,
             },

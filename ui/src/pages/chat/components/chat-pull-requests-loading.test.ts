@@ -4,10 +4,8 @@ import { createComponent, createSignal, flush, merge, type Setter } from "solid-
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import * as staleRecovery from "../../../app/stale-chunk-reload.ts";
-import * as storageAccess from "../../../local-storage.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../../../test-helpers/storage.ts";
 import { pullRequest } from "./chat-pull-requests.test-support.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 
@@ -98,7 +96,6 @@ describe("pull request renderer loading", () => {
   it.each(["current", "hidden", "session changed", "dismissed", "unmounted"] as const)(
     "reloads a stale PR view only for a current owner (%s)",
     async (state) => {
-      vi.spyOn(storageAccess, "getSafeSessionStorage").mockReturnValue(createStorageMock());
       // mock-isolation: fail lazy export access without Vitest wrapping the transport error.
       vi.doMock("./chat-pull-requests-content.tsx", () => ({
         get ChatPullRequestsContent() {
@@ -116,6 +113,7 @@ describe("pull request renderer loading", () => {
         (options) => {
           pending = recover({
             ...options,
+            storage: { getItem: () => null, setItem: () => {} },
             reload,
           });
           return pending;
