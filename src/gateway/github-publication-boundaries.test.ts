@@ -22,6 +22,8 @@ import {
   installGitHubPublicationTestHarness,
   persistClaimPublicationWorkspace,
   persistPublicationTestSession,
+  publicationRequest as sessionRequest,
+  publicationWorktree,
   root,
   seedLocalPublication,
 } from "./github-publication.test-support.js";
@@ -45,11 +47,6 @@ function createLocalCoordinator(database = localDatabase()) {
 const localDatabase = () => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
 const receipt = (database: ReturnType<typeof localDatabase>, requestId: string) =>
   readGitHubPublicationRequest(database.db, { requestId });
-const sessionRequest = (idempotencyKey: string) => ({
-  sessionKey: SESSION_KEY,
-  agentId: "main",
-  idempotencyKey,
-});
 const cloudRequest = (idempotencyKey: string) => ({
   ...sessionRequest(idempotencyKey),
   sessionKey: REQUEST.sessionKey,
@@ -58,14 +55,7 @@ const cloudRequest = (idempotencyKey: string) => ({
 const publish = (coordinator: ReturnType<typeof createLocalCoordinator>, key: string) =>
   coordinator.requestForSessionV2(sessionRequest(key));
 const worktree = (overrides = {}) => ({
-  id: "worktree-1",
-  repoRoot: "/repo",
-  repoFingerprint: "fingerprint-1",
-  path: "/repo/worktree",
-  branch: BRANCH,
-  baseRef: "origin/main",
-  ownerKind: "session",
-  ownerId: SESSION_KEY,
+  ...publicationWorktree(),
   ...overrides,
 });
 function respond(override: (argv: string[]) => ReturnType<typeof commandResult> | undefined) {

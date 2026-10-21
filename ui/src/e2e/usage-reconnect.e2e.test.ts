@@ -4,7 +4,12 @@ import type { SessionsUsageResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  installUsageOverviewGateway as installMockGateway,
+  usageAggregates,
+  usageMessages,
+  usageTotals as createTotals,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage proxy reconnect lifecycle",
@@ -16,21 +21,16 @@ const suite = createControlUiE2eSuite({
 // Mirrors the module-private default usage TTL asserted by this flow.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
-const messages = { total: 2, user: 1, assistant: 1, toolCalls: 0, toolResults: 0, errors: 0 };
+const messages = usageMessages({ total: 2, user: 1, assistant: 1 });
 
-const totals = {
+const totals = createTotals({
   input: 100,
   output: 20,
-  cacheRead: 0,
-  cacheWrite: 0,
   totalTokens: 120,
   totalCost: 0.01,
   inputCost: 0.008,
   outputCost: 0.002,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
+});
 
 function today(): string {
   const date = new Date();
@@ -65,16 +65,12 @@ function sessionsUsage(
       },
     ],
     totals: usageTotals,
-    aggregates: {
+    aggregates: usageAggregates({
       messages,
-      tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-      byModel: [],
-      byProvider: [],
       byAgent: [{ agentId: "main", totals: usageTotals }],
-      byChannel: [],
       costDaily: [{ date, ...usageTotals }],
       daily: [{ ...day, messages: 2, toolCalls: 0, errors: 0 }],
-    },
+    }),
     ...(cacheStatus ? { cacheStatus } : {}),
   };
 }

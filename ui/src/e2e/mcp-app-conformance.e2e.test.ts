@@ -143,8 +143,23 @@ function mountHost(page: Page) {
 function configureImmediate(scenario: string) {
   return fixture.configure({ scenario, callDelayMs: 0 });
 }
-function companionEvents(events: FixtureEvent[], event: string) {
-  return events.filter((entry) => entry.event === event && entry.tool === "app_companion");
+function toolEvents(events: FixtureEvent[], event: string, tool = "app_companion") {
+  return events.filter((entry) => entry.event === event && entry.tool === tool);
+}
+function expectToolResponse(events: FixtureEvent[], tool = "app_companion") {
+  const calls = toolEvents(events, "incoming", tool);
+  expect(calls).toHaveLength(1);
+  const id = calls[0]?.id;
+  expect(id).toBeDefined();
+  expect(toolEvents(events, "response-written", tool)).toMatchObject([{ id, isError: false }]);
+  return id;
+}
+function standaloneAddress(standaloneUrl: string) {
+  return `http://127.0.0.1:${gatewayPort}${standaloneUrl}`;
+}
+async function expectResourceDenied(app: Frame) {
+  await waitForTextContaining(app.locator("#capabilities"), "serverResources", false);
+  await clickFor(app, "read-resource", "resource", "denied:");
 }
 async function waitForFixtureEvent(scenario: string, event: string, timeout?: number) {
   await expect
@@ -414,8 +429,7 @@ suite.define(() => {
             controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt") as string),
           )
           .toBe("summarize selection");
-        const currentView = viewLease();
-        expect(getMcpAppModelContext(runtime, currentView)).toMatchObject({
+        expect(getMcpAppModelContext(runtime, viewLease())).toMatchObject({
           content: [{ type: "text", text: "selected item 42" }],
         });
 
@@ -449,7 +463,7 @@ suite.define(() => {
         const standalonePage = await standaloneContext.newPage();
         standalonePage.on("console", (message) => standaloneDiagnostics.push(message.text()));
         await configureImmediate("standalone-bridge");
-        const absoluteStandaloneUrl = `http://127.0.0.1:${gatewayPort}${standaloneUrl}`;
+        const absoluteStandaloneUrl = standaloneAddress(standaloneUrl);
         const ticket = standaloneUrl.split("#")[1] ?? "";
         await standalonePage.goto(absoluteStandaloneUrl);
         app = await findAppFrame(standalonePage);
@@ -459,29 +473,19 @@ suite.define(() => {
         expect(authorizationHeaders.every((value) => value.startsWith("MCP-App v1."))).toBe(true);
         expect(authorizationHeaders.some((value) => value === `Bearer ${authValue}`)).toBe(false);
         expect(ticket).not.toBe("");
-        expect(requestUrls.some((value) => value.includes(ticket))).toBe(false);
-        expect(referrers.some((value) => value.includes(ticket))).toBe(false);
-        expect(standaloneDiagnostics.some((value) => value.includes(ticket))).toBe(false);
+        for (const values of [requestUrls, referrers, standaloneDiagnostics]) {
+          expect(values.some((value) => value.includes(ticket))).toBe(false);
+        }
 
         await configureImmediate("standalone-graceful-teardown");
         await teardownProof.run("standalone-graceful-teardown", standalonePage, app, async () => {
           await app.locator("#request-teardown").click();
         });
         for (const { events } of teardownProof.records) {
-          const calls = events.filter(
-            (event) => event.event === "incoming" && event.tool === "cleanup_save",
-          );
-          expect(calls).toHaveLength(1);
-          const id = calls[0]?.id;
-          expect(id).toBeDefined();
+          const id = expectToolResponse(events, "cleanup_save");
           expect(events.filter((event) => event.event === "cleanup-save")).toMatchObject([
             { requestId: id },
           ]);
-          expect(
-            events.filter(
-              (event) => event.event === "response-written" && event.tool === "cleanup_save",
-            ),
-          ).toMatchObject([{ id, isError: false }]);
         }
         await configureImmediate("standalone-after-teardown");
         await standalonePage.reload();
@@ -500,18 +504,12 @@ suite.define(() => {
 
         await standalonePage.reload();
         app = await findAppFrame(standalonePage);
-        await waitForTextContaining(app.locator("#capabilities"), "serverResources", false);
-        await clickFor(app, "read-resource", "resource", "denied:");
+        await expectResourceDenied(app);
 
         const revokedControlPage = await controlContext.newPage();
         await mountHost(revokedControlPage);
         const revokedControlApp = await findAppFrame(revokedControlPage);
-        await waitForTextContaining(
-          revokedControlApp.locator("#capabilities"),
-          "serverResources",
-          false,
-        );
-        await clickFor(revokedControlApp, "read-resource", "resource", "denied:");
+        await expectResourceDenied(revokedControlApp);
         await capture(revokedControlPage, "control-ui-resource-revoked");
         await revokedControlPage.close();
 
@@ -547,7 +545,7 @@ suite.define(() => {
             const standaloneUrl = await requestStandaloneUrl(controlPage, { sessionKey, viewId });
             const standalonePage = await standaloneContext.newPage();
             const requests = observeMcpAppRequests(standalonePage);
-            await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
+            await standalonePage.goto(standaloneAddress(standaloneUrl));
             let app = await findAppFrame(standalonePage);
             // Each RPC stays below 10s; their composition must cross the former 15s HTTP cutoff.
             const timingSpec = { scenario: "list8-call8", callDelayMs: 8000 };
@@ -619,7 +617,7 @@ suite.define(() => {
                   8000,
                 );
                 const events = await fixture.readEvents(spec.scenario);
-                const calls = companionEvents(events, "incoming");
+                const calls = toolEvents(events, "incoming");
                 expect(calls).toHaveLength(1);
                 const call = calls[0]!;
                 expect(
@@ -649,7 +647,7 @@ suite.define(() => {
                 const response =
                   spec.action === "teardown"
                     ? await standalonePage.reload()
-                    : await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
+                    : await standalonePage.goto(standaloneAddress(standaloneUrl));
                 const timeOrigin = await standalonePage.evaluate(() => performance.timeOrigin);
                 expect(response?.status()).toBe(200);
                 expect(timeOrigin).not.toBe(previousTimeOrigin);
@@ -669,12 +667,12 @@ suite.define(() => {
               expect(controlResponses).toHaveLength(1);
               expect(controlResponses[0]?.writableFinished).toBe(true);
               const controlEvents = await fixture.readEvents(spec.scenario + "-control");
-              expect(companionEvents(controlEvents, "incoming")).toHaveLength(1);
-              expect(companionEvents(controlEvents, "response-written")).toHaveLength(1);
+              expect(toolEvents(controlEvents, "incoming")).toHaveLength(1);
+              expect(toolEvents(controlEvents, "response-written")).toHaveLength(1);
               // A subsequent real response is a causal barrier for the cancelled handler's late reply.
               const settledEvents = await fixture.readEvents(spec.scenario);
-              expect(companionEvents(settledEvents, "response-written")).toEqual([]);
-              expect(companionEvents(settledEvents, "incoming")).toHaveLength(1);
+              expect(toolEvents(settledEvents, "response-written")).toEqual([]);
+              expect(toolEvents(settledEvents, "incoming")).toHaveLength(1);
             }
             expect(
               (await fixture.readEvents()).filter((event) => event.method === "initialize"),
@@ -704,26 +702,15 @@ suite.define(() => {
               });
               await configureImmediate("history-forward");
               await historyPage.goto(fixtureHistoryUrl);
-              await historyPage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
+              await historyPage.goto(standaloneAddress(standaloneUrl));
               await findAppFrame(historyPage);
               await historyPage.goBack({ timeout: 15_000 });
               expect(historyPage.url()).toBe(fixtureHistoryUrl);
               await waitForText(historyPage.locator("p"), "History control");
               await historyPage.goForward({ timeout: 15_000 });
               const historyApp = await findAppFrame(historyPage);
-              await historyApp.locator("#call-app").click();
-              await waitForTextContaining(historyApp.locator("#app-tool"), "companion-called");
-
-              const historyEvents = (await fixture.readEvents("history-forward")).filter(
-                (event) => event.tool === "app_companion",
-              );
-              const historyCalls = historyEvents.filter((event) => event.event === "incoming");
-              expect(historyCalls).toHaveLength(1);
-              const historyCallId = historyCalls[0]?.id;
-              expect(historyCallId).toBeDefined();
-              expect(
-                historyEvents.filter((event) => event.event === "response-written"),
-              ).toMatchObject([{ id: historyCallId, isError: false }]);
+              await clickFor(historyApp, "call-app", "app-tool", "companion-called");
+              expectToolResponse(await fixture.readEvents("history-forward"));
               for (const pathname of ["/__openclaw__/mcp-app", "/__openclaw__/mcp-app/view"]) {
                 expect(responses.filter((response) => response.pathname === pathname)).toEqual(
                   expect.arrayContaining([

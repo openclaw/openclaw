@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  installUsageOverviewGateway as installMockGateway,
+  usageAggregates,
+  usagePageOptions,
+  usageTotals as createTotals,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage selected-session details" });
 
@@ -8,19 +13,7 @@ suite.define(() => {
   it("counts assistant invocations and refreshes selected usage details", async () => {
     const date = "2026-08-20";
     const start = Date.parse(`${date}T12:00:00Z`);
-    const totals = {
-      input: 300,
-      output: 60,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 360,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    };
+    const totals = createTotals({ input: 300, output: 60, totalTokens: 360 });
     const tools = {
       totalCalls: 3,
       uniqueTools: 2,
@@ -60,16 +53,11 @@ suite.define(() => {
         },
       ],
       totals: usageTotals,
-      aggregates: {
+      aggregates: usageAggregates({
         messages,
         tools,
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
         costDaily: [{ date, ...usageTotals }],
-      },
+      }),
     });
     const logs = (
       [
@@ -82,9 +70,7 @@ suite.define(() => {
     ).map(([offset, role, content]) => ({ timestamp: start + offset, role, content }));
     await suite.withPage(
       {
-        locale: "en-US",
-        timezoneId: "UTC",
-        serviceWorkers: "block",
+        ...usagePageOptions,
         viewport: { width: 1440, height: 1000 },
       },
       async ({ page }) => {

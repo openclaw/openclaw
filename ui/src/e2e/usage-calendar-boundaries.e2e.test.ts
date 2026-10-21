@@ -1,39 +1,17 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { SessionsUsageResult } from "../../../src/shared/usage-types.js";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  installUsageOverviewGateway as installMockGateway,
+  usageAggregates,
+  usageMessages,
+  usagePageOptions,
+  usageTotals,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage calendar boundaries" });
-const emptyTotals = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
-const emptyMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
-function aggregates(
-  messages = emptyMessages,
-  costDaily: SessionsUsageResult["aggregates"]["costDaily"] = [],
-) {
-  return {
-    messages,
-    costDaily,
-    tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-    byModel: [],
-    byProvider: [],
-    byAgent: [],
-    byChannel: [],
-    daily: [],
-  };
-}
+const emptyTotals = usageTotals();
+const emptyMessages = usageMessages();
 async function selectLocalDate(page: Page, date: string) {
   await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
   const inputs = await page.locator(".usage-date-input").all();
@@ -80,9 +58,8 @@ suite.define(() => {
       ] as const;
       await suite.withPage(
         {
-          locale: "en-US",
+          ...usagePageOptions,
           timezoneId,
-          serviceWorkers: "block",
           viewport: { width: 1440, height: 1000 },
         },
         async ({ page }) => {
@@ -116,7 +93,7 @@ suite.define(() => {
                         },
                       ],
                       totals,
-                      aggregates: aggregates(messages, [{ date, ...totals }]),
+                      aggregates: usageAggregates({ messages, costDaily: [{ date, ...totals }] }),
                     },
                   })),
                   {
@@ -125,7 +102,7 @@ suite.define(() => {
                       updatedAt,
                       sessions: [],
                       totals: emptyTotals,
-                      aggregates: aggregates(messages),
+                      aggregates: usageAggregates({ messages, costDaily: [] }),
                     },
                   },
                 ],
@@ -263,9 +240,10 @@ suite.define(() => {
                 },
               ],
               totals,
-              aggregates: aggregates({ ...messages, total: 3, user: 2, assistant: 1 }, [
-                { date, ...totals },
-              ]),
+              aggregates: usageAggregates({
+                messages: { ...messages, total: 3, user: 2, assistant: 1 },
+                costDaily: [{ date, ...totals }],
+              }),
             },
             "usage.status": { updatedAt: end, providers: [] },
           },
@@ -345,7 +323,7 @@ suite.define(() => {
                 },
               ],
               totals,
-              aggregates: aggregates(emptyMessages, [{ date, ...totals }]),
+              aggregates: usageAggregates({ costDaily: [{ date, ...totals }] }),
             },
             "usage.status": { updatedAt, providers: [] },
             "sessions.usage.timeseries": { points },

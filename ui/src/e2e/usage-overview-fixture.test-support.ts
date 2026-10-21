@@ -1,10 +1,39 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import type { SessionsUsageParams } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
 import { buildUsageOverview } from "../../../src/shared/usage-overview.js";
 import type { SessionUsageEntry, SessionsUsageResult } from "../../../src/shared/usage-types.js";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e-contract.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+
+export const usagePageOptions = {
+  locale: "en-US",
+  timezoneId: "UTC",
+  viewport: { width: 1440, height: 1100 },
+  serviceWorkers: "block",
+} as const;
+
+export const usageTotals = (overrides: Partial<SessionsUsageResult["totals"]> = {}) => ({
+  ...createEmptyCostUsageTotals(),
+  ...overrides,
+});
+export const usageMessages = (
+  overrides: Partial<SessionsUsageResult["aggregates"]["messages"]> = {},
+) => ({ total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0, ...overrides });
+
+export const usageAggregates = (
+  overrides: Partial<SessionsUsageResult["aggregates"]> = {},
+): SessionsUsageResult["aggregates"] => ({
+  messages: usageMessages(),
+  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+  byModel: [],
+  byProvider: [],
+  byAgent: [],
+  byChannel: [],
+  daily: [],
+  ...overrides,
+});
 
 /** Exercise server-owned filtering without copying that policy into the browser fixture. */
 export async function installUsageOverviewGateway(

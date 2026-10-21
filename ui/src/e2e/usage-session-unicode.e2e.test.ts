@@ -1,23 +1,24 @@
 import { expect, it } from "vitest";
-import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
-import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  installUsageOverviewGateway as installMockGateway,
+  usageAggregates,
+  usageTotals,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage session filter Unicode",
   startServerBeforeBrowser: true,
 });
 
-const usageTotals = {
-  ...createEmptyCostUsageTotals(),
+const totals = usageTotals({
   input: 100,
   output: 20,
   totalTokens: 120,
   totalCost: 0.01,
   inputCost: 0.008,
   outputCost: 0.002,
-};
+});
 
 function currentDay(): string {
   const date = new Date();
@@ -30,9 +31,9 @@ function usageResponse(sessionKey?: string) {
     updatedAt: Date.now(),
     startDate: day,
     endDate: day,
-    totals: usageTotals,
-    sessions: sessionKey ? [{ key: sessionKey, usage: usageTotals }] : [],
-    aggregates: { ...buildAggregatesFromSessions([]), costDaily: [{ date: day, ...usageTotals }] },
+    totals,
+    sessions: sessionKey ? [{ key: sessionKey, usage: totals }] : [],
+    aggregates: usageAggregates({ costDaily: [{ date: day, ...totals }] }),
   };
 }
 

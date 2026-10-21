@@ -2,12 +2,10 @@ import { writeFile } from "node:fs/promises";
 // Control UI tests cover mobile pairing setup through the mocked Gateway.
 import path from "node:path";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import qrcode from "qrcode";
 import { beforeEach, expect, it } from "vitest";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -40,6 +38,19 @@ async function captureUiProof(page: Page, fileName: string) {
   }
   await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
 }
+
+async function expectVisible(locator: Locator) {
+  expect(await locator.isVisible()).toBe(true);
+}
+
+const pairCommand = {
+  name: "pair",
+  textAliases: ["/pair"],
+  description: "Generate setup codes and approve device pairing requests.",
+  source: "plugin",
+  scope: "both",
+  acceptsArgs: true,
+};
 
 async function expectPairingLayout(page: Page, mode: "node" | "qr") {
   const layout = await page.evaluate((currentMode) => {
@@ -166,12 +177,7 @@ suite.define(() => {
           "commands.list": {
             commands: [
               {
-                name: "pair",
-                textAliases: ["/pair"],
-                description: "Generate setup codes and approve device pairing requests.",
-                source: "plugin",
-                scope: "both",
-                acceptsArgs: true,
+                ...pairCommand,
                 clientPresentation: {
                   when: "no-arguments",
                   action: { kind: "device-pairing" },
@@ -229,16 +235,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-queue").count()).toBe(0);
 
       await gateway.setMethodResponse("commands.list", {
-        commands: [
-          {
-            name: "pair",
-            textAliases: ["/pair"],
-            description: "Generate setup codes and approve device pairing requests.",
-            source: "plugin",
-            scope: "both",
-            acceptsArgs: true,
-          },
-        ],
+        commands: [pairCommand],
       });
       await page.reload();
       await baseline.waitFor();
@@ -291,6 +288,10 @@ suite.define(() => {
             "node.list": { nodes: [] },
           },
         });
+        const button = (name: string) => page.getByRole("button", { name });
+        const text = (name: string) => page.getByText(name, { exact: true });
+        const setCode = (id: string, access: "full" | "limited" | "node", expires?: number) =>
+          gateway.setMethodResponse("device.pair.setupCode", setupResult(id, access, expires));
 
         const response = await page.goto(`${suite.server.baseUrl}settings/security`);
         expect(response?.status()).toBe(200);
@@ -303,7 +304,7 @@ suite.define(() => {
         const dialog = page.getByRole("dialog", { name: "Pair a device" });
         const qr = page.getByAltText("OpenClaw mobile pairing QR code");
         await dialog.waitFor();
-        await page.getByRole("button", { name: "Create setup code" }).waitFor();
+        await button("Create setup code").waitFor();
         const dialogBox = await page.locator(".device-pair-setup").boundingBox();
         expect(dialogBox?.width).toBeLessThanOrEqual(390);
         await captureUiProof(page, "01-mobile-access-selection.png");
@@ -336,10 +337,8 @@ suite.define(() => {
         await helpPopup.close();
 
         await gateway.deferNext("device.pair.setupCode");
-        await page.getByRole("button", { name: "Create setup code" }).click();
-        expect(
-          await page.getByRole("status").getByText("Creating a secure setup code…").isVisible(),
-        ).toBe(true);
+        await button("Create setup code").click();
+        await expectVisible(page.getByRole("status").getByText("Creating a secure setup code…"));
         expect(await qr.count()).toBe(0);
         expect(await page.locator('input[name="device-pair-access"]').first().isDisabled()).toBe(
           true,
@@ -366,22 +365,17 @@ suite.define(() => {
           ts: 2,
         });
         await expect.poll(async () => qr.count()).toBe(0);
-        expect(await page.getByText("Test iPhone", { exact: true }).isVisible()).toBe(true);
-        expect(
-          await page.getByText("Device paired · Full access", { exact: true }).isVisible(),
-        ).toBe(true);
+        await expectVisible(text("Test iPhone"));
+        await expectVisible(text("Device paired · Full access"));
         await captureUiProof(page, "04-mobile-full-success.png");
-        await page.getByRole("button", { name: "Done" }).click();
+        await button("Done").click();
         await dialog.waitFor({ state: "hidden" });
 
         await page.setViewportSize({ height: 900, width: 1280 });
         await pairFromSettings.click();
         await page.locator('input[name="device-pair-access"]').nth(1).check();
-        await gateway.setMethodResponse(
-          "device.pair.setupCode",
-          setupResult("setup-limited", "limited"),
-        );
-        await page.getByRole("button", { name: "Create setup code" }).click();
+        await setCode("setup-limited", "limited");
+        await button("Create setup code").click();
         await qr.waitFor();
         await captureUiProof(page, "04-desktop-waiting.png");
         await expectPairingLayout(page, "qr");
@@ -395,20 +389,15 @@ suite.define(() => {
           ts: 3,
         });
         await expect.poll(async () => qr.count()).toBe(0);
-        expect(
-          await page.getByRole("heading", { name: "Device paired", exact: true }).isVisible(),
-        ).toBe(true);
-        expect(await page.getByText("Limited access", { exact: true }).isVisible()).toBe(true);
+        await expectVisible(page.getByRole("heading", { name: "Device paired", exact: true }));
+        await expectVisible(text("Limited access"));
         await captureUiProof(page, "05-desktop-limited-success.png");
-        await page.getByRole("button", { name: "Done" }).click();
+        await button("Done").click();
 
         // The completion event is droppable. With the event never delivered, the
         // lapsing credential must still resolve to paired, not to expired.
         await pairFromSettings.click();
-        await gateway.setMethodResponse(
-          "device.pair.setupCode",
-          setupResult("setup-missed", "full", Date.now() + 2_000),
-        );
+        await setCode("setup-missed", "full", Date.now() + 2_000);
         await gateway.setMethodResponse("device.pair.setupStatus", {
           completion: {
             setupId: "setup-missed",
@@ -418,24 +407,21 @@ suite.define(() => {
             ts: 5,
           },
         });
-        await page.getByRole("button", { name: "Create setup code" }).click();
+        await button("Create setup code").click();
         await qr.waitFor();
-        await page.getByText("Recovered iPhone", { exact: true }).waitFor();
+        await text("Recovered iPhone").waitFor();
         expect(await qr.count()).toBe(0);
-        expect(await page.getByText("Setup code expired", { exact: true }).count()).toBe(0);
+        expect(await text("Setup code expired").count()).toBe(0);
         expect((await gateway.getRequests("device.pair.setupStatus")).at(-1)?.params).toEqual({
           setupId: "setup-missed",
         });
         await captureUiProof(page, "06-desktop-reconciled-success.png");
-        await page.getByRole("button", { name: "Done" }).click();
+        await button("Done").click();
 
         // Retiring the bearer is not success when the credential-bearing
         // response did not finish. Surface a recovery path instead.
         await pairFromSettings.click();
-        await gateway.setMethodResponse(
-          "device.pair.setupCode",
-          setupResult("setup-uncertain", "full", Date.now() + 2_000),
-        );
+        await setCode("setup-uncertain", "full", Date.now() + 2_000);
         await gateway.setMethodResponse("device.pair.setupStatus", {
           deliveryUncertain: {
             setupId: "setup-uncertain",
@@ -444,44 +430,34 @@ suite.define(() => {
             ts: 6,
           },
         });
-        await page.getByRole("button", { name: "Create setup code" }).click();
+        await button("Create setup code").click();
         await page
           .getByRole("heading", { name: "Pairing delivery could not be confirmed" })
           .waitFor();
         expect(await qr.count()).toBe(0);
-        expect(await page.getByRole("button", { name: "Generate new code" }).isVisible()).toBe(
-          true,
-        );
-        expect(await page.getByRole("button", { name: "Manage devices" }).isVisible()).toBe(true);
+        await expectVisible(button("Generate new code"));
+        await expectVisible(button("Manage devices"));
         await captureUiProof(page, "07-desktop-delivery-uncertain.png");
         await page.locator(".device-pair-setup__close").click();
 
         await pairFromSettings.click();
         await gateway.deferNext("device.pair.setupStatus");
-        await gateway.setMethodResponse(
-          "device.pair.setupCode",
-          setupResult("setup-expired", "full", 0),
-        );
-        await page.getByRole("button", { name: "Create setup code" }).click();
+        await setCode("setup-expired", "full", 0);
+        await button("Create setup code").click();
         await page.getByRole("status").getByText("Loading…", { exact: true }).waitFor();
         expect(await qr.count()).toBe(0);
-        expect(await page.getByRole("button", { name: "Copy setup code" }).count()).toBe(0);
-        expect(await page.getByText(setupCode, { exact: true }).count()).toBe(0);
+        expect(await button("Copy setup code").count()).toBe(0);
+        expect(await text(setupCode).count()).toBe(0);
         await gateway.resolveDeferred("device.pair.setupStatus", {});
         await page.getByRole("heading", { name: "Setup code expired", exact: true }).waitFor();
         expect(await qr.count()).toBe(0);
         await captureUiProof(page, "07-desktop-expired.png");
 
-        await gateway.setMethodResponse(
-          "device.pair.setupCode",
-          setupResult("setup-current", "full"),
-        );
+        await setCode("setup-current", "full");
         await gateway.deferNext("device.pair.setupCode");
-        await page.getByRole("button", { name: "Generate new code" }).click();
+        await button("Generate new code").click();
         expect(await qr.count()).toBe(0);
-        expect(
-          await page.getByText("Creating a secure setup code…", { exact: true }).isVisible(),
-        ).toBe(true);
+        await expectVisible(text("Creating a secure setup code…"));
         await gateway.resolveDeferred(
           "device.pair.setupCode",
           setupResult("setup-current", "full"),
@@ -497,32 +473,27 @@ suite.define(() => {
         await captureUiProof(page, "08-desktop-regenerated-waiting.png");
 
         await gateway.deferNext("device.pair.setupCode");
-        await page.getByRole("button", { name: "New code" }).click();
+        await button("New code").click();
         expect(await qr.count()).toBe(0);
         await gateway.rejectDeferred("device.pair.setupCode", { message: "setup unavailable" });
         const error = page.getByRole("alert");
-        expect(await error.getByText("Could not create a setup code.").isVisible()).toBe(true);
-        expect(await error.getByText("setup unavailable", { exact: false }).isVisible()).toBe(true);
+        await expectVisible(error.getByText("Could not create a setup code."));
+        await expectVisible(error.getByText("setup unavailable", { exact: false }));
         await captureUiProof(page, "09-desktop-error.png");
 
-        await gateway.setMethodResponse(
-          "device.pair.setupCode",
-          setupResult("setup-recovered", "full"),
-        );
-        await page.getByRole("button", { name: "Reload" }).click();
+        await setCode("setup-recovered", "full");
+        await button("Reload").click();
         await qr.waitFor();
 
         await page.clock.install();
         await gateway.deferNext("device.pair.setupCode");
-        await page.getByRole("button", { name: "New code" }).click();
+        await button("New code").click();
         await page.clock.fastForward(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS + 1);
         await page.clock.runFor(100);
-        expect(
-          await error
-            .getByText("gateway request timed out after 30000ms: device.pair.setupCode")
-            .isVisible(),
-        ).toBe(true);
-        await page.getByRole("button", { name: "Reload" }).click();
+        await expectVisible(
+          error.getByText("gateway request timed out after 30000ms: device.pair.setupCode"),
+        );
+        await button("Reload").click();
         await qr.waitFor();
         await page.locator(".device-pair-setup__close").click();
         await dialog.waitFor({ state: "hidden" });
@@ -533,51 +504,12 @@ suite.define(() => {
           { height: 844, width: 390 },
         ]) {
           await page.setViewportSize(viewport);
-          await gateway.setMethodResponse(
-            "device.pair.setupCode",
-            setupResult(`setup-node-${viewport.width}`, "node", Date.now() + 60_000),
-          );
+          await setCode(`setup-node-${viewport.width}`, "node", Date.now() + 60_000);
           await pairFromSettings.click();
-          try {
-            await dialog.waitFor();
-          } catch (reopenError) {
-            try {
-              const state = await evaluateControlUiContext(page, (context) => {
-                const overlay = context.overlays.snapshot;
-                const gatewaySnapshot = context.gateway.snapshot;
-                return {
-                  gatewayPhase: gatewaySnapshot.phase,
-                  admin: gatewaySnapshot.hello?.auth?.scopes?.includes("operator.admin") ?? false,
-                  pairingOpen: overlay.devicePairSetupOpen,
-                  pairingPhase: overlay.devicePairSetupLifecycle.phase,
-                  modalLayers: document.openClawModalLayers?.size ?? 0,
-                  hosts: Array.from(
-                    document.querySelectorAll<OpenClawModalDialog>("openclaw-modal-dialog"),
-                    (host) => ({
-                      open: host.open,
-                      connected: host.isConnected,
-                      dialogs: Array.from(host.querySelectorAll("dialog"), (native) => ({
-                        open: native.open,
-                        inert: native.inert,
-                        phase: native.dataset.phase,
-                        visible: native.getClientRects().length > 0,
-                      })),
-                    }),
-                  ),
-                };
-              });
-              console.warn(
-                "[mobile-pairing] reopen timeout",
-                JSON.stringify({ viewport, pageErrorCount: pageErrors.length, state }),
-              );
-            } catch {
-              console.warn("[mobile-pairing] reopen timeout diagnostics unavailable");
-            }
-            throw reopenError;
-          }
+          await dialog.waitFor();
           await page.locator('input[name="device-pair-access"]').nth(2).check();
-          await page.getByRole("button", { name: "Create setup code" }).click();
-          await page.getByText(nodeCommand, { exact: true }).waitFor();
+          await button("Create setup code").click();
+          await text(nodeCommand).waitFor();
           await captureUiProof(page, `11-node-${viewport.width}.png`);
           await expectPairingLayout(page, "node");
           const copy = setup.locator(".chat-copy-btn");
@@ -588,7 +520,7 @@ suite.define(() => {
           await expect
             .poll(() => page.evaluate(() => navigator.clipboard.readText()))
             .toBe(nodeCommand);
-          const manageDevices = page.getByRole("button", { name: "Manage devices" });
+          const manageDevices = button("Manage devices");
           await manageDevices.scrollIntoViewIfNeeded();
           await manageDevices.click({ trial: true });
           if (viewport.width === 1280) {
@@ -611,7 +543,7 @@ suite.define(() => {
           bootstrapProfile: "node",
           includeQr: false,
         });
-        await page.getByRole("button", { name: "Manage devices" }).click();
+        await button("Manage devices").click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/devices");
         expect(pageErrors).toEqual([]);
       },

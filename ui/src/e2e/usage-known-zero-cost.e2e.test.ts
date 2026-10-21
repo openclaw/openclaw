@@ -1,7 +1,12 @@
 import { expect, it } from "vitest";
 import { createRecordedCostUsage } from "../pages/usage/test-helpers/recorded-cost.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  installUsageOverviewGateway as installMockGateway,
+  usageAggregates,
+  usageMessages,
+  usagePageOptions,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI known-zero usage cost mocked Gateway E2E",
@@ -23,24 +28,16 @@ suite.define(() => {
         endDate: fixture.costDaily.at(-1)!.date,
         sessions: fixture.sessions,
         totals: fixture.totals,
-        aggregates: {
-          messages: { total: 6, user: 3, assistant: 3, toolCalls: 0, toolResults: 0, errors: 0 },
-          tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-          byModel: [],
-          byProvider: [],
-          byAgent: [],
-          byChannel: [],
-          daily: [],
+        aggregates: usageAggregates({
+          messages: usageMessages({ total: 6, user: 3, assistant: 3 }),
           costDaily: fixture.costDaily,
-        },
+        }),
       },
       "usage.status": { updatedAt, providers: [] },
     };
     await suite.withPage(
       {
-        locale: "en-US",
-        timezoneId: "UTC",
-        serviceWorkers: "block",
+        ...usagePageOptions,
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
