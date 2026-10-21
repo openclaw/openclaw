@@ -305,7 +305,7 @@ describe("Testbox admission GitHub response", () => {
     return { ...result, receipt };
   }
 
-  it.each([
+  it.each<Parameters<typeof admit>[0] & { classification: string; bodyKind: string }>([
     { ...jsonDenial(secret, "primary-rate-limit"), headers: rateHeaders },
     jsonDenial("You have exceeded a secondary rate limit. " + secret, "secondary-rate-limit"),
     jsonDenial("Resource not accessible by integration", "resource-not-accessible"),

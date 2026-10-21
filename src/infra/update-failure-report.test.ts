@@ -655,7 +655,7 @@ describe("update failure report", () => {
     }
   });
 
-  it.each(["enumeration", "receipt"] as const)(
+  it.for(["enumeration", "receipt"] as const)(
     "preserves a successor while cleanup's %s is delayed",
     async (checkpoint, { signal }) => {
       const { env, prepared, stateDir, submit } =

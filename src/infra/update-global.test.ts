@@ -127,10 +127,11 @@ function rootRunner(roots: Record<string, string | null>, version?: string): Com
     if (version && argv[1] === "--version") {
       return commandResult(`${version}\n`);
     }
-    if (!(argv[0] in roots)) {
+    const command = argv[0];
+    if (!command || !(command in roots)) {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     }
-    const root = roots[argv[0]];
+    const root = roots[command];
     return commandResult(root ? `${root}\n` : "", root ? 0 : 1);
   };
 }

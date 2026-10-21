@@ -26,7 +26,6 @@ import {
   readReleaseChecksWorkflow,
   readWorkflow,
   readWorkflowOutputs,
-  requiredWorkflowStep,
   runGit,
   runWorkflowShellScript,
   type WorkflowStep,
@@ -68,8 +67,13 @@ function readJson(file: string) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
-const step = (job: { steps: WorkflowStep[] }, name: string) =>
-  requiredWorkflowStep(job.steps, name);
+function step<T extends { steps: WorkflowStep[] }>(job: T, name: string): T["steps"][number];
+function step(job: { steps: WorkflowStep[] }, name: string) {
+  return expectDefined(
+    job.steps.find((entry) => entry.name === name),
+    name,
+  );
+}
 
 function expectSuccess(result: { status: number | null; stdout: string; stderr: string }) {
   expect(result.status, result.stdout + result.stderr).toBe(0);

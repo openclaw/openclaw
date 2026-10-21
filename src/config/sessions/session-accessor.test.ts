@@ -911,8 +911,19 @@ describe("session accessor seam", () => {
   it("applies explicit replacements without exposing mutable store rows", async () => {
     const mainKey = "agent:main:main";
     const otherKey = "agent:main:other";
-    await seed(entryScope(mainKey), "session-1", { status: "interrupted" });
-    await seed(entryScope(otherKey), "session-2", { status: "interrupted" }, 20);
+    await mutateLifecycle({
+      storePath,
+      upserts: (
+        [
+          ["main", "session-1", "interrupted", 10],
+          ["other", "session-2", "interrupted", 20],
+        ] as const
+      ).map(([suffix, sessionId, status, updatedAt]) => ({
+        sessionKey: `agent:main:${suffix}`,
+        entry: { sessionId, status, updatedAt },
+      })),
+      skipMaintenance: true,
+    });
     const participant = { identity: { type: "profile" as const, id: "replacement-reader" } };
     recordSessionParticipant(entryScope(mainKey), {
       ...participant,
