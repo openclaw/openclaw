@@ -481,9 +481,13 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 description={t("meetingCapture.libraryHint")}
                 onClick={() => context.navigate("meetings")}
               />
-              <Errored fallback={() => <CaptureSummary status={null} />}>
+              <Errored fallback={(_error) => <CaptureSummary status={null} />}>
                 <Loading on={requestKey()} fallback={<CaptureSummary status={null} />}>
-                  <Show when={readStatus()} keyed fallback={<CaptureSummary status={null} />}>
+                  <Show
+                    when={client() && readStatus()}
+                    keyed
+                    fallback={<CaptureSummary status={null} />}
+                  >
                     {(current) => <CaptureSummary status={current.status} />}
                   </Show>
                 </Loading>

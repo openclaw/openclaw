@@ -203,6 +203,18 @@ it("keeps the focused days draft and Refresh control through a failed inventory 
   expect(input.value).toBe("14");
 });
 
+it("clears a failed inventory read after disconnect", async () => {
+  const { page, request, publish, client } = await mount();
+  request.mockRejectedValueOnce(new Error("Inventory unavailable"));
+  click(page, "Refresh");
+  await waitText(page, "Inventory unavailable");
+  publish(false, client, null);
+  await waitForSolid(() => {
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(page.textContent).not.toContain("Inventory unavailable");
+  });
+});
+
 it("retires the days draft and inventory when a fresh hello removes access", async () => {
   const { page, context, client, publish } = await mount();
   const input = draft(page, "14");

@@ -135,6 +135,20 @@ afterEach(() => {
 });
 
 describe("curated meeting capture", () => {
+  it.each([false, true])(
+    "shows unknown health after disconnect (failed read=%s)",
+    async (failStatus) => {
+      const { page, context, publish } = await mount({ failStatus });
+      publish(false, context.gateway.snapshot.client!, null);
+      await waitForSolid(() => {
+        expect(page.querySelector('[role="alert"]')).toBeNull();
+        expect(page.textContent).not.toContain("Archive unavailable");
+        expect(page.textContent).not.toContain("No saved transcript was reported.");
+        expect(page.querySelectorAll(".settings-status")[0]?.textContent).toContain("Unknown");
+      });
+    },
+  );
+
   it.each<{
     field: string;
     value: string;

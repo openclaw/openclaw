@@ -57,6 +57,9 @@ export function createSettingsStatus<T>(
     return outcome && "result" in outcome ? outcome.result : undefined;
   });
   const read = () => {
+    if (!client()) {
+      return result();
+    }
     const outcome = reads().value();
     if (outcome && "error" in outcome) {
       throw outcome.error;
