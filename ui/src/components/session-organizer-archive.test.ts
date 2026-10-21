@@ -64,11 +64,10 @@ describe("session organizer nested archive choice", () => {
       const modal = createModalDialogTestFixture();
       onTestFinished(() => modal.cleanup());
       const harness = createHarness();
-      const root = {
-        ...sessionRow(0),
+      const root = sessionRow(0, {
         hasArchiveDescendants: true,
         hasActiveRun: activeDepth === 0,
-      };
+      });
       prepareArchiveTree(
         harness,
         Array.from({ length: count }, (_, index) =>
@@ -121,7 +120,7 @@ describe("session organizer nested archive choice", () => {
     "keeps single archive when no descendants remain (hint=%s)",
     async (hint) => {
       const harness = createHarness();
-      const root = { ...sessionRow(0), hasArchiveDescendants: hint };
+      const root = sessionRow(0, { hasArchiveDescendants: hint });
       const reads = prepareArchiveTree(harness, [gatewayRow(0)]);
       await archiveSessionWithUndo(harness.host, root, harness.scope);
       expect(harness.patch).toHaveBeenCalledOnce();

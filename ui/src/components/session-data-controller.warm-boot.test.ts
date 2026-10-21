@@ -23,6 +23,14 @@ function row(key: string, updatedAt: number, extra: Partial<GatewaySessionRow> =
   return { key: `agent:main:${key}`, kind: "direct" as const, updatedAt, ...extra };
 }
 
+async function expectKeys(owner: SessionDataOwner, ...keys: string[]) {
+  await vi.waitFor(() =>
+    expect(owner.sessionsResult?.sessions.map((session) => session.key)).toEqual(
+      keys.map((key) => `agent:main:${key}`),
+    ),
+  );
+}
+
 it("applies the saved roster filter before its first read and releases it with the data owner", async () => {
   const rows = [row("mine", 1), row("other", 2)];
   const rosterFilters: unknown[] = [];
@@ -61,21 +69,12 @@ it("applies the saved roster filter before its first read and releases it with t
   const roster = rosterActivityStore(context);
   try {
     owner.connect();
-    await vi.waitFor(() =>
-      expect(owner.sessionsResult?.sessions.map((session) => session.key)).toEqual([
-        "agent:main:mine",
-      ]),
-    );
+    await expectKeys(owner, "mine");
     expect(rosterFilters).toEqual([true]);
 
     involvingMe = false;
     owner.synchronize();
-    await vi.waitFor(() =>
-      expect(owner.sessionsResult?.sessions.map((session) => session.key)).toEqual([
-        "agent:main:mine",
-        "agent:main:other",
-      ]),
-    );
+    await expectKeys(owner, "mine", "other");
     expect(rosterFilters).toEqual([true, undefined]);
 
     involvingMe = true;
@@ -172,8 +171,7 @@ it.each([
         controller.connect();
       }
 
-      expect(sessions.canonicalListRevision).toBe(0);
-      expect(sessions.state.resultCached).toBe(true);
+      expect(sessions).toMatchObject({ canonicalListRevision: 0, state: { resultCached: true } });
       expect(controller).toMatchObject({ sessionsResult: null, sessionsAgentId: null });
       expect(request).not.toHaveBeenCalled();
 

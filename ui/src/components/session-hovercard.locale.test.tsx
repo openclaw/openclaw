@@ -108,7 +108,8 @@ it("retains the header across row updates and clears optional details without st
   await waitForSolid(() => {
     expect(find("__header")).toBe(header);
     expect(header?.textContent).toContain("Updated synthetic session");
-    expect(parts().color?.getAttribute("style")).toContain("session-color-purple");
+    expect(parts().color?.getAttribute("style")).toContain("--session-color-purple");
+    expect(parts().color?.getAttribute("aria-label")).toBe("Session color: Purple");
   });
   setRow({ label: "Plain synthetic session", hasActiveRun: false, hasAutomation: false });
   await waitForSolid(() => {

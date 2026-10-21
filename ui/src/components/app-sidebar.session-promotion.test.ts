@@ -28,25 +28,24 @@ function drag(
 }
 
 async function mountFamily(archived = false) {
+  const row = (id: string, updatedAt: number, extra: Partial<GatewaySessionRow>) => ({
+    key: `agent:main:${id}`,
+    sessionId: `${id}-id`,
+    kind: "direct" as const,
+    updatedAt,
+    ...extra,
+  });
   const family: { parent: GatewaySessionRow; child: GatewaySessionRow } = {
-    parent: {
-      key: "agent:main:parent",
-      sessionId: "parent-id",
-      kind: "direct",
+    parent: row("parent", 1, {
       label: archived ? "Archived parent" : "Public thread access",
-      updatedAt: 1,
       childSessions: ["agent:main:child"],
       ...(archived ? { archived: true } : {}),
-    },
-    child: {
-      key: "agent:main:child",
-      sessionId: "child-id",
-      kind: "direct",
+    }),
+    child: row("child", 2, {
       label: archived ? "Surviving child" : "Reconcile short URLs",
-      updatedAt: 2,
       parentSessionKey: "agent:main:parent",
       spawnedBy: "agent:main:parent",
-    },
+    }),
   };
   const patches: Record<string, unknown>[] = [];
   const request = createGatewayRequestMock(async (method, params) => {
@@ -121,6 +120,8 @@ function expectHistoryIdentity({
 
 it("drags a nested conversation into the top level and keeps its history identity", async () => {
   const { sidebar, request, family } = await mountFamily();
+  const child = () => sidebar.querySelector(`[data-session-key="${family.child.key}"]`);
+  const patches = () => request.mock.calls.filter(([method]) => method === "sessions.patch");
   sidebar.sidebarEntries = [];
   sidebar.onUpdateSidebarEntries = (entries) => {
     sidebar.sidebarEntries = entries;
@@ -137,7 +138,7 @@ it("drags a nested conversation into the top level and keeps its history identit
   drag(sidebar.querySelector(".sidebar-rail__pins")!, "drop", shortcutDrop);
   expect(family.child.sidebarRoot).toBeUndefined();
   expect(sidebar.sidebarEntries).toEqual([]);
-  expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(0);
+  expect(patches()).toHaveLength(0);
   const data = createDataTransferStub();
   drag(row, "dragstart", data);
   await sidebar.updateComplete;
@@ -147,21 +148,13 @@ it("drags a nested conversation into the top level and keeps its history identit
   drag(drop!, "drop", data);
   await waitForFast(() => expect(family.child.sidebarRoot).toBe(true));
   await waitForFast(() =>
-    expect(
-      sidebar
-        .querySelector('[data-session-key="agent:main:child"]')
-        ?.classList.contains("sidebar-recent-session--child"),
-    ).toBe(false),
+    expect(child()?.classList.contains("sidebar-recent-session--child")).toBe(false),
   );
   expectHistoryIdentity(family);
-  sidebar
-    .querySelector<HTMLButtonElement>(
-      '[data-session-key="agent:main:child"] [data-sidebar-session-pin]',
-    )!
-    .click();
+  child()!.querySelector<HTMLButtonElement>("[data-sidebar-session-pin]")!.click();
   await sidebar.updateComplete;
   expect(sidebar.sidebarEntries).toEqual(["session:agent:main:child"]);
-  expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+  expect(patches()).toHaveLength(1);
 });
 
 it.each(["existing group", "new group", "batch group"])(

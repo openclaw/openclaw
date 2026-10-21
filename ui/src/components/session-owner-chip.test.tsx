@@ -43,20 +43,18 @@ function mount(params: { participants?: SessionParticipant[]; participantCount?:
   );
   flush();
   expect(chip.querySelector(".session-owner-chip")).not.toBeNull();
-  return { chip, setOwner, setSize };
+  return { chip, setOwner, setSize, find: (selector: string) => chip.querySelector(selector) };
 }
 
 it("keeps the single owner chip unchanged without participants", () => {
-  const { chip } = mount({});
-  expect(chip.querySelector(".session-owner-stack")).toBeNull();
+  const { chip, find } = mount({});
+  expect(find(".session-owner-stack")).toBeNull();
   expect(chip.querySelectorAll(".session-owner-chip")).toHaveLength(1);
-  expect(chip.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toBe(
-    "Owned by Ada",
-  );
+  expect(find(".session-owner-chip")?.getAttribute("aria-label")).toBe("Owned by Ada");
 });
 
 it("renders one participant behind the owner with combined accessibility", () => {
-  const { chip } = mount({
+  const { find } = mount({
     participants: [
       {
         identity: { type: "agent", id: "research" },
@@ -64,22 +62,19 @@ it("renders one participant behind the owner with combined accessibility", () =>
         avatarUrl: "/avatar/research",
       },
     ],
-    participantCount: 1,
   });
-  expect(chip.querySelector(".session-owner-stack__back .viewer-avatar")).not.toBeNull();
-  expect(chip.querySelector(".session-owner-stack__front")).not.toBeNull();
-  expect(chip.querySelector(".session-owner-stack")?.getAttribute("aria-label")).toBe(
+  expect(find(".session-owner-stack__back .viewer-avatar")).not.toBeNull();
+  expect(find(".session-owner-stack__front")).not.toBeNull();
+  expect(find(".session-owner-stack")?.getAttribute("aria-label")).toBe(
     "Owned by Ada · with Research",
   );
-  expect(chip.querySelector(".session-owner-stack__back img")?.getAttribute("src")).toBe(
-    "/avatar/research",
-  );
+  expect(find(".session-owner-stack__back img")?.getAttribute("src")).toBe("/avatar/research");
 });
 
 it.each(["row", "header"] as const)(
   "renders the agent picture and generated fallback in a %s owner chip",
   async (size) => {
-    const { chip, setOwner, setSize } = mount({});
+    const { find, setOwner, setSize } = mount({});
     setOwner({
       type: "agent",
       id: "research",
@@ -89,34 +84,23 @@ it.each(["row", "header"] as const)(
     });
     setSize(size);
     flush();
-    expect(chip.querySelector(".session-owner-chip img")?.getAttribute("src")).toBe(
-      "/avatar/research",
-    );
-    chip.querySelector("img")?.dispatchEvent(new Event("error"));
-    await vi.waitFor(() =>
-      expect(chip.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-    );
-    expect(chip.querySelector(".identity-avatar--agent")?.classList.contains("is-fallback")).toBe(
-      true,
-    );
+    expect(find(".session-owner-chip img")?.getAttribute("src")).toBe("/avatar/research");
+    find("img")?.dispatchEvent(new Event("error"));
+    await vi.waitFor(() => expect(find(".identity-avatar__agent-face")).not.toBeNull());
+    expect(find(".identity-avatar--agent")?.classList.contains("is-fallback")).toBe(true);
     setOwner((previous) => ({ ...previous, avatarUrl: undefined }));
     flush();
-    await vi.waitFor(() =>
-      expect(chip.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-    );
+    await vi.waitFor(() => expect(find(".identity-avatar__agent-face")).not.toBeNull());
   },
 );
 
 it("renders the total participant count in the back slot for three identities", () => {
-  const { chip } = mount({
+  const { find } = mount({
     participants: [
       { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
       { identity: { type: "agent", id: "research" }, label: "Research" },
     ],
-    participantCount: 2,
   });
-  expect(chip.querySelector(".session-owner-stack__overflow")?.textContent).toBe("+2");
-  expect(chip.querySelector(".session-owner-stack")?.getAttribute("aria-label")).toBe(
-    "Owned by Ada · +2 more",
-  );
+  expect(find(".session-owner-stack__overflow")?.textContent).toBe("+2");
+  expect(find(".session-owner-stack")?.getAttribute("aria-label")).toBe("Owned by Ada · +2 more");
 });

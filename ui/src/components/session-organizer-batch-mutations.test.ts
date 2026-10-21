@@ -49,10 +49,10 @@ describe("patchSessionRows", () => {
     async (action) => {
       const h = createHarness();
       const rows = [
-        makeRow(0, { pinnable: true, isChild: false }),
-        makeRow(1, { pinnable: false, isChild: false }),
-        makeRow(2, { key: "agent:main:subagent:hidden", pinnable: false, isChild: false }),
-        makeRow(3, { pinnable: true, sidebarRoot: true, isChild: false }),
+        sessionRow(0, { pinnable: true, isChild: false }),
+        sessionRow(1, { pinnable: false, isChild: false }),
+        sessionRow(2, { key: "agent:main:subagent:hidden", pinnable: false, isChild: false }),
+        sessionRow(3, { pinnable: true, sidebarRoot: true, isChild: false }),
       ];
       if (action === "create") {
         h.host.knownSessionGroups = () => ["Projects"];
@@ -73,11 +73,10 @@ describe("patchSessionRows", () => {
 
   it("rejects a hidden worker as a tree root before reading or changing descendants", async () => {
     const h = createHarness();
-    const root = {
-      ...sessionRow(0),
+    const root = sessionRow(0, {
       key: "agent:main:subagent:hidden",
       hasArchiveDescendants: true,
-    };
+    });
     h.scope.sessions.describe = vi.fn(async () => ({
       session: {
         key: root.key,
@@ -103,7 +102,7 @@ describe("patchSessionRows", () => {
   it.each(["operator.write", "operator.sessions.write", "operator.admin"])(
     "acknowledges hidden runs conditionally with %s",
     async (scope) => {
-      const run = makeRow(1, { key: "agent:main:subagent:done", isChild: true });
+      const run = sessionRow(1, { key: "agent:main:subagent:done", isChild: true });
       const parent = withHiddenRun(run, { unread: false });
       const h = createHarness({ scopes: [scope] });
       expect(menuReason(h, [parent], "toggle-unread")).toBeUndefined();
@@ -135,7 +134,7 @@ describe("patchSessionRows", () => {
       methods: advertised ? ["sessions.patch", "sessions.patchMany"] : [],
       scopes: [scope],
     });
-    const rows = [sessionRow(0), makeRow(1, { sharingRole })];
+    const rows = [sessionRow(0), sessionRow(1, { sharingRole })];
     expect(menuReason(h, rows, "toggle-unread")).toBeDefined();
     await h.action({ kind: "toggle-unread" }, rows, false);
     expectNoCalls(h.request, h.patch);
@@ -143,7 +142,7 @@ describe("patchSessionRows", () => {
   });
 
   it("leaves foreign hidden runs unread when an owner marks the parent read", async () => {
-    const run = makeRow(1, { key: "agent:main:subagent:foreign", sharingRole: "member" as const });
+    const run = sessionRow(1, { key: "agent:main:subagent:foreign", sharingRole: "member" });
     const parent = withHiddenRun(run);
     const h = createHarness({ scopes: ["operator.sessions.write"] });
     await h.action({ kind: "toggle-unread" }, [parent], true);
@@ -154,7 +153,7 @@ describe("patchSessionRows", () => {
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {
     const h = createHarness();
     const rows = batchRows(101);
-    rows[100] = { ...rows[100]!, sessionId: undefined };
+    rows[100] = sessionRow(100, { sessionId: undefined });
 
     await expect(h.patchRows(rows, { archived: false })).resolves.toBeNull();
 
@@ -273,8 +272,8 @@ describe("patchSessionRows", () => {
     const h = createHarness({
       scopes: ["operator.read", scope, "operator.questions", "operator.approvals", "operator.talk"],
     });
-    const own = makeRow(0, { archived: !archived, sharingRole: "owner" as const });
-    const member = makeRow(1, { archived: !archived, sharingRole: "member" as const });
+    const own = sessionRow(0, { archived: !archived, sharingRole: "owner" });
+    const member = sessionRow(1, { archived: !archived, sharingRole: "member" });
     expect(menuReason(h, [own, member], "toggle-archived")).toBe(
       "Only the session creator or an admin can make this change.",
     );
@@ -331,9 +330,6 @@ function preservedWorktree(
   return { id, branch, path, reason };
 }
 type OperationsHarness = ReturnType<typeof createHarness>;
-function makeRow(index: number, overrides: Partial<SidebarRecentSession>) {
-  return { ...sessionRow(index), ...overrides };
-}
 function menuReason(
   h: OperationsHarness,
   rows: SidebarRecentSession[],
@@ -349,7 +345,7 @@ function withHiddenRun(
   run: SidebarRecentSession,
   extra: Partial<SidebarRecentSession> = {},
 ): SidebarRecentSession {
-  return makeRow(0, {
+  return sessionRow(0, {
     ...extra,
     subagentSummary: {
       attention: { kind: "none" },
@@ -394,7 +390,7 @@ const destructiveHarness = {
 };
 
 function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
-  return makeRow(0, {
+  return sessionRow(0, {
     hasActiveRun,
     cloudWorkerStopAction: {
       method: "sessions.reclaim",
@@ -530,7 +526,7 @@ describe("session organizer destructive confirmations", () => {
 
   it("keeps a retired scope from navigating when the worktree prompt is cancelled", async () => {
     const h = worktreeHarness("cleanup-failed");
-    const active = makeRow(0, { active: true });
+    const active = sessionRow(0, { active: true });
 
     const pending = h.remove(active);
     await answer();
@@ -661,7 +657,7 @@ describe("session organizer batch archive confirmation", () => {
     async ({ activity, decision }) => {
       const modal = createModalDialogTestFixture();
       const h = createHarness();
-      const rows = [sessionRow(0), makeRow(1, { ...activity })];
+      const rows = [sessionRow(0), sessionRow(1, activity)];
       vi.mocked(showToast).mockClear();
       try {
         const pending = modal.track(h.action({ kind: "toggle-archived" }, rows, false));

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cdp, page } from "vitest/browser";
 import "../test-helpers/load-styles.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { catalogPage } from "../test-helpers/app-sidebar.ts";
 import { owner, other, key, mount, settled, geometry } from "../test-helpers/sidebar-stress.ts";
 setupSidebarTest();
 afterEach(async () => {
@@ -52,6 +53,14 @@ function titleIssues(row: ReturnType<typeof geometry>[number], suffix = "") {
     issues.push(row.key + " title has no space" + suffix);
   }
   return issues;
+}
+
+function expectRingWidths(rows: ReturnType<typeof geometry>) {
+  for (const row of rows) {
+    for (const ring of row.rings) {
+      expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
+    }
+  }
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", () => {
@@ -176,75 +185,64 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     const { sidebar, context } = await mount(width);
     context.theme.setMode("light");
     await expect.poll(() => document.documentElement.dataset.themeMode).toBe(theme);
-    sidebar.sessionData.sessionCatalogs = [
-      {
-        id: "codex",
-        label: "Codex",
-        capabilities: { continueSession: true, archive: true },
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: "Local",
-            kind: "gateway",
-            connected: true,
-            sessions: Array.from({ length: 8 }, (_, i) => ({
-              threadId: "thread-" + i,
-              name: "Native catalog thread " + i,
-              cwd: i % 2 ? "/projects/alpha" : "/projects/beta",
-              createdActor: i % 2 ? owner : other,
-              status: i % 2 ? "running" : "idle",
-              archived: false,
-              canContinue: true,
-              canArchive: true,
-              ...(i === 0 ? { sessionKey: key("group-running") } : {}),
-              ...(i === 1 ? { pullRequest: { numbers: [123], state: "draft" as const } } : {}),
-            })),
-          },
-          {
-            hostId: "node:offline",
-            label: "Offline host",
-            kind: "node",
-            connected: false,
-            error: { code: "NODE_OFFLINE", message: "Fixture offline" },
-            sessions: [
-              {
-                threadId: "offline",
-                name: "Cached remote thread",
-                cwd: "/projects/remote",
-                status: "running",
-                archived: false,
-                canContinue: false,
-                canArchive: false,
-              },
-            ],
-          },
-        ],
-      },
-    ];
+    const catalog = catalogPage([]).catalogs[0]!;
+    const local = catalog.hosts[0]!;
+    local.label = "Local";
+    local.sessions = Array.from({ length: 8 }, (_, i) => ({
+      threadId: "thread-" + i,
+      name: "Native catalog thread " + i,
+      cwd: i % 2 ? "/projects/alpha" : "/projects/beta",
+      createdActor: i % 2 ? owner : other,
+      status: i % 2 ? "running" : "idle",
+      archived: false,
+      canContinue: true,
+      canArchive: true,
+      ...(i === 0 ? { sessionKey: key("group-running") } : {}),
+      ...(i === 1 ? { pullRequest: { numbers: [123], state: "draft" as const } } : {}),
+    }));
+    catalog.hosts.push({
+      hostId: "node:offline",
+      label: "Offline host",
+      kind: "node",
+      connected: false,
+      error: { code: "NODE_OFFLINE", message: "Fixture offline" },
+      sessions: [
+        {
+          threadId: "offline",
+          name: "Cached remote thread",
+          cwd: "/projects/remote",
+          status: "running",
+          archived: false,
+          canContinue: false,
+          canArchive: false,
+        },
+      ],
+    });
+    sidebar.sessionData.sessionCatalogs = [catalog];
     sidebar.sessionData.requestSessionDataUpdate();
     await settled(sidebar);
-    const catalog = sidebar.querySelector<HTMLElement>('[data-session-section="catalog:codex"]');
-    expect(catalog).not.toBeNull();
-    const rows = geometry(catalog!);
+    const section = sidebar.querySelector<HTMLElement>('[data-session-section="catalog:codex"]');
+    expect(section).not.toBeNull();
+    const rows = geometry(section!);
     expect(rows.length).toBeGreaterThanOrEqual(6);
+    expectRingWidths(rows);
     for (const row of rows) {
       for (const ring of row.rings) {
-        expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
         if (row.title) {
           expect(ring.rect.right).toBeLessThanOrEqual(row.title.left + 0.5);
         }
       }
     }
     if (grouping !== "none") {
-      expect(catalog!.querySelector("[data-session-catalog-project]")).not.toBeNull();
+      expect(section!.querySelector("[data-session-catalog-project]")).not.toBeNull();
     }
-    const toggle = catalog!.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")!;
+    const toggle = section!.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")!;
     toggle.click();
     await settled(sidebar);
-    expect(geometry(catalog!).length).toBe(0);
+    expect(geometry(section!)).toHaveLength(0);
     toggle.click();
     await settled(sidebar);
-    expect(geometry(catalog!).length).toBe(rows.length);
+    expect(geometry(section!)).toHaveLength(rows.length);
   });
   it("keeps archive attribution and row actions in person grouping", async () => {
     await page.viewport(1000, 1100);
@@ -256,11 +254,7 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
     expect(row).not.toBeNull();
     expect(row!.querySelector(".sidebar-session__archive-glyph")).not.toBeNull();
-    for (const entry of geometry(sidebar)) {
-      for (const ring of entry.rings) {
-        expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
-      }
-    }
+    expectRingWidths(geometry(sidebar));
     const target = sidebar.querySelector<HTMLAnchorElement>(
       `[data-session-key="${key("pinned")}"] .sidebar-recent-session__link`,
     )!;
