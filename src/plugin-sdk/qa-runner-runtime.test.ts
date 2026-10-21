@@ -54,6 +54,21 @@ function registration() {
   };
 }
 
+function installRunner<T extends ReturnType<typeof registration>>(entry: T, declared = plugin()) {
+  loadPluginManifestRegistryCore.mockReturnValue(registry([declared]));
+  loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({ qaRunnerCliRegistrations: [entry] });
+  return entry;
+}
+
+function contribution(entry?: ReturnType<typeof registration>) {
+  return {
+    pluginId: "qa-example",
+    commandName: "example",
+    status: entry ? "available" : "blocked",
+    ...(entry ? { registration: entry } : {}),
+  };
+}
+
 function expectPrivateEnv(env: NodeJS.ProcessEnv | undefined, sourceRoot: string) {
   expect(env).toMatchObject({
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
@@ -132,19 +147,12 @@ it("returns activated runner registrations declared in plugin manifests", async 
     ...plugin(),
     qaRunners: [{ commandName: "example", description: "Run the example live QA lane" }],
   };
-  loadPluginManifestRegistryCore.mockReturnValue(registry([declared]));
-  const registered = { ...entry, adapterFactory };
-  loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-    qaRunnerCliRegistrations: [registered],
-  });
+  const registered = installRunner({ ...entry, adapterFactory }, declared);
 
   expect(module.listQaRunnerCliContributions()).toEqual([
     {
-      pluginId: "qa-example",
-      commandName: "example",
+      ...contribution(registered),
       description: "Run the example live QA lane",
-      status: "available",
-      registration: registered,
     },
   ]);
   expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
@@ -154,15 +162,10 @@ it("returns activated runner registrations declared in plugin manifests", async 
 });
 
 it("rejects invalid module-flow support metadata", async () => {
-  loadPluginManifestRegistryCore.mockReturnValue(registry());
   const entry = registration();
-  loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-    qaRunnerCliRegistrations: [
-      {
-        ...entry,
-        adapterFactory: { ...entry.adapterFactory, supportsModuleFlows: false },
-      },
-    ],
+  installRunner({
+    ...entry,
+    adapterFactory: { ...entry.adapterFactory, supportsModuleFlows: false },
   });
 
   expect(() => module.listQaRunnerCliContributions()).toThrow(
@@ -174,13 +177,7 @@ it("reports declared runners as blocked when the plugin is present but not activ
   loadPluginManifestRegistryCore.mockReturnValue(registry([plugin("workspace")]));
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue(null);
 
-  expect(module.listQaRunnerCliContributions()).toEqual([
-    {
-      pluginId: "qa-example",
-      commandName: "example",
-      status: "blocked",
-    },
-  ]);
+  expect(module.listQaRunnerCliContributions()).toEqual([contribution()]);
 });
 
 it("prefers the source bundled tree for private qa discovery in repo checkouts", async () => {
@@ -195,14 +192,7 @@ it("prefers the source bundled tree for private qa discovery in repo checkouts",
     qaRunnerCliRegistrations: [entry],
   });
 
-  expect(module.listQaRunnerCliContributions()).toEqual([
-    {
-      pluginId: "qa-example",
-      commandName: "example",
-      status: "available",
-      registration: entry,
-    },
-  ]);
+  expect(module.listQaRunnerCliContributions()).toEqual([contribution(entry)]);
   const manifestCall = loadBundledPluginManifestRegistry.mock.calls[0]?.[0] as
     | ManifestRegistryCall
     | undefined;

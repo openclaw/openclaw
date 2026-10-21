@@ -39,6 +39,9 @@ function expectItems(actual: unknown, ...expected: Record<string, unknown>[]) {
   expect(actual).toEqual(expected.map((item) => expect.objectContaining(item)));
 }
 
+const containingItems = (...items: Record<string, unknown>[]) =>
+  expect.arrayContaining(items.map((item) => expect.objectContaining(item)));
+
 async function renderSourceFixture(
   source: string | Readonly<Record<string, string>>,
   entrypoints: readonly string[] = ["fixture"],
@@ -261,17 +264,13 @@ it("reads added and removed entrypoints from each revision's own inventory", asy
   ]);
   expectItems(addedDiff.exports, {
     change: "added",
-    declarationChanges: expect.arrayContaining([
-      expect.objectContaining({ after: expect.stringContaining("value: number") }),
-    ]),
+    declarationChanges: containingItems({ after: expect.stringContaining("value: number") }),
     entrypoint: "added",
     exportName: "createAdded",
   });
   expect(removedDiff.exports[0]).toMatchObject({
     change: "removed",
-    declarationChanges: expect.arrayContaining([
-      expect.objectContaining({ before: expect.stringContaining("value: number") }),
-    ]),
+    declarationChanges: containingItems({ before: expect.stringContaining("value: number") }),
   });
   expect(addedDiff.digest).not.toBe(diffApi(before, sameNamesDifferentContents).digest);
   expect(report(addedDiff)).toContain("value: number");
@@ -462,17 +461,15 @@ it("renders a checkout reached through a symlinked alias", async () => {
     { symlinked: true },
   );
 
-  expect(baseline.modules).toEqual([
-    expect.objectContaining({
-      source: fixtureSource,
-      exports: [
-        expect.objectContaining({
-          exportName: "measure",
-          declaration: expect.stringContaining("export function measure(value: string): number;"),
-        }),
-      ],
-    }),
-  ]);
+  expectItems(baseline.modules, {
+    source: fixtureSource,
+    exports: [
+      expect.objectContaining({
+        exportName: "measure",
+        declaration: expect.stringContaining("export function measure(value: string): number;"),
+      }),
+    ],
+  });
 });
 
 it("fails when a declaration dependency cannot be resolved", async () => {
@@ -629,25 +626,17 @@ it("captures private shape changes while ignoring documentation and implementati
   const resultChanged = await renderPrivateDeclarationFixture({ optionalResult: true });
   const declaration = baseline.modules[0]?.exports[0];
 
-  expect(declaration).toEqual(
-    expect.objectContaining({
-      exportName: "createFixture",
-      kind: "function",
-      source: fixtureSource,
-    }),
-  );
+  expect(declaration).toMatchObject({
+    exportName: "createFixture",
+    kind: "function",
+    source: fixtureSource,
+  });
   expect(declaration?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
   expect(declaration?.closureSectionIds?.map((id) => baseline.declarationSections[id])).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        name: "FixtureOptionLeaf",
-        text: expect.stringContaining("required: string"),
-      }),
-      expect.objectContaining({
-        name: "FixtureResult",
-        text: expect.stringContaining("FixtureResultLeaf"),
-      }),
-    ]),
+    containingItems(
+      { name: "FixtureOptionLeaf", text: expect.stringContaining("required: string") },
+      { name: "FixtureResult", text: expect.stringContaining("FixtureResultLeaf") },
+    ),
   );
   expect(declaration?.declaration).toContain("FixtureOptions");
   expect(declaration?.declaration).toContain("FixtureResult");

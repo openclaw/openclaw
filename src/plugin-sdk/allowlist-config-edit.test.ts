@@ -3,35 +3,21 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildDmGroupAccountAllowlistAdapter,
   buildLegacyDmAccountAllowlistAdapter,
-  collectAllowlistOverridesFromRecord,
   createAccountScopedAllowlistNameResolver,
   createFlatAllowlistOverrideResolver,
   createNestedAllowlistOverrideResolver,
-  readConfiguredAllowlistEntries,
 } from "./allowlist-config-edit.js";
 
 describe("allowlist config helpers", () => {
-  it("coerces mixed entries to non-empty strings", () => {
-    expect(readConfiguredAllowlistEntries(["owner", 42, ""])).toEqual(["owner", "42"]);
-  });
-  it("collects only non-empty overrides from a flat record", () => {
-    expect(
-      collectAllowlistOverridesFromRecord({
-        record: { room1: { users: ["a", "b"] }, room2: { users: [] } },
-        label: (key) => key,
-        resolveEntries: (value) => value.users,
-      }),
-    ).toEqual([{ label: "room1", entries: ["a", "b"] }]);
-  });
-  it("builds an account-scoped flat override resolver", () => {
-    const account = { channels: { room1: { users: ["a"] } } };
+  it("builds flat overrides with nonempty, string-coerced entries", () => {
+    const account = { channels: { room1: { users: ["a", 42, ""] }, room2: { users: [] } } };
     const resolveOverrides = createFlatAllowlistOverrideResolver({
       resolveRecord: (value: typeof account) => value.channels,
       label: (key) => key,
       resolveEntries: (value) => value.users,
     });
 
-    expect(resolveOverrides(account)).toEqual([{ label: "room1", entries: ["a"] }]);
+    expect(resolveOverrides(account)).toEqual([{ label: "room1", entries: ["a", "42"] }]);
   });
   it("builds an account-scoped nested override resolver", () => {
     const account = {

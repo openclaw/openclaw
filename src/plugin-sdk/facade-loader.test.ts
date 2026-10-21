@@ -16,6 +16,7 @@ import {
   resetFacadeLoaderStateForTest,
 } from "./facade-loader.js";
 import { listImportedBundledPluginFacadeIds as listImportedFacadeRuntimeIds } from "./facade-runtime.js";
+import { writeFacadeFiles } from "./facade-runtime.test-support.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
 
 const { createTempDirSync } = createPluginSdkTestHarness();
@@ -32,20 +33,13 @@ function nextTrustedPluginId(prefix: string): string {
   return `${prefix}${trustedPluginIdCounter++}`;
 }
 
-const writeFixturePackageJson = (pluginRoot: string) =>
-  fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"module"}\n');
-
 function createPluginFixture(files: (pluginId: string) => Record<string, string>, source = false) {
   const bundledPluginsDir = path.join(packageRoot, ...(source ? [] : ["dist"]), "extensions");
   const pluginId = nextTrustedPluginId("openclaw-facade-fixture-");
   const pluginRoot = path.join(bundledPluginsDir, pluginId);
-  fs.mkdirSync(pluginRoot, { recursive: true });
   trustedBundledPluginFixtureRoots.push(pluginRoot);
-  writeFixturePackageJson(pluginRoot);
+  writeFacadeFiles(pluginRoot, { "package.json": { type: "module" }, ...files(pluginId) });
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-  for (const [name, content] of Object.entries(files(pluginId))) {
-    fs.writeFileSync(path.join(pluginRoot, name), content, "utf8");
-  }
   return { bundledPluginsDir, pluginId, pluginRoot };
 }
 
@@ -74,18 +68,14 @@ function createBundledChannelConfigFixtures(): string {
     ["telegram", "TelegramConfigSchema"],
     ["imessage", "IMessageConfigSchema"],
   ] as const) {
-    const pluginRoot = path.join(bundledPluginsDir, pluginId);
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    writeFixturePackageJson(pluginRoot);
-    fs.writeFileSync(
-      path.join(pluginRoot, "config-api.js"),
-      [
+    writeFacadeFiles(path.join(bundledPluginsDir, pluginId), {
+      "package.json": { type: "module" },
+      "config-api.js": [
         'import { z } from "zod";',
         `export const ${exportName} = z.object({ dmPolicy: z.literal("pairing").default("pairing") });`,
         "",
       ].join("\n"),
-      "utf8",
-    );
+    });
   }
   return bundledPluginsDir;
 }
@@ -252,13 +242,12 @@ describe("plugin-sdk facade loader", () => {
   it("reloads replaced facade artifacts and dependencies without erasing imported-plugin history", () => {
     const pluginRoot = fs.realpathSync(createTempDirSync("openclaw-facade-replacement-"));
     const modulePath = path.join(pluginRoot, "api.js");
-    const dependencyPath = path.join(pluginRoot, "dependency.js");
-    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
-
-    const writeArtifact = (marker: string) => {
-      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
-      fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
-    };
+    writeFacadeFiles(pluginRoot, { "package.json": { type: "commonjs" } });
+    const writeArtifact = (marker: string) =>
+      writeFacadeFiles(pluginRoot, {
+        "dependency.js": `module.exports = ${JSON.stringify(marker)};\n`,
+        "api.js": 'module.exports = { marker: require("./dependency.js") };\n',
+      });
     const loadArtifact = () =>
       loadFacadeModuleAtLocationSync<{ marker: string }>({
         location: { modulePath, boundaryRoot: pluginRoot },
