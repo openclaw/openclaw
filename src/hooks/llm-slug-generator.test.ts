@@ -53,21 +53,11 @@ describe("generateSlugViaLLM", () => {
     expectRun({ timeoutMs: 500_000 });
   });
 
-  it("rejects error payloads before slugifying them into memory filenames", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ isError: true, text: "Provider API error (429): quota exceeded" }],
-    });
-
-    await expect(generate()).resolves.toBeNull();
-  });
-
   it.each([
-    'HTTP 400: {"error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance."}}',
-  ])("rejects provider/auth/quota error text before slugifying: %s", async (text) => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text }],
-    });
-
+    { isError: true, text: "Provider API error (429): quota exceeded" },
+    { text: 'HTTP 400: {"error":{"type":"insufficient_quota"}}' },
+  ])("rejects error payload $text before slugifying", async (payload) => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [payload] });
     await expect(generate()).resolves.toBeNull();
   });
 
