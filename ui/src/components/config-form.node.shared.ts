@@ -79,6 +79,10 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     label,
     help,
     showLabel,
+    usingDefault:
+      params.value === undefined &&
+      (params.schema.default !== undefined ||
+        hintForPath(params.path, params.hints)?.inheritedDefault === true),
     helpId:
       params.descriptionId ??
       (showLabel && help ? configFieldId(params.path, "description") : undefined),
