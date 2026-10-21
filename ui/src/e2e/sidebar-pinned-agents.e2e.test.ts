@@ -75,7 +75,16 @@ async function checkAccessiblePins(page: Page, width: number) {
         status: "running",
       }),
     ],
-    methodResponses: { "agents.list": agentsList },
+    methodResponses: {
+      "agents.list": agentsList,
+      "chat.startup": {
+        agentsList,
+        messages: [],
+        metadata: { models: [] },
+        sessionId: "main-session",
+        thinkingLevel: null,
+      },
+    },
   });
   await page.goto(`${suite.server.baseUrl}chat`);
   await waitForControlUiRoute(page, { routeId: "chat" });
