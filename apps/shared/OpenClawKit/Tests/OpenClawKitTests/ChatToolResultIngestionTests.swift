@@ -531,9 +531,15 @@ struct ChatToolResultIngestionTests {
         let state = try #require(await store.branchState(for: scope))
         #expect(state.lastActiveLeafEntryID == carrierID)
         #expect(await store.enqueueCommand(.init(
-            id: "background-after-results", sessionKey: scope.sessionKey, agentID: scope.agentID,
-            text: "Continue", thinking: "off", createdAt: Date().timeIntervalSince1970,
-            status: .queued, retryCount: 0, lastError: nil)))
+            id: "background-after-results",
+            sessionKey: scope.sessionKey,
+            agentID: scope.agentID,
+            text: "Continue",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
 
         // Reconnect with another session visible: there is no visible ancestry
         // fallback, so the persisted tip must match the gateway's exact leaf.
@@ -556,7 +562,8 @@ struct ChatToolResultIngestionTests {
         defer { vm.detachTransport() }
         #expect(vm.applyHistoryPayload(
             .init(sessionKey: "main", sessionId: nil, messages: [carrier], thinkingLevel: nil),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false))
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false))
         await vm.pendingCacheWriteTask?.value
         let scope = try #require(vm.outboxBranchScope(for: vm.currentSessionSnapshot()))
         let recorded = try #require(await store.branchState(for: scope))
@@ -566,13 +573,20 @@ struct ChatToolResultIngestionTests {
         #expect(await store.updateLastActiveLeafEntryID(carrierID, expectedEpoch: recorded.epoch, for: scope))
         let state = try #require(await store.branchState(for: scope))
         #expect(await store.enqueueCommand(.init(
-            id: "queued-before-history-advances", sessionKey: scope.sessionKey, agentID: scope.agentID,
-            text: "Continue", thinking: "off", createdAt: Date().timeIntervalSince1970,
-            status: .queued, retryCount: 0, lastError: nil)))
+            id: "queued-before-history-advances",
+            sessionKey: scope.sessionKey,
+            agentID: scope.agentID,
+            text: "Continue",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
         let descendant = try Self.raw(#"{"role":"assistant","__openclaw":{"id":"next-leaf"},"content":"Done"}"#)
         #expect(vm.applyHistoryPayload(
             .init(sessionKey: "main", sessionId: nil, messages: [carrier, descendant], thinkingLevel: nil),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false))
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false))
         await vm.pendingCacheWriteTask?.value
 
         // Exercise the actual SQLite encode/decode path before branch ancestry
