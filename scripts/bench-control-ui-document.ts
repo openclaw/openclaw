@@ -181,8 +181,9 @@ try {
         !metadata.trusted ||
         event.type !== "diagnostic.phase.completed" ||
         !event.name.startsWith("control-ui.document.")
-      )
+      ) {
         return;
+      }
       const key = event.trace?.traceId ?? "document";
       const stages = traces.get(key) ?? {};
       const stage = event.name.slice("control-ui.document.".length);
@@ -190,9 +191,13 @@ try {
       traces.set(key, stages);
       if (stage === "total") {
         ordinal++;
-        if (!values.serve) observations.push(stages);
+        if (!values.serve) {
+          observations.push(stages);
+        }
         traces.delete(key);
-        if (values.serve) emit({ type: "document-stages", ordinal, stagesMs: stages });
+        if (values.serve) {
+          emit({ type: "document-stages", ordinal, stagesMs: stages });
+        }
       }
     },
     { include: ["diagnostic.phase.completed"] },
@@ -244,10 +249,10 @@ try {
       process.once("SIGTERM", stop);
     });
   } else {
-    const read = async (route: string) => {
+    const read = async (requestPath: string) => {
       const startedAt = performance.now();
       const response = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
-        request(`${origin}${route}`, { agent: false }, resolve).once("error", reject).end();
+        request(`${origin}${requestPath}`, { agent: false }, resolve).once("error", reject).end();
       });
       const responseStartMs = performance.now() - startedAt;
       const body = await buffer(response);
@@ -276,13 +281,15 @@ try {
       assert.equal(payload.preferences.profileId, profile.id);
       assert(isRecord(payload.preferences.entries));
       assert.equal(payload.preferences.entries["ui.themeMode"], "dark");
-      if (run === 0) firstPayload = payload;
-      else
+      if (run === 0) {
+        firstPayload = payload;
+      } else {
         assert.deepEqual(
           payload,
           firstPayload,
           "same inputs must produce identical bootstrap payloads",
         );
+      }
       samples.push({
         run,
         temperature: run === 0 ? "first-http" : "warm",
@@ -301,17 +308,18 @@ try {
       "document and canonical endpoint bootstrap must agree",
     );
     const report = { type: "report", ...fixture, payloadCorrect: true, samples };
-    if (values.out)
+    if (values.out) {
       await writeFile(path.resolve(values.out), `${JSON.stringify(report, null, 2)}\n`);
+    }
     emit(report);
   }
 } finally {
   if (server?.listening) {
     const listener = server;
     listener.closeAllConnections();
-    await new Promise<void>((resolve, reject) =>
-      listener.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      listener.close((error) => (error ? reject(error) : resolve()));
+    });
   }
   unsubscribe?.();
   catalog?.release();
