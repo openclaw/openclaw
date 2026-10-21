@@ -640,9 +640,7 @@ describe("worker tunnel manager", () => {
             baseCommit,
             "eligible",
             priorDigest,
-            "memo-v1",
           ],
-          input: "[]",
         });
         expect(captured.code, captured.stderr).toBe(0);
         return captured.stdout.trim();
