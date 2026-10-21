@@ -25,12 +25,10 @@ it("handles circular arrays without treating later siblings as circular", () => 
 });
 
 it("opts into string normalization without changing the lossless default", () => {
-  const high = "\ud83d";
-  const low = "\udc00";
   const value = {
-    [`key${high}`]: "name",
-    high: `left${high}right`,
-    low: `left${low}right`,
+    "key\ud83d": "name",
+    high: "left\ud83dright",
+    low: "left\udc00right",
     valid: "emoji 🙈 ok",
   };
 
@@ -42,23 +40,18 @@ it("opts into string normalization without changing the lossless default", () =>
   );
 });
 
-it("serializes cache-trace edge types deterministically", () => {
-  const error = new Error("boom");
-  error.stack = "Error: boom\n    at test";
-
-  const value = {
-    bytes: new Uint8Array([1, 2, 3]),
-    error,
-    finite: 1,
-    infinity: Infinity,
-    nan: Number.NaN,
-    nil: null,
-    token: 123n,
-    undef: undefined,
-  };
-  expect(serialize(value)).toBe(
-    '{"bytes":{"data":"AQID","type":"Uint8Array"},"error":{"message":"boom","name":"Error","stack":"Error: boom\\n    at test"},"finite":1,"infinity":"Infinity","nan":"NaN","nil":null,"token":"123","undef":undefined}',
-  );
+const error = Object.assign(new Error("boom"), { stack: "Error: boom\n    at test" });
+it.each<[unknown, string]>([
+  [new Uint8Array([1, 2, 3]), '{"data":"AQID","type":"Uint8Array"}'],
+  [error, '{"message":"boom","name":"Error","stack":"Error: boom\\n    at test"}'],
+  [1, "1"],
+  [Infinity, '"Infinity"'],
+  [Number.NaN, '"NaN"'],
+  [null, "null"],
+  [123n, '"123"'],
+  [undefined, "undefined"],
+])("serializes nested cache-trace case %#", (value, expected) => {
+  expect(serialize({ value })).toBe(`{"value":${expected}}`);
 });
 
 it("preserves colliding normalized keys and reads getters in deterministic order", () => {
