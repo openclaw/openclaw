@@ -9,6 +9,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsGoal } from "./chat-details-goal.tsx";
 
 const goal: SessionGoal = {
@@ -105,25 +106,28 @@ it.each(["session", "goal", "presentation"] as const)(
       flush();
       expect(save.disabled).toBe(false);
       save.click();
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       flush();
-      expect(onSubmit).toHaveBeenCalledExactlyOnceWith({
-        action: "edit",
-        sessionId: "session-original",
-        goalId: goal.id,
-        objective,
-      });
+      await waitForSolid(() =>
+        expect(onSubmit).toHaveBeenCalledExactlyOnceWith({
+          action: "edit",
+          sessionId: "session-original",
+          goalId: goal.id,
+          objective,
+        }),
+      );
       expect(input.disabled).toBe(true);
       const cancelled = new CustomEvent("modal-cancel", { cancelable: true });
       modal.dispatchEvent(cancelled);
       expect(cancelled.defaultPrevented).toBe(true);
       submissionError = "Goal update is invalid. Check the objective and try again.";
       pending.resolve(false);
-      await pending.promise;
-      await Promise.resolve();
-      flush();
-      expect(modal.querySelector('[role="alert"]')?.textContent).toBe(submissionError);
+      await waitForSolid(() =>
+        expect(modal.querySelector('[role="alert"]')?.textContent).toBe(submissionError),
+      );
       expect(input.value).toBe(objective);
       expect(save.disabled).toBe(false);
+      expect(document.activeElement).toBe(input);
       setGoal({ ...goal, tokensUsed: 240 });
       flush();
       expect(document.body.contains(modal)).toBe(true);

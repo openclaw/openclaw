@@ -73,7 +73,7 @@ function expectNonOutcome(
   extra = "",
 ) {
   expect(runtime.log).toHaveBeenCalledWith(
-    `nextcloud-talk: inbound media non-outcome reason=${reason} account=default message=msg-1 sender=user-1${extra}`,
+    `nextcloud-talk: inbound media non-outcome reason=${reason} account=default message=msg-1 sender=users/user-1${extra}`,
   );
 }
 
@@ -410,7 +410,7 @@ describe("nextcloud-talk inbound media behavior", () => {
         { status: 404 },
       ),
       expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_unavailable account=default message=msg-1 sender=user-1 status=404",
+        "nextcloud-talk: inbound media non-outcome reason=media_unavailable account=default message=msg-1 sender=users/user-1 status=404",
     },
     {
       label: "fetch timeout",
@@ -419,13 +419,13 @@ describe("nextcloud-talk inbound media behavior", () => {
         "timeout reading https://cloud.example.com/s/private-token secret-error-detail",
       ),
       expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_fetch_failed account=default message=msg-1 sender=user-1",
+        "nextcloud-talk: inbound media non-outcome reason=media_fetch_failed account=default message=msg-1 sender=users/user-1",
     },
     {
       label: "staging failure",
       error: new Error("stage failed for private-token with secret-error-detail"),
       expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_stage_failed account=default message=msg-1 sender=user-1",
+        "nextcloud-talk: inbound media non-outcome reason=media_stage_failed account=default message=msg-1 sender=users/user-1",
     },
   ])("preserves caption and bounded diagnostics for $label", async ({ error, expectedLog }) => {
     const coreRuntime = createPluginRuntimeMock();

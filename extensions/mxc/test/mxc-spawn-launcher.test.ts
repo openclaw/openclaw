@@ -4,41 +4,34 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
-const require = createRequire(import.meta.url);
-const launcherPath = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../src/mxc-spawn-launcher.mjs",
-);
-
-const loadLauncher = () =>
-  require(launcherPath) as {
-    decodePayload: (argv: string[]) => unknown;
-    forwardSignals: (
-      spawned: { kill: (signal: string) => void },
-      options?: {
-        exitGraceMs?: number;
-        setTimeout?: (callback: () => void, ms: number) => { unref?: () => void };
-        clearTimeout?: (timer: unknown) => void;
-      },
-    ) => { exitCode: () => number | undefined; dispose: () => void };
-    launchSandbox: (
-      spawnSandboxFromConfig: (config: unknown, options: unknown) => unknown,
-      config: unknown,
-      options: unknown,
-      bridges?: {
-        child?: (spawned: unknown) => void;
-        pty?: (spawned: unknown) => void;
-      },
-    ) => Promise<void>;
-    signalExitCode: (signal: number | string | undefined) => number;
-  };
+const { decodePayload, forwardSignals, launchSandbox, signalExitCode } = createRequire(
+  import.meta.url,
+)("../src/mxc-spawn-launcher.mjs") as {
+  decodePayload: (argv: string[]) => unknown;
+  forwardSignals: (
+    spawned: { kill: (signal: string) => void },
+    options?: {
+      exitGraceMs?: number;
+      setTimeout?: (callback: () => void, ms: number) => { unref?: () => void };
+      clearTimeout?: (timer: unknown) => void;
+    },
+  ) => { exitCode: () => number | undefined; dispose: () => void };
+  launchSandbox: (
+    spawnSandboxFromConfig: (config: unknown, options: unknown) => unknown,
+    config: unknown,
+    options: unknown,
+    bridges?: {
+      child?: (spawned: unknown) => void;
+      pty?: (spawned: unknown) => void;
+    },
+  ) => Promise<void>;
+  signalExitCode: (signal: number | string | undefined) => number;
+};
 
 describe("mxc-spawn-launcher", () => {
   it("decodes a JSON --payload-file and removes it before spawning", () => {
-    const { decodePayload } = loadLauncher();
     const dir = mkdtempSync(path.join(tmpdir(), "mxc-launcher-test-"));
     const payloadFile = path.join(dir, "payload.json");
     const body = { config: { process: { env: ["SECRET=value"] } }, options: {} };
@@ -46,31 +39,23 @@ describe("mxc-spawn-launcher", () => {
       writeFileSync(payloadFile, JSON.stringify(body), "utf-8");
 
       expect(decodePayload(["--payload-file", payloadFile])).toEqual(body);
-      expect(existsSync(payloadFile)).toBe(false);
-      expect(existsSync(dir)).toBe(false);
+      expect([payloadFile, dir].map(existsSync)).toEqual([false, false]);
     } finally {
       rmSync(dir, { force: true, recursive: true });
     }
   });
 
   it("throws when --payload is missing", () => {
-    const { decodePayload } = loadLauncher();
-
     expect(() => decodePayload([])).toThrow(/Missing --payload-file/);
   });
 
   it("maps PTY signal exits to process exit codes", () => {
-    const { signalExitCode } = loadLauncher();
-
-    expect(signalExitCode(15)).toBe(143);
-    expect(signalExitCode("SIGTERM")).toBe(143);
-    expect(signalExitCode("SIGINT")).toBe(130);
-    expect(signalExitCode("SIGUNKNOWN")).toBe(1);
-    expect(signalExitCode(undefined)).toBe(1);
+    expect([15, "SIGTERM", "SIGINT", "SIGUNKNOWN", undefined].map(signalExitCode)).toEqual([
+      143, 143, 130, 1, 1,
+    ]);
   });
 
   it("resolves a promised PTY before selecting its bridge", async () => {
-    const { launchSandbox } = loadLauncher();
     const pty = { onData: vi.fn() };
     const spawnResult = Promise.resolve(pty);
     const ptyBridge = vi.fn();
@@ -81,28 +66,16 @@ describe("mxc-spawn-launcher", () => {
       child: childBridge,
     });
 
-    expect(ptyBridge).toHaveBeenCalledWith(pty);
-    expect(ptyBridge).not.toHaveBeenCalledWith(spawnResult);
+    expect(ptyBridge.mock.calls).toEqual([[pty]]);
     expect(childBridge).not.toHaveBeenCalled();
   });
 
   it("forwards process termination signals to spawned sandbox children", () => {
-    const { forwardSignals } = loadLauncher();
-    const listeners = new Map<string, () => void>();
-    const processOn = vi.spyOn(process, "on").mockImplementation((event, listener) => {
-      if (typeof event === "string" && typeof listener === "function") {
-        listeners.set(event, listener as () => void);
-      }
-      return process;
-    });
+    const processOn = vi.spyOn(process, "on").mockReturnValue(process);
     const spawned = { kill: vi.fn() };
     const clearTimeoutMock = vi.fn();
-    const timers: Array<{ callback: () => void; ms: number; unref: ReturnType<typeof vi.fn> }> = [];
-    const setTimeoutMock = vi.fn((callback: () => void, ms: number) => {
-      const timer = { callback, ms, unref: vi.fn() };
-      timers.push(timer);
-      return timer;
-    });
+    const timer = { unref: vi.fn() };
+    const setTimeoutMock = vi.fn((_callback: () => void, _ms: number) => timer);
     try {
       const signals = forwardSignals(spawned, {
         exitGraceMs: 25,
@@ -110,28 +83,25 @@ describe("mxc-spawn-launcher", () => {
         clearTimeout: clearTimeoutMock,
       });
 
-      listeners.get("SIGTERM")?.();
-      listeners.get("SIGINT")?.();
+      processOn.mock.calls.find(([event]) => event === "SIGTERM")?.[1]();
+      processOn.mock.calls.find(([event]) => event === "SIGINT")?.[1]();
 
-      expect(spawned.kill).toHaveBeenCalledWith("SIGTERM");
-      expect(spawned.kill).toHaveBeenCalledWith("SIGINT");
-      expect(setTimeoutMock).toHaveBeenCalledTimes(1);
-      expect(timers[0]?.ms).toBe(25);
-      expect(timers[0]?.unref).toHaveBeenCalledTimes(1);
+      expect(spawned.kill.mock.calls).toEqual([["SIGTERM"], ["SIGINT"]]);
+      expect(setTimeoutMock.mock.calls).toEqual([[expect.any(Function), 25]]);
+      expect(timer.unref).toHaveBeenCalledTimes(1);
 
-      timers[0]?.callback();
+      setTimeoutMock.mock.calls[0]?.[0]();
 
       expect(spawned.kill).toHaveBeenLastCalledWith("SIGKILL");
       expect(signals.exitCode()).toBe(143);
       signals.dispose();
-      expect(clearTimeoutMock).toHaveBeenCalledWith(timers[0]);
+      expect(clearTimeoutMock).toHaveBeenCalledWith(timer);
     } finally {
       processOn.mockRestore();
     }
   });
 
   it("waits for child stdio closure and releases launcher input and signal listeners", async () => {
-    const { launchSandbox } = loadLauncher();
     const originalCode = process.exitCode;
     const inputListeners = process.stdin.listeners("data");
     const signalListeners = process.listeners("SIGTERM");

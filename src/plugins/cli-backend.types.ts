@@ -268,11 +268,15 @@ export type CliBackendResolveExecutionArgsContext = Omit<
   CliBackendPrepareExecutionContext,
   "agentDir" | "contextWindow" | "contextTokenBudget" | "env"
 > & {
+  /** Agent identity used to resolve per-agent execution policy. */
+  agentId?: string;
   /** Effective fast mode at spawn, after queue admission and backend preparation. */
   fastMode?: boolean;
   /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
   hostOwnedTools?: readonly string[];
   useResume: boolean;
+  /** The backend process is executing a native control operation. */
+  controlOperation?: "compact";
   baseArgs: readonly string[];
 };
 

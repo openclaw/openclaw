@@ -53,13 +53,11 @@ export async function createWhatsAppQaTransportAdapter(
     // Unpack sequentially so rollback cannot remove authRoot while another unpack is writing.
     driverAuthDir = await unpackWhatsAppAuthArchive({
       archiveBase64: runtimeEnv.driverAuthArchiveBase64,
-      clearSignalSessions: true,
       label: "driver-auth",
       parentDir: authRoot,
     });
     sutAuthDir = await unpackWhatsAppAuthArchive({
       archiveBase64: runtimeEnv.sutAuthArchiveBase64,
-      clearSignalSessions: true,
       label: "sut-auth",
       parentDir: authRoot,
     });
