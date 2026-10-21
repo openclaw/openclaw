@@ -189,9 +189,11 @@ export async function loadProviderUsageSummary(
  */
 function resolveDefaultUsageFetch(): typeof fetch {
   const bundledFetch = loadUndiciRuntimeDeps().fetch;
-  return ((input: RequestInfo | URL, init?: RequestInit) =>
+  // The bundled undici fetch honors per-request dispatchers; only its Response
+  // and RequestInit declarations come from undici's own dts instead of lib.dom.
+  return (input: RequestInfo | URL, init?: RequestInit) =>
     bundledFetch(
       input instanceof Request ? input.url : input,
       init as Parameters<typeof bundledFetch>[1],
-    )) as unknown as typeof fetch;
+    ) as Promise<Response>;
 }
