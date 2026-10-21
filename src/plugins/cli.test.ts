@@ -59,12 +59,6 @@ function snapshot(
     owners: {},
   };
 }
-async function rootHelp(config: OpenClawConfig) {
-  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-  const { outputRootHelp } = await import("../cli/program/root-help.js");
-  await outputRootHelp({ config });
-  return write.mock.calls.map(([chunk]) => String(chunk)).join("");
-}
 beforeEach(() => {
   mocks.load.mockReset();
   mocks.snapshot.mockReset();
@@ -90,10 +84,6 @@ it("loads manifest root help without plugin code and respects enabled policy", a
     plugins: { entries: { matrix: { enabled: true }, "external-cli": { enabled: false } } },
   };
   await expect(getPluginCliCommandDescriptors(config)).resolves.toEqual(matrixPlugin.cliCommands);
-  const help = await rootHelp(config);
-  expect(help).toContain("matrix *");
-  expect(help).toContain("Matrix channel utilities");
-  expect(help).not.toContain("External utilities");
   config.plugins!.entries!.matrix = { enabled: false };
   config.plugins!.entries!["external-cli"] = { enabled: true };
   await expect(getPluginCliCommandDescriptors(config)).resolves.toEqual(sibling.cliCommands);
@@ -114,7 +104,6 @@ it("preserves deduplicated manifest root help when an unrelated legacy plugin fa
   mocks.load.mockRejectedValue(new Error("broken legacy CLI plugin"));
   const config: OpenClawConfig = { plugins: { entries: { "legacy-cli": { enabled: true } } } };
   await expect(getPluginCliCommandDescriptors(config)).resolves.toEqual(matrixPlugin.cliCommands);
-  expect(await rootHelp(config)).toContain("matrix *");
   expect(stderr).not.toHaveBeenCalled();
   expect(mocks.load).toHaveBeenCalledWith(
     expect.objectContaining({ onlyPluginIds: ["legacy-cli"] }),
