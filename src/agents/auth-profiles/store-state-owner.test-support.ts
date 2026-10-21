@@ -34,10 +34,8 @@ export function createAuthOwnerTestFixtures() {
     version: 1,
     profiles: { shared: apiKey(key) },
   });
-
-  function snapshotAt(databasePath: string) {
-    return getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath)?.store;
-  }
+  const snapshotAt = (databasePath: string) =>
+    getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath)?.store;
 
   afterEach(async () => {
     clearSecretsRuntimeSnapshotState();
@@ -90,11 +88,9 @@ export function createAuthOwnerTestFixtures() {
     const sharedPath = resolveSharedAuthStorePath(env);
     const agentPath = resolveAuthProfileDatabasePath(agentDir);
     withEnv(env, () => {
-      setRuntimeAuthProfileStoreSnapshot(loadAuthProfileStoreWithoutExternalProfiles());
-      setRuntimeAuthProfileStoreSnapshot(
-        loadAuthProfileStoreWithoutExternalProfiles(agentDir),
-        agentDir,
-      );
+      for (const dir of [undefined, agentDir]) {
+        setRuntimeAuthProfileStoreSnapshot(loadAuthProfileStoreWithoutExternalProfiles(dir), dir);
+      }
     });
     return { stateDir, agentDir, sharedPath, agentPath, env };
   }

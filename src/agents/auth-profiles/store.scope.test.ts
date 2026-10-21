@@ -20,17 +20,19 @@ function root(location: "legacy-main" | "state-db" = "state-db") {
   const stateDir = tempDirs.make("openclaw-auth-scope-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   noteCommittedSharedAuthStoreOwnership({ location }, env);
-  return { stateDir, env, agentDir: path.join(stateDir, "agents", "temporary", "agent") };
+  const agentDir = path.join(stateDir, "agents", "temporary", "agent");
+  return {
+    env,
+    agentDir,
+    run: <T>(run: () => T | Promise<T>) => withAuthProfileStoreAgentDir(agentDir, stateDir, run),
+  };
 }
 
 function rows(key: string): AuthProfileRowRead {
   return {
     store: {
       status: "readable",
-      raw: {
-        version: 1,
-        profiles: { shared: { type: "api_key", provider: "custom", key } },
-      },
+      raw: { version: 1, profiles: { shared: { type: "api_key", provider: "custom", key } } },
     },
     state: { status: "missing", reason: "row" },
     cacheable: true,
@@ -49,14 +51,12 @@ it("waits for shared facts and reads fresh credentials for each bounded scope", 
     withPreparedExternalAuthProfiles: async (_params, run) => run(),
   });
   const run = vi.fn(() => runtime.loadAuthProfileStoreForRuntime().profiles.shared);
-  const first = withAuthProfileStoreAgentDir(owner.agentDir, owner.stateDir, run);
+  const first = owner.run(run);
   try {
     expect(run).not.toHaveBeenCalled();
     pendingRows.resolve(rows("fixture-old"));
     await expect(first).resolves.toMatchObject({ key: "fixture-old" });
-    await expect(
-      withAuthProfileStoreAgentDir(owner.agentDir, owner.stateDir, run),
-    ).resolves.toMatchObject({ key: "fixture-new" });
+    await expect(owner.run(run)).resolves.toMatchObject({ key: "fixture-new" });
     expect(resolveRuntimeAuthProfileAgentDir()).toBeUndefined();
   } finally {
     pendingRows.resolve(rows("fixture-old"));
@@ -75,9 +75,7 @@ it.each(["database-close", "owner-change"] as const)(
       return pendingRows.promise;
     });
     const run = vi.fn();
-    const preparing = Promise.resolve(
-      withAuthProfileStoreAgentDir(owner.agentDir, owner.stateDir, run),
-    );
+    const preparing = owner.run(run);
     const outcome = preparing.then(
       () => ({ rejected: false }),
       () => ({ rejected: true }),
@@ -109,12 +107,12 @@ it("keeps concurrent and nested async scopes separate, including callback reject
   const second = root("legacy-main");
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const outer = withAuthProfileStoreAgentDir(first.agentDir, first.stateDir, async () => {
+  const outer = first.run(async () => {
     entered.resolve();
     await release.promise;
     expect(resolveRuntimeAuthProfileAgentDir()).toBe(first.agentDir);
     await expect(
-      withAuthProfileStoreAgentDir(second.agentDir, second.stateDir, async () => {
+      second.run(async () => {
         await Promise.resolve();
         expect(resolveRuntimeAuthProfileAgentDir()).toBe(second.agentDir);
         throw new Error("fixture callback failed");
@@ -124,7 +122,7 @@ it("keeps concurrent and nested async scopes separate, including callback reject
   });
   try {
     await entered.promise;
-    await withAuthProfileStoreAgentDir(second.agentDir, second.stateDir, async () => {
+    await second.run(async () => {
       await Promise.resolve();
       expect(resolveRuntimeAuthProfileAgentDir()).toBe(second.agentDir);
     });
