@@ -25,6 +25,7 @@ import { resolvePhysicalSessionStorePath } from "../config/sessions/session-stor
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   closeProvider,
@@ -117,6 +118,8 @@ test.each(["lifecycle", "outstanding"] as const)(
         })().catch((error: unknown) => response.writeHead(500).end(String(error)));
       });
 
+      const heartbeatsEnabled = areHeartbeatsEnabled();
+      setHeartbeatsEnabled(false);
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       try {
         const provider = buildMockOpenAiResponsesProvider(
@@ -269,12 +272,16 @@ test.each(["lifecycle", "outstanding"] as const)(
         expect(laterParentTurn).toContain(CHILD_SESSION_KEY);
         expect(laterParentTurn).not.toContain("## Active Subagents");
       } finally {
-        if (gateway) {
-          await disconnectGatewayClient(gateway.client).catch(() => undefined);
-          await gateway.server.close({ reason: "subagent prompt recent proof complete" });
+        try {
+          if (gateway) {
+            await disconnectGatewayClient(gateway.client).catch(() => undefined);
+            await gateway.server.close({ reason: "subagent prompt recent proof complete" });
+          }
+          await closeProvider(providerServer);
+        } finally {
+          setHeartbeatsEnabled(heartbeatsEnabled);
+          env.restore();
         }
-        await closeProvider(providerServer);
-        env.restore();
       }
     });
   },
