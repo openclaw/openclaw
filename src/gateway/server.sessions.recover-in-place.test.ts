@@ -3,7 +3,11 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
 import {
@@ -201,14 +205,22 @@ function expectContinuation(
   });
 }
 
-test.for([false, true])(
-  "operator resume keeps session identity and admits one durable continuation (native: %s)",
-  async (native, { signal }) => {
-    const current = await fixture(
-      native ? "native-resume" : "builtin-resume",
-      native ? "codex" : undefined,
-      true,
-    );
+test.for(["builtin", "native", "pending"] as const)(
+  "operator resume keeps session identity and admits one durable continuation (%s)",
+  async (scenario, { signal }) => {
+    const native = scenario === "native";
+    const current = await fixture(`${scenario}-resume`, native ? "codex" : undefined, true);
+    if (scenario === "pending") {
+      await patchSessionEntryCore(current.scope, () => ({
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: current.recoveryCycleId,
+          revision: 4,
+          chargedAttempts: 0,
+        },
+      }));
+    }
     const before = await current.transcript();
     const dispatched = createDeferredCore();
     const finish = createDeferredCore();

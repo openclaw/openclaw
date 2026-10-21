@@ -13,7 +13,7 @@ import {
   buildMainSessionRecoverySettlementPatch,
 } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import {
-  inspectMainRestartRecoveryRolloverEligibility,
+  isMainSessionRecoveryPending,
   isMainSessionRecoveryReconciliationCandidate,
 } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { markOrphanedMainSessionForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
@@ -202,11 +202,14 @@ export async function recoverGatewaySession(params: {
   if (!initialSource?.sessionId) {
     return invalidSessionRequest("Session recovery source was not found.");
   }
+  const recovery = initialSource.mainRestartRecovery;
+  // Rejected dispatches refund their attempt; startup can exhaust its passes without a tombstone.
+  const pendingRecovery =
+    params.mode !== "new-session" &&
+    isMainSessionRecoveryPending(initialSource, sourceTarget.canonicalKey);
   if (
     params.mode === "in-place" &&
-    (params.sessionId !== initialSource.sessionId ||
-      params.recoveryCycleId !== initialSource.mainRestartRecovery?.cycleId ||
-      !initialSource.mainRestartRecovery?.tombstone)
+    (params.sessionId !== initialSource.sessionId || params.recoveryCycleId !== recovery?.cycleId)
   ) {
     return { ok: false, error: recoveryConflictError("source-changed") };
   }
@@ -238,15 +241,12 @@ export async function recoverGatewaySession(params: {
       continuation,
     };
   }
-  const initialEligibility = inspectMainRestartRecoveryRolloverEligibility(initialSource);
-  if (!initialEligibility.eligible && initialEligibility.reason !== "already_recovered") {
-    return invalidSessionRequest("Session recovery requires a restart-tombstoned session.");
+  if (!recovery || (!pendingRecovery && !recovery.tombstone)) {
+    return invalidSessionRequest(
+      "Session recovery requires pending restart recovery or a restart-tombstoned session.",
+    );
   }
-  const recovery = initialSource.mainRestartRecovery;
-  if (!recovery?.tombstone) {
-    return invalidSessionRequest("Session is not recoverable.");
-  }
-  if (params.mode === "in-place" && !recovery.tombstone.recoveredSessionKey) {
+  if (pendingRecovery || (params.mode === "in-place" && !recovery.tombstone?.recoveredSessionKey)) {
     return await runQueuedStoreWrite({
       queues: recoveryQueues,
       storePath: normalizeSessionIdentities(sourceTarget.storePath, [
@@ -272,8 +272,10 @@ export async function recoverGatewaySession(params: {
             current.lifecycleRevision !== initialSource.lifecycleRevision ||
             current.mainRestartRecovery?.cycleId !== recovery.cycleId ||
             current.mainRestartRecovery.revision !== recovery.revision ||
-            !current.mainRestartRecovery.tombstone ||
-            current.mainRestartRecovery.tombstone.recoveredSessionKey ||
+            (pendingRecovery
+              ? !isMainSessionRecoveryPending(current, sourceTarget.canonicalKey)
+              : !current.mainRestartRecovery.tombstone) ||
+            current.mainRestartRecovery.tombstone?.recoveredSessionKey ||
             current.archivedAt !== undefined ||
             current.providerReview ||
             isSessionControllerWorkActive(
