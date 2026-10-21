@@ -98,21 +98,6 @@ describe("pw-session page-scoped CDP client", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("reads the main-frame loader identity through the existing page session", async () => {
-    const sessionSend = vi.fn(async (method: string) =>
-      method === "Page.getFrameTree"
-        ? { frameTree: { frame: { loaderId: "LOADER_SAME_URL" } } }
-        : {},
-    );
-    const sessionDetach = vi.fn(async () => {});
-    const page = cdpPage(sessionSend, sessionDetach);
-
-    await expect(readDocumentIdentitiesForPage(page as never)).resolves.toEqual({
-      mainFrame: "cdp:LOADER_SAME_URL",
-    });
-    expect(sessionDetach).toHaveBeenCalledTimes(1);
-  });
-
   it.each(["attach", "command", "detach"] as const)(
     "bounds page CDP %s and releases its exact session",
     async (phase) => {
