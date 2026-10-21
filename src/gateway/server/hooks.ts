@@ -531,14 +531,24 @@ export function createGatewayHookDispatcher(params: {
               eventTarget.agentId,
               eventTarget.eventSessionKey,
             );
-            const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
+            const { admitScheduledOccurrence, runCronIsolatedAgentTurn } =
+              await loadIsolatedAgentModule();
             // Lazy module loading is the last Gateway-owned async boundary before
             // cron preparation, so recheck the deadline after it settles.
             if (startupAbortController.signal.aborted) {
               return;
             }
+            const ingressBoundary = pluginId ? "gateway.hooks.plugin" : "gateway.hooks.agent";
             const runHookIsolatedTurn = async () =>
               await runCronIsolatedAgentTurn({
+                // An event occurrence has no parent, so it holds nothing to release.
+                occurrence: await admitScheduledOccurrence({
+                  cfg,
+                  job,
+                  agentId,
+                  trigger: "event",
+                  ingressBoundary,
+                }),
                 cfg,
                 deps,
                 job,
@@ -556,13 +566,13 @@ export function createGatewayHookDispatcher(params: {
                   ingress: pluginId
                     ? {
                         kind: "webhook",
-                        boundary: "gateway.hooks.plugin",
+                        boundary: ingressBoundary,
                         state: "present",
                         rawSourceRef: `${pluginId}:${safeName}`,
                       }
                     : {
                         kind: "webhook",
-                        boundary: "gateway.hooks.agent",
+                        boundary: ingressBoundary,
                         state: "present",
                         ...(acceptedValue.mappingId
                           ? { rawSourceRef: acceptedValue.mappingId }

@@ -1,6 +1,8 @@
 /**
- * Collects the live facts one scheduled occurrence needs and mints its
- * execution context. A failure here never fails the run.
+ * Admits one scheduled occurrence: reads the parent row once, runs the
+ * requester's owner check and holds the parent generation for the whole
+ * occurrence. Each admitted run then mints its context from those facts. A
+ * failure here never fails the run.
  */
 import { access } from "node:fs/promises";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -8,6 +10,7 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { prepareSessionGenerationFacts } from "../config/sessions/session-delivery-generation.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -17,41 +20,29 @@ import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-rec
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import {
   buildScheduledExecutionContext,
-  resolveScheduledRequester,
+  classifyScheduledParent,
+  resolveScheduledPrincipal,
   type ScheduledAdmissionFacts,
   type ScheduledExecutionContextResult,
-  type ScheduledExecutionFacts,
+  type ScheduledRequesterRef,
 } from "./execution-context.js";
+import {
+  failedScheduledExecution,
+  type ScheduledExecutionContext,
+  type ScheduledOccurrence,
+  unadmittedScheduledOccurrence,
+} from "./scheduled-occurrence.js";
 import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import type { CronStoredJob } from "./types.js";
 
-type ScheduledExecutionContext = ScheduledExecutionFacts &
-  Readonly<{
-    /** Throws when the parent incarnation or the admitted run is no longer current. */
-    assertCurrent: () => void;
-  }>;
-
-type MintParams = {
+type OccurrenceAdmissionParams = {
   cfg: OpenClawConfig;
   job: CronStoredJob;
-  trigger: "cron" | "event";
-  ingressBoundary?: string;
-  runId: string;
   agentId: string;
-  runSessionKey: string;
-  storePath: string;
-  toolsAllow?: readonly string[];
-  /** Restored operator source authority, when the occurrence carries one. */
-  operatorAuthorityRestored: boolean;
+  trigger: "cron" | "event";
+  /** Event-triggered runs name their ingress boundary. */
+  ingressBoundary?: string;
 };
-
-export type MintedScheduledExecution = Readonly<{
-  result: ScheduledExecutionContextResult;
-  /** Binds the context to the admitted run; the admission owner reads it through `current`. */
-  bind: (assertAdmitted: () => void) => void;
-  current: () => ScheduledExecutionContext | undefined;
-  release: () => void;
-}>;
 
 function ingressFor(boundary: string | undefined): ScheduledAdmissionFacts["ingress"] {
   if (boundary === "gateway.hooks.plugin") {
@@ -60,14 +51,15 @@ function ingressFor(boundary: string | undefined): ScheduledAdmissionFacts["ingr
   return boundary === "gateway.hooks.agent" ? "webhook" : "channel-join";
 }
 
-async function checkRequesterOwner(params: MintParams): Promise<boolean> {
-  const requester = resolveScheduledRequester(params.job);
+/** Owner check for requesters the occurrence can verify; operator sources are checked per run. */
+async function checkRequesterOwner(
+  cfg: OpenClawConfig,
+  requester: Exclude<ScheduledRequesterRef, { kind: "operator-source" }>,
+): Promise<boolean> {
   switch (requester.kind) {
-    case "operator-source":
-      return params.operatorAuthorityRestored;
     case "channel": {
-      const prepared = await prepareCommandOwnerAuthority(params.cfg, requester.requester);
-      return prepared.source !== undefined && prepared.isCurrent(params.cfg);
+      const prepared = await prepareCommandOwnerAuthority(cfg, requester.requester);
+      return prepared.source !== undefined && prepared.isCurrent(cfg);
     }
     case "profile":
       try {
@@ -77,7 +69,7 @@ async function checkRequesterOwner(params: MintParams): Promise<boolean> {
       }
       // Named roles describe team operators; only an untiered install or the
       // Gateway owner profile carries owner authority.
-      return !params.cfg.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID;
+      return !cfg.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID;
     case "unknown":
       return false;
   }
@@ -106,14 +98,13 @@ export function scheduledParentLinkOf(job: CronStoredJob): ScheduledParentLink |
   return job.sourceConversation;
 }
 
-async function readParentRow(params: MintParams): Promise<ScheduledAdmissionFacts["parentRow"]> {
-  const parentLink = scheduledParentLinkOf(params.job);
-  if (!parentLink) {
-    return undefined;
-  }
+async function readParentRow(
+  parentSessionKey: string,
+  storePath: string,
+): Promise<NonNullable<ScheduledAdmissionFacts["parentRow"]>> {
   const entry = await readSessionEntryInWorker({
-    sessionKey: parentLink.sessionKey,
-    storePath: params.storePath,
+    sessionKey: parentSessionKey,
+    storePath,
     readConsistency: "latest",
   });
   const worktreePath = entry?.worktree ? entry.spawnedCwd : undefined;
@@ -159,7 +150,16 @@ export function parentRowFactsFromEntry(
 
 /** Admission facts from already-read inputs; shared with the development replay. */
 export function assembleScheduledAdmissionFacts(
-  params: Omit<MintParams, "storePath" | "operatorAuthorityRestored">,
+  params: {
+    cfg: OpenClawConfig;
+    job: CronStoredJob;
+    trigger: "cron" | "event";
+    ingressBoundary?: string;
+    runId: string;
+    agentId: string;
+    runSessionKey: string;
+    toolsAllow?: readonly string[];
+  },
   parentRow: ScheduledAdmissionFacts["parentRow"],
   owner: boolean | undefined,
 ): ScheduledAdmissionFacts {
@@ -183,57 +183,103 @@ export function assembleScheduledAdmissionFacts(
   };
 }
 
-/** Mints the context for one occurrence. Errors become a `fail` result. */
-async function mintScheduledExecutionContext(
-  params: MintParams,
-): Promise<MintedScheduledExecution> {
-  let releaseLease = () => {};
-  let assertParentCurrent = () => {};
-  let result: ScheduledExecutionContextResult;
+/**
+ * Admits one occurrence. The single call site for stored jobs is the cron
+ * service's `executeJobCore`; hook and join-intro turns admit with
+ * `trigger: "event"`. Errors become `fail` results for every run it mints.
+ */
+export async function admitScheduledOccurrence(
+  params: OccurrenceAdmissionParams,
+): Promise<ScheduledOccurrence> {
+  const { job } = params;
+  const principal = resolveScheduledPrincipal(job, {
+    trigger: params.trigger,
+    ...(params.trigger === "event" ? { ingress: ingressFor(params.ingressBoundary) } : {}),
+    agentId: params.agentId,
+  });
+  let parentRow: ScheduledAdmissionFacts["parentRow"];
+  let owner: boolean | undefined;
+  let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
   try {
-    const parentRow = await readParentRow(params);
-    // Only parent-linked jobs recheck a requester; other principals keep legacy authority.
-    const owner = parentRow ? await checkRequesterOwner(params) : undefined;
-    const facts = assembleScheduledAdmissionFacts(params, parentRow, owner);
-    result = buildScheduledExecutionContext(params.job, facts);
-    if (result.status === "ready" && result.facts.principal.kind === "parent") {
-      const { parent } = result.facts.principal;
-      // A revisionless link holds the generation the builder just validated.
-      const observedRevision =
-        parentRow && !parentRow.missing ? parentRow.lifecycleRevision : undefined;
-      const generation = await prepareSessionGenerationFacts({
+    if (!("error" in principal) && principal.kind === "parent") {
+      const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
         agentId: params.agentId,
-        storePath: params.storePath,
-        sessionKey: parent.sessionKey,
-        sessionId: parent.sessionId,
-        lifecycleRevision: parent.lifecycleRevision ?? observedRevision ?? null,
       });
-      releaseLease = generation.release;
-      assertParentCurrent = () => generation.assertCurrent();
+      parentRow = await readParentRow(principal.parent.sessionKey, storePath);
+      if (principal.requester.kind !== "operator-source") {
+        owner = await checkRequesterOwner(params.cfg, principal.requester);
+      }
+      if (classifyScheduledParent(principal.parent, parentRow) === "current") {
+        // A revisionless link holds the generation classification just validated.
+        const observedRevision = parentRow.missing ? undefined : parentRow.lifecycleRevision;
+        generation = await prepareSessionGenerationFacts({
+          agentId: params.agentId,
+          storePath,
+          sessionKey: principal.parent.sessionKey,
+          sessionId: principal.parent.sessionId,
+          lifecycleRevision: principal.parent.lifecycleRevision ?? observedRevision ?? null,
+        });
+      }
     }
   } catch (error) {
-    result = { status: "fail", error: error instanceof Error ? error.message : String(error) };
+    generation?.release();
+    return unadmittedScheduledOccurrence(error instanceof Error ? error.message : String(error));
   }
-  let context: ScheduledExecutionContext | undefined;
+  const operatorSourceRequester =
+    !("error" in principal) &&
+    principal.kind === "parent" &&
+    principal.requester.kind === "operator-source";
   return {
-    result,
-    bind(assertAdmitted) {
-      if (result.status !== "ready") {
-        return;
+    mint(run) {
+      let result: ScheduledExecutionContextResult;
+      try {
+        const facts = assembleScheduledAdmissionFacts(
+          {
+            cfg: run.cfg,
+            job,
+            trigger: params.trigger,
+            ingressBoundary: params.ingressBoundary,
+            runId: run.runId,
+            agentId: run.agentId,
+            runSessionKey: run.runSessionKey,
+            toolsAllow: run.toolsAllow,
+          },
+          parentRow,
+          operatorSourceRequester ? run.operatorAuthorityRestored : owner,
+        );
+        result = buildScheduledExecutionContext(job, facts);
+      } catch (error) {
+        return failedScheduledExecution(error instanceof Error ? error.message : String(error));
       }
-      context = {
-        ...result.facts,
-        assertCurrent: () => {
-          assertAdmitted();
-          assertParentCurrent();
+      const lease = generation;
+      const assertParentCurrent =
+        result.status === "ready" && result.facts.principal.kind === "parent" && lease
+          ? () => lease.assertCurrent()
+          : () => {};
+      let context: ScheduledExecutionContext | undefined;
+      return {
+        result,
+        bind(assertAdmitted) {
+          if (result.status !== "ready") {
+            return;
+          }
+          context = {
+            ...result.facts,
+            assertCurrent: () => {
+              assertAdmitted();
+              assertParentCurrent();
+            },
+          };
+        },
+        current: () => context,
+        release() {
+          context = undefined;
         },
       };
     },
-    current: () => context,
     release() {
-      context = undefined;
-      releaseLease();
-      releaseLease = () => {};
+      generation?.release();
+      generation = undefined;
     },
   };
 }
@@ -252,33 +298,5 @@ export function resolveCronJobToolPolicyContext(
     }),
     callerOrigin: job.toolsAllowProvenance?.callerOrigin,
     execTarget: job.toolsAllowExecTarget,
-  });
-}
-
-/** Mints the context for one prompt-executor attempt. */
-export function mintCronPromptExecutionContext(
-  params: {
-    cfgWithAgentDefaults: OpenClawConfig;
-    job: CronStoredJob;
-    agentId: string;
-    runSessionKey: string;
-    cronSession: { storePath: string };
-    agentPayload?: { toolsAllow?: string[] } | null;
-    operatorAuthority?: unknown;
-    executionIdentity?: { ingress?: { boundary?: string } };
-  },
-  run: { runId: string; trigger: "cron" | "event" },
-) {
-  return mintScheduledExecutionContext({
-    cfg: params.cfgWithAgentDefaults,
-    job: params.job,
-    trigger: run.trigger,
-    ingressBoundary: params.executionIdentity?.ingress?.boundary,
-    runId: run.runId,
-    agentId: params.agentId,
-    runSessionKey: params.runSessionKey,
-    storePath: params.cronSession.storePath,
-    toolsAllow: params.agentPayload?.toolsAllow,
-    operatorAuthorityRestored: params.operatorAuthority !== undefined,
   });
 }

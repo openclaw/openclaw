@@ -199,9 +199,10 @@ function profileIdOf(actor: SessionCreatedActor | undefined) {
   return actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
 }
 
-function resolvePrincipal(
+/** The occurrence's principal; occurrence admission and the builder share this resolution. */
+export function resolveScheduledPrincipal(
   job: BuilderJob,
-  facts: ScheduledAdmissionFacts,
+  facts: Pick<ScheduledAdmissionFacts, "trigger" | "ingress" | "agentId">,
 ): ScheduledPrincipal | { error: string } {
   if (facts.trigger === "event") {
     return facts.ingress
@@ -251,7 +252,7 @@ function resolvePrincipal(
   };
 }
 
-function classifyParent(
+export function classifyScheduledParent(
   parent: ScheduledParentRef,
   row: ScheduledParentRowFacts | undefined,
 ): ScheduledParentUnavailableReason | "current" | "unread" {
@@ -309,7 +310,8 @@ function resolveAuthority(
 }
 
 function resolvePlacement(job: BuilderJob, principal: ScheduledPrincipal): ScheduledPlacement {
-  if (resolveCronSessionTargetSessionKey(job.sessionTarget)) {
+  // `main` runs as a scheduled turn inside the agent's main session, like `session:<key>`.
+  if (job.sessionTarget === "main" || resolveCronSessionTargetSessionKey(job.sessionTarget)) {
     return "in-session";
   }
   return principal.kind === "parent" ? "child" : "detached";
@@ -352,16 +354,13 @@ export function buildScheduledExecutionContext(
   job: BuilderJob,
   facts: ScheduledAdmissionFacts,
 ): ScheduledExecutionContextResult {
-  if (job.sessionTarget === "main") {
-    return { status: "fail", error: "main-session jobs run inside the main session's own turn" };
-  }
-  const principal = resolvePrincipal(job, facts);
+  const principal = resolveScheduledPrincipal(job, facts);
   if ("error" in principal) {
     return { status: "fail", error: principal.error };
   }
   const parentRow = principal.kind === "parent" ? facts.parentRow : undefined;
   if (principal.kind === "parent") {
-    const state = classifyParent(principal.parent, parentRow);
+    const state = classifyScheduledParent(principal.parent, parentRow);
     if (state === "unread") {
       return { status: "fail", error: "parent session facts are required for a parent-linked job" };
     }

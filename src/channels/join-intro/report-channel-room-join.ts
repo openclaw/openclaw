@@ -172,8 +172,17 @@ export async function reportChannelRoomJoin(
         },
         state: { nextRunAtMs: nowMs },
       };
-      const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
+      const { admitScheduledOccurrence, runCronIsolatedAgentTurn } =
+        await import("../../cron/isolated-agent.js");
+      // An event occurrence has no parent, so it holds nothing to release.
+      const occurrence = await admitScheduledOccurrence({
+        cfg: params.cfg,
+        job,
+        agentId: params.route.agentId,
+        trigger: "event",
+      });
       const result = await runCronIsolatedAgentTurn({
+        occurrence,
         cfg: params.cfg,
         deps: createDefaultDeps(),
         job,

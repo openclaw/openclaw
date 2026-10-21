@@ -19,6 +19,7 @@ import {
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 
 async function announce(
   payloads: ReplyPayload[],
@@ -36,6 +37,7 @@ async function announce(
     const deps = createCliDeps();
     mockAgentPayloads(payloads);
     const result = await runCronIsolatedAgentTurn({
+      occurrence: TEST_SCHEDULED_OCCURRENCE,
       deliveryAttemptFence: null,
       cfg,
       deps,

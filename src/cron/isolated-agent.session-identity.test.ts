@@ -25,6 +25,7 @@ import {
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import * as h from "./isolated-agent/run.test-harness.js";
 import { normalizeCronJobCreate } from "./normalize.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import type { CronJob, CronStoredJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
@@ -76,6 +77,7 @@ function runSessionTurn(
 ) {
   setRuntimeConfigSnapshot(cfg);
   return runCronIsolatedAgentTurn({
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     deliveryAttemptFence: null,
     cfg,
     deps: makeDeps(),
