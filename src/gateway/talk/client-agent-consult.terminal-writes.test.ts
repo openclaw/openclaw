@@ -2,6 +2,8 @@ import { afterAll, afterEach, assert, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import * as runs from "../../agents/admitted-run-context.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as terminal from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -25,6 +27,42 @@ beforeAll(async () => {
 });
 afterEach(() => core.mockReset());
 afterAll(async () => state?.cleanup());
+
+it("keeps browser Talk consults idle-fresh through accepted user-turn storage", async () => {
+  const sessionTarget = await prepareTalkSessionTarget(config, "agent:main:talk-idle");
+  const scope = { ...sessionTarget, sessionKey: sessionTarget.canonicalKey };
+  const now = Date.now();
+  const staleAt = now - 61 * 60_000;
+  await replaceSessionEntry(scope, {
+    sessionId: "talk-idle",
+    sessionStartedAt: staleAt,
+    updatedAt: staleAt,
+    lastInteractionAt: staleAt,
+  });
+  core.mockImplementation(async (params) => {
+    await runs.resolvePreparedRunAdmission({ ...params, runtimeKind: "embedded" });
+    assert(params.userTurnTranscriptRecorder);
+    await params.userTurnTranscriptRecorder.persistApproved();
+    return { payloads: [{ text: "Answer" }], meta: { durationMs: 0 } };
+  });
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    const runner = createConsultRunner({ config, sessionTarget });
+    await expect(runner.runPrompt({ prompt: "check" })).resolves.toEqual({ text: "Answer" });
+    const entry = loadSessionEntry(scope);
+    expect(entry).toMatchObject({ sessionId: "talk-idle", lastInteractionAt: now });
+    assert(entry);
+    expect(
+      evaluateSessionFreshness({
+        ...entry,
+        now: now + 1,
+        policy: { mode: "idle", idleMinutes: 60, atHour: 4 },
+      }).fresh,
+    ).toBe(true);
+  } finally {
+    clock.mockRestore();
+  }
+});
 
 it.each([false, true])("drains writes; abort revokes authority (%s)", async (abort) => {
   const commit = createDeferred();

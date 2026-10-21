@@ -26,7 +26,7 @@ import {
 } from "./router-outlet.test-support.tsx";
 
 // mock-isolation: Supply the renderer while retaining the registered route's ownership policy.
-vi.mock("../pages/chat/chat-page.ts", () => ({}));
+vi.mock("../pages/chat/chat-page.tsx", () => ({}));
 
 type RouteId = "chat" | "dashboard" | "home" | "settings" | "new-session";
 type TestContext = Record<string, never>;

@@ -30,7 +30,7 @@ import {
   setNavigationContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
 import type { ChatRouteData } from "./route-loader.ts";
 import { ChatRouteView } from "./route-view.tsx";
 import type { SessionChatRouteData } from "./session-route-data.ts";

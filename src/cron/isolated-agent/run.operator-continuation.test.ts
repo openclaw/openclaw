@@ -670,7 +670,7 @@ it.each([
       );
       expect(entered).toBe(1);
       if (scenario === "operator" || scenario === "paused force run") {
-        expect(JSON.stringify(offered)).toContain("inspect");
+        expect(JSON.stringify(offered)).toContain('"inspect"');
         expect(JSON.stringify(offered)).toContain("merge");
         expect(rejected).toBeUndefined();
         expect(results).toMatchObject([
@@ -696,7 +696,7 @@ it.each([
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
-        expect(JSON.stringify(offered)).not.toContain("inspect");
+        expect(JSON.stringify(offered)).not.toContain('"inspect"');
         expect(JSON.stringify(offered)).not.toContain("merge");
         expect(results).toEqual([]);
       }

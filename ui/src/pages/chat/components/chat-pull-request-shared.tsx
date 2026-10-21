@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { For, Show } from "solid-js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -37,27 +37,37 @@ export const STATE_LABEL_KEYS = {
   closed: "chat.pullRequests.closed",
   open: "chat.pullRequests.open",
 } as const;
-export function ChecksRow(props: {
-  label: string;
-  count: number;
-  modifier: "failed" | "passed" | "running" | "skipped";
+const CHECK_ROW_LABELS = {
+  failed: "chat.pullRequests.checksFailed",
+  passed: "chat.pullRequests.checksPassed",
+  running: "chat.pullRequests.checksRunning",
+  skipped: "chat.pullRequests.checksSkipped",
+} as const;
+
+export function ChecksRows(props: {
+  checks: ControlUiSessionPullRequest["checks"];
+  runningFirst?: boolean;
 }) {
+  const order = () =>
+    props.runningFirst
+      ? (["failed", "running", "passed", "skipped"] as const)
+      : (["failed", "passed", "running", "skipped"] as const);
   return (
-    <Show when={props.count !== 0}>
-      <div class={["chat-pr__checks-row", `chat-pr__checks-row--${props.modifier}`]}>
-        <span class="chat-pr__check-symbol" aria-hidden="true">
-          <Show when={props.modifier !== "running"} fallback={<span class="btn__spinner" />}>
-            <Icon
-              name={
-                props.modifier === "failed" ? "x" : props.modifier === "passed" ? "check" : "circle"
-              }
-            />
-          </Show>
-        </span>
-        <span class="chat-pr__checks-row-label">{props.label}</span>
-        <span class="chat-pr__checks-row-count">{props.count}</span>
-      </div>
-    </Show>
+    <For each={order()}>
+      {(kind) => (
+        <Show when={(props.checks?.[kind] ?? 0) !== 0}>
+          <div class={["chat-pr__checks-row", `chat-pr__checks-row--${kind}`]}>
+            <span class="chat-pr__check-symbol" aria-hidden="true">
+              <Show when={kind !== "running"} fallback={<span class="btn__spinner" />}>
+                <Icon name={kind === "failed" ? "x" : kind === "passed" ? "check" : "circle"} />
+              </Show>
+            </span>
+            <span class="chat-pr__checks-row-label">{t(CHECK_ROW_LABELS[kind])}</span>
+            <span class="chat-pr__checks-row-count">{props.checks?.[kind] ?? 0}</span>
+          </div>
+        </Show>
+      )}
+    </For>
   );
 }
 

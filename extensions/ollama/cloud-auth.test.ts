@@ -1,41 +1,31 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type {
-  ProviderAuthContext,
-  ProviderAuthMethod,
-  ProviderPlugin,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  capturePluginRegistration,
+  createTestWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
-function cloudAuthMethod(): ProviderAuthMethod {
-  const registerProvider = vi.fn<(provider: ProviderPlugin) => void>();
-  plugin.register(
-    createTestPluginApi({
-      id: "ollama",
-      runtime: createPluginRuntimeMock(),
-      registerProvider,
-    }),
+const keyError = "Ollama Cloud requires a hosted API key";
+
+function cloudAuthMethod() {
+  return expectDefined(
+    capturePluginRegistration(plugin).providers.find((entry) => entry.id === "ollama-cloud")
+      ?.auth[0],
+    "Ollama Cloud exposes an auth method",
   );
-  const provider = expectDefined(
-    registerProvider.mock.calls
-      .map(([entry]) => entry)
-      .find((entry) => entry.id === "ollama-cloud"),
-    "Ollama Cloud provider is registered",
-  );
-  return expectDefined(provider.auth[0], "Ollama Cloud exposes an auth method");
 }
 
 function authContext(
-  options: Pick<ProviderAuthContext, "env" | "opts" | "secretInputMode">,
+  options: Partial<Pick<ProviderAuthContext, "env" | "opts" | "secretInputMode">>,
 ): ProviderAuthContext {
   return {
     config: {},
-    prompter: {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
+    env: {},
+    opts: {},
+    secretInputMode: "plaintext",
+    prompter: createTestWizardPrompter({
       select: async ({ options: choices }) =>
         expectDefined(choices[0], "Expected a prompt option").value,
       multiselect: async () => {
@@ -43,8 +33,7 @@ function authContext(
       },
       text: async ({ initialValue }) => initialValue ?? "  ollama-local  ",
       confirm: vi.fn(async () => true),
-      progress: () => ({ update: vi.fn(), stop: vi.fn() }),
-    },
+    }),
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     isRemote: false,
     openUrl: vi.fn(async () => {}),
@@ -59,18 +48,17 @@ function authContext(
 
 describe("Ollama Cloud API key setup", () => {
   it.each(["flag", "prompt", "env", "ref"] as const)(
-    "rejects the local placeholder from %s during interactive setup",
+    "rejects local key from %s",
     async (source) => {
-      const method = cloudAuthMethod();
       await expect(
-        method.run(
+        cloudAuthMethod().run(
           authContext({
             env: source === "env" || source === "ref" ? { OLLAMA_API_KEY: "ollama-local" } : {},
             opts: source === "flag" ? { ollamaCloudApiKey: "ollama-local" } : {},
             secretInputMode: source === "ref" ? "ref" : "plaintext",
           }),
         ),
-      ).rejects.toThrow("Ollama Cloud requires a hosted API key");
+      ).rejects.toThrow(keyError);
     },
   );
 
@@ -86,23 +74,14 @@ describe("Ollama Cloud API key setup", () => {
       resolveApiKey: vi.fn(async () => ({ key: "ollama-local", source: "flag" as const })),
       toApiKeyCredential,
     };
-    await expect(method.validateNonInteractive?.(ctx)).rejects.toThrow(
-      "Ollama Cloud requires a hosted API key",
-    );
-    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
-      "Ollama Cloud requires a hosted API key",
-    );
+    await expect(method.validateNonInteractive?.(ctx)).rejects.toThrow(keyError);
+    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(keyError);
     expect(toApiKeyCredential).not.toHaveBeenCalled();
   });
 
   it("preserves a hosted key and the Cloud default model", async () => {
-    const method = cloudAuthMethod();
-    const result = await method.run(
-      authContext({
-        env: {},
-        opts: { ollamaCloudApiKey: "hosted-test-key" },
-        secretInputMode: "plaintext",
-      }),
+    const result = await cloudAuthMethod().run(
+      authContext({ opts: { ollamaCloudApiKey: "hosted-test-key" } }),
     );
     expect(result).toMatchObject({
       profiles: [
