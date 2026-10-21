@@ -69,17 +69,11 @@ describe("handleAbortTrigger", () => {
     vi.clearAllMocks();
     abortSessionRunTargetWithOutcomeMock.mockImplementation((params) => {
       const outcome = {
-        aborted: false,
         alreadyFinalizing: true,
-        queuedCancelled: 0,
-        activeCancelled: 0,
         childrenStopped: 0,
         childFailures: 0,
-        failures: [],
-        settled: Promise.resolve(),
       };
       return {
-        ...outcome,
         completed: (async () => {
           await params.stopChildren?.(async () => true);
           return outcome;

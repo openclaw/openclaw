@@ -598,40 +598,33 @@ describe("/acp command", () => {
   });
 
   it.each([
-    {
-      kind: "topic",
-      originatingTo: "telegram:-1003841603622",
-      threadId: "498",
-      conversationId: "-1003841603622:topic:498",
-    },
-    {
-      kind: "DM",
-      originatingTo: "telegram:123456789",
-      threadId: undefined,
-      conversationId: "123456789",
-    },
-  ])("binds Telegram $kind ACP spawns to full conversation ids", async (fixture) => {
-    const result = await runCommand("/acp spawn codex --thread here", baseCfg, {
-      Provider: "telegram",
-      OriginatingTo: fixture.originatingTo,
-      ...(fixture.threadId ? { MessageThreadId: fixture.threadId } : {}),
-    });
+    ["topic", "telegram:-1003841603622", "498", "-1003841603622:topic:498"],
+    ["DM", "telegram:123456789", undefined, "123456789"],
+  ] as const)(
+    "binds Telegram %s ACP spawns to full conversation ids",
+    async (kind, originatingTo, threadId, conversationId) => {
+      const result = await runCommand("/acp spawn codex --thread here", baseCfg, {
+        Provider: "telegram",
+        OriginatingTo: originatingTo,
+        ...(threadId ? { MessageThreadId: threadId } : {}),
+      });
 
-    expectReplyText(result, "Spawned ACP session agent:main:acp:", "Bound this conversation to");
-    if (fixture.kind === "topic") {
-      expect(result?.reply?.delivery).toEqual({ pin: { enabled: true } });
-    } else {
-      expect(result?.reply?.channelData).toBeUndefined();
-    }
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: fixture.conversationId,
-      },
-    });
-  });
+      expectReplyText(result, "Spawned ACP session agent:main:acp:", "Bound this conversation to");
+      if (kind === "topic") {
+        expect(result?.reply?.delivery).toEqual({ pin: { enabled: true } });
+      } else {
+        expect(result?.reply?.channelData).toBeUndefined();
+      }
+      expectBindingBindCall({
+        placement: "current",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId,
+        },
+      });
+    },
+  );
 
   it.each([
     { command: "/acp spawn", error: "ACP target harness id is required" },
