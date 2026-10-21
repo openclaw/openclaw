@@ -155,7 +155,7 @@ export async function performSessionGitHubPreparation(
 }
 
 /** The caller retains current PR eligibility and session-action exclusion through this operation. */
-export async function prepareManagedPullRequestWorkspace(params: {
+async function prepareManagedPullRequestWorkspace(params: {
   owner: LocalWorkspaceOwner;
   storePath: string;
   identity: PreparedGitHubPublicationIdentity;

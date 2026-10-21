@@ -3,11 +3,17 @@ import {
   createKnownMainRed,
   createMainFailureClassifier,
 } from "../../scripts/ci-known-main-red.mjs";
-import { reportPrFailures } from "../../scripts/ci-pr-failure-report.mjs";
+import { formatFailureReport, reportPrFailures } from "../../scripts/ci-pr-failure-report.mjs";
 import {
   extractNodeFailedTests,
   parseNodeFailureReport,
 } from "../../scripts/lib/ci-node-test-evidence.mjs";
+import {
+  evaluateWorkflow,
+  expectIncludes,
+  readCiWorkflow,
+  requiredWorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 const repository = "openclaw/openclaw";
 const headSha = "a".repeat(40);
@@ -51,6 +57,7 @@ const mainRun = {
   status: "completed",
   conclusion: "failure",
 };
+const prRun = { ...mainRun, id: 100, event: "pull_request", head_sha: headSha };
 const job = {
   id: 10,
   run_id: 100,
@@ -121,6 +128,31 @@ const appendedReport = (text: string) => ({ prReport: `${report()}\n${text}` });
 const insertFailure = (anchor: string, message: string) =>
   changedReport(anchor, `Error: ${message}\n[shard:gateway] ${anchor}`);
 
+function mockApi(
+  responses: Record<string, unknown>,
+  fallback?: (url: URL, path: string) => Response,
+  unavailable?: string,
+) {
+  const api = vi.fn(async (input: string, init?: RequestInit) => {
+    expect(init?.method ?? "GET").toBe("GET");
+    const url = new URL(input);
+    const path = url.pathname.replace(`/repos/${repository}`, "");
+    if (path === unavailable) {
+      return new Response("Unavailable", { status: 503 });
+    }
+    if (Object.hasOwn(responses, path)) {
+      const body = responses[path];
+      return new Response(typeof body === "string" ? body : JSON.stringify(body));
+    }
+    if (fallback) {
+      return fallback(url, path);
+    }
+    throw new Error(`Unexpected API request ${path}`);
+  });
+  vi.stubGlobal("fetch", api);
+  return api;
+}
+
 function failureClassifier(
   options: {
     mainJobs?: (typeof job)[];
@@ -132,29 +164,19 @@ function failureClassifier(
 ) {
   const runs = options.runs ?? [mainRun];
   const latest = runs.toSorted((a, b) => b.run_number - a.run_number)[0];
-  const api = vi.fn(async (url: string) => {
-    const path = new URL(url).pathname.replace(`/repos/${repository}`, "");
-    if (path === options.unavailable) {
-      return new Response("Unavailable", { status: 503 });
-    }
-    if (path === "/actions/workflows/ci.yml/runs") {
-      return new Response(JSON.stringify({ workflow_runs: runs }));
-    }
-    if (path === `/actions/runs/${latest?.id}/attempts/1/jobs`) {
-      const jobs = (options.mainJobs ?? [{ ...job, id: 20 }]).map((entry) =>
-        Object.assign({}, entry, { run_id: latest!.id }),
-      );
-      return new Response(JSON.stringify({ total_count: jobs.length, jobs }));
-    }
-    if (path === "/actions/jobs/20/logs") {
-      return new Response(options.mainReport ?? report());
-    }
-    if (path === "/actions/jobs/10/logs") {
-      return new Response(options.prReport ?? report());
-    }
-    throw new Error(`Unexpected reporting request ${path}`);
-  });
-  vi.stubGlobal("fetch", api);
+  const jobs = (options.mainJobs ?? [{ ...job, id: 20 }]).map((entry) =>
+    Object.assign({}, entry, { run_id: latest?.id }),
+  );
+  const api = mockApi(
+    {
+      "/actions/workflows/ci.yml/runs": { workflow_runs: runs },
+      [`/actions/runs/${latest?.id}/attempts/1/jobs`]: { total_count: jobs.length, jobs },
+      "/actions/jobs/20/logs": options.mainReport ?? report(),
+      "/actions/jobs/10/logs": options.prReport ?? report(),
+    },
+    undefined,
+    options.unavailable,
+  );
   return { api, ...createMainFailureClassifier({ repository, token: "synthetic-token" }) };
 }
 
@@ -742,5 +764,151 @@ describe("loose CI failure discovery", () => {
       { file: "test/unhandled.test.ts", tests: [] },
     ]);
     expect(parseNodeFailureReport(log, false)).toEqual([]);
+  });
+});
+
+describe("PR failure reporting", () => {
+  const reportJob = (id: number, name: string, conclusion: string | null = "success") => ({
+    ...job,
+    id,
+    name,
+    conclusion,
+    steps: [],
+    status: conclusion === null ? "in_progress" : "completed",
+  });
+  const runReport = (overrides: Record<string, unknown> = {}) =>
+    reportPrFailures({ ...prContext, ...overrides });
+  const passedPrerequisites = { preflightResult: "success", securityFastResult: "success" };
+  function fixture(rows: ReturnType<typeof reportJob>[], currentRun = prRun) {
+    const mainJobs = [reportJob(20, "build-artifacts", "failure"), reportJob(21, "checks-ui")].map(
+      (entry) => Object.assign({}, entry, { run_id: 200 }),
+    );
+    return mockApi({
+      "/actions/runs/100": currentRun,
+      "/actions/runs/100/attempts/1/jobs": { total_count: rows.length, jobs: rows },
+      "/actions/runs/100/attempts/2/jobs": { total_count: rows.length, jobs: rows },
+      "/actions/workflows/ci.yml/runs": { workflow_runs: [mainRun] },
+      "/actions/runs/200/attempts/1/jobs": { total_count: mainJobs.length, jobs: mainJobs },
+    });
+  }
+
+  it.each([
+    [repository, "c".repeat(40)],
+    ["contributor/openclaw", "main"],
+  ])(
+    "checks out trusted reporter code for %s despite a stale event base",
+    (headRepository, ref) => {
+      const checkout = requiredWorkflowStep(
+        readCiWorkflow().jobs["pr-failure-report"].steps,
+        "Checkout CI failure reporter",
+      );
+      expect(checkout.with.repository ?? repository).toBe(repository);
+      expect(
+        evaluateWorkflow(checkout.with.ref, {
+          headRepository,
+          sha: "c".repeat(40),
+          githubEvent: {
+            pull_request: {
+              head: { repo: { full_name: headRepository }, sha: headSha },
+              base: { ref: "main", sha: mainSha },
+            },
+          },
+        }),
+      ).toBe(ref);
+    },
+  );
+
+  it("uses complete successful prerequisite results without enumerating jobs", async () => {
+    const api = fixture([reportJob(1, "checks-ui")]);
+    const result = await runReport({
+      ...passedPrerequisites,
+      jobResults: ["success", "success", "success", "skipped"],
+    });
+    expect(result).toMatchObject({ failures: [], knownMainRed: false, failureJobId: "" });
+    expect(formatFailureReport(result, prContext)).toContain("prerequisite results");
+    expect(api.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+      `/repos/${repository}/actions/runs/100`,
+    ]);
+  });
+
+  it.each(["failure", "cancelled", "unknown", "", undefined])(
+    "enumerates jobs for prerequisite %s",
+    async (result) => {
+      const api = fixture([reportJob(1, "checks-ui", "timed_out")]);
+      const outcome = await runReport({
+        ...passedPrerequisites,
+        jobResults: ["success", "success", result],
+      });
+      expect(outcome).toMatchObject({
+        failures: [{ job: "checks-ui", conclusion: "timed_out" }],
+        knownMainRed: false,
+        failureJobId: "1",
+      });
+      expect(api.mock.calls.some(([url]) => url.includes("/attempts/1/jobs"))).toBe(true);
+    },
+  );
+
+  it("reports every failure without cancellation and preserves a blocking gate result", async () => {
+    fixture([
+      reportJob(1, "preflight"),
+      reportJob(2, "build-artifacts", "failure"),
+      reportJob(3, "checks-ui", "failure"),
+      reportJob(4, "platform-only", "timed_out"),
+      reportJob(5, "not-selected", "skipped"),
+      reportJob(6, "pr-failure-report", null),
+      reportJob(7, "openclaw/ci-gate", null),
+    ]);
+    const result = await runReport();
+    expect(result).toMatchObject({
+      failures: [
+        { job: "build-artifacts", class: "pre-existing", mainRunId: 200, mainJobId: 20 },
+        { job: "checks-ui", class: "new", mainRunId: 200, mainJobId: 21 },
+        { job: "platform-only", class: "unknown", mainRunId: 200, mainJobId: null },
+      ],
+      knownMainRed: false,
+      failureJobId: "2",
+    });
+    expectIncludes(formatFailureReport(result, prContext), [
+      "| [build-artifacts](https://github.com/openclaw/openclaw/actions/runs/100/job/2) | failure | **pre-existing** |",
+      "https://github.com/openclaw/openclaw/actions/runs/200/job/20",
+      "**new**",
+      "**unknown**",
+    ]);
+  });
+
+  it("does not grant the first-attempt allowance on a retry", async () => {
+    fixture([], { ...prRun, run_attempt: 2 });
+    expect(await runReport({ runAttempt: 2 })).toMatchObject({
+      failures: [],
+      knownMainRed: false,
+      failureJobId: "",
+    });
+  });
+
+  it("waits for all validation jobs and rejects mismatched run identity", async () => {
+    fixture([reportJob(1, "checks-ui", null)]);
+    await expect(runReport()).rejects.toThrow("not all completed");
+    fixture([], { ...prRun, head_sha: mainSha });
+    await expect(runReport()).rejects.toThrow("identity changed");
+  });
+
+  it("escapes job-controlled table text", () => {
+    const summary = formatFailureReport(
+      {
+        jobs: [{ id: 1 }],
+        failures: [
+          {
+            job: "[bad]|<br>\nnext",
+            conclusion: "failure",
+            class: "unknown",
+            mainRunId: null,
+            mainJobId: null,
+            reason: "a|b",
+          },
+        ],
+      },
+      prContext,
+    );
+    expectIncludes(summary, ["&#91;bad&#93;&#124;&lt;br&gt; next", "a&#124;b"]);
   });
 });

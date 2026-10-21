@@ -114,6 +114,16 @@ export function DesktopFileChrome(props: FileReaderChromeProps) {
       disabled: props.controls.editing,
     }));
   const actions = (compact: boolean): MenuEntry[] => [
+    ...(props.controls.fileAttachment
+      ? [
+          {
+            id: "attach-session",
+            label: t("chat.detailPanel.attachToSession"),
+            icon: <Icon name="paperclip" />,
+            disabled: props.controls.fileAttachment.disabled,
+          },
+        ]
+      : []),
     ...(compact && props.controls.htmlPreview
       ? [
           {
@@ -200,7 +210,9 @@ export function DesktopFileChrome(props: FileReaderChromeProps) {
       : []),
   ];
   const select = (value: string) => {
-    if (value === "html-mode") {
+    if (value === "attach-session") {
+      props.controls.fileAttachment?.attach();
+    } else if (value === "html-mode") {
       props.controls.htmlPreview?.onToggle();
     } else if (value === "preview" || value === "highlighted" || value === "plain") {
       props.controls.onReadingModeChange?.(value);

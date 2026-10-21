@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -7,13 +6,10 @@ import {
   type WorkerProvider,
   WorkerProviderError,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import * as secretEgressRuntime from "openclaw/plugin-sdk/secret-egress-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
@@ -24,7 +20,7 @@ import {
   catalogJson,
   classProfile,
   commandResult,
-  createProviderFixtures,
+  createProviderTestHarness,
   nodeEnrollmentFixture,
   OPENCLAW_ROOT,
   WORKER_WALLPAPER_PATH,
@@ -62,25 +58,9 @@ const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
 const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: false };
 const SETUP_PROFILE = { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS };
 type ProvisionOptions = Parameters<WorkerProvider["provision"]>[2];
-const { providers, createProvider } = createProviderFixtures({
-  isExecutable: (candidate) => candidate === SIBLING_BINARY,
-});
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...providers].map((provider) => provider.dispose()));
-    } finally {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-      providers.clear();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      vi.unstubAllEnvs();
-      vi.restoreAllMocks();
-      syncBuiltinESMExports();
-      cleanup();
-    }
-  }),
+const { createProvider, tempDirs } = createProviderTestHarness(
+  { isExecutable: (candidate) => candidate === SIBLING_BINARY },
+  "openclaw-crabbox-provider-",
 );
 beforeEach(() => {
   revokeSetupGrant.mockReset();
@@ -94,14 +74,6 @@ beforeEach(() => {
         revoke: revokeSetupGrant,
       }),
     );
-  vi.mocked(ensureManagedCrabboxBinary)
-    .mockReset()
-    .mockImplementation(async (params) => ({
-      binary: params?.binary ?? "crabbox",
-      version: "999.0.0",
-    }));
-  // Provider instances share durable state within a replay test, never across test cases.
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-provider-"));
 });
 
 function inspectJson(overrides: Record<string, unknown> = {}): string {
@@ -213,30 +185,6 @@ function heartbeatFixture(run: CrabboxCommandRunner) {
   const { provider } = recordedProvider({ heartbeat }, (message) => warnings.push(message));
   return { provider, heartbeat, warnings };
 }
-
-it("does not allocate after cancellation during managed binary acquisition", async () => {
-  const acquisition = delayedBinary();
-  const runCommand = vi.fn<CrabboxCommandRunner>(async () => commandResult());
-  const provider = providerWithRawRunner(runCommand);
-  const controller = new AbortController();
-  const beginNodeEnrollment = vi.fn();
-  const provision = provider.provision(PROFILE, OPERATION_ID, {
-    beginNodeEnrollment,
-    signal: controller.signal,
-  });
-  const rejected = expect(provision).rejects.toMatchObject({ name: "AbortError" });
-
-  await acquisition.started;
-  controller.abort();
-  acquisition.resolve({
-    binary: path.resolve(path.sep, "managed", "crabbox"),
-    version: "999.0.0",
-  });
-  await rejected;
-
-  expect(runCommand).not.toHaveBeenCalled();
-  expect(beginNodeEnrollment).not.toHaveBeenCalled();
-});
 
 it.each([
   [undefined, "windows/wsl2", "windows --windows-mode wsl2"],

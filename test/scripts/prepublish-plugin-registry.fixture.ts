@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 
 export const SOURCE_SHA = "a".repeat(40);
 export const VERSION = "2026.8.1-beta.1";
-export const MANIFEST = "prepublish-plugin-registry.json";
+const MANIFEST = "prepublish-plugin-registry.json";
 export const writeJson = (file: string, value: unknown) =>
   writeFileSync(file, `${JSON.stringify(value)}\n`);
 export const sha256 = (file: string) =>

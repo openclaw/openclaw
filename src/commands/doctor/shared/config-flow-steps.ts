@@ -118,7 +118,7 @@ export function applyLegacyCompatibilityStep(params: {
 }
 
 /** Strip unknown config keys while preserving active auth profile settings. */
-export function applyUnknownConfigKeyStep(params: {
+function applyUnknownConfigKeyStep(params: {
   state: DoctorConfigMutationState;
   shouldRepair: boolean;
   doctorFixCommand: string;

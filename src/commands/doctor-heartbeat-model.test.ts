@@ -61,7 +61,7 @@ it.each([
         defaults: {
           model: defaultModel,
           modelPolicy: { allow: ["openai/gpt-5.4"] },
-          heartbeat: { model: "openai/gpt-4o-mini", every: "30m" },
+          heartbeat: { agentId: "main", model: "openai/gpt-4o-mini", every: "30m" },
         },
         entries: {
           main: {
@@ -119,6 +119,9 @@ it.each([
       original.agents?.entries?.main?.modelPolicy,
     );
     const billing = await retainHeartbeatMigrationInput(next, cfg);
+    expect(billing.agents?.defaults?.heartbeat?.agentId).toBe("main");
+    expect(billing.agents?.entries?.main?.heartbeat).not.toHaveProperty("agentId");
+    expect(billing.agents?.entries?.main?.heartbeat?.every).toBe("30m");
     expect(billing.agents?.entries?.main?.heartbeat?.model).toBe(
       allowed ? "openai/gpt-4o-mini" : defaultModel,
     );
@@ -192,7 +195,7 @@ it.each([
       expect(warnings[0]?.[0]).toContain(`configured default "${defaultModel}"`);
       expect(warnings[0]?.[0]).toContain("agents.entries.main.modelPolicy.allow");
     }
-    await retireHeartbeatWithDoctor(next);
+    await expect(retireHeartbeatWithDoctor(billing)).resolves.toEqual(next);
     expect(note.mock.calls.filter(([, title]) => title === "Heartbeat model changed")).toEqual(
       warnings,
     );

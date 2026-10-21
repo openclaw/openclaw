@@ -125,9 +125,9 @@ suite.define(() => {
       });
       await home.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
       const pages = await openSidebarPages(page);
-      await pages.getByRole("link", { name: "Agents", exact: true }).click();
-      await page.waitForURL((url) => url.pathname.endsWith("/agents"));
-      await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
+      await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+      await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
+      await page.locator("openclaw-sessions-page").waitFor();
       await page.locator(".sidebar-footer-bar__home").click();
       const dock = page.locator("openclaw-assistant-panel");
       const dockComposer = dock.locator(".agent-chat__composer-combobox textarea");

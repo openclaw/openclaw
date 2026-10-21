@@ -217,9 +217,6 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
       waitAccountId: accountId,
     },
   );
-  await context.waitGatewayAccountReady(accountId, {
-    timeoutMs: context.timeoutMs,
-  });
   const cli = await createMatrixQaCliGatewayRuntime({
     artifactLabel: "cli-setup-then-gateway-reply",
     context,
@@ -259,9 +256,6 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
         waitAccountId: accountId,
       },
     );
-    await context.waitGatewayAccountReady(accountId, {
-      timeoutMs: context.timeoutMs,
-    });
     // The Gateway now owns encrypted state. Exercise a real CLI crypto command
     // against the same account, then require the Gateway to resume and reply.
     const { artifacts: handoffArtifacts, payload: handoffPayload } = await runMatrixQaSetupCliJson(

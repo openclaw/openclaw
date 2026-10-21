@@ -3789,6 +3789,7 @@ try {
           method,
           {
             ...latencySummary(measurements.latenciesMs),
+            latenciesMs: measurements.latenciesMs,
             callsPerMinute: (measurements.latenciesMs.length / cpu.wallMs) * 60_000,
             responseBytes: measurements.responseBytes,
             responseBytesPerCall: measurements.responseBytes / measurements.latenciesMs.length,

@@ -476,7 +476,7 @@ describe("resolveVoiceCallConfig session routing", () => {
           responseTimeoutMs: 20000,
           tts: {
             providers: {
-              openai: { voice: "alloy" },
+              openai: { apiKey: "resolved-route-key", voice: "alloy" },
             },
           },
         },
@@ -495,7 +495,11 @@ describe("resolveVoiceCallConfig session routing", () => {
         tts: { provider: "openai" },
       },
     });
-    expect(effective.config.tts?.providers?.openai).toEqual({ voice: "alloy", speed: 1 });
+    expect(effective.config.tts?.providers?.openai).toEqual({
+      apiKey: "resolved-route-key",
+      voice: "alloy",
+      speed: 1,
+    });
   });
 
   it("falls back to global voice settings when no per-number route matches", () => {

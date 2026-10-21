@@ -64,6 +64,13 @@ describe("protected canonical session handoff", () => {
     expect(parseReturn(`${path}&${duplicate}`, "/control")).toBeNull();
   });
 
+  it("preserves an in-flight preferred-face hint without changing the authenticated target", async () => {
+    const path = `${canonical}?__openclawSessionFacePreference=1`;
+    const opened = await request(entryUrl(path, "/control"));
+    expect(opened.serveApp).toHaveBeenCalledWith(path, expect.any(Function));
+    expect(parseReturn(path, "/control")).toEqual(parseReturn(canonical, "/control"));
+  });
+
   it("uses the authenticated profile and grants only exact accessible sessions", async () => {
     const probe = await request(`${entry}&probe=1`);
     expect(probe.res.statusCode).toBe(204);
@@ -111,6 +118,10 @@ describe("protected canonical session handoff", () => {
     "/control/chat/main/topic?openclaw_mount_recovery=1&token=secret",
     "/control/chat/main/topic?openclaw_mount_recovery=1&openclaw_mount_recovery=2",
     "/control/chat/main/topic?openclaw_mount_recovery=invalid",
+    "/control/chat/main?__openclawSessionFacePreference=1&__openclawSessionFacePreference=1",
+    "/control/chat/main?__openclawSessionFacePreference=0",
+    "/control/chat/main?__openclawSessionFacePreference=",
+    "/control/chat/main?__openclawSessionFacePreference=1&token=secret",
     `${canonical}?dashboard=other`,
     "/control/chat/main/../settings",
     "/control/chat/main\\topic",

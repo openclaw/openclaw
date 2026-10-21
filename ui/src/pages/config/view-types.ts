@@ -8,6 +8,7 @@ type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configPro
 // Async presenters retain their owners' admitted completions.
 type ConfigData = {
   [Key in keyof ConfigPageProps]: Key extends
+    | "onNativeNotificationsSendTest"
     | "onImportCustomTheme"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"

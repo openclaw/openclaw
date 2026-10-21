@@ -10,7 +10,6 @@ extensions/active-memory/index.ts	3
 extensions/active-memory/transcript-result.ts	2
 extensions/amazon-bedrock-mantle/discovery.ts	1
 extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts	3
-extensions/amazon-bedrock-mantle/register.sync.runtime.ts	2
 extensions/amazon-bedrock/config-compat.ts	5
 extensions/amazon-bedrock/embedding-provider.ts	1
 extensions/amazon-bedrock/register.sync.runtime.ts	10
@@ -322,7 +321,7 @@ extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	3
-extensions/google/transport-stream.ts	11
+extensions/google/transport-stream.ts	10
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/approval-card-actions.ts	1
@@ -733,7 +732,7 @@ extensions/slack/src/monitor/ingress.ts	7
 extensions/slack/src/monitor/media.ts	1
 extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	5
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
-extensions/slack/src/monitor/provider-support.ts	2
+extensions/slack/src/monitor/provider-support.ts	1
 extensions/slack/src/monitor/provider.ts	4
 extensions/slack/src/monitor/relay-source.ts	1
 extensions/slack/src/monitor/slash.ts	3

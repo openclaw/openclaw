@@ -9,7 +9,11 @@ import type { CronJob, CronRunResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import { parseCronDurationMs } from "./decimal.ts";
-import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
+import {
+  hasUnchangedCronSchedule,
+  buildCronSchedule,
+  parseCronScheduleAt,
+} from "./form-schedule.ts";
 import { isReadOnlyCronPayload, jobToForm, normalizeCronFormState } from "./form.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
@@ -53,8 +57,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.eventArguments = "cron.events.eventArgumentsInvalid";
     }
   } else if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    if (!Number.isFinite(ms)) {
+    if (!parseCronScheduleAt(form.scheduleAt)) {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
@@ -381,11 +384,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                 accountId: deliveryAccountId,
                 bestEffort: form.deliveryBestEffort,
               }),
-          threadId: ownerTarget
-            ? editingJob?.delivery?.threadId !== undefined
-              ? null
-              : undefined
-            : form.deliveryThreadId,
+          threadId:
+            (!ownerTarget ? form.deliveryThreadId : undefined) ??
+            (editingJob?.delivery?.threadId !== undefined ? null : undefined),
           ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
             ? { completionDestination: form.deliveryCompletionDestination }
             : {}),

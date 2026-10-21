@@ -12,7 +12,7 @@ const suite = createControlUiE2eSuite({
 
 const targets = [
   { pathname: "/usage", routeId: "usage" },
-  { pathname: "/agents", routeId: "agents-home" },
+  { pathname: "/claws", routeId: "claws" },
 ] as const;
 
 suite.define(() => {
@@ -23,7 +23,18 @@ suite.define(() => {
         suite.withPage(
           { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
           async ({ page }) => {
-            await installMockGateway(page);
+            const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+            await installMockGateway(page, {
+              methodResponses: {
+                "config.get": {
+                  config,
+                  sourceConfig: config,
+                  hash: "settings-exit-claws-config",
+                  valid: true,
+                  issues: [],
+                },
+              },
+            });
             await page.goto(`${suite.server.baseUrl}settings/model-providers`);
             await waitForControlUiRoute(page, {
               pathname: "/settings/model-providers",

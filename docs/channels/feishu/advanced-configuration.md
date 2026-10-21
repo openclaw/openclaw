@@ -139,6 +139,11 @@ but table metadata is not retrieved, keep the returned `app_token` and URL. Insp
 that existing application rather than creating another one; a missing `table_id`
 does not mean creation failed.
 
+Bitable metadata discovery reads every table and field page. If table discovery
+fails after the application lookup succeeds, the result keeps the validated
+application token and name and reports `tables_error`; retry discovery or use a
+known table ID. Record listing remains paginated by the caller.
+
 `feishu_doc` creates title-only documents. To add Markdown, pass the returned
 `document_id` as `doc_token` in a separate `write` action. A `create` request
 that includes `content` fails without creating an empty document.

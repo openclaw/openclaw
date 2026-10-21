@@ -171,13 +171,12 @@ export function createComposerMobileInteraction(
           }
           pointerOrigin = event.composedPath()[0];
           setKeyboardNavigation(false);
-          // Closing the keyboard may retain focus, so the next editor tap has
-          // no focusin edge. Keep its origin before restoring the writing layout.
+          // A tap on the editor starts writing even if a closing drawer or
+          // keyboard transition prevents a new focusin event.
           if (
             event.button === 0 &&
             pointerOrigin instanceof Node &&
             pointerOrigin === state.composerTextarea &&
-            doc.activeElement === pointerOrigin &&
             editable(pointerOrigin)
           ) {
             changeEditing(true);

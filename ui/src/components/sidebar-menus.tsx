@@ -12,6 +12,7 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import { PendingSessionCreate } from "../pages/chat/pending-session-create-lazy.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { createSidebarCatalogMenu } from "./app-sidebar-catalog-menu.tsx";
 import {
@@ -71,6 +72,7 @@ type SidebarMenusState = {
   filterMenuView: SidebarFilterMenuView;
   agentMenuPosition: { x: number; top: number; placement?: "right-start" } | null;
   agentMenuMode: "hover" | "click";
+  agentCreateDialogOpen: boolean;
   // Anchored by its bottom edge so the footer menu grows upward.
   identityMenuPosition: {
     x: number;
@@ -106,6 +108,7 @@ export function createSidebarMenus(deps: {
     filterMenuView: "root",
     agentMenuPosition: null,
     agentMenuMode: "click",
+    agentCreateDialogOpen: false,
     identityMenuPosition: null,
     menuRenderer: null,
   };
@@ -123,7 +126,11 @@ export function createSidebarMenus(deps: {
   let disposed = false;
   let catalogMenuView: CatalogMenuView | undefined;
   const menuRendererImport = createIdleImport(
-    () => import("./sidebar-menus-render.tsx"),
+    // A visible Create action can enter its pending chat synchronously.
+    () =>
+      Promise.all([import("./sidebar-menus-render.tsx"), PendingSessionCreate.preload()]).then(
+        ([renderer]) => renderer,
+      ),
     (renderer) => {
       if (!disposed) {
         sessionMenuWork = renderer.createSessionMenuWork(host, (work) =>
@@ -557,6 +564,19 @@ export function createSidebarMenus(deps: {
       agentMenuFocusBeforeHover = null;
       setField("agentMenuPosition", null);
       releaseTrigger("agent", options.restoreFocus);
+    },
+
+    openAgentCreateDialog() {
+      if (!host.sessionDataContext) {
+        return;
+      }
+      menus.closeAgentMenu();
+      loadMenuRenderer();
+      setField("agentCreateDialogOpen", true);
+    },
+
+    closeAgentCreateDialog() {
+      setField("agentCreateDialogOpen", false);
     },
 
     toggleIdentityMenu(trigger: HTMLElement) {

@@ -22,7 +22,12 @@ import {
 import { dropAbortedFollowups, rememberFollowupDrainCallback } from "./drain.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
 import { peekRecentQueueMessageId, recordRecentQueueMessageId } from "./recent-message-ids.js";
-import { getExistingFollowupQueue, getFollowupQueue, trimSummaryElisionsToCap } from "./state.js";
+import {
+  followupSourceRunners,
+  getExistingFollowupQueue,
+  getFollowupQueue,
+  trimSummaryElisionsToCap,
+} from "./state.js";
 import {
   isFollowupRunAborted,
   resolveFollowupAbortSignal,
@@ -167,6 +172,9 @@ export function enqueueFollowupRun(
       recordRecentQueueMessageId(run, recentMessageIdKey);
     }
     if (runFollowup) {
+      if (!followupSourceRunners.has(queuedInput)) {
+        followupSourceRunners.set(queuedInput, runFollowup);
+      }
       rememberFollowupDrainCallback(key, runFollowup, queue);
     }
     const signal = resolveFollowupAbortSignal({

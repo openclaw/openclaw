@@ -33,7 +33,7 @@ const STATUS_KEYS = {
   failed: "common.failed",
   stopped: "chat.sessionDetails.stopped",
 } as const;
-const SUMMARY_ORDER = ["running", "waiting", "queued", "done", "failed", "stopped"] as const;
+const SUMMARY_ORDER = ["running", "waiting", "queued", "done", "stopped"] as const;
 
 function isWorking(row: Subagent) {
   return row.status === "running" || row.status === "waiting";
@@ -107,7 +107,9 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
   const counts = createMemo(() =>
     SUMMARY_ORDER.map((status) => ({
       status,
-      count: props.rows.filter((row) => row.status === status).length,
+      // Done summarizes settled work here; individual rows retain their real outcome.
+      count: props.rows.filter((row) => (row.status === "failed" ? "done" : row.status) === status)
+        .length,
     })).filter((entry) => entry.count > 0),
   );
   const countLabel = (status: Subagent["status"]) =>
@@ -164,33 +166,9 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
               <span class="chat-details-subagents__counts">
                 <For each={counts()} keyed={(entry) => entry.status}>
                   {(entry) => (
-                    <span class="chat-details-subagents__count">
+                    <span class="chat-details-subagents__count" data-status={entry().status}>
                       <span>{entry().count}</span>{" "}
-                      <Show
-                        when={
-                          props.mobile &&
-                          (entry().status === "running" || entry().status === "done")
-                        }
-                      >
-                        <Show
-                          when={entry().status === "running"}
-                          fallback={<Icon name="check" class="chat-details-subagents__check" />}
-                        >
-                          <span class="chat-details-subagents__spinner" aria-hidden="true" />
-                        </Show>
-                      </Show>
-                      <span
-                        class={[
-                          "chat-details-subagents__count-label",
-                          {
-                            "sr-only":
-                              props.mobile &&
-                              (entry().status === "running" || entry().status === "done"),
-                            "chat-details-subagents__working":
-                              !props.mobile && entry().status === "running",
-                          },
-                        ]}
-                      >
+                      <span class="chat-details-subagents__count-label">
                         {countLabel(entry().status)}
                       </span>
                     </span>

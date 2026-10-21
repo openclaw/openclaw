@@ -221,7 +221,10 @@ it.for(["stopped", "failed"] as const)(
     });
     const completionText = "Exec completed (owned-command, code 0) :: ORIGINAL_COMMAND_RESULT";
     const completion = enqueue(completionText, [owner]);
-    const peers = ["First notification", "Second notification"].map((text) => enqueue(text));
+    const peers = [
+      "Reminder: investigate heartbeat wake failures",
+      "Reminder: review heartbeat poll results",
+    ].map((text) => enqueue(text));
     const gate = createGate();
     let selectedOwners: readonly Owner[] | undefined;
     const runAgent = mockAgent().mockImplementation(async (params) => {
@@ -261,7 +264,7 @@ it.for(["stopped", "failed"] as const)(
       const cancellation = captureExecRequestCancellation(identity);
       expect(cancellation.requestRunIds).toEqual([identity.runId, input.runId]);
       for (const peer of peers) {
-        expect(input.currentInboundContext?.text).toContain(peer.text);
+        expect(input.currentInboundContext?.text ?? "").toContain(peer.text);
       }
       const late = enqueue("Late unrelated notification");
       if (outcome === "stopped") {
@@ -293,7 +296,7 @@ it.for(["stopped", "failed"] as const)(
       expect(next.prompt).toContain(nextBody);
       expect(next.prompt).not.toContain(completionText);
       for (const peer of [...peers, late]) {
-        expect(next.currentInboundContext?.text).toContain(peer.text);
+        expect(next.currentInboundContext?.text ?? "").toContain(peer.text);
       }
       expect(events.peekSystemEventEntries(sessionKey)).toEqual([]);
     });

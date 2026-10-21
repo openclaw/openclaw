@@ -243,7 +243,7 @@ suite.define(() => {
             await trigger.click();
           }
           const reads = (await gateway.getRequests("models.list")).length;
-          await navigateInApp(page, "agents-home");
+          await navigateInApp(page, "sessions");
           await pollCount(root).toBe(0);
           if (!placement) {
             await navigateInApp(page, "new-session", "?agent=main");
@@ -251,7 +251,7 @@ suite.define(() => {
             await pollCount(rows).toBe(2);
             await trigger.click();
             expect(await gateway.getRequests("models.list")).toHaveLength(reads);
-            await navigateInApp(page, "agents-home");
+            await navigateInApp(page, "sessions");
             await pollCount(root).toBe(0);
           }
           await savePreference(page, gateway, storageKey, preference, identity);

@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -59,6 +60,31 @@ function select(container: Element, label: string) {
 }
 
 describe("native notification test outcome", () => {
+  it("keeps the send affordance pending until the command settles", async () => {
+    const completion = createDeferredCore<undefined>();
+    const onSend = vi.fn(() => completion.promise);
+    const { container } = renderSection({
+      nativeNotifications: { permission: "granted", test: null },
+      onNativeNotificationsSendTest: onSend,
+    });
+    const button = expectDefined(container.querySelector<HTMLButtonElement>("button"), "send");
+    button.click();
+    flush();
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toContain("Sending test");
+    expect(container.querySelector(".settings-status--accent")?.textContent).toContain(
+      "Sending test",
+    );
+    expect(container.textContent).toContain("Test notification");
+    button.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    completion.resolve(undefined);
+    await waitForSolid(() => {
+      expect(button.disabled).toBe(false);
+      expect(button.textContent).toContain("Send test");
+    });
+  });
+
   it("renders pending immediately and disables duplicate sends", () => {
     const onSend = vi.fn();
     const { container } = renderSection({

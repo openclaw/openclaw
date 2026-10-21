@@ -229,7 +229,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         })
       : null;
     const renameDisabledReason = !renameAccess
-      ? t("sessionsView.actionRequiresConnection")
+      ? sharingSnapshot.phase !== "connected"
+        ? t("sessionsView.actionRequiresConnection")
+        : undefined
       : renameAccess.allowed
         ? undefined
         : renameAccess.reason;

@@ -1,6 +1,12 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, onSettled } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
+import {
+  CatalogDiscoveryChip,
+  CatalogDiscoveryChips,
+  CatalogDiscoverySearch,
+  CatalogDiscoverySection,
+} from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
@@ -318,25 +324,12 @@ function CatalogSection(params: {
   return (
     <>
       {params.loading || params.items.length > 0 ? (
-        <section
-          class={[
-            "plugin-catalog-section",
-            { "plugin-catalog-section--expandable": Boolean(params.onViewAll) },
-          ]}
-          data-catalog-section={params.id}
+        <CatalogDiscoverySection
+          id={params.id}
+          title={params.title}
+          onViewAll={params.onViewAll ? () => params.onViewAll?.() : undefined}
+          viewAllLabel={t("pluginsPage.viewAllInstalledPlugins")}
         >
-          <header class="plugin-catalog-section__header">
-            <h2>{params.title}</h2>
-            {params.onViewAll ? (
-              <button
-                type="button"
-                class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
-                onClick={() => params.onViewAll?.()}
-              >
-                {t("pluginsPage.viewAllInstalledPlugins")}
-              </button>
-            ) : undefined}
-          </header>
           {params.loading ? (
             renderCatalogGridSkeleton({ cards: SECTION_SIZE })
           ) : (
@@ -349,7 +342,7 @@ function CatalogSection(params: {
               </For>
             </div>
           )}
-        </section>
+        </CatalogDiscoverySection>
       ) : undefined}
     </>
   );
@@ -363,30 +356,16 @@ function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
       .toSorted((left, right) => left.order - right.order),
   );
   return (
-    <div class="plugin-catalog-chips" role="group" aria-label={t("pluginsPage.categoriesLabel")}>
+    <CatalogDiscoveryChips label={t("pluginsPage.categoriesLabel")}>
       <For each={[["all", "pluginsPage.intentAll", "layoutGrid"], ...PROMOTED_SECTIONS] as const}>
         {([intent, label, icon]) => (
-          <button
-            type="button"
-            class={[
-              "plugin-catalog-chip",
-              {
-                "is-active":
-                  props.intent === intent && (intent !== "all" || props.category === null),
-              },
-            ]}
-            aria-pressed={
-              props.intent === intent && (intent !== "all" || props.category === null)
-                ? "true"
-                : "false"
-            }
+          <CatalogDiscoveryChip
+            active={props.intent === intent && (intent !== "all" || props.category === null)}
             onClick={() => props.onIntentChange(intent)}
+            icon={<Icon name={icon} />}
           >
-            <span aria-hidden="true">
-              <Icon name={icon} />
-            </span>
             {t(label)}
-          </button>
+          </CatalogDiscoveryChip>
         )}
       </For>
       {props.categoriesLoading ? (
@@ -401,18 +380,16 @@ function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
       ) : undefined}
       <For each={categories()} keyed={(item) => item.slug}>
         {(item) => (
-          <button
-            type="button"
-            class={["plugin-catalog-chip", { "is-active": props.category === item().slug }]}
-            aria-pressed={props.category === item().slug ? "true" : "false"}
+          <CatalogDiscoveryChip
+            active={props.category === item().slug}
             onClick={() => props.onCategoryChange(item().slug)}
+            icon={categoryIcon(item().icon)}
           >
-            <span aria-hidden="true">{categoryIcon(item().icon)}</span>
             {item().label}
-          </button>
+          </CatalogDiscoveryChip>
         )}
       </For>
-    </div>
+    </CatalogDiscoveryChips>
   );
 }
 
@@ -558,10 +535,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   });
   return (
     <section class="plugin-catalog-results" aria-label={t("pluginsPage.exploreTitle")}>
-      <label class="plugin-catalog-search">
-        <span aria-hidden="true">
-          <Icon name="search" />
-        </span>
+      <CatalogDiscoverySearch>
         <input
           type="search"
           class="oc-input"
@@ -574,7 +548,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
           }}
           onInput={(event) => props.onQueryChange(event.currentTarget.value)}
         />
-      </label>
+      </CatalogDiscoverySearch>
       <CategoryChips {...props} />
       {props.categoriesError
         ? renderError(props.categoriesError, props.onRetryCategories)

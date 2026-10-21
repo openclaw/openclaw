@@ -11,7 +11,6 @@ import {
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -233,28 +232,6 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledWith(
       expect.objectContaining({ syntheticAuthProviderRefs: ["selected-runtime"] }),
     );
-  });
-
-  it("prepares inline provider models when no default model is configured", async () => {
-    const snapshot = await publish(
-      inputFor(
-        "inline",
-        providerConfig("custom", {
-          baseUrl: "https://custom.example.test/v1",
-          api: "openai-responses",
-          models: [modelDefinition("custom-model", { reasoning: false })],
-        }),
-      ),
-    );
-
-    expect(snapshot.inlineProviderModels).toMatchObject([
-      {
-        provider: "custom",
-        id: "custom-model",
-        baseUrl: "https://custom.example.test/v1",
-        api: "openai-responses",
-      },
-    ]);
   });
 
   it("builds credential-free command owners separately from runtime owners", async () => {

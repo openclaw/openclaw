@@ -93,10 +93,8 @@ it.each([
           store: { [key]: entry },
           lightweightListRow: true,
         });
-        expect(row).toMatchObject({
-          runtimeSelectionLocked: locked,
-          thinkingLevel: "high",
-        });
+        const selection = { runtimeSelectionLocked: locked, thinkingLevel: "high" };
+        expect(row).toMatchObject(selection);
         expect(row.modelSelectionLocked).toBe(modelLocked ? true : undefined);
         if (kind === "runtime-pin") {
           expect(row.agentRuntime?.source).toBe("session-key");
@@ -119,10 +117,7 @@ it.each([
           canonicalKey: key,
           targetAgentId: "main",
         });
-        expect(patched.resolved).toMatchObject({
-          runtimeSelectionLocked: locked,
-          thinkingLevel: "high",
-        });
+        expect(patched.resolved).toMatchObject(selection);
         const expectedRuntime = modelLocked
           ? { id: acp ? "acpx" : "codex", source: acp ? "session-key" : "session" }
           : kind === "historical-harness"

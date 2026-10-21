@@ -2433,6 +2433,80 @@ select.input {
   min-height: 32px;
 }
 
+/* Keep the existing controls in place as streaming crosses the source-line
+   threshold. Only icons span the code rows; language and JSON modes scroll away. */
+.code-block-wrapper--long {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-rows: minmax(44px, auto) auto auto;
+  column-gap: 6px;
+  /* Clipping without a scroll container lets sticky follow the transcript. */
+  overflow: clip;
+}
+
+.code-block-wrapper--long > .code-block-header,
+.code-block-wrapper--long > .code-block-header > .code-block-actions {
+  display: contents;
+}
+
+.code-block-wrapper--long .code-block-lang {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  padding: 8px 8px 4px 14px;
+}
+
+.code-block-wrapper--long .code-block-json-modes {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+}
+
+.code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
+  position: sticky;
+  top: 4px;
+  z-index: 1;
+  grid-row: 1 / 4;
+  align-self: start;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  margin-block: 8px 4px;
+  background: color-mix(in srgb, var(--text) 3%, var(--bg));
+}
+
+.code-block-wrapper--long :is(.code-block-copy, .code-block-wrap):hover,
+.code-block-wrapper--long .code-block-wrap[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--text) 8%, var(--bg));
+  color: var(--text);
+}
+
+.code-block-wrapper--long :is(.code-block-copy, .code-block-wrap):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.code-block-wrapper--long .code-block-wrap {
+  grid-column: 3;
+}
+
+.code-block-wrapper--long .code-block-copy {
+  grid-column: 4;
+  margin-inline-end: 8px;
+}
+
+.code-block-wrapper--long > :is(pre, .code-block-viewport, .code-block-json-tree) {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+}
+
+.code-block-wrapper--long > .code-block-expand {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  justify-self: start;
+}
+
 .code-block-lang {
   color: var(--muted);
   font-family: var(--mono);
@@ -2448,14 +2522,15 @@ select.input {
 }
 
 .code-block-json-mode {
-  min-height: 32px;
-  padding: 6px 10px;
+  min-height: 24px;
+  padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-xs);
 }
 
 .code-block-json-mode[aria-pressed="true"] {
