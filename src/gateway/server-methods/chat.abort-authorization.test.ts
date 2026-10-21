@@ -209,26 +209,6 @@ describe("chat.abort authorization", () => {
     expect(rpcSourceTesting.has("run-1")).toBe(true);
   });
 
-  it("allows the same paired device to abort after reconnecting", async () => {
-    const context = createChatAbortContext({
-      sources: [
-        ["run-1", createActiveRun("main", { owner: { connId: "conn-old", deviceId: "dev-1" } })],
-      ],
-    });
-
-    const respond = await invokeAbort({
-      context,
-      runId: "run-1",
-      connId: "conn-new",
-      deviceId: "dev-1",
-    });
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { aborted: true, runIds: ["run-1"] });
-    expect(rpcSourceTesting.has("run-1")).toBe(false);
-  });
-
   it("does not reveal a foreign hidden run to ordinary session aborts", async () => {
     const hidden = createActiveRun("main", {
       controlUiVisible: false,

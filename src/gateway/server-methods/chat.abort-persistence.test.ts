@@ -488,6 +488,7 @@ describe("chat abort transcript persistence", () => {
     expect(ok).toBe(true);
     expectAbortPayload(payload, { runIds: [runId] });
     expect(active.input.abortSignal.aborted).toBe(true);
+    expect(rpcSourceTesting.has(runId)).toBe(false);
     const persisted = collectAssistantRowsWithText(await readTranscript(), partial);
     expect(persisted).toHaveLength(1);
     expectPersistedAbortMessage(persisted[0], {
