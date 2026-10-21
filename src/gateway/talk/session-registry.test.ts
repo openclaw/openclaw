@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
@@ -15,12 +15,14 @@ import {
 } from "./session-registry.js";
 
 describe("Talk connection cleanup registry", () => {
+  const log = { warn: vi.fn() };
+  beforeEach(() => log.warn.mockClear());
+
   it("keeps a live Gateway's cleanup admission after its store reopens", async () => {
     await withOpenClawTestState(
       { scenario: "minimal", label: "talk-cleanup-store-reopen" },
       async () => {
         openOpenClawStateDatabase();
-        const log = { warn: vi.fn() };
         const cleanup = vi.fn();
         const original = prepareTalkConnectionClose([{ connId: "original" }], log);
         registerTalkConnectionCleanup("original", "realtime-relay", cleanup);
@@ -48,7 +50,6 @@ describe("Talk connection cleanup registry", () => {
         const entered = createDeferred();
         const finish = createDeferred();
         const second = vi.fn();
-        const log = { warn: vi.fn() };
         registerTalkConnectionCleanup(connId, "realtime-relay", () => {
           entered.resolve();
           return finish.promise;
@@ -77,7 +78,6 @@ describe("Talk connection cleanup registry", () => {
   it("keeps one cleanup per relay kind", () => {
     const replacedRealtimeCleanup = vi.fn();
     const transcriptionCleanup = vi.fn();
-    const log = { warn: vi.fn() };
     const realtimeCleanup = vi.fn();
 
     registerTalkConnectionCleanup("conn-dedupe", "realtime-relay", replacedRealtimeCleanup);
@@ -94,15 +94,13 @@ describe("Talk connection cleanup registry", () => {
   });
 
   it("continues cleanup after one relay owner throws", () => {
-    const cleanupError = new Error("realtime cleanup failed");
     const transcriptionCleanup = vi.fn();
-    const log = { warn: vi.fn() };
 
     registerTalkConnectionCleanup(
       "conn-error",
       "realtime-relay",
       vi.fn().mockImplementationOnce(() => {
-        throw cleanupError;
+        throw new Error("realtime cleanup failed");
       }),
     );
     registerTalkConnectionCleanup("conn-error", "transcription-relay", transcriptionCleanup);
@@ -118,7 +116,6 @@ describe("Talk connection cleanup registry", () => {
   it("retains failed async cleanup for shutdown retry without replacing its owner", async () => {
     const first = createDeferred();
     const finish = createDeferred();
-    const log = { warn: vi.fn() };
     const firstStarted = createDeferred();
     const retryStarted = createDeferred();
     const cleanup = vi
@@ -140,23 +137,19 @@ describe("Talk connection cleanup registry", () => {
     first.reject(new Error("physical cleanup failed"));
     await firstObserved;
     await Promise.resolve();
-    let drained = false;
-    const draining = drainGlobalSingletonLifecycleState("restart").then(() => {
-      drained = true;
-    });
-    let concurrentDrained = false;
-    const concurrentDrain = drainGlobalSingletonLifecycleState("restart").then(() => {
-      concurrentDrained = true;
-    });
+    const drained = vi.fn();
+    const concurrentDrained = vi.fn();
+    const draining = drainGlobalSingletonLifecycleState("restart").then(drained);
+    const concurrentDrain = drainGlobalSingletonLifecycleState("restart").then(concurrentDrained);
     try {
       await retryStarted.promise;
       expect(cleanup).toHaveBeenCalledTimes(2);
       await Promise.resolve();
-      expect(drained).toBe(false);
+      expect(drained).not.toHaveBeenCalled();
       finish.resolve();
       await Promise.all([draining, concurrentDrain]);
-      expect(drained).toBe(true);
-      expect(concurrentDrained).toBe(true);
+      expect(drained).toHaveBeenCalledOnce();
+      expect(concurrentDrained).toHaveBeenCalledOnce();
       cleanupTalkConnection("conn-async-retry", log);
       expect(cleanup).toHaveBeenCalledTimes(2);
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("physical cleanup failed"));

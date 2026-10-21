@@ -61,9 +61,7 @@ it.each([false, true])(
     const sessionKey = `agent:main:talk-terminal-${abort}`;
     const runner = createTalkClientAgentConsultRunner({
       config,
-      context: {
-        logGateway: createSubsystemLogger("test/talk-terminal-writes"),
-      },
+      context: { logGateway: createSubsystemLogger("test/talk-terminal-writes") },
       sessionTarget: {
         agentId: "main",
         sessionKey,
@@ -77,19 +75,12 @@ it.each([false, true])(
       initialItems: [],
       registerRun: async () => ({ release: () => {}, isCurrent: () => true }),
     });
-    let settled = false;
+    const settled = vi.fn();
     const run = runner.runPrompt({
       prompt: "Check terminal bookkeeping",
       signal: controller.signal,
     });
-    void run.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    void run.then(settled, settled);
     try {
       const { admitted, writeContext, persistence } = await awaitGateBeforeSettlement(
         captured.promise,
@@ -102,7 +93,7 @@ it.each([false, true])(
         controller.abort();
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
       }
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       commit.resolve();
       await persistence;
       if (abort) {
