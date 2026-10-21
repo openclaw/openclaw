@@ -20,6 +20,7 @@ vi.mock("../config/sessions/session-delivery-generation.js", async (importOrigin
 
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
+const { readScheduledToolTargets } = await import("./execution-context-registry.js");
 const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
@@ -170,6 +171,31 @@ describe("admitScheduledOccurrence", () => {
     expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "parent-session", lifecycleRevision: "rev-1" }),
     );
+  });
+
+  it("exposes a child's board and media targets to tool construction for the run", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const { occurrence, minted } = await mint(job(LINKED_JOB));
+    const admission = prepareCronRunAdmission({
+      cfg: {},
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:cron:job-1:run:s1",
+      jobId: "job-1",
+      deliveryAttemptFence: null,
+      scheduledExecution: minted,
+    });
+    const admitted = await admission.preparedRunAdmission.admit("embedded");
+    expect(readScheduledToolTargets(admitted)).toEqual({
+      boardSessionKey: PARENT_KEY,
+      mediaSessionKey: PARENT_KEY,
+    });
+    admission.close();
+    expect(readScheduledToolTargets(admitted)).toBeUndefined();
+    occurrence.release();
   });
 
   it("reports a removed parent as a pause without throwing", async () => {

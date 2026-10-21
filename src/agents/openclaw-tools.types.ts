@@ -148,6 +148,8 @@ export type OpenClawToolsOptions = {
   gatewayCallerLocal?: boolean;
   /** True only for a validated scheduled tool policy. */
   gatewayCallerScheduled?: boolean;
+  /** Sessions a scheduled run's board, widget and media tools act on, from its execution context. */
+  scheduledToolTargets?: import("../cron/execution-context-registry.js").ScheduledToolTargets;
   /** Delivery target for topic/thread routing. */
   agentTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
