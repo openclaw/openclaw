@@ -531,13 +531,12 @@ function selectSharedAuthStoreMigrationSource(
     : owner;
 }
 
-function isRetainedSharedAuthSource(env: NodeJS.ProcessEnv, sourcePath: string, ownerId: string) {
-  return (
-    fs.existsSync(sourcePath) &&
-    withArtifactPreservingStateReads(() =>
-      createRetainedAgentDatabaseMatcher(env, () => [])(sourcePath, ownerId),
-    )
-  );
+function findRetainedSharedAuthSource(env: NodeJS.ProcessEnv, sourcePath: string, ownerId: string) {
+  return fs.existsSync(sourcePath)
+    ? withArtifactPreservingStateReads(() =>
+        createRetainedAgentDatabaseMatcher(env, () => [])(sourcePath, ownerId),
+      )
+    : undefined;
 }
 
 function heldSharedAuthSourceMessages(
@@ -569,7 +568,7 @@ export function detectSharedAuthStoreMigration(params: {
   }
   const source = selectSharedAuthStoreMigrationSource(env, sources, params);
   const { sourcePath } = source;
-  if (isRetainedSharedAuthSource(env, sourcePath, source.ownerId ?? LEGACY_IMPLICIT_AGENT_ID)) {
+  if (findRetainedSharedAuthSource(env, sourcePath, source.ownerId ?? LEGACY_IMPLICIT_AGENT_ID)) {
     return { ...source, hasLegacy: true, held: true };
   }
   const ownership = params.artifactPreservingReadOnly
@@ -627,9 +626,14 @@ export async function migrateSharedAuthStore(params: {
       }
     },
     run: async (env) => {
-      // The source agent can be deleted with its database retained after detection; never move a retired store.
-      const ownerId = params.detected.ownerId ?? LEGACY_IMPLICIT_AGENT_ID;
-      if (isRetainedSharedAuthSource(env, params.detected.sourcePath, ownerId)) {
+      // The source agent can be deleted with its database retained after detection; never move a
+      // retired store. Detection already refused an unreadable journal, so only a recorded deletion counts.
+      const retained = findRetainedSharedAuthSource(
+        env,
+        params.detected.sourcePath,
+        params.detected.ownerId ?? LEGACY_IMPLICIT_AGENT_ID,
+      );
+      if (retained && retained !== "unavailable") {
         return heldSharedAuthSourceMessages(params.detected);
       }
       const now = params.now?.() ?? Date.now();
