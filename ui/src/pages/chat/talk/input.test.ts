@@ -78,6 +78,16 @@ function openMicrophone(inputDeviceId: string | undefined) {
   return createMicrophoneInput().open(inputDeviceId);
 }
 
+const selectedMicrophone = {
+  audio: {
+    autoGainControl: true,
+    echoCancellation: true,
+    noiseSuppression: true,
+    deviceId: { exact: "selected" },
+  },
+};
+const selectedCamera = { video: { deviceId: { exact: "selected" } } };
+
 afterEach(() => {
   ownedInputs.forEach((input) => input.stop());
   ownedInputs.clear();
@@ -295,34 +305,14 @@ describe("realtime Talk microphone inputs", () => {
     await expect(open("selected")).rejects.toThrow(`The selected ${kind} is unavailable`);
     expect(getUserMedia).toHaveBeenCalledOnce();
     expect(getUserMedia).toHaveBeenCalledWith(
-      kind === "camera"
-        ? { video: { deviceId: { exact: "selected" } } }
-        : {
-            audio: {
-              autoGainControl: true,
-              echoCancellation: true,
-              noiseSuppression: true,
-              deviceId: { exact: "selected" },
-            },
-          },
+      kind === "camera" ? selectedCamera : selectedMicrophone,
     );
     expect(fallback.track.stop).not.toHaveBeenCalled();
   });
 
   it.each([
-    [
-      "microphone",
-      openMicrophone,
-      {
-        audio: {
-          autoGainControl: true,
-          echoCancellation: true,
-          noiseSuppression: true,
-          deviceId: { exact: "selected" },
-        },
-      },
-    ],
-    ["camera", openRealtimeTalkCamera, { video: { deviceId: { exact: "selected" } } }],
+    ["microphone", openMicrophone, selectedMicrophone],
+    ["camera", openRealtimeTalkCamera, selectedCamera],
   ] as const)("uses exact %s selection and voice processing", async (_kind, open, constraints) => {
     const { stream } = microphoneFixture();
     const getUserMedia = useMedia(stream);

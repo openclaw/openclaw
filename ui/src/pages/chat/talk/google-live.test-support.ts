@@ -187,10 +187,15 @@ export function createSession(
   };
 }
 
-export function createClient(): RealtimeTalkTransportContext["client"] {
+export function createClient(
+  request: (method: string, params: Record<string, unknown>) => unknown = vi.fn(),
+  addEventListener: (
+    listener: (event: { event: string; payload?: unknown }) => void,
+  ) => unknown = vi.fn(() => () => undefined),
+): RealtimeTalkTransportContext["client"] {
   return {
-    addEventListener: vi.fn(() => () => undefined),
-    request: vi.fn(),
+    addEventListener,
+    request,
   } as unknown as RealtimeTalkTransportContext["client"];
 }
 

@@ -29,13 +29,6 @@ function createChatEvents() {
   };
 }
 
-function scheduleReply(events: ReturnType<typeof createChatEvents>, text: string) {
-  window.setTimeout(() => {
-    events.final();
-    window.setTimeout(() => events.reply(text), 300);
-  }, 0);
-}
-
 type ConsultParams = Parameters<typeof submitRealtimeTalkConsult>[0];
 function consultContext(client: object, overrides: Partial<ConsultParams["ctx"]> = {}) {
   return { client, sessionKey: "agent:main:main", callbacks: {}, ...overrides } as never;
@@ -211,22 +204,48 @@ describe("RealtimeTalkSession consult handoff", () => {
   );
 
   it.each([
-    ["pending", 251, 50, () => new Promise(() => {})],
-    ["completed first", 0, 300, () => ({ runId: "run-1", status: "ok" })],
+    ["reply during wait", "pending", true, 251, 301, undefined],
+    ["reply after wait", "ok", true, 0, 300, undefined],
+    ["no-text fallback", "ok", false, 499, 500, undefined],
+    ["provider error", "error", false, 0, 1, "provider authentication failed"],
+    ["operator abort", "timeout", false, 0, 1, "aborted by operator"],
   ] as const)(
-    "keeps delayed source text when the empty-final wait is %s",
-    async (_when, checkpoint, remaining, wait) => {
+    "settles an empty final with %s",
+    async (_name, status, reply, checkpoint, end, error) => {
       vi.useFakeTimers();
-      const text = "The source reply wins.";
-      const { submit, start } = consultFixture((events) => scheduleReply(events, text), wait);
+      const wait = () =>
+        status === "pending"
+          ? new Promise(() => {})
+          : {
+              runId: "run-1",
+              status,
+              ...(status === "timeout" ? { stopReason: "rpc" } : {}),
+              ...(error ? { error } : {}),
+            };
+      const { request, submit, start } = consultFixture((events) => {
+        window.setTimeout(() => {
+          events.final();
+          if (reply) {
+            window.setTimeout(() => events.reply("The source reply wins."), 300);
+          }
+        }, 0);
+      }, wait);
       const consult = start();
       if (checkpoint) {
         await vi.advanceTimersByTimeAsync(checkpoint);
         expect(submit).not.toHaveBeenCalled();
       }
-      await vi.advanceTimersByTimeAsync(remaining);
+      await vi.advanceTimersByTimeAsync(end - checkpoint);
       await consult;
-      expect(submit).toHaveBeenCalledExactlyOnceWith("call-1", { result: text });
+      expect(request).toHaveBeenCalledWith("agent.wait", { runId: "run-1", timeoutMs: 120_000 });
+      expect(submit).toHaveBeenCalledExactlyOnceWith(
+        "call-1",
+        error
+          ? { error }
+          : {
+              result: reply ? "The source reply wins." : "OpenClaw finished with no text.",
+            },
+      );
     },
   );
 
@@ -253,47 +272,6 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(submit).toHaveBeenCalledExactlyOnceWith("call-1", {
       result: "The source reply still wins.",
     });
-  });
-
-  it("submits the no-text fallback after an empty final and completed Gateway run", async () => {
-    vi.useFakeTimers();
-    const { request, submit, start } = consultFixture(
-      (events) => {
-        window.setTimeout(() => events.final(), 0);
-      },
-      () => ({ runId: "run-1", status: "ok" }),
-    );
-
-    const consult = start();
-
-    await vi.advanceTimersByTimeAsync(499);
-    expect(submit).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await consult;
-
-    expect(request).toHaveBeenCalledWith("agent.wait", {
-      runId: "run-1",
-      timeoutMs: 120_000,
-    });
-    expect(submit).toHaveBeenCalledWith("call-1", {
-      result: "OpenClaw finished with no text.",
-    });
-  });
-
-  it.each([
-    { runId: "run-1", status: "error", error: "provider authentication failed" },
-    { runId: "run-1", status: "timeout", stopReason: "rpc", error: "aborted by operator" },
-  ])("submits $error from terminal empty-final waits", async (waitResult) => {
-    const { submit, start } = consultFixture(
-      (events) => {
-        setImmediate(() => events.final());
-      },
-      () => waitResult,
-    );
-
-    await start();
-
-    expect(submit).toHaveBeenCalledWith("call-1", { error: waitResult.error });
   });
 
   it.each([

@@ -4,9 +4,10 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/
 import {
   beginTimedTransport as beginTransport,
   startTimedTransport as startTransport,
-  createTransport as createBaseTransport,
+  createTransport,
   toolResponse,
   installGoogleLiveTestFixture,
+  expectAudioReleased,
   latestWebSocket,
 } from "./google-live.test-support.ts";
 import type { RealtimeTalkCallbacks } from "./shared.ts";
@@ -63,8 +64,8 @@ function mockVideoElements(readyState: (index: number) => number) {
   return videos;
 }
 
-function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
-  return createBaseTransport(
+function createVideoTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
+  return createTransport(
     callbacks,
     { request: vi.fn(), addEventListener: vi.fn() } as never,
     undefined,
@@ -114,7 +115,7 @@ describe("Google Live Video Talk", () => {
         .mockReturnValue("data:image/jpeg;base64,gemini-camera-frame");
       const onStatus = vi.fn();
       const onVideoStream = vi.fn();
-      const transport = await createTransport({ onStatus, onVideoStream });
+      const transport = await createVideoTransport({ onStatus, onVideoStream });
 
       const { start, ws } = await beginTransport(transport);
       expect(getUserMedia).toHaveBeenCalledOnce();
@@ -202,7 +203,7 @@ describe("Google Live Video Talk", () => {
         throw new Error("stream callback failed");
       }
     });
-    const transport = await createTransport({ onVideoStream });
+    const transport = await createVideoTransport({ onVideoStream });
     const ws = await startTransport(transport);
     await transport.setVideoEnabled(true);
 
@@ -234,7 +235,7 @@ describe("Google Live Video Talk", () => {
       );
       const onVideoStream = vi.fn();
       const onStatus = vi.fn();
-      const transport = await createTransport({ onVideoStream, onStatus }, "front");
+      const transport = await createVideoTransport({ onVideoStream, onStatus }, "front");
 
       const ws = await startTransport(transport);
       await transport.setVideoEnabled(true);
@@ -275,7 +276,7 @@ describe("Google Live Video Talk", () => {
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onStatus = vi.fn();
     const onVideoStream = vi.fn();
-    const transport = await createTransport({ onStatus, onVideoStream });
+    const transport = await createVideoTransport({ onStatus, onVideoStream });
 
     const { start, ws } = await beginTransport(transport);
     onStatus.mockClear();
@@ -291,5 +292,113 @@ describe("Google Live Video Talk", () => {
     expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
     expect(onVideoStream).not.toHaveBeenCalled();
     expect(ws.readyState).toBe(3);
+  });
+});
+
+const SETUP_TIMEOUT_MS = 30_000;
+describe("Google Live setup timeout", () => {
+  installGoogleLiveTestFixture();
+  beforeEach(() => vi.useFakeTimers());
+
+  afterEach(() => vi.useRealTimers());
+
+  it.each(["open", "connecting"])(
+    "times out %s setup without provisional callbacks",
+    async (state) => {
+      const onStatus = vi.fn();
+      const onTalkEvent = vi.fn(() => {
+        throw new Error("talk callback must remain provisional");
+      });
+      const transport = await createTransport({ onStatus, onTalkEvent });
+      const { start, ws: socket } = await beginTransport(transport);
+      onStatus.mockClear();
+      if (state === "open") {
+        socket.emitOpen();
+      } else {
+        socket.readyState = 0;
+        onStatus.mockImplementation(() => {
+          throw new Error("status callback must remain provisional");
+        });
+      }
+      const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");
+      await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
+      await rejected;
+      expect(onStatus).not.toHaveBeenCalled();
+      expect(onTalkEvent).not.toHaveBeenCalled();
+      expectAudioReleased();
+      expect(socket.readyState).toBe(3);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each([
+    ["close", "Realtime connection closed"],
+    ["error", "Realtime connection failed"],
+  ] as const)("rejects startup when the WebSocket emits %s", async (event, detail) => {
+    const onStatus = vi.fn();
+    const transport = await createTransport({ onStatus });
+    const { start, ws: socket } = await beginTransport(transport);
+    onStatus.mockClear();
+    const rejected = expect(start).rejects.toThrow(detail);
+
+    if (event === "close") {
+      socket.emitClose();
+    } else {
+      socket.emitError();
+    }
+
+    await rejected;
+    expect(onStatus).not.toHaveBeenCalled();
+    expectAudioReleased();
+    expect(socket.readyState).toBe(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("releases resources when a readiness callback throws during activation", async () => {
+    const onStatus = vi.fn();
+    const transport = await createTransport({ onStatus });
+    const { start, ws: socket } = await beginTransport(transport);
+    onStatus.mockClear();
+    onStatus.mockImplementation(() => {
+      throw new Error("consumer failed");
+    });
+    socket.emitOpen();
+    socket.emitJson({ setupComplete: {} });
+    await expect(start).resolves.toBe("ready");
+
+    expect(() => transport.activate()).toThrow("consumer failed");
+    expectAudioReleased();
+    expect(socket.readyState).toBe(3);
+  });
+
+  it("clears the deadline after Google setup completes", async () => {
+    const onStatus = vi.fn();
+    const transport = await createTransport({ onStatus });
+
+    const { start, ws: socket } = await beginTransport(transport);
+    onStatus.mockClear();
+    socket.emitOpen();
+    socket.emitJson({ setupComplete: {} });
+    await expect(start).resolves.toBe("ready");
+    expect(onStatus).not.toHaveBeenCalled();
+    transport.activate();
+    await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
+
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith("listening");
+    transport.stop();
+  });
+
+  it("clears the deadline when the transport stops", async () => {
+    const onStatus = vi.fn();
+    const transport = await createTransport({ onStatus });
+
+    const { start } = await beginTransport(transport);
+    onStatus.mockClear();
+    transport.stop();
+    await expect(start).resolves.toBe("cancelled");
+    await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
+
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

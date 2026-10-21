@@ -97,7 +97,7 @@ export class MockAudioContext {
   }
 }
 
-export function createSession(): RealtimeTalkGatewayRelaySessionResult {
+function createSession(): RealtimeTalkGatewayRelaySessionResult {
   return {
     provider: "openai",
     transport: "gateway-relay",
@@ -177,14 +177,20 @@ export function createAudioAppendClient(client = createClient()) {
   };
 }
 
-export async function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
-  return new GatewayRelayRealtimeTalkTransport(createSession(), {
-    input: await prepareRealtimeTalkTestInput(),
-    callbacks: {},
-    client: createClient(),
-    sessionKey: "main",
-    ...overrides,
-  });
+export async function createTransport(
+  overrides: Partial<RealtimeTalkTransportContext> = {},
+  session: Partial<RealtimeTalkGatewayRelaySessionResult> = {},
+) {
+  return new GatewayRelayRealtimeTalkTransport(
+    { ...createSession(), ...session },
+    {
+      input: await prepareRealtimeTalkTestInput(),
+      callbacks: {},
+      client: createClient(),
+      sessionKey: "main",
+      ...overrides,
+    },
+  );
 }
 
 export async function startTransport(transport: GatewayRelayRealtimeTalkTransport): Promise<void> {

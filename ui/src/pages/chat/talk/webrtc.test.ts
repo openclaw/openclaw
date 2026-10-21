@@ -1,15 +1,26 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, type RealtimeTalkCallbacks } from "./shared.ts";
 import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  type RealtimeTalkWebRtcSdpSessionResult,
-  type RealtimeTalkCallbacks,
-} from "./shared.ts";
-import {
+  audioFixture,
+  readAnswer,
+  VideoPeerConnection,
+  cameraFixture,
+  dispatchDescribeViewToolCall,
+  startCamera,
+  stubAnswerSdpFetch,
+  pendingAnswer,
   createWebRtcTransport,
+  createOpenAiTransport,
+  expectRequest,
+  sentRealtimeEvents,
+  stubMedia,
+  toolOutput,
   dispatchCompletedToolCall,
+  dispatchControlToolCall,
   dispatchRealtimeEvent,
   FakePeerConnection,
   requirePeer,
@@ -19,51 +30,12 @@ import {
   userMessage,
 } from "./webrtc.test-support.ts";
 
+const CAPTURE_CHANGES = ["unchanged", "disabled", "switched", "muted", "ended", "stopped"] as const;
+
 let stopInputTrack: ReturnType<typeof vi.fn>;
-
-function stubAnswerSdpFetch() {
-  const fetchMock = vi.fn<typeof fetch>(async () => new Response("answer-sdp"));
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
-}
-
-async function createOpenAiTransport(
-  client: Record<string, unknown> = {},
-  callbacks: RealtimeTalkCallbacks = {},
-  session: Partial<RealtimeTalkWebRtcSdpSessionResult> = {},
-) {
-  return (
-    await createWebRtcTransport({
-      client,
-      callbacks,
-      session: { offerResponseMaxBytes: 256 * 1024, ...session },
-    })
-  ).transport;
-}
 
 function startTransport(callbacks: RealtimeTalkCallbacks = {}) {
   return startWebRtcTransport({}, callbacks, { offerResponseMaxBytes: 256 * 1024 });
-}
-
-function pendingAnswer() {
-  const pending: { signal?: AbortSignal; response?: Response } = {};
-  const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-    pending.signal = init?.signal ?? undefined;
-    pending.response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          pending.signal?.addEventListener(
-            "abort",
-            () => controller.error(pending.signal?.reason),
-            { once: true },
-          );
-        },
-      }),
-    );
-    return pending.response;
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  return Object.assign(pending, { fetchMock });
 }
 
 const consultRun = {
@@ -243,7 +215,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       },
       signal: expect.any(AbortSignal),
     });
-    transport.stop();
   });
 
   it.each(["timeout", "stop"])("aborts a pending SDP body read on %s", async (cause) => {
@@ -348,13 +319,12 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     await vi.runAllTimersAsync();
 
     expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
-    transport.stop();
   });
 
   it.each(["error", "conversation.item.input_audio_transcription.failed"])(
     "surfaces %s without closing the OpenAI data channel",
     async (type) => {
-      const { transport, peer, onStatus, onTranscript, dispatch } = await startTransport();
+      const { peer, onStatus, onTranscript, dispatch } = await startTransport();
       const itemId = type === "error" ? undefined : "failed-input";
       dispatch({
         type,
@@ -372,12 +342,11 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         final: true,
         itemId: "input-1",
       });
-      transport.stop();
     },
   );
 
   it("surfaces speech and response lifecycle status from the OpenAI data channel", async () => {
-    const { transport, onStatus, dispatch } = await startTransport();
+    const { onStatus, dispatch } = await startTransport();
     for (const event of [
       { type: "input_audio_buffer.speech_started" },
       { type: "input_audio_buffer.speech_stopped" },
@@ -391,13 +360,12 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(onStatus).toHaveBeenCalledWith("thinking", "Processing speech");
     expect(onStatus).toHaveBeenCalledWith("thinking", "Generating response");
     expect(onStatus).toHaveBeenCalledWith("listening", undefined);
-    transport.stop();
   });
 
   it.each(["cancelled", "failed", "incomplete"] as const)(
     "keeps browser Talk reusable after a %s response",
     async (status) => {
-      const { transport, onStatus, dispatch } = await startTransport();
+      const { onStatus, dispatch } = await startTransport();
       onStatus.mockClear();
       const response = {
         id: "response-1",
@@ -424,77 +392,80 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         "listening",
       ]);
       expect(onStatus).toHaveBeenLastCalledWith("listening", undefined);
-      transport.stop();
     },
   );
 
-  it("publishes finalized transcripts from the OpenAI data channel", async () => {
-    const { transport, peer, onTranscript, dispatch } = await startTransport();
-    dispatchTranscription(peer, "hello");
-    dispatch({
-      type: "response.audio_transcript.done",
-      item_id: "response-1",
-      transcript: "hi there",
-    });
-
-    expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
-      { role: "user", text: "hello", final: true, itemId: "input-1" },
-      { role: "assistant", text: "hi there", final: true, itemId: "response-1" },
-    ]);
-    transport.stop();
-  });
-
-  it("stops processing the current provider event when a transcript callback closes it", async () => {
-    const onTalkEvent = vi.fn();
-    const onTranscript = vi.fn(() => transport.stop());
-    const transport = await createOpenAiTransport({}, { onTranscript, onTalkEvent });
-
-    await transport.start();
-    dispatchTranscription(FakePeerConnection.instances[0], "overflow");
-
-    expect(onTranscript).toHaveBeenCalledOnce();
-    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
-  });
-
-  it("maps frameless Codex transcript events by role and finality", async () => {
-    const { transport, dispatch, onTranscript } = await startTransport();
-    for (const event of [
-      { type: "input_transcript.added", item: { id: "user-live", text: "hel" } },
-      { type: "output_transcript.added", item: { id: "assistant-live", text: "hi" } },
-      {
-        type: "turn.done",
-        turn: { id: "user-final", role: "user", transcript: "hello" },
-      },
-      {
-        type: "turn.done",
-        turn: { id: "assistant-final", role: "assistant", transcript: "hi there" },
-      },
-    ]) {
-      dispatch(event);
+  it.each([
+    {
+      label: "final audio",
+      entries: [
+        ["user", "conversation.item.input_audio_transcription.completed", "transcript", true, null],
+        ["assistant", "response.audio_transcript.done", "transcript", true, null],
+      ],
+    },
+    {
+      label: "frameless",
+      entries: [
+        ["user", "input_transcript.added", "item", false, "verbatim"],
+        ["assistant", "output_transcript.added", "item", false, "verbatim"],
+        ["user", "turn.done", "turn", true, "snapshot"],
+        ["assistant", "turn.done", "turn", true, "snapshot"],
+      ],
+    },
+    {
+      label: "output audio",
+      entries: [
+        ["assistant", "response.output_audio_transcript.delta", "delta", false, null],
+        ["assistant", "response.output_audio_transcript.done", "transcript", true, null],
+      ],
+    },
+    {
+      label: "output text",
+      entries: [
+        ["assistant", "response.output_text.delta", "delta", false, null],
+        ["assistant", "response.output_text.done", "text", true, null],
+      ],
+    },
+  ] as const)("maps $label transcript sequences", async ({ entries }) => {
+    const { dispatch, onTranscript } = await startTransport();
+    for (const [role, type, field] of entries) {
+      const payload =
+        field === "item"
+          ? { item: { id: "item-1", text: "hello" } }
+          : field === "turn"
+            ? { turn: { id: "item-1", role, transcript: "hello" } }
+            : { item_id: "item-1", [field]: "hello" };
+      dispatch({ type, ...payload });
     }
-
-    expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
-      { role: "user", text: "hel", final: false, textMode: "verbatim" },
-      { role: "assistant", text: "hi", final: false, textMode: "verbatim" },
-      { role: "user", text: "hello", final: true, textMode: "snapshot" },
-      { role: "assistant", text: "hi there", final: true, textMode: "snapshot" },
-    ]);
-    transport.stop();
+    expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual(
+      entries.map(([role, _type, _field, final, textMode]) => ({
+        role,
+        text: "hello",
+        final,
+        ...(textMode ? { textMode } : { itemId: "item-1" }),
+      })),
+    );
   });
 
   it.each([
-    ["response.output_audio_transcript", "transcript"],
-    ["response.output_text", "text"],
-  ])("emits assistant transcripts from %s events", async (prefix, finalField) => {
-    const { transport, onTranscript, dispatch } = await startTransport();
-    dispatch({ type: `${prefix}.delta`, item_id: "response-1", delta: "hi" });
-    dispatch({ type: `${prefix}.done`, item_id: "response-1", [finalField]: "hi there" });
-
-    expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
-      { role: "assistant", text: "hi", final: false, itemId: "response-1" },
-      { role: "assistant", text: "hi there", final: true, itemId: "response-1" },
-    ]);
-    transport.stop();
+    {
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "input-1",
+      transcript: "overflow",
+    },
+    {
+      type: "turn.done",
+      turn: { id: "assistant-final", role: "assistant", transcript: "finished" },
+    },
+  ])("stops processing $type when its transcript callback closes the transport", async (event) => {
+    const onTranscript = vi.fn(() => fixture.transport.stop());
+    const fixture = await startTransport({ onTranscript });
+    fixture.onStatus.mockClear();
+    fixture.onTalkEvent.mockClear();
+    fixture.dispatch(event);
+    expect(onTranscript).toHaveBeenCalledOnce();
+    expect(fixture.onStatus).not.toHaveBeenCalled();
+    expect(fixture.onTalkEvent.mock.calls.map(([entry]) => entry.type)).toEqual(["session.closed"]);
   });
 
   it("aborts an in-flight OpenAI tool consult when the transport stops", async () => {
@@ -544,7 +515,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     "schedules spoken control acknowledgements with active response=%s",
     async (active) => {
       const request = createControlRequest();
-      const { transport, peer, dispatch, sent } = await startActiveConsult(request, {
+      const { peer, dispatch, sent } = await startActiveConsult(request, {
         responseAlreadyActive: active,
       });
       dispatchTranscription(peer, "status");
@@ -572,13 +543,12 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         dispatch({ type: "response.done", response: { id: "response-2", status: "completed" } });
         expect(sent("response.create")).toHaveLength(2);
       }
-      transport.stop();
     },
   );
 
   it("interrupts stale OpenAI output when active-control cancel is suppressed", async () => {
     const request = createControlRequest({ ...spokenStatus, mode: "cancel", aborted: true });
-    const { transport, peer, sent } = await startActiveConsult(request, {
+    const { peer, sent } = await startActiveConsult(request, {
       responseAlreadyActive: true,
     });
 
@@ -594,12 +564,11 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         (event) => event.type === "conversation.item.create" && event.item?.type === "message",
       ),
     ).toBe(false);
-    transport.stop();
   });
 
   it("does not auto-control ambiguous multilingual speech during an active consult", async () => {
     const request = createControlRequest(null);
-    const { transport, peer } = await startActiveConsult(request);
+    const { peer } = await startActiveConsult(request);
 
     dispatchTranscription(peer, "¿cómo va esto?");
 
@@ -607,6 +576,534 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       setTimeout(resolve, 0);
     });
     expect(request).not.toHaveBeenCalledWith("talk.client.steer", expect.any(Object));
-    transport.stop();
+  });
+  it("submits control results without optional response and item ids", async () => {
+    const request = expectRequest("talk.client.steer", {
+      ok: true,
+      mode: "steer",
+      sessionKey: "main",
+      active: true,
+      queued: true,
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    const { transport } = await createWebRtcTransport({
+      client: { addEventListener: vi.fn(() => () => undefined), request },
+    });
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    dispatchCompletedToolCall(peer, {
+      responseId: null,
+      itemId: null,
+      arguments: JSON.stringify({ text: "revísalo en WebUI", mode: "steer" }),
+    });
+
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("talk.client.steer", {
+        sessionKey: "main",
+        text: "revísalo en WebUI",
+        mode: "steer",
+      }),
+    );
+    const sent = sentRealtimeEvents(peer);
+    expect(sent).toContainEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: "call-control",
+        output: expect.stringContaining('"mode":"steer"'),
+      },
+    });
+  });
+
+  it.each(["resolved", "rejected"])(
+    "discards a pending control %s after its transport stops and a replacement starts",
+    async (outcome) => {
+      const pending = createDeferred<unknown>();
+      const request = vi.fn(() => pending.promise);
+      const {
+        transport,
+        peer: previousPeer,
+        onTalkEvent,
+      } = await startWebRtcTransport({ request });
+      dispatchControlToolCall(previousPeer, { text: "status", mode: "status" });
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+      transport.stop();
+      const { transport: replacement, peer: replacementPeer } = await startWebRtcTransport(
+        { request },
+        { onTalkEvent },
+      );
+      onTalkEvent.mockClear();
+      if (outcome === "resolved") {
+        pending.resolve({ ok: true, mode: "status", message: "Old call finished." });
+      } else {
+        pending.reject(new Error("Old control failed"));
+      }
+      await pending.promise.catch(() => undefined);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+
+      expect(onTalkEvent).not.toHaveBeenCalled();
+      expect(sentRealtimeEvents(previousPeer)).toEqual([]);
+      expect(sentRealtimeEvents(replacementPeer)).toEqual([]);
+      expect(replacementPeer?.connectionState).not.toBe("closed");
+      replacement.stop();
+    },
+  );
+
+  it("executes completed calls once and ignores provisional events", async () => {
+    const request = expectRequest("talk.client.toolCall", { runId: "run-1" });
+    const { peer } = await startWebRtcTransport({
+      addEventListener: vi.fn(() => () => undefined),
+      request,
+    });
+
+    for (const type of [
+      "response.function_call_arguments.delta",
+      "response.function_call_arguments.done",
+    ]) {
+      dispatchRealtimeEvent(peer, {
+        type,
+        item_id: "item-1",
+        call_id: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        arguments: JSON.stringify({ question: "provisional" }),
+        delta: JSON.stringify({ question: "provisional" }),
+      });
+    }
+    expect(request).not.toHaveBeenCalled();
+
+    dispatchCompletedToolCall(peer, {
+      itemId: "item-1",
+      callId: "call-1",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      arguments: JSON.stringify({ question: "status?" }),
+    });
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("talk.client.toolCall", {
+        sessionKey: "main",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "status?" },
+      }),
+    );
+
+    dispatchCompletedToolCall(peer, {
+      responseId: "response-2",
+      itemId: "item-2",
+      callId: "call-1",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      arguments: JSON.stringify({ question: "late" }),
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "cancelled response", responseStatus: "cancelled" },
+    { label: "incomplete item", itemStatus: "incomplete" },
+    { label: "missing call", callId: null },
+    { label: "missing name", name: null },
+    { label: "missing arguments", arguments: null },
+  ])("ignores a function call with $label", async ({ label: _label, ...overrides }) => {
+    const request = vi.fn();
+    const { peer } = await startWebRtcTransport({ request });
+    dispatchCompletedToolCall(peer, overrides);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("enforces the authoritative 256000-byte UTF-8 argument limit", async () => {
+    const request = expectRequest("talk.client.steer", { ok: true, mode: "status" });
+    const { peer } = await startWebRtcTransport({ request });
+    const baseArgs = JSON.stringify({ text: "status" });
+    const argumentsAtLimit = baseArgs + " ".repeat(256_000 - baseArgs.length);
+    const oversizedArguments = JSON.stringify({ text: "é".repeat(128_000) });
+
+    dispatchCompletedToolCall(peer, { arguments: argumentsAtLimit });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    dispatchCompletedToolCall(peer, {
+      responseId: "response-2",
+      itemId: "item-2",
+      callId: "call-2",
+      arguments: oversizedArguments,
+    });
+    dispatchCompletedToolCall(peer, {
+      responseId: "response-3",
+      itemId: "item-3",
+      callId: "call-2",
+      arguments: oversizedArguments,
+    });
+
+    expect(new TextEncoder().encode(argumentsAtLimit)).toHaveLength(256_000);
+    expect(new TextEncoder().encode(oversizedArguments).byteLength).toBeGreaterThan(256_000);
+    const outputs = sentRealtimeEvents(peer).filter(
+      (event) =>
+        event.type === "conversation.item.create" && event.item?.type === "function_call_output",
+    );
+    expect(outputs).toHaveLength(2);
+    expect(JSON.parse(String(outputs[1]?.item?.output))).toEqual({
+      error: "Realtime tool arguments exceed the 256000-byte UTF-8 limit",
+    });
+  });
+
+  it("ends the session instead of evicting completed call identities", async () => {
+    const { peer, onStatus } = await startWebRtcTransport();
+
+    const dispatchView = (suffix: string | number) =>
+      dispatchCompletedToolCall(peer, {
+        responseId: `response-${suffix}`,
+        itemId: `item-${suffix}`,
+        callId: `call-${suffix}`,
+        name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
+        arguments: "{}",
+      });
+    for (let index = 0; index < 1_024; index += 1) {
+      dispatchView(index);
+    }
+    dispatchView("overflow");
+
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime tool-call session limit exceeded");
+    expect(peer?.channel.close).toHaveBeenCalledOnce();
+    dispatchView("late");
+    expect(peer?.channel.close).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces OpenAI tool-result send failures without an unhandled rejection", async () => {
+    const request = expectRequest("talk.client.steer", {
+      ok: true,
+      mode: "status",
+      sessionKey: "main",
+      active: true,
+      message: "Still working.",
+    });
+    const { peer, onStatus } = await startWebRtcTransport({ request });
+
+    peer?.channel.send.mockImplementation(() => {
+      throw new Error("OpenAI data channel rejected the tool result");
+    });
+    dispatchControlToolCall(peer, { text: "status", mode: "status" });
+
+    await waitForFast(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "OpenAI data channel rejected the tool result",
+      ),
+    );
+  });
+
+  it("silently disposes a provisional OpenAI transport", async () => {
+    const onTalkEvent = vi.fn();
+    const { transport } = await createWebRtcTransport({ callbacks: { onTalkEvent } });
+    await transport.start();
+    onTalkEvent.mockClear();
+
+    transport.stop({ emitClosed: false });
+
+    expect(onTalkEvent).not.toHaveBeenCalled();
+    expect(FakePeerConnection.instances[0]?.connectionState).toBe("closed");
+  });
+
+  it.each([
+    ["close_requested", "idle"],
+    ["content", "error"],
+    ["connection_lost", "error"],
+  ])(
+    "displays GPT-Live transcript fragments and releases media on %s finalization",
+    async (reason, outcome) => {
+      const { peer, onTranscript, onTalkEvent, onStatus } = await startWebRtcTransport();
+      const dispatch = (event: unknown) => dispatchRealtimeEvent(peer, event);
+
+      dispatch({
+        type: "session.input_transcript.delta",
+        delta: "Check the weather",
+      });
+      dispatch({
+        type: "session.output_transcript.delta",
+        delta: "I'll check",
+      });
+
+      expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
+        { role: "user", text: "Check the weather", final: false, textMode: "verbatim" },
+        { role: "assistant", text: "I'll check", final: false, textMode: "verbatim" },
+      ]);
+      expect(onTalkEvent).not.toHaveBeenCalled();
+      expect(peer.connectionState).not.toBe("closed");
+
+      dispatch({ type: "session.delegation.created" });
+      dispatch({ type: "session.closed", reason });
+      dispatch({ type: "session.input_transcript.delta", delta: "stale" });
+
+      expect(peer?.connectionState).toBe("closed");
+      expect(peer.channel.close).toHaveBeenCalledOnce();
+      expect(stopInputTrack).toHaveBeenCalledOnce();
+      if (outcome === "error") {
+        expect(onStatus).toHaveBeenLastCalledWith("error", "Realtime connection closed");
+      } else {
+        expect(onStatus).toHaveBeenLastCalledWith("idle");
+      }
+      expect(onTranscript).toHaveBeenCalledTimes(2);
+      expect(onTranscript.mock.calls.some(([entry]) => entry.final)).toBe(false);
+      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
+    },
+  );
+
+  it("resolves relative offer routes against the connected Gateway", async () => {
+    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
+    vi.stubGlobal("fetch", fetchMock);
+    await readAnswer(undefined, {
+      offerUrl: "/plugins/codex/realtime/calls",
+      offerResponseMaxBytes: undefined,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://gateway.example.test/plugins/codex/realtime/calls",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer reservation-token",
+        }),
+      }),
+    );
+  });
+
+  it.each([false, true])("cancels the SDP body without waiting (stale=%s)", async (stale) => {
+    const cancel = vi.fn(() => (stale ? Promise.resolve() : new Promise<void>(() => {})));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: stale, status: stale ? 200 : 502, body: { cancel } })),
+    );
+    const answer = readAnswer(() => !stale);
+    if (stale) {
+      await expect(answer).resolves.toBeUndefined();
+    } else {
+      await expect(answer).rejects.toThrow("Realtime WebRTC setup failed (502)");
+    }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  describe("OpenAI Realtime media lifecycle", () => {
+    beforeEach(() => vi.stubGlobal("RTCPeerConnection", VideoPeerConnection));
+
+    it("ends the call visibly when the microphone track ends", async () => {
+      const { track, stream } = audioFixture();
+      stubMedia(stream);
+      const onStatus = vi.fn();
+      const { transport } = await createWebRtcTransport({ callbacks: { onStatus } });
+      await transport.start();
+
+      track.dispatchEvent(new Event("ended"));
+
+      expect(onStatus).toHaveBeenCalledWith("error", expect.stringContaining("Microphone"));
+      expect(requirePeer().connectionState).toBe("closed");
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(document.querySelector("audio")).toBeNull();
+    });
+
+    it.each(CAPTURE_CHANGES)(
+      "keeps camera consent through capture readiness: %s",
+      async (change) => {
+        const { track: audioTrack, stream: audio } = audioFixture();
+        const { track: videoTrack, stream: camera } = cameraFixture();
+        const { stream: nextCamera } = cameraFixture("back");
+        const getUserMedia = stubMedia(audio, camera, nextCamera);
+
+        const originalCreateElement = document.createElement.bind(document);
+        let videoReadyState: number = HTMLMediaElement.HAVE_METADATA;
+        let captureVideo: HTMLVideoElement | undefined;
+        vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
+          const element = originalCreateElement(tagName);
+          if (element instanceof HTMLVideoElement) {
+            captureVideo = element;
+            Object.defineProperties(element, {
+              readyState: { configurable: true, get: () => videoReadyState },
+              videoWidth: { configurable: true, value: 1280 },
+              videoHeight: { configurable: true, value: 720 },
+            });
+            vi.spyOn(element, "play").mockResolvedValue(undefined);
+          }
+          return element;
+        });
+        const drawImage = vi.fn();
+        vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ drawImage } as never);
+        vi.spyOn(HTMLCanvasElement.prototype, "toDataURL")
+          .mockReturnValueOnce(`data:image/jpeg;base64,${"x".repeat(512)}`)
+          .mockReturnValueOnce("data:image/jpeg;base64,camera-frame");
+        const onVideoStream = vi.fn();
+        const onTalkEvent = vi.fn();
+        const onStatus = vi.fn();
+        const { transport } = await createWebRtcTransport({
+          callbacks: { onStatus, onTalkEvent, onVideoStream },
+          videoDeviceId: change === "switched" ? "front" : undefined,
+        });
+
+        await transport.start();
+        const peer = requirePeer();
+        const sent = () => sentRealtimeEvents(peer);
+        expect(getUserMedia).toHaveBeenCalledOnce();
+        expect(peer?.addTrack).toHaveBeenCalledWith(audioTrack, audio);
+        expect(onVideoStream).not.toHaveBeenCalled();
+
+        await transport.setVideoEnabled(true);
+        expect(onVideoStream).toHaveBeenCalledWith(camera);
+        dispatchDescribeViewToolCall(peer);
+        await Promise.resolve();
+        expect(sent()).not.toContainEqual(
+          expect.objectContaining({
+            item: expect.objectContaining({ content: expect.any(Array) }),
+          }),
+        );
+        if (change !== "unchanged") {
+          const pendingVideo = captureVideo;
+          if (change === "disabled") {
+            await transport.setVideoEnabled(false);
+          } else if (change === "switched") {
+            await transport.switchCamera("back");
+            expect(getUserMedia).toHaveBeenNthCalledWith(2, {
+              video: { deviceId: { exact: "front" } },
+            });
+            expect(getUserMedia).toHaveBeenNthCalledWith(3, {
+              video: { deviceId: { exact: "back" } },
+            });
+            expect(videoTrack.stop).toHaveBeenCalledOnce();
+            expect(onVideoStream).toHaveBeenLastCalledWith(nextCamera);
+          } else if (change === "muted") {
+            videoTrack.muted = true;
+          } else if (change === "ended") {
+            videoTrack.dispatchEvent(new Event("ended"));
+          } else {
+            transport.stop();
+          }
+          const sentBeforeRelease = sent();
+          const noticesBeforeRelease = onTalkEvent.mock.calls.length;
+          // A detached preview may retain its decoded frame while the current camera changes.
+          videoReadyState = HTMLMediaElement.HAVE_CURRENT_DATA;
+          pendingVideo?.dispatchEvent(new Event("loadeddata"));
+          await vi.waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+          await Promise.resolve();
+          const events = sent();
+          expect(events.filter(({ item }) => item?.type === "message")).toEqual([]);
+          if (change === "stopped") {
+            expect(events).toEqual(sentBeforeRelease);
+            expect(onTalkEvent).toHaveBeenCalledTimes(noticesBeforeRelease);
+          } else {
+            expect(events).toContainEqual(
+              toolOutput("call-camera", { ok: false, error: "camera is off" }),
+            );
+          }
+          if (change === "ended") {
+            expect(onVideoStream).toHaveBeenLastCalledWith(null);
+            await transport.setVideoEnabled(true);
+            expect(getUserMedia).toHaveBeenNthCalledWith(3, { video: true });
+            expect(onVideoStream).toHaveBeenLastCalledWith(nextCamera);
+          }
+          return;
+        }
+        videoReadyState = HTMLMediaElement.HAVE_CURRENT_DATA;
+        captureVideo?.dispatchEvent(new Event("loadeddata"));
+
+        await vi.waitFor(() =>
+          expect(sent()).toContainEqual(
+            userMessage([
+              { type: "input_image", image_url: "data:image/jpeg;base64,camera-frame" },
+            ]),
+          ),
+        );
+        expect(sent()).toContainEqual(toolOutput("call-camera", { ok: true, frameAttached: true }));
+        expect(sent()).toContainEqual({ type: "response.create" });
+        expect(getUserMedia).toHaveBeenNthCalledWith(1, {
+          audio: {
+            autoGainControl: true,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
+        expect(peer?.addTrack).toHaveBeenCalledOnce();
+        expect(drawImage).toHaveBeenCalledTimes(2);
+        for (const [payload] of peer?.channel.send.mock.calls ?? []) {
+          expect(new TextEncoder().encode(String(payload)).length).toBeLessThanOrEqual(512);
+        }
+
+        await transport.setVideoEnabled(false);
+        expect(onVideoStream).toHaveBeenLastCalledWith(null);
+        expect(videoTrack.stop).toHaveBeenCalledOnce();
+        expect(audioTrack.stop).not.toHaveBeenCalled();
+
+        dispatchDescribeViewToolCall(peer, "camera-off");
+        await vi.waitFor(() =>
+          expect(sent()).toContainEqual(
+            toolOutput("call-camera-off", { ok: false, error: "camera is off" }),
+          ),
+        );
+        expect(onStatus).not.toHaveBeenCalledWith("error", expect.anything());
+
+        transport.stop();
+        expect(audioTrack.stop).toHaveBeenCalledOnce();
+      },
+    );
+
+    it("keeps voice alive when lazy camera acquisition fails", async () => {
+      const { track: audioTrack, stream: audio } = audioFixture();
+      stubMedia(audio).mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
+      const onStatus = vi.fn();
+      const onVideoStream = vi.fn();
+      const { transport } = await createWebRtcTransport({ callbacks: { onStatus, onVideoStream } });
+
+      await transport.start();
+      await expect(transport.setVideoEnabled(true)).rejects.toThrow("Camera access is blocked");
+
+      expect(audioTrack.stop).not.toHaveBeenCalled();
+      expect(onVideoStream).not.toHaveBeenCalled();
+      expect(onStatus).not.toHaveBeenCalledWith("error", expect.anything());
+      transport.stop();
+      expect(audioTrack.stop).toHaveBeenCalledOnce();
+    });
+
+    it("releases acquired media when stopped during the camera prompt", async () => {
+      const { track: audioTrack, stream: audio } = audioFixture();
+      const { track: videoTrack, stream: camera } = cameraFixture();
+      const cameraPending = createDeferred<MediaStream>();
+      const getUserMedia = stubMedia(audio).mockReturnValueOnce(cameraPending.promise);
+      const { transport } = await createWebRtcTransport();
+
+      await transport.start();
+      const enabling = transport.setVideoEnabled(true);
+      await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+      transport.stop();
+      expect(audioTrack.stop).toHaveBeenCalledOnce();
+      cameraPending.resolve(camera);
+
+      await expect(enabling).resolves.toBeUndefined();
+      expect(videoTrack.stop).toHaveBeenCalledOnce();
+    });
+
+    it("restores the previous camera when a live switch fails", async () => {
+      const { transport, context, getUserMedia, onVideoStream } = await startCamera("front");
+      const { stream: restoredFrontCamera } = cameraFixture("front");
+      getUserMedia
+        .mockRejectedValueOnce(new DOMException("missing", "OverconstrainedError"))
+        .mockResolvedValueOnce(restoredFrontCamera);
+
+      await expect(transport.switchCamera("missing")).rejects.toThrow(
+        "The selected camera is unavailable",
+      );
+
+      expect(getUserMedia).toHaveBeenNthCalledWith(4, {
+        video: { deviceId: { exact: "front" } },
+      });
+      expect(context.videoDeviceId).toBe("front");
+      expect(onVideoStream).toHaveBeenLastCalledWith(restoredFrontCamera);
+    });
   });
 });
