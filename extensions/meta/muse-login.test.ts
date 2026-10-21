@@ -1,4 +1,4 @@
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/provider-auth";
@@ -13,9 +13,7 @@ afterEach(() => vi.useRealTimers());
 async function fixture() {
   const directory = directories.make("muse-login-");
   const binaryPath = path.join(directory, "muse");
-  await writeFile(
-    binaryPath,
-    `#!${process.execPath}
+  const script = `#!${process.execPath}
 const fs = require('node:fs');
 const path = require('node:path');
 const dir = process.env.FAKE_MUSE_DIR;
@@ -26,21 +24,17 @@ fs.writeFileSync(path.join(dir, 'environment'), JSON.stringify({ backend: proces
 const watcher = fs.watch(dir, (_, name) => { if (name === 'approve') { fs.writeFileSync(path.join(dir, 'credential'), 'saved'); watcher.close(); process.exit(0); } });
 process.on('SIGTERM', () => { fs.writeFileSync(path.join(dir, 'cancelled'), 'yes'); watcher.close(); process.exit(0); });
 process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth/device/?code=ABCD-1234\\nconfirm this code matches:\\n  ABCD-1234\\n');
-`,
-  );
-  await chmod(binaryPath, 0o700);
+`;
+  await writeFile(binaryPath, script, { mode: 0o700 });
   const ctx: ProviderAuthContext = {
     config: { plugins: { entries: { muse: { config: { binaryPath } } } } },
     env: {
-      ...process.env,
       FAKE_MUSE_DIR: directory,
       OPENCLAW_STATE_DIR: path.join(directory, "state"),
       META_API_KEY: "must-not-be-used",
-      TBH_CREDENTIAL_BACKEND: undefined,
-      XDG_CONFIG_HOME: undefined,
     },
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    prompter: createWizardPrompter({ deviceCode: vi.fn(), confirm: vi.fn(async () => true) }),
+    prompter: createWizardPrompter({ deviceCode: vi.fn() }),
     isRemote: false,
     openUrl: vi.fn(async () => {
       await writeFile(path.join(directory, "approve"), "yes");
@@ -52,22 +46,16 @@ process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth
 
 it("signs in with one browser approval using managed credentials", async () => {
   const { ctx, directory, read } = await fixture();
-  const result = await runMuseLogin(ctx);
-  expect(ctx.prompter.deviceCode).toHaveBeenCalledExactlyOnceWith({
-    title: "Authorize Muse Code",
-    code: "ABCD-1234",
-  });
-  expect(ctx.openUrl).toHaveBeenCalledExactlyOnceWith(
-    "https://auth.meta.com/oauth/device/?code=ABCD-1234",
-  );
-  expect([result.profiles, result.agentRuntimeId]).toEqual([[], "muse"]);
+  const { profiles, agentRuntimeId, configPatch } = await runMuseLogin(ctx);
+  const code = { title: "Authorize Muse Code", code: "ABCD-1234" };
+  const url = "https://auth.meta.com/oauth/device/?code=ABCD-1234";
+  expect(ctx.prompter.deviceCode).toHaveBeenCalledExactlyOnceWith(code);
+  expect(ctx.openUrl).toHaveBeenCalledExactlyOnceWith(url);
+  expect([profiles, agentRuntimeId, configPatch?.agents]).toEqual([[], "muse", undefined]);
   expect(ctx.prompter.select).not.toHaveBeenCalled();
-  expect(result.configPatch?.agents).toBeUndefined();
   expect(await read("attempts")).toBe("login\n");
-  expect(JSON.parse(await read("environment"))).toEqual({
-    backend: "file",
-    home: path.join(directory, "state", "muse"),
-  });
+  const environment = JSON.parse(await read("environment"));
+  expect(environment).toEqual({ backend: "file", home: path.join(directory, "state", "muse") });
 });
 
 it("terminates the child even when cancellation interrupts device-code presentation", async () => {
@@ -83,9 +71,7 @@ it("terminates the child even when cancellation interrupts device-code presentat
   expect(ctx.openUrl).not.toHaveBeenCalled();
 });
 
-it("kills a pending login when authority is revoked without aborting the signal", async ({
-  signal,
-}) => {
+it("terminates login on authority revocation without aborting its signal", async ({ signal }) => {
   const { ctx, read } = await fixture();
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   ctx.signal = signal;
@@ -102,16 +88,12 @@ it("kills a pending login when authority is revoked without aborting the signal"
   await expect(runMuseLogin(ctx)).rejects.toThrow("Login authority revoked");
   expect(signal.aborted).toBe(false);
   expect(await read("cancelled")).toBe("yes");
-  await expect(read("credential")).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expect(read("credential")).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("gives the install command when the configured binary is missing", async () => {
   const { ctx, directory } = await fixture();
-  ctx.config = {
-    plugins: { entries: { muse: { config: { binaryPath: path.join(directory, "missing") } } } },
-  };
+  await rm(path.join(directory, "muse"));
   await expect(runMuseLogin(ctx)).rejects.toThrow(
     "curl -fsSL https://dev.meta.ai/install.sh | bash",
   );
