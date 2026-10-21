@@ -169,7 +169,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
 
   function RequestLifetime(requestProps: { request: ReturnType<typeof request> }) {
     const [computing, setComputing] = createSignal(false);
-    let load: (() => Promise<void>) | undefined;
+    let load: ((refresh?: boolean) => Promise<void>) | undefined;
     useVisiblePoll(500, () => void load?.(), {
       enabled: () => computing() && props.active !== false,
     });
@@ -184,7 +184,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
       }
       let active = true;
       setPending(true);
-      load = async () => {
+      load = async (refresh = false) => {
         if (props.active === false || document.visibilityState === "hidden") {
           setComputing(true);
           return;
@@ -194,7 +194,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
         try {
           result =
             (requestedReload?.target === target ? requestedReload.result : undefined) ??
-            (await loader(target.scope));
+            (await (refresh ? loader(target.scope, { refresh: true }) : loader(target.scope)));
           if (!active) {
             return;
           }
@@ -254,7 +254,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
           }
         }
       };
-      void load();
+      void load(requestedReload?.target === target);
       return () => {
         active = false;
       };
@@ -479,7 +479,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
         !disposed && request() === currentRequest && Boolean(value()?.views.includes(view));
       let freshResult: SessionsDiffResult;
       try {
-        freshResult = await loader(requestedScope);
+        freshResult = await loader(requestedScope, { refresh: true });
       } catch {
         return;
       }

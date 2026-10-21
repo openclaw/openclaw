@@ -91,6 +91,7 @@ function executionArgs(overrides: Partial<Parameters<typeof resolveClaudeCliExec
     workspaceDir: "/tmp",
     provider: "claude-cli",
     modelId: "claude-opus-4-8",
+    config: { tools: { exec: { mode: "ask" } } },
     useResume: false,
     baseArgs: ["-p"],
     ...overrides,
@@ -176,19 +177,6 @@ function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
   expect(args?.[disallowedIndex + 1]).toBe(CLAUDE_CLI_DISALLOWED_TOOLS);
 }
 
-function normalizeClaudeArgs(
-  args: string[],
-  context: Parameters<typeof normalizeClaudeBackendConfig>[1] = {
-    backendId: "claude-cli",
-    config: { tools: { exec: { mode: "ask" } } },
-  },
-): string[] | undefined {
-  return normalizeClaudeBackendConfig(
-    { command: "claude", args, output: "json", input: "arg" },
-    context,
-  ).args;
-}
-
 it.each([
   ["--dangerously-skip-permissions --verbose", "--verbose --setting-sources user"],
   ["--permission-mode acceptEdits", "--permission-mode acceptEdits --setting-sources user"],
@@ -196,10 +184,74 @@ it.each([
   ["--setting-sources project", "--setting-sources user"],
   ["--setting-sources=local,user", "--setting-sources=user"],
 ])("normalizes Claude permission and setting args: %s", (input, expected) => {
-  expect(normalizeClaudeArgs(argv("-p", input))).toEqual(argv("-p", expected));
+  expect(executionArgs({ baseArgs: argv("-p", input) })).toEqual(argv("-p", expected));
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
+  it.each([
+    [undefined, true],
+    [{ mode: "full" }, true],
+    [{ mode: "ask" }, false],
+    [{ security: "allowlist", ask: "always" }, false],
+  ] as const)(
+    "derives permission mode from global exec policy %j for normal runs",
+    (exec, bypass) => {
+      const args = executionArgs({ config: { tools: { exec } } });
+      expect(args.includes("bypassPermissions")).toBe(bypass);
+    },
+  );
+
+  it("keeps per-agent exec policy for normal runs and omits only the injected mode for compaction", () => {
+    const forAgent = (
+      globalMode: "ask" | "full",
+      agentMode: "ask" | "full",
+      controlOperation?: "compact",
+    ) =>
+      executionArgs({
+        agentId: "worker",
+        controlOperation,
+        config: {
+          tools: { exec: { mode: globalMode } },
+          agents: { entries: { worker: { tools: { exec: { mode: agentMode } } } } },
+        },
+      });
+
+    expect(forAgent("full", "ask")).not.toContain("bypassPermissions");
+    expect(forAgent("ask", "full")).toContain("bypassPermissions");
+    expect(forAgent("ask", "full", "compact")).not.toContain("bypassPermissions");
+  });
+
+  it.each([false, true])(
+    "keeps yolo bypass on ordinary turns but omits it for manual compaction (resume=%s)",
+    (useResume) => {
+      const normalized = normalizeClaudeBackendConfig(backend.config);
+      const context = {
+        config: { tools: { exec: { mode: "full" as const } } },
+        useResume,
+        baseArgs: (useResume ? normalized.resumeArgs : normalized.args) ?? [],
+      };
+      expect(executionArgs(context)).toEqual(
+        expect.arrayContaining(["--permission-mode", "bypassPermissions"]),
+      );
+      const compactArgs = executionArgs({ ...context, controlOperation: "compact" });
+      expect(compactArgs).not.toContain("--permission-mode");
+      expect(compactArgs).not.toContain("bypassPermissions");
+    },
+  );
+
+  it.each([
+    "--permission-mode acceptEdits",
+    "--permission-mode=acceptEdits",
+    "--permission-mode bypassPermissions",
+  ])("preserves explicit %s during manual compaction", (permissionArgs) => {
+    const args = executionArgs({
+      config: { tools: { exec: { mode: "full" } } },
+      controlOperation: "compact",
+      baseArgs: argv("-p", permissionArgs),
+    });
+    expect(args).toEqual(argv("-p", permissionArgs, "--setting-sources user"));
+  });
+
   it("keeps the real resumed manual-compaction command enabled", () => {
     expect(backend.config.systemPromptWhen).toBe("always");
     const manualCompaction = backend.manualCompaction;
@@ -210,7 +262,10 @@ describe("resolveClaudeCliExecutionArgs", () => {
       throw new Error("Anthropic CLI backend must expose resumed manual compaction");
     }
 
-    const args = [...executionArgs({ useResume: true, baseArgs }), manualCompaction.buildPrompt()];
+    const args = [
+      ...executionArgs({ useResume: true, baseArgs, controlOperation: "compact" }),
+      manualCompaction.buildPrompt(),
+    ];
 
     expect(args).toContain("/compact");
     expect(args).not.toContain("--disable-slash-commands");
@@ -242,8 +297,10 @@ describe("resolveClaudeCliExecutionArgs", () => {
     ["claude-opus-4-7", "minimal", "", "--effort low"],
     ["claude-opus-4-7", "medium", "", "--effort medium"],
   ] as const)("maps %s thinking=%s to %s", (modelId, thinkingLevel, configured, expected) => {
-    const baseArgs = configured ? argv("-p", configured) : ["-p"];
-    expect(executionArgs({ modelId, thinkingLevel, baseArgs })).toEqual(argv("-p", expected));
+    const baseArgs = argv("-p --setting-sources user", ...(configured ? [configured] : []));
+    expect(executionArgs({ modelId, thinkingLevel, baseArgs })).toEqual(
+      argv("-p --setting-sources user", expected),
+    );
   });
 
   it("strips configured effort args when thinking is adaptive", () => {
@@ -256,7 +313,9 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "{sessionId}",
         ),
       }),
-    ).toEqual(argv("-p --output-format stream-json --verbose --resume {sessionId}"));
+    ).toEqual(
+      argv("-p --output-format stream-json --verbose --resume {sessionId} --setting-sources user"),
+    );
   });
 
   it("forces isolated no-tool one-shot args for side-question execution", () => {
@@ -276,7 +335,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
         ),
       }),
     ).toEqual([
-      ...argv("-p --output-format stream-json --safe-mode --tools"),
+      ...argv("-p --output-format stream-json --setting-sources user --safe-mode --tools"),
       "",
       ...argv(
         "--disallowedTools mcp__* --strict-mcp-config --no-session-persistence",
@@ -310,10 +369,9 @@ function registeredBackend(
 }
 
 describe("normalizeClaudeBackendConfig", () => {
-  it("normalizes both args and resumeArgs for custom overrides", () => {
+  it("normalizes I/O defaults while deferring argument normalization until execution", () => {
     const streamArgs = argv("-p --output-format stream-json --verbose");
     const resumeArgs = [...streamArgs, "--resume", "{sessionId}"];
-    const permissions = argv("--setting-sources user --permission-mode bypassPermissions");
     const normalized = normalizeClaudeBackendConfig({
       command: "claude",
       args: [...streamArgs],
@@ -321,39 +379,12 @@ describe("normalizeClaudeBackendConfig", () => {
     });
 
     expect(normalized).toMatchObject({
-      args: [...streamArgs, ...permissions],
-      resumeArgs: [...resumeArgs, ...permissions],
+      args: streamArgs,
+      resumeArgs,
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
     });
-  });
-
-  it.each([
-    [undefined, true],
-    [{ mode: "ask" }, false],
-    [{ security: "allowlist", ask: "always" }, false],
-  ] as const)("derives Claude bypass from global exec policy %j", (exec, bypass) => {
-    expect(
-      normalizeClaudeArgs(["-p"], {
-        backendId: "claude-cli",
-        config: { tools: { exec } },
-      })?.includes("bypassPermissions"),
-    ).toBe(bypass);
-  });
-
-  it("derives Claude bypass from per-agent OpenClaw exec policy", () => {
-    const forAgent = (agentId: string, globalMode: "ask" | "full", agentMode: "ask" | "full") =>
-      normalizeClaudeArgs(["-p"], {
-        backendId: "claude-cli",
-        agentId,
-        config: {
-          tools: { exec: { mode: globalMode } },
-          agents: { entries: { [agentId]: { tools: { exec: { mode: agentMode } } } } },
-        },
-      });
-    expect(forAgent("safe-agent", "full", "ask")).not.toContain("bypassPermissions");
-    expect(forAgent("yolo-agent", "ask", "full")).toContain("bypassPermissions");
   });
 
   it("gates the Claude cache-control flag on the capability probe", () => {

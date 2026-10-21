@@ -1,11 +1,55 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createLayoutMeasurement } from "./layout-measurement.ts";
 
 const cleanup: Array<() => void> = [];
 let resize: () => void;
 let disconnected = false;
+
+it.each([false, true])("remeasures when fonts settle unless disposed: %s", async (disposed) => {
+  const fonts = createDeferred();
+  const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+  Object.defineProperty(document, "fonts", { configurable: true, value: { ready: fonts.promise } });
+  onTestFinished(() => {
+    if (previousFonts) {
+      Object.defineProperty(document, "fonts", previousFonts);
+    } else {
+      Reflect.deleteProperty(document, "fonts");
+    }
+  });
+  let element!: HTMLDivElement;
+  let width = 10;
+  const reads: number[] = [];
+  const view = mountSolid(() => {
+    createLayoutMeasurement(
+      () => true,
+      () => {
+        const measuredWidth = width;
+        reads.push(measuredWidth);
+        return () => {
+          element.style.width = measuredWidth + "px";
+        };
+      },
+      { targets: () => [element], fonts: true },
+    );
+    return <div ref={(node) => (element = node)} />;
+  });
+  cleanup.push(view.unmount);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(element.style.width).toBe("10px");
+  width = 20;
+  if (disposed) {
+    view.unmount();
+  }
+  fonts.resolve();
+  await fonts.promise;
+  vi.advanceTimersToNextFrame();
+  expect(reads).toEqual(disposed ? [10] : [10, 20]);
+  expect(element.style.width).toBe(disposed ? "10px" : "20px");
+});
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
