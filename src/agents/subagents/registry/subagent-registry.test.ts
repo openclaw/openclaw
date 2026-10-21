@@ -442,7 +442,6 @@ describe("subagent registry seam flow", () => {
           sessionId: "session-collector-clean",
           lifecycleRevision: "revision-collector-clean",
         },
-        task: "completed sibling",
         createdAt: now - 10_000,
         endedAt: now - 5_000,
         archiveAtMs: now - 1,
@@ -456,7 +455,6 @@ describe("subagent registry seam flow", () => {
         sessionId: "session-collector-cleanup-pending",
         lifecycleRevision: "revision-collector-cleanup-pending",
       },
-      task: "failed launch cleanup",
       createdAt: now - 9_000,
       endedAt: now - 4_000,
       archiveAtMs: now - 1,
@@ -481,7 +479,6 @@ describe("subagent registry seam flow", () => {
       runId: "run-ordinary-parent",
       childSessionKey: parentSessionKey,
       childSessionIdentity: { sessionId: "sess-collector-parent" },
-      task: "spawn nested child",
       createdAt: Date.now(),
       expectsCompletionMessage: true,
     });
@@ -492,7 +489,6 @@ describe("subagent registry seam flow", () => {
       controllerSessionKey: parentSessionKey,
       requesterSessionKey: parentSessionKey,
       requesterDisplayKey: "parent",
-      task: "nested result",
       expectsCompletionMessage: false,
       collect: true,
       swarmRequesterSessionKey: parentSessionKey,
@@ -517,7 +513,6 @@ describe("subagent registry seam flow", () => {
       runId: "public-collector-run",
       childSessionKey,
       childSessionIdentity: { sessionId: "sess-early-structured-output" },
-      task: "return structured output immediately",
       createdAt: Date.now(),
       collect: true,
       execution: { status: "queued" },
@@ -587,8 +582,6 @@ describe("subagent registry seam flow", () => {
         sessionId: "sess-child",
         lifecycleRevision: "revision-child",
       },
-      task: "retry registry restore",
-      cleanup: "keep",
       pauseReason: "sessions_yield",
       createdAt: Date.now(),
     });
@@ -652,7 +645,6 @@ describe("subagent registry seam flow", () => {
         runId: "run-queued-kill-intent",
         childSessionKey: "agent:main:subagent:queued-kill-intent",
         childSessionIdentity: { sessionId: "session-queued-kill-intent" },
-        task: "do not relaunch",
         groupId: "kill-intent",
         createdAt: now,
         killIntent: {
@@ -761,10 +753,6 @@ describe("subagent registry seam flow", () => {
         await mod.registerSubagentRun({
           runId,
           childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "collector acceptance race",
-          cleanup: "keep",
           collect: true,
           groupId: "acceptance-race",
           queued: true,
@@ -788,10 +776,6 @@ describe("subagent registry seam flow", () => {
           makeCompletedCollectorRun({
             runId,
             childSessionKey,
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            task: "terminal collector acceptance",
-            cleanup: "keep",
             swarmRunId: runId,
             schedulerSlotId: runId,
             ...(state === "terminal pending"
@@ -863,7 +847,6 @@ describe("subagent registry seam flow", () => {
           lifecycleRevision: "revision-queued-cleanup-retry",
         },
         swarmRequesterSessionKey: "agent:main:main",
-        task: "retry failed cleanup",
         groupId: "restore-cleanup-retry",
         createdAt: now,
         queuedLaunch: {
@@ -941,7 +924,6 @@ describe("subagent registry seam flow", () => {
 
     await mod.registerSubagentRun({
       runId: "run-interrupted-wait",
-      task: "resume after transport close",
     });
 
     await waitForFast(() => expect(findRequesterRun("run-interrupted-wait")).toBeDefined());
@@ -968,7 +950,6 @@ describe("subagent registry seam flow", () => {
     const spawn = runWithGatewayIndependentRootWorkAdmission(async () => {
       await mod.registerSubagentRun({
         runId,
-        task: "outlive the closing Gateway",
         expectsCompletionMessage: true,
       });
       await spawnTurn.promise;
@@ -1037,7 +1018,6 @@ describe("subagent registry seam flow", () => {
           await mod.registerSubagentRun({
             runId: "run-detached-requester-owner",
             requesterSessionKey: sessionKey,
-            task: "finish after the requester attempt exits",
             expectsCompletionMessage: true,
           });
           await withinTest(waitStarted.promise, context.signal);
@@ -1079,7 +1059,6 @@ describe("subagent registry seam flow", () => {
     const settleRootWork = observeRootWork();
     await mod.registerSubagentRun({
       runId,
-      task: "published timeout should stay stable",
       runTimeoutSeconds: 1,
     });
 
@@ -1279,7 +1258,6 @@ describe("subagent registry seam flow", () => {
               sessionId: "sess-child",
               lifecycleRevision: "revision-child",
             },
-            task: "resume near explicit timeout",
             runTimeoutSeconds: duration / 1_000,
             createdAt,
             startedAt: createdAt,
@@ -1291,7 +1269,6 @@ describe("subagent registry seam flow", () => {
         } else {
           await mod.registerSubagentRun({
             runId,
-            task: "honor explicit run deadline",
             runTimeoutSeconds: duration / 1_000,
           });
           if (source === "lifecycle") {
@@ -1354,7 +1331,6 @@ describe("subagent registry seam flow", () => {
     const settleRootWork = observeRootWork();
     await mod.registerSubagentRun({
       runId,
-      task: "honor observed session start deadline",
       runTimeoutSeconds: 60,
     });
 
@@ -1409,7 +1385,6 @@ describe("subagent registry seam flow", () => {
 
     await mod.registerSubagentRun({
       runId: "run-reactivated-timeout",
-      task: "new run after stale terminal row",
     });
 
     await waitForFast(() => {
@@ -1452,7 +1427,6 @@ describe("subagent registry seam flow", () => {
         runId,
         childSessionKey: "agent:main:subagent:wait-collector-yield",
         sessionEntry: { sessionId: "sess-wait-collector-yield" },
-        task: "collect through the wait observation",
         expectsCompletionMessage: false,
         collect: true,
         outputSchema: { type: "object" },
@@ -1517,7 +1491,6 @@ describe("subagent registry seam flow", () => {
       await mod.registerSubagentRun({
         runId,
         childSessionKey,
-        task: "preserve actual timeout",
         collect: true,
         expectsCompletionMessage: false,
         swarmRequesterSessionKey: "agent:main:main",
@@ -1580,7 +1553,6 @@ describe("subagent registry seam flow", () => {
           runId,
           childSessionKey: "agent:main:subagent:pending-timeout",
           sessionEntry,
-          task: "settle pending abort",
         });
         const lifecycleHandler = getLifecycleHandler();
         lifecycleHandler({
@@ -1673,7 +1645,6 @@ describe("subagent registry seam flow", () => {
     try {
       await mod.registerSubagentRun({
         runId,
-        task: "report terminal failure",
         expectsCompletionMessage: true,
       });
       if (source === "lifecycle") {
@@ -1757,7 +1728,6 @@ describe("subagent registry seam flow", () => {
         ...(failure === "registry write"
           ? { sessionEntry: { sessionId: "sess-retry-durable-completion" } }
           : {}),
-        task: "retry completion after transient failure",
         expectsCompletionMessage: false,
       });
       await waitForFast(() => {
@@ -1898,7 +1868,6 @@ describe("subagent registry seam flow", () => {
 
     await mod.registerSubagentRun({
       runId: "run-killed-recovery",
-      task: "killed recovery test",
       expectsCompletionMessage: false,
     });
 
@@ -1933,7 +1902,6 @@ describe("subagent registry seam flow", () => {
     try {
       await mod.registerSubagentRun({
         runId: "run-timeout-then-ok",
-        task: "timeout retry",
         expectsCompletionMessage: true,
       });
 
@@ -2008,7 +1976,6 @@ describe("subagent registry seam flow", () => {
     const settleRootWork = observeRootWork();
     await mod.registerSubagentRun({
       runId: "run-delete-give-up",
-      task: "completion cleanup retry",
       cleanup: "delete",
       expectsCompletionMessage: true,
     });
@@ -2115,7 +2082,6 @@ describe("subagent registry seam flow", () => {
         sessionId: "sess-parent",
         lifecycleRevision: "revision-parent",
       },
-      task: "expired parent cleanup",
       cleanup: "delete",
       createdAt: Date.parse("2026-03-24T11:50:00Z"),
       startedAt: Date.parse("2026-03-24T11:50:30Z"),
@@ -2135,7 +2101,6 @@ describe("subagent registry seam flow", () => {
         runId: "run-child-finished",
         requesterSessionKey: "agent:main:subagent:parent",
         requesterDisplayKey: "parent",
-        task: "descendant settles",
       });
       await announceEntered.promise;
     } finally {
@@ -2180,7 +2145,6 @@ describe("subagent registry seam flow", () => {
         childSessionKey: "agent:main:subagent:killed",
         sessionEntry,
         requesterOrigin: { channel: "quietchat", accountId: "acct-1" },
-        task: "kill after init",
         expectsCompletionMessage: false,
         workspaceDir: "/tmp/killed-workspace",
       });
@@ -2283,10 +2247,6 @@ describe("subagent registry seam flow", () => {
         runId,
         childSessionKey: `agent:main:subagent:interrupted-${scenario}`,
         childSessionIdentity: { sessionId: `sess-interrupted-${scenario}` },
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "preserve existing terminal evidence",
-        cleanup: "keep" as const,
         createdAt: 1,
         cleanupCompletedAt,
         ...evidence,
@@ -2339,7 +2299,6 @@ describe("subagent registry seam flow", () => {
         controllerSessionKey: "agent:main:session:parent",
         requesterSessionKey: "agent:main:session:parent",
         requesterDisplayKey: "parent",
-        task: `${kind} cleanup`,
         spawnMode: kind === "session" ? "session" : "run",
         agentDir: `/tmp/agent-${kind}`,
         workspaceDir: `/tmp/workspace-${kind}`,
@@ -2427,7 +2386,6 @@ describe("subagent registry seam flow", () => {
     mockPendingAgentWait();
     await mod.registerSubagentRun({
       runId: "run-sweep-error",
-      task: "sweep error",
       cleanup: "delete",
     });
     const run = expectDefined(
