@@ -20,26 +20,22 @@ const turnPage = (items: CodexThreadItem[], backwardsCursor?: string, nextCursor
 });
 
 function nativeItemControl(source: CodexThreadItem[]) {
-  const listItemPage = vi.fn<CodexSessionCatalogControl["listItemPage"]>(
-    async ({ cursor, limit }) => {
-      const newestFirst = source.toReversed();
-      const anchor = cursor ? newestFirst.findIndex((item) => cursor === `native:${item.id}`) : -1;
-      if (cursor && anchor < 0) {
-        throw new Error("native item anchor is unavailable");
-      }
-      const selected = newestFirst.slice(anchor + 1, anchor + 1 + limit);
-      const last = selected.at(-1);
-      return {
-        data: selected.map((item) => ({ turnId: "turn-1", item })),
-        ...(last && anchor + 1 + selected.length < source.length
-          ? { nextCursor: `native:${last.id}` }
-          : {}),
-      };
-    },
-  );
+  const listItemPage: CodexSessionCatalogControl["listItemPage"] = async ({ cursor, limit }) => {
+    const newestFirst = source.toReversed();
+    const anchor = cursor ? newestFirst.findIndex((item) => cursor === `native:${item.id}`) : -1;
+    expect(cursor === undefined || anchor >= 0).toBe(true);
+    const selected = newestFirst.slice(anchor + 1, anchor + 1 + limit);
+    const last = selected.at(-1);
+    return {
+      data: selected.map((item) => ({ turnId: "turn-1", item })),
+      ...(last && anchor + 1 + selected.length < source.length
+        ? { nextCursor: `native:${last.id}` }
+        : {}),
+    };
+  };
   return createEligibleControl({
     requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
-    listItemPage,
+    listItemPage: vi.fn(listItemPage),
   });
 }
 
@@ -97,14 +93,12 @@ it("fails visibly when one complete raw item cannot fit the wire budget", async 
 it("resumes within a legacy turn after an append, then advances to the next native turn", async () => {
   const source = textItems(...Array.from({ length: 7 }, (_, index) => `item-${index}`));
   const listTurnPage = vi.fn<CodexSessionCatalogControl["listTurnPage"]>(async ({ cursor }) => {
+    expect([undefined, "turn-anchor", "older-turns"]).toContain(cursor);
     if (cursor === "older-turns") {
       return {
         data: [{ id: "older", items: textItems("oldest") }],
         backwardsCursor: "older-anchor",
       };
-    }
-    if (cursor && cursor !== "turn-anchor") {
-      throw new Error("unexpected native turn cursor");
     }
     return turnPage(source, "turn-anchor", "older-turns");
   });

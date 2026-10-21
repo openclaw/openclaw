@@ -1,14 +1,17 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
-import { createClientHarness } from "./app-server/test-support.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
+import {
+  catalogClient,
+  catalogIndex,
+  catalogThread,
+} from "./session-catalog-client.test-support.js";
 import {
   codexCatalogResidentHomeKey,
   observeCodexCatalogClient,
   subscribeCodexCatalogEvents,
 } from "./session-catalog-events.js";
-import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { catalogWebSocketOptions } from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
@@ -24,20 +27,14 @@ const liveSettingsEvent = {
 function nativeThread(overrides: Partial<CodexThread> = {}): CodexThread {
   return {
     ...threadStartResult().thread,
-    source: "cli",
-    ...persisted,
-    updatedAt: 100,
-    recencyAt: 100,
-    status: { type: "idle" },
-    ...overrides,
+    ...catalogThread({ ...persisted, ...overrides }),
   };
 }
 
 async function fixture(overflow = false, evicted = false) {
-  const options = {
-    ...catalogWebSocketOptions(`wss://catalog-settings-${++fixtureId}.example.test/codex`),
-    authToken: "synthetic-settings-token",
-  };
+  const options = catalogWebSocketOptions(
+    `wss://catalog-settings-${++fixtureId}.example.test/codex`,
+  );
   const inventory = [
     nativeThread({ recencyAt: evicted ? 0 : 100 }),
     nativeThread({ id: "other", recencyAt: 200 }),
@@ -74,21 +71,12 @@ async function fixture(overflow = false, evicted = false) {
     };
   };
   const create = () =>
-    createClientHarness({
-      onWrite(line, send) {
-        const request = JSON.parse(line);
-        methods.push(request.method);
-        const result = respond(request.method, request.params);
-        if (result !== undefined) {
-          send({ id: request.id, result });
-        }
-      },
+    catalogClient(({ method, params }) => {
+      methods.push(method);
+      return respond(method, params);
     });
   const a = create();
   const b = create();
-  onTestFinished(async () => {
-    await Promise.all([a.client.closeAndWait(), b.client.closeAndWait()]);
-  });
   // Worker startup is fixture setup, outside the live-settings request deadline.
   const reader = overflow ? b.client : a.client;
   await reader.request("thread/list", { limit: 1 }, { catalogPreview: true });
@@ -96,16 +84,14 @@ async function fixture(overflow = false, evicted = false) {
   await observeCodexCatalogClient(a.client, { startOptions: options });
   await observeCodexCatalogClient(b.client, { startOptions: options });
   const homeId = await codexCatalogResidentHomeKey({ startOptions: options });
-  const index = new CodexCatalogIndex({
+  const index = catalogIndex({
     homeId,
     readNative: async (params: CodexThreadListParams) =>
       projectCodexCatalogPage(
         // Overflow queries still have a native reader after the live settings source closes.
         await reader.request("thread/list", params, { catalogPreview: true }),
       ),
-    assertCurrent: () => {},
   });
-  onTestFinished(() => index.close());
   await index.initialize();
   const abandonClient = vi.fn(async () => {});
   const resume = () =>
