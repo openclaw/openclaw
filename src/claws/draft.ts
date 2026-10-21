@@ -21,6 +21,7 @@ import {
 
 export const MAX_CLAW_DRAFT_BYTES = 1_000_000;
 const DRAFT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const CURRENT_DRAFT_PATH = ".openclaw/claw-drafts/current.json";
 
 export function clawDraftRevision(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -50,6 +51,12 @@ export async function createClawDraft(workspaceDir: string, assertCurrent?: () =
   await root.write(relativePath, `${JSON.stringify(document, null, 2)}\n`, {
     mkdir: true,
     overwrite: false,
+    mode: 0o600,
+    assertBeforeMutation: assertCurrent,
+  });
+  await root.write(CURRENT_DRAFT_PATH, `${JSON.stringify({ draftId })}\n`, {
+    mkdir: true,
+    overwrite: true,
     mode: 0o600,
     assertBeforeMutation: assertCurrent,
   });

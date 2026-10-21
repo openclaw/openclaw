@@ -284,6 +284,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       };
     }
     const desktopFocus = this.desktopFocus;
+    const onCreateClaw =
+      currentAgentId && canCreateClawDraft(this.context)
+        ? () => void clawCreatorFlow(this.context).start(currentAgentId)
+        : undefined;
     const panelDefinitions = sidebarPanelDefinitions({
       paneId: this.paneId,
       panePresentationId: this.presentationId,
@@ -352,10 +356,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         ),
       connected: state.connected,
       onClearCompanion: () => void this.clearSessionCompanion(),
-      onCreateClaw:
-        currentAgentId && canCreateClawDraft(this.context)
-          ? () => void clawCreatorFlow(this.context).start(currentAgentId)
-          : undefined,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
@@ -399,35 +399,39 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const connectionGeneration = this.connectionGeneration;
     // Main panel actions share the task toolbar. Content roots stay in the
     // sidebar region so changing their presentation never reconnects them.
-    const header =
+    const paneHeader =
       subagentHeader || this.compact
         ? null
-        : {
-            header: this.renderPaneHeader(
-              sessionWorkspace,
-              selectedSession,
-              catalog,
-              agentWorkspace,
-              workspaceGit,
-              chatProps.placementStartup,
-              savedLayout,
-              panelDefinitions,
-              subagentStop,
-              headerDetails,
-              { openPanelSlot: callbacks.openSlot, closePanelSlot: callbacks.closeSlot },
-            ),
-            notice:
-              !conversationVisible && chatProps.error
-                ? { error: chatProps.error, onDismissError: chatProps.onDismissError }
-                : undefined,
-            sessionKey: state.sessionKey,
-            agentId: currentAgentId,
-            presentation: {
-              owner: this.element,
-              isPresented: () => this.visuallyPresented,
-              preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
-            },
-          };
+        : this.renderPaneHeader(
+            sessionWorkspace,
+            selectedSession,
+            catalog,
+            agentWorkspace,
+            workspaceGit,
+            chatProps.placementStartup,
+            savedLayout,
+            panelDefinitions,
+            subagentStop,
+            headerDetails,
+            { openPanelSlot: callbacks.openSlot, closePanelSlot: callbacks.closeSlot },
+          );
+    if (paneHeader) {
+      paneHeader.header.onCreateClaw = onCreateClaw;
+    }
+    const header = paneHeader && {
+      header: paneHeader,
+      notice:
+        !conversationVisible && chatProps.error
+          ? { error: chatProps.error, onDismissError: chatProps.onDismissError }
+          : undefined,
+      sessionKey: state.sessionKey,
+      agentId: currentAgentId,
+      presentation: {
+        owner: this.element,
+        isPresented: () => this.visuallyPresented,
+        preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
+      },
+    };
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
       onRegionElementRef: (element) => {

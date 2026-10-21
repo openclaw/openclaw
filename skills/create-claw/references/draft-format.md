@@ -1,6 +1,6 @@
 # Private Claw draft format
 
-Write only the existing JSON file named in the `/skill create-claw` input. Keep these fields:
+Write only the current JSON draft named by `.openclaw/claw-drafts/current.json`. Keep these fields:
 
 ```json
 {

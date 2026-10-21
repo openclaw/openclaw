@@ -10,6 +10,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
@@ -18,7 +19,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { clawDraftUrl } from "./draft-navigation.ts";
 
 type Target = {
   agentId: string;
@@ -152,12 +152,10 @@ export class ClawCreatorFlow {
         client,
       };
       const generation = this.reset(target);
-      const reviewUrl = clawDraftUrl(this.context.basePath, target);
-      const message = `${created.prompt}\nReview: [Create a Claw](${reviewUrl})`;
       const ack = await client.request<{ status?: string }>("chat.send", {
         sessionKey: target.sessionKey,
         ...(isUiGlobalSessionKey(target.sessionKey) ? { agentId } : {}),
-        message,
+        message: created.prompt,
         deliver: false,
         idempotencyKey: generateUUID(),
       });
@@ -311,6 +309,15 @@ export class ClawCreatorFlow {
         this.publication = result;
         this.modalOpen = false;
         this.error = null;
+        showToast({
+          message: t(
+            result.publicationStatus === "published"
+              ? "clawsDraft.published"
+              : "clawsDraft.pending",
+          ),
+          actionLabel: t("clawsDraft.viewPublication"),
+          onAction: () => openExternalUrlSafe(result.url),
+        });
       }
     } catch (error) {
       if (this.current(target, generation)) {

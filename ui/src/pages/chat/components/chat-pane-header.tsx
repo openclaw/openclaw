@@ -123,6 +123,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
   onOpenAgentSettings?: (agentId: string) => void;
+  onCreateClaw?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
 };
 
@@ -611,6 +612,20 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
               <RunningSubagents count={props.runningSubagentCount} onOpen={props.onOpenSubagents} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
+            <Show when={props.onCreateClaw}>
+              <openclaw-tooltip
+                prop:content={`${t("clawsDraft.title")} · ${t("clawsDraft.railHint")}`}
+              >
+                <button
+                  class="btn btn--ghost btn--icon chat-icon-btn"
+                  type="button"
+                  aria-label={t("clawsDraft.title")}
+                  onClick={() => props.onCreateClaw?.()}
+                >
+                  <Icon name="share" />
+                </button>
+              </openclaw-tooltip>
+            </Show>
             <Show when={props.sharingControl}>
               {(sharing) => <ChatSessionSharing {...sharing()} />}
             </Show>

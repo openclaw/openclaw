@@ -123,7 +123,7 @@ export const clawsDraftsHandlers: GatewayRequestHandlers = {
         assertCurrent();
         options.respond(true, {
           ...draft,
-          prompt: clawDraftPrompt(draft.draftId),
+          prompt: clawDraftPrompt(),
         });
       } finally {
         source?.authorization?.release?.();

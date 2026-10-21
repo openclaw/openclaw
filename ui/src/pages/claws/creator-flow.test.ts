@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("Create Claw from the agent's main chat", () => {
-  it("sends one manual skill command to the existing main session, then reviews and publishes the selected archive", async () => {
+  it("invokes the bundled skill in the existing main session, then reviews and publishes the selected archive", async () => {
     vi.useFakeTimers();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
@@ -38,7 +38,7 @@ describe("Create Claw from the agent's main chat", () => {
           return {
             draftId,
             path: `/workspace/.openclaw/claw-drafts/${draftId}.json`,
-            prompt: `/skill create-claw Turn this agent into a shareable Claw. Draft: .openclaw/claw-drafts/${draftId}.json.`,
+            prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
           };
         case "chat.send":
           return { status: "started", runId: "run-1" };
@@ -91,8 +91,11 @@ describe("Create Claw from the agent's main chat", () => {
     });
     expect(requests.map((entry) => entry.method)).toEqual(["claws.drafts.create", "chat.send"]);
     expect(requests[1]!.params).toMatchObject({ sessionKey: mainKey, deliver: false });
-    expect(requests[1]!.params.message).toMatch(/^\/skill create-claw /);
-    expect(requests[1]!.params.message).toContain("Review: [Create a Claw]");
+    expect(requests[1]!.params.message).toBe(
+      "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+    );
+    expect(requests[1]!.params.message).not.toContain(draftId);
+    expect(requests[1]!.params.message).not.toContain("Review:");
     expect(requests[1]!.params).not.toHaveProperty("parentSessionKey");
     expect(requests[1]!.params).not.toHaveProperty("fork");
     expect(context.navigate).toHaveBeenCalledWith("chat", expect.anything());
@@ -111,6 +114,13 @@ describe("Create Claw from the agent's main chat", () => {
     await flow.publish();
     expect(flow.modalOpen).toBe(false);
     expect(flow.publication?.publicationStatus).toBe("pending");
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "clawsDraft.pending",
+        actionLabel: "clawsDraft.viewPublication",
+        onAction: expect.any(Function),
+      }),
+    );
     expect(requests.at(-1)).toMatchObject({
       method: "claws.drafts.publish",
       params: {
@@ -133,7 +143,10 @@ describe("Create Claw from the agent's main chat", () => {
           });
         }
         if (method === "claws.drafts.create") {
-          return Promise.resolve({ draftId, prompt: "/skill create-claw" });
+          return Promise.resolve({
+            draftId,
+            prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+          });
         }
         throw new Error(`Unexpected method ${method}`);
       });
@@ -152,7 +165,10 @@ describe("Create Claw from the agent's main chat", () => {
 
       const newRequest = vi.fn(async (method: string) => {
         if (method === "claws.drafts.create") {
-          return { draftId, prompt: "/skill create-claw" };
+          return {
+            draftId,
+            prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+          };
         }
         if (method === "chat.send") {
           return { status: "started" };
@@ -172,7 +188,11 @@ describe("Create Claw from the agent's main chat", () => {
       resolvePending(
         pendingMethod === "chat.send"
           ? { status: "started" }
-          : { draftId, prompt: "/skill create-claw" },
+          : {
+              draftId,
+              prompt:
+                "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+            },
       );
       await interrupted;
       expect(flow.busy).toBeNull();

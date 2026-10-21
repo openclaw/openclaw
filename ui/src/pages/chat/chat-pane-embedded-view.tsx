@@ -255,18 +255,6 @@ export function ClearCompanion(
 ) {
   return (
     <>
-      <Show when={props.onCreateClaw}>
-        <openclaw-tooltip prop:content={`${t("clawsDraft.title")} · ${t("clawsDraft.railHint")}`}>
-          <button
-            class="rail-header__action"
-            type="button"
-            aria-label={t("clawsDraft.title")}
-            onClick={() => props.onCreateClaw?.()}
-          >
-            <Icon name="box" />
-          </button>
-        </openclaw-tooltip>
-      </Show>
       <openclaw-tooltip prop:content={t("chat.rail.clear")}>
         <button
           ref={props.actionRef}

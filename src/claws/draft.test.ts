@@ -31,6 +31,9 @@ describe("agent-created Claw drafts", () => {
     await writeFile(join(workspaceDir, "USER.md"), "PRIVATE_PERSON_SENTINEL");
     await writeFile(join(workspaceDir, ".env"), "PRIVATE_CREDENTIAL_SENTINEL");
     const draft = await createClawDraft(workspaceDir);
+    expect(
+      JSON.parse(await readFile(join(workspaceDir, ".openclaw/claw-drafts/current.json"), "utf8")),
+    ).toEqual({ draftId: draft.draftId });
     await writeFile(draft.path, JSON.stringify(proposal));
 
     await using prepared = await prepareClawDraft({
@@ -233,7 +236,11 @@ describe("agent-created Claw drafts", () => {
       () => {},
       options,
     );
-    expect(result).toMatchObject({ name: review.name, publicationStatus: "pending" });
+    expect(result).toMatchObject({
+      name: review.name,
+      url: "https://registry.example.test/maker/claws/research-brief",
+      publicationStatus: "pending",
+    });
     expect(uploads).toHaveLength(1);
     const artifact = join(workspaceDir, "published.tgz");
     await writeFile(artifact, uploads[0]!.bytes);
