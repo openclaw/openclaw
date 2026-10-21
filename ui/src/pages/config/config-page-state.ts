@@ -778,12 +778,12 @@ export function createConfigPage(
       customThemeLabel: settings.customTheme?.label ?? null,
       customThemeSourceUrl: settings.customTheme?.sourceUrl ?? null,
       customThemeImportUrl: customThemeImportOwner.snapshot.url,
-      customThemeImportBusy: customThemeImportOwner.snapshot.busy,
+      customThemeImportCompletion: customThemeImportOwner.completedImport,
       customThemeImportMessage: customThemeImportOwner.snapshot.message,
       customThemeImportExpanded: customThemeImportOwner.snapshot.expanded,
       onCustomThemeImportUrlChange: (next: string) => customThemeImportOwner.setUrl(next),
-      onImportCustomTheme: () => {
-        void customThemeImportOwner.import({
+      onImportCustomTheme: () =>
+        customThemeImportOwner.import({
           config: context.runtimeConfig.state,
           hasCustomTheme: Boolean(settings.customTheme),
           readTheme: () => settings.theme,
@@ -795,8 +795,7 @@ export function createConfigPage(
               t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),
             imported: (label) => t("configPage.themeImported", { name: label }),
           },
-        });
-      },
+        }),
       onClearCustomTheme: () => {
         customThemeImportOwner.clear({
           apply: () =>
