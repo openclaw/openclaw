@@ -1952,10 +1952,37 @@ not imply event replay. These scenarios isolate RPC costs; they do not generate
 background session activity at production rates.
 
 Every measured scenario records per-method request-to-response p50/p99, call rate,
-and uncompressed wire response bytes. Handler and worker queue timings remain in
+and uncompressed wire response bytes. Transcript samples also report
+`chatDeltaDeliveryMs`: the Gateway-assigned chat-delta message timestamp to each
+subscriber receipt, including server delivery queues and client parsing. Both
+processes run on the same host; this is not internet latency. Handler and worker queue timings remain in
 Gateway diagnostics. Whole-window CPU/allocation divided by source-event or
 socket-delivery counts is a workload-normalized cost, not isolated encode/send
 cost. Use CPU profiles when attributing broadcast work.
+
+The default transcript-broadcast clients use direct loopback ingress, which does
+not negotiate compression. Add `--compressed` to use one synthetic trusted-proxy
+identity over loopback and exercise negotiated permessage-deflate. Add
+`--distinct-viewers` instead to use a separate admitted synthetic identity per
+client; this also enables compressed ingress. Both modes verify trusted-proxy
+authentication, negotiated compression, and the expected user-profile count.
+They configure only the generated Gateway fixture and use documentation-only
+forwarded addresses; no real proxy, account, or external connection is involved.
+Use the same mode on both sides of a comparison. These modes support only
+`transcript-broadcast` without `--mixed-rpc`.
+
+Use `--transport-counts` in a separate transcript-broadcast pass to attribute
+`Buffer.concat` calls and copied bytes by source call site, and count outbound
+`Socket._write`/`Socket._writev` submissions on the isolated Gateway port. Each
+sample records the counters beside its event counts; divide bytes and submissions
+by the validated source-event or delivery count as appropriate. Batched writes
+also record their segment count. These are native socket submissions, not kernel
+syscall counts, and exclude worker isolates and other socket ports. Stack capture
+adds substantial allocation and CPU overhead, so this mode rejects allocation,
+CPU, GC, and diagnostics profiling flags. Its timing and heap figures must not be
+used as acceptance results. Compare separate uninstrumented or equally profiled
+A/B runs for those metrics. The private diagnostics IPC acknowledgment bounds the
+counted workload; setup, warmup, and report serialization remain outside it.
 
 Add `--workload-cpu-profile` to capture the full measured workload in the Gateway
 main isolate. Each sample's `workloadCpuProfile` includes the full

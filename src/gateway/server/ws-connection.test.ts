@@ -510,7 +510,7 @@ it.each(["direct", "broadcast", "preauth"])("bounds %s shutdown", async (deliver
   );
 });
 
-it("batches a broadcast burst into one socket write while preserving response order", async () => {
+it("corks a broadcast burst while preserving frame bytes, response order and backlog", async () => {
   const pair = await openSocketPair();
   const { socket: liveSocket, request, peer } = pair;
   const writes = vi.spyOn(request.socket, "write");
@@ -548,15 +548,29 @@ it("batches a broadcast burst into one socket write while preserving response or
     { type: "res", id: "between", ok: true },
     { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
   ]);
-  expect(writes).toHaveBeenCalledTimes(1);
-  expect(writes.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
+  const wire = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
+  const expected = [
+    '{"type":"event","event":"tick","payload":{"value":1},"seq":1}',
+    '{"type":"event","event":"tick","payload":{"value":2},"seq":2}',
+    '{"type":"res","id":"between","ok":true}',
+    '{"type":"event","event":"tick","payload":{"value":3},"seq":3}',
+  ];
+  expect(wire).toEqual(
+    Buffer.concat(
+      expected.flatMap((json) => [Buffer.from([0x81, json.length]), Buffer.from(json)]),
+    ),
+  );
+  expect([...liveClients][0]!.socket.bufferedAmount).toBe(0);
 });
 
 it.each(["closing", "failed-send"] as const)("retires both peers after %s", async (failure) => {
   const pair = await openSocketPair();
   const { socket: liveSocket, peer } = pair;
 
-  const handler = await connectWs({ socket: liveSocket as unknown as TestSocket });
+  const handler = await connectWs({
+    socket: liveSocket as unknown as TestSocket,
+    requestSocket: pair.request.socket,
+  });
 
   handler.setClient(makeClient(liveSocket, "real-closing-client"));
 
@@ -564,7 +578,7 @@ it.each(["closing", "failed-send"] as const)("retires both peers after %s", asyn
     liveSocket.close(1000, "real close race");
     expect(liveSocket.readyState).toBe(Ws.WebSocket.CLOSING);
   } else {
-    vi.spyOn(liveSocket, "send").mockImplementationOnce(() => {
+    vi.spyOn(pair.request.socket, "write").mockImplementationOnce(() => {
       throw new Error("response transport unavailable");
     });
     vi.spyOn(liveSocket, "close").mockImplementationOnce(() => {
