@@ -46,19 +46,6 @@ function mockObjectArg(mock: { mock: { calls: unknown[][] } }): Record<string, u
   return arg as Record<string, unknown>;
 }
 
-async function expectNetworkPolicy(baseUrls: readonly string[], allow: true | undefined) {
-  for (const baseUrl of baseUrls) {
-    await generateAt(baseUrl);
-    expect(mockObjectArg(resolveProviderHttpRequestConfigMock), baseUrl).toHaveProperty(
-      "allowPrivateNetwork",
-      allow,
-    );
-    if (!allow) {
-      expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(false);
-    }
-  }
-}
-
 describe("litellm image generation provider", () => {
   beforeEach(() => {
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "litellm-key" });
@@ -115,31 +102,28 @@ describe("litellm image generation provider", () => {
     ).toEqual(inputImages);
   });
 
-  it("auto-allows private network for loopback-style baseUrls", async () => {
-    await expectNetworkPolicy(
-      [
-        "http://127.255.255.254:4000",
-        "http://[::1]:4000",
-        "http://[0:0:0:0:0:0:0:1]:4000",
-        "http://host.docker.internal:4000",
-        "https://localhost:4000",
-        "https://LOCALHOST:4000",
-        "http://proxy.localhost:4000",
-      ],
-      true,
+  it.each([
+    ["http://127.255.255.254:4000", true],
+    ["http://[::1]:4000", true],
+    ["http://[0:0:0:0:0:0:0:1]:4000", true],
+    ["http://host.docker.internal:4000", true],
+    ["https://localhost:4000", true],
+    ["https://LOCALHOST:4000", true],
+    ["http://proxy.localhost:4000", true],
+    ["http://192.168.5.10:4000", undefined],
+    ["http://printer.local:4000", undefined],
+    ["http://127.evil.com:4000", undefined],
+    ["http://[::ffff:127.0.0.1]:4000", undefined],
+    ["https://evil.example.com/?target=host.docker.internal", undefined],
+    ["https://evil.example.com/host.docker.internal/foo", undefined],
+    ["https://public-api.openai.com/v1", undefined],
+  ] as const)("sets automatic private-network policy for %s to %s", async (baseUrl, allow) => {
+    await generateAt(baseUrl);
+    expect(mockObjectArg(resolveProviderHttpRequestConfigMock)).toHaveProperty(
+      "allowPrivateNetwork",
+      allow,
     );
-  });
-
-  it("requires explicit private-network opt-in for LAN and internal baseUrls", async () => {
-    await expectNetworkPolicy(
-      [
-        "http://192.168.5.10:4000",
-        "http://printer.local:4000",
-        "http://127.evil.com:4000",
-        "http://[::ffff:127.0.0.1]:4000",
-      ],
-      undefined,
-    );
+    expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(allow === true);
   });
 
   it("honors explicit private-network opt-in for a non-loopback hostname", async () => {
@@ -149,17 +133,5 @@ describe("litellm image generation provider", () => {
     expect(config.allowPrivateNetwork).toBeUndefined();
     expect(config.request).toEqual({ allowPrivateNetwork: true });
     expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
-  });
-
-  it("does not allow private network for public hosts that embed private strings in the URL", async () => {
-    // Only the parsed hostname can grant the loopback exemption.
-    await expectNetworkPolicy(
-      [
-        "https://evil.example.com/?target=host.docker.internal",
-        "https://evil.example.com/host.docker.internal/foo",
-        "https://public-api.openai.com/v1",
-      ],
-      undefined,
-    );
   });
 });

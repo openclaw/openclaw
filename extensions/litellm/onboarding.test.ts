@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   capturePluginRegistration,
   createTestWizardPrompter,
@@ -9,11 +8,14 @@ import {
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { WizardCancelledError } from "openclaw/plugin-sdk/setup";
 import { Agent, EnvHttpProxyAgent, ProxyAgent } from "undici";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
 const discoveryFetch = vi.fn();
+function unexpectedAuth(): never {
+  throw new Error("Unexpected browser/OAuth auth");
+}
 
 const reply = (body: unknown, status = 200) => Response.json(body, { status });
 function expectModel(config: OpenClawConfig, modelId: string) {
@@ -28,25 +30,7 @@ function expectDiscoveryKey(key: string) {
   );
 }
 
-function createPrompter(
-  params: {
-    baseUrl?: string;
-    selected?: string;
-    cancel?: boolean;
-    manualModel?: string;
-  } = {},
-) {
-  async function selectOption<T>(prompt: { options: Array<{ value: T }> }): Promise<T> {
-    if (params.cancel) {
-      throw new WizardCancelledError();
-    }
-    const option =
-      prompt.options.find(({ value }) => value === params.selected) ?? prompt.options[0];
-    if (!option) {
-      throw new Error("Expected a selectable option");
-    }
-    return option.value;
-  }
+function createPrompter(params: { baseUrl?: string; manualModel?: string } = {}) {
   const text = vi.fn(async (prompt: Parameters<WizardPrompter["text"]>[0]) => {
     if (prompt.message === "LiteLLM proxy base URL") {
       return params.baseUrl ?? "http://127.0.0.1:4000/v1";
@@ -56,30 +40,27 @@ function createPrompter(
     }
     return params.manualModel ?? "local-qwen";
   });
-  const prompter = createTestWizardPrompter({ select: selectOption, text });
+  const prompter = createTestWizardPrompter({ text });
   vi.spyOn(prompter, "select");
   return prompter;
 }
 
 async function configure(
   params: {
-    config?: OpenClawConfig;
     prompter?: WizardPrompter;
     ref?: boolean;
     credentialOnly?: boolean;
     assertCurrent?: () => void;
   } = {},
 ) {
-  const config = params.config ?? {};
+  const config = {};
   const provider = requireRegisteredProvider(
     capturePluginRegistration(plugin).providers,
     "litellm",
   );
   const auth = provider.auth[0];
-  if (!auth) {
-    throw new Error("Expected LiteLLM API-key auth");
-  }
-  const context: ProviderAuthContext = {
+  assert(auth, "Expected LiteLLM API-key auth");
+  const result = await auth.run({
     config,
     opts: params.ref ? {} : { litellmApiKey: "resolved-fixture-key" },
     env: params.ref ? { LITELLM_TEST_KEY: "resolved-reference-key" } : {},
@@ -89,25 +70,19 @@ async function configure(
     credentialOnly: params.credentialOnly,
     assertCurrent: params.assertCurrent,
     isRemote: false,
-    openUrl: async () => {
-      throw new Error("Unexpected browser auth");
-    },
-    oauth: {
-      createVpsAwareHandlers: () => {
-        throw new Error("Unexpected OAuth");
-      },
-    },
-  };
-  const result = await auth.run(context);
+    openUrl: unexpectedAuth,
+    oauth: { createVpsAwareHandlers: unexpectedAuth },
+  });
   return { result, config: applyProviderAuthConfigPatch(config, result.configPatch, result) };
 }
 
 describe("LiteLLM discovery-backed onboarding", () => {
   beforeEach(() => {
-    discoveryFetch.mockReset();
-    discoveryFetch.mockImplementation(async () =>
-      reply({ data: [{ id: "local-qwen" }, { id: "team/second-model" }] }),
-    );
+    discoveryFetch
+      .mockReset()
+      .mockImplementation(async () =>
+        reply({ data: [{ id: "local-qwen" }, { id: "team/second-model" }] }),
+      );
     vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
       Agent,
       EnvHttpProxyAgent,
@@ -132,36 +107,39 @@ describe("LiteLLM discovery-backed onboarding", () => {
   });
 
   it("preserves a selected proxy alias containing a slash", async () => {
-    const { result, config } = await configure({
-      prompter: createPrompter({ selected: "team/second-model" }),
+    const prompter = createPrompter();
+    vi.mocked(prompter.select).mockImplementation(async ({ options }) => {
+      const option = options.find(({ value }) => value === "team/second-model");
+      assert(option, "Expected proxy alias option");
+      return option.value;
     });
+    const { result, config } = await configure({ prompter });
 
     expect(result.defaultModel).toBe("litellm/team/second-model");
     expectModel(config, "team/second-model");
   });
 
   it.each([
-    { failure: "HTTP", response: () => reply({ error: "unavailable" }, 503), reason: /503/ },
-    { failure: "empty", response: () => reply({ data: [] }), reason: /no models|empty/i },
-    {
-      failure: "malformed",
-      response: () => reply({ unexpected: [] }),
-      reason: /invalid|malformed/i,
-    },
-  ])("shows the $failure failure reason before manual entry", async ({ response, reason }) => {
-    discoveryFetch.mockImplementation(async () => response());
-    const prompter = createPrompter({ manualModel: "manual-model" });
-    const { result, config } = await configure({ prompter });
+    ["HTTP", { error: "unavailable" }, 503, /503/],
+    ["empty", { data: [] }, 200, /no models|empty/i],
+    ["malformed", { unexpected: [] }, 200, /invalid|malformed/i],
+  ] as const)(
+    "shows the %s failure reason before manual entry",
+    async (_failure, body, status, reason) => {
+      discoveryFetch.mockImplementation(async () => reply(body, status));
+      const prompter = createPrompter({ manualModel: "manual-model" });
+      const { result, config } = await configure({ prompter });
 
-    expect(prompter.note).toHaveBeenCalledWith(expect.stringMatching(reason), expect.any(String));
-    expect(result.defaultModel).toBe("litellm/manual-model");
-    expectModel(config, "manual-model");
-  });
+      expect(prompter.note).toHaveBeenCalledWith(expect.stringMatching(reason), expect.any(String));
+      expect(result.defaultModel).toBe("litellm/manual-model");
+      expectModel(config, "manual-model");
+    },
+  );
 
   it("propagates cancellation instead of applying the hosted default", async () => {
-    await expect(configure({ prompter: createPrompter({ cancel: true }) })).rejects.toBeInstanceOf(
-      WizardCancelledError,
-    );
+    const prompter = createPrompter();
+    vi.mocked(prompter.select).mockRejectedValue(new WizardCancelledError());
+    await expect(configure({ prompter })).rejects.toBeInstanceOf(WizardCancelledError);
   });
 
   it("propagates revoked authority instead of offering manual entry", async () => {
