@@ -19,31 +19,6 @@ const lint = (cfg: OpenClawConfig) =>
 const detect = (cfg: OpenClawConfig) => check.detect(context(cfg));
 
 describe("core/doctor/skill-workshop-tool-policy", () => {
-  it.each([true, false])("respects a reader's Workshop opt-out (deny=%s)", async (denied) => {
-    const result = await lint({
-      agents: {
-        entries: {
-          reader: {
-            tools: { profile: "minimal", ...(denied ? { deny: ["group:agents"] } : {}) },
-          },
-        },
-      },
-    });
-
-    expect(result.findings).toEqual(
-      denied
-        ? []
-        : [
-            expect.objectContaining({
-              severity: "warning",
-              target: "reader",
-              path: "agents.entries.reader.tools.profile",
-              fixHint: 'Add agents.entries.reader.tools.alsoAllow: ["skill_workshop"].',
-            }),
-          ],
-    );
-  });
-
   it("warns when autonomous capture is enabled but policy hides its tool", async () => {
     const findings = await detect({ tools: { profile: "messaging" } });
 
@@ -65,6 +40,7 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
         entries: {
           main: { tools: { profile: "coding" } },
           helper: { tools: { profile: "messaging" } },
+          reader: { tools: { profile: "minimal", deny: ["group:agents"] } },
           third: { tools: { profile: "coding" } },
         },
       },
@@ -75,6 +51,9 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
         severity: "warning",
         target: "helper",
         path: "agents.entries.helper.tools.profile",
+        message:
+          'agents.entries.helper.tools.profile: "messaging" does not include "skill_workshop".',
+        fixHint: 'Add agents.entries.helper.tools.alsoAllow: ["skill_workshop"].',
       }),
     ]);
   });

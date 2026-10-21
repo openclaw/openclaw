@@ -31,37 +31,33 @@ async function fingerprint(kind: "sqlite" | "widgets-data" = "sqlite") {
 const detect = (cfg: OpenClawConfig = {}) => check.detect({ ...context(cfg), mode: "lint" });
 const repair = (cfg: OpenClawConfig = {}) => check.repair!(context(cfg), []);
 
-it("previews and removes the stale plugin state directory", async () => {
-  await fingerprint();
-  const findings = await detect();
-  expect(findings).toEqual([
-    expect.objectContaining({
-      checkId: "core/doctor/removed-workspaces-state",
-      path: staleDir,
-      severity: "warning",
-    }),
-  ]);
-  await expect(check.detect(context(), { paths: [join(root, "other")] })).resolves.toEqual([]);
-  const effect = { dryRunSafe: false, kind: "state", target: staleDir };
-  expect(await check.repair!({ ...context(), dryRun: true }, findings)).toMatchObject({
-    changes: [expect.stringContaining("Would remove retired Workspaces plugin state")],
-    effects: [{ ...effect, action: "would-remove-retired-workspaces-state" }],
-  });
-  await expect(fs.stat(staleDir)).resolves.toBeDefined();
-  expect(await check.repair!(context(), findings)).toMatchObject({
-    changes: [expect.stringContaining("Removed retired Workspaces plugin state")],
-    effects: [{ ...effect, action: "remove-retired-workspaces-state" }],
-  });
-  await expect(fs.stat(staleDir)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(detect()).resolves.toEqual([]);
-});
-
-it("detects the widgets/data plugin layout fingerprint", async () => {
-  await fingerprint("widgets-data");
-  await expect(detect()).resolves.toEqual([
-    expect.objectContaining({ checkId: "core/doctor/removed-workspaces-state", path: staleDir }),
-  ]);
-});
+it.each(["sqlite", "widgets-data"] as const)(
+  "previews and removes the %s plugin state",
+  async (kind) => {
+    await fingerprint(kind);
+    const findings = await detect();
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/removed-workspaces-state",
+        path: staleDir,
+        severity: "warning",
+      }),
+    ]);
+    await expect(check.detect(context(), { paths: [join(root, "other")] })).resolves.toEqual([]);
+    const effect = { dryRunSafe: false, kind: "state", target: staleDir };
+    expect(await check.repair!({ ...context(), dryRun: true }, findings)).toMatchObject({
+      changes: [expect.stringContaining("Would remove retired Workspaces plugin state")],
+      effects: [{ ...effect, action: "would-remove-retired-workspaces-state" }],
+    });
+    await expect(fs.stat(staleDir)).resolves.toBeDefined();
+    expect(await check.repair!(context(), findings)).toMatchObject({
+      changes: [expect.stringContaining("Removed retired Workspaces plugin state")],
+      effects: [{ ...effect, action: "remove-retired-workspaces-state" }],
+    });
+    await expect(fs.stat(staleDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(detect()).resolves.toEqual([]);
+  },
+);
 
 it("ignores a plain user directory without plugin fingerprints", async () => {
   const notes = join(staleDir, "notes.md");
