@@ -113,19 +113,14 @@ const direct = (phases?: Phases): AgentHarnessCompletionDelivery => ({
   path: "direct",
   ...(phases ? { phases } : {}),
 });
+const directPhase = (delivered: boolean): Phases => [
+  { phase: "direct-primary", delivered, path: delivered ? "direct" : "none" },
+];
 it.each<[string, AgentHarnessCompletionDelivery, boolean]>([
   ["direct result without phases", direct(), true],
   ["direct result with no executed phase", direct([]), false],
-  [
-    "completed direct phase",
-    direct([{ phase: "direct-primary", delivered: true, path: "direct" }]),
-    true,
-  ],
-  [
-    "unsuccessful direct phase",
-    direct([{ phase: "direct-primary", delivered: false, path: "none" }]),
-    false,
-  ],
+  ["completed direct phase", direct(directPhase(true)), true],
+  ["unsuccessful direct phase", direct(directPhase(false)), false],
   [
     "steer evidence does not prove direct delivery",
     direct([

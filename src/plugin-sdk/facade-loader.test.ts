@@ -284,7 +284,11 @@ describe("cold facade activation", () => {
   const moduleUrl = (file: string) => pathToFileURL(path.resolve(file)).href;
 
   const fixtureLifetime = createFixtureLifetime();
-  afterEach(() => fixtureLifetime.cleanup());
+  afterEach(async () => {
+    resetFacadeRuntimeStateForTest();
+    vi.unstubAllEnvs();
+    await fixtureLifetime.cleanup();
+  });
 
   function createFacade(id: string) {
     const bundledRoot = path.resolve("dist-runtime", "extensions");
@@ -302,18 +306,13 @@ describe("cold facade activation", () => {
     const root = createFacade("async-cold-owner");
     resetFacadeRuntimeStateForTest();
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", root);
-    try {
-      const pending = loadActivatedBundledPluginPublicSurfaceModule({
-        dirName: "fixture",
-        artifactBasename: "api.js",
-      });
-      expect(listImportedBundledPluginFacadeIds()).toEqual([]);
-      await expect(pending).resolves.toEqual({ marker: "cold" });
-      expect(listImportedBundledPluginFacadeIds()).toEqual(["async-cold-owner"]);
-    } finally {
-      resetFacadeRuntimeStateForTest();
-      vi.unstubAllEnvs();
-    }
+    const pending = loadActivatedBundledPluginPublicSurfaceModule({
+      dirName: "fixture",
+      artifactBasename: "api.js",
+    });
+    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    await expect(pending).resolves.toEqual({ marker: "cold" });
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["async-cold-owner"]);
   });
 
   it("uses the live snapshot during cold synchronous activation", async ({ signal }) => {

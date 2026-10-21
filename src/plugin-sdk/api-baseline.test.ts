@@ -108,23 +108,19 @@ async function renderPrivateDeclarationFixture(params?: {
   optionalResult?: boolean;
 }) {
   return renderSourceFixture({
-    "fixture.ts": [
-      'import type { FixtureOptionLeaf } from "./fixture-option.js";',
-      'import type { FixtureResultLeaf } from "./fixture-result.js";',
-      `${params?.comments ? "/** Options docs */ " : ""}type FixtureOptions = { nested: FixtureOptionLeaf };`,
-      "type FixtureResult = { nested: FixtureResultLeaf };",
-      "export declare function createFixture(options: FixtureOptions): FixtureResult;",
-      `${params?.comments ? "/** Error docs */ " : ""}export class FixtureError extends Error {`,
-      "  readonly status: number;",
-      '  constructor(status: number) { super("fixture"); this.status = status; }',
-      "  getStatus() { return this.status; }",
-      "}",
-    ].join("\n"),
-    "fixture-option.ts": [
-      'import type { FixtureResultLeaf } from "./fixture-result.js";',
-      'import type { FixtureExternal } from "fixture-external";',
-      `export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: string; result?: FixtureResultLeaf; external?: FixtureExternal };`,
-    ].join("\n"),
+    "fixture.ts": `import type { FixtureOptionLeaf } from "./fixture-option.js";
+import type { FixtureResultLeaf } from "./fixture-result.js";
+${params?.comments ? "/** Options docs */ " : ""}type FixtureOptions = { nested: FixtureOptionLeaf };
+type FixtureResult = { nested: FixtureResultLeaf };
+export declare function createFixture(options: FixtureOptions): FixtureResult;
+${params?.comments ? "/** Error docs */ " : ""}export class FixtureError extends Error {
+  readonly status: number;
+  constructor(status: number) { super("fixture"); this.status = status; }
+  getStatus() { return this.status; }
+}`,
+    "fixture-option.ts": `import type { FixtureResultLeaf } from "./fixture-result.js";
+import type { FixtureExternal } from "fixture-external";
+export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: string; result?: FixtureResultLeaf; external?: FixtureExternal };`,
     "fixture-result.ts": 'export type { FixtureResultLeaf } from "./fixture-result-shape.js";\n',
     "fixture-result-shape.ts": importedType(
       "FixtureOptionLeaf",
@@ -151,13 +147,11 @@ async function renderDependencyDeclarationFixture(dependencyDeclaration: string)
 function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean) {
   const cwd = tempDirs.make("openclaw-plugin-sdk-tuple-");
   const fileName = path.join(cwd, "fixture.ts");
-  const source = [
-    "interface Array<T> { [index: number]: T; readonly length: number }",
-    "interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }",
-    `type Warmup = ${warmup};`,
-    `const VALUES = ${tuple};`,
-    "type Value = (typeof VALUES)[number];",
-  ].join("\n");
+  const source = `interface Array<T> { [index: number]: T; readonly length: number }
+interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }
+type Warmup = ${warmup};
+const VALUES = ${tuple};
+type Value = (typeof VALUES)[number];`;
   const native = nativeProject(
     cwd,
     [fileName],
@@ -519,16 +513,12 @@ it("keeps hashes stable when unqualified declarations move", async () => {
 it("includes globals from side-effect imports in closure hashes", async () => {
   const render = (optionalValue: boolean) =>
     renderSourceFixture({
-      "fixture.ts": [
-        'import "./ambient.js";',
-        "export declare function createFixture(value: OpenClawBaselineFixtureGlobal): void;",
-      ].join("\n"),
-      "ambient.ts": [
-        "declare global {",
-        `  interface OpenClawBaselineFixtureGlobal { value${optionalValue ? "?" : ""}: string }`,
-        "}",
-        "export {};",
-      ].join("\n"),
+      "fixture.ts":
+        'import "./ambient.js";\nexport declare function createFixture(value: OpenClawBaselineFixtureGlobal): void;',
+      "ambient.ts": `declare global {
+  interface OpenClawBaselineFixtureGlobal { value${optionalValue ? "?" : ""}: string }
+}
+export {};`,
     });
   const baseline = await render(false);
   const changed = await render(true);

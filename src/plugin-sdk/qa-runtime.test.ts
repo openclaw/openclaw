@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { LiveTransportQaCliRegistrationOptions } from "./qa-runtime.js";
+import type { LiveTransportQaCliRegistrationOptions, QaDockerRunCommand } from "./qa-runtime.js";
 
 const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const loadBundledPluginManifestRegistry = vi.hoisted(() => vi.fn());
@@ -69,9 +69,21 @@ async function occupyLoopbackPort(): Promise<{ close: () => Promise<void>; port:
   };
 }
 
-async function dockerRuntime() {
-  return module.createQaDockerRuntime({ auditContext: "qa-test" });
-}
+const dockerRuntime = () => module.createQaDockerRuntime({ auditContext: "qa-test" });
+const healthUrl = "http://127.0.0.1:18789/healthz";
+const composeFile = "/tmp/docker-compose.yml";
+const repoRoot = "/repo";
+const commandOutput = (stdout: string) => ({ stdout, stderr: "" });
+const registerCli = (
+  run: LiveTransportQaCliRegistrationOptions["run"],
+  overrides: Partial<LiveTransportQaCliRegistrationOptions> = {},
+) => {
+  const qa = new Command();
+  module
+    .createLiveTransportQaCliRegistration({ ...registrationOptions(run), ...overrides })
+    .register(qa);
+  return (args: string[] = []) => qa.parseAsync(["node", "openclaw", "telegram", ...args]);
+};
 
 function registrationOptions(
   run: LiveTransportQaCliRegistrationOptions["run"],
@@ -134,26 +146,21 @@ it("runs a plugin-owned transport through the private QA suite host", async () =
 
 it("registers shared live transport QA CLI options", async () => {
   const run = vi.fn(async () => {});
-  const qa = new Command();
+  const parse = registerCli(run, {
+    credentialFileHelp: "Private JSON credential file",
+    credentialOptions: {
+      sourceDescription: "Credential source for Telegram QA",
+      roleDescription: "Credential role for Telegram QA",
+    },
+    defaultProviderMode: "live-frontier",
+    description: "Run Telegram QA",
+    listScenariosHelp: "List Telegram scenarios",
+    profileHelp: "QA profile",
+    failFastHelp: "Stop after first failure",
+    allowFailuresHelp: "Allow failures",
+  });
 
-  module
-    .createLiveTransportQaCliRegistration({
-      ...registrationOptions(run),
-      credentialFileHelp: "Private JSON credential file",
-      credentialOptions: {
-        sourceDescription: "Credential source for Telegram QA",
-        roleDescription: "Credential role for Telegram QA",
-      },
-      defaultProviderMode: "live-frontier",
-      description: "Run Telegram QA",
-      listScenariosHelp: "List Telegram scenarios",
-      profileHelp: "QA profile",
-      failFastHelp: "Stop after first failure",
-      allowFailuresHelp: "Allow failures",
-    })
-    .register(qa);
-
-  await qa.parseAsync(["node", "openclaw", "telegram"]);
+  await parse();
   expect(run).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
   run.mockClear();
 
@@ -173,10 +180,7 @@ it("registers shared live transport QA CLI options", async () => {
     ["credential-source", "convex", "credentialSource"],
     ["credential-role", "maintainer", "credentialRole"],
   ] as const;
-  await qa.parseAsync([
-    "node",
-    "openclaw",
-    "telegram",
+  await parse([
     ...mappings.flatMap(([flag, value]) => (value === true ? [`--${flag}`] : [`--${flag}`, value])),
     "--scenario",
     "alpha",
@@ -192,20 +196,15 @@ it("registers shared live transport QA CLI options", async () => {
 });
 
 it("reports a blank dedicated QA scenario selection without dispatching", async () => {
-  const qa = new Command();
   const dispatchedScenarioIds: string[][] = [];
-  module
-    .createLiveTransportQaCliRegistration(
-      registrationOptions(async (options) => {
-        dispatchedScenarioIds.push(options.scenarioIds ?? []);
-      }),
-    )
-    .register(qa);
+  const parse = registerCli(async (options) => {
+    dispatchedScenarioIds.push(options.scenarioIds ?? []);
+  });
 
   const previousExitCode = process.exitCode;
   const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   try {
-    await qa.parseAsync(["node", "openclaw", "telegram", "--scenario", " \t "]);
+    await parse(["--scenario", " \t "]);
 
     expect(stderrWrite).toHaveBeenCalledWith(
       "--scenario must name at least one non-empty scenario id.\n",
@@ -219,18 +218,17 @@ it("reports a blank dedicated QA scenario selection without dispatching", async 
 });
 
 it("shares Docker health parsing across array and jsonl compose output", async () => {
-  const runtime = await dockerRuntime();
+  const runtime = dockerRuntime();
   const dockerPsOutputs = ['[{"Health":"starting"}]', '{"State":"running"}\n'];
-  const runCommand = vi.fn(async () => ({
-    stdout: dockerPsOutputs.shift() ?? '{"State":"running"}',
-    stderr: "",
-  }));
+  const runCommand = vi.fn(async () =>
+    commandOutput(dockerPsOutputs.shift() ?? '{"State":"running"}'),
+  );
   const sleepImpl = vi.fn(async () => {});
 
   await runtime.waitForDockerServiceHealth(
     "homeserver",
-    "/tmp/docker-compose.yml",
-    "/repo",
+    composeFile,
+    repoRoot,
     runCommand,
     sleepImpl,
   );
@@ -240,13 +238,10 @@ it("shares Docker health parsing across array and jsonl compose output", async (
 });
 
 it("cancels compose service health probe response bodies", async () => {
-  const runtime = await dockerRuntime();
-  const runCommand = vi.fn(async (_command: string, args: string[]) => {
-    if (args.includes("ps")) {
-      return { stdout: "qa-gateway-one\n", stderr: "" };
-    }
-    return { stdout: "172.18.0.4\n", stderr: "" };
-  });
+  const runtime = dockerRuntime();
+  const runCommand = vi.fn<QaDockerRunCommand>(async (_command, args) =>
+    commandOutput(args.includes("ps") ? "qa-gateway-one\n" : "172.18.0.4\n"),
+  );
   const probe = cancelTrackedFetchResponse(true);
   const fetchImpl = vi.fn(async () => probe.response);
 
@@ -254,8 +249,8 @@ it("cancels compose service health probe response bodies", async () => {
     runtime.resolveComposeServiceUrl(
       "gateway",
       18789,
-      "/tmp/docker-compose.yml",
-      "/repo",
+      composeFile,
+      repoRoot,
       runCommand,
       fetchImpl,
     ),
@@ -270,23 +265,23 @@ it("cancels the guarded default health response before stripping its body", asyn
     "fetch",
     vi.fn(async () => response),
   );
-  const runtime = await dockerRuntime();
+  const runtime = dockerRuntime();
 
-  await expect(runtime.fetchHealthUrl("http://127.0.0.1:18789/healthz")).resolves.toEqual({
+  await expect(runtime.fetchHealthUrl(healthUrl)).resolves.toEqual({
     ok: false,
   });
   expect(cancel).toHaveBeenCalledOnce();
 });
 
 it("cancels waitForHealth response bodies after each probe", async () => {
-  const runtime = await dockerRuntime();
+  const runtime = dockerRuntime();
   const first = cancelTrackedFetchResponse(false);
   const second = cancelTrackedFetchResponse(true);
   const responses = [first.response, second.response];
   const fetchImpl = vi.fn(async () => responses.shift() ?? second.response);
   const sleepImpl = vi.fn(async () => {});
 
-  await runtime.waitForHealth("http://127.0.0.1:18789/healthz", {
+  await runtime.waitForHealth(healthUrl, {
     fetchImpl,
     sleepImpl,
     timeoutMs: 1000,
@@ -299,7 +294,7 @@ it("cancels waitForHealth response bodies after each probe", async () => {
 });
 
 it("bounds a stalled waitForHealth probe by the remaining overall deadline", async () => {
-  const runtime = await dockerRuntime();
+  const runtime = dockerRuntime();
   let probeSignal: AbortSignal | undefined;
   const fetchImpl = vi.fn(async (_input: string, init?: Pick<RequestInit, "signal">) => {
     probeSignal = init?.signal ?? undefined;
@@ -315,7 +310,7 @@ it("bounds a stalled waitForHealth probe by the remaining overall deadline", asy
   const startedAt = Date.now();
 
   await expect(
-    runtime.waitForHealth("http://127.0.0.1:18789/healthz", {
+    runtime.waitForHealth(healthUrl, {
       fetchImpl,
       sleepImpl,
       timeoutMs: 25,
@@ -387,8 +382,8 @@ function contribution(entry?: ReturnType<typeof registration>) {
   };
 }
 
-function expectPrivateEnv(env: NodeJS.ProcessEnv | undefined, sourceRoot: string) {
-  expect(env).toMatchObject({
+function privateEnv(sourceRoot: string) {
+  return expect.objectContaining({
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
   });
@@ -417,10 +412,7 @@ describe("QA runner discovery", () => {
       artifactBasename: "runtime-api.js",
       ...(sourceRoot
         ? {
-            env: expect.objectContaining({
-              OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-              OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
-            }),
+            env: privateEnv(sourceRoot),
           }
         : {}),
     });
@@ -432,9 +424,11 @@ describe("QA runner discovery", () => {
     loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(testApi);
 
     expect(runner.loadQaRunnerBundledPluginTestApi("matrix")).toBe(testApi);
-    const testApiCall = firstPublicSurfaceCall();
-    expect(testApiCall).toMatchObject({ dirName: "matrix", artifactBasename: "test-api.js" });
-    expectPrivateEnv(testApiCall?.env, sourceRoot);
+    expect(firstPublicSurfaceCall()).toMatchObject({
+      dirName: "matrix",
+      artifactBasename: "test-api.js",
+      env: privateEnv(sourceRoot),
+    });
   });
 
   it("reports the qa runtime as unavailable when the qa-lab surface is missing", async () => {
@@ -504,14 +498,12 @@ describe("QA runner discovery", () => {
     const manifestCall = loadBundledPluginManifestRegistry.mock.calls[0]?.[0] as
       | ManifestRegistryCall
       | undefined;
-    expectPrivateEnv(manifestCall?.env, sourceRoot);
-
-    const publicSurfaceCall = firstPublicSurfaceCall();
-    expect(publicSurfaceCall).toMatchObject({
+    expect(manifestCall).toMatchObject({ env: privateEnv(sourceRoot) });
+    expect(firstPublicSurfaceCall()).toMatchObject({
       dirName: "qa-example",
       artifactBasename: "qa-runner-api.js",
+      env: privateEnv(sourceRoot),
     });
-    expectPrivateEnv(publicSurfaceCall?.env, sourceRoot);
   });
 
   it("fails fast when two plugins declare the same qa runner command", async () => {

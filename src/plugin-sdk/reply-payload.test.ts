@@ -196,37 +196,26 @@ it("does not duplicate a caption when a media sender returns undefined", async (
   expect(sendText).not.toHaveBeenCalled();
 });
 
-it("falls back to text when every media URL is empty", async () => {
-  const sendMedia = vi.fn();
-  const sendText = sendTextResult();
-
-  const result = await sendPayload(
-    { text: "caption", mediaUrls: ["", ""] },
-    { sendMedia, sendText },
-    { text: "caption" },
-  );
-
-  expect(sendMedia).not.toHaveBeenCalled();
-  expect(sendText).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: "caption" }));
-  expect(result).toEqual(sent("caption"));
-});
-
-it("sends the full text when the adapter chunker returns no chunks", async () => {
-  const sendText = sendTextResult();
-  const onDeliveryResult = vi.fn();
-
-  const result = await sendPayload(
-    { text: "visible reply" },
-    { textChunkLimit: 64, chunker: () => [], sendText },
-    { onDeliveryResult },
-  );
-
-  expect(sendText).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ text: "visible reply" }),
-  );
-  expect(onDeliveryResult).toHaveBeenCalledWith(sent("visible reply"));
-  expect(result).toEqual(sent("visible reply"));
-});
+it.each([
+  ["empty media URLs", { mediaUrls: ["", ""] }, {}],
+  ["empty chunker", {}, { textChunkLimit: 64, chunker: () => [] }],
+] satisfies Array<[string, Partial<Options["ctx"]["payload"]>, Partial<Options["adapter"]>]>)(
+  "falls back to the full text with %s",
+  async (_name, payload, adapter) => {
+    const sendMedia = vi.fn();
+    const sendText = sendTextResult();
+    const onDeliveryResult = vi.fn();
+    const result = await sendPayload(
+      { text: "caption", ...payload },
+      { sendMedia, sendText, ...adapter },
+      { text: "caption", onDeliveryResult },
+    );
+    expect(sendMedia).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: "caption" }));
+    expect(onDeliveryResult).toHaveBeenCalledWith(sent("caption"));
+    expect(result).toEqual(sent("caption"));
+  },
+);
 
 it("reports each completed text chunk before a later chunk fails", async () => {
   const sendText = vi
