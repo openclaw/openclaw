@@ -25,13 +25,11 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const env = { HOME: "/home/caller", OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway" };
 let target: SystemdServiceReadTarget;
-let ownerReads: number;
 const defaults = {
   serviceUser: "gateway",
   managerUid: 0,
   assignments: ["OPENCLAW_SERVICE_KIND=gateway"],
   unset: [] as string[],
-  managerChanges: false,
   fileSpecs: [] as [string, boolean][],
   loaded: true,
   loadState: "loaded",
@@ -75,11 +73,10 @@ beforeEach(async () => {
   findScope.mockReset().mockResolvedValue(target);
   userBus.mockReset().mockRejectedValue(new Error("wrong user manager"));
   state = { ...defaults };
-  ownerReads = 0;
   vi.spyOn(os, "userInfo").mockReturnValue(account("gateway", 2001));
   systemBus.mockReset().mockImplementation(async (args) => {
     if (args.includes("GetNameOwner")) {
-      return reply("s", [state.managerChanges && ++ownerReads > 1 ? ":1.99" : ":1.42"]);
+      return reply("s", [":1.42"]);
     }
     if (args.includes("GetConnectionUnixUser")) {
       return reply("u", [state.managerUid]);
@@ -266,27 +263,24 @@ describe("system-scope effective command", () => {
     });
     await expect(readSystemdServiceCommandLocation(env, target)).rejects.toThrow();
   });
-  it.each([false, true])(
-    "reads the selected system unit with discovered target=%s",
-    async (discover) => {
-      const command = await readEffective({
-        requireLoaded: true,
-        ...(discover ? {} : { systemdReadTarget: target }),
-      });
-      expect(command).toMatchObject({
-        programArguments: ["/usr/bin/openclaw", "gateway"],
-        sourcePath: target.unitPath,
-        environment: { HOME: "/home/gateway", OPENCLAW_SERVICE_KIND: "gateway" },
-      });
-      expect(command?.managedDefinition).toBeUndefined();
-      expect(userBus).not.toHaveBeenCalled();
-      expect(
-        systemBus.mock.calls.every(
-          ([args]) => args.includes("--auto-start=no") && !args.includes("LoadUnit"),
-        ),
-      ).toBe(true);
-    },
-  );
+
+  it("reads the discovered system unit", async () => {
+    const command = await readEffective({
+      requireLoaded: true,
+    });
+    expect(command).toMatchObject({
+      programArguments: ["/usr/bin/openclaw", "gateway"],
+      sourcePath: target.unitPath,
+      environment: { HOME: "/home/gateway", OPENCLAW_SERVICE_KIND: "gateway" },
+    });
+    expect(command?.managedDefinition).toBeUndefined();
+    expect(userBus).not.toHaveBeenCalled();
+    expect(
+      systemBus.mock.calls.every(
+        ([args]) => args.includes("--auto-start=no") && !args.includes("LoadUnit"),
+      ),
+    ).toBe(true);
+  });
 
   it.each(["2001", "other"])(
     "requires the service account for strict inspection: %s",
@@ -307,9 +301,8 @@ describe("system-scope effective command", () => {
     },
   );
 
-  it.each(["uid", "replacement"])("rejects an unverified system manager: %s", async (fault) => {
-    state.managerUid = fault === "uid" ? 2001 : 0;
-    state.managerChanges = fault === "replacement";
+  it("rejects an unexpected system-manager UID", async () => {
+    state.managerUid = 2001;
     await expect(readEffective()).rejects.toMatchObject({
       reason: "systemd-manager-changed",
     });

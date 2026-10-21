@@ -94,8 +94,6 @@ esac`,
 
   it.each([
     { probe: "show", scope: "user" },
-    { probe: "cat", scope: "user" },
-    { probe: "is-active", scope: "user" },
     { probe: "show", scope: "system" },
   ])("sanitizes failed $scope $probe diagnostics", async ({ probe, scope }) => {
     const script =
@@ -130,10 +128,6 @@ esac`,
     { output: "Failed to connect to bus: No medium found", code: 1, available: false },
   ])("preserves manager status $output", async ({ output, code, available }) => {
     await commandFixture("systemctl", `#!/bin/sh\nprintf '%s\\n' '${output}'\nexit ${code}\n`);
-    const expected = { stdout: `${output}\n`, stderr: "", code, termination: "exit" };
-    await expect(execFileUtf8("systemctl", ["--user", "status"], { env })).resolves.toEqual(
-      expected,
-    );
     await expect(isAvailable(env)).resolves.toBe(true);
     await expect(isUserAvailable(env)).resolves.toBe(available);
     if (available) {

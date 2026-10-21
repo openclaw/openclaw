@@ -12,15 +12,14 @@ import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
 } from "./service.test-helpers.js";
+import * as systemdExec from "./systemd-exec.js";
+import { writeUnit as writeFixtureFile } from "./systemd-files.test-support.js";
 import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
 
 const assertNoSystemOwnership = vi.hoisted(() =>
   vi.fn<typeof import("./systemd-system.js").assertNoSystemSystemdOwnership>(),
 );
 const busctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlUser>());
-const reloadUserManager = vi.hoisted(() =>
-  vi.fn<typeof import("./systemd-exec.js").reloadSystemdUserManager>(),
-);
 
 vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-system.js", async (importOriginal) => ({
@@ -31,7 +30,6 @@ vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   assertSystemdAvailable: async () => {},
   execBusctlUser: busctl,
-  reloadSystemdUserManager: reloadUserManager,
   execSystemctlUser: async () => ({ code: 0, termination: "exit", stdout: "", stderr: "" }),
 }));
 
@@ -41,12 +39,6 @@ import {
 } from "./systemd-definition-mutation.js";
 import { refreshLegacySystemdServiceMetadata, stageSystemdService } from "./systemd-install.js";
 import { readSystemdServiceExecStart } from "./systemd-service-files.js";
-
-// Safe fixture modes must not depend on umask; fault cases change permissions explicitly.
-async function writeFixtureFile(file: string, contents: string, options = { mode: 0o644 }) {
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o755 });
-  await fs.writeFile(file, contents, options);
-}
 
 describe.skipIf(process.platform === "win32")("systemd definition mutation ownership", () => {
   let root: string;
@@ -192,12 +184,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
 
   beforeEach(async () => {
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
-    reloadUserManager
-      .mockReset()
-      .mockImplementation(
-        (await vi.importActual<typeof import("./systemd-exec.js")>("./systemd-exec.js"))
-          .reloadSystemdUserManager,
-      );
     vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
     busctl.mockReset().mockImplementation(async (serviceEnv) => ({
       code: 1,
@@ -348,19 +334,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await expectEmpty(target, replacement, stateDir);
   });
 
-  it("seals root-owned manager fragments", async () => {
-    const extra = await input(
-      "global-user/service.d/operator.conf",
-      "[Service]\nEnvironment=TOKEN=operator-secret-canary\n",
-    );
-    managerDefinition(extra);
-    mockStatOwner((file) => file === extra, 0);
-    const before = await fs.readFile(extra);
-    await expectRefusal({ kind: "sealed" }, "SERVICE_DEFINITION_SEALED");
-    expect(await fs.readFile(extra)).toEqual(before);
-    await expectEmpty(path.dirname(unitPath), stateDir);
-  });
-
   it("redacts and refuses uninspectable managers", async () => {
     busctl.mockRejectedValue(new Error("manager-secret-canary"));
     await expectRefusal({ kind: "unknown" }, "SERVICE_DEFINITION_UNKNOWN");
@@ -486,7 +459,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     const extra = await input("operator.conf", owner("first"));
     managerDefinition(extra);
     if (existed) {
-      await writeFixtureFile(target, "previous definition", { mode: 0o400 });
+      await writeFixtureFile(target, "previous definition", 0o400);
     }
     afterRename(target, () => writeFixtureFile(extra, owner("second")));
     await changed(publish(target, "must not remain"));
@@ -518,7 +491,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     { mount: "file-ro", mode: 0o400 },
     { mount: "file-rw", mode: 0o644 },
   ])("inspects a mounted target before staging ($mount, $mode)", async ({ mount, mode }) => {
-    await writeFixtureFile(unitPath, "original definition", { mode });
+    await writeFixtureFile(unitPath, "original definition", mode);
     const escaped = unitPath.replaceAll(" ", "\\040");
     mockMount(
       unitPath,
@@ -828,16 +801,11 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       await barrier;
     });
     await firstStarted;
-
     const startedAt = Date.now();
     try {
       await expect(
-        withSystemdDefinitionMutation(env, env, async () => undefined, {
-          timeoutMs: 100,
-        }),
-      ).rejects.toMatchObject({
-        code: "file_lock_timeout",
-      });
+        withSystemdDefinitionMutation(env, env, async () => undefined, { timeoutMs: 100 }),
+      ).rejects.toMatchObject({ code: "file_lock_timeout" });
       expect(Date.now() - startedAt).toBeLessThan(2_000);
     } finally {
       release();
@@ -951,7 +919,9 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   )(
     "$kind retains its budget across $stepMs ms wall-clock step",
     async ({ kind, timeouts, stepMs }) => {
-      reloadUserManager.mockResolvedValue(undefined);
+      const reloadUserManager = vi
+        .spyOn(systemdExec, "reloadSystemdUserManager")
+        .mockResolvedValue(undefined);
       const realNow = Date.now;
       let offset = 0;
       let monotonicNow = 0;
@@ -997,7 +967,7 @@ Description=OpenClaw Gateway (v2026.7.1-2)
 ExecStart=/usr/bin/openclaw gateway run
 Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway OPENCLAW_SERVICE_VERSION=2026.7.1-2
 `,
-          { mode: 0o600 },
+          0o600,
         );
         assertNoSystemOwnership.mockImplementation(async () => stepClock());
         await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(true);

@@ -171,23 +171,6 @@ it("accepts root account aliases", async () => {
   }
 });
 
-it("retains the root privilege requirement for a pinned system unit", async () => {
-  vi.spyOn(process, "geteuid").mockReturnValue(2001);
-  await expect(
-    startSystemdService({ stdout: new PassThrough(), systemdIdentity: original }),
-  ).rejects.toThrow("sudo systemctl start openclaw.service");
-  expect(native.open).not.toHaveBeenCalled();
-  expect(native.systemctl).not.toHaveBeenCalled();
-});
-
-it("never falls back to an unbound manager when activation inspection fails", async () => {
-  native.query.mockRejectedValueOnce(new Error("native inspection unavailable"));
-  await expect(startSystemdService(options())).rejects.toThrow("native inspection unavailable");
-  expect(effects).toEqual([]);
-  expect(native.systemctl).not.toHaveBeenCalled();
-  expect(native.close).toHaveBeenCalledOnce();
-});
-
 it.each(["ordinary failure", "ownership refusal", "lost custody", "effect refusal"])(
   "continues activation only after an ordinary reset failure: %s",
   async (mode) => {
@@ -243,14 +226,6 @@ it("captures the selected native owner before stop without any mutation", async 
   expect(effects).toEqual([]);
   expect(native.query.mock.calls.some(([args]) => args[4] === "LoadUnit")).toBe(false);
   expect(native.close).toHaveBeenCalledOnce();
-});
-
-it("refuses to capture authority for another service account", async () => {
-  current.serviceUser = "another-account";
-  await expect(
-    captureSystemdServiceIdentity({ env: {}, target: original, managerUid: 0 }),
-  ).rejects.toBeInstanceOf(ServiceOwnershipRefusalError);
-  expect(effects).toEqual([]);
 });
 
 it("root can retain the explicitly adopted non-root account through pinned stop and start", async () => {

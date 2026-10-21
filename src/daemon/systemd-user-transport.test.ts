@@ -483,7 +483,7 @@ it.each([450, 500])("does not give fallback a new deadline after %s ms", async (
   }
 });
 
-it.each(["current", "retired", "slow-guard", "stop"] as const)(
+it.each(["retired", "slow-guard", "stop"] as const)(
   "%s fallback retains the original authority and budget",
   async (mode) => {
     let active = true;

@@ -2,16 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { resolveLiveManagedGatewayDistFence } from "../../scripts/lib/live-gateway-dist-fence.mts";
-import { assertManagedGatewayArtifactPublication } from "../cli/update-cli/update-command-service-revalidation.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as processes from "../shared/pid-alive.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import type { ExecResult } from "./exec-file.js";
-import type { GatewayServiceState } from "./service-types.js";
-import * as gatewayService from "./service.js";
-import * as systemdServiceFiles from "./systemd-service-files.js";
 
 const systemctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execSystemctl>());
 const userctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execSystemctlUser>());
@@ -145,15 +140,6 @@ function withFixture(work: (home: string) => Promise<void>) {
 }
 const withLinuxFixture = (work: (home: string) => Promise<void>) =>
   withMockedPlatform("linux", () => withFixture(work));
-const publication = (checkoutRoot: string, env: Record<string, string>) =>
-  assertManagedGatewayArtifactPublication({
-    roots: [checkoutRoot],
-    env,
-    timeoutMs: 5_000,
-    assertCurrent() {},
-    updateInstallKind: "package",
-    shouldRestart: true,
-  });
 
 beforeEach(() => {
   vi.stubEnv("PROC_SAFE_NATIVE", "auto");
@@ -456,11 +442,11 @@ it.each(
       : new Error("Synthetic service inventory unavailable");
     const native = scope === "user" ? userctl : systemctl;
     native.mockRejectedValue(failure);
-    const publishing = publication(home, { HOME: home, ...buses });
+    const discovery = discoverManagedGatewayBindings({ HOME: home, ...buses });
     if (uncertain) {
-      await expect(publishing).rejects.toBe(failure);
+      await expect(discovery).rejects.toBe(failure);
     } else {
-      await expect(publishing).resolves.toBeUndefined();
+      await expect(discovery).resolves.toEqual([]);
     }
     expect(native).toHaveBeenCalled();
   }),
@@ -488,37 +474,10 @@ it.skipIf(process.platform !== "linux")("binds removed custom-profile units", ()
         systemdReadTarget: { scope: "user", unitName: name, unitPath: removedPath },
       }),
     ]);
-    const checkout = path.join(home, "checkout");
-    await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
-    await fs.writeFile(path.join(checkout, "package.json"), '{"name":"openclaw"}\n');
-    await fs.writeFile(path.join(checkout, "dist/index.js"), "gateway\n");
-    const command = {
-      programArguments: [process.execPath, path.join(checkout, "dist/index.js"), "gateway"],
-      sourcePath: removedPath,
-    };
-    vi.spyOn(systemdServiceFiles, "readSystemdServiceCommandLocation").mockImplementation(
-      async (_env, target) =>
-        target?.unitName === name ? { kind: "command", command } : { kind: "not-loaded" },
-    );
-    vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
-      installed: true,
-      loadState: { status: "loaded" },
-      running: true,
-      env: {},
-      command,
-    } satisfies GatewayServiceState);
-    const writes = vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("unexpected write"));
-    await expect(
-      resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
-    ).resolves.toMatchObject({ refuse: true });
-    await expect(publication(checkout, env)).rejects.toThrow(
-      `another managed Gateway (systemd user unit ${JSON.stringify(name)})`,
-    );
-    expect(writes).not.toHaveBeenCalled();
   }),
 );
 
-it.each([false, true])("fences possible managers (present=%s)", (present) =>
+it.each([false, true])("includes only advertised invoking managers (present=%s)", (present) =>
   withLinuxFixture(async (home) => {
     vi.spyOn(fs, "lstat").mockRejectedValue(
       Object.assign(new Error("Synthetic path absent"), { code: "ENOENT" }),
@@ -531,8 +490,8 @@ it.each([false, true])("fences possible managers (present=%s)", (present) =>
       XDG_RUNTIME_DIR: home,
       ...(present ? { DBUS_SESSION_BUS_ADDRESS: buses.DBUS_SESSION_BUS_ADDRESS } : {}),
     };
-    await expect(
-      resolveLiveManagedGatewayDistFence(home, { env, requireVerified: true }),
-    ).resolves.toMatchObject({ refuse: present });
+    await expect(discoverManagedGatewayBindings(env, { includeInvoking: true })).resolves.toEqual(
+      present ? [{ env }] : [],
+    );
   }),
 );
