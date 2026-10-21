@@ -9,6 +9,7 @@ import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnosti
 import {
   getChromeWebSocketEndpoint,
   isChromeCdpOwnedByPid,
+  isChromeCdpReady,
   isChromeReachable,
   ManagedChromeCleanupError,
   stopOpenClawChrome,
@@ -137,6 +138,12 @@ describe("browser chrome helpers", () => {
       }),
     ).resolves.toBe(false);
 
+    await expect(
+      isChromeCdpReady("http://169.254.169.254:9222", 50, 50, {
+        dangerouslyAllowPrivateNetwork: false,
+        allowedHostnames: ["127.0.0.1"],
+      }),
+    ).resolves.toBe(false);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 

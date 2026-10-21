@@ -245,12 +245,14 @@ it.each(
       false,
       platform,
     );
-    expect(resolveBrowserExecutableForPlatform(resolved, platform)?.path).toBe(
-      mode === "cache" ? chrome : shell,
+    const executable = {
+      kind: mode === "cache" ? "chromium" : "custom",
+      path: mode === "cache" ? chrome : shell,
+    };
+    expect(resolveBrowserExecutableForPlatform(resolved, platform)).toEqual(executable);
+    expect(resolveBrowserExecutableForPlatform({ ...resolved, headless: true }, platform)).toEqual(
+      executable,
     );
-    expect(
-      resolveBrowserExecutableForPlatform({ ...resolved, headless: true }, platform)?.path,
-    ).toBe(mode === "cache" ? chrome : shell);
     await expect(stopOwnedOpenClawChrome(resolved, profile, 100)).resolves.toMatchObject({
       status: ownsProfile ? "stopped" : "unverified",
     });
