@@ -70,7 +70,7 @@ const toolOptions = (config: OpenClawConfig, sessionKey: string, sessionId: stri
   sessionId,
   senderIsOwner: false,
 });
-const withOperator = <T>(client: ReturnType<typeof roleClient>, run: () => T) =>
+const withOperator = <T>(client: ReturnType<typeof roleClient>, run: () => Promise<T>) =>
   withPluginRuntimeGatewayRequestScope({ ...requestScope(), client }, () =>
     withOperatorToolGatewayAuthority(
       { authenticatedUserProfile: client.authenticatedUserProfile, scopes: ["operator.write"] },

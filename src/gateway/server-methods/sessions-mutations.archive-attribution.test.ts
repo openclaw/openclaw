@@ -22,13 +22,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import * as lifecycleDrain from "./sessions-lifecycle-drain.js";
-import {
-  createSessionMutationContext,
-  startSessionMutationRequest,
-} from "./sessions-mutations.native-consent.test-support.js";
+import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import * as archivePreparation from "./sessions-patch-archive.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 const scopeFor = (sessionKey: string) => ({ agentId: "main", sessionKey });
@@ -84,16 +81,20 @@ async function invokePatchSession(
   requestClient = client(),
   method: "sessions.patch" | "sessions.patchMany" = "sessions.patch",
 ) {
-  const request = startSessionMutationRequest(
-    method,
-    { ...params },
-    {
-      client: requestClient,
-      context: createSessionMutationContext(),
-    },
-  );
-  await request.running;
-  return request.responses;
+  const responses: Parameters<RespondFn>[] = [];
+  await sessionMutationHandlers[method]?.({
+    params,
+    client: requestClient,
+    context: {
+      getRuntimeConfig: () => ({}),
+      loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set(),
+      dedupe: new Map(),
+    } as unknown as GatewayRequestContext,
+    respond: (...response: Parameters<RespondFn>) => responses.push(response),
+  } as never);
+  return responses;
 }
 
 it.aroundEach((runTest) =>
@@ -387,6 +388,10 @@ it.each([
         endedAt,
         endedAt === undefined ? undefined : 10,
       ]);
+
+      await patchSession(sessionKey, client("profile-bob", "Bob"), sessionId);
+      expect(readSession(sessionKey)?.archivedBy).toEqual(ada);
+
       await patchSession(sessionKey, client("profile-bob", "Bob"), sessionId, false);
       const restored = readSession(sessionKey);
       expect([restored?.archivedAt, restored?.archivedBy]).toEqual([undefined, undefined]);

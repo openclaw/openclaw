@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_RPC_SET_VERSION,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -20,7 +24,6 @@ import {
   type WorkerProcessResult,
 } from "./worker-process-protocol.js";
 import { runWorkerProcess } from "./worker-process.js";
-import { createWorkerLaunchDescriptorForTest } from "./worker-process.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -49,8 +52,31 @@ vi.mock("./worker.runtime.js", () => ({
   createWorkerRuntimeEnvironment: vi.fn(),
 }));
 
-const descriptor = createWorkerLaunchDescriptorForTest({
+const descriptor = {
+  version: 4,
+  connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
+  admission: {
+    environmentId: "environment-1",
+    credential: ["worker", "fixture", "value"].join("-"),
+    sessionId: "session-1",
+    ownerEpoch: 1,
+    rpcSetVersion: WORKER_RPC_SET_VERSION,
+    handshake: {
+      bundleHash: "a".repeat(64),
+      openclawVersion: "2026.7.12",
+      protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+    },
+  },
   assignment: {
+    agentId: "agent-1",
+    operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+    agentRuntimeIdentityToken: "signed-runtime-token",
+    runId: "run-1",
+    turnId: "turn-1",
+    prompt: "Inspect the workspace.",
+    suppressPromptTranscript: false,
+    workspaceDir: "/tmp/openclaw-worker/workspace",
+    modelRef: { provider: "provider-1", model: "model-1" },
     inferenceOptions: { reasoning: "medium", maxTokens: 512 },
     initialMessages: [
       { role: "user", content: [{ type: "text", text: "Earlier context." }], timestamp: 1 },
@@ -59,7 +85,7 @@ const descriptor = createWorkerLaunchDescriptorForTest({
     liveEvents: { ackedSeq: 12, nextSeq: 13 },
     toolAuthority: { allowedToolNames: ["read", "exec"] },
   },
-});
+} satisfies WorkerLaunchDescriptor;
 
 function commandInput() {
   const input = new PassThrough();
@@ -210,7 +236,7 @@ function gatedCommandHarness(mode: "standalone" | "managed") {
 
 function waitForRuntimeAbort(
   result: Awaited<ReturnType<typeof runWorkerDescriptor>> = completed,
-  onAbort: (signal: AbortSignal) => void = () => {},
+  onAbort = () => {},
 ) {
   const started = createDeferred<AbortSignal>();
   vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
@@ -220,7 +246,7 @@ function waitForRuntimeAbort(
     }
     started.resolve(signal);
     await aborted(signal);
-    onAbort(signal);
+    onAbort();
     return result;
   });
   return started.promise;
@@ -336,17 +362,23 @@ describe("worker command lifetime gate", () => {
     "aborts the worker path and terminates its owned tree on IPC disconnect (%s)",
     async (mode) => {
       const harness = gatedCommandHarness(mode);
-      const started = waitForRuntimeAbort(completed, (signal) => {
+      let runtimeSignal: AbortSignal | undefined;
+      vi.mocked(runWorkerDescriptor).mockImplementation(async (_descriptor, options) => {
+        const signal = options?.signal;
+        if (!signal) {
+          throw new Error("expected worker lifetime abort signal");
+        }
+        runtimeSignal = signal;
+        await aborted(signal);
         throw signal.reason instanceof Error ? signal.reason : new Error("worker interrupted");
       });
       const lifetime = lifetimeHarness();
       lifetime.terminateOwnedTree.mockImplementation(() => {
-        expect(runtimeSignal.aborted).toBe(true);
+        expect(runtimeSignal?.aborted).toBe(true);
       });
       const running = runWorkerCommand({ ...harness, lifetime: lifetime.contract });
       lifetime.open();
-      const runtimeSignal = await started;
-      expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(runWorkerDescriptor).toHaveBeenCalledOnce());
 
       lifetime.disconnectAfterStart();
 
@@ -356,35 +388,56 @@ describe("worker command lifetime gate", () => {
     },
   );
 
-  it("cancels only the exact active turn", async () => {
+  it("retains state across turns and cancels only the exact active turn", async () => {
     const harness = managedHarness();
-    const started = waitForRuntimeAbort({
-      status: "failed",
-      reason: "turn-failed",
-      transcriptLeafId: "cancelled-leaf",
-      transcriptNextSeq: 3,
+    const lifetime = lifetimeHarness();
+    managedRuntime.backgroundCount = 1;
+    vi.mocked(runWorkerDescriptor).mockResolvedValueOnce({
+      status: "completed",
+      transcriptLeafId: "first-leaf",
+      transcriptNextSeq: 2,
     });
-    const running = runWorkerCommand({ ...harness, managed: true });
-    harness.turn();
-    const signal = await started;
-    harness.send({ type: "cancel", turnId: "turn-2" });
-    expect(signal.aborted).toBe(false);
-    harness.send({ type: "cancel", turnId: "turn-1" });
-    await running;
-    expect(harness.results).toEqual([
+    const secondStarted = waitForRuntimeAbort(
       {
-        type: "result",
-        turnId: "turn-1",
-        result: {
-          status: "failed",
-          reason: "turn-failed",
-          transcriptLeafId: "cancelled-leaf",
-          transcriptNextSeq: 3,
-        },
-        retainWorker: false,
+        status: "failed",
+        reason: "turn-failed",
+        transcriptLeafId: "second-leaf",
+        transcriptNextSeq: 3,
       },
-    ]);
+      () => {
+        managedRuntime.backgroundCount = 0;
+      },
+    );
+    const running = runWorkerCommand({ ...harness, managed: true, lifetime: lifetime.contract });
+    lifetime.open();
+    harness.turn();
+    await vi.waitFor(() => expect(harness.results).toHaveLength(1));
+    expect(harness.results[0]).toEqual({
+      type: "result",
+      turnId: "turn-1",
+      retainWorker: true,
+      result: { status: "completed", transcriptLeafId: "first-leaf", transcriptNextSeq: 2 },
+    });
+    expect(lifetime.dispose).not.toHaveBeenCalled();
+
+    harness.turn(nextRun(harness.launch));
+    const secondSignal = await secondStarted;
+    harness.send({ type: "cancel", turnId: "turn-1" });
+    expect(secondSignal.aborted).toBe(false);
+    harness.send({ type: "cancel", turnId: "turn-2" });
+    await running;
+
+    expect(harness.results[1]).toMatchObject({
+      turnId: "turn-2",
+      result: { status: "failed", reason: "turn-failed" },
+      retainWorker: false,
+    });
+    expect(createWorkerRuntimeEnvironment).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(runWorkerDescriptor).mock.calls.map(([, options]) => options?.environmentStateDir),
+    ).toEqual([stateDir, stateDir]);
     expect(managedRuntime.close).toHaveBeenCalledOnce();
+    expect(lifetime.dispose).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(

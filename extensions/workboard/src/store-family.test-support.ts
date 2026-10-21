@@ -4,7 +4,7 @@ import type { WorkboardStore } from "./store.js";
 export const expectRejected = (work: Promise<unknown>, error?: string | RegExp) =>
   expect(work).rejects.toThrow(error);
 
-export const expectStored = async (store: WorkboardStore, id: string, shape: unknown) =>
+export const expectStored = async (store: WorkboardStore, id: string, shape: object) =>
   expect(await store.get(id)).toMatchObject(shape);
 
 export const contains = (...shapes: Record<string, unknown>[]) =>

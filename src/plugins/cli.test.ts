@@ -3,10 +3,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 
 const mocks = vi.hoisted(() => ({ load: vi.fn(), snapshot: vi.fn() }));
+// mock-isolation: CLI discovery uses fixture registries without loading plugin runtimes.
 vi.mock("./loader.js", () => ({ loadOpenClawPluginCliRegistry: mocks.load }));
+// mock-isolation: Metadata selection uses the fixture snapshot, never host config or plugin state.
 vi.mock("../config/io.plugin-metadata.js", () => ({
   resolveConfigWidePluginMetadataSnapshot: mocks.snapshot,
 }));
+// mock-isolation: Explicit fixture enablement keeps auto-detection outside descriptor discovery proof.
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config }: { config: OpenClawConfig }) => ({
     config,

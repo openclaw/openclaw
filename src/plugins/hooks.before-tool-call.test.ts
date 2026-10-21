@@ -157,7 +157,10 @@ describe("before_tool_call isolation and approval", () => {
           expect([...bytes]).toEqual([20, 30]);
           bytes[0] = 99;
         });
-        await runParams(handler, { view }, false);
+        await toolRunner([{ handler }], { catchErrors: false }).runBeforeToolCall(
+          { toolName: "bash", params: { view } },
+          ctx,
+        );
         expect(handler).toHaveBeenCalledOnce();
         expect([...new Uint8Array(buffer)]).toEqual([10, 20, 30, 40]);
       }
@@ -169,7 +172,12 @@ describe("before_tool_call isolation and approval", () => {
       Object.defineProperty(view, "buffer", { value: new ArrayBuffer(4), enumerable: true });
       for (const params of [{ view }, { error: new Error("shared", { cause: view }) }]) {
         const handler = vi.fn<Handler>(() => ({}));
-        await expect(runParams(handler, params, true)).rejects.toThrow(isolationError);
+        await expect(
+          toolRunner([{ handler }], { catchErrors: true }).runBeforeToolCall(
+            { toolName: "bash", params },
+            ctx,
+          ),
+        ).rejects.toThrow("before_tool_call mutable input isolation failed");
         expect(handler).not.toHaveBeenCalled();
       }
     });
@@ -194,7 +202,10 @@ describe("before_tool_call isolation and approval", () => {
       expect(map.get(value.params)?.has(value.params)).toBe(true);
       map.clear();
     });
-    await runParams(handler, params, false);
+    await toolRunner([{ handler }], { catchErrors: false }).runBeforeToolCall(
+      { toolName: "bash", params },
+      ctx,
+    );
     expect(handler).toHaveBeenCalledOnce();
     expect(reads).toBe(1);
     expect(params.map.get(params)?.has(params)).toBe(true);
@@ -299,7 +310,8 @@ describe("before_tool_call receipts", () => {
       enforcement: { coverageState: "enforced" },
       source: { owner: "plugin-hook" },
     });
-    expect(JSON.stringify(receipts)).not.toMatch(/secret-plugin-id|secret-tool-name/);
+    expect(JSON.stringify(receipts)).not.toContain("secret-plugin-id");
+    expect(JSON.stringify(receipts)).not.toContain("secret-tool-name");
   });
 
   it.each([

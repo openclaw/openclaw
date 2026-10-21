@@ -29,6 +29,7 @@ import { isToolResultError } from "./tool-result-error.js";
 const { cancel, killTree } = vi.hoisted(() => ({ cancel: vi.fn(), killTree: vi.fn() }));
 // mock-isolation: Registry fixtures exercise cancellation decisions without launching processes.
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ cancel }) }));
+// mock-isolation: Synthetic process IDs must never reach the host process-killing implementation.
 vi.mock("../process/kill-tree.js", () => ({ killProcessTree: killTree }));
 beforeEach(() => {
   vi.clearAllMocks();

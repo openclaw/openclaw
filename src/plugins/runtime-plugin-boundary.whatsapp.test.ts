@@ -14,7 +14,7 @@ type HeavyModule = {
   ) => void;
 };
 
-function loadRuntime<T>(root: string, file: string) {
+function loadRuntime<T extends object>(root: string, file: string): T {
   return loadFacadeModuleAtLocationSync<T>({
     location: { modulePath: path.join(root, file), boundaryRoot: root },
     boundary: { boundaryLabel: "bundled plugin root", rejectHardlinks: false },

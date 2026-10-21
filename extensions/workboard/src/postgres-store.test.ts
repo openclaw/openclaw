@@ -44,7 +44,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     return path.join(tempDirs.make("openclaw-workboard-postgres-"), "workboard.sqlite");
   }
 
-  async function openDatabase(dbPath = databasePath()) {
+  async function openDatabase(dbPath: string) {
     const owner = createWorkboardDatabase(dbPath, undefined, postgresInput);
     if (owner.db instanceof DatabaseSync) {
       owner.close();
@@ -67,13 +67,13 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     owners.push({ close });
     const { schema } = await fixture.state();
     schemas.add(schema);
-    return { fixture, schema, close, dbPath };
+    return { fixture, schema, close };
   }
 
-  const insertBoard = (id: string, name: string | null = null) => ({
-    sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+  const insertBoard = (id: string) => ({
+    sql: "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
     method: "run" as const,
-    args: [id, name, 1, 2],
+    args: [id, 1, 2],
   });
 
   const get = (sql: string, args: string[] = []) => ({ sql, args, method: "get" as const });
@@ -104,8 +104,40 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     ).toEqual([]);
   });
 
+  it("retains a real SQLite anchor and reopens the same PostgreSQL schema", async () => {
+    const dbPath = databasePath();
+    const first = await openDatabase(dbPath);
+    await first.fixture.statements(
+      [
+        {
+          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          method: "run",
+          args: ["board", "Persisted remotely", 1, 2],
+        },
+      ],
+      true,
+    );
+    const persisted = await observer.query<{ name: string }>(
+      `SELECT name FROM ${quoteIdentifier(first.schema)}.workboard_boards WHERE id = $1`,
+      ["board"],
+    );
+    expect(persisted.rows).toEqual([{ name: "Persisted remotely" }]);
+    const schema = first.schema;
+    await first.close();
+    const reopened = await openDatabase(dbPath);
+    expect(reopened.schema).toBe(schema);
+    expect(await readName(reopened.fixture, "board")).toEqual([{ name: "Persisted remotely" }]);
+    await reopened.close();
+    using anchor = new DatabaseSync(dbPath, { readOnly: true });
+    expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expect(
+      anchor.prepare("SELECT name FROM sqlite_schema WHERE name = 'workboard_boards'").get(),
+    ).toBeUndefined();
+  });
+
   it("invalidates anchor revisions for attempted writes while retaining only committed rows", async () => {
-    const { fixture, schema, dbPath } = await openDatabase();
+    const dbPath = databasePath();
+    const { fixture, schema } = await openDatabase(dbPath);
     const before = readSqliteDatabaseWriteTokenForPath(dbPath);
     expect(before).toBeDefined();
     await fixture.statements([insertBoard("committed")], true);
@@ -137,7 +169,8 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     ["COMMIT", true],
     ["SELECT 1", false],
   ] as const)("classifies terminated PostgreSQL sessions before %s", async (statement, unknown) => {
-    const { fixture, schema, dbPath } = await openDatabase();
+    const dbPath = databasePath();
+    const { fixture, schema } = await openDatabase(dbPath);
     const [process] = await fixture.statements([get("SELECT pg_backend_pid() AS pid")]);
     const pid = (process as { pid: number }).pid;
     expect(typeof pid).toBe("number");
@@ -168,7 +201,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
   });
 
   it("keeps the connection usable after a deferred constraint fails at COMMIT", async () => {
-    const { fixture } = await openDatabase();
+    const { fixture } = await openDatabase(databasePath());
     const [pid] = await fixture.statements([get("SELECT pg_backend_pid() AS pid")]);
     await fixture.statements([
       { sql: "CREATE TABLE deferred_unique (id INTEGER UNIQUE DEFERRABLE INITIALLY DEFERRED)" },
@@ -193,17 +226,21 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     ).toEqual([[{ id: 2 }]]);
   });
 
-  it("preserves the PostgreSQL anchor and remote rows across missing-config refusal and reopen", async () => {
+  it("refuses a PostgreSQL anchor when the PostgreSQL config is absent without creating SQLite data", async () => {
     const dbPath = databasePath();
     const opened = await openDatabase(dbPath);
     const schema = opened.schema;
-    await opened.fixture.statements([insertBoard("remote", "Keep remote data")], true);
+    await opened.fixture.statements(
+      [
+        {
+          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          method: "run",
+          args: ["remote", "Keep remote data", 1, 2],
+        },
+      ],
+      true,
+    );
     await opened.close();
-    expect(
-      await rows(`SELECT name FROM ${quoteIdentifier(schema)}.workboard_boards WHERE id = $1`, [
-        "remote",
-      ]),
-    ).toEqual([{ name: "Keep remote data" }]);
     const snapshotAnchor = () => {
       using anchor = new DatabaseSync(dbPath, { readOnly: true });
       return {
@@ -216,10 +253,6 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
           .all(),
       };
     };
-    {
-      using anchor = new DatabaseSync(dbPath, { readOnly: true });
-      expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    }
     const before = snapshotAnchor();
     expect(before.workboardTables).toEqual([]);
     expect(() => createWorkboardDatabase(dbPath)).toThrow(schema);
@@ -236,31 +269,64 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     fs.renameSync(`${dbPath}.replacement`, dbPath);
   }
 
-  it.each([
-    ["version", 4],
-    ["store_id", "00000000-0000-4000-8000-000000000001"],
-  ] as const)(
-    "refuses mismatched PostgreSQL %s without altering metadata",
-    async (column, value) => {
-      const { schema, close, dbPath } = await openDatabase();
-      await close();
-      const table = quoteIdentifier(schema) + ".openclaw_schema_meta";
-      const read = () =>
-        rows<{ value: number | string }>(
-          `SELECT ${column === "version" ? "version::integer" : column} AS value FROM ${table} WHERE store = 'workboard'`,
-        );
-      const before = await read();
-      expect(before).toHaveLength(1);
-      await observer.query(`UPDATE ${table} SET ${column} = $1 WHERE store = 'workboard'`, [value]);
-      replaceAnchorForFreshAdmission(dbPath);
-      expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
-        column === "version"
-          ? /expected.*3/i
-          : new RegExp(`${before[0]!.value}.*${value}|${value}.*${before[0]!.value}`),
-      );
-      expect(await read()).toEqual([{ value }]);
-    },
-  );
+  it("refuses a PostgreSQL schema version mismatch without migrating it", async () => {
+    const dbPath = databasePath();
+    const opened = await openDatabase(dbPath);
+    const schema = opened.schema;
+    await opened.close();
+    await observer.query(
+      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET version = 4 WHERE store = 'workboard'`,
+    );
+    replaceAnchorForFreshAdmission(dbPath);
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(/expected.*3/i);
+    expect(
+      await rows<{ version: number }>(
+        `SELECT version::integer FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
+      ),
+    ).toEqual([{ version: 4 }]);
+  });
+
+  it("refuses PostgreSQL metadata belonging to a different anchor", async () => {
+    const dbPath = databasePath();
+    const opened = await openDatabase(dbPath);
+    const schema = opened.schema;
+    await opened.close();
+    const metadata = await observer.query<{ store_id: string }>(
+      `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
+    );
+    expect(metadata.rows).toHaveLength(1);
+    const originalId = metadata.rows[0]!.store_id;
+    const otherId = "00000000-0000-4000-8000-000000000001";
+    await observer.query(
+      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET store_id = $1 WHERE store = 'workboard'`,
+      [otherId],
+    );
+    replaceAnchorForFreshAdmission(dbPath);
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
+      new RegExp(`${originalId}.*${otherId}|${otherId}.*${originalId}`),
+    );
+    expect(
+      await rows<{ store_id: string }>(
+        `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
+      ),
+    ).toEqual([{ store_id: otherId }]);
+  });
+
+  it("refuses an existing SQLite workboard without replacing its data", () => {
+    const dbPath = databasePath();
+    {
+      using existing = new DatabaseSync(dbPath);
+      existing.exec("CREATE TABLE workboard_boards (id TEXT PRIMARY KEY, name TEXT)");
+      existing.prepare("INSERT INTO workboard_boards VALUES (?, ?)").run("local", "Keep me");
+    }
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
+      "Existing SQLite workboard data cannot switch engines",
+    );
+    using preserved = new DatabaseSync(dbPath, { readOnly: true });
+    expect(preserved.prepare("SELECT * FROM workboard_boards").all()).toEqual([
+      { id: "local", name: "Keep me" },
+    ]);
+  });
 });
 
 function quoteIdentifier(value: string): string {

@@ -9,8 +9,14 @@ import {
   WebSocketServer,
 } from "../../packages/gateway-client/src/websocket.test-support.js";
 import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
   type WorkerConnectParams,
   WorkerConnectRequestFrameSchema,
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_RPC_SET_VERSION,
   WORKER_PUBLIC_INGRESS_PATH,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
@@ -20,8 +26,6 @@ import type {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { PRESENCE_QUERY_TIMEOUT_MS } from "../agents/tools/presence-tool-contract.js";
-import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
-import { buildWorkerConnectParams } from "./launch-descriptor.js";
 import {
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
@@ -35,16 +39,30 @@ import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 import { registerWorkerGatewayToolTransportTests } from "./worker-connection-gateway-tools.suite.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 
-const descriptor = testWorkerDescriptor("/tmp/worker");
-descriptor.admission.ownerEpoch = 1;
-const FRAME_CONNECT_PARAMS = buildWorkerConnectParams(descriptor);
-const accessCredentials = { clientId: "fixture-client-id", clientSecret: "fixture-client-secret" };
-const withAdmission = (
-  admission: Partial<WorkerConnectParams["admission"]>,
-): WorkerConnectParams => ({
-  ...FRAME_CONNECT_PARAMS,
-  admission: { ...FRAME_CONNECT_PARAMS.admission, ...admission },
-});
+const FRAME_CONNECT_PARAMS: WorkerConnectParams = {
+  minProtocol: 1,
+  maxProtocol: 1,
+  client: {
+    id: GATEWAY_CLIENT_IDS.WORKER,
+    version: "listener-isolation-test",
+    platform: process.platform,
+    mode: GATEWAY_CLIENT_MODES.WORKER,
+  },
+  role: "worker",
+  admission: {
+    environmentId: "listener-isolation-test",
+    credential: "listener-isolation-credential",
+    ownerEpoch: 1,
+    rpcSetVersion: WORKER_RPC_SET_VERSION,
+    handshake: {
+      bundleHash: "a".repeat(64),
+      openclawVersion: "listener-isolation-test",
+      protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+    },
+    sessionId: "session-1",
+    runId: "run-1",
+  },
+};
 
 const activeConnections: ReturnType<typeof createWorkerConnection>[] = [];
 const servers: WebSocketServer[] = [];
@@ -157,12 +175,19 @@ it("keeps a presence read pending through both cold geolocation download windows
     },
     { timeoutMs: PRESENCE_QUERY_TIMEOUT_MS },
   );
-  const settled = vi.fn();
-  void pending.then(settled, settled);
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
   const [data] = await received;
   const frame = JSON.parse(rawDataToString(data));
   await vi.advanceTimersByTimeAsync(240_001);
-  expect(settled).not.toHaveBeenCalled();
+  expect(settled).toBe(false);
   reply(peer, frame.id, { content: [], details: { status: "ok" } });
   await expect(pending).resolves.toMatchObject({ ok: true });
 });
@@ -191,15 +216,17 @@ it("settles admitted heartbeat work before stop releases cleanup", async () => {
       ownerEpoch: FRAME_CONNECT_PARAMS.admission.ownerEpoch,
     });
     const assertCurrent = await entered.promise;
-    const stopped = vi.fn();
-    const stopping = connection.stop().then(stopped);
+    let stopped = false;
+    const stopping = connection.stop().then(() => {
+      stopped = true;
+    });
     await vi.advanceTimersByTimeAsync(0);
     expect(connection.state.kind).toBe("stopped");
     expect(assertCurrent).toThrow(WorkerConnectionInterruptedError);
-    expect(stopped).not.toHaveBeenCalled();
+    expect(stopped).toBe(false);
     release.resolve();
     await stopping;
-    expect(stopped).toHaveBeenCalledOnce();
+    expect(stopped).toBe(true);
   } finally {
     release.resolve();
   }
@@ -222,30 +249,22 @@ const inferenceIdentity = {
   runId: "run-1",
   turnId: "turn-1",
 };
-const inferenceEventFrame = (
-  seq: number,
-  overrides: Partial<WorkerInferenceEventFrame["payload"]> = {},
-): WorkerInferenceEventFrame => ({
+const inferenceEventFrame = (seq: number): WorkerInferenceEventFrame => ({
   type: "event",
   event: "worker.inference.event",
   payload: {
     ...inferenceIdentity,
     seq,
     event: { type: "text_delta", contentIndex: 0, delta: `chunk-${seq}` },
-    ...overrides,
   },
 });
-const inferenceTerminalFrame = (
-  seq: number,
-  overrides: Partial<WorkerInferenceTerminalFrame["payload"]> = {},
-): WorkerInferenceTerminalFrame => ({
+const inferenceTerminalFrame = (seq: number): WorkerInferenceTerminalFrame => ({
   type: "event",
   event: "worker.inference.terminal",
   payload: {
     ...inferenceIdentity,
     seq,
     outcome: { type: "error", reason: "provider-error", message: `failure-${seq}` },
-    ...overrides,
   },
 });
 
@@ -289,7 +308,7 @@ describe("worker connection endpoint failures", () => {
       endpoint: {
         ...endpoint,
         tlsFingerprint: "ab".repeat(32),
-        cloudflareAccess: accessCredentials,
+        cloudflareAccess: { clientId: "fixture-client-id", clientSecret: "fixture-client-secret" },
       },
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 3_000,
@@ -328,7 +347,10 @@ describe("worker connection endpoint failures", () => {
         endpoint: {
           kind: "websocket",
           url: endpointUrl,
-          cloudflareAccess: accessCredentials,
+          cloudflareAccess: {
+            clientId: "fixture-client-id",
+            clientSecret: "fixture-client-secret",
+          },
         },
         admissionTimeoutMs: 300,
         admissionDeadlineMs: 1_000,
@@ -537,7 +559,13 @@ it("staggers twenty workers recovering from transient Gateway transport loss", a
   const workers = Array.from({ length: 20 }, (_, index) =>
     makeConnection({
       endpoint,
-      connectParams: withAdmission({ environmentId: `reconnect-worker-${index}` }),
+      connectParams: {
+        ...FRAME_CONNECT_PARAMS,
+        admission: {
+          ...FRAME_CONNECT_PARAMS.admission,
+          environmentId: `reconnect-worker-${index}`,
+        },
+      },
       admissionDeadlineMs: 10_000,
     }),
   );
@@ -592,7 +620,10 @@ it("staggers twenty workers recovering from transient Gateway transport loss", a
 });
 it("isolates listener failures and binds terminal errors during nested transitions", async () => {
   const connection = makeConnection({
-    connectParams: withAdmission({ sessionId: null, runId: null }),
+    connectParams: {
+      ...FRAME_CONNECT_PARAMS,
+      admission: { ...FRAME_CONNECT_PARAMS.admission, sessionId: null, runId: null },
+    },
   });
   const observed: WorkerConnectionState["kind"][] = [];
   const throwing = vi.fn(() => {
@@ -627,8 +658,20 @@ it("isolates listener failures and binds terminal errors during nested transitio
 describe("WorkerConnection inference callback isolation", () => {
   it.each([
     ["invalid payload", { ...inferenceEventFrame(1), payload: {} }],
-    ["wrong session", inferenceEventFrame(1, { sessionId: "other" })],
-    ["wrong epoch", inferenceTerminalFrame(1, { runEpoch: 2 })],
+    [
+      "wrong session",
+      {
+        ...inferenceEventFrame(1),
+        payload: { ...inferenceEventFrame(1).payload, sessionId: "other" },
+      },
+    ],
+    [
+      "wrong epoch",
+      {
+        ...inferenceTerminalFrame(1),
+        payload: { ...inferenceTerminalFrame(1).payload, runEpoch: 2 },
+      },
+    ],
   ])("rejects %s before notifying the inference callback", (_label, frame) => {
     const dispatcher = createFrameDispatcher();
     const listener = vi.fn();

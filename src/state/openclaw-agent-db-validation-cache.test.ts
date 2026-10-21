@@ -806,10 +806,11 @@ describe("canonical proof on physical database validation", () => {
         if (mode === "transferred") {
           expect(adoptValidation(opened.database, transferred)).toBe(true);
         }
-        const target = mode === "thin" ? { agentId: "main", db: opened.db } : opened.database;
+        const target =
+          mode === "thin" ? { agentId: "main", db: opened.database.db } : opened.database;
         expect(markCanonical(target)).toBe(true);
         expect(hasCanonical(database)).toBe(true);
-        expect(hasCanonical({ agentId: "other", db: opened.db })).toBe(false);
+        expect(hasCanonical({ agentId: "other", db: opened.database.db })).toBe(false);
         expectFlag(transferred.canonicalReady, 1);
         if (mode === "transferred") {
           invalidateValidation(database.path);

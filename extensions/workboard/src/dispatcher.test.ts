@@ -50,7 +50,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     run = vi.fn();
     managedPath = path.dirname(fixture.dbPath);
   });
-  const expectStored = (id: string, shape: unknown) =>
+  const expectStored = (id: string, shape: object) =>
     expect(store.get(id)).resolves.toMatchObject(shape);
   const expectStatus = (id: string, status: string) => expectStored(id, { status });
   const expectStarted = (

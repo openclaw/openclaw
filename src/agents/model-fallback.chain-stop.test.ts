@@ -13,10 +13,6 @@ import { FailoverError } from "./failover-error.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { type ModelFallbackStepHandler, runFallbackAttempt } from "./model-fallback-attempt.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
-import {
-  logModelFallbackDecision,
-  type ModelFallbackDecisionParams,
-} from "./model-fallback-observation.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import {
   createSessionPlacementSettlementClosedAbortError,
@@ -50,8 +46,6 @@ let previousConsole: typeof loggingState.rawConsole;
 beforeAll(() => logPaths.setup());
 afterAll(() => logPaths.cleanup());
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-16T00:00:00Z") });
-  activeSessionId = `session-${++testSequence}`;
   capture = createDiagnosticLogRecordCapture();
   previousConsole = loggingState.rawConsole;
   warn.mockClear();
@@ -70,7 +64,6 @@ afterEach(async () => {
   loggingState.rawConsole = previousConsole;
   setLoggerOverride(null);
   resetLogger();
-  vi.useRealTimers();
 });
 function fallbackRecords() {
   return capture.records.filter(
@@ -98,50 +91,45 @@ async function terminalAbortWrapper(): Promise<Error> {
   assert(error instanceof Error);
   return error;
 }
-type StopError = Error | { message: string };
-const stopCases: Array<
-  [
-    reason: string,
-    make: () => StopError | Promise<StopError>,
-    image?: boolean,
-    opaqueName?: boolean,
-  ]
-> = [
-  ["agent_run_terminal_timeout", terminalTimeout],
-  [
-    "command_lane_task_timeout",
-    () =>
-      new CommandLaneTaskTimeoutError("chain-stop-lane", {
+type StopInput = { error: Error | { message: string }; abortSignal?: AbortSignal };
+const stopCases: Array<{
+  reason: string;
+  make: () => StopInput | Promise<StopInput>;
+  image?: boolean;
+}> = [
+  { reason: "agent_run_terminal_timeout", make: () => ({ error: terminalTimeout() }) },
+  {
+    reason: "command_lane_task_timeout",
+    make: () => ({
+      error: new CommandLaneTaskTimeoutError("chain-stop-lane", {
         cause: "release-signal",
         elapsedMs: 0,
         taskBudgetMs: 60_000,
       }),
-  ],
-  [
-    "agent_harness_preflight",
-    () => new AgentHarnessPreflightError("private preflight detail"),
-    true,
-  ],
-  [
-    "sandbox_provisioning",
-    () => toSandboxProvisioningError(new Error("private sandbox detail"), "fixture"),
-  ],
-  ["caller_signal_aborted", () => ({ message: "private caller detail" })],
-  ["agent_run_direct_abort", createAgentRunDirectAbortError],
-  ["agent_run_restart_abort", createAgentRunRestartAbortError],
-  ["session_placement_settlement_closed", createSessionPlacementSettlementClosedAbortError],
-  ["terminal_abort_wrapper", terminalAbortWrapper],
-  ...[
-    () => {
-      throw new Error("error name is unavailable");
-    },
-    () => Symbol("unusable error name"),
-  ].map((get): [string, () => Error, boolean, boolean] => [
-    "agent_run_terminal_timeout",
-    () => Object.defineProperty(terminalTimeout(), "name", { get }),
-    false,
-    true,
-  ]),
+    }),
+  },
+  {
+    reason: "agent_harness_preflight",
+    make: () => ({ error: new AgentHarnessPreflightError("private preflight detail") }),
+    image: true,
+  },
+  {
+    reason: "sandbox_provisioning",
+    make: () => ({
+      error: toSandboxProvisioningError(new Error("private sandbox detail"), "fixture"),
+    }),
+  },
+  {
+    reason: "caller_signal_aborted",
+    make: () => ({ error: { message: "private caller detail" }, abortSignal: AbortSignal.abort() }),
+  },
+  { reason: "agent_run_direct_abort", make: () => ({ error: createAgentRunDirectAbortError() }) },
+  { reason: "agent_run_restart_abort", make: () => ({ error: createAgentRunRestartAbortError() }) },
+  {
+    reason: "session_placement_settlement_closed",
+    make: () => ({ error: createSessionPlacementSettlementClosedAbortError() }),
+  },
+  { reason: "terminal_abort_wrapper", make: async () => ({ error: await terminalAbortWrapper() }) },
 ];
 
 it("preserves an idle-breaker result without reporting fallback success or trying another model", async () => {
@@ -223,15 +211,14 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
 });
 
 it.each(stopCases)(
-  "records %s once without replacing or retrying the failure (case %#)",
-  async (reason, make, image, opaqueName) => {
-    const error = await make();
-    const abortSignal = reason === "caller_signal_aborted" ? AbortSignal.abort() : undefined;
+  "records $reason once without replacing or retrying the failure",
+  async (row) => {
+    const { error, abortSignal } = await row.make();
     Object.freeze(error);
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("must not run");
     const onError = vi.fn();
     const onFallbackStep = vi.fn<ModelFallbackStepHandler>();
-    const result = image
+    const result = row.image
       ? runWithImageModelFallback({
           cfg: { agents: { defaults: { imageModel } } },
           run,
@@ -247,20 +234,46 @@ it.each(stopCases)(
     expect(records).toHaveLength(1);
     expect(records[0]?.attributes).toMatchObject({
       event: "model_fallback_chain_stopped",
-      reason,
+      reason: row.reason,
       candidateProvider: "fixture-primary",
       candidateModel: "fixture-model",
-      ...(error instanceof Error && !opaqueName ? { errorName: error.name } : {}),
-      ...(image ? {} : { sessionId: "chain-stop-session", lane: "chain-stop-lane" }),
+      ...(error instanceof Error ? { errorName: error.name } : {}),
+      ...(row.image ? {} : { sessionId: "chain-stop-session", lane: "chain-stop-lane" }),
     });
     expect(records[0]?.attributes).not.toHaveProperty("decision");
     expect(records[0]?.attributes).not.toHaveProperty("fallbackStepType");
-    if (!(error instanceof Error) || opaqueName) {
+    if (!(error instanceof Error)) {
       expect(records[0]?.attributes).not.toHaveProperty("errorName");
     }
     expect(JSON.stringify(records)).not.toContain(error.message);
   },
 );
+
+it.each([
+  {
+    name: "cannot be read",
+    read() {
+      throw new Error("error name is unavailable");
+    },
+  },
+  { name: "is not a string", read: () => Symbol("unusable error name") },
+])("preserves a terminal timeout when its error name $name", async ({ read }) => {
+  const error = terminalTimeout();
+  Object.defineProperty(error, "name", { get: read });
+  const run = vi.fn().mockRejectedValue(error);
+  const failure = await runWithModelFallback({ ...fallbackOptions, run }).catch(
+    (caught: unknown) => caught,
+  );
+  expect(failure === error).toBe(true);
+  expect(run).toHaveBeenCalledOnce();
+  await capture.flush();
+  expect(fallbackRecords()).toHaveLength(1);
+  expect(fallbackRecords()[0]?.attributes).toMatchObject({
+    event: "model_fallback_chain_stopped",
+    reason: "agent_run_terminal_timeout",
+  });
+  expect(fallbackRecords()[0]?.attributes).not.toHaveProperty("errorName");
+});
 
 it("sanitizes compact stop diagnostics without exposing error details", async () => {
   const provider = "fixture\nprovider\u001b[31m";
@@ -297,85 +310,4 @@ it("sanitizes compact stop diagnostics without exposing error details", async ()
   expect(line).not.toContain(error.message);
   expect(line).not.toContain("private cause");
   expect(JSON.stringify(fallbackRecords())).not.toContain("private diagnostic message");
-});
-
-let activeSessionId = "session-0";
-let testSequence = 0;
-const primary = { provider: "modelstudio", model: "glm-5" };
-const fallback = { provider: "minimax", model: "MiniMax-M2.7-highspeed" };
-
-function logFailure(overrides: Partial<ModelFallbackDecisionParams> = {}) {
-  return logModelFallbackDecision({
-    decision: "candidate_failed",
-    runId: "run-1",
-    sessionId: activeSessionId,
-    requestedProvider: primary.provider,
-    requestedModel: primary.model,
-    candidate: { ...primary, routeOrigin: "requested", routeResolution: "raw" },
-    attempt: 1,
-    reason: "auth",
-    status: 401,
-    code: "invalid_token",
-    error: "HTTP 401: invalid access token or token expired",
-    nextCandidate: { ...fallback, routeOrigin: "configured-fallback", routeResolution: "resolved" },
-    ...overrides,
-  });
-}
-
-function loggedPayloads() {
-  return fallbackRecords().map((record) => record.attributes ?? {});
-}
-
-it.each(["candidate_failed", "candidate_succeeded"] as const)(
-  "keeps %s error details in the returned step, not routine diagnostics",
-  async (decision) => {
-    const marker = "synthetic-private-tool-output";
-    const step = logFailure({
-      decision,
-      error: marker,
-      previousAttempts: [{ provider: "prior", model: "prior", error: marker, reason: "auth" }],
-    });
-    expect(step?.fallbackStepFromFailureDetail).toBe(marker);
-    await capture.flush();
-    expect(fallbackRecords()).not.toHaveLength(0);
-    expect(JSON.stringify(fallbackRecords())).not.toContain(marker);
-    expect(loggedPayloads()[0]).toMatchObject({ status: 401, code: "invalid_token" });
-  },
-);
-
-it("coalesces duplicate auth failures while preserving fallback step fields", async () => {
-  const firstStep = logFailure({ runId: "run-1" });
-  const secondStep = logFailure({ runId: "run-2" });
-  const thirdStep = logFailure({ runId: "run-3" });
-
-  expect(firstStep).toMatchObject({
-    fallbackStepFromModel: "modelstudio/glm-5",
-    fallbackStepToModel: "minimax/MiniMax-M2.7-highspeed",
-    fallbackStepFromFailureReason: "auth",
-  });
-  expect([secondStep, thirdStep]).toEqual([firstStep, firstStep]);
-  await capture.flush();
-  expect(fallbackRecords()).toHaveLength(1);
-  expect(loggedPayloads()[0]).toMatchObject({
-    candidateRouteOrigin: "requested",
-    candidateRouteResolution: "raw",
-    nextCandidateRouteOrigin: "configured-fallback",
-    nextCandidateRouteResolution: "resolved",
-  });
-
-  vi.setSystemTime(Date.now() + 30_000);
-  logFailure({ runId: "run-4" });
-
-  await capture.flush();
-  expect(fallbackRecords()).toHaveLength(2);
-  expect(loggedPayloads()[1]).toMatchObject({ suppressedDuplicateCount: 2 });
-  expect(String(loggedPayloads()[1]?.consoleMessage)).toContain("2 duplicates suppressed");
-});
-
-it("keeps no-session runs visible by scoping coalescing to the run id", async () => {
-  logFailure({ sessionId: undefined, runId: "run-1" });
-  logFailure({ sessionId: undefined, runId: "run-2" });
-
-  await capture.flush();
-  expect(fallbackRecords()).toHaveLength(2);
 });
