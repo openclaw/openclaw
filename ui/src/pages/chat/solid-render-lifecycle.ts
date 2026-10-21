@@ -2,8 +2,6 @@ import { createEffect, createSignal, onCleanup, type Accessor } from "@solidjs/s
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import {
   type AfterCommitEffect,
-  type AfterCommitTask,
-  createAfterCommitTask,
   notifyRenderLifecycleForTest,
   type RenderLifecycle,
 } from "./render-lifecycle.ts";
@@ -12,7 +10,12 @@ export type SolidRenderLifecycle<T> = RenderLifecycle & {
   readonly snapshot: Accessor<T>;
 };
 
-type CommitTask = AfterCommitTask & { generation: number };
+type CommitTask = {
+  generation: number;
+  started: boolean;
+  run(this: void): void;
+  cancel(this: void): void;
+};
 
 /** Create inside the pane's Solid owner. Domain state and frame coalescing stay with their owners. */
 export function createSolidRenderLifecycle<T>(options: {
@@ -47,11 +50,55 @@ export function createSolidRenderLifecycle<T>(options: {
       onCancel?.();
       return () => {};
     }
-    const task = createAfterCommitTask(tasks, { generation: requestedGeneration + 1 }, effect, {
-      isCurrent: () => !disposed,
-      onCancel,
-      cleanupOnComplete: true,
-    });
+    let cleanup: (() => void) | undefined;
+    const complete = () => {
+      if (!tasks.delete(task)) {
+        return;
+      }
+      const release = cleanup;
+      cleanup = undefined;
+      release?.();
+    };
+    const task: CommitTask = {
+      generation: requestedGeneration + 1,
+      started: false,
+      run() {
+        if (!tasks.has(task)) {
+          return;
+        }
+        task.started = true;
+        try {
+          const nextCleanup = effect(complete);
+          if (typeof nextCleanup === "function") {
+            // Completion or disposal can happen inside the callback itself.
+            if (tasks.has(task) && !disposed) {
+              cleanup = nextCleanup;
+            } else {
+              nextCleanup();
+            }
+          } else {
+            complete();
+          }
+        } catch (error) {
+          complete();
+          throw error;
+        }
+      },
+      cancel() {
+        if (!tasks.delete(task)) {
+          return;
+        }
+        try {
+          cleanup?.();
+        } finally {
+          cleanup = undefined;
+          if (!task.started) {
+            onCancel?.();
+          }
+        }
+      },
+    };
+    tasks.add(task);
     invalidate();
     return task.cancel;
   };
