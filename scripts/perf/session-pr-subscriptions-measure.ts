@@ -418,7 +418,7 @@ if (values.child) {
     for (let index = 0; index < 10; index++) {
       await rpc(peers[0]!, "sessions.patch", { key: key(4991), category: `warmup-${index % 2}` });
     }
-    await delay(1000);
+    const warmupSettlement = await command("settle");
     if (values["start-at"]) {
       const startAt = integer(values["start-at"], "--start-at");
       assert(Date.now() < startAt, "Gateway setup missed the paired start time");
@@ -436,7 +436,7 @@ if (values.child) {
         ).elapsedMs,
       );
     }
-    await delay(1000);
+    const preMeasurementSettlement = await command("settle");
     if (values["start-at"]) {
       const notifyAt = integer(values["start-at"], "--start-at") + 30000;
       assert(Date.now() < notifyAt, "Subscribe phase missed the paired notification start");
@@ -493,6 +493,8 @@ if (values.child) {
     const result = {
       format: "session-pr-subscriptions-v1",
       setupSettlement,
+      warmupSettlement,
+      preMeasurementSettlement,
       finalSettlement,
       revision: values.revision ?? null,
       testedOwners: Object.fromEntries(
