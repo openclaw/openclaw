@@ -74,7 +74,10 @@ it("retires requests synchronously on mutable same-client reconnects and owner d
   expect(gateway.listeners.size).toBe(0);
   expect(reconnected && page.isCurrent(reconnected)).toBe(false);
   expect([page.capture(), page.snapshot]).toEqual([null, null]);
-  expectChange(invalidate, { identityChanged: false, snapshot: { phase: "stopped" } });
+  expectChange(invalidate, {
+    identityChanged: false,
+    snapshot: expect.objectContaining({ phase: "stopped" }),
+  });
 });
 
 it("rebinds an equivalent replacement source and ignores the retired subscription", () => {

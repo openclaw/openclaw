@@ -113,10 +113,10 @@ it("uploads into an owner-only remote directory and cleans after success", async
 
   const [allocate, upload, cleanup] = runCommand.mock.calls;
   expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "scp", "ssh"]);
-  expect(allocate[0].at(-1)).toBe("sh -s");
-  expect(allocate[1].input).toContain("umask 077");
-  expect(allocate[1].input).not.toContain("a file");
-  expect(upload[0]).toEqual([
+  expect(allocate?.[0].at(-1)).toBe("sh -s");
+  expect(allocate?.[1].input).toContain("umask 077");
+  expect(allocate?.[1].input).not.toContain("a file");
+  expect(upload?.[0]).toEqual([
     "scp",
     ..."BatchMode=yes StrictHostKeyChecking=yes ConnectTimeout=10 ClearAllForwardings=yes ForwardAgent=no ForwardX11=no"
       .split(" ")
@@ -126,7 +126,7 @@ it("uploads into an owner-only remote directory and cleans after success", async
     `bot@messages-mac:${remotePath}`,
   ]);
   expect(use).toHaveBeenCalledWith(remotePath);
-  expect(cleanup[1].input).toBe(`set -eu\nrm -rf -- ${remoteDir}\n`);
+  expect(cleanup?.[1].input).toBe(`set -eu\nrm -rf -- ${remoteDir}\n`);
 });
 
 it("cleans the token-owned parent after setup timeout", async () => {
