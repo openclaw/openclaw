@@ -20,7 +20,11 @@ export function createGatewayWebSocketTransport(
   // Pinned Bun HTTP sockets disable _writev. Keep one copy per burst there;
   // replacing _writev itself could consume Bun's queued HTTP response operations.
   if (!nativeWritev) {
-    stream.write = (chunk, encoding, callback) => {
+    stream.write = (
+      chunk: string | Uint8Array,
+      encoding?: BufferEncoding | ((error?: Error | null) => void),
+      callback?: (error?: Error | null) => void,
+    ) => {
       const done = typeof encoding === "function" ? encoding : callback;
       const charset = typeof encoding === "string" ? encoding : "utf8";
       if (!batch) {
