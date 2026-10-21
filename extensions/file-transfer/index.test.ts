@@ -1,5 +1,4 @@
-// File Transfer tests cover index plugin behavior.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import pluginEntry from "./index.js";
 
 function rejectRuntimeImport(moduleName: string) {
@@ -36,19 +35,22 @@ afterAll(() => {
 });
 
 describe("file-transfer plugin entry", () => {
-  it("registers static command and tool descriptors without importing runtime handlers", () => {
-    const registerNodeHostCommand = vi.fn();
-    const registerNodeInvokePolicy = vi.fn();
-    const registerTool = vi.fn();
-    const registerCli = vi.fn();
+  const registerNodeHostCommand = vi.fn();
+  const registerNodeInvokePolicy = vi.fn();
+  const registerTool = vi.fn();
+  const registerCli = vi.fn();
 
+  beforeEach(() => {
+    vi.clearAllMocks();
     pluginEntry.register({
       registerCli,
       registerNodeHostCommand,
       registerNodeInvokePolicy,
       registerTool,
     } as never);
+  });
 
+  it("registers static command and tool descriptors without importing runtime handlers", () => {
     expect(pluginEntry.nodeHostCommands?.map((entry) => entry.command)).toEqual([
       "file.stat",
       "file.fetch",
@@ -95,14 +97,6 @@ describe("file-transfer plugin entry", () => {
   });
 
   it("reports every node command idle between invokes so node auto-update can activate", () => {
-    const registerNodeHostCommand = vi.fn();
-    pluginEntry.register({
-      registerCli: vi.fn(),
-      registerNodeHostCommand,
-      registerNodeInvokePolicy: vi.fn(),
-      registerTool: vi.fn(),
-    } as never);
-
     // The node host counts in-flight invokes itself; a missing or non-false hook defers updates forever.
     const commands = [
       ...(pluginEntry.nodeHostCommands ?? []),
@@ -115,19 +109,7 @@ describe("file-transfer plugin entry", () => {
   });
 
   it("fails closed if the lazy policy module cannot load", async () => {
-    const registerNodeHostCommand = vi.fn();
-    const registerNodeInvokePolicy = vi.fn();
-    const registerTool = vi.fn();
-    const registerCli = vi.fn();
     const invokeNode = vi.fn();
-
-    pluginEntry.register({
-      registerCli,
-      registerNodeHostCommand,
-      registerNodeInvokePolicy,
-      registerTool,
-    } as never);
-
     const policy = registerNodeInvokePolicy.mock.calls.find(([entry]) =>
       entry.commands.includes("file.fetch"),
     )?.[0];
