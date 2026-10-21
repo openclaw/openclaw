@@ -285,8 +285,11 @@ Native exec-policy fixtures reuse the Linux job's runtime artifact from the same
 workflow run, verified against the selected checkout SHA. The macOS job installs
 only the root and native-asset dependency closures, keeping platform-specific
 dependencies local. The artifact omits UI, plugin, and sealed remote-worker outputs.
-It waits for the existing Linux build instead of rebuilding
-the runtime and plugins on a macOS runner. The prepared CLI remains the normal
+Swift compilation starts after preflight without waiting for Linux. Before native
+tests execute, the job waits for the existing Linux build's published artifact,
+from the current producer attempt, rather than rebuilding the runtime and plugins
+on macOS or waiting for the remaining Linux verification steps. Package tests
+need no runtime artifact. The prepared CLI remains the normal
 production launcher, including request validation, state ownership, and cleanup.
 The default suite keeps real CLI coverage in the native cwd, socket half-close,
 and skill-policy commit cases. The larger socket cancellation and Gateway trust
