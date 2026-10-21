@@ -107,7 +107,7 @@ describe("memory manager database publication", () => {
     return {
       targetDb,
       sourceDb,
-      publish(options: Partial<Parameters<typeof publishPreparedMemoryDatabase>[0]> = {}) {
+      publish: (options: Partial<Parameters<typeof publishPreparedMemoryDatabase>[0]> = {}) => {
         const sourceSchema = readSourceSchema(sourceDb);
         sourceDb.close();
         return publishPreparedMemoryDatabase({

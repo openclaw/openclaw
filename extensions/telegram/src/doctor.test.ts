@@ -9,7 +9,7 @@ const inspectTelegramAccountMock = vi.hoisted(() => vi.fn());
 const lookupTelegramChatIdMock = vi.hoisted(() => vi.fn());
 const DOCTOR_FIX_COMMAND = "openclaw doctor --fix";
 
-function telegramConfig<T extends object>(telegram: T) {
+function telegramConfig<const T extends object>(telegram: T) {
   return { channels: { telegram } };
 }
 

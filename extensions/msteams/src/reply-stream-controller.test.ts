@@ -18,7 +18,7 @@ const media = (name: string) => `https://example.test/${name}.png`;
 
 type ControllerOptions = Parameters<typeof createTeamsReplyStreamController>[0];
 function makeController(
-  stream: ReturnType<typeof makeStream>,
+  stream: ReturnType<typeof makeStream> | ReturnType<typeof makeAcknowledgedStream>,
   options: Partial<Omit<ControllerOptions, "context">> = {},
 ) {
   return createTeamsReplyStreamController({

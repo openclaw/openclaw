@@ -32,16 +32,16 @@ type MockDispatcherInstance = {
 };
 
 const { AgentCtor, EnvHttpProxyAgentCtor, ProxyAgentCtor } = vi.hoisted(() => {
-  const constructor = <T extends Record<string, unknown> | string>() =>
-    vi.fn(function (this: MockDispatcherInstance, options?: T) {
+  const constructor = () =>
+    vi.fn(function (this: MockDispatcherInstance, options?: MockDispatcherInstance["options"]) {
       this.options = options;
       this.destroy = vi.fn(async () => undefined);
       this.close = vi.fn(async () => undefined);
     });
   return {
-    AgentCtor: constructor<Record<string, unknown>>(),
-    EnvHttpProxyAgentCtor: constructor<Record<string, unknown>>(),
-    ProxyAgentCtor: constructor<Record<string, unknown> | string>(),
+    AgentCtor: constructor(),
+    EnvHttpProxyAgentCtor: constructor(),
+    ProxyAgentCtor: constructor(),
   };
 });
 

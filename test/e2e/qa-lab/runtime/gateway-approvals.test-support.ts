@@ -112,8 +112,11 @@ export async function runApprovalProof(
       ...(kind === "plugin" && name === "reviewer"
         ? {
             caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-            onEvent: (event: { event: string; payload?: unknown }) => {
-              if (["plugin.approval.requested", "plugin.approval.resolved"].includes(event.event)) {
+            onEvent: (event: { event?: string; payload?: unknown }) => {
+              if (
+                event.event === "plugin.approval.requested" ||
+                event.event === "plugin.approval.resolved"
+              ) {
                 events.push(event);
               }
             },
