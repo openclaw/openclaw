@@ -5832,6 +5832,13 @@ cursor and follow-up reads retain one SQLite snapshot across transport
 acknowledgments.
 SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
 16-row keyset batches because its bridge buffers results.
+Bounded SQLite context hydration also decodes one payload row at a time, so the
+encoded window does not remain resident alongside its decoded result. Its byte
+selection, event order, and snapshot authority are unchanged. Before a transcript
+worker task starts on V8, usage at or above 80% of the actual heap limit sheds its
+decoded history and memory-export caches through the isolate-local memory-pressure
+channel. Subsequent reads repopulate those caches through their existing owners;
+database handles and stored transcript bytes remain under their original lifecycle.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
 The initial canonical lookup supplies session identity without an unchanged-entry

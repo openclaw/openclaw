@@ -62,6 +62,8 @@ const { values } = parseArgs({
     "workload-cpu-profile": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
+    "worker-memory": { type: "boolean", default: false },
+    "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
@@ -86,6 +88,8 @@ const { values } = parseArgs({
     runs: { type: "string", default: "20" },
     sessions: { type: "string", default: "100" },
     "history-turns": { type: "string", default: "0" },
+    "history-last-turns": { type: "string", default: "0" },
+    "history-payload-kib": { type: "string", default: "0" },
     "seed-history": { type: "boolean", default: false },
     rounds: { type: "string", default: "5" },
     "duration-ms": { type: "string", default: "3600000" },
@@ -139,14 +143,22 @@ if (
 }
 const retentionScenario = scenario === "attempt-retention";
 const idleScenario = scenario === "session-idle-retention";
+const soakScenario = scenario === "memory-soak";
 const historyTurns = integer(values["history-turns"], "--history-turns", 0);
-if ((historyTurns || values["seed-history"]) && !idleScenario) {
-  throw new Error("--history-turns and --seed-history require session-idle-retention");
+const historyLastTurns = integer(values["history-last-turns"], "--history-last-turns", 0);
+const historyPayloadBytes =
+  integer(values["history-payload-kib"], "--history-payload-kib", 0) * 1024;
+if ((historyTurns || values["seed-history"]) && !idleScenario && !soakScenario) {
+  throw new Error(
+    "--history-turns and --seed-history require session-idle-retention or memory-soak",
+  );
 }
 if (values["seed-history"] && !historyTurns) {
   throw new Error("--seed-history requires --history-turns > 0");
 }
-const soakScenario = scenario === "memory-soak";
+if ((historyLastTurns || historyPayloadBytes) && !historyTurns) {
+  throw new Error("--history-last-turns and --history-payload-kib require --history-turns");
+}
 const reasoningScenario = retentionScenario || idleScenario || soakScenario;
 if (
   (values["session-census"] || values["fingerprint-retention"]) &&
@@ -227,6 +239,9 @@ const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-m
 const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
 const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-profile-ms", 0);
 const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
+if (soakScenario && historyTurns && resetEveryRounds) {
+  throw new Error("Seeded memory-soak histories require --reset-every-rounds 0");
+}
 if (
   soakScenario &&
   (values["stream-start-allocations"] ||
@@ -1058,6 +1073,8 @@ const env = {
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
+  ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
+  ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
 };
 function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, ipc = false) {
   const log = createWriteStream(path.join(output, `${name}.log`));
@@ -1218,7 +1235,8 @@ if (values["seed-history"]) {
       const manager = await SessionManager.openAsync(target, path.join(root, "workspace"));
       await manager.appendModelChange("openai", "gpt-4.1");
       await manager.appendThinkingLevelChange("off");
-      for (let turn = 0; turn < historyTurns; turn++) {
+      const turns = index === keys.length - 1 && historyLastTurns ? historyLastTurns : historyTurns;
+      for (let turn = 0; turn < turns; turn++) {
         const callId = `fixture-${turn}`;
         const assistant = {
           role: "assistant" as const,
@@ -1237,6 +1255,22 @@ if (values["seed-history"]) {
           ...assistant,
           stopReason: "toolUse",
           content: [
+            ...(historyPayloadBytes
+              ? [
+                  {
+                    type: "thinking" as const,
+                    thinking: `Synthetic reasoning ${turn}.`,
+                    thinkingSignature: JSON.stringify({
+                      type: "reasoning",
+                      id: `rs_fixture_${index}_${turn}`,
+                      summary: [],
+                      encrypted_content: promptContent
+                        .update(Buffer.alloc(historyPayloadBytes / 2))
+                        .toString("hex"),
+                    }),
+                  },
+                ]
+              : []),
             { type: "toolCall", id: callId, name: "read", arguments: { path: "fixture.txt" } },
           ],
         });
@@ -1246,7 +1280,14 @@ if (values["seed-history"]) {
           toolName: "read",
           isError: false,
           content: [
-            { type: "text", text: `Synthetic file ${turn}.\n${"Fixture content. ".repeat(128)}` },
+            {
+              type: "text",
+              text: `Synthetic file ${turn}.\n${
+                historyPayloadBytes
+                  ? promptContent.update(Buffer.alloc(historyPayloadBytes / 2)).toString("hex")
+                  : "Fixture content. ".repeat(128)
+              }`,
+            },
           ],
           timestamp: timestamp + turn,
         });
@@ -1258,7 +1299,10 @@ if (values["seed-history"]) {
       }
       console.log(`SEEDED ${index + 1}/${sessionCount}`);
     }
-    writeFileSync(historySeedPath, JSON.stringify({ sessionCount, historyTurns }));
+    writeFileSync(
+      historySeedPath,
+      JSON.stringify({ sessionCount, historyTurns, historyLastTurns, historyPayloadBytes }),
+    );
   } finally {
     await agentDb.closeOpenClawAgentDatabasesAsync();
     await stateDb.closeOpenClawStateDatabaseAsync();
@@ -1268,8 +1312,13 @@ if (values["seed-history"]) {
 }
 if (historyTurns) {
   const seeded = JSON.parse(readFileSync(historySeedPath, "utf8"));
-  if (seeded.sessionCount !== sessionCount || seeded.historyTurns !== historyTurns) {
-    throw new Error("Run --seed-history with matching --sessions and --history-turns first");
+  if (
+    seeded.sessionCount !== sessionCount ||
+    seeded.historyTurns !== historyTurns ||
+    (seeded.historyLastTurns ?? 0) !== historyLastTurns ||
+    (seeded.historyPayloadBytes ?? 0) !== historyPayloadBytes
+  ) {
+    throw new Error("Run --seed-history with matching session count and history options first");
   }
 }
 const connectParams = {
@@ -2134,6 +2183,9 @@ try {
       "./scripts/tsx.mjs",
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
+      ...(values["worker-memory"] || values["baseline-owners"]
+        ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
+        : []),
     ]),
     "gateway",
     {},
@@ -2622,7 +2674,9 @@ try {
                       client,
                       method,
                       {
-                        sessionKey: `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                        sessionKey: historyTurns
+                          ? keys[clientIndex % keys.length]
+                          : `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
                         limit: 50,
                       },
                       onResponse,
@@ -2862,6 +2916,7 @@ try {
       streamStart,
       ...(values["mixed-rpc"]
         ? {
+            ...(recordListRequests ? { rpcRequests: listRequests } : {}),
             rpcLatencyMs: Object.fromEntries(
               Object.entries(rpcLatencies).map(([method, latencies]) => [
                 method,
@@ -3201,6 +3256,9 @@ try {
           memoryIntervalMs,
           retainedProfileMs,
           resetEveryRounds,
+          historyTurns,
+          historyLastTurns,
+          historyPayloadBytes,
           sessionResets,
           completedSoakRounds,
           initialRetainedResources,

@@ -896,6 +896,52 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --reset-every-rounds 20 --list-interval-ms 2000 --heap-snapshot
 ```
 
+To retain long active histories during a memory soak, seed with
+`--scenario memory-soak --runs 8 --history-turns 512 --history-last-turns 2500
+--history-payload-kib 16 --reset-every-rounds 0 --seed-history`, then run with
+the same options without `--seed-history`. The last session contains the larger
+turn count. Each seeded turn has a separate deterministic synthetic reasoning
+signature and tool result of the requested KiB each; the default zero preserves
+the smaller reopen fixture. In this mode, `--mixed-rpc` history polls select the
+active seeded sessions, including the larger last session. Keep fixture writes sequential and record actual
+database bytes before choosing the shape on a shared filesystem.
+
+Add `--worker-memory` in a separate diagnostic pass to record bounded task-kind
+memory under `transcript-worker-<thread>.jsonl`. The private preload observes
+the real transcript worker's task transport and samples after JSON parses of at
+least 1 KiB, capturing the raw-row plus decoded-object high water. It records
+task-start/end heap, peak observed heap, parsed bytes, heap limit, and the count
+and final old-generation bytes of major collections during each task. Tasks with
+no major collection keep that value absent. Periodic samples separately label
+the last observed post-GC baseline. It does not force GC, retain payloads,
+or change production worker limits. These are sampled lower bounds, not an exact
+allocation total; per-parse sampling adds overhead, so compare equally instrumented
+pairs and keep uninstrumented RPC acceptance timing separate.
+
+For a focused cold-process bounded-hydration diagnostic on that same fixture:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-hydration-headroom.ts \
+  --state-dir /path/to/seeded-fixture --output /path/to/hydration-result \
+  --revision <measured-commit-sha> --max-mib 64 --rounds 4
+```
+
+This uses the normal hydration owner and actual transcript task worker, checks
+that repeated reads return identical results, and leaves a three-second idle
+observation after the task burst. It does not establish Gateway throughput.
+Use separate matching fixtures, a shared `--start-at`, the measurement lock,
+and swapped CPU halves for baseline/candidate pairs. Follow it with the actual
+Gateway swarm and history/list latency comparison.
+
+For a comparison in one source checkout, `--baseline-owners` substitutes sibling
+`.baseline.ts` copies of `session-transcript.worker`,
+`session-accessor.sqlite-history-query`, `session-memory-entry.worker`, and
+`session-accessor.sqlite-active-context` under `src/config/sessions`. Create those
+four copies from the recorded baseline commit before applying the candidate;
+they are temporary sandbox artifacts. Both sides otherwise use the same import
+graph, dependencies, and driver. Omit `--worker-memory` for the uninstrumented
+Gateway latency pairs; the baseline loader still selects the pinned owners.
+
 This runs paced cohorts after five minutes of warmup, with one real `read` tool
 and a streamed completion per turn, including the same synthetic reasoning
 signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
