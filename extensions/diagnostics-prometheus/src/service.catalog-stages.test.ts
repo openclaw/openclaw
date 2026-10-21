@@ -1,6 +1,67 @@
 import { describe, expect, it } from "vitest";
 import { baseEvent, createMetricsHarness, trusted, untrusted } from "./service.test-helpers.js";
 
+it("exports trusted Control UI document timings in seconds with only bounded stage labels", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "diagnostic.phase.completed" as const,
+    name: "control-ui.document.total",
+    startedAt: 10,
+    durationMs: 125,
+    details: { route: "/chat/synthetic-private-session", user: "synthetic-private-user" },
+  };
+  try {
+    for (const stage of [
+      "auth_grants",
+      "identity_avatar",
+      "plugin_catalog",
+      "git_branch",
+      "preferences",
+      "render",
+      "total",
+    ]) {
+      metrics.record({ ...event, name: `control-ui.document.${stage}` });
+      metrics.record({ ...event, name: `control-ui.document.${stage}`, durationMs: 0 });
+    }
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_control_ui_document_duration_seconds histogram\n");
+    const sums = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_control_ui_document_duration_seconds_sum"));
+    expect(sums).toEqual([
+      'openclaw_control_ui_document_duration_seconds_sum{stage="auth_grants"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="git_branch"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="identity_avatar"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="plugin_catalog"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="preferences"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="render"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="total"} 0.125',
+    ]);
+    expect(rendered).toContain(
+      'openclaw_control_ui_document_duration_seconds_count{stage="total"} 2\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_control_ui_document_duration_seconds_bucket{le="0.1",stage="total"} 1\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_control_ui_document_duration_seconds_bucket{le="0.25",stage="total"} 2\n',
+    );
+    expect(rendered).not.toContain("synthetic-private");
+
+    metrics.record(event, untrusted);
+    metrics.record(event, { trusted: false, internal: true });
+    for (const name of ["control-ui.document.private-session", "other.total"]) {
+      metrics.record({ ...event, name });
+    }
+    for (const durationMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      metrics.record({ ...event, durationMs });
+    }
+    expect(metrics.render()).toBe(rendered);
+  } finally {
+    metrics.stop();
+  }
+});
+
 describe("catalog list stage metrics", () => {
   it("exports elapsed and synchronous CPU populations with fixed labels and no diagnostic content", () => {
     const metrics = createMetricsHarness();
