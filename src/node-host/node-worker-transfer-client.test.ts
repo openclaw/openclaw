@@ -3,16 +3,23 @@ import { X509Certificate } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import http, { createServer as createHttpServer, type RequestOptions } from "node:http";
+import http, {
+  createServer as createHttpServer,
+  type RequestOptions,
+  type ServerResponse,
+} from "node:http";
 import https, { createServer as createHttpsServer } from "node:https";
 import { connect as connectNet, type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import type { TLSSocket } from "node:tls";
+import { gzipSync } from "node:zlib";
 import { installGlobalProxy } from "@openclaw/proxyline";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import {
@@ -20,7 +27,6 @@ import {
   digest,
   fileEntry,
   manifestFixture,
-  readUpload,
   serveTransfer,
   transferFixture,
   transferHandler,
@@ -56,6 +62,90 @@ function observeDrainListeners(emitter: EventEmitter): DrainProbe {
   });
   return probe;
 }
+
+describe("workspace manifest HTTP encoding", () => {
+  const { rawManifest, manifestRef } = manifestFixture();
+  const overflow = () => Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES + 1);
+  function oversizedGzipHeader() {
+    const compressed = gzipSync(rawManifest);
+    // A valid optional filename can exhaust the wire cap without expanding the body.
+    compressed[3] = 8;
+    return Buffer.concat([
+      compressed.subarray(0, 10),
+      Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES, 65),
+      Buffer.from([0]),
+      compressed.subarray(10),
+    ]);
+  }
+  async function encodingFixture(send: (res: ServerResponse) => void, signal?: AbortSignal) {
+    const { workspaceDir, download, read } = fixture("encoding");
+    await fs.mkdir(workspaceDir);
+    await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "existing workspace");
+    let acceptEncoding: string | undefined;
+    const gateway = await serveTransfer(
+      createHttpServer((req, res) => {
+        acceptEncoding = req.headers["accept-encoding"];
+        send(res);
+      }),
+    );
+    return {
+      ...gateway,
+      workspaceDir,
+      read,
+      acceptEncoding: () => acceptEncoding,
+      run: () => download(gateway.gatewayUrl, manifestRef, { signal }),
+    };
+  }
+
+  it("downloads gzip manifests and verifies decoded content", async () => {
+    await using f = await encodingFixture((res) => {
+      res.writeHead(200, { "content-encoding": "gzip" });
+      res.end(gzipSync(rawManifest));
+    });
+    await expect(f.run()).resolves.toBe(manifestRef);
+    expect(f.acceptEncoding()).toBe("gzip");
+    expect(await fs.readdir(f.workspaceDir)).not.toContain("sentinel.txt");
+  });
+
+  it.each<[string, string, () => Buffer, RegExp]>([
+    ["unknown encoding", "br", () => Buffer.from(rawManifest), /encoding/],
+    ["decoded digest mismatch", "gzip", () => gzipSync(`${rawManifest} `), /digest/],
+    ["decoded overflow", "gzip", () => gzipSync(overflow()), /byte limit/],
+    ["encoded gzip overflow", "gzip", oversizedGzipHeader, /byte limit/],
+    ["identity overflow", "identity", overflow, /byte limit/],
+  ])("rejects %s before changing the workspace", async (_name, encoding, body, reason) => {
+    const payload = body();
+    await using f = await encodingFixture((res) =>
+      res.writeHead(200, { "content-encoding": encoding }).end(payload),
+    );
+    await expect(f.run()).rejects.toMatchObject({
+      cause: { message: expect.stringMatching(reason) },
+    });
+    expect(await f.read("sentinel.txt")).toBe("existing workspace");
+    expect(await fs.readdir(path.dirname(f.workspaceDir))).toEqual(["workspace"]);
+  });
+
+  it("cancels an unfinished gzip response and closes the transport without changing the workspace", async () => {
+    const controller = new AbortController();
+    const sent = createDeferred();
+    const closed = createDeferred();
+    await using f = await encodingFixture((res) => {
+      res.on("close", () => closed.resolve());
+      res.writeHead(200, { "content-encoding": "gzip" });
+      res.write(gzipSync(rawManifest).subarray(0, 12), () => sent.resolve());
+    }, controller.signal);
+    try {
+      const result = expect(f.run()).rejects.toMatchObject({ cause: { name: "AbortError" } });
+      await sent.promise;
+      controller.abort();
+      await result;
+      await closed.promise;
+      expect(await f.read("sentinel.txt")).toBe("existing workspace");
+    } finally {
+      controller.abort();
+    }
+  });
+});
 
 describe("node worker transfer client", () => {
   it.skipIf(process.platform === "win32")(
@@ -99,23 +189,14 @@ describe("node worker transfer client", () => {
       ]);
       let uploadedRaw: string | undefined;
       const server = createHttpServer(
-        transferHandler(async (req, res) => {
-          if (req.url?.endsWith("/manifest")) {
-            res.writeHead(200).end(rawManifest);
-            return;
-          }
-          if (req.url?.endsWith(`/blobs/${sha256}`)) {
-            res.writeHead(200).end(original);
-            return;
-          }
-          if (req.method === "POST" && req.url?.includes("/reconciliations/")) {
-            const { currentRaw, currentRef } = await readUpload(req);
+        workspaceTransferHandler(
+          rawManifest,
+          new Map([[sha256, original]]),
+          ({ currentRaw, currentRef }) => {
             uploadedRaw = currentRaw;
-            res.writeHead(200).end(JSON.stringify({ manifestRef: currentRef }));
-            return;
-          }
-          res.writeHead(404).end();
-        }),
+            return currentRef;
+          },
+        ),
       );
       await using gateway = await serveTransfer(server);
       await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
@@ -283,6 +364,7 @@ describe("node worker transfer client", () => {
     await using gateway = await serveTransfer(server);
     const gatewayUrl = gateway.gatewayUrl.replace(/^ws/u, "wss");
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+    const hashMemo = new Map<string, string>();
     const gatewayPort = Number(new URL(gatewayUrl).port);
     let hidPeerCertificate = false;
     const pinnedAgent = https.globalAgent;
@@ -296,7 +378,7 @@ describe("node worker transfer client", () => {
     pinnedAgent.on("free", hidePeerCertificate);
     try {
       await expect(
-        download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint }),
+        download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint, hashMemo }),
       ).resolves.toBe(manifestRef);
       await expect(read("~/result.txt")).resolves.toBe("pinned transfer\n");
       expect(requestCount).toBe(2);
@@ -307,7 +389,7 @@ describe("node worker transfer client", () => {
       uploadManifestRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
         .manifestRef;
       await expect(
-        upload(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint }),
+        upload(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint, hashMemo }),
       ).resolves.toBe(uploadManifestRef);
       expect(requestCount).toBe(3);
       expect(connectionCount).toBe(1);
@@ -492,41 +574,25 @@ describe("node worker transfer client", () => {
       fileEntry("result.txt", baseBody),
     ]);
     const server = createHttpServer(
-      transferHandler(async (req, res) => {
-        if (req.url?.endsWith("/manifest")) {
-          res.writeHead(200, { "content-length": String(Buffer.byteLength(baseRaw)) });
-          res.end(baseRaw);
-          return;
-        }
-        if (req.url?.endsWith(`/blobs/${baseSha256}`)) {
-          res.writeHead(200, { "content-length": String(baseBody.byteLength) });
-          res.end(baseBody);
-          return;
-        }
-        if (req.method === "POST" && req.url?.includes("/reconciliations/")) {
-          const { body, fileHeader, currentRaw, currentRef } = await readUpload(req);
+      workspaceTransferHandler(
+        baseRaw,
+        new Map([[baseSha256, baseBody]]),
+        ({ body, fileHeader, currentRaw, currentRef }) => {
           const current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
           const entry = current.entries.find(
             (candidate) => candidate.path === "result.txt" && candidate.type === "file",
           );
-          const declaredSize = body.readBigUInt64BE(fileHeader);
           const uploaded = body.subarray(fileHeader + 8);
-          const valid =
-            entry?.type === "file" &&
-            declaredSize === BigInt(entry.size) &&
-            uploaded.byteLength === entry.size &&
-            digest(uploaded) === entry.sha256;
-          if (!valid) {
-            res.writeHead(400, { "content-type": "application/json" });
-            res.end(JSON.stringify({ error: "workspace_transfer_invalid", reason: "file_digest" }));
-            return;
-          }
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ manifestRef: currentRef }));
-          return;
-        }
-        res.writeHead(404).end();
-      }),
+          expect(entry).toMatchObject({
+            type: "file",
+            size: uploaded.length,
+            sha256: digest(uploaded),
+          });
+          expect(body.readBigUInt64BE(fileHeader)).toBe(BigInt(uploaded.length));
+          return currentRef;
+        },
+        true,
+      ),
     );
     const gatewayUrl = await listen(server);
     const request = http.request.bind(http);

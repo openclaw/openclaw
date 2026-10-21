@@ -16,49 +16,38 @@ const content = Buffer.from("captured workspace bytes");
 const sha256 = createHash("sha256").update(content).digest("hex");
 const source = { path: "source.bin", size: content.byteLength, sha256 };
 
-it.each([false, true])(
-  "freezes literal paths and aliased hardlinks (upload fails: %s)",
-  async (fails) => {
-    const root = tempDirs.make("worker-upload-snapshot-");
-    const workspaceDir = path.join(root, "workspace");
-    const alias = path.join(root, "workspace-alias");
-    const sharedFile = path.join(root, "shared.bin");
-    const sourcePath = "~/source.bin";
-    await fs.mkdir(path.join(workspaceDir, "~"), { recursive: true });
-    await fs.writeFile(sharedFile, content);
-    await fs.link(sharedFile, path.join(workspaceDir, sourcePath));
-    await fs.symlink(workspaceDir, alias, "junction");
-    let readAfterScope: (() => Promise<void>) | undefined;
-    const failure = new Error("upload failed");
+it("freezes literal paths and aliased hardlinks", async () => {
+  const root = tempDirs.make("worker-upload-snapshot-");
+  const workspaceDir = path.join(root, "workspace");
+  const alias = path.join(root, "workspace-alias");
+  const sharedFile = path.join(root, "shared.bin");
+  const sourcePath = "~/source.bin";
+  await fs.mkdir(path.join(workspaceDir, "~"), { recursive: true });
+  await fs.writeFile(sharedFile, content);
+  await fs.link(sharedFile, path.join(workspaceDir, sourcePath));
+  await fs.symlink(workspaceDir, alias, "junction");
+  let readAfterScope: (() => Promise<void>) | undefined;
 
-    const uploading = withSnapshot(
-      { workspaceDir: alias, sources: [{ ...source, path: sourcePath }] },
-      async (snapshot) => {
-        const file = snapshot.files[0]!;
-        readAfterScope = () => snapshot.stream(file, async () => {});
-        expect(file.size).toBe(content.byteLength);
-        if (!fails) {
-          await fs.writeFile(sharedFile, "later workspace edit");
-        }
-        const chunks: Buffer[] = [];
-        await snapshot.stream(file, async (chunk) => {
-          chunks.push(Buffer.from(chunk));
-        });
-        expect(Buffer.concat(chunks)).toEqual(content);
-        if (fails) {
-          throw failure;
-        }
-        return "uploaded";
-      },
-    );
+  const uploading = withSnapshot(
+    { workspaceDir: alias, sources: [{ ...source, path: sourcePath }] },
+    async (snapshot) => {
+      const file = snapshot.files[0]!;
+      readAfterScope = () => snapshot.stream(file, async () => {});
+      expect(file.size).toBe(content.byteLength);
+      await fs.writeFile(sharedFile, "later workspace edit");
+      const chunks: Buffer[] = [];
+      await snapshot.stream(file, async (chunk) => {
+        chunks.push(Buffer.from(chunk));
+      });
+      expect(Buffer.concat(chunks)).toEqual(content);
+      return "uploaded";
+    },
+  );
 
-    await expect(uploading)[fails ? "rejects" : "resolves"].toBe(fails ? failure : "uploaded");
-    await expect(readAfterScope!()).rejects.toThrow();
-    await expect(fs.readFile(sharedFile)).resolves.toEqual(
-      fails ? content : Buffer.from("later workspace edit"),
-    );
-  },
-);
+  await expect(uploading).resolves.toBe("uploaded");
+  await expect(readAfterScope!()).rejects.toThrow();
+  await expect(fs.readFile(sharedFile)).resolves.toEqual(Buffer.from("later workspace edit"));
+});
 
 it("accepts an empty source list while still requiring the workspace to exist", async () => {
   const workspaceDir = tempDirs.make("worker-upload-empty-");

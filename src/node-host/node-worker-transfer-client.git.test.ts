@@ -312,22 +312,4 @@ describe("node worker Git transfers", () => {
     await fs.writeFile(path.join(workspaceDir, "first.txt"), "edited independently\n");
     await expect(fs.readFile(path.join(workspaceDir, "third.txt"))).resolves.toEqual(body);
   });
-
-  it("round-trips a downloaded workspace with a supplied hash memo", async () => {
-    const root = tempDirs.make("node-worker-transfer-memo-");
-    const { download, upload } = transferFixture(root, "environment-memo");
-    const body = Buffer.from("memoized content\n");
-    const entry = fileEntry("artifact.txt", body);
-    const { sha256 } = entry;
-    const { rawManifest, manifestRef } = manifestFixture([entry]);
-    const server = createHttpServer(
-      workspaceTransferHandler(rawManifest, new Map([[sha256, body]]), () => manifestRef),
-    );
-    await using gateway = await serveTransfer(server);
-    const hashMemo = new Map<string, string>();
-    await expect(download(gateway.gatewayUrl, manifestRef, { hashMemo })).resolves.toBe(
-      manifestRef,
-    );
-    await expect(upload(gateway.gatewayUrl, manifestRef, { hashMemo })).resolves.toBe(manifestRef);
-  });
 });

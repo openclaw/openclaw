@@ -87,7 +87,7 @@ export async function readUpload(request: IncomingMessage) {
 export function workspaceTransferHandler(
   rawManifest: string,
   blobs: ReadonlyMap<string, Buffer>,
-  currentRef?: () => string | undefined,
+  currentRef?: (upload: Awaited<ReturnType<typeof readUpload>>) => string | undefined,
   contentLength = false,
 ) {
   return transferHandler(async (request, response) => {
@@ -97,15 +97,10 @@ export function workspaceTransferHandler(
       request.method === "POST" &&
       request.url?.includes("/reconciliations/") &&
       currentRef;
-    if (reconcile) {
-      for await (const chunk of request) {
-        void chunk;
-      }
-    }
     const body = manifest
       ? rawManifest
       : reconcile
-        ? JSON.stringify({ manifestRef: reconcile() })
+        ? JSON.stringify({ manifestRef: reconcile(await readUpload(request)) })
         : blobs.get(request.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1] ?? "");
     response.writeHead(body === undefined ? 404 : 200, {
       ...(reconcile && contentLength ? { "content-type": "application/json" } : {}),

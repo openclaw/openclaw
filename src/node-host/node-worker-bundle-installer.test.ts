@@ -449,13 +449,18 @@ describe("node worker bundle installer", () => {
       const served = await serve(fixture.archive, fixture.input.archive.token);
       const { ensure, inspect } = installation(fixture, served.gatewayUrl);
 
-      await expect(ensure()).rejects.toThrow("worker-bundle-install-failed");
+      await expect(ensure()).rejects.toThrow(
+        kind === "corrupt"
+          ? "worker bundle archive failed integrity validation"
+          : "worker-bundle-install-failed",
+      );
 
       expect(served.requests).not.toHaveBeenCalled();
       await expect(inspect()).resolves.toEqual({
         bundleHash: fixture.input.build.bundleHash,
         status: "missing",
       });
+      await expect(fs.access(bundleDirectory(fixture))).rejects.toThrow();
     },
   );
 
@@ -822,16 +827,6 @@ describe("node worker bundle installer", () => {
 
     expect(served.requests).toHaveBeenCalledTimes(2);
     await expect(fs.access(tamperedDependency)).rejects.toThrow();
-  });
-
-  it("rejects archive digest mismatch without publishing a bundle", async () => {
-    const fixture = await bundleFixture();
-    fixture.input.archive.sha256 = "f".repeat(64);
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { ensure } = installation(fixture, served.gatewayUrl);
-
-    await expect(ensure()).rejects.toThrow("worker bundle archive failed integrity validation");
-    await expect(fs.access(bundleDirectory(fixture))).rejects.toThrow();
   });
 
   it("rejects an unexpected content length before publication", async () => {
