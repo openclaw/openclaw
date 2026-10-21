@@ -61,6 +61,15 @@ function heartbeat(target: string, every?: string) {
   return { heartbeat: { target, ...(every ? { every } : {}) } };
 }
 
+function activation(config: OpenClawConfig, plugin: PluginManifestRecord) {
+  return resolveEffectivePluginActivationState({
+    ...plugin,
+    channelIds: plugin.channels,
+    config: normalizePluginsConfig(config.plugins),
+    rootConfig: config,
+  }).enabled;
+}
+
 describe("doctor stale plugin config helpers", () => {
   beforeEach(() => {
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReset();
@@ -86,7 +95,6 @@ describe("doctor stale plugin config helpers", () => {
     ["mixed surviving allowlist", { allow: ["webhooks", "surviving-installed"] }, true, true],
     ["surviving deny entry", { deny: ["webhooks", "unrelated-installed"] }, true, true],
   ] as const)("preserves activation after repairing %s", (_name, policy, enabled, surviving) => {
-    const unrelated = false;
     const cfg: OpenClawConfig = {
       hooks: { enabled: true, token: "synthetic-gateway-hook-token" },
       plugins: {
@@ -95,19 +103,14 @@ describe("doctor stale plugin config helpers", () => {
       },
     };
     const before = structuredClone(cfg);
-    const activation = (config: OpenClawConfig, id: string) =>
-      resolveEffectivePluginActivationState({
-        id,
-        origin: "global",
-        config: normalizePluginsConfig(config.plugins),
-        rootConfig: config,
-      });
-    expect(activation(cfg, "unrelated-installed").enabled).toBe(unrelated);
-    expect(activation(cfg, "surviving-installed").enabled).toBe(surviving);
+    const activations = (config: OpenClawConfig) =>
+      ["unrelated-installed", "surviving-installed"].map((id) =>
+        activation(config, { ...manifest(id), origin: "global" }),
+      );
+    expect(activations(cfg)).toEqual([false, surviving]);
 
     const result = maybeRepairStalePluginConfig(cfg);
-    expect(activation(result.config, "unrelated-installed").enabled).toBe(unrelated);
-    expect(activation(result.config, "surviving-installed").enabled).toBe(surviving);
+    expect(activations(result.config)).toEqual([false, surviving]);
     expect(normalizePluginsConfig(result.config.plugins).enabled).toBe(enabled);
     expect(result.config.plugins?.entries?.webhooks).toBeUndefined();
     expect(result.config.hooks).toEqual(cfg.hooks);
@@ -185,15 +188,7 @@ describe("doctor stale plugin config helpers", () => {
       };
       const expectActivation = (candidate: OpenClawConfig) => {
         for (const plugin of plugins) {
-          expect(
-            resolveEffectivePluginActivationState({
-              ...plugin,
-              channelIds: plugin.channels,
-              config: normalizePluginsConfig(candidate.plugins),
-              rootConfig: candidate,
-            }).enabled,
-            plugin.id,
-          ).toBe(enabledIds.includes(plugin.id));
+          expect(activation(candidate, plugin), plugin.id).toBe(enabledIds.includes(plugin.id));
         }
       };
       expectActivation(cfg);
