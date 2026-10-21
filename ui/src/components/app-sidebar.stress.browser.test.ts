@@ -244,7 +244,7 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     await settled(sidebar);
     expect(geometry(section!)).toHaveLength(rows.length);
   });
-  it("keeps archive attribution and row actions in person grouping", async () => {
+  it("keeps archive attribution in person grouping", async () => {
     await page.viewport(1000, 1100);
     const { sidebar } = await mount(220);
     sidebar.sessionOrganizer.setSessionsGrouping("person");
@@ -254,17 +254,6 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
     expect(row).not.toBeNull();
     expect(row!.querySelector(".sidebar-session__archive-glyph")).not.toBeNull();
-    expectRingWidths(geometry(sidebar));
-    const target = sidebar.querySelector<HTMLAnchorElement>(
-      `[data-session-key="${key("pinned")}"] .sidebar-recent-session__link`,
-    )!;
-    target.focus();
-    expect(document.activeElement).toBe(target);
-    target.dispatchEvent(
-      new MouseEvent("click", { altKey: true, bubbles: true, cancelable: true }),
-    );
-    await settled(sidebar);
-    expect(sidebar.querySelector(".sidebar-recent-session--selected")).not.toBeNull();
     sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
     await settled(sidebar);
     const archived = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);

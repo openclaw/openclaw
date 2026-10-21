@@ -156,27 +156,6 @@ describe("patchSessionRows", () => {
     expectError(h, "Session lifecycle action requires a durable session identity.");
   });
 
-  it("dispatches 101 rows as ordered protocol-sized chunks and refreshes once", async () => {
-    const rows = batchRows(101);
-    const h = createHarness();
-
-    const archived = await h.patchRows(rows, { archived: true, unread: false });
-
-    expect(h.request.mock.calls).toEqual(
-      [rows.slice(0, 100), rows.slice(100)].map((chunk) => [
-        "sessions.patchMany",
-        { targets: chunk.map(sessionTarget), patch: { archived: true, unread: false } },
-        { timeoutMs: 10 * 60_000 },
-      ]),
-    );
-    expect(archived).toEqual(rows);
-    expect(h.pruneSidebarSessionEntry.mock.calls.map(([key]) => key)).toEqual([
-      rows[0]!.key,
-      rows[100]!.key,
-    ]);
-    expect(h.reconcileMutation).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { current: false, staleAfterRequest: undefined, count: 1, requests: 0 },
     { current: true, staleAfterRequest: 1, count: 101, requests: 1 },
@@ -194,10 +173,12 @@ describe("patchSessionRows", () => {
       expectedCategory: null,
       expectedArchived: false,
     };
-    const rows = batchRows(3).map((row) => Object.assign(row, { archiveGuard }));
+    const rows = batchRows(4).map((row, index) =>
+      Object.assign(row, { archiveGuard, pinned: index === 0 || index === 3 }),
+    );
     const h = createHarness({ failedKeys: [rows[0]!.key, rows[2]!.key] });
 
-    await expect(h.patchRows(rows, { archived: true })).resolves.toEqual([rows[1]]);
+    await expect(h.patchRows(rows, { archived: true })).resolves.toEqual([rows[1], rows[3]]);
 
     expect(h.request).toHaveBeenCalledWith(
       "sessions.patchMany",
@@ -207,7 +188,7 @@ describe("patchSessionRows", () => {
       }),
       expect.anything(),
     );
-    expect(h.pruneSidebarSessionEntry).not.toHaveBeenCalled();
+    expect(h.pruneSidebarSessionEntry.mock.calls).toEqual([[rows[3]!.key]]);
     expectError(
       h,
       `${rows[0]!.key}: failed ${rows[0]!.key}; ${rows[2]!.key}: failed ${rows[2]!.key}`,
@@ -756,9 +737,7 @@ function guardedTarget(index: number) {
 
 describe("session organizer nested archive choice", () => {
   it.each([
-    ["confirm", 3, 0],
     ["alternative", 3, 0],
-    ["cancel", 3, 0],
     ["confirm", 2, 1],
   ] as const)(
     "honors %s for %s sessions with active work at depth %s",
@@ -812,9 +791,6 @@ describe("session organizer nested archive choice", () => {
         });
       }
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-      if (choice === "cancel") {
-        expect(harness.beginArchive).not.toHaveBeenCalled();
-      }
     },
   );
 

@@ -18,19 +18,17 @@ function mount(participants: SessionParticipant[] = []) {
     id: "profile-ada",
     label: "Ada",
   });
-  const [size, setSize] = createSignal<SessionOwnerChipProps["size"]>("row");
   const { container: chip } = mountSolid(() => (
     <SessionOwnerChip
       owner={owner()}
       attribution="owned"
-      size={size()}
       participants={participants}
       participantCount={participants.length}
     />
   ));
   flush();
   expect(chip.querySelector(".session-owner-chip")).not.toBeNull();
-  return { chip, setOwner, setSize, find: (selector: string) => chip.querySelector(selector) };
+  return { setOwner, find: (selector: string) => chip.querySelector(selector) };
 }
 
 it("renders one participant behind the owner with combined accessibility", () => {
@@ -41,33 +39,27 @@ it("renders one participant behind the owner with combined accessibility", () =>
       avatarUrl: "/avatar/research",
     },
   ]);
-  expect(find(".session-owner-stack__back .viewer-avatar")).not.toBeNull();
-  expect(find(".session-owner-stack__front")).not.toBeNull();
   expect(find(".session-owner-stack")?.getAttribute("aria-label")).toBe(
     "Owned by Ada · with Research",
   );
   expect(find(".session-owner-stack__back img")?.getAttribute("src")).toBe("/avatar/research");
 });
 
-it.each(["row", "header"] as const)(
-  "renders the agent picture and generated fallback in a %s owner chip",
-  async (size) => {
-    const { find, setOwner, setSize } = mount();
-    setOwner({
-      type: "agent",
-      id: "research",
-      identity: { type: "agent", id: "research" },
-      label: "Research",
-      avatarUrl: "/avatar/research",
-    });
-    setSize(size);
-    flush();
-    expect(find(".session-owner-chip img")?.getAttribute("src")).toBe("/avatar/research");
-    find("img")?.dispatchEvent(new Event("error"));
-    await vi.waitFor(() => expect(find(".identity-avatar__agent-face")).not.toBeNull());
-    expect(find(".identity-avatar--agent")?.classList.contains("is-fallback")).toBe(true);
-    setOwner((previous) => ({ ...previous, avatarUrl: undefined }));
-    flush();
-    await vi.waitFor(() => expect(find(".identity-avatar__agent-face")).not.toBeNull());
-  },
-);
+it("renders the agent picture and generated fallback in an owner chip", async () => {
+  const { find, setOwner } = mount();
+  setOwner({
+    type: "agent",
+    id: "research",
+    identity: { type: "agent", id: "research" },
+    label: "Research",
+    avatarUrl: "/avatar/research",
+  });
+  flush();
+  expect(find(".session-owner-chip img")?.getAttribute("src")).toBe("/avatar/research");
+  find("img")?.dispatchEvent(new Event("error"));
+  await vi.waitFor(() => expect(find(".identity-avatar__agent-face")).not.toBeNull());
+  expect(find(".identity-avatar--agent")?.classList.contains("is-fallback")).toBe(true);
+  setOwner((previous) => ({ ...previous, avatarUrl: undefined }));
+  flush();
+  await vi.waitFor(() => expect(find(".identity-avatar__agent-face")).not.toBeNull());
+});

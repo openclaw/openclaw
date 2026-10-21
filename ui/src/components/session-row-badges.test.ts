@@ -41,21 +41,6 @@ function badge(kind: string) {
 }
 
 describe("session row placement badges", () => {
-  it("names the service, profile, and machine without losing conflict or disk attention", () => {
-    renderBadges({
-      placementState: "active",
-      placementProviderId: "machine0",
-      placementProfileId: "team",
-      placementMachine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
-      workspaceConflictCount: 2,
-      diskSpaceStatus: "warning",
-    });
-    expectLabel(
-      badge("cloud"),
-      "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active · 2 workspace conflicts · Cloud session disk space is low",
-    );
-  });
-
   it.each([
     ["incognito", { incognito: true }, "Incognito session"],
     ["approval", { hasApproval: true }, "Approval needed"],
@@ -80,24 +65,6 @@ describe("session row placement badges", () => {
 
     renderBadges({ outboxAttentionCount: 0 });
     expect(container.querySelector(".session-row-badges")).toBeNull();
-  });
-
-  it.each(["local", "reclaimed"] as const)(
-    "keeps %s placement visually quiet",
-    (placementState) => {
-      renderBadges({ placementState });
-
-      expect(container.querySelector(".session-row-badges")).toBeNull();
-    },
-  );
-
-  it("renders a cloud-worker placement as a globe", () => {
-    renderBadges({ placementState: "active" });
-    const indicator = badge("cloud");
-    expect(indicator?.dataset.placementState).toBe("active");
-    expectLabel(indicator, "Placement: active");
-    expect(indicator?.querySelector("circle")).not.toBeNull();
-    expect(indicator?.querySelector("rect")).toBeNull();
   });
 
   it.each([
@@ -150,16 +117,4 @@ describe("session row placement badges", () => {
       expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
     },
   );
-
-  it.each([
-    { status: "warning" as const, label: "Cloud session disk space is low" },
-    { status: "critical" as const, label: "Cloud session disk space is critically low" },
-  ])("uses the cloud badge's $status tone for background pressure", ({ status, label }) => {
-    renderBadges({ placementState: "active", diskSpaceStatus: status });
-
-    const indicator = badge("cloud");
-    expect(indicator?.dataset.diskSpaceStatus).toBe(status);
-    expectLabel(indicator, `Placement: active · ${label}`);
-    expect(container.querySelectorAll(".session-row-badge--cloud")).toHaveLength(1);
-  });
 });

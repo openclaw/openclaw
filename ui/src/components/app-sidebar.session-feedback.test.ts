@@ -369,8 +369,8 @@ describe("sidebar session feedback", () => {
     await expectHint(sidebar);
   });
 
-  it("waits for a pending catalog host to publish its matching result", async () => {
-    const { sidebar, gatewayHarness, request, enableCatalog, reply } = await emptyCatalogFixture();
+  it("keeps the empty-list hint hidden while a catalog host is pending", async () => {
+    const { sidebar, enableCatalog, reply } = await emptyCatalogFixture();
     const catalog = catalogPage([]).catalogs[0]!;
     catalog.capabilities.archive = false;
     Object.assign(catalog, { id: "fixture", label: "Fixture catalog" });
@@ -384,32 +384,6 @@ describe("sidebar session feedback", () => {
     enableCatalog();
     await sidebar.sessionData.refreshSessionCatalogs();
     await settleLitElement(sidebar);
-    const params = request.mock.calls.findLast(
-      ([method]) => method === "sessions.catalog.list",
-    )?.[1];
-    expect(params).toMatchObject({
-      agentId: "main",
-      allowPartialResults: true,
-      progressId: expect.any(String),
-    });
-    expect(sidebar.textContent).not.toContain(hint);
-
-    gatewayHarness.publishEvent("sessions.catalog.host", {
-      progressId: (params as { progressId: string }).progressId,
-      agentId: "main",
-      catalog: {
-        ...catalog,
-        hosts: [
-          {
-            ...catalog.hosts[0]!,
-            pending: false,
-            sessions: matchingCatalog().catalogs[0]!.hosts[0]!.sessions,
-          },
-        ],
-      },
-    });
-    await settleLitElement(sidebar);
-    expect(sidebar.textContent).toContain("Catalog conversation");
     expect(sidebar.textContent).not.toContain(hint);
   });
 

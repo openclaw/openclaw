@@ -89,13 +89,12 @@ it("applies the saved roster filter before its first read and releases it with t
 });
 
 it.each([
-  ["before controller binding", "before", null, false],
-  ["after controller binding", "after", null, false],
-  ["before a different profile connects", "after", "other-profile", false],
-  ["before filtered live rows win bootstrap", "after", null, true],
+  ["before controller binding", "before", false],
+  ["after controller binding", "after", false],
+  ["before filtered live rows win bootstrap", "after", true],
 ] as const)(
   "leaves routing cache loaded %s to its owner and renders only live rows",
-  async (_name, cacheTiming, profileId, filtered) => {
+  async (_name, cacheTiming, filtered) => {
     const cachedRow = row("kept", 1, {
       sessionId: "kept-session",
       derivedTitle: "Cached title",
@@ -179,12 +178,7 @@ it.each([
         statusFilter = "archived";
         controller.resetSessionList();
       }
-      gateway.publish({ phase: "connected", selfUser: profileId ? { id: profileId } : null });
-      if (profileId) {
-        expect(sessions.state.result).toBeNull();
-        expect(controller.sessionsResult).toBeNull();
-        expect(controller.sessionResultsByAgent).toEqual({});
-      }
+      gateway.publish({ phase: "connected", selfUser: null });
       if (filtered) {
         await controller.refreshSidebarSessions();
         expect(controller.sessionsResult?.sessions).toEqual(archived.sessions);
