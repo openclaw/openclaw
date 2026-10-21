@@ -144,6 +144,10 @@ Historical transcripts without a recognizable helper identity remain eligible.
 
 Full rebuilds wait for temporary database cleanup before reporting completion.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
+SQLite background rebuilds retain completed work when foreground activity interrupts
+indexing. The next sync resumes the rebuild, incorporating source changes before
+publishing the complete index. Closing the memory owner or restarting the Gateway
+discards this unfinished work. PostgreSQL rebuilds restart after an interruption.
 
 When an embedding provider rate-limits indexing, each embedding operation gets
 up to five attempts. Retries honor valid provider cooldown hints, capped at

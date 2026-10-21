@@ -5,7 +5,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { testing as schedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { LegacyContextEngine } from "../../context-engine/legacy.js";
@@ -42,6 +42,7 @@ export function useChatAbortRegistryFixture() {
   let stateDir = "";
   let releaseProfileCatalog: (() => void) | undefined;
   let settleRootWork: ReturnType<typeof observeRootWork>;
+  let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   const settle = (keepObserving = true) =>
     settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
   beforeEach(async () => {
@@ -49,6 +50,7 @@ export function useChatAbortRegistryFixture() {
     if (stateDir) {
       throw new Error("Previous chat abort registry fixture cleanup is incomplete");
     }
+    schedulerWork = observeSwarmSchedulerWork();
     stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-abort-errors-")));
     const config = { agents: { defaults: { workspace: stateDir } }, browser: { enabled: false } };
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -65,12 +67,15 @@ export function useChatAbortRegistryFixture() {
     const recordFailure = (error: unknown) => {
       failures.push(error);
     };
+    let schedulerClosed = false;
+    await schedulerWork.close().then(() => {
+      schedulerClosed = true;
+    }, recordFailure);
     await settle(false).catch(recordFailure);
     // Delivery results can settle before their detached root's cleanup tail.
-    if (getActiveGatewayRootWorkCount() === 0) {
+    if (schedulerClosed && getActiveGatewayRootWorkCount() === 0) {
       try {
         await resetSubagentRegistryForTests({ persist: false });
-        schedulerTesting.reset();
         releaseProfileCatalog?.();
         releaseProfileCatalog = undefined;
         await cleanupSessionStateForTest({ stateDir: stateDir || undefined });
