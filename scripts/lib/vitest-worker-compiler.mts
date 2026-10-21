@@ -10,6 +10,7 @@ import {
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildOutputOptions,
 } from "./runtime-process-core-build-entries.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
@@ -285,7 +286,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       await build({
         ...config,
         entry: { [name]: source },
-        outputOptions: { codeSplitting: false },
+        outputOptions: standaloneRuntimeProcessBuildOutputOptions(name, source),
       });
     }
     reportPhase("standalone workers compiled");

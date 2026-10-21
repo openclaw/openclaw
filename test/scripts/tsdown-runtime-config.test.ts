@@ -249,6 +249,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
       requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
+      requireStandaloneRuntimeGraph("config/sessions/session-transcript.worker"),
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
