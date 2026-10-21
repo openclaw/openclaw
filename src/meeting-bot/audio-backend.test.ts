@@ -6,6 +6,8 @@ const PIPEWIRE_SINK_NAME = "openclaw_meeting_audio";
 const PIPEWIRE_MONITOR_NAME = `${PIPEWIRE_SINK_NAME}.monitor`;
 const PIPEWIRE_SOURCE_NAME = PIPEWIRE_SINK_NAME;
 const defaults = { backend: "auto", bufferBytes: 4_096, format: "pcm16-24khz" } as const;
+const channelMap = "front-left,front-right";
+const properties = `'device.description="OpenClaw Meeting Audio"'`;
 
 function pulseRunner(loaded = false) {
   const run = createPulseCommands(loaded);
@@ -17,12 +19,11 @@ function pulseRunner(loaded = false) {
 
 describe("meeting audio backend", () => {
   it("selects the native backend for macOS and Linux", () => {
-    expect(resolveMeetingAudioRuntimeForFormat({ ...defaults, platform: "darwin" }).backend).toBe(
-      "blackhole-2ch",
-    );
-    expect(resolveMeetingAudioRuntimeForFormat({ ...defaults, platform: "linux" }).backend).toBe(
-      "pipewire-pulse",
-    );
+    expect(
+      (["darwin", "linux"] as const).map(
+        (platform) => resolveMeetingAudioRuntimeForFormat({ ...defaults, platform }).backend,
+      ),
+    ).toEqual(["blackhole-2ch", "pipewire-pulse"]);
     expect(() => resolveMeetingAudioRuntimeForFormat({ ...defaults, platform: "win32" })).toThrow(
       "unsupported on win32",
     );
@@ -62,37 +63,30 @@ describe("meeting audio backend", () => {
 
   it("idempotently provisions a PipeWire-Pulse null sink", async () => {
     const run = pulseRunner();
-
     await ensureMeetingAudioBackend({ backend: "pipewire-pulse", run, timeoutMs: 5_000 });
-
-    expect(run).toHaveBeenCalledWith(
+    const modules = [
       [
-        "pactl",
-        "load-module",
         "module-null-sink",
         `sink_name=${PIPEWIRE_SINK_NAME}`,
         "rate=48000",
         "channels=2",
-        "channel_map=front-left,front-right",
-        `sink_properties='device.description="OpenClaw Meeting Audio"'`,
+        `channel_map=${channelMap}`,
+        `sink_properties=${properties}`,
       ],
-      5_000,
-    );
-    expect(run).toHaveBeenCalledWith(
       [
-        "pactl",
-        "load-module",
         "module-remap-source",
         `source_name=${PIPEWIRE_SOURCE_NAME}`,
         `master=${PIPEWIRE_MONITOR_NAME}`,
         "channels=2",
-        "master_channel_map=front-left,front-right",
-        "channel_map=front-left,front-right",
+        `master_channel_map=${channelMap}`,
+        `channel_map=${channelMap}`,
         "remix=no",
-        `source_properties='device.description="OpenClaw Meeting Audio"'`,
+        `source_properties=${properties}`,
       ],
-      5_000,
-    );
+    ];
+    for (const args of modules) {
+      expect(run).toHaveBeenCalledWith(["pactl", "load-module", ...args], 5_000);
+    }
   });
 
   it("does not load a second module when the sink already exists", async () => {
