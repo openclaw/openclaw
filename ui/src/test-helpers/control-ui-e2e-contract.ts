@@ -68,8 +68,6 @@ type GatewayMethods = {
     options?: { exactParams?: boolean },
   ) => number;
   getSessionRow: (key: string) => ControlUiSessionFixture;
-  /** Commit one fixture-owned visibility change without replacing the canonical roster. */
-  setSessionVisibility: ReturnType<typeof createControlUiSessionFixtures>["setVisibility"];
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
@@ -95,6 +93,8 @@ type GatewayMethods = {
 };
 
 export type ControlUiMockGateway = GatewayMethods & {
+  /** Commit one fixture-owned visibility change without replacing the canonical roster. */
+  setSessionVisibility: ReturnType<typeof createControlUiSessionFixtures>["setVisibility"];
   readonly online: boolean;
   requests: MockGatewayRequest[];
   emit: (event: string, payload?: unknown) => void;

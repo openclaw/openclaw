@@ -1,4 +1,4 @@
-import type { Element } from "solid-js";
+import { merge, type Element } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -261,10 +261,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
-          chat: {
-            ...paneChatProps,
-            ...detailsActions,
-            ...detailsOutputs,
+          chat: merge(paneChatProps, detailsActions, detailsOutputs, {
             environment,
             outputs: detailsOutputs.outputs
               ? {
@@ -336,7 +333,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                 backTo: { area: "details" },
               });
             },
-          },
+          } satisfies Partial<ChatDetailsProps>),
           mobileBindings: {
             sharing: this.prepareSessionSharing(selectedSession, {
               personActivity: chatProps.personActivity,
