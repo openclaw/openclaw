@@ -192,14 +192,8 @@ describe("worker node portal carrier", () => {
   it.each(["portal close", "socket close", "runtime replacement"] as const)(
     "joins the original invocation when shutdown overlaps %s",
     async (retirement) => {
-      const record = await support.seedReadyNodeDesktop("worker-node-portal-settlement");
-      const transport = pendingPortalTransport({
-        proof: portalNodeProof(record.nodeDeviceId!),
-        isProofCurrent: () => true,
-      });
-      const streamed = fakePortalBroker();
-      const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
-      carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+      const { record, transport, streamed, carrier, open, bindRuntime } =
+        await fixture("settlement");
       const invoked = createDeferred();
       const invocation =
         createDeferred<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
@@ -210,11 +204,7 @@ describe("worker node portal carrier", () => {
         completionOrder.push("invocation");
         return result;
       });
-      const portal = await carrier.open({
-        environmentId: record.environmentId,
-        ownerEpoch: record.ownerEpoch,
-        remotePort: 4321,
-      });
+      const portal = await open();
       const stopping: Promise<void>[] = [];
       let connection: ReturnType<typeof portal.connect> | undefined;
       const observeClose = (name: string, work: Promise<void>) => {
@@ -238,7 +228,7 @@ describe("worker node portal carrier", () => {
             stream.destroy();
           });
         } else {
-          carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+          bindRuntime();
         }
         observeClose("close", portal.close());
         observeClose("stop", carrier.stop(record.environmentId, record.ownerEpoch));

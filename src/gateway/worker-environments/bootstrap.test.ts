@@ -66,6 +66,15 @@ function tagged(action: "current" | "install" | "receipt", payload: string): str
   return `${OUTPUT_TAG}\t${action}\t${payload}\n`;
 }
 
+function installResponses() {
+  return [
+    result({ stdout: tagged("install", REMOTE_TARBALL) }),
+    result(),
+    result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+    result(),
+  ];
+}
+
 function commandPort(argv: string[]): number {
   const portFlag = argv[0] === "scp" ? "-P" : "-p";
   return Number(argv[argv.indexOf(portFlag) + 1]);
@@ -172,19 +181,7 @@ describe("bootstrapWorker", () => {
       },
     );
 
-    await expect(
-      bootstrapWorker(
-        {
-          ssh: SSH,
-          artifact: BUNDLE,
-        },
-        { resolveIdentity, runCommand: runner.runCommand },
-      ),
-    ).resolves.toEqual({
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: VERSION,
-      protocolFeatures: ["admission-v1"],
-    });
+    await expect(bootstrapWith(runner)).resolves.toEqual(RECEIPT);
 
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0]?.argv[0]).toBe("ssh");
@@ -298,12 +295,7 @@ describe("bootstrapWorker", () => {
     "%s transfer timeout while other phases keep the base timeout",
     async (_name, tarballBytes, transferTimeoutMs) => {
       const baseTimeoutMs = 600_000;
-      const runner = fakeRunner([
-        result({ stdout: tagged("install", REMOTE_TARBALL) }),
-        result(),
-        result({ stdout: tagged("receipt", RECEIPT_JSON) }),
-        result(),
-      ]);
+      const runner = fakeRunner(installResponses());
 
       await expect(
         bootstrapWith(
@@ -355,18 +347,12 @@ describe("bootstrapWorker", () => {
   it("selects an authenticated fallback before transfer and install", async () => {
     const runner = fakeRunner([
       result({ code: 255, stderr: "primary transport unavailable" }),
-      result({ stdout: tagged("install", REMOTE_TARBALL) }),
-      result(),
-      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
-      result(),
+      ...installResponses(),
     ]);
 
-    await expect(
-      bootstrapWorker(
-        { ssh: { ...SSH, fallbackPorts: [22] }, artifact: BUNDLE },
-        { resolveIdentity, runCommand: runner.runCommand },
-      ),
-    ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+    await expect(bootstrapWith(runner, { ssh: { ...SSH, fallbackPorts: [22] } })).resolves.toEqual(
+      RECEIPT,
+    );
 
     expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh", "scp", "ssh", "ssh"]);
     expect(runner.calls.map((call) => commandPort(call.argv))).toEqual([2222, 22, 22, 22, 22]);
@@ -394,12 +380,7 @@ describe("bootstrapWorker", () => {
       ports: [2222, 2222, 2222, 22, 22],
     },
   ])("retries $phase when the selected port changes", async ({ phase, commands, ports }) => {
-    const responses = [
-      result({ stdout: tagged("install", REMOTE_TARBALL) }),
-      result(),
-      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
-      result(),
-    ];
+    const responses = installResponses();
     responses.splice(
       phase === "transfer" ? 1 : 2,
       0,
@@ -407,12 +388,9 @@ describe("bootstrapWorker", () => {
     );
     const runner = fakeRunner(responses);
 
-    await expect(
-      bootstrapWorker(
-        { ssh: { ...SSH, fallbackPorts: [22] }, artifact: BUNDLE },
-        { resolveIdentity, runCommand: runner.runCommand },
-      ),
-    ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+    await expect(bootstrapWith(runner, { ssh: { ...SSH, fallbackPorts: [22] } })).resolves.toEqual(
+      RECEIPT,
+    );
 
     expect(runner.calls.map((call) => call.argv[0])).toEqual(commands);
     expect(runner.calls.map((call) => commandPort(call.argv))).toEqual(ports);
@@ -553,12 +531,9 @@ describe("bootstrapWorker", () => {
     const prefix = "e".repeat(511);
     const runner = fakeRunner([result({ code: 1, stderr: `${prefix}😀 tail` }), result()]);
 
-    await expect(
-      bootstrapWorker(
-        { ssh: SSH, artifact: BUNDLE },
-        { resolveIdentity, runCommand: runner.runCommand },
-      ),
-    ).rejects.toThrow(`Worker bootstrap preflight failed (exit 1): ${prefix}`);
+    await expect(bootstrapWith(runner)).rejects.toThrow(
+      `Worker bootstrap preflight failed (exit 1): ${prefix}`,
+    );
   });
   it.skipIf(process.platform === "win32")(
     "reuses and finally cleans the operation upload across ambiguous candidate attempts",
