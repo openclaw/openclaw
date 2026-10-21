@@ -145,6 +145,24 @@ function bufferedContext(
   });
 }
 
+async function partialSnapshot(
+  params: Omit<Parameters<typeof captureAbortedPartial>[0], "session" | "sessionKey">,
+) {
+  return captureAbortedPartial({
+    session: await prepareChatAbortSessionSnapshot({
+      cfg: sessionEntryState.cfg,
+      key: "main",
+      agentId: "main",
+    }),
+    sessionKey: "main",
+    ...params,
+  });
+}
+
+function persistPartial(snapshot: Awaited<ReturnType<typeof partialSnapshot>>, warn = vi.fn()) {
+  return persistAbortedPartials({ context: { logGateway: { warn } }, snapshots: [snapshot] });
+}
+
 const transcriptFixtures = new Map<
   string,
   { sessionId: string; storePath: string; agentId: string; sessionKey: string }
@@ -297,7 +315,7 @@ describe("chat abort transcript persistence", () => {
     );
     const cancelWorker = vi.fn(() => ["parent"]);
     const context = createChatAbortContext({
-      sources: new Map([["parent", parent]]),
+      sources: [["parent", parent]],
       workerEnvironmentService: createWorkerInferenceCancellationService(
         sessionId,
         ["parent"],
@@ -346,23 +364,15 @@ describe("chat abort transcript persistence", () => {
     const { sessionId } = await createTranscriptFixture();
     sessionEntryState.storePath = "";
     const warn = vi.fn();
-    const persistence = persistAbortedPartials({
-      context: { logGateway: { warn } },
-      snapshots: [
-        captureAbortedPartial({
-          session: await prepareChatAbortSessionSnapshot({
-            cfg: sessionEntryState.cfg,
-            key: "main",
-            agentId: "main",
-          }),
-          sessionKey: "main",
-          sessionId,
-          runId: "failed-abort-run",
-          text: "partial that cannot be persisted",
-          abortOrigin: origin,
-        }),
-      ],
-    });
+    const persistence = persistPartial(
+      await partialSnapshot({
+        sessionId,
+        runId: "failed-abort-run",
+        text: "partial that cannot be persisted",
+        abortOrigin: origin,
+      }),
+      warn,
+    );
 
     if (rejects) {
       await expect(persistence).rejects.toThrow("transcript identity not resolved");
@@ -376,23 +386,14 @@ describe("chat abort transcript persistence", () => {
     const { sessionId } = await createTranscriptFixture();
 
     await expect(
-      persistAbortedPartials({
-        context: { logGateway: { warn: vi.fn() } },
-        snapshots: [
-          captureAbortedPartial({
-            session: await prepareChatAbortSessionSnapshot({
-              cfg: sessionEntryState.cfg,
-              key: "main",
-              agentId: "main",
-            }),
-            sessionKey: "main",
-            sessionId: `${sessionId}-stale`,
-            runId: "stale-placement-run",
-            text: "partial from the former session",
-            abortOrigin: "placement-abandon",
-          }),
-        ],
-      }),
+      persistPartial(
+        await partialSnapshot({
+          sessionId: `${sessionId}-stale`,
+          runId: "stale-placement-run",
+          text: "partial from the former session",
+          abortOrigin: "placement-abandon",
+        }),
+      ),
     ).rejects.toThrow("transcript session changed");
   });
 
@@ -409,13 +410,7 @@ describe("chat abort transcript persistence", () => {
         },
       );
       sessionEntryState.lifecycleRevision = lifecycleRevision;
-      const snapshot = captureAbortedPartial({
-        session: await prepareChatAbortSessionSnapshot({
-          cfg: sessionEntryState.cfg,
-          key: "main",
-          agentId: "main",
-        }),
-        sessionKey: "main",
+      const snapshot = await partialSnapshot({
         sessionId,
         runId: "placement-revision",
         text: "obsolete placement partial",
@@ -430,12 +425,7 @@ describe("chat abort transcript persistence", () => {
         },
       );
       const before = await readTranscriptLines(transcriptPath);
-      await expect(
-        persistAbortedPartials({
-          context: { logGateway: { warn: vi.fn() } },
-          snapshots: [snapshot],
-        }),
-      ).rejects.toThrow("session-rebound");
+      await expect(persistPartial(snapshot)).rejects.toThrow("session-rebound");
       expect(await readTranscriptLines(transcriptPath)).toEqual(before);
     },
   );
@@ -511,7 +501,7 @@ describe("chat abort transcript persistence", () => {
     });
     const context = createChatAbortContext({
       getRuntimeConfig: () => cfg,
-      sources: new Map([[runId, active]]),
+      sources: [[runId, active]],
       chatRunState: createAbortTestRunState([[runId, { buffer: partial }]]),
     });
     const respond = vi.fn();
@@ -545,23 +535,14 @@ describe("chat abort transcript persistence", () => {
     // drop this run's abort partial, so the skip must be run-scoped.
     seedCommittedReply({ sessionId, storePath, runId: "settled-other-run" });
 
-    await persistAbortedPartials({
-      context: { logGateway: { warn: vi.fn() } },
-      snapshots: [
-        captureAbortedPartial({
-          session: await prepareChatAbortSessionSnapshot({
-            cfg: sessionEntryState.cfg,
-            key: "main",
-            agentId: "main",
-          }),
-          sessionKey: "main",
-          runId: "aborted-later-run",
-          sessionId,
-          text: "Completed reply",
-          abortOrigin: "rpc",
-        }),
-      ],
-    });
+    await persistPartial(
+      await partialSnapshot({
+        runId: "aborted-later-run",
+        sessionId,
+        text: "Completed reply",
+        abortOrigin: "rpc",
+      }),
+    );
 
     const lines = await readTranscriptLines(transcriptPath);
     const committedRows = collectAssistantRowsWithText(lines, "Completed reply");
@@ -579,23 +560,14 @@ describe("chat abort transcript persistence", () => {
 
     // The skip happens inside the writer queue after the append decision was
     // handed off, so it must not surface as a failed placement abandonment.
-    await persistAbortedPartials({
-      context: { logGateway: { warn: vi.fn() } },
-      snapshots: [
-        captureAbortedPartial({
-          session: await prepareChatAbortSessionSnapshot({
-            cfg: sessionEntryState.cfg,
-            key: "main",
-            agentId: "main",
-          }),
-          sessionKey: "main",
-          runId: "stalled-placement-run",
-          sessionId,
-          text: "Completed reply",
-          abortOrigin: "placement-abandon",
-        }),
-      ],
-    });
+    await persistPartial(
+      await partialSnapshot({
+        runId: "stalled-placement-run",
+        sessionId,
+        text: "Completed reply",
+        abortOrigin: "placement-abandon",
+      }),
+    );
 
     const lines = await readTranscriptLines(transcriptPath);
     const committedRows = collectAssistantRowsWithText(lines, "Completed reply");
@@ -670,10 +642,10 @@ describe("chat abort transcript persistence", () => {
     operation.freezeAbort();
     const pending = createActiveRun("main", { sessionId, queued: true });
     const context = createChatAbortContext({
-      sources: new Map([
+      sources: [
         ["run-pending", pending],
         ["run-finalizing", finalizingRun],
-      ]),
+      ],
       chatRunState: createAbortTestRunState([
         ["run-pending", { buffer: "Unexecuted input must not become an abort partial" }],
         ["run-finalizing", { buffer: "Completed reply" }],
@@ -700,7 +672,7 @@ describe("chat abort transcript persistence", () => {
     const runId = "run-stop-raw-alias";
     const active = createActiveRun("alias-main", { sessionId });
     const context = createChatAbortContext({
-      sources: new Map([[runId, active]]),
+      sources: [[runId, active]],
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: "alias-main", clientRunId: runId }),
     });
 
@@ -745,10 +717,10 @@ describe("chat abort transcript persistence", () => {
     });
     const runId = `run-${selectedAgentId}-global`;
     const context = createChatAbortContext({
-      sources: new Map([
+      sources: [
         ["run-main-global", mainActive],
         ["run-work-global", workActive],
-      ]),
+      ],
       chatRunState: createAbortTestRunState([
         [runId, { buffer: `partial ${selectedAgentId} response` }],
       ]),
@@ -821,10 +793,10 @@ describe("chat abort transcript persistence", () => {
       agentId: "work",
     });
     const context = createChatAbortContext({
-      sources: new Map([
+      sources: [
         ["run-main-global", mainActive],
         ["run-work-global", workActive],
-      ]),
+      ],
       getRuntimeConfig: () => cfg,
     });
     const agentEvents: Array<{ runId: string; sessionKey?: string; agentId?: string }> = [];
@@ -885,7 +857,7 @@ describe("chat abort transcript persistence", () => {
       agentId: "work",
     });
     const context = globalContext({
-      sources: new Map([["run-work-global", workActive]]),
+      sources: [["run-work-global", workActive]],
     });
 
     await abort(
@@ -910,7 +882,7 @@ describe("chat abort transcript persistence", () => {
     });
     const context = createChatAbortContext({
       getRuntimeConfig: () => ({ agents: { list: [{ id: "work", default: true }] } }),
-      sources: new Map([["run-work-global", active]]),
+      sources: [["run-work-global", active]],
     });
 
     await abort(
@@ -933,7 +905,7 @@ describe("chat abort transcript persistence", () => {
     const respond = vi.fn();
     const active = createActiveRun("third-session", { sessionId });
     const context = createChatAbortContext({
-      sources: new Map([["run-stop-client-session", active]]),
+      sources: [["run-stop-client-session", active]],
     });
 
     await stop(
@@ -981,7 +953,7 @@ describe("chat.abort session identity matching", () => {
     const runId = "embedded-run-1";
     const active = createActiveRun("agent:main:embedded-key", { sessionId: storedSessionId });
     const context = createChatAbortContext({
-      sources: new Map([[runId, active]]),
+      sources: [[runId, active]],
     });
     const respond = vi.fn();
 
@@ -1002,7 +974,7 @@ describe("chat.abort session identity matching", () => {
     const runId = "embedded-run-2";
     const active = createActiveRun("agent:main:other-key", { sessionId: "sess-different" });
     const context = createChatAbortContext({
-      sources: new Map([[runId, active]]),
+      sources: [[runId, active]],
     });
     const respond = vi.fn();
 

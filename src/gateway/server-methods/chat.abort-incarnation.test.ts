@@ -7,7 +7,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
@@ -76,19 +75,14 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original",
       });
-      await registerSubagentRun({
+      await fixture.registerRun({
         runId,
         childSessionKey,
         childAgentId: "main",
         sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
           ?.entry,
         requesterSessionKey: parentKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: parentKey,
         requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
         expectsCompletionMessage: false,
       });
       // Running fixture turns need real ownership so cold lifecycle setup cannot
@@ -215,19 +209,15 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         sessionKey: grandchildKey,
         defaultSessionId: "grandchild-session",
       });
-      await registerSubagentRun({
+      await fixture.registerRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
         childAgentId: "main",
         sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: grandchildKey })
           ?.entry,
         requesterSessionKey: endedKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: endedKey,
         requesterTurnRunId: "new-turn",
         task: "grandchild",
-        cleanup: "keep",
-        collect: true,
         queued: true,
         expectsCompletionMessage: false,
       });
@@ -288,7 +278,7 @@ it.each(["child", "ancestor"])(
         defaultSessionId: "ancestor-session",
         lifecycleRevision: "original-ancestor",
       });
-      await registerSubagentRun({
+      await fixture.registerRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
         childAgentId: "broken",
@@ -297,12 +287,8 @@ it.each(["child", "ancestor"])(
           sessionKey: ancestorKey,
         })?.entry,
         requesterSessionKey: parentKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: parentKey,
         requesterTurnRunId: "parent",
         task: "ancestor",
-        cleanup: "keep",
-        collect: true,
         queued: true,
         expectsCompletionMessage: false,
       });
@@ -326,7 +312,7 @@ it.each(["child", "ancestor"])(
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original-child",
       });
-      await registerSubagentRun({
+      await fixture.registerRun({
         runId,
         childSessionKey,
         childAgentId,
@@ -335,12 +321,9 @@ it.each(["child", "ancestor"])(
           sessionKey: childSessionKey,
         })?.entry,
         requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
-        requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
         requesterDisplayKey: parentKey,
+        requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
         requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
         queued: true,
         expectsCompletionMessage: false,
       });

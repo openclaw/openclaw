@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
-import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
+import {
+  settleSubagentRegistryPersistenceWork,
+  writeSubagentSessionEntry,
+} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { observeSwarmSchedulerWork } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
@@ -13,6 +17,9 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+
+type RegisteredRun = Parameters<typeof registerSubagentRun>[0];
+type RunDefaults = "requesterAgentId" | "requesterDisplayKey" | "task" | "cleanup" | "collect";
 
 vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../server-recovery-runtime-context.js")>()),
@@ -100,6 +107,24 @@ export function useChatAbortRegistryFixture() {
 
   return {
     settle,
+    writeSession: (sessionKey: string, sessionId: string) =>
+      writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey,
+        defaultSessionId: sessionId,
+      }),
+    registerRun: (
+      params: Omit<RegisteredRun, RunDefaults> & Partial<Pick<RegisteredRun, RunDefaults>>,
+    ) =>
+      registerSubagentRun({
+        requesterAgentId: "main",
+        requesterDisplayKey: params.requesterSessionKey,
+        task: params.runId,
+        cleanup: "keep",
+        collect: true,
+        ...params,
+      }),
     get stateDir() {
       return stateDir;
     },

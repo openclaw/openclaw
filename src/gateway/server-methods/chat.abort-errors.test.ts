@@ -19,7 +19,6 @@ import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-c
 import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
@@ -120,19 +119,15 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original-child",
       });
-      await registerSubagentRun({
+      await fixture.registerRun({
         runId,
         childSessionKey,
         childAgentId,
         sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
           ?.entry,
         requesterSessionKey: runId !== "root" ? rootKey : sessionKey,
-        requesterAgentId: "main",
         requesterDisplayKey: "main",
         requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
         queued: true,
         expectsCompletionMessage: false,
       });
@@ -288,18 +283,13 @@ it.each([
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original-child",
       });
-      await registerSubagentRun({
+      await fixture.registerRun({
         runId,
         childSessionKey,
         childAgentId: runId === "bad" ? "broken" : "main",
         sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
           ?.entry,
         requesterSessionKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: requesterSessionKey,
-        task: runId,
-        cleanup: "keep",
-        collect: true,
         queued: runId === "healthy" || (runId === "bad" && queued),
         expectsCompletionMessage: false,
       });
@@ -476,7 +466,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       message: { role: "user", content: "old user turn", timestamp: Date.now() },
     });
     expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
-    await registerSubagentRun({
+    await fixture.registerRun({
       runId: "child",
       childSessionKey: childKey,
       childAgentId: "child",
@@ -485,12 +475,8 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
         sessionKey: childKey,
       })?.entry,
       requesterSessionKey: sessionKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: sessionKey,
       requesterTurnRunId: "parent",
       task: "child",
-      cleanup: "keep",
-      collect: true,
       expectsCompletionMessage: false,
     });
     const entered = createDeferred();
@@ -684,7 +670,7 @@ it("reports typed contention without replaying or denying an already applied Sto
   });
   const sessionKey = "agent:main:main";
   const active = createActiveRun(sessionKey, { agentId: "main" });
-  const context = createChatAbortContext({ sources: new Map([["run-1", active]]) });
+  const context = createChatAbortContext({ sources: [["run-1", active]] });
   const respond = await invokeChatAbortHandler({
     handler: handleChatAbortRequest,
     context,
@@ -758,7 +744,7 @@ it.each([
       }
     })();
     source.input.abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-    const context = createChatAbortContext({ sources: new Map([["retained-run", source]]) });
+    const context = createChatAbortContext({ sources: [["retained-run", source]] });
     const stopping = invokeChatAbortHandler({
       handler: handleChatAbortRequestWithLifecycle,
       context,

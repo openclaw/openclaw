@@ -4,7 +4,6 @@ import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
 import * as subagentKill from "../../agents/subagents/registry/subagent-control-kill.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -78,17 +77,14 @@ async function queueCollector(sessionKey: string, groupId: string, runId: string
     maxConcurrent: 1,
     onStartFailure: () => true,
   });
-  await registerSubagentRun({
+  await fixture.registerRun({
     runId,
     childSessionKey: sessionKey,
     childAgentId: "main",
     sessionEntry: loadSessionEntry({ agentId: "main", sessionKey }),
     requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
     requesterDisplayKey: "main",
     task: "queued collector",
-    cleanup: "keep",
-    collect: true,
     queued: true,
     expectsCompletionMessage: false,
   });
@@ -129,7 +125,7 @@ it.each([false, true])(
     const context = createChatAbortContext({
       getRuntimeConfig,
       workerEnvironmentService: service,
-      sources: new Map([["worker-run", active]]),
+      sources: [["worker-run", active]],
     });
     const kill = vi
       .spyOn(subagentKill, "killSubagentRunAdmin")
@@ -218,7 +214,7 @@ it.each([
   const context = createChatAbortContext({
     getRuntimeConfig,
     getSessionEventSubscriberConnIds: () => new Set(),
-    sources: new Map([[runId, active]]),
+    sources: [[runId, active]],
     chatRunState: createAbortTestRunState([[runId, { buffer: "Already streamed reply" }]]),
   });
   const pending = invokeChatAbortHandler({

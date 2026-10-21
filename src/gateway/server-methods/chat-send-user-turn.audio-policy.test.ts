@@ -170,7 +170,9 @@ describe("chat.send voice transcription policy boundary", () => {
         const { prepared, input, cfg } = await prepare({ default: "allow" }, undefined, echoFormat);
         expect(input.text).toBe("caption");
         expect(runExec).not.toHaveBeenCalled();
+        expect(prepared.ctx.media?.[0]?.transcribed).not.toBe(true);
         prepared.applyApprovedText(requireInputText(input));
+        expect(prepared.ctx.BodyForAgent).toBe("caption");
         await applyMediaUnderstanding({ ctx: prepared.ctx, cfg, processingMode: "audio-only" });
         expect(runExec).toHaveBeenCalledOnce();
         expect(prepared.ctx.BodyForAgent).toContain("policy-approved voice");
