@@ -17,8 +17,11 @@ export type TestModelSetupPage = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-const recommendedIconUrl = "https://cdn.simpleicons.org/ollama";
 export const customIconUrl = "https://cdn.example.com/acme.png";
+
+const option = (id: string, label: string, hint: string) => ({ id, brandId: id, label, hint });
+const subscribe = () => () => undefined;
+const selection = () => ({ state: { selectedId: "main", scopeId: "main" }, subscribe });
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -26,33 +29,23 @@ export const detection: SystemAgentSetupDetectResult = {
   manualProviders: [],
   authOptions: [],
   prepareOptions: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Connect to an Ollama server and select a cloud or local model",
-    },
-    {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: "llama.cpp",
-      hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
-    },
-    {
-      id: "lmstudio",
-      brandId: "lmstudio",
-      label: "LM Studio",
-      hint: "Connect to a running LM Studio server and use an already loaded model",
-    },
+    option("ollama", "Ollama", "Connect to an Ollama server and select a cloud or local model"),
+    option(
+      "llama-cpp",
+      "llama.cpp",
+      "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
+    ),
+    option(
+      "lmstudio",
+      "LM Studio",
+      "Connect to a running LM Studio server and use an already loaded model",
+    ),
   ],
   recommendedInstalls: [
     {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Run open models locally",
+      ...option("ollama", "Ollama", "Run open models locally"),
       website: "https://ollama.com/download",
-      icon: recommendedIconUrl,
+      icon: "https://cdn.simpleicons.org/ollama",
     },
   ],
   workspace: "/tmp/workspace",
@@ -99,9 +92,9 @@ export function createContext() {
     setSessionKey: () => undefined,
     start: () => undefined,
     stop: () => undefined,
-    subscribe: () => () => undefined,
-    subscribeEventLog: () => () => undefined,
-    subscribeEvents: () => () => undefined,
+    subscribe,
+    subscribeEventLog: subscribe,
+    subscribeEvents: subscribe,
   } as unknown as ApplicationGateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   return {
@@ -111,14 +104,8 @@ export function createContext() {
     snapshot,
     context: {
       gateway,
-      agentSelection: {
-        state: { selectedId: "main", scopeId: "main" },
-        subscribe: () => () => undefined,
-      },
-      settingsAgentSelection: {
-        state: { selectedId: "main", scopeId: "main" },
-        subscribe: () => () => undefined,
-      },
+      agentSelection: selection(),
+      settingsAgentSelection: selection(),
       basePath: "/openclaw",
       resourceBasePath: "/openclaw",
       navigate: vi.fn(),
