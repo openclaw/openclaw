@@ -40,27 +40,41 @@ type ProfileFixture = Profiler.Profile & {
   timeDeltas: number[];
 };
 
-function frame(functionName: string, scriptId: string, url = "", lineNumber = 0, columnNumber = 0) {
-  return { functionName, scriptId, url, lineNumber, columnNumber };
-}
-
 function profile(): ProfileFixture {
   return {
     nodes: [
       {
         id: 1,
-        callFrame: frame("(root)", "0", "", -1, -1),
+        callFrame: {
+          functionName: "(root)",
+          scriptId: "0",
+          url: "",
+          lineNumber: -1,
+          columnNumber: -1,
+        },
         children: [2, 3],
       },
       {
         id: 2,
-        callFrame: frame("readRows", "12", "/fixture/openclaw/src/state/read.js", 20, 4),
+        callFrame: {
+          functionName: "readRows",
+          scriptId: "12",
+          url: "/fixture/openclaw/src/state/read.js",
+          lineNumber: 20,
+          columnNumber: 4,
+        },
         hitCount: 2,
         positionTicks: [{ line: 21, ticks: 2 }],
       },
       {
         id: 3,
-        callFrame: frame("private payload", "14", "eval://private-source"),
+        callFrame: {
+          functionName: "private payload",
+          scriptId: "14",
+          url: "eval://private-source",
+          lineNumber: 0,
+          columnNumber: 0,
+        },
         deoptReason: "private reason",
       },
     ],
@@ -74,31 +88,6 @@ function profile(): ProfileFixture {
 async function capture(signal = new AbortController().signal, hasAuthority = () => true) {
   const { captureDiagnosticCpuProfile } = await import("./diagnostic-cpu-profile.js");
   return captureDiagnosticCpuProfile({ signal, hasAuthority });
-}
-
-async function complete(forbidden = /fixture|private/, maxOutcomeBytes?: number) {
-  const outcome = await capture();
-  expect(outcome.status).toBe("complete");
-  if (outcome.status !== "complete") {
-    throw new Error("capture failed");
-  }
-  expect(JSON.stringify(outcome)).not.toMatch(forbidden);
-  if (maxOutcomeBytes !== undefined) {
-    expect(Buffer.byteLength(JSON.stringify(outcome))).toBeLessThan(maxOutcomeBytes);
-  }
-  return outcome.result;
-}
-
-async function unavailable(reason: string, cleanupFailed = false) {
-  expect(await capture()).toEqual({ status: "unavailable", reason, cleanupFailed });
-}
-
-function restoreBunVersion() {
-  if (bunVersion) {
-    Object.defineProperty(process.versions, "bun", bunVersion);
-  } else {
-    Reflect.deleteProperty(process.versions, "bun");
-  }
 }
 
 function returnProfile(value: Profiler.Profile = profile()) {
@@ -138,7 +127,11 @@ beforeEach(() => {
   native.wait.mockResolvedValue(undefined);
 });
 afterEach(() => {
-  restoreBunVersion();
+  if (bunVersion) {
+    Object.defineProperty(process.versions, "bun", bunVersion);
+  } else {
+    Reflect.deleteProperty(process.versions, "bun");
+  }
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -149,7 +142,11 @@ describe("diagnostic CPU profile owner", () => {
     native.dispose.mockImplementationOnce(() => {
       throw new Error("private native failure");
     });
-    await unavailable("cleanup-failed", true);
+    expect(await capture()).toEqual({
+      status: "unavailable",
+      reason: "cleanup-failed",
+      cleanupFailed: true,
+    });
     expect(native.dispose).toHaveBeenCalledOnce();
     expect((await capture()).status).toBe("complete");
     expect(native.start).toHaveBeenCalledTimes(2);
@@ -171,18 +168,25 @@ describe("diagnostic CPU profile owner", () => {
     native.wait.mockImplementation(async () => {
       now += 5_000;
     });
-    expect(await complete()).toMatchObject({ startBlockedMs: 2_100, actualDurationMs: 5_500 });
+    expect(await capture()).toMatchObject({
+      status: "complete",
+      result: { startBlockedMs: 2_100, actualDurationMs: 5_500 },
+    });
   });
   it("returns a complete sanitized graph only after native cleanup", async () => {
-    const result = await complete();
-    expect(result).toMatchObject({
+    const outcome = await capture();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status !== "complete") {
+      throw new Error("capture failed");
+    }
+    expect(outcome.result).toMatchObject({
       requestedDurationMs: 5_000,
       actualDurationMs: 5_500,
       samplingIntervalMicros: 10_000,
       sampleLossCount: null,
       redactedNodeCount: 1,
     });
-    expect(result.profile).toEqual({
+    expect(outcome.result.profile).toEqual({
       ...profile(),
       nodes: [
         profile().nodes[0],
@@ -197,6 +201,7 @@ describe("diagnostic CPU profile owner", () => {
         },
       ],
     });
+    expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
     expect(native.post.mock.calls.map(([method]) => method)).toEqual([
       "Profiler.enable",
       "Profiler.setSamplingInterval",
@@ -216,23 +221,38 @@ describe("diagnostic CPU profile owner", () => {
     value.nodes[1].callFrame.lineNumber = -10;
     value.nodes[1].callFrame.columnNumber = -200;
     value.nodes[1].positionTicks = [{ line: -9, ticks: 2 }];
-    value.nodes[2].callFrame = frame("wasm-to-js", "-1");
+    value.nodes[2].callFrame = {
+      functionName: "wasm-to-js",
+      scriptId: "-1",
+      url: "",
+      lineNumber: 0,
+      columnNumber: 0,
+    };
     returnProfile(value);
-    expect(await complete()).toMatchObject({
-      profile: {
-        nodes: expect.arrayContaining([
-          expect.objectContaining({
-            id: 2,
-            callFrame: expect.objectContaining({ lineNumber: -10, columnNumber: -200 }),
-            positionTicks: [{ line: -9, ticks: 2 }],
-          }),
-          expect.objectContaining({
-            id: 3,
-            callFrame: frame("[redacted]", "-1"),
-          }),
-        ]),
-        samples: [2, 3, 2],
-        timeDeltas: [10_000, -500, 10_500],
+    expect(await capture()).toMatchObject({
+      status: "complete",
+      result: {
+        profile: {
+          nodes: expect.arrayContaining([
+            expect.objectContaining({
+              id: 2,
+              callFrame: expect.objectContaining({ lineNumber: -10, columnNumber: -200 }),
+              positionTicks: [{ line: -9, ticks: 2 }],
+            }),
+            expect.objectContaining({
+              id: 3,
+              callFrame: {
+                functionName: "[redacted]",
+                scriptId: "-1",
+                url: "",
+                lineNumber: 0,
+                columnNumber: 0,
+              },
+            }),
+          ]),
+          samples: [2, 3, 2],
+          timeDeltas: [10_000, -500, 10_500],
+        },
       },
     });
   });
@@ -243,7 +263,11 @@ describe("diagnostic CPU profile owner", () => {
       const value = profile();
       value.nodes[1].callFrame.scriptId = scriptId;
       returnProfile(value);
-      await unavailable("invalid-profile");
+      expect(await capture()).toEqual({
+        status: "unavailable",
+        reason: "invalid-profile",
+        cleanupFailed: false,
+      });
       expect(native.disconnect).toHaveBeenCalledOnce();
     },
   );
@@ -307,27 +331,38 @@ describe("diagnostic CPU profile owner", () => {
     native.disconnect.mockImplementationOnce(() => {
       throw new Error("private disconnect error");
     });
-    await unavailable("capture-failed", true);
+    expect(await capture()).toEqual({
+      status: "unavailable",
+      reason: "capture-failed",
+      cleanupFailed: true,
+    });
     returnProfile();
     expect((await capture()).status).toBe("complete");
     expect(native.connect).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    ["NODE_OPTIONS", "--inspect=0"],
-    ["NODE_OPTIONS", "--cpu-prof"],
-    ["NODE_OPTIONS", "--heap_prof"],
-    ["NODE_OPTIONS", "--prof"],
-    ["NODE_OPTIONS", "--perf-basic-prof"],
-    ["NODE_OPTIONS", "--experimental-test-coverage"],
-    ["NODE_OPTIONS", '"unterminated'],
-    ["NODE_V8_COVERAGE", "fixture-coverage"],
-    ["listener", "ws://127.0.0.1:9229/fixture"],
-  ])("refuses profiler ownership from %s=%s", async (kind, value) => {
+    "--inspect=0",
+    "--cpu-prof",
+    "--heap_prof",
+    "--prof",
+    "--perf-basic-prof",
+    "--experimental-test-coverage",
+  ])("refuses known profiler option %s", async (option) => {
+    vi.stubEnv("NODE_OPTIONS", option);
+    expect(await capture()).toMatchObject({ status: "unavailable", reason: "conflict" });
+    expect(native.connect).not.toHaveBeenCalled();
+  });
+
+  it.each(["listener", "coverage", "malformed-options"])("refuses %s ownership", async (kind) => {
     if (kind === "listener") {
-      native.url.mockReturnValue(value);
-    } else {
-      vi.stubEnv(kind, value);
+      native.url.mockReturnValue("ws://127.0.0.1:9229/fixture");
+    }
+    if (kind === "coverage") {
+      vi.stubEnv("NODE_V8_COVERAGE", "fixture-coverage");
+    }
+    if (kind === "malformed-options") {
+      vi.stubEnv("NODE_OPTIONS", '"unterminated');
     }
     expect(await capture()).toMatchObject({ status: "unavailable", reason: "conflict" });
     expect(native.connect).not.toHaveBeenCalled();
@@ -346,7 +381,11 @@ describe("diagnostic CPU profile owner", () => {
       }
       return {};
     });
-    await unavailable("tracing-active");
+    expect(await capture()).toEqual({
+      status: "unavailable",
+      reason: "tracing-active",
+      cleanupFailed: false,
+    });
     expect(native.post.mock.calls.some(([method]) => method === "Profiler.start")).toBe(false);
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
@@ -354,13 +393,22 @@ describe("diagnostic CPU profile owner", () => {
   it.each(["BUN_INSPECT", "BUN_INSPECT_CONNECT_TO"])(
     "refuses %s debugger ownership on Bun only",
     async (variable) => {
-      vi.stubEnv(variable, "ws://127.0.0.1:9229/fixture");
-      Object.defineProperty(process.versions, "bun", { configurable: true, value: "fixture" });
-      expect(await capture()).toMatchObject({ status: "unavailable", reason: "conflict" });
-      expect(native.connect).not.toHaveBeenCalled();
-      Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
-      expect(await capture()).toMatchObject({ status: "complete" });
-      expect(native.connect).not.toHaveBeenCalled();
+      const original = Object.getOwnPropertyDescriptor(process.versions, "bun");
+      try {
+        vi.stubEnv(variable, "ws://127.0.0.1:9229/fixture");
+        Object.defineProperty(process.versions, "bun", { configurable: true, value: "fixture" });
+        expect(await capture()).toMatchObject({ status: "unavailable", reason: "conflict" });
+        expect(native.connect).not.toHaveBeenCalled();
+        Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
+        expect(await capture()).toMatchObject({ status: "complete" });
+        expect(native.connect).not.toHaveBeenCalled();
+      } finally {
+        if (original) {
+          Object.defineProperty(process.versions, "bun", original);
+        } else {
+          Reflect.deleteProperty(process.versions, "bun");
+        }
+      }
     },
   );
 
@@ -385,11 +433,19 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it.each(["lineNumber", "columnNumber"] as const)(
-    "rejects fractional %s without publishing a partial graph",
-    async (field) => {
+  const invalidProfiles: Record<string, (value: ProfileFixture) => void> = {
+    "fractional source line": (value) => {
+      value.nodes[1].callFrame.lineNumber = -1.5;
+    },
+    "fractional source column": (value) => {
+      value.nodes[1].callFrame.columnNumber = -1.5;
+    },
+  };
+  it.each(Object.entries(invalidProfiles))(
+    "rejects %s without publishing a partial graph",
+    async (_name, mutate) => {
       const value = profile();
-      value.nodes[1].callFrame[field] = -1.5;
+      mutate(value);
       returnProfile(value);
       expect(await capture()).toMatchObject({ status: "unavailable", reason: "invalid-profile" });
       expect(native.disconnect).toHaveBeenCalledOnce();
@@ -412,23 +468,28 @@ describe("diagnostic CPU profile owner", () => {
     root.children = children.map((node) => node.id);
     const value: Profiler.Profile = { ...profile(), nodes: [root, ...children] };
     returnProfile(value);
-    const result = await complete(/fixture|private/, 1024 * 1024);
-    expect(result).toMatchObject({
-      truncated: true,
-      originalNodeCount: 3_000,
-      sampleCount: 3,
-      omittedSampleCount: 0,
-      summary: [
-        {
-          sampleCount: 2,
-          stack: [expect.objectContaining({ functionName: "x".repeat(256) }), expect.any(Object)],
-        },
-        {
-          sampleCount: 1,
-          stack: [expect.objectContaining({ functionName: "[redacted]" }), expect.any(Object)],
-        },
-      ],
+    const outcome = await capture();
+    expect(outcome).toMatchObject({
+      status: "complete",
+      result: {
+        truncated: true,
+        originalNodeCount: 3_000,
+        sampleCount: 3,
+        omittedSampleCount: 0,
+        summary: [
+          {
+            sampleCount: 2,
+            stack: [expect.objectContaining({ functionName: "x".repeat(256) }), expect.any(Object)],
+          },
+          {
+            sampleCount: 1,
+            stack: [expect.objectContaining({ functionName: "[redacted]" }), expect.any(Object)],
+          },
+        ],
+      },
     });
+    expect(JSON.stringify(outcome)).not.toContain("private payload");
+    expect(Buffer.byteLength(JSON.stringify(outcome))).toBeLessThan(1024 * 1024);
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
 
@@ -472,11 +533,11 @@ describe("diagnostic CPU profile owner", () => {
         });
       }
       returnProfile({ ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) });
-      const result = await complete(/fixture|private|runBoot/);
-      if (!("summary" in result)) {
+      const outcome = await capture();
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
         throw new Error("expected a bounded summary");
       }
-      expect(result.summary).toEqual(
+      expect(outcome.result.summary).toEqual(
         ["dist/second.js", "src/first.ts"].map((url, index) => ({
           sampleCount: 2 - index,
           elidedFrameCount: dependencyDepth - 8 + 1,
@@ -488,8 +549,9 @@ describe("diagnostic CPU profile owner", () => {
           ],
         })),
       );
-      expect(result.omittedSampleCount).toBe(0);
-      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(1024 * 1024);
+      expect(outcome.result.omittedSampleCount).toBe(0);
+      expect(JSON.stringify(outcome)).not.toMatch(/fixture|private|runBoot/);
+      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
     },
   );
 
@@ -522,10 +584,12 @@ describe("diagnostic CPU profile owner", () => {
       // The hottest stack is last in native order; ranking must retain it first.
       samples.push(...Array<number>(20).fill(samples.at(-1)!));
       returnProfile({ ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) });
-      const result = await complete();
-      if (!("summary" in result)) {
+      const outcome = await capture();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
         throw new Error("expected a bounded summary");
       }
+      const result = outcome.result;
       expect(result.profile).toBeUndefined();
       expect(result.summary[0]).toMatchObject({ sampleCount: 21 });
       expect(result.summary.every((row) => row.stack.length === 8)).toBe(true);
@@ -557,7 +621,11 @@ describe("diagnostic CPU profile owner", () => {
   it.skipIf(process.platform === "win32")(
     "captures a real profile with the current runtime without opening a listener",
     async ({ signal }) => {
-      restoreBunVersion();
+      if (bunVersion) {
+        Object.defineProperty(process.versions, "bun", bunVersion);
+      } else {
+        Reflect.deleteProperty(process.versions, "bun");
+      }
       // Keep V8 coverage and mocked inspector/timers in the test worker. The
       // fresh child exercises the prepared owner without inheriting either.
       const env: NodeJS.ProcessEnv = {};

@@ -50,7 +50,11 @@ async function connect(options: Parameters<typeof openClient>[0]) {
 type IncognitoResult = { key: string; sessionId: string; entry: InternalSessionEntry };
 type SessionList = { sessions: Array<{ key: string; incognito?: true }> };
 
-async function request<T>(method: string, params: Record<string, unknown>, ws?: WebSocket) {
+async function request<T extends Record<string, unknown>>(
+  method: string,
+  params: Record<string, unknown>,
+  ws?: WebSocket,
+) {
   return ws ? await rpcReq<T>(ws, method, params) : await directSessionReq<T>(method, params);
 }
 

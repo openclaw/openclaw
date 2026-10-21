@@ -561,6 +561,7 @@ async function runReset(params: {
       await harness.client.handleInteraction(
         createInternalInteractionPayload({
           ...interactionFor("status", CHANNEL),
+          type: InteractionType.ApplicationCommand,
           data: { id: "reset-command", name: params.commandName, type: 1 },
         }),
       );

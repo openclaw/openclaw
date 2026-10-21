@@ -1,49 +1,38 @@
 // File logs preserve raw values; diagnostic emission owns its redaction.
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
-import { Logger as TsLogger } from "tslog";
-import { afterAll, afterEach, beforeAll, beforeEach, assert, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import {
-  createSubsystemLogger as createPluginSubsystemLogger,
-  getChildLogger as getPluginChildLogger,
-} from "../plugin-sdk/logging-core.js";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import {
   capturePluginStateWorkerFailure,
   restorePluginStateWorkerFailure,
 } from "../plugin-state/plugin-state-worker-errors.js";
 import { withEnv } from "../test-utils/env.js";
-import type { LogLevel } from "./levels.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { fileLogTransport } from "./logger-file-transport.js";
 import {
-  applyLoggingConfig,
-  flushLogger,
   getChildLogger,
   getLogger,
   resetLogger,
   setLoggerOverride,
   toPinoLikeLogger,
 } from "./logger.js";
-import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
-import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
-import { loggingState } from "./state.js";
+import { testApi as loggerTest } from "./logger.test-support.js";
+import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 
-const pluginStateSecret = "sk-testsecret1234567890abcd";
+const secret = "sk-testsecret1234567890abcd";
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-redaction-");
 let logPath: string;
-let rawConsole: typeof loggingState.rawConsole;
 
 async function readLogFile(): Promise<string> {
-  await flushLogger();
+  await loggerTest.flushFileLogQueueForTests();
   return fs.readFileSync(logPath, "utf8");
 }
 
@@ -57,34 +46,26 @@ async function readRecords() {
 beforeAll(() => logPathTracker.setup());
 
 beforeEach(() => {
-  rawConsole = loggingState.rawConsole;
-  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
-  vi.stubEnv("OPENCLAW_LOG_LEVEL", "");
+  resetDiagnosticEventsForTest();
   logPath = logPathTracker.nextPath();
   setLoggerOverride({ level: "info", file: logPath });
 });
 
-afterEach(async () => {
-  await flushLogger();
+afterEach(() => {
+  resetDiagnosticEventsForTest();
   resetLogger();
-  resetSecretRedactionRegistryForTest();
-  loggingState.rawConsole = rawConsole;
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
 });
 
 afterAll(() => logPathTracker.cleanup());
 it.each([{ aggregate: false }, { aggregate: true }])(
   "retains plugin-state failure origin and raw causes (aggregate=$aggregate)",
   async ({ aggregate }) => {
-    const native = Object.assign(
-      new Error(`Permission denied; Authorization: Bearer ${pluginStateSecret}`),
-      {
-        code: "EACCES",
-        errno: -13,
-        privateData: "unrelated stored value",
-      },
-    );
+    const native = Object.assign(new Error(`Permission denied; Authorization: Bearer ${secret}`), {
+      code: "EACCES",
+      errno: -13,
+      privateData: "unrelated stored value",
+    });
     const cause = aggregate
       ? new AggregateError([native], "Synthetic admission failed", {
           cause: new Error("Synthetic cleanup failed"),
@@ -130,12 +111,27 @@ it.each([{ aggregate: false }, { aggregate: true }])(
           : { cause: nativeDetails }),
       },
     });
-    expect(content).toContain(pluginStateSecret);
-    expect((await readConfiguredLogTail()).lines.join("\n")).not.toContain(pluginStateSecret);
+    expect(content).toContain(secret);
+    expect((await readConfiguredLogTail()).lines.join("\n")).not.toContain(secret);
     expect(content).not.toContain("unrelated stored value");
     expect(record["1"].error).not.toHaveProperty("stack");
   },
 );
+
+it("redacts sensitive structured fields before emitting diagnostic log records", async () => {
+  // afterEach owns diagnostic subscription cleanup, including this capture.
+  const capture = createDiagnosticLogRecordCapture();
+  getLogger().info(
+    { password: "hunter2", token: "token-value-1234567890" },
+    "credential diagnostic",
+  );
+  await capture.flush();
+  const serialized = JSON.stringify(capture.records);
+  expect(serialized).toContain("credential diagnostic");
+  expect(serialized).not.toContain("hunter2");
+  expect(serialized).not.toContain("token-value-1234567890");
+  expect(capture.records.at(-1)?.attributes?.password).toBe("***");
+});
 
 it("uses logging.file from the active config path", async () => {
   setLoggerOverride(null);
@@ -226,239 +222,6 @@ it("promotes agent, session, and channel context to top-level JSONL fields", asy
     channel: "discord",
     message: "session routed",
   });
-});
-
-async function logToSinks(
-  message: string,
-  meta?: Record<string, unknown>,
-  redactPatterns?: string[],
-  write?: (logger: ReturnType<typeof getPluginChildLogger>, file: string) => void,
-) {
-  vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
-  const file = logPathTracker.nextPath();
-  applyLoggingConfig({
-    level: "info",
-    file,
-    consoleStyle: "json",
-    consoleLevel: "info",
-    redactPatterns,
-  });
-  const output = vi.fn();
-  loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
-  const logger = createPluginSubsystemLogger("jsonl-proof");
-  if (write) {
-    write(getPluginChildLogger({ subsystem: "jsonl-proof" }), file);
-  } else {
-    logger.info(message, meta);
-  }
-  await flushLogger();
-  const lines = fs.readFileSync(file, "utf8").trim().split("\n");
-  return {
-    raw: lines.map((line) => JSON.parse(line))[0],
-    console: output.mock.calls.map(([line]) => JSON.parse(String(line))),
-  };
-}
-
-async function expectMetadata(
-  result: Awaited<ReturnType<typeof logToSinks>>,
-  raw: Record<string, unknown>,
-  redacted: Record<string, unknown>,
-) {
-  expect(result.raw["1"]).toEqual(raw);
-  expect(result.console[0]).toMatchObject(redacted);
-  const tail = await readTail();
-  expect(tail.record["1"]).toEqual(redacted);
-  return tail;
-}
-
-async function readTail(limit?: number) {
-  const { lines } = await readConfiguredLogTail({ limit });
-  assert(lines[0] !== undefined);
-  return { record: JSON.parse(lines[0]), text: lines.join("\n") };
-}
-
-it("keeps files raw and redacts console/tail independently", async () => {
-  const secret = "sk-syntheticcredential123456";
-  const meta = { password: "synthetic-password", count: 3 };
-  const result = await logToSinks(`request failed token=${secret}`, structuredClone(meta));
-  const tail = await expectMetadata(result, meta, { password: "***", count: 3 });
-  expect(result.raw.message).toContain(secret);
-  expect(JSON.stringify(result.console)).not.toContain(secret);
-  expect(tail.text).not.toContain(secret);
-});
-
-it.each([
-  { value: "private-value", pattern: "^private-value$" },
-  { value: 42, pattern: '"value":(42)' },
-  { value: true, pattern: '"value":(true)' },
-  { value: null, pattern: '"value":(null)' },
-])("redacts custom scalar at console/tail: $value", async ({ value, pattern }) => {
-  const result = await logToSinks("custom rules", { value }, [pattern]);
-  await expectMetadata(result, { value }, { value: "***" });
-});
-
-it("refreshes registry/custom policies without rewriting files", async () => {
-  registerSecretValueForRedaction("987654321");
-  const meta = { value: 987654321, nested: [987654321] };
-  const result = await logToSinks("registry proof", structuredClone(meta));
-  await expectMetadata(result, meta, { value: "***", nested: ["***"] });
-  const reloaded = await logToSinks("reload proof", { value: "reload-private" }, [
-    "^reload-private$",
-  ]);
-  await expectMetadata(reloaded, { value: "reload-private" }, { value: "***" });
-});
-
-it("writes valid raw overflow metadata and masks it when tailed", async () => {
-  const hostname = '--token "synthetic-credential-123456"';
-  vi.spyOn(os, "hostname").mockReturnValue(hostname);
-  const result = await logToSinks("overflow", undefined, undefined, (logger, file) => {
-    logger.info("first");
-    for (let index = 0; index < 4_095; index += 1) {
-      fileLogTransport.enqueue({ file, hostname, maxFileBytes: 1024 * 1024, payload: "{}\n" });
-    }
-    logger.info("second");
-  });
-  expect(result.raw).toMatchObject({ dropped: 1, hostname });
-  const tail = await readTail(5_000);
-  expect(tail.record.dropped).toBe(1);
-  expect(tail.text).not.toContain("synthetic-credential-123456");
-});
-
-it("serializes native values once, preserving cycles, bigints and text", async () => {
-  const toJSON = vi.fn(() => ({ token: "raw-native-token", count: 7 }));
-  const circular: Record<string, unknown> = { count: 9n };
-  circular.self = circular;
-  const result = await logToSinks("native values", undefined, undefined, (logger) => {
-    logger.info("native value", { toJSON }, circular, Number.NaN);
-  });
-  expect(toJSON).toHaveBeenCalledTimes(1);
-  expect([result.raw["2"], result.raw["3"], result.raw.message]).toEqual([
-    { token: "raw-native-token", count: 7 },
-    { count: "9", self: "[Circular]" },
-    'native value {"token":"raw-native-token","count":7} {"count":"9","self":"[Circular]"} NaN',
-  ]);
-  expect((await readTail()).text).not.toContain("raw-native-token");
-});
-
-it.each([
-  { value: "private-value", pattern: "^private-value$" },
-  { value: `private-value${"x".repeat(6000)}`, pattern: "^private-valuex+$" },
-])("redacts complete and truncated display copies", async ({ value, pattern }) => {
-  const result = await logToSinks("display projection", undefined, [pattern], (logger) => {
-    logger.info("native value", { value, key: "opaque-key", password: 1234 });
-  });
-  expect(result.raw.message).toContain("private-value");
-  const tail = await readTail();
-  expect(tail.text).not.toContain("private-value");
-  expect(tail.text).not.toContain("opaque-key");
-  expect(tail.record["2"].password).toBe("***");
-  expect(tail.record.message).not.toContain("1234");
-});
-
-const child = (module = "retained", level?: LogLevel) => getChildLogger({ module }, { level });
-const read = (file: string) => fs.readFileSync(file, "utf8");
-function expectLog(file: string, visible: string, hidden?: string) {
-  const text = read(file);
-  expect(text).toContain(visible);
-  if (hidden) {
-    expect(text).not.toContain(hidden);
-  }
-  return text;
-}
-it.each([
-  ["root", getLogger],
-  ["child", () => child()],
-  ["nested child", () => child().getSubLogger({ name: "nested" })],
-  ["pino child", () => toPinoLikeLogger(child(), "info").child({ component: "nested" })],
-] as const)(
-  "refreshes retained %s across silent, file and level changes",
-  async (_name, create) => {
-    const first = logPathTracker.nextPath();
-    const second = logPathTracker.nextPath();
-    applyLoggingConfig({ level: "silent", file: first });
-    const logger = create();
-    logger.info("hidden before enable");
-    applyLoggingConfig({ level: "info", file: first });
-    logger.info("first target");
-    logger.debug("hidden before debug");
-    applyLoggingConfig({ level: "debug", file: second });
-    logger.debug("second target");
-    applyLoggingConfig({ level: "silent", file: second });
-    logger.error("hidden after disable");
-    await flushLogger();
-    const firstText = expectLog(first, "first target", "second target");
-    const secondText = expectLog(second, "second target", "first target");
-    expect(firstText + secondText).not.toContain("hidden");
-  },
-);
-
-it("preserves explicit levels and later nested settings assignments", async () => {
-  const first = logPathTracker.nextPath();
-  const second = logPathTracker.nextPath();
-  applyLoggingConfig({ level: "error", file: first });
-  const logger = child("verbose", "debug");
-  const nested = logger.getSubLogger({ name: "nested" });
-  const silent = toPinoLikeLogger(child("quiet", "silent"), "silent").child({ component: "child" });
-  expect(logger).toBeInstanceOf(TsLogger);
-  nested.debug("explicit debug");
-  logger.settings.minLevel = 4;
-  applyLoggingConfig({ level: "trace", file: second });
-  nested.debug("hidden after assignment");
-  nested.warn("assigned warning");
-  silent.error("hidden explicit silent");
-  expect(silent.level).toBe("silent");
-  await flushLogger();
-  expectLog(first, "explicit debug");
-  expectLog(second, "assigned warning", "hidden");
-});
-
-it("applies new file size limits to existing children", async () => {
-  const file = logPathTracker.nextPath();
-  applyLoggingConfig({ level: "info", file, maxFileBytes: 1_000_000 });
-  const logger = child("rotation");
-  logger.info("before smaller limit");
-  await flushLogger();
-  applyLoggingConfig({ level: "info", file, maxFileBytes: 1 });
-  logger.info("after smaller limit");
-  await flushLogger();
-  const archive = path.join(path.dirname(file), `${path.basename(file, ".log")}.1.log`);
-  expectLog(archive, "before smaller limit");
-  expectLog(file, "after smaller limit");
-});
-
-it("leaves third-party loggers under their own policy", () => {
-  const logger = new TsLogger<{ date?: Date } & Record<string, unknown>>({
-    minLevel: 4,
-    type: "hidden",
-  });
-  const records: unknown[] = [];
-  logger.attachTransport((record) => {
-    records.push(record);
-  });
-  const adapter = toPinoLikeLogger(logger, "warn").child({ component: "external" });
-  applyLoggingConfig({ level: "silent", file: logPathTracker.nextPath() });
-  adapter.info("hidden external info");
-  adapter.warn({ event: "external" }, { detail: "retained" }, "external warning");
-  expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject({
-    "0": { event: "external" },
-    "1": { detail: "retained" },
-    "2": "external warning",
-    _logMeta: { logLevelName: "WARN" },
-  });
-});
-
-it("keeps Pino inheritance across module copies", async () => {
-  const file = logPathTracker.nextPath();
-  applyLoggingConfig({ level: "silent", file });
-  const logger = child("retained-module");
-  vi.resetModules();
-  const reloaded = await import("./logger.js");
-  const adapter = reloaded.toPinoLikeLogger(logger, "info").child({ component: "later-copy" });
-  reloaded.applyLoggingConfig({ level: "info", file });
-  adapter.info("enabled through another module copy");
-  await flushLogger();
-  expectLog(file, "enabled through another module copy");
 });
 
 it("keeps falsy scalar context ahead of later aliases and logger bindings", async () => {

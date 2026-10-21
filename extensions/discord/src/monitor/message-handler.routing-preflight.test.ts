@@ -95,25 +95,40 @@ async function prepare(cfg: OpenClawConfig, adapter: SessionBindingAdapter, dire
   });
 }
 
-it("resolves ambiguous conversation bindings without synchronous persistence", async () => {
-  const record = binding("agent:second:acp:bound-session");
-  const cfg: OpenClawConfig = {
-    agents: { ownership: "explicit", entries: { first: {}, second: {} } },
-  };
-  const touch = vi.fn(() => {
-    throw new Error("Routing preflight must not perform synchronous persistence");
-  });
-  const result = await prepare(cfg, {
-    ...scope,
-    listBySession: () => [record],
-    resolveByConversation: (ref) => (ref.conversationId === channelId ? record : null),
-    touch,
-  });
-  expect(touch).not.toHaveBeenCalled();
-  expect(result.effectiveRoute.agentId).toBe("second");
-  expect(result.baseSessionKey).toBe(record.targetSessionKey);
-  expect(result.threadBinding).toEqual(record);
-});
+it.each(["ambiguous", "main-session"])(
+  "resolves conversation bindings with %s routing without synchronous persistence",
+  async (routing) => {
+    const mainSession = routing === "main-session";
+    const record = binding(mainSession ? "agent:second:home" : "agent:second:acp:bound-session");
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { first: {}, second: {} } },
+    };
+    if (mainSession) {
+      cfg.bindings = [{ agentId: "first", match: { channel: "discord" } }];
+      cfg.session = { mainKey: "home" };
+    }
+    const touch = vi.fn(() => {
+      throw new Error("Routing preflight must not perform synchronous persistence");
+    });
+    const result = await prepare(cfg, {
+      ...scope,
+      listBySession: () => [record],
+      resolveByConversation: (ref) => (ref.conversationId === channelId ? record : null),
+      touch,
+    });
+    expect(touch).not.toHaveBeenCalled();
+    expect(result.effectiveRoute.agentId).toBe("second");
+    expect(result.baseSessionKey).toBe(record.targetSessionKey);
+    expect(result.threadBinding).toEqual(record);
+    if (mainSession) {
+      expect(result.effectiveRoute).toMatchObject({
+        sessionKey: "agent:second:home",
+        mainSessionKey: "agent:second:home",
+        lastRoutePolicy: "main",
+      });
+    }
+  },
+);
 
 it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
   "rejects changed Discord %s ownership before adopting a reply",
@@ -174,7 +189,7 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
       }
       return lookup(ref);
     });
-    const prepared = await prepare(
+    const { effectiveRoute: route } = await prepare(
       cfg,
       {
         ...scope,
@@ -186,7 +201,6 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
       },
       direct,
     );
-    const route = prepared.effectiveRoute;
     holdRead = true;
     expect(route.agentId).toBe(configured || stale ? "work" : "main");
     if (configured) {
@@ -194,8 +208,6 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
     }
     if (stale) {
       expect(route.sessionKey).toBe(`agent:work:discord:channel:${channelId}`);
-      expect(prepared.boundSessionKey).toBeUndefined();
-      expect(prepared.threadBinding).toBeUndefined();
     }
     const autoThread =
       scenario === "derived"

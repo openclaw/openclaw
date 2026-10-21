@@ -847,7 +847,7 @@ describe("Discord native plugin command dispatch", () => {
       cfg.channels!.discord!.guilds = {
         guild1: {
           requireMention: true,
-          channels: { chan1: { allow: true, requireMention: true } },
+          channels: { chan1: { enabled: true, requireMention: true } },
         },
       };
       vi.spyOn(nativeCommandRoute, "resolveDiscordNativeInteractionRouteState").mockImplementation(

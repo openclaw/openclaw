@@ -693,7 +693,7 @@ describe("sandbox browser lifecycle", () => {
     dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
     dockerMocks.readDockerContainerLabel.mockResolvedValue("old-tmpfs-config");
-    vi.mocked(execContainer).mockResolvedValue({
+    namespaceMocks.execContainer.mockResolvedValue({
       stdout: JSON.stringify({
         Mounts: [{ Type: "bind", Source: testWorkspaceDir, Destination: "/workspace", RW: true }],
         Tmpfs: { "/workspace/cache": "rw" },

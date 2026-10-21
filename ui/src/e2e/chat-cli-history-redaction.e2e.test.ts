@@ -12,6 +12,7 @@ import {
   createChatFlowE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
+  requireRecord,
   visibleChatBubbleTexts,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
@@ -57,6 +58,23 @@ suite.define(() => {
         localMessages: [localUserMessage],
         importedMessages: await readClaudeCliSessionMessagesAsync({ cliSessionId, homeDir }),
       });
+
+      expect(mergedMessages).toHaveLength(2);
+      expect(mergedMessages[0]).toEqual({
+        ...localUserMessage,
+        __openclaw: {
+          cliSessionId,
+          externalId: "control-ui-claude-user-copy",
+          importedFrom: "claude-cli",
+        },
+      });
+      expect(requireRecord(requireRecord(mergedMessages[1])["__openclaw"])).toMatchObject({
+        cliSessionId,
+        externalId: "control-ui-claude-imported-assistant",
+        importedFrom: "claude-cli",
+      });
+      expect(JSON.stringify(mergedMessages)).toContain(secret);
+      expect(await fs.readFile(filePath, "utf-8")).toContain(secret);
 
       const gateway = await installMockGateway(page, {
         historyMessages: mergedMessages,

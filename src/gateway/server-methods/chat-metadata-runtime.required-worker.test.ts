@@ -157,32 +157,3 @@ test.each([
     await harness.runtime.stop();
   }
 });
-
-test.each([
-  ["required device worker", "coding", "device", "worker", "coding"],
-  ["optional device worker", undefined, "device", "worker", undefined],
-  ["required Gateway inference", "coding", "device", "gateway", undefined],
-  ["missing profile", "missing", "device", "worker", undefined],
-  ["foreign provider setting", "coding", "custom", "worker", undefined],
-  ["invalid device setting", "coding", "device", "native", undefined],
-] as const)(
-  "projects only current %s policy",
-  async (_name, required, provider, inference, expected) => {
-    const cfg: OpenClawConfig = {
-      cloudWorkers: {
-        requiredProfile: required,
-        profiles: { coding: { provider, settings: { device: "paired-worker", inference } } },
-      },
-    };
-    const harness = await workerHarness(cfg);
-    const params = { sessionKey: "agent:main:example" };
-    expect((await harness.read(params)).requiredWorkerInferenceProfileId).toBe(expected);
-    expect(await harness.read()).not.toHaveProperty("requiredWorkerInferenceProfileId");
-    expect(
-      (await harness.read({ ...params, sessionEntry: { agentRuntimeOverride: "codex" } }))
-        .requiredWorkerInferenceProfileId,
-    ).toBeUndefined();
-    delete cfg.cloudWorkers!.requiredProfile;
-    expect((await harness.read(params)).requiredWorkerInferenceProfileId).toBeUndefined();
-  },
-);

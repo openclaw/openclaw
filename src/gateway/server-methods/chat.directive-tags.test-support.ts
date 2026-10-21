@@ -339,6 +339,27 @@ export async function seedChatDirectiveFileTranscript(
   await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
 }
 
+export function expectClaimOnlyTranscriptMedia(
+  message: unknown,
+  expectedMedia: unknown[],
+  forbiddenValues: string[],
+) {
+  const media = (
+    message as { __openclaw?: { media?: Array<Record<string, unknown>> } } | undefined
+  )?.["__openclaw"]?.media;
+  expect(media).toEqual(expectedMedia);
+  for (const fact of media ?? []) {
+    expect(fact.url).toMatch(/^media:\/\/inbound\/[^?#]+$/u);
+    for (const key of ["path", "workspaceDir", "data"]) {
+      expect(fact).not.toHaveProperty(key);
+    }
+  }
+  const serialized = JSON.stringify(message);
+  for (const value of ["base64", ...forbiddenValues]) {
+    expect(serialized).not.toContain(value);
+  }
+}
+
 export function createChatDirectiveReplyBackend(params: {
   cancel?: ReplyBackendHandle["cancel"];
   isStopped?: ReplyBackendHandle["isStopped"];

@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
-  createGuildPreflightArgs,
+  createDiscordPreflightArgs,
+  createGuildEvent,
   createGuildTextClient,
+  DEFAULT_PREFLIGHT_CFG,
 } from "./message-handler.preflight.test-helpers.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
@@ -67,15 +69,23 @@ function preflightParams(
   enabled: boolean,
   client = createGuildTextClient(CHANNEL_ID),
 ) {
-  return createGuildPreflightArgs({
-    message,
-    discordConfig: { allowBots: true },
-    client,
-    botUserId: "bot-1",
+  return {
+    ...createDiscordPreflightArgs({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      discordConfig: { allowBots: true },
+      data: createGuildEvent({
+        channelId: CHANNEL_ID,
+        guildId: GUILD_ID,
+        author: message.author,
+        message,
+      }),
+      client,
+      botUserId: "bot-1",
+    }),
     guildEntries: {
       [GUILD_ID]: { id: GUILD_ID, channels: { [CHANNEL_ID]: { enabled, requireMention: false } } },
     },
-  });
+  };
 }
 
 describe("preflightDiscordMessage configured ACP bindings", () => {

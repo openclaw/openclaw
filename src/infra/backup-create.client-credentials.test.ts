@@ -51,7 +51,9 @@ it(
     })) {
       source
         .prepare(
-          `INSERT INTO ${table} (${Object.keys(row)}) VALUES (${Object.keys(row).map(() => "?")})`,
+          `INSERT INTO ${table} (${Object.keys(row).join(",")}) VALUES (${Object.keys(row)
+            .map(() => "?")
+            .join(",")})`,
         )
         .run(...Object.values(row));
     }

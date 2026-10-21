@@ -273,6 +273,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/server.sessions.create.spawn.test.ts", 11],
   ["src/gateway/server.sessions.create.stores.test.ts", 14],
   ["src/gateway/server.sessions.create.workspace-policy.test.ts", 24],
+  ["src/gateway/server.sessions.create.worktree-selection.test.ts", 22],
   ["src/gateway/server.sessions.create.worktrees.test.ts", 23],
   // Two-run median case-body anchors from main runs 33504478720/33509347578.
   // These balance files; membership-specific wrapper spans own admission.

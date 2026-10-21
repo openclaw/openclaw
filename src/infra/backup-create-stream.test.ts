@@ -45,7 +45,12 @@ function startArchive() {
     reportProgress = report;
     return archiveStream;
   });
-  return { archivePath, archiveStream, writePromise, reportProgress };
+  return {
+    archivePath,
+    archiveStream,
+    writePromise,
+    reportProgress: (progress: Parameters<ReportProgress>[0]) => reportProgress(progress),
+  };
 }
 const retry = (
   controller: AbortController,

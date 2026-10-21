@@ -3164,6 +3164,7 @@
       "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts": 8,
       "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts": 19,
       "ui/src/e2e/chat-comment-pane-retirement.e2e.test.ts": 17,
+      "ui/src/e2e/chat-composer-accessory-focus.e2e.test.ts": 3,
       "ui/src/e2e/chat-composer-capability-menu-height.e2e.test.ts": 4,
       "ui/src/e2e/chat-composer-capability-menu.e2e.test.ts": 28,
       "ui/src/e2e/chat-composer-catalog.e2e.test.ts": 26,
