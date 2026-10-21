@@ -2,9 +2,9 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  registerMatrixApprovalReactionTarget as registerMatrixApprovalReactionTargetRaw,
-  resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
-  unregisterMatrixApprovalReactionTarget as unregisterMatrixApprovalReactionTargetRaw,
+  registerMatrixApprovalReactionTarget as register,
+  resolveMatrixApprovalReactionTargetWithPersistence as resolve,
+  unregisterMatrixApprovalReactionTarget as unregister,
 } from "./approval-reactions.js";
 import { setMatrixRuntime } from "./runtime.js";
 
@@ -13,51 +13,30 @@ const { clearRuntime: clearMatrixRuntime } = createPluginRuntimeStore<PluginRunt
   errorMessage: "Matrix runtime not initialized",
 });
 
-type RegisterTargetParams = Parameters<typeof registerMatrixApprovalReactionTargetRaw>[0];
-type ResolveTargetParams = Parameters<
-  typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
->[0];
-type UnregisterTargetParams = Parameters<typeof unregisterMatrixApprovalReactionTargetRaw>[0];
-const touchedTargetRefs = new Map<string, UnregisterTargetParams>();
-const anchor = { roomId: "!ops:example.org", eventId: "$approval-msg" };
+const targets: Parameters<typeof unregister>[0][] = [];
+const anchor = { accountId: "default", roomId: "!ops:example.org", eventId: "$approval-msg" };
 const approval = { ...anchor, approvalId: "req-123", approvalKind: "exec" as const };
 
-function rememberTargetRef({ accountId, roomId, eventId }: UnregisterTargetParams): void {
-  const ref = { accountId, roomId, eventId };
-  touchedTargetRefs.set(JSON.stringify(ref), ref);
-}
-
-async function registerTarget(params: Partial<RegisterTargetParams> = {}): Promise<void> {
+async function registerTarget(params: Partial<Parameters<typeof register>[0]> = {}): Promise<void> {
   const target = {
-    accountId: "default",
     ...approval,
     allowedDecisions: ["allow-once" as const],
     ...params,
   };
-  rememberTargetRef(target);
-  await registerMatrixApprovalReactionTargetRaw(target);
+  targets.push(target);
+  await register(target);
 }
 
-function resolveTarget(params: Partial<ResolveTargetParams> = {}) {
-  const target = { accountId: "default", ...anchor, reactionKey: "✅", ...params };
-  rememberTargetRef(target);
-  return resolveMatrixApprovalReactionTargetWithPersistenceRaw(target);
+function resolveTarget(params: Partial<Parameters<typeof resolve>[0]> = {}) {
+  return resolve({ ...anchor, reactionKey: "✅", ...params });
 }
 
-function createRuntimeLogger(overrides: { warn?: ReturnType<typeof vi.fn> } = {}) {
-  // Runtime state survives no-isolate workers, so expose every logger method later files may call.
-  return { debug: vi.fn(), info: vi.fn(), warn: overrides.warn ?? vi.fn(), error: vi.fn() };
-}
-
-beforeEach(() => {
-  clearMatrixRuntime();
-});
+beforeEach(clearMatrixRuntime);
 
 afterEach(async () => {
-  for (const target of touchedTargetRefs.values()) {
-    await unregisterMatrixApprovalReactionTargetRaw(target);
+  for (const target of targets.splice(0)) {
+    await unregister(target);
   }
-  touchedTargetRefs.clear();
   clearMatrixRuntime();
   vi.restoreAllMocks();
 });
@@ -93,13 +72,12 @@ describe("matrix approval reactions", () => {
     const approvalKind = "system-agent" as const;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const warn = vi.fn();
-    const register = vi.fn().mockResolvedValue(undefined);
+    const persist = vi.fn().mockResolvedValue(undefined);
     const persistedAnchor = { roomId: "!ops:example.org", eventId: "$approval-msg-2" };
     const record = {
       version: 1,
       target: {
         ...approval,
-        accountId: "default",
         approvalKind,
         ...persistedAnchor,
         allowedDecisions: ["allow-once", "deny"] as const,
@@ -107,7 +85,7 @@ describe("matrix approval reactions", () => {
     };
     const lookup = vi.fn().mockResolvedValue(record);
     const openKeyedStore = vi.fn(() => ({
-      register,
+      register: persist,
       lookup,
       consume: vi.fn(),
       delete: vi.fn().mockResolvedValue(undefined),
@@ -116,12 +94,12 @@ describe("matrix approval reactions", () => {
     }));
     setMatrixRuntime({
       state: { openKeyedStoreV2: openKeyedStore },
-      logging: { getChildLogger: () => createRuntimeLogger({ warn }) },
+      logging: { getChildLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() }) },
     } as never);
 
     await registerTarget({ ...record.target, ttlMs: 1 });
 
-    expect(register).toHaveBeenCalledExactlyOnceWith(
+    expect(persist).toHaveBeenCalledExactlyOnceWith(
       '["default","!ops:example.org","$approval-msg-2"]',
       record,
       { ttlMs: 1 },
@@ -136,7 +114,7 @@ describe("matrix approval reactions", () => {
     expect(openKeyedStore).toHaveBeenCalledOnce();
     expect(lookup).toHaveBeenCalledWith('["default","!ops:example.org","$approval-msg-2"]');
 
-    register.mockRejectedValueOnce(new Error("sqlite unavailable"));
+    persist.mockRejectedValueOnce(new Error("sqlite unavailable"));
     await registerTarget({
       eventId: "$approval-msg-3",
       approvalId: "req-fallback",
