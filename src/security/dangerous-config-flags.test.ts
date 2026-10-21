@@ -1,4 +1,3 @@
-// Covers dangerous config flag detection and reporting.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +5,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
+
+const dangerousFlags = [{ path: "mode", equals: "danger" }];
+const pluginEntries = { "workspace-danger": { config: { mode: "danger" } } };
 
 function writeDangerousWorkspacePlugin(workspaceDir: string) {
   const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-danger");
@@ -19,7 +21,7 @@ function writeDangerousWorkspacePlugin(workspaceDir: string) {
     JSON.stringify({
       id: "workspace-danger",
       configSchema: { type: "object", additionalProperties: true },
-      configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
+      configContracts: { dangerousFlags },
     }),
   );
 }
@@ -39,7 +41,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       plugins: {
         entries: {
           acpx: { config: { permissionMode: "approve-all" } },
-          "workspace-danger": { config: { mode: "danger" } },
+          ...pluginEntries,
         },
       },
     });
@@ -54,40 +56,18 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
 
     const flags = collectEnabledInsecureOrDangerousFlags({
       agents: { defaults: { workspace: workspaceDir } },
-      plugins: {
-        entries: { "workspace-danger": { config: { mode: "danger" } } },
-      },
+      plugins: { entries: pluginEntries },
     });
 
     expect(flags).toContain("plugins.entries.workspace-danger.config.mode=danger");
   });
 
   it("ignores plugin config values that are not declared as dangerous", () => {
+    const configContractsById = new Map([["other", { configContracts: { dangerousFlags } }]]);
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
-        {
-          plugins: {
-            entries: {
-              other: {
-                config: {
-                  mode: "safe",
-                },
-              },
-            },
-          },
-        },
-        {
-          configContractsById: new Map([
-            [
-              "other",
-              {
-                configContracts: {
-                  dangerousFlags: [{ path: "mode", equals: "danger" }],
-                },
-              },
-            ],
-          ]),
-        },
+        { plugins: { entries: { other: { config: { mode: "safe" } } } } },
+        { configContractsById },
       ),
     ).toStrictEqual([]);
   });
@@ -113,19 +93,9 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
           },
         },
       },
-      hooks: {
-        allowRequestSessionKey: true,
-      },
-      browser: {
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
-      },
-      tools: {
-        fs: {
-          workspaceOnly: false,
-        },
-      },
+      hooks: { allowRequestSessionKey: true },
+      browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
+      tools: { fs: { workspaceOnly: false } },
     });
 
     expect(flags).toStrictEqual([
@@ -139,15 +109,10 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
   });
 
   it("collects configured security audit suppressions as a dangerous flag", () => {
-    expect(
-      collectEnabledInsecureOrDangerousFlagsFromContracts({
-        security: {
-          audit: {
-            suppressions: [{ checkId: "plugins.code_safety" }],
-          },
-        },
-      }),
-    ).toContain("security.audit.suppressions configured (1)");
+    const flags = collectEnabledInsecureOrDangerousFlagsFromContracts({
+      security: { audit: { suppressions: [{ checkId: "plugins.code_safety" }] } },
+    });
+    expect(flags).toContain("security.audit.suppressions configured (1)");
   });
 
   it("keeps legacy list indices for id-less dangerous sandbox rows", () => {
@@ -156,16 +121,8 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     } = {
       agents: {
         list: [
-          {
-            id: "worker",
-          },
-          {
-            sandbox: {
-              docker: {
-                dangerouslyAllowContainerNamespaceJoin: true,
-              },
-            },
-          },
+          { id: "worker" },
+          { sandbox: { docker: { dangerouslyAllowContainerNamespaceJoin: true } } },
         ],
       },
     };
