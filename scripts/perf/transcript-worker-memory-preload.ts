@@ -3,7 +3,12 @@ import { appendFileSync } from "node:fs";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { GCProfiler, getHeapStatistics } from "node:v8";
-import workerThreads, { isMainThread, MessagePort, threadId } from "node:worker_threads";
+import workerThreads, {
+  isMainThread,
+  MessagePort,
+  threadId,
+  type Transferable,
+} from "node:worker_threads";
 
 const output = process.env.OPENCLAW_BENCH_WORKER_MEMORY_DIR;
 const baselineOwners = process.env.OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS === "1";
@@ -176,8 +181,8 @@ if (
     return on.apply(this, args);
   };
   const parse = JSON.parse;
-  JSON.parse = function (...args: Parameters<typeof JSON.parse>) {
-    const value = parse(...args);
+  JSON.parse = function (...args: [text: string, reviver?: Parameters<typeof JSON.parse>[1]]) {
+    const value = Reflect.apply(parse, undefined, args);
     if (active && typeof args[0] === "string" && args[0].length >= 1024) {
       active.parsedBytes += Buffer.byteLength(args[0]);
       active.observedPeakHeapUsed = Math.max(
@@ -190,7 +195,12 @@ if (
   // Keep the original receiver when the benchmark forwards through apply.
   // oxlint-disable-next-line typescript/unbound-method
   const post = MessagePort.prototype.postMessage;
-  MessagePort.prototype.postMessage = function (...args: Parameters<MessagePort["postMessage"]>) {
+  MessagePort.prototype.postMessage = function (
+    ...args: [
+      message: unknown,
+      options?: Parameters<MessagePort["postMessage"]>[1] | Transferable[],
+    ]
+  ) {
     const message: unknown = args[0];
     if (
       active &&
@@ -216,7 +226,7 @@ if (
       });
       active = undefined;
     }
-    return post.apply(this, args);
+    return Reflect.apply(post, this, args);
   };
   setInterval(() => {
     drainGc();
