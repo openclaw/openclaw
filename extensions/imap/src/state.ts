@@ -32,10 +32,6 @@ export function createImapState(runtime: OpenClawPluginApi["runtime"]) {
       maxEntries: 256,
       overflowPolicy: "reject-new",
     }),
-    skips: runtime.state.openKeyedStore<{ count: number }>({
-      namespace: "skip-count",
-      maxEntries: 2_048,
-    }),
   };
 }
 
@@ -105,16 +101,6 @@ export async function rememberImapMessage(
     messageIds: [...(ring?.messageIds ?? []), messageId].slice(-100),
   });
   return true;
-}
-
-export async function countImapSkip(
-  state: ImapWatcherState,
-  accountId: string,
-  reason: string,
-): Promise<void> {
-  const key = `${accountId}:${reason}`;
-  const current = await state.skips.lookup(key);
-  await state.skips.register(key, { count: Math.min((current?.count ?? 0) + 1, 1_000_000) });
 }
 
 export async function recordImapAttempt(
