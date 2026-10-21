@@ -100,7 +100,6 @@ function createApprovalTestPlugin(id: string, label: string, approvals = false):
 const telegramApproveTestPlugin = createApprovalTestPlugin("telegram", "Telegram", true);
 telegramApproveTestPlugin.config.defaultAccountId = (cfg) =>
   cfg.channels?.telegram?.defaultAccount ?? "default";
-const discordApproveTestPlugin = createApprovalTestPlugin("discord", "Discord", true);
 const signalApproveTestPlugin = createApprovalTestPlugin("signal", "Signal", true);
 const slackApproveTestPlugin = createApprovalTestPlugin("slack", "Slack");
 const whatsappApproveTestPlugin = createApprovalTestPlugin("whatsapp", "WhatsApp");
@@ -160,9 +159,9 @@ function expectReply(result: Awaited<ReturnType<typeof approve>>, text: string) 
 describe("handleApproveCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveApprovalOverGatewayMock.mockReset().mockResolvedValue(undefined);
     isPendingSystemAgentApprovalMock.mockResolvedValue(false);
     setPlugins(
-      discordApproveTestPlugin,
       slackApproveTestPlugin,
       whatsappApproveTestPlugin,
       signalApproveTestPlugin,
@@ -175,22 +174,16 @@ describe("handleApproveCommand", () => {
     senders = ["123"],
     accountId?: string,
   ): OpenClawConfig {
-    const execApprovals = enabled === null ? null : { enabled, approvers: senders, target: "dm" };
     const approvers = {
-      authorizedSenders: execApprovals?.approvers ?? [],
+      authorizedSenders: enabled === null ? [] : senders,
       ...(accountId ? { accountId } : {}),
     };
-    const account = execApprovals ? { execApprovals } : {};
-    const telegram = {
-      allowFrom: ["*"],
-      ...(accountId ? { defaultAccount: accountId, accounts: { [accountId]: account } } : account),
-    };
     return withApprovalPolicy(
-      { commands: { text: true }, channels: { telegram } } as OpenClawConfig,
+      { commands: { text: true }, channels: { telegram: { defaultAccount: accountId } } },
       {
         exec: {
           ...approvers,
-          ...(execApprovals?.enabled
+          ...(enabled
             ? {}
             : { reply: "❌ Telegram exec approvals are not enabled for this bot account." }),
         },
@@ -216,7 +209,6 @@ describe("handleApproveCommand", () => {
       telegramContext,
     );
     params.command.isAuthorizedSender = false;
-    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
 
     expectReply(await approve(params), "Approval allow-once submitted");
     expectApprovalResolverCall("plugin:abc12345", "plugin");
@@ -238,7 +230,6 @@ describe("handleApproveCommand", () => {
       ...channelContext("slack", "U12345678"),
       GroupSpace: "T11111111",
     };
-    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
 
     const plugin = buildApproveParams("/approve plugin:abc allow-once", cfg, ctx);
     plugin.command.isAuthorizedSender = false;
@@ -255,7 +246,6 @@ describe("handleApproveCommand", () => {
   });
 
   it("honors the configured default account for omitted-account /approve auth", async () => {
-    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     const params = buildApproveParams(
       "/approve abc12345 allow-once",
       createTelegramApproveCfg(true, ["123"], "work"),

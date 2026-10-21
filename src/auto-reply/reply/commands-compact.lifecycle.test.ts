@@ -50,34 +50,6 @@ describe("handleCompactCommand lifecycle authority", () => {
     }
   });
 
-  it("keeps the 60-second natural drain retryable and adopts ingress before compacting", async () => {
-    let adopted = false;
-    const onAdopted = vi.fn(async () => {
-      adopted = true;
-    });
-    const params = buildLifecycleParams({}, onAdopted);
-    const { operation, cancel } = startCompactActiveRun(params);
-    vi.mocked(waitForSessionControllerSettlement).mockImplementationOnce(
-      async (settled, timeout) => {
-        expect(timeout).toBe(60_000);
-        expect(adopted).toBe(false);
-        expect(operation.abortSignal.aborted).toBe(false);
-        operation.complete();
-        await settled;
-        return true;
-      },
-    );
-    vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async () => {
-      expect(adopted).toBe(true);
-      return { ok: true, compacted: false };
-    });
-    const result = await handleCompactCommand(params, true);
-    expect(onAdopted).toHaveBeenCalledOnce();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(compactEmbeddedAgentSession).toHaveBeenCalledOnce();
-    expect(result?.reply?.text).toContain("Compaction skipped");
-  });
-
   it("adopts before cancelling the captured run and preserves queued input", async () => {
     let adopted = false;
     const params = buildLifecycleParams({}, async () => {
@@ -337,6 +309,7 @@ describe("handleCompactCommand lifecycle authority", () => {
 
   it("preserves the drained writer fence and accounts completed compaction after caller closure", async () => {
     const controller = new AbortController();
+    const onAdopted = vi.fn(async () => {});
     const original = {
       sessionId: "session-1",
       updatedAt: 1,
@@ -344,23 +317,29 @@ describe("handleCompactCommand lifecycle authority", () => {
       activeWriterRunId: "earlier-writer",
     };
     let currentEntry = original;
-    const params = buildLifecycleParams({
-      sessionEntry: original,
-      opts: { abortSignal: controller.signal },
-    });
+    const params = buildLifecycleParams(
+      { sessionEntry: original, opts: { abortSignal: controller.signal } },
+      onAdopted,
+    );
     const { operation, cancel } = startCompactActiveRun(params);
-    vi.mocked(waitForSessionControllerSettlement).mockImplementationOnce(async (settled) => {
-      currentEntry = { ...original, activeWriterRunId: "drained-writer" };
-      operation.complete();
-      await settled;
-      return true;
-    });
+    vi.mocked(waitForSessionControllerSettlement).mockImplementationOnce(
+      async (settled, timeout) => {
+        expect(timeout).toBe(60_000);
+        expect(onAdopted).not.toHaveBeenCalled();
+        expect(operation.abortSignal.aborted).toBe(false);
+        currentEntry = { ...original, activeWriterRunId: "drained-writer" };
+        operation.complete();
+        await settled;
+        return true;
+      },
+    );
     vi.mocked(prepareCurrentSessionEntry).mockImplementation(async () => ({
       entry: currentEntry,
       assertCurrent() {},
       release() {},
     }));
     vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input, host) => {
+      expect(onAdopted).toHaveBeenCalledOnce();
       expect(input.sessionEntry).toMatchObject({ activeWriterRunId: "drained-writer" });
       host?.assertActive?.();
       controller.abort(new Error("caller closed"));
@@ -372,7 +351,9 @@ describe("handleCompactCommand lifecycle authority", () => {
     });
     const result = await handleCompactCommand(params, true);
     expect(result?.sessionCompaction?.reason).toBe("command invocation closed");
+    expect(onAdopted).toHaveBeenCalledOnce();
     expect(incrementCompactionCount).toHaveBeenCalledOnce();
+    expect(compactEmbeddedAgentSession).toHaveBeenCalledOnce();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(cancel).not.toHaveBeenCalled();
   });

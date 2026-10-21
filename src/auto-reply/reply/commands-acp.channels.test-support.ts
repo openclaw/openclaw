@@ -5,146 +5,100 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
-function commandTargets({
+type Conversation = { conversationId: string; parentConversationId?: string };
+type Resolver = (params: ChannelCommandConversationContext) => Conversation | null;
+
+function commandTarget({
   originatingTo,
   commandTo,
   fallbackTo,
 }: ChannelCommandConversationContext) {
-  return [originatingTo, commandTo, fallbackTo];
+  return [originatingTo, commandTo, fallbackTo].find((target) => target?.trim())?.trim();
 }
 
-function channel<T extends object>(id: string, label: string, plugin: T) {
+function channel<T extends object>(id: string, label: string, resolve: Resolver, extra: T) {
   return {
     pluginId: id,
     source: "test",
-    plugin: { ...createChannelTestPluginBase({ id, label }), ...plugin },
+    plugin: {
+      ...createChannelTestPluginBase({ id, label }),
+      bindings: { resolveCommandConversation: resolve },
+      ...extra,
+    },
   };
 }
 
-function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
-  const trimmed = raw?.trim().replace(/^telegram:/i, "");
-  const topicMatch = /^(.*):topic:\d+$/i.exec(trimmed ?? "");
-  return (topicMatch?.[1] ?? trimmed)?.trim() || undefined;
-}
-
-function parseDiscordConversationIdForTest(
-  targets: Array<string | undefined | null>,
-): string | undefined {
-  for (const rawTarget of targets) {
-    const target = rawTarget?.trim();
-    if (!target) {
-      continue;
-    }
-    const mentionMatch = /^<#(\d+)>$/.exec(target);
-    if (mentionMatch?.[1]) {
-      return mentionMatch[1];
-    }
-    if (/^channel:/i.test(target)) {
-      return target;
-    }
-  }
-  return undefined;
-}
-
-function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): string | undefined {
-  const sessionKey = raw?.trim().toLowerCase() ?? "";
-  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
-  return match?.[1] ? `channel:${match[1]}` : undefined;
-}
-
+// These adapters cover the synthetic conversation shapes used by this suite;
+// channel parsers and command-context precedence have their own owner tests.
 export function setMinimalAcpCommandRegistryForTests(): void {
   setActivePluginRegistry(
     createTestRegistry([
-      channel("telegram", "Telegram", {
-        conversationBindings: {
-          defaultTopLevelPlacement: "current",
-          buildBoundReplyPayload: ({
-            operation,
-            conversation,
-          }: {
-            operation: "acp-spawn";
-            conversation: { conversationId: string };
-          }) =>
-            operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
-              ? { delivery: { pin: { enabled: true } } }
-              : null,
+      channel(
+        "telegram",
+        "Telegram",
+        (params) => {
+          const chatId = commandTarget(params)?.replace(/^telegram:/i, "");
+          if (!chatId || (!params.threadId && chatId.startsWith("-"))) {
+            return null;
+          }
+          return {
+            conversationId: params.threadId ? `${chatId}:topic:${params.threadId}` : chatId,
+            parentConversationId: chatId,
+          };
         },
-        bindings: {
-          resolveCommandConversation: (params: ChannelCommandConversationContext) => {
-            const { threadId } = params;
-            const chatId = commandTargets(params).map(parseTelegramChatIdForTest).find(Boolean);
-            if (!chatId) {
-              return null;
-            }
-            if (threadId) {
-              return {
-                conversationId: `${chatId}:topic:${threadId}`,
-                parentConversationId: chatId,
-              };
-            }
-            if (chatId.startsWith("-")) {
-              return null;
-            }
-            return { conversationId: chatId, parentConversationId: chatId };
+        {
+          conversationBindings: {
+            defaultTopLevelPlacement: "current",
+            buildBoundReplyPayload: ({
+              operation,
+              conversation,
+            }: {
+              operation: "acp-spawn";
+              conversation: Conversation;
+            }) =>
+              operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
+                ? { delivery: { pin: { enabled: true } } }
+                : null,
           },
         },
-      }),
-      channel("discord", "Discord", {
-        conversationBindings: {
-          defaultTopLevelPlacement: "child",
+      ),
+      channel(
+        "discord",
+        "Discord",
+        (params) => {
+          const target = commandTarget(params);
+          const parent = target?.startsWith("channel:") ? target : undefined;
+          return params.threadId
+            ? {
+                conversationId: params.threadId,
+                ...(parent ? { parentConversationId: parent } : {}),
+              }
+            : parent
+              ? { conversationId: parent }
+              : null;
         },
-        bindings: {
-          resolveCommandConversation: (params: ChannelCommandConversationContext) => {
-            const { threadId, threadParentId, parentSessionKey } = params;
-            if (threadId) {
-              const parentConversationId =
-                (threadParentId?.trim()
-                  ? `channel:${threadParentId.trim().replace(/^channel:/i, "")}`
-                  : undefined) ??
-                parseDiscordParentChannelFromSessionKeyForTest(parentSessionKey) ??
-                parseDiscordConversationIdForTest(commandTargets(params));
-              return {
-                conversationId: threadId,
-                ...(parentConversationId && parentConversationId !== threadId
-                  ? { parentConversationId }
-                  : {}),
-              };
-            }
-            const conversationId = parseDiscordConversationIdForTest(commandTargets(params));
-            return conversationId ? { conversationId } : null;
-          },
+        { conversationBindings: { defaultTopLevelPlacement: "child" } },
+      ),
+      channel(
+        "slack",
+        "Slack",
+        (params) => {
+          const conversationId = commandTarget(params);
+          return conversationId ? { conversationId } : null;
         },
-      }),
-      channel("slack", "Slack", {
-        bindings: {
-          resolveCommandConversation: (params: ChannelCommandConversationContext) => {
-            const conversationId = commandTargets(params)
-              .map((candidate) => candidate?.trim())
-              .find((candidate) => candidate && candidate.length > 0);
-            return conversationId ? { conversationId } : null;
-          },
+        {},
+      ),
+      channel(
+        "matrix",
+        "Matrix",
+        (params) => {
+          const roomId = commandTarget(params)?.replace(/^room:/i, "");
+          return params.threadId && roomId
+            ? { conversationId: params.threadId, parentConversationId: roomId }
+            : null;
         },
-      }),
-      channel("matrix", "Matrix", {
-        conversationBindings: {
-          defaultTopLevelPlacement: "child",
-        },
-        bindings: {
-          resolveCommandConversation: (params: ChannelCommandConversationContext) => {
-            const { threadId } = params;
-            const roomId = commandTargets(params)
-              .map((candidate) => candidate?.trim().replace(/^room:/i, ""))
-              .find((candidate) => candidate && candidate.length > 0);
-            if (!threadId || !roomId) {
-              return null;
-            }
-            return {
-              conversationId: threadId,
-              parentConversationId: roomId,
-            };
-          },
-        },
-      }),
+        { conversationBindings: { defaultTopLevelPlacement: "child" } },
+      ),
     ]),
   );
 }

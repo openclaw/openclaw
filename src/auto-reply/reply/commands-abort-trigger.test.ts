@@ -13,25 +13,11 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
-vi.mock("../../hooks/internal-hooks.js", () => ({
-  createInternalHookEvent: vi.fn(),
-  triggerInternalHook: vi.fn(),
-}));
-
-vi.mock("./abort-cutoff.js", () => ({
-  resolveAbortCutoffFromContext: vi.fn(() => undefined),
-  shouldPersistAbortCutoff: vi.fn(() => false),
-}));
-
 vi.mock("./abort-operation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./abort-operation.js")>()),
   captureChannelSessionStop: vi.fn((params: { key?: string; sessionId?: string }) => params),
   abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
   stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0, failed: 0 })),
-}));
-
-vi.mock("./abort-trigger-text.js", () => ({
-  isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
 }));
 
 vi.mock("./abort-primitives.js", () => ({

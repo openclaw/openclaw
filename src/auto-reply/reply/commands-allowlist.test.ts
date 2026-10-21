@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -16,10 +13,8 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import type { ConfigSnapshotMock } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
@@ -37,35 +32,12 @@ vi.mock("../../config/config.js", () => ({
   replaceConfigFile: replaceConfigFileMock,
   transformConfigFileWithRetry: async (params: {
     afterWrite?: unknown;
-    transform: (
-      currentConfig: OpenClawConfig,
-      context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
-    ) => ConfigEdit | Promise<ConfigEdit>;
+    transform: (currentConfig: OpenClawConfig) => ConfigEdit | Promise<ConfigEdit>;
   }) => {
-    const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
-    const previousHash = snapshot.hash ?? null;
-    const currentConfig = structuredClone(
-      snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
-    );
-    const transformed = await params.transform(currentConfig, {
-      snapshot,
-      previousHash,
-      attempt: 0,
-    });
+    const { parsed } = await readConfigFileSnapshotMock();
+    const transformed = await params.transform(structuredClone(parsed));
     const afterWrite = params.afterWrite ?? { mode: "auto" };
-    const writePayload = { nextConfig: transformed.nextConfig, afterWrite };
-    await replaceConfigFileMock(writePayload);
-    return {
-      path: snapshot.path ?? "/tmp/openclaw.json",
-      previousHash,
-      persistedHash: "persisted-hash",
-      snapshot,
-      nextConfig: transformed.nextConfig,
-      result: transformed.result,
-      attempts: 1,
-      afterWrite,
-      followUp: { action: "none" },
-    };
+    await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
   },
 }));
 
@@ -176,53 +148,16 @@ function setAllowlistPluginRegistry() {
 beforeEach(() => {
   vi.clearAllMocks();
   setAllowlistPluginRegistry();
-  readConfigFileSnapshotMock.mockImplementation(async () => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      return { valid: false, parsed: null };
-    }
-    const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-    return { valid: true, parsed };
-  });
+  readConfigFileSnapshotMock.mockResolvedValue({ valid: false, parsed: null });
   validateConfigObjectWithPluginsMock.mockImplementation((value: unknown) => ({
     ok: true,
     config: value,
   }));
-  replaceConfigFileMock.mockImplementation(async (params: { nextConfig: unknown }) => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (configPath) {
-      await fs.writeFile(configPath, JSON.stringify(params.nextConfig, null, 2), "utf-8");
-    }
-  });
+  replaceConfigFileMock.mockResolvedValue(undefined);
   readChannelAllowFromStoreMock.mockResolvedValue([]);
   addChannelAllowFromStoreEntryMock.mockResolvedValue({ changed: true, allowFrom: [] });
   removeChannelAllowFromStoreEntryMock.mockResolvedValue({ changed: true, allowFrom: [] });
 });
-
-async function withTempConfigPath<T>(
-  initialConfig: Record<string, unknown>,
-  run: (configPath: string) => Promise<T>,
-): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-allowlist-config-"));
-  const configPath = path.join(dir, "openclaw.json");
-  const previous = process.env.OPENCLAW_CONFIG_PATH;
-  setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-  await fs.writeFile(configPath, JSON.stringify(initialConfig, null, 2), "utf-8");
-  try {
-    return await run(configPath);
-  } finally {
-    if (previous === undefined) {
-      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-    } else {
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", previous);
-    }
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-  }
-}
-
-async function readJsonFile<T>(filePath: string): Promise<T> {
-  return JSON.parse(await fs.readFile(filePath, "utf-8")) as T;
-}
 
 function buildAllowlistParams(
   commandBody: string,
@@ -277,7 +212,7 @@ function expectReply(result: Awaited<ReturnType<typeof handleAllowlistCommand>>,
 }
 
 function mockConfigSnapshot(cfg: OpenClawConfig) {
-  readConfigFileSnapshotMock.mockResolvedValueOnce({ valid: true, parsed: structuredClone(cfg) });
+  readConfigFileSnapshotMock.mockResolvedValue({ valid: true, parsed: structuredClone(cfg) });
 }
 
 describe("handleAllowlistCommand", () => {
@@ -311,44 +246,45 @@ describe("handleAllowlistCommand", () => {
           ? { allowFrom: ["123"] }
           : { accounts: { work: { allowFrom: ["123"] } } };
       const cfg = config({ telegram });
-      await withTempConfigPath(cfg, async (configPath) => {
-        mockConfigSnapshot(cfg);
-        addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
-          changed: true,
-          allowFrom: ["123", "789"],
-        });
-        const accountFlag = accountId === "default" ? "" : "--account work ";
-        const result = await runOwnerCommand(
-          `/allowlist add dm ${accountFlag}789`,
-          cfg,
-          accountId === "default" ? undefined : { AccountId: "work" },
-        );
-        expect(result?.shouldContinue, accountId).toBe(false);
-        expect(addChannelAllowFromStoreEntryMock, accountId).toHaveBeenCalledWith({
-          channel: "telegram",
-          entry: "789",
-          accountId,
-        });
-        if (accountId === "default") {
-          const written = await readJsonFile<OpenClawConfig>(configPath);
-          expect(written.channels?.telegram?.allowFrom, accountId).toEqual(["123", "789"]);
-          expect(result?.reply?.text, accountId).toContain("DM allowlist added");
-        }
+      mockConfigSnapshot(cfg);
+      addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+        changed: true,
+        allowFrom: ["123", "789"],
       });
+      const accountFlag = accountId === "default" ? "" : "--account work ";
+      const result = await runOwnerCommand(
+        `/allowlist add dm ${accountFlag}789`,
+        cfg,
+        accountId === "default" ? undefined : { AccountId: "work" },
+      );
+      expect(result?.shouldContinue, accountId).toBe(false);
+      expect(addChannelAllowFromStoreEntryMock, accountId).toHaveBeenCalledWith({
+        channel: "telegram",
+        entry: "789",
+        accountId,
+      });
+      if (accountId === "default") {
+        expect(replaceConfigFileMock).toHaveBeenLastCalledWith({
+          nextConfig: { ...cfg, channels: { telegram: { allowFrom: ["123", "789"] } } },
+          afterWrite: { mode: "auto" },
+        });
+        expect(result?.reply?.text, accountId).toContain("DM allowlist added");
+      }
     }
   });
 
   it("keeps group allowlist edits out of the DM pairing store", async () => {
     const cfg = config({ telegram: { groupAllowFrom: ["123"] } });
-    await withTempConfigPath({ channels: cfg.channels }, async (configPath) => {
-      const result = await runOwnerCommand("/allowlist add group 789", cfg);
+    mockConfigSnapshot({ channels: cfg.channels });
+    const result = await runOwnerCommand("/allowlist add group 789", cfg);
 
-      expectReply(result, "group allowlist added: channels.telegram.groupAllowFrom.");
-      const written = await readJsonFile<OpenClawConfig>(configPath);
-      expect(written.channels?.telegram?.groupAllowFrom).toEqual(["123", "789"]);
-      expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
-      expect(result?.reply?.text).not.toContain("pairing store");
+    expectReply(result, "group allowlist added: channels.telegram.groupAllowFrom.");
+    expect(replaceConfigFileMock).toHaveBeenLastCalledWith({
+      nextConfig: { channels: { telegram: { groupAllowFrom: ["123", "789"] } } },
+      afterWrite: { mode: "auto" },
     });
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).not.toContain("pairing store");
   });
 
   it("uses the configured default account for omitted-account list", async () => {
