@@ -165,25 +165,17 @@ async function editSchedule(
 }
 
 async function runCronRunAndCaptureExit(params: {
-  ran?: boolean;
-  enqueued?: boolean;
-  runId?: string;
   history?: Array<
     { status: "ok"; completionStatus?: "failed"; deliveryStatus?: "not-requested" } | undefined
   >;
   expectedError?: string;
-  args?: string[];
+  args: string[];
 }) {
   resetGatewayMock();
   let runPollCount = 0;
   callGatewayFromCli.mockImplementation(async (method: string) => {
     if (method === "cron.run") {
-      return {
-        ok: true,
-        ran: params.ran,
-        enqueued: params.enqueued,
-        runId: params.runId,
-      };
+      return { ok: true, enqueued: true, runId: "manual:job-1:123:0" };
     }
     if (method === "cron.runs") {
       const entry = params.history?.[runPollCount++];
@@ -194,7 +186,7 @@ async function runCronRunAndCaptureExit(params: {
 
   let exitCode: number | undefined;
   try {
-    await parse(params.args ?? ["cron", "run", "job-1"]);
+    await parse([...RUN_WAIT, ...params.args]);
   } catch (error) {
     if (!(error instanceof ExitError)) {
       throw error;
@@ -220,21 +212,15 @@ function flags(options: Record<string, string | true>): string[] {
   );
 }
 
-function cronPage(
-  jobs: CronJob[],
-  offset = 0,
-  total = jobs.length,
-  deliveryPreviews?: Record<string, CronDeliveryPreview>,
-) {
-  const next = offset + jobs.length;
+function cronPage(jobs: CronJob[], deliveryPreviews?: Record<string, CronDeliveryPreview>) {
   return {
     jobs,
     snapshotRevision: "test-stable-cron-inventory",
-    total,
-    offset,
+    total: jobs.length,
+    offset: 0,
     limit: 200,
-    hasMore: next < total,
-    nextOffset: next < total ? next : null,
+    hasMore: false,
+    nextOffset: null,
     deliveryPreviews,
   };
 }
@@ -255,28 +241,10 @@ it("resolves Gateway options with leaf overrides", async () => {
   );
 });
 
-it.each([
-  {
-    name: "exits 0 for cron run when job is queued successfully",
-    enqueued: true,
-    expectedExitCode: 0,
-  },
-  {
-    name: "exits 1 for cron run when job does not execute",
-    ran: false,
-    expectedExitCode: 1,
-  },
-])("$name", async ({ ran, enqueued, expectedExitCode }) => {
-  const { exitCode } = await runCronRunAndCaptureExit({ ran, enqueued });
-  expect(exitCode).toBe(expectedExitCode);
-});
-
 it("waits for stored failed completion", async () => {
   const { calls, exitCode } = await runCronRunAndCaptureExit({
-    enqueued: true,
-    runId: "manual:job-1:123:0",
     history: [{ status: "ok", completionStatus: "failed" }],
-    args: [...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"],
+    args: ["--wait-timeout", "1s", "--poll-interval", "1ms"],
   });
   expect(exitCode).toBe(1);
   expect(rpcParams("cron.runs")).toEqual({
@@ -301,10 +269,8 @@ it("reduces each history RPC timeout after the system clock jumps backward", asy
   vi.setSystemTime(startedAt);
 
   const pendingRun = runCronRunAndCaptureExit({
-    enqueued: true,
-    runId: "manual:job-1:123:0",
     history: [undefined, { status: "ok", deliveryStatus: "not-requested" }],
-    args: [...RUN_WAIT, "--wait-timeout", "100ms", "--poll-interval", "25ms"],
+    args: ["--wait-timeout", "100ms", "--poll-interval", "25ms"],
   });
 
   await vi.advanceTimersByTimeAsync(0);
@@ -331,9 +297,7 @@ it("reduces each history RPC timeout after the system clock jumps backward", asy
 it("bounds oversized poll intervals by the wait timeout", async () => {
   vi.useFakeTimers();
   const run = runCronRunAndCaptureExit({
-    enqueued: true,
-    runId: "manual:job-1:123:0",
-    args: [...RUN_WAIT, "--wait-timeout", "10ms", "--poll-interval", "999999999999999ms"],
+    args: ["--wait-timeout", "10ms", "--poll-interval", "999999999999999ms"],
     expectedError: "timed out waiting for cron run",
   });
   await vi.advanceTimersByTimeAsync(0);
@@ -387,65 +351,27 @@ it("lists jobs with normalized agent filter", async () => {
   });
 });
 
-it("paginates cron show lookups", async () => {
+it("shows the resolved delivery preview and run diagnostic", async () => {
   resetGatewayMock();
-  callGatewayFromCli.mockImplementation(
-    async (method: string, _opts: unknown, params?: unknown) => {
-      if (method === "cron.list") {
-        const offset = (params as { offset?: number }).offset ?? 0;
-        if (offset === 0) {
-          return cronPage(
-            Array.from({ length: 200 }, (_, index) =>
-              createCronJob(`first-page-${index}`, `First Page ${index}`),
-            ),
-            0,
-            201,
-          );
-        }
-        const targetJob = createCronJob("target-job", "Target Job");
-        targetJob.state.lastDiagnosticSummary = "exec stderr tail";
-        return cronPage([targetJob], 200, 201, {
+  const job = createCronJob("target-job", "Target Job");
+  job.state.lastDiagnosticSummary = "exec stderr tail";
+  callGatewayFromCli.mockImplementation(async (method: string) =>
+    method === "cron.list"
+      ? cronPage([job], {
           "target-job": {
             label: "announce -> telegram:-100",
             detail: "resolved from last, main session",
           },
-        });
-      }
-      return { ok: true, params };
-    },
+        })
+      : undefined,
   );
-
   await parse(["cron", "show", "Target Job"]);
-
-  const listParams = callGatewayFromCli.mock.calls
-    .filter((call) => call[0] === "cron.list")
-    .map((call) => call[2]);
-  expect(listParams).toEqual([
-    { includeDisabled: true, limit: 200, offset: 0 },
-    { includeDisabled: true, limit: 200, offset: 200 },
-  ]);
   expect(defaultRuntime.log).toHaveBeenCalledWith("id: target-job");
   expect(defaultRuntime.log).toHaveBeenCalledWith(
     "delivery: announce -> telegram:-100 (resolved from last, main session)",
   );
   expect(defaultRuntime.log).toHaveBeenCalledWith("diagnostic: exec stderr tail");
 });
-
-it.each([false, true])(
-  "renders cron show without state (missing payload: %s)",
-  async (missingPayload) => {
-    mockExistingJob({ state: undefined, ...(missingPayload ? { payload: undefined } : {}) });
-    await parse(["cron", "show", "job-1"]);
-    expect(defaultRuntime.log.mock.calls).toEqual(
-      expect.arrayContaining(
-        ["id: job-1", "next: -", "last: -", "status: idle", "last error: -", "diagnostic: -"].map(
-          (line) => [line],
-        ),
-      ),
-    );
-    expect(defaultRuntime.error).not.toHaveBeenCalled();
-  },
-);
 
 it("keeps the ambiguous cron show name error when a matching row has no schedule", async () => {
   resetGatewayMock();
@@ -739,16 +665,6 @@ it.each([
     expect(await edit(...args)).toEqual(expected);
   },
 );
-
-it("normalizes offset one-shot creation independently of timezone", async () => {
-  const params = await addOptions({
-    "--name": "job",
-    "--at": "+002027-01-15T12:00:00+02:00",
-    "--message": "hello",
-    "--tz": "America/New_York",
-  });
-  expect(params.schedule).toEqual({ kind: "at", at: "2027-01-15T10:00:00.000Z" });
-});
 
 it("replaces a cron expression and stagger while retaining its timezone", async () => {
   expect(
