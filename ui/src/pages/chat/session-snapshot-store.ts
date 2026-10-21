@@ -40,6 +40,7 @@ import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
+  peekPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
 const CHAT_SNAPSHOT_PROJECTION_VERSION = 3;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
@@ -165,6 +166,45 @@ async function parseSnapshotRecord(
     }
   }
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
+}
+
+async function readSnapshotRecord(
+  sessionKey: string,
+  value: unknown,
+  isCurrent: () => boolean,
+  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+): Promise<ChatSessionSnapshot | null> {
+  if (
+    value === undefined ||
+    !isCurrent() ||
+    !isPersistableChatSnapshotKey(sessionKey) ||
+    asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION
+  ) {
+    return null;
+  }
+  const record = await parseSnapshotRecord(value, sessionKey, onBoard);
+  if (!isCurrent()) {
+    return null;
+  }
+  if (!record) {
+    debugSnapshotStore("resetting cache after record shape mismatch");
+    await resetSessionSnapshotDatabase();
+  }
+  return record?.snapshot ?? null;
+}
+
+export async function readPrewarmedChatSnapshot(
+  cacheKey: string,
+): Promise<ChatSessionSnapshot | null> {
+  const entry = peekPrewarmedChatSnapshot();
+  if (entry?.cacheKey !== cacheKey) {
+    return null;
+  }
+  entry.snapshot ??= entry.promise.then((value) =>
+    readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
+  );
+  const snapshot = await entry.snapshot;
+  return snapshot && !entry.cancelled && peekPrewarmedChatSnapshot() === entry ? snapshot : null;
 }
 
 function createSnapshotRecord(
@@ -493,24 +533,14 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   ): Promise<ChatSessionSnapshot | null> {
     const isCurrent = this.captureReadScope(sessionKey);
     const prewarm = consumePrewarmedChatSnapshot(sessionKey);
-    const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
-    if (value === undefined || !isCurrent() || !isPersistableChatSnapshotKey(sessionKey)) {
+    const read = () =>
+      (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey)).then((value) =>
+        readSnapshotRecord(sessionKey, value, isCurrent, onBoard),
+      );
+    const snapshot = await (prewarm ? (prewarm.snapshot ??= read()) : read());
+    if (!snapshot || !isCurrent()) {
       return null;
     }
-    // Older display projections cannot resume a cursor or contribute a retained history prefix.
-    if (asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION) {
-      return null;
-    }
-    const record = await parseSnapshotRecord(value, sessionKey, onBoard);
-    if (!isCurrent()) {
-      return null;
-    }
-    if (!record) {
-      debugSnapshotStore("resetting cache after record shape mismatch");
-      await resetSessionSnapshotDatabase();
-      return null;
-    }
-    const snapshot = record.snapshot;
     setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(snapshot));
     return snapshot;
   }

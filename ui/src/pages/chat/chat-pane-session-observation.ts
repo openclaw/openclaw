@@ -291,7 +291,12 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
   protected synchronizeSessionObservation(options: { eventSessionId?: string | null } = {}) {
     const state = this.state;
     const sessions = this.context.sessions;
-    if (!state?.connected || !state.sessionKey.trim() || parseCatalogSessionKey(state.sessionKey)) {
+    if (
+      !state?.connected ||
+      this.routeResolutionPending ||
+      !state.sessionKey.trim() ||
+      parseCatalogSessionKey(state.sessionKey)
+    ) {
       this.retireSessionObservation();
       return;
     }

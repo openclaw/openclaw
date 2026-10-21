@@ -109,7 +109,7 @@ it.each(["exact", "literal", "short", "title"] as const)(
       ).toMatchObject({
         kind: "session",
         sessionKey: row.key,
-        ...(!exact && !literal ? { sessionResolutionFromCache: true } : {}),
+        ...(!exact && !literal ? { sessionResolutionFromCache: "roster" } : {}),
       });
       expect(context.agents.state.agentsList).toBeNull();
       expect(request).not.toHaveBeenCalled();

@@ -4,6 +4,7 @@ import {
   type BootRecord,
 } from "../../app/boot-record.ts";
 import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
+import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   snapshotStoreGeneration,
@@ -14,9 +15,14 @@ type PrewarmedSnapshot = {
   cacheKey: string;
   cancelled: boolean;
   promise: Promise<unknown>;
+  snapshot?: Promise<ChatSessionSnapshot | null>;
 };
 
 let pending: PrewarmedSnapshot | undefined;
+
+export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
+  return pending;
+}
 
 export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   if (pending && (cacheKey === undefined || pending.cacheKey === cacheKey)) {
@@ -41,9 +47,7 @@ export function prewarmChatSnapshot(cacheKey: string): void {
   pending = entry;
 }
 
-export function consumePrewarmedChatSnapshot(
-  cacheKey: string,
-): Pick<PrewarmedSnapshot, "promise"> | undefined {
+export function consumePrewarmedChatSnapshot(cacheKey: string): PrewarmedSnapshot | undefined {
   if (pending?.cacheKey !== cacheKey) {
     return undefined;
   }
