@@ -26,9 +26,8 @@ function createTabsFixture(root?: ShadowRoot, props: () => Partial<TabsProps> = 
 }
 
 function styles(root: ParentNode) {
-  return [...root.querySelectorAll("style[data-openclaw-overlay-style]")].map(
-    (style) => style.textContent,
-  );
+  const sheets = root.querySelectorAll("style[data-openclaw-overlay-style]");
+  return Array.from(sheets, (style) => style.textContent);
 }
 
 it("shares tab styles across components and releases them with the last consumer", () => {

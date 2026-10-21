@@ -6,13 +6,12 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { useGatewayPage } from "./gateway-page.ts";
 
 function source(overrides: Partial<ApplicationGatewaySnapshot> = {}) {
-  const initial: ApplicationGatewaySnapshot = {
+  const fixture = createApplicationGateway({
     ...createApplicationGateway().gateway.snapshot,
     client: {} as GatewayBrowserClient,
     phase: "connected",
     ...overrides,
-  };
-  const fixture = createApplicationGateway(initial);
+  });
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
   const subscribe = fixture.gateway.subscribe;
   fixture.gateway.subscribe = (listener) => {
@@ -26,10 +25,8 @@ function source(overrides: Partial<ApplicationGatewaySnapshot> = {}) {
   return { ...fixture, listeners };
 }
 
-function createGatewayFixture(
-  getGateway: Parameters<typeof useGatewayPage>[0]["getGateway"],
-  invalidateRequests = vi.fn(),
-) {
+type PageOptions = Parameters<typeof useGatewayPage>[0];
+function createGatewayFixture(getGateway: PageOptions["getGateway"], invalidateRequests = vi.fn()) {
   const callbacks = {
     onIdentityChange: vi.fn(),
     ensureInitialData: vi.fn(),
@@ -50,18 +47,15 @@ function expectChange(callback: ReturnType<typeof vi.fn>, fields: Record<string,
   expect(callback).toHaveBeenLastCalledWith(expect.objectContaining(fields));
 }
 
-it("retires requests synchronously on same-client reconnects and owner disposal", () => {
+it("retires requests synchronously on mutable same-client reconnects and owner disposal", () => {
   const gateway = source();
   const current = gateway.gateway.snapshot;
   const abort = new AbortController();
   const invalidate = vi.fn(() => abort.abort());
-  const { page, dispose, ensureInitialData, onIdentityChange } = createGatewayFixture(
-    () => gateway.gateway,
-    invalidate,
-  );
+  const view = createGatewayFixture(() => gateway.gateway, invalidate);
+  const { page, dispose } = view;
   const first = page.capture();
   expect(first).not.toBeNull();
-  // The producer can reuse a mutable snapshot; previous transport facts stay separate.
   current.phase = "reconnecting";
   gateway.publish(current);
   expect(abort.signal.aborted).toBe(true);
@@ -72,18 +66,15 @@ it("retires requests synchronously on same-client reconnects and owner disposal"
   gateway.publish(current);
   const reconnected = page.capture();
   expect(reconnected).not.toBeNull();
-  expect(ensureInitialData).toHaveBeenCalledTimes(2);
-  expect(onIdentityChange).not.toHaveBeenCalled();
+  expect(view.ensureInitialData).toHaveBeenCalledTimes(2);
+  expect(view.onIdentityChange).not.toHaveBeenCalled();
   expect(invalidate).toHaveBeenCalledTimes(2);
 
   dispose();
   expect(gateway.listeners.size).toBe(0);
   expect(reconnected && page.isCurrent(reconnected)).toBe(false);
   expect([page.capture(), page.snapshot]).toEqual([null, null]);
-  expectChange(invalidate, {
-    identityChanged: false,
-    snapshot: { phase: "stopped" },
-  });
+  expectChange(invalidate, { identityChanged: false, snapshot: { phase: "stopped" } });
 });
 
 it("rebinds an equivalent replacement source and ignores the retired subscription", () => {
@@ -96,10 +87,7 @@ it("rebinds an equivalent replacement source and ignores the retired subscriptio
   flush();
   expect(previous && page.isCurrent(previous)).toBe(false);
   expect([first.listeners.size, second.listeners.size]).toEqual([0, 1]);
-  expectChange(onIdentityChange, {
-    sourceChanged: true,
-    identityChanged: true,
-  });
+  expectChange(onIdentityChange, { sourceChanged: true, identityChanged: true });
   const epoch = page.epoch;
   first.publish({ ...first.gateway.snapshot, phase: "reconnecting" });
   expect(page).toMatchObject({ epoch, connected: true });
@@ -114,10 +102,7 @@ it("accepts route metadata clones only within the same source and hello epoch", 
   const scope = page.capture();
   current.publish({ ...initial, suspensionPhase: "draining" });
   current.publish({ ...initial, suspensionPhase: "accepting" });
-  expectChange(onSnapshot, {
-    becameAvailable: true,
-    becameConnected: false,
-  });
+  expectChange(onSnapshot, { becameAvailable: true, becameConnected: false });
   expect(page.isRouteDataCurrent(route)).toBe(true);
   expect(scope && page.isCurrent(scope)).toBe(true);
   expect(ensureInitialData).toHaveBeenCalledOnce();

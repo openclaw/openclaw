@@ -18,9 +18,7 @@ function owned<T extends { dispose(): void }>(owner: T): T {
 it("publishes mutable agent state", async () => {
   const source = createApplicationGateway();
   const client = createTestGatewayClient(async (method) => {
-    if (method !== "agents.list") {
-      throw new Error(`Unexpected method: ${method}`);
-    }
+    expect(method).toBe("agents.list");
     return { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] };
   });
   const agents = owned(createAgentCapability(source.gateway));
@@ -49,16 +47,14 @@ it("retains the roster owner's first/last upstream acquisition", () => {
   const projection = owned(project.projectRosterActivity(roster));
   expect(projection.read().involvingMe).toBe(false);
   expect(subscribe).not.toHaveBeenCalled();
-  const first = projection.subscribe(() => {});
-  const second = projection.subscribe(() => {});
+  const stops = Array.from({ length: 2 }, () => projection.subscribe(() => {}));
   expect(subscribe).toHaveBeenCalledOnce();
   const before = projection.revision();
   roster.setInvolvingMe(true);
   flush();
   expect(projection.read().involvingMe).toBe(true);
   expect(projection.revision()).toBeGreaterThan(before);
-  first();
-  second();
+  stops.forEach((stop) => stop());
   expect(projection.read().cards).toEqual([]);
   projection.subscribe(() => {});
   expect(subscribe).toHaveBeenCalledTimes(2);

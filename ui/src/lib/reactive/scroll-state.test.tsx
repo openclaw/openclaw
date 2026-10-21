@@ -10,28 +10,13 @@ const cleanup: Array<() => void> = [];
 
 class TestResizeObserver implements ResizeObserver {
   readonly targets = new Set<Element>();
-  constructor(private readonly callback: ResizeObserverCallback) {
+  constructor(private readonly callback: (entries: ReadonlyArray<{ target: Element }>) => void) {
     observers.push(this);
   }
-  observe(element: Element) {
-    this.targets.add(element);
-  }
-  unobserve(element: Element) {
-    this.targets.delete(element);
-  }
-  disconnect() {
-    this.targets.clear();
-  }
-  deliver(element: Element) {
-    const entry: ResizeObserverEntry = {
-      target: element,
-      borderBoxSize: [],
-      contentBoxSize: [],
-      devicePixelContentBoxSize: [],
-      contentRect: new DOMRectReadOnly(),
-    };
-    this.callback([entry], this);
-  }
+  observe = (element: Element) => this.targets.add(element);
+  unobserve = (element: Element) => this.targets.delete(element);
+  disconnect = () => this.targets.clear();
+  deliver = (element: Element) => this.callback([{ target: element }]);
 }
 
 beforeEach(() => {
@@ -39,9 +24,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", TestResizeObserver);
 });
 afterEach(() => {
-  for (const dispose of cleanup.splice(0)) {
-    dispose();
-  }
+  cleanup.splice(0).forEach((dispose) => dispose());
   observers.length = 0;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -72,31 +55,35 @@ function expectFrame(element: HTMLElement, scrollable: boolean, atEnd: boolean, 
   }
 }
 
-function externalScroll(
-  options: Parameters<typeof createScrollStateRef>[1] = {},
-  publish = reflect,
-) {
+type ScrollOptions = Parameters<typeof createScrollStateRef>[1];
+function externalScroll(options: ScrollOptions = {}, publish = reflect) {
   const element = document.body.appendChild(document.createElement("div"));
   cleanup.push(() => element.remove());
   const values = geometry(element, options.horizontal);
-  const binding = createRoot((dispose) => ({
-    dispose,
-    ref: createScrollStateRef(publish, options),
-  }));
-  cleanup.push(binding.dispose);
-  binding.ref(element);
-  return { element, values, dispose: binding.dispose };
+  const root = createRoot((stop) => ({ stop, ref: createScrollStateRef(publish, options) }));
+  cleanup.push(root.stop);
+  root.ref(element);
+  return { element, values, dispose: root.stop };
 }
 
-it("keeps horizontal scroll affordances on Solid-bound elements", () => {
-  const view = mountSolid(() => <div role="region" ref={useScrollState(true)} />);
+it.each([
+  { horizontal: true, trackScroll: true },
+  { horizontal: false, trackScroll: false },
+])("tracks Solid-bound scroll state with %j", ({ horizontal, trackScroll }) => {
+  const view = mountSolid(() => (
+    <div role="region" ref={useScrollState(horizontal, trackScroll)} />
+  ));
   cleanup.push(view.unmount);
   const element = view.getByRole("region");
-  const values = geometry(element, true);
+  const values = geometry(element, horizontal);
   expectFrame(element, true, false, true);
   values.offset = 200;
   element.dispatchEvent(new Event("scroll"));
-  expectFrame(element, true, true, false);
+  expectFrame(element, true, trackScroll, !trackScroll);
+  if (!trackScroll) {
+    observers.at(-1)!.deliver(element);
+    expectFrame(element, true, true, false);
+  }
 });
 
 it("moves observation to the rendered replacement and ignores the old pending layout", () => {
@@ -117,7 +104,6 @@ it("moves observation to the rendered replacement and ignores the old pending la
   flush();
   const second = view.getByRole("region");
   geometry(second).extent = 100;
-  // A queued browser notification can arrive after unobserve and element replacement.
   oldObserver.deliver(first);
   vi.advanceTimersToNextFrame();
 
@@ -158,11 +144,8 @@ it("resamples content on reveal and releases live external targets when disposed
   values.extent = 400;
   setContent("a longer path");
   expectFrame(element, true, false);
-  expect(publish).toHaveBeenCalledExactlyOnceWith(element, {
-    scrollable: true,
-    atStart: true,
-    atEnd: false,
-  });
+  const atStart = { scrollable: true, atStart: true, atEnd: false };
+  expect(publish).toHaveBeenCalledExactlyOnceWith(element, atStart);
   expect(observers.filter((observer) => observer.targets.has(element))).toHaveLength(1);
 
   values.offset = 300;
@@ -172,8 +155,7 @@ it("resamples content on reveal and releases live external targets when disposed
   retiringObserver.deliver(element);
   element.dispatchEvent(new Event("scroll"));
   vi.advanceTimersToNextFrame();
-  expect(element.isConnected).toBe(true);
-  expect(element.dataset.atEnd).toBe("false");
+  expect(element).toMatchObject({ isConnected: true, dataset: { atEnd: "false" } });
   expect(observers.every((observer) => observer.targets.size === 0)).toBe(true);
 });
 
@@ -198,12 +180,8 @@ it("defers bounded reveal and cancels replaced, cleared, and disposed requests",
   const stop = createRoot((dispose) => {
     createScrollPosition(
       () => {
-        const initialTarget = active();
-        return {
-          reveal: initialTarget
-            ? { identity: [initialTarget], target: () => initialTarget }
-            : undefined,
-        };
+        const initial = active();
+        return initial ? { reveal: { identity: [initial], target: () => initial } } : {};
       },
       { region: () => region, revealTiming: "animation-frame" },
     );
@@ -213,30 +191,19 @@ it("defers bounded reveal and cancels replaced, cleared, and disposed requests",
   flush();
   expect(region.scrollTop).toBe(100);
 
-  select(second);
-  expect(region.scrollTop).toBe(100);
-  vi.advanceTimersToNextFrame();
-  expect(region.scrollTop).toBe(80);
-
-  select(first);
-  vi.advanceTimersToNextFrame();
-  expect(region.scrollTop).toBe(140);
-
-  select(second);
-  select(null);
-  vi.advanceTimersToNextFrame();
-  expect(region.scrollTop).toBe(140);
-
-  select(outside);
-  vi.advanceTimersToNextFrame();
-  expect(region.scrollTop).toBe(140);
-
-  select(second);
-  stop();
-  vi.advanceTimersToNextFrame();
-  expect(region.scrollTop).toBe(140);
-  expect(region.scrollLeft).toBe(25);
-  expect(ancestor.scrollTop).toBe(400);
+  for (const [target, beforeFrame, top] of [
+    [second, () => expect(region.scrollTop).toBe(100), 80],
+    [first, undefined, 140],
+    [second, () => select(null), 140],
+    [outside, undefined, 140],
+    [second, stop, 140],
+  ] as const) {
+    select(target);
+    beforeFrame?.();
+    vi.advanceTimersToNextFrame();
+    expect(region.scrollTop).toBe(top);
+  }
+  expect([region.scrollLeft, ancestor.scrollTop]).toEqual([25, 400]);
   expect(nativeScroll).not.toHaveBeenCalled();
 });
 
