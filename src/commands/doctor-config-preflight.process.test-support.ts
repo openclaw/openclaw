@@ -14,11 +14,6 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const execFileAsync = promisify(execFile);
 const isolatedRuntimeNodeExecPath = resolveTestNodeExecPath();
-type RuntimeArgs = [root: string, env: NodeJS.ProcessEnv, args: string[], timeout: number];
-type RuntimeOptions = Pick<
-  Parameters<typeof runCliProcessChild>[0],
-  "maxBuffer" | "onTestFinished"
->;
 // The fixture owns its package assets; resolving linked source back to the checkout
 // makes Doctor repair that checkout instead, including building its Control UI.
 // Dependency realpaths still own their transitive packages under isolated installs.
@@ -45,29 +40,41 @@ export const ISOLATED_RUNTIME_NODE_ARGS = [
   `)}`,
 ];
 
-function runRuntime([cwd, env, args, timeoutMs]: RuntimeArgs, options: RuntimeOptions = {}) {
+export function runBuiltRuntime(
+  runtimeRoot: string,
+  env: NodeJS.ProcessEnv,
+  args: string[],
+  timeout: number,
+  options: Pick<Parameters<typeof runCliProcessChild>[0], "maxBuffer" | "onTestFinished"> = {},
+) {
   return runCliProcessChild({
     nodeExecutable: isolatedRuntimeNodeExecPath,
-    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, ...args],
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
     nodeArgsPolicy: "caller",
-    cwd,
+    cwd: runtimeRoot,
     env,
-    timeoutMs,
+    timeoutMs: timeout,
     maxBuffer: options.maxBuffer ?? 1024 * 1024,
     ...(options.onTestFinished ? { onTestFinished: options.onTestFinished } : {}),
   });
 }
 
-export function runBuiltRuntime(
-  ...[root, env, args, timeout, options]: [...RuntimeArgs, RuntimeOptions?]
-) {
-  return runRuntime([root, env, [path.join(root, "dist", "entry.js"), ...args], timeout], options);
-}
-
 export function runSourceRuntime(
-  ...[root, env, args, timeout, maxBuffer]: [...RuntimeArgs, number?]
+  runtimeRoot: string,
+  env: NodeJS.ProcessEnv,
+  args: string[],
+  timeout: number,
+  maxBuffer?: number,
 ) {
-  return runRuntime([root, env, ["--import", "tsx", ...args], timeout], { maxBuffer });
+  return runCliProcessChild({
+    nodeExecutable: isolatedRuntimeNodeExecPath,
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
+    nodeArgsPolicy: "caller",
+    cwd: runtimeRoot,
+    env,
+    timeoutMs: timeout,
+    maxBuffer: maxBuffer ?? 1024 * 1024,
+  });
 }
 
 export function runIsolatedModuleScript(
@@ -177,20 +184,22 @@ export function seedPluginStateSidecar(stateDir: string, canonicalCreatedAt: num
   });
   closeOpenClawStateDatabaseForTest();
 
-  const insert = `
+  const shared = new DatabaseSync(sharedPath);
+  try {
+    shared
+      .prepare(`
         INSERT INTO plugin_state_entries (
           plugin_id, namespace, entry_key, value_json, created_at, expires_at
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `;
-  {
-    using shared = new DatabaseSync(sharedPath);
-    shared
-      .prepare(insert)
+      `)
       .run("discord", "components", "interaction:1", '{"ok":false}', canonicalCreatedAt, null);
+  } finally {
+    shared.close();
   }
 
-  using sidecar = new DatabaseSync(sidecarPath);
-  sidecar.exec(`
+  const sidecar = new DatabaseSync(sidecarPath);
+  try {
+    sidecar.exec(`
       CREATE TABLE plugin_state_entries (
         plugin_id TEXT NOT NULL,
         namespace TEXT NOT NULL,
@@ -201,10 +210,17 @@ export function seedPluginStateSidecar(stateDir: string, canonicalCreatedAt: num
         PRIMARY KEY (plugin_id, namespace, entry_key)
       );
     `);
-  sidecar
-    .prepare(insert)
-    // Keep retired sidecar data distinct from the canonical row.
-    .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
+    sidecar
+      .prepare(`
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      // Keep retired sidecar data distinct from the canonical row.
+      .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
+  } finally {
+    sidecar.close();
+  }
 }
 
 export function seedV17AdditiveRepairDatabase(
@@ -216,10 +232,11 @@ export function seedV17AdditiveRepairDatabase(
   closeOpenClawStateDatabaseForTest();
   const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  using database = new DatabaseSync(databasePath);
-  seedOpenClawAgentSchemaV21(database);
-  removeCanonicalValidationFromHistoricalAgentFixture(database);
-  database.exec(`
+  const database = new DatabaseSync(databasePath);
+  try {
+    seedOpenClawAgentSchemaV21(database);
+    removeCanonicalValidationFromHistoricalAgentFixture(database);
+    database.exec(`
       DROP TABLE session_participants;
       DROP TRIGGER session_conversations_route_context_invalidate_after_update;
       ALTER TABLE session_conversations DROP COLUMN route_context_json;
@@ -227,8 +244,8 @@ export function seedV17AdditiveRepairDatabase(
       PRAGMA user_version = 17;
       UPDATE schema_meta SET schema_version = 17;
     `);
-  if (options.participantDependency) {
-    database.exec(`
+    if (options.participantDependency) {
+      database.exec(`
         CREATE TABLE session_participants (
           session_key TEXT NOT NULL,
           actor_type TEXT NOT NULL,
@@ -242,6 +259,9 @@ export function seedV17AdditiveRepairDatabase(
         ) STRICT;
         CREATE INDEX idx_test_participant_dependency ON session_participants(actor_id);
       `);
+    }
+  } finally {
+    database.close();
   }
   return databasePath;
 }
