@@ -1,4 +1,3 @@
-// Runtime Postbuild tests cover runtime postbuild script behavior.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -50,24 +49,34 @@ const MODULE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const nodeRunnerFixture = `export { resolveNodeRunner } from ${JSON.stringify(new URL("../../src/cli/update-cli/node-runner.ts", import.meta.url).href)};\n`;
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  let statError: unknown;
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    statError = error;
+  const result = fs.stat(targetPath);
+  await expect(result).rejects.toBeInstanceOf(Error);
+  await expect(result).rejects.toMatchObject({ code: "ENOENT" });
+}
+
+async function writeText(root: string, relative: string, contents: string): Promise<void> {
+  const file = path.join(root, relative);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, contents, "utf8");
+}
+
+const readText = (root: string, relative: string) => fs.readFile(path.join(root, relative), "utf8");
+
+async function runtimeFixture(files: Record<string, string>) {
+  const rootDir = createTempDir("openclaw-runtime-postbuild-");
+  const distDir = path.join(rootDir, "dist");
+  await fs.mkdir(distDir, { recursive: true });
+  for (const [name, contents] of Object.entries(files)) {
+    await writeText(distDir, name, contents);
   }
-  expect(statError).toBeInstanceOf(Error);
-  if (!(statError instanceof Error)) {
-    throw new Error("expected missing path error");
-  }
-  expect(Reflect.get(statError, "code")).toBe("ENOENT");
+  return { rootDir, distDir };
 }
 
 async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
   const sourceDir = path.join(rootDir, "src", "auto-reply", "reply", "export-html");
   await fs.mkdir(sourceDir, { recursive: true });
-  await fs.writeFile(path.join(sourceDir, "template.html"), "<html></html>\n", "utf8");
-  await fs.writeFile(path.join(rootDir, "package.json"), "{}\n", "utf8");
+  await writeText(sourceDir, "template.html", "<html></html>\n");
+  await writeText(rootDir, "package.json", "{}\n");
   for (const fixture of [
     {
       name: "marked",
@@ -84,14 +93,14 @@ async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
   ]) {
     const packageDir = path.join(rootDir, "node_modules", fixture.name);
     await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
+    await writeText(
+      packageDir,
+      "package.json",
       `${JSON.stringify({ name: fixture.name, type: "module", exports: fixture.exports })}\n`,
-      "utf8",
     );
     const entryName = fixture.name === "marked" ? "index.js" : "common.js";
-    await fs.writeFile(path.join(packageDir, entryName), fixture.source, "utf8");
-    await fs.writeFile(path.join(packageDir, "LICENSE"), fixture.license, "utf8");
+    await writeText(packageDir, entryName, fixture.source);
+    await writeText(packageDir, "LICENSE", fixture.license);
   }
 }
 
@@ -120,12 +129,14 @@ describe("runtime postbuild static assets", () => {
       await expectPathMissing(path.join(rootDir, "dist", fileName));
     }
     await fs.mkdir(path.join(rootDir, "dist/plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "dist/plugin-sdk/test-env.js"),
+    await writeText(
+      rootDir,
+      "dist/plugin-sdk/test-env.js",
       'export * from "../test-env-fixture.mjs";\n',
     );
-    await fs.writeFile(
-      path.join(rootDir, "dist/test-env-fixture.mjs"),
+    await writeText(
+      rootDir,
+      "dist/test-env-fixture.mjs",
       companions.map((fileName) => `new URL("./${fileName}", import.meta.url);`).join("\n"),
     );
     runRuntimePostBuild(params);
@@ -151,8 +162,8 @@ describe("runtime postbuild static assets", () => {
     const distHookDir = path.join(rootDir, "dist", "bundled", "session-memory");
     await fs.mkdir(sourceHookDir, { recursive: true });
     await fs.mkdir(distHookDir, { recursive: true });
-    await fs.writeFile(path.join(sourceHookDir, "HOOK.md"), "---\nname: session-memory\n---\n");
-    await fs.writeFile(path.join(distHookDir, "handler.js"), "export default () => {};\n");
+    await writeText(sourceHookDir, "HOOK.md", "---\nname: session-memory\n---\n");
+    await writeText(distHookDir, "handler.js", "export default () => {};\n");
 
     runRuntimePostBuild({
       rootDir,
@@ -160,12 +171,8 @@ describe("runtime postbuild static assets", () => {
       timings: false,
     });
 
-    await expect(fs.readFile(path.join(distHookDir, "HOOK.md"), "utf8")).resolves.toContain(
-      "name: session-memory",
-    );
-    await expect(fs.readFile(path.join(distHookDir, "handler.js"), "utf8")).resolves.toBe(
-      "export default () => {};\n",
-    );
+    await expect(readText(distHookDir, "HOOK.md")).resolves.toContain("name: session-memory");
+    await expect(readText(distHookDir, "handler.js")).resolves.toBe("export default () => {};\n");
   });
 
   it("discovers repo static asset metadata without scanning extension directories", () => {
@@ -223,11 +230,9 @@ describe("runtime postbuild static assets", () => {
     copyStaticExtensionAssets({ rootDir });
     copyStaticExtensionAssetsToRuntimeOverlay({ rootDir });
 
-    const schema = await fs.readFile(path.join(MODULE_ROOT, schemaPath), "utf8");
+    const schema = await readText(MODULE_ROOT, schemaPath);
     for (const outputRoot of ["dist", "dist-runtime"]) {
-      await expect(fs.readFile(path.join(rootDir, outputRoot, schemaPath), "utf8")).resolves.toBe(
-        schema,
-      );
+      await expect(readText(rootDir, path.join(outputRoot, schemaPath))).resolves.toBe(schema);
     }
   });
 
@@ -239,9 +244,10 @@ describe("runtime postbuild static assets", () => {
     for (const id of pluginIds) {
       const pluginDir = path.join(rootDir, "extensions", id);
       await fs.mkdir(pluginDir, { recursive: true });
-      await fs.writeFile(path.join(pluginDir, "asset.txt"), `${id} bytes\n`);
-      await fs.writeFile(
-        path.join(pluginDir, "package.json"),
+      await writeText(pluginDir, "asset.txt", `${id} bytes\n`);
+      await writeText(
+        pluginDir,
+        "package.json",
         JSON.stringify({
           openclaw: { build: { staticAssets: [{ source: "asset.txt", output: "asset.txt" }] } },
         }),
@@ -250,7 +256,7 @@ describe("runtime postbuild static assets", () => {
     for (const id of ["with-manifest", "manifest-only"]) {
       const pluginDir = path.join(rootDir, "extensions", id);
       await fs.mkdir(pluginDir, { recursive: true });
-      await fs.writeFile(path.join(pluginDir, "openclaw.plugin.json"), "not valid JSON");
+      await writeText(pluginDir, "openclaw.plugin.json", "not valid JSON");
     }
     git(["init", "-q"]);
     git(["add", "extensions"]);
@@ -276,7 +282,7 @@ describe("runtime postbuild static assets", () => {
       );
       for (const id of pluginIds) {
         await expect(
-          fs.readFile(path.join(rootDir, "dist", "extensions", id, "asset.txt"), "utf8"),
+          readText(rootDir, path.join("dist", "extensions", id, "asset.txt")),
         ).resolves.toBe(`${id} bytes\n`);
       }
     } finally {
@@ -302,7 +308,7 @@ describe("runtime postbuild static assets", () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-malformed-");
     const packageDir = path.join(rootDir, "extensions", "demo");
     await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify(packageJson), "utf8");
+    await writeText(packageDir, "package.json", JSON.stringify(packageJson));
 
     expect(discoverStaticExtensionAssets({ rootDir })).toEqual([]);
   });
@@ -319,8 +325,9 @@ describe("runtime postbuild static assets", () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const packageDir = path.join(rootDir, "extensions", "external-demo");
     await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
+    await writeText(
+      packageDir,
+      "package.json",
       JSON.stringify({
         name: "@openclaw/external-demo",
         openclaw: {
@@ -335,7 +342,6 @@ describe("runtime postbuild static assets", () => {
           },
         },
       }),
-      "utf8",
     );
 
     expect(discoverStaticExtensionAssets({ rootDir, ...params })).toEqual(
@@ -383,8 +389,9 @@ describe("runtime postbuild static assets", () => {
     const warn = vi.fn();
 
     await fs.mkdir(path.join(rootDir, "extensions", "diffs", "assets"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "extensions", "diffs", "package.json"),
+    await writeText(
+      rootDir,
+      path.join("extensions", "diffs", "package.json"),
       JSON.stringify({
         name: "@openclaw/diffs",
         ...(dependency ? { dependencies: { [dependency]: "1.0.0" } } : {}),
@@ -395,30 +402,31 @@ describe("runtime postbuild static assets", () => {
           },
         },
       }),
-      "utf8",
     );
-    await fs.writeFile(
-      path.join(rootDir, "extensions", "diffs", "openclaw.plugin.json"),
+    await writeText(
+      rootDir,
+      path.join("extensions", "diffs", "openclaw.plugin.json"),
       '{"id":"diffs"}\n',
-      "utf8",
     );
     if (dependency) {
       for (const base of local ? [rootDir, packageDir] : [rootDir]) {
         const dependencyDir = path.join(base, "node_modules", dependency);
         await fs.mkdir(path.join(dependencyDir, "private"), { recursive: true });
-        await fs.writeFile(
-          path.join(dependencyDir, "package.json"),
+        await writeText(
+          dependencyDir,
+          "package.json",
           JSON.stringify({ name: dependency, exports: { "./runtime": "./private/runtime.js" } }),
         );
         if (!(missing && base === packageDir)) {
-          await fs.writeFile(
-            path.join(dependencyDir, "private/runtime.js"),
+          await writeText(
+            dependencyDir,
+            "private/runtime.js",
             local && base === rootDir ? "wrong ancestor version\n" : contents,
           );
         }
       }
     } else {
-      await fs.writeFile(path.join(packageDir, source), contents);
+      await writeText(packageDir, source, contents);
     }
 
     writeUpdateCompatibilityBuildFixture(rootDir);
@@ -434,7 +442,7 @@ describe("runtime postbuild static assets", () => {
       if (missing) {
         await expectPathMissing(path.join(rootDir, asset));
       } else {
-        await expect(fs.readFile(path.join(rootDir, asset), "utf8")).resolves.toBe(contents);
+        await expect(readText(rootDir, asset)).resolves.toBe(contents);
       }
     }
     if (missing) {
@@ -462,18 +470,18 @@ describe("runtime postbuild static assets", () => {
       readBuildIdFromBuildInfoForModuleUrl(pathToFileURL(path.join(rootDir, "dist/entry.js")).href),
     ).toBe("source-runtime-build");
     await expect(
-      fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
+      readText(rootDir, path.join("dist", "export-html", "template.html")),
     ).resolves.toBe("<html></html>\n");
     const vendorDir = path.join(rootDir, "dist", "export-html", "vendor");
-    const markedAsset = await fs.readFile(path.join(vendorDir, "marked.min.js"), "utf8");
-    const highlightAsset = await fs.readFile(path.join(vendorDir, "highlight.min.js"), "utf8");
+    const markedAsset = await readText(vendorDir, "marked.min.js");
+    const highlightAsset = await readText(vendorDir, "highlight.min.js");
     expect(markedAsset).toContain("ALTERNATE ROOT MARKED LICENSE");
     expect(markedAsset).toContain("alternate-root-marked");
     expect(highlightAsset).toContain("ALTERNATE ROOT HIGHLIGHT LICENSE");
     expect(highlightAsset).toContain("alternate-root-highlight");
-    await expect(
-      fs.readFile(path.join(rootDir, "dist", "channel-catalog.json"), "utf8"),
-    ).resolves.toContain('"entries"');
+    await expect(readText(rootDir, path.join("dist", "channel-catalog.json"))).resolves.toContain(
+      '"entries"',
+    );
     const bridge = await import(
       pathToFileURL(path.join(rootDir, "dist", "shared-Y6bNiw2w.js")).href
     );
@@ -496,14 +504,14 @@ describe("runtime postbuild static assets", () => {
     });
 
     await expect(
-      fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
+      readText(rootDir, path.join("dist", "export-html", "template.html")),
     ).resolves.toBe("<html></html>\n");
-    await expect(
-      fs.readFile(path.join(rootDir, "dist", "channel-catalog.json"), "utf8"),
-    ).resolves.toContain('"entries"');
-    await expect(
-      fs.readFile(path.join(rootDir, "dist", "shared-Y6bNiw2w.js"), "utf8"),
-    ).resolves.toContain("resolveNodeRunner");
+    await expect(readText(rootDir, path.join("dist", "channel-catalog.json"))).resolves.toContain(
+      '"entries"',
+    );
+    await expect(readText(rootDir, path.join("dist", "shared-Y6bNiw2w.js"))).resolves.toContain(
+      "resolveNodeRunner",
+    );
     await expectPathMissing(path.join(cwd, "dist"));
     await expectPathMissing(path.join(repoRoot, "dist"));
   });
@@ -537,14 +545,11 @@ describe("runtime postbuild static assets", () => {
     const runtimeAsset = path.join(rootDir, "dist-runtime", "extensions", "diffs", output);
 
     await fs.mkdir(path.join(distPluginDir, "assets"), { recursive: true });
-    await fs.writeFile(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
-    await fs.writeFile(
-      path.join(distPluginDir, "openclaw.plugin.json"),
-      '{"id":"diffs"}\n',
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distPluginDir, "package.json"),
+    await writeText(distPluginDir, "index.js", "export default {};\n");
+    await writeText(distPluginDir, "openclaw.plugin.json", '{"id":"diffs"}\n');
+    await writeText(
+      distPluginDir,
+      "package.json",
       JSON.stringify({
         name: "@openclaw/diffs",
         openclaw: {
@@ -554,9 +559,8 @@ describe("runtime postbuild static assets", () => {
           },
         },
       }),
-      "utf8",
     );
-    await fs.writeFile(path.join(distPluginDir, output), "console.log('viewer');\n", "utf8");
+    await writeText(distPluginDir, output, "console.log('viewer');\n");
 
     writeUpdateCompatibilityBuildFixture(rootDir);
     runRuntimePostBuild({
@@ -576,8 +580,9 @@ describe("runtime postbuild static assets", () => {
     const output = "assets/viewer-runtime.js";
 
     await fs.mkdir(path.join(rootDir, "extensions", "diffs"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "extensions", "diffs", "package.json"),
+    await writeText(
+      rootDir,
+      path.join("extensions", "diffs", "package.json"),
       JSON.stringify({
         name: "@openclaw/diffs",
         openclaw: {
@@ -587,7 +592,6 @@ describe("runtime postbuild static assets", () => {
           },
         },
       }),
-      "utf8",
     );
 
     runRuntimePostBuild({
@@ -606,11 +610,7 @@ describe("runtime postbuild static assets", () => {
   it("skips runtime overlay asset copies when the runtime extension root is absent", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     await fs.mkdir(path.join(rootDir, "extensions", "demo", "assets"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "extensions", "demo", "assets", "viewer.js"),
-      "viewer\n",
-      "utf8",
-    );
+    await writeText(rootDir, path.join("extensions", "demo", "assets", "viewer.js"), "viewer\n");
 
     copyStaticExtensionAssetsToRuntimeOverlay({
       rootDir,
@@ -629,11 +629,7 @@ describe("runtime postbuild static assets", () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     await fs.mkdir(path.join(rootDir, "dist-runtime", "extensions"), { recursive: true });
     await fs.mkdir(path.join(rootDir, "extensions", "demo", "assets"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "extensions", "demo", "assets", "viewer.js"),
-      "viewer\n",
-      "utf8",
-    );
+    await writeText(rootDir, path.join("extensions", "demo", "assets", "viewer.js"), "viewer\n");
 
     copyStaticExtensionAssetsToRuntimeOverlay({
       rootDir,
@@ -688,41 +684,24 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("writes stable aliases for hashed root runtime modules", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "runtime-model-auth.runtime-XyZ987.js"),
-      "export const auth = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "runtime-tts.runtime-AbCd1234.mjs"),
-      "export const tts = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "dispatch.contract-AbCd1234.mjs"),
-      "export const dispatch = true;\n",
-      "utf8",
-    );
+    const { rootDir, distDir } = await runtimeFixture({
+      "runtime-model-auth.runtime-XyZ987.js": "export const auth = true;\n",
+      "runtime-tts.runtime-AbCd1234.mjs": "export const tts = true;\n",
+      "dispatch.contract-AbCd1234.mjs": "export const dispatch = true;\n",
+    });
     for (const extension of ["js", "mjs"]) {
-      await fs.writeFile(
-        path.join(distDir, `library-Other123.${extension}`),
-        "export const x = true;\n",
-        "utf8",
-      );
+      await writeText(distDir, `library-Other123.${extension}`, "export const x = true;\n");
     }
 
     writeStableRootRuntimeAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "runtime-model-auth.runtime.js")).toBe(
       'export * from "./runtime-model-auth.runtime-XyZ987.js";\n',
     );
-    expect(await fs.readFile(path.join(distDir, "runtime-tts.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "runtime-tts.runtime.js")).toBe(
       'export * from "./runtime-tts.runtime-AbCd1234.mjs";\n',
     );
-    expect(await fs.readFile(path.join(distDir, "dispatch.contract.js"), "utf8")).toBe(
+    expect(await readText(distDir, "dispatch.contract.js")).toBe(
       'export * from "./dispatch.contract-AbCd1234.mjs";\n',
     );
     for (const fileName of ["library.js", "runtime-tts.runtime.mjs", "dispatch.contract.mjs"]) {
@@ -747,24 +726,22 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("forwards default exports through stable and legacy aliases", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}\n', "utf8");
-    await fs.writeFile(
-      path.join(distDir, "text-transforms.runtime-Hash111.mjs"),
+    const { rootDir, distDir } = await runtimeFixture({});
+    await writeText(rootDir, "package.json", '{"type":"module"}\n');
+    await writeText(
+      distDir,
+      "text-transforms.runtime-Hash111.mjs",
       "function reconcile(value) { return value; }\nexport { reconcile as default };\n",
-      "utf8",
     );
-    await fs.writeFile(
-      path.join(distDir, "mixed.contract-Hash222.mjs"),
+    await writeText(
+      distDir,
+      "mixed.contract-Hash222.mjs",
       "export const named = true;\nexport default function run() {}\n",
-      "utf8",
     );
-    await fs.writeFile(
-      path.join(distDir, "named-only.runtime-Hash333.js"),
+    await writeText(
+      distDir,
+      "named-only.runtime-Hash333.js",
       'const marker = "export { marker as default }";\nexport { marker };\n',
-      "utf8",
     );
 
     writeStableRootRuntimeAliases({ rootDir });
@@ -789,7 +766,7 @@ describe("runtime postbuild static assets", () => {
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
     writeStableRootRuntimeAliases({ rootDir });
     writeLegacyRootRuntimeCompatAliases({ rootDir });
-    expect(await fs.readFile(path.join(distDir, "text-transforms.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "text-transforms.runtime.js")).toBe(
       'export * from "./text-transforms.runtime-Hash111.mjs";\n' +
         'export { default } from "./text-transforms.runtime-Hash111.mjs";\n',
     );
@@ -801,24 +778,11 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("does not write ambiguous stable aliases for colliding root runtime chunks", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "install.runtime-Aaa111.mjs"),
-      "export const pluginInstall = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "install.runtime-Bbb222.js"),
-      "export const daemonInstall = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "install.runtime.js"),
-      'export * from "./install.runtime-Stale.js";\n',
-      "utf8",
-    );
+    const { rootDir, distDir } = await runtimeFixture({
+      "install.runtime-Aaa111.mjs": "export const pluginInstall = true;\n",
+      "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
+      "install.runtime.js": 'export * from "./install.runtime-Stale.js";\n',
+    });
 
     writeStableRootRuntimeAliases({ rootDir });
 
@@ -826,99 +790,63 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("writes a stable plugin install runtime alias when install runtimes collide", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "install.runtime-Aaa111.mjs"),
-      [
+    const { rootDir, distDir } = await runtimeFixture({
+      "install.runtime-Aaa111.mjs": [
         "export const scanPackageInstallSource = true;",
         "export const scanInstalledPackageDependencyTree = true;",
         "export const scanBundleInstallSource = true;",
         "",
       ].join("\n"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "install.runtime-Bbb222.js"),
-      "export const daemonInstall = true;\n",
-      "utf8",
-    );
+      "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
+    });
 
     writeStableRootRuntimeAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "install.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "install.runtime.js")).toBe(
       'export * from "./install.runtime-Aaa111.mjs";\n',
     );
   });
 
   it("keeps stable aliases when one colliding root runtime chunk re-exports the implementation", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "runtime-model-auth.runtime-Impl123.js"),
-      "export const auth = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "runtime-model-auth.runtime-Wrap456.mjs"),
-      'import { auth } from "./runtime-model-auth.runtime-Impl123.js";\nexport { auth };\n',
-      "utf8",
-    );
+    const { rootDir, distDir } = await runtimeFixture({
+      "runtime-model-auth.runtime-Impl123.js": "export const auth = true;\n",
+      "runtime-model-auth.runtime-Wrap456.mjs":
+        'import { auth } from "./runtime-model-auth.runtime-Impl123.js";\nexport { auth };\n',
+    });
 
     writeStableRootRuntimeAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "runtime-model-auth.runtime.js")).toBe(
       'export * from "./runtime-model-auth.runtime-Wrap456.mjs";\n',
     );
   });
 
   it("ignores legacy wrappers to the stable runtime alias when choosing the implementation", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "runtime-plugins.runtime-NewHash.mjs"),
-      "export const ready = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "runtime-plugins.runtime-OldHash.js"),
-      'export * from "./runtime-plugins.runtime.js";\n',
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "dispatch-OldHash.js"),
-      ['const lazy = () => import("./runtime-plugins.runtime-NewHash.mjs");', ""].join("\n"),
-      "utf8",
-    );
+    const { rootDir, distDir } = await runtimeFixture({
+      "runtime-plugins.runtime-NewHash.mjs": "export const ready = true;\n",
+      "runtime-plugins.runtime-OldHash.js": 'export * from "./runtime-plugins.runtime.js";\n',
+      "dispatch-OldHash.js": [
+        'const lazy = () => import("./runtime-plugins.runtime-NewHash.mjs");',
+        "",
+      ].join("\n"),
+    });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
     writeStableRootRuntimeAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "dispatch-OldHash.js"), "utf8")).toBe(
+    expect(await readText(distDir, "dispatch-OldHash.js")).toBe(
       ['const lazy = () => import("./runtime-plugins.runtime.js");', ""].join("\n"),
     );
-    expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "runtime-plugins.runtime.js")).toBe(
       'export * from "./runtime-plugins.runtime-NewHash.mjs";\n',
     );
   });
 
   it.each(["js", "mjs"])("rewrites mixed runtime imports in a %s importer", async (extension) => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "runtime-plugins.runtime-AbCd1234.mjs"),
-      "export const ready = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "dispatch.contract-AbCd1234.js"),
-      "export const dispatch = true;\n",
-      "utf8",
-    );
+    const { rootDir, distDir } = await runtimeFixture({
+      "runtime-plugins.runtime-AbCd1234.mjs": "export const ready = true;\n",
+      "dispatch.contract-AbCd1234.js": "export const dispatch = true;\n",
+    });
     const importerPath = path.join(distDir, `dispatch-OldHash.${extension}`);
     await fs.writeFile(
       importerPath,
@@ -946,61 +874,43 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("keeps text-transform runtime imports hashed after the stable alias export surface grew", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "text-transforms.runtime-NewHash.mjs"),
-      "export const n = true;\nexport const t = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "provider-runtime-NewHash.mjs"),
-      [
+    const { rootDir, distDir } = await runtimeFixture({
+      "text-transforms.runtime-NewHash.mjs": "export const n = true;\nexport const t = true;\n",
+      "provider-runtime-NewHash.mjs": [
         'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.mjs";',
         "export { applyPluginTextReplacements };",
         "",
       ].join("\n"),
-      "utf8",
-    );
+    });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
     writeStableRootRuntimeAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "provider-runtime-NewHash.mjs"), "utf8")).toBe(
+    expect(await readText(distDir, "provider-runtime-NewHash.mjs")).toBe(
       [
         'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.mjs";',
         "export { applyPluginTextReplacements };",
         "",
       ].join("\n"),
     );
-    expect(await fs.readFile(path.join(distDir, "text-transforms.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "text-transforms.runtime.js")).toBe(
       'export * from "./text-transforms.runtime-NewHash.mjs";\n',
     );
   });
 
   it("rewrites gateway shutdown imports to stable runtime aliases", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "server-close.runtime-AbCd1234.js"),
-      "export const close = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "server.impl-OldHash.js"),
-      [
+    const { rootDir, distDir } = await runtimeFixture({
+      "server-close.runtime-AbCd1234.js": "export const close = true;\n",
+      "server.impl-OldHash.js": [
         'const closeModule = () => import("./server-close.runtime-AbCd1234.js");',
         'const ordinaryChunk = () => import("./server-close-OldHash.js");',
         "",
       ].join("\n"),
-      "utf8",
-    );
+    });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "server.impl-OldHash.js"), "utf8")).toBe(
+    expect(await readText(distDir, "server.impl-OldHash.js")).toBe(
       [
         'const closeModule = () => import("./server-close.runtime.js");',
         'const ordinaryChunk = () => import("./server-close-OldHash.js");',
@@ -1010,60 +920,40 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("rewrites reply-dispatch imports to the stable provider dispatcher runtime alias", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "provider-dispatcher.runtime-NewHash.js"),
-      'export * from "./provider-dispatcher-ImplHash.js";\n',
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "reply-dispatch-runtime-OldHash.js"),
-      ['const dispatcher = () => import("./provider-dispatcher.runtime-NewHash.js");', ""].join(
-        "\n",
-      ),
-      "utf8",
-    );
+    const { rootDir, distDir } = await runtimeFixture({
+      "provider-dispatcher.runtime-NewHash.js":
+        'export * from "./provider-dispatcher-ImplHash.js";\n',
+      "reply-dispatch-runtime-OldHash.js": [
+        'const dispatcher = () => import("./provider-dispatcher.runtime-NewHash.js");',
+        "",
+      ].join("\n"),
+    });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
     writeStableRootRuntimeAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "reply-dispatch-runtime-OldHash.js"), "utf8")).toBe(
+    expect(await readText(distDir, "reply-dispatch-runtime-OldHash.js")).toBe(
       ['const dispatcher = () => import("./provider-dispatcher.runtime.js");', ""].join("\n"),
     );
-    expect(await fs.readFile(path.join(distDir, "provider-dispatcher.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "provider-dispatcher.runtime.js")).toBe(
       'export * from "./provider-dispatcher.runtime-NewHash.js";\n',
     );
   });
 
   it("keeps hashed imports when a stable runtime alias would collide", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "install.runtime-Aaa111.mjs"),
-      "export const pluginInstall = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "install.runtime-Bbb222.js"),
-      "export const daemonInstall = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "install-OldHash.js"),
-      [
+    const { rootDir, distDir } = await runtimeFixture({
+      "install.runtime-Aaa111.mjs": "export const pluginInstall = true;\n",
+      "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
+      "install-OldHash.js": [
         'const pluginRuntime = () => import("./install.runtime-Aaa111.mjs");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
         "",
       ].join("\n"),
-      "utf8",
-    );
+    });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "install-OldHash.js"), "utf8")).toBe(
+    expect(await readText(distDir, "install-OldHash.js")).toBe(
       [
         'const pluginRuntime = () => import("./install.runtime-Aaa111.mjs");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
@@ -1073,37 +963,24 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("rewrites plugin install runtime imports to stable aliases when install runtimes collide", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "install.runtime-Aaa111.mjs"),
-      [
+    const { rootDir, distDir } = await runtimeFixture({
+      "install.runtime-Aaa111.mjs": [
         "export const scanPackageInstallSource = true;",
         "export const scanInstalledPackageDependencyTree = true;",
         "export const scanBundleInstallSource = true;",
         "",
       ].join("\n"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "install.runtime-Bbb222.js"),
-      "export const daemonInstall = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "install-OldHash.js"),
-      [
+      "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
+      "install-OldHash.js": [
         'const pluginRuntime = () => import("./install.runtime-Aaa111.mjs");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
         "",
       ].join("\n"),
-      "utf8",
-    );
+    });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "install-OldHash.js"), "utf8")).toBe(
+    expect(await readText(distDir, "install-OldHash.js")).toBe(
       [
         'const pluginRuntime = () => import("./install.runtime.js");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
@@ -1113,23 +990,14 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("leaves stable alias files pointing at their hashed runtime chunks", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "runtime-plugins.runtime-AbCd1234.mjs"),
-      "export const ready = true;\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "runtime-plugins.runtime.js"),
-      'export * from "./runtime-plugins.runtime-AbCd1234.mjs";\n',
-      "utf8",
-    );
+    const { rootDir, distDir } = await runtimeFixture({
+      "runtime-plugins.runtime-AbCd1234.mjs": "export const ready = true;\n",
+      "runtime-plugins.runtime.js": 'export * from "./runtime-plugins.runtime-AbCd1234.mjs";\n',
+    });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toBe(
+    expect(await readText(distDir, "runtime-plugins.runtime.js")).toBe(
       'export * from "./runtime-plugins.runtime-AbCd1234.mjs";\n',
     );
   });
@@ -1157,7 +1025,7 @@ describe("runtime postbuild static assets", () => {
 
   it("keeps the 2026.9.1 Git updater restart import loadable after dist replacement", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-old-updater-");
-    await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}');
+    await writeText(rootDir, "package.json", '{"type":"module"}');
     const distDir = path.join(rootDir, "dist");
     const ownerPath = path.join(distDir, "update-command-service-command.mjs");
     await fs.mkdir(distDir, { recursive: true });
@@ -1554,135 +1422,92 @@ describe("previous release update compatibility", () => {
       access: "namespace binding",
       statement:
         'const [left, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "object rest binding",
       statement:
         'const [{ x, ...rest }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "array rest binding",
       statement:
         'const [{ x }, ...rest] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "default binding",
       statement:
         'const [{ x = 0 }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "intermediate array",
       statement:
         'const modules = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]); const [{ x }, { y }] = modules;',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "empty object binding",
       statement:
         'const [{}, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "nested binding",
       statement:
         'const [{ x: { value } }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "omitted array binding",
       statement:
         'const [, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "optional call",
       statement:
         'const [{ x }, { y }] = await Promise.all?.([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "spread import array",
       statement:
         'const [{ x }, { y }] = await Promise.all([...[], import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "unawaited Promise.all",
       statement:
         'const modules = Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "different combiner",
       statement:
         'const [{ x }, { y }] = await Promise.race([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
-      names: [
-        ["x", "y"],
-        ["x", "y"],
-      ],
     },
     {
       access: "mixed array",
       statement:
         'const [{ x }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js"), 1]);',
-      names: [
+    },
+  ])(
+    "records conservative module contracts for $access",
+    ({
+      statement,
+      names = [
         ["x", "y"],
         ["x", "y"],
       ],
+    }) => {
+      const { inventory } = recordImportedFixture(`await (async () => { ${statement} })()`, {
+        "left-abcdefgh.js": "//#region src/infra/left.ts\nexport const x = 1, y = 2;\n",
+        "right-abcdefgh.js": "//#region src/infra/right.ts\nexport const x = 3, y = 4;\n",
+      });
+      expect(
+        inventory.releases[0]?.chunks.map((chunk) => ({
+          path: chunk.path,
+          imported: chunk.imports.flatMap((entry) => entry.exports),
+          exported: chunk.exports.map((entry) => entry.exported),
+        })),
+      ).toEqual([
+        { path: "left-abcdefgh.js", imported: names[0], exported: names[0] },
+        { path: "right-abcdefgh.js", imported: names[1], exported: names[1] },
+      ]);
     },
-  ])("records conservative module contracts for $access", ({ statement, names }) => {
-    const { inventory } = recordImportedFixture(`await (async () => { ${statement} })()`, {
-      "left-abcdefgh.js": "//#region src/infra/left.ts\nexport const x = 1, y = 2;\n",
-      "right-abcdefgh.js": "//#region src/infra/right.ts\nexport const x = 3, y = 4;\n",
-    });
-    expect(
-      inventory.releases[0]?.chunks.map((chunk) => ({
-        path: chunk.path,
-        imported: chunk.imports.flatMap((entry) => entry.exports),
-        exported: chunk.exports.map((entry) => entry.exported),
-      })),
-    ).toEqual([
-      { path: "left-abcdefgh.js", imported: names[0], exported: names[0] },
-      { path: "right-abcdefgh.js", imported: names[1], exported: names[1] },
-    ]);
-  });
+  );
 
   it.each([
     {

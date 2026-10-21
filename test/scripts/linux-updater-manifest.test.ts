@@ -586,50 +586,37 @@ it.each([
   expect(remote.read().calls).toEqual([]);
 });
 
-const uploadAuthorityCases: Array<{
-  reason: string;
-  initial: Partial<Remote>;
-  message: string;
-  prepared?: boolean;
-}> = [
-  { reason: "unreachable tooling", initial: { toolingStatus: "behind" }, message: "not reachable" },
-  {
-    reason: "stale prepared parent",
-    initial: { parentAttempt: 2 },
-    message: "runAttempt",
-    prepared: true,
-  },
-  ...[
-    { reason: "stale attempt", currentRunOverrides: { run_attempt: 2 } },
-    { reason: "wrong path", currentRunOverrides: { path: ".github/workflows/other.yml" } },
-    { reason: "wrong source SHA", currentRunOverrides: { head_sha: "c".repeat(40) } },
-    {
-      reason: "cancelled run",
-      currentRunOverrides: { status: "completed", conclusion: "cancelled" },
-    },
-  ].map(({ reason, currentRunOverrides }) => ({
-    reason,
-    initial: { currentRunOverrides },
-    message: "release workflow run",
-  })),
-  ...[
-    { reason: "another tag", eventInputOverrides: { tag: sourceTag } },
-    { reason: "another channel", eventInputOverrides: { npm_dist_tag: "beta" } },
-  ].map(({ reason, eventInputOverrides }) => ({
-    reason,
-    initial: { eventInputOverrides },
-    message: "Actions release inputs differ",
-  })),
-];
-it.each(uploadAuthorityCases)(
-  "revalidates manifest upload authority: $reason",
-  ({ initial, message, prepared }) => {
-    const remote = fixture(initial);
-    const result = remote.run("carry", "v2026.9.5", prepared);
-    expect(result.stderr).toContain(message);
-    expectOutcome(remote, result, "failed", 1);
-  },
-);
+it.each<[string, Partial<Remote>, string, boolean?]>([
+  ["unreachable tooling", { toolingStatus: "behind" }, "not reachable"],
+  ["stale prepared parent", { parentAttempt: 2 }, "runAttempt", true],
+  ["stale attempt", { currentRunOverrides: { run_attempt: 2 } }, "release workflow run"],
+  [
+    "wrong path",
+    { currentRunOverrides: { path: ".github/workflows/other.yml" } },
+    "release workflow run",
+  ],
+  [
+    "wrong source SHA",
+    { currentRunOverrides: { head_sha: "c".repeat(40) } },
+    "release workflow run",
+  ],
+  [
+    "cancelled run",
+    { currentRunOverrides: { status: "completed", conclusion: "cancelled" } },
+    "release workflow run",
+  ],
+  ["another tag", { eventInputOverrides: { tag: sourceTag } }, "Actions release inputs differ"],
+  [
+    "another channel",
+    { eventInputOverrides: { npm_dist_tag: "beta" } },
+    "Actions release inputs differ",
+  ],
+])("revalidates manifest upload authority: %s", (_reason, initial, message, prepared) => {
+  const remote = fixture(initial);
+  const result = remote.run("carry", "v2026.9.5", prepared);
+  expect(result.stderr).toContain(message);
+  expectOutcome(remote, result, "failed", 1);
+});
 
 it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
   "checks the actual same-tag legacy selector and REST identities (%s)",

@@ -50,38 +50,26 @@ describe("Android versioning", () => {
     ).toMatchObject({ appStoreRevision: "1" });
   });
 
-  it("rejects missing CLI option values before reading version files", () => {
-    expectMissingValue("android-version", "--field");
-    expectMissingValue("android-version", "--field", "-h");
-  });
+  it.each<[string, string, string | undefined]>([
+    ["android-version", "--field", undefined],
+    ["android-version", "--field", "-h"],
+    ["android-sync-versioning", "--root", "--check"],
+    ["android-sync-versioning", "--root", "-h"],
+  ])("rejects missing %s %s values before reading version files (%s)", expectMissingValue);
 
-  it("rejects missing Android sync CLI root values before reading version files", () => {
-    expectMissingValue("android-sync-versioning", "--root", "--check");
-    expectMissingValue("android-sync-versioning", "--root", "-h");
-  });
-
-  it("rejects semver-only versions", () => {
-    const rootDir = writeAndroidFixture({ version: "1.2.3" });
-
-    expect(() => resolveAndroidVersion(rootDir)).toThrow(
-      "Expected pinned release version like 2026.6.5",
-    );
+  it.each<[Partial<Parameters<typeof writeFixture>[0]>, string]>([
+    [{ version: "1.2.3" }, "Expected pinned release version like 2026.6.5"],
+    [{ versionCode: 2026060301 }, "Expected 2026060201 through 2026060249 for version 2026.6.2"],
+  ])("rejects invalid pinned metadata %j", (overrides, message) => {
+    expect(() => resolveAndroidVersion(writeAndroidFixture(overrides))).toThrow(message);
   });
 
   it.each(["2026.13.2", "2026.6.9007199254740993"])("rejects impossible pinned %s", (version) => {
     expect(() => normalizePinned(version)).toThrow("Expected pinned release version like 2026.6.5");
   });
 
-  it("rejects version codes that do not match the pinned version date", () => {
-    const rootDir = writeAndroidFixture({ versionCode: 2026060301 });
-
-    expect(() => resolveAndroidVersion(rootDir)).toThrow(
-      "Expected 2026060201 through 2026060249 for version 2026.6.2",
-    );
-  });
-  it("strips prerelease suffixes when pinning from gateway version", () => {
-    expect(pinGateway("2026.6.2-beta.3")).toBe("2026.6.2");
-    expect(pinGateway("2026.6.2-alpha.1")).toBe("2026.6.2");
+  it.each(["2026.6.2-beta.3", "2026.6.2-alpha.1"])("strips the suffix from %s", (version) => {
+    expect(pinGateway(version)).toBe("2026.6.2");
   });
 
   it("rejects pinned versions that cannot derive Play-compatible version codes", () => {
