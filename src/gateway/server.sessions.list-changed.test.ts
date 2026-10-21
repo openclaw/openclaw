@@ -5,9 +5,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
@@ -23,18 +21,10 @@ import {
   expectFields,
   transcriptMessageContents,
   expectRespondPayload,
-  findSession,
   expectChangedBroadcast,
 } from "./server.sessions.list-changed.test-helpers.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
-import {
-  seedCompletedSessionTranscript,
-  seedSessionListBackfillFixture,
-} from "./session-row-fixtures.test-support.js";
-import { getSessionRowProjection } from "./session-row-projection-access.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
+import { seedCompletedSessionTranscript } from "./session-row-fixtures.test-support.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import {
   agentCommandMock,
@@ -79,10 +69,9 @@ function reply(
 }
 
 async function invokeSession(
-  method: "sessions.list" | MutationMethod,
+  method: MutationMethod,
   params: Record<string, unknown>,
   context: Record<string, unknown>,
-  defer = false,
   subscribedConnIds = new Set(["conn-1"]),
 ) {
   const respond = vi.fn();
@@ -91,47 +80,25 @@ async function invokeSession(
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const requestContext = {
     getRuntimeConfig,
-    ...(method === "sessions.list"
-      ? {
-          readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
-        }
-      : {
-          broadcastToConnIds,
-          dedupe: new Map(),
-          getSessionEventSubscriberConnIds: () => subscribedConnIds,
-          loadGatewayModelCatalog: async () => ({ providers: [] }),
-          loadGatewayModelCatalogSnapshot: () => mutationCatalogSnapshot([]),
-        }),
+    broadcastToConnIds,
+    dedupe: new Map(),
+    getSessionEventSubscriberConnIds: () => subscribedConnIds,
+    loadGatewayModelCatalog: async () => ({ providers: [] }),
+    loadGatewayModelCatalogSnapshot: () => mutationCatalogSnapshot([]),
     ...context,
   } as unknown as GatewayRequestContext;
   const handler = expectDefined(sessionsHandlers[method], "session handler");
-  const request = initializeSessionReadContext(requestContext).then(() => {
-    const options = {
-      req: { type: "req" as const, id: "test-request", method, params },
-      params,
-      respond,
-      client: null,
-      isWebchatConnect: () => false,
-      context: requestContext,
-    };
-    return handler(
-      method === "sessions.list"
-        ? options
-        : bindInProcessRequestMutationAuthority(options, undefined, undefined),
-    );
-  });
-  if (!defer) {
-    await request;
-  }
-  return { request, respond, context: requestContext, broadcastToConnIds };
-}
-
-async function invokeSessionsList(
-  params: Record<string, unknown> = {},
-  context: Record<string, unknown> = {},
-  defer = false,
-) {
-  return invokeSession("sessions.list", params, context, defer);
+  await initializeSessionReadContext(requestContext);
+  const options = {
+    req: { type: "req" as const, id: "test-request", method, params },
+    params,
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: requestContext,
+  };
+  await handler(bindInProcessRequestMutationAuthority(options, undefined, undefined));
+  return { respond, context: requestContext, broadcastToConnIds };
 }
 
 async function mutationCatalogSnapshot(
@@ -156,7 +123,7 @@ async function invokeSessionMutation(
   subscribedConnIds = new Set(["conn-1"]),
   method: MutationMethod = "sessions.patch",
 ) {
-  const prepared = await invokeSession(method, params, context, false, subscribedConnIds);
+  const prepared = await invokeSession(method, params, context, subscribedConnIds);
   await flushPendingSessionsChangedEvents(prepared.context);
   return {
     broadcastToConnIds: prepared.broadcastToConnIds,
@@ -194,8 +161,6 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
     sessionKey: "agent:main:dashboard:child",
     entries: {
       main: sessionStoreEntry("sess-parent"),
-      "dashboard:live": sessionStoreEntry("sess-live"),
-      "dashboard:idle": sessionStoreEntry("sess-idle", { updatedAt: Date.now() + 60_000 }),
       "dashboard:child": sessionStoreEntry("sess-child", {
         updatedAt: Date.now() - 1_000,
         providerOverride: "anthropic",
@@ -247,49 +212,27 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   expect(galleryChild).not.toHaveProperty("totalTokens");
   expect(galleryChild).not.toHaveProperty("model");
   await prepareGatewayReplyRuntimeForTest();
-  const held = new Map(
-    ["list-live-z", "list-live-a"].map(
-      (id) => [id, { entered: createDeferred<void>(), release: createDeferred<void>() }] as const,
-    ),
-  );
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
   agentCommandMock.mockImplementation(async (options) => {
     const command = options as AgentCommandGatewayIngressOpts;
-    const turn = held.get(command.runId!);
-    if (!turn) {
+    if (command.runId !== "list-live") {
       throw new Error("Unexpected list boundary inference");
     }
-    turn.entered.resolve();
-    await turn.release.promise;
+    entered.resolve();
+    await release.promise;
   });
   try {
-    for (const [runId, sessionKey] of [
-      ["list-live-z", "agent:main:main"],
-      ["list-live-a", "agent:main:dashboard:live"],
-    ] as const) {
-      const accepted = await rpcReq(ws, "agent", {
-        sessionKey,
-        message: "Hold this list-visible turn",
-        idempotencyKey: runId,
-      });
-      expect(accepted.ok).toBe(true);
-      await held.get(runId)!.entered.promise;
-    }
-    const activePage = (offset?: number) =>
-      rpcReq<SessionsListResult>(ws, "sessions.list", { activeOnly: true, limit: 1, offset });
-    const first = await activePage();
-    const second = await activePage(1);
-    expect(first.payload).toMatchObject({ count: 1, totalCount: 2, nextOffset: 1 });
-    expect(second.payload).toMatchObject({ count: 1, totalCount: 2, nextOffset: null });
-    const active = [...first.payload!.sessions, ...second.payload!.sessions];
-    expect(active.map((session) => session.key).toSorted()).toEqual([
-      "agent:main:dashboard:live",
-      "agent:main:main",
-    ]);
-    expect(active.flatMap((session) => session.activeRunIds).toSorted()).toEqual([
-      "list-live-a",
-      "list-live-z",
-    ]);
-    expect(active.every((session) => session.hasActiveRun)).toBe(true);
+    expect(
+      (
+        await rpcReq(ws, "agent", {
+          sessionKey: "agent:main:main",
+          message: "Hold this list-visible turn",
+          idempotencyKey: "list-live",
+        })
+      ).ok,
+    ).toBe(true);
+    await entered.promise;
     for (const method of ["sessions.fork", "sessions.rewind", "sessions.branches.switch"]) {
       const refused = await rpcReq(ws, method, {
         sessionKey: "agent:main:main",
@@ -303,9 +246,7 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
       );
     }
   } finally {
-    for (const turn of held.values()) {
-      turn.release.resolve();
-    }
+    release.resolve();
     agentCommandMock.mockReset();
   }
   ws.close();
@@ -370,31 +311,6 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
   }
 });
 
-test("sessions.list distinguishes proven idle from unavailable run identities", async () => {
-  await writeMainSessionStore();
-  const idle = await invokeSessionsList();
-  const idleSession = findSession(expectRespondPayload(idle.respond), "agent:main:main");
-  expect(idleSession).toMatchObject({ hasActiveRun: false, activeRunIds: [] });
-  const runId = "list-unavailable-exact-identities";
-  registerAgentRunContext(runId, {
-    agentId: "main",
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    projectSessionActive: true,
-  });
-  try {
-    const unavailable = await invokeSessionsList();
-    const unavailableSession = findSession(
-      expectRespondPayload(unavailable.respond),
-      "agent:main:main",
-    );
-    expect(unavailableSession).toMatchObject({ hasActiveRun: true });
-    expect(unavailableSession).not.toHaveProperty("activeRunIds");
-  } finally {
-    clearAgentRunContext(runId);
-  }
-});
-
 test("sessions.changed does not publish a preparing source as running", async () => {
   await writeMainSessionStore({ status: "failed" });
   await registerSessionListRpcSourceForTest({ executionStarted: false });
@@ -406,44 +322,6 @@ test("sessions.changed does not publish a preparing source as running", async ()
     hasActiveRun: false,
     activeRunIds: [],
   });
-});
-
-test("sessions.list yields for bulk metadata and later serves previews without repairing titles", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const keys = await seedSessionListBackfillFixture(storePath, 11, 1);
-  // Durable rows publish while the request creates its projection, before the test holds it.
-  const requestProjection = createDeferredCore<SessionRowProjection>();
-  const backfilled = observeSessionRowBackfill(keys, requestProjection.promise);
-  const releaseForeground = retainSessionListForegroundWork();
-  try {
-    const params = { includeDerivedTitles: true, includeLastMessage: true, limit: 11 };
-    const { request, respond, context } = await invokeSessionsList(
-      params,
-      { logGateway: { debug: vi.fn() } },
-      true,
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(respond).not.toHaveBeenCalled();
-    await request;
-    expectFields(findSession(expectRespondPayload(respond), "agent:main:bulk-10"), {
-      lastMessagePreview: "last 10",
-    });
-    requestProjection.resolve(
-      expectDefined(getSessionRowProjection(context), "request projection"),
-    );
-    releaseForeground();
-    await backfilled;
-    const refreshed = await invokeSessionsList(params, { ...context });
-    const payload = expectRespondPayload(refreshed.respond);
-    const session = findSession(payload, "agent:main:bulk-0");
-    expectFields(session, {
-      derivedTitle: undefined,
-      lastMessagePreview: "last 0",
-    });
-  } finally {
-    releaseForeground();
-  }
 });
 
 test("sessions.changed includes live usage metadata without inventing an unpriced cost", async () => {

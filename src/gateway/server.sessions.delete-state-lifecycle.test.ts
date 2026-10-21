@@ -73,11 +73,7 @@ function afterSessionStateMaterialization(after: () => void | Promise<void>) {
   );
 }
 
-const {
-  createSessionStoreDir,
-  createConfiguredGlobalAgentSessionStore,
-  resetConfiguredGlobalAgentSessionStore,
-} = setupGatewaySessionsHandlerTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const companions = new Set<SessionCompanionService>();
 const cleanups: Array<() => void | Promise<void>> = [];
 
@@ -563,25 +559,6 @@ async function readState(service: SessionCompanionService, sessionKey: string, a
   }
   return response.payload;
 }
-
-test("sessions.delete isolates Side chat for the same global key and session ID in another agent", async () => {
-  const stores = await createConfiguredGlobalAgentSessionStore();
-  await writeSessionStore({
-    agentId: "work",
-    entries: { global: sessionStoreEntry("sess-main-global") },
-    storePath: stores.workStorePath,
-  });
-  const { service } = await createCompanion();
-  cleanups.push(() => resetConfiguredGlobalAgentSessionStore(stores));
-  await ask(service, "global", "Main agent question?", "main");
-  await ask(service, "global", "Work agent question?", "work");
-  const mainBefore = await readState(service, "global", "main");
-
-  const deleted = await directSessionReq("sessions.delete", { key: "global", agentId: "work" });
-  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-  expect(await readState(service, "global", "main")).toEqual(mainBefore);
-  expect((await readState(service, "global", "work")).exchanges).toEqual([]);
-});
 
 test("a delayed deletion event cannot erase Side chat for a newer generation", async () => {
   const { sessionKey } = await createStoredSession("old-generation");

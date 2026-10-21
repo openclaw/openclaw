@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi, describe } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -10,6 +11,7 @@ import {
   observeHostDataSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import { createAcpMeta } from "../acp/runtime/session-meta-lifecycle.test-support.js";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
@@ -36,6 +38,7 @@ import { createReplyOperation } from "../sessions/session-controller.operation.j
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   expectResetAcpState,
@@ -792,4 +795,80 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
   expect(reset.ok).toBe(true);
   expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
   expectThreadUnbound();
+});
+
+describe("acp-authority", () => {
+  test.each(["already retired", "caller retired"] as const)(
+    "ACP reset preserves its row and resume state when %s before metadata commit",
+    async (reason) => {
+      const acpEntryWriter = await import("../acp/runtime/session-meta-entry.js");
+      const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
+      const { storePath } = await seedActiveMainSession();
+      const sessionKey = "agent:main:main";
+      seedCanonicalAcpSessionMeta({
+        sessionKey,
+        meta: createAcpMeta({
+          backend: "acpx",
+          agent: "codex",
+          identity: {
+            state: "resolved",
+            acpxRecordId: sessionKey,
+            acpxSessionId: "original-backend",
+            source: "status",
+            lastUpdatedAt: Date.now(),
+          },
+          cwd: "/tmp/acp-session",
+        }),
+      });
+      acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
+        id: "acpx",
+        runtime: { prepareFreshSession: vi.fn(async () => {}) },
+      });
+      const scope = { agentId: "main", sessionKey, storePath };
+      const readState = () => ({
+        entry: loadSessionEntry(scope),
+        meta: readAcpSessionEntry({ sessionKey })?.acp,
+      });
+      const before = structuredClone(readState());
+      const mutation = createRequestGate();
+      const originalWrite = acpEntryWriter.updateAcpSessionStoreEntry;
+      using intercepted = vi
+        .spyOn(acpEntryWriter, "updateAcpSessionStoreEntry")
+        .mockImplementation(async (input) => {
+          if (input.mutation.kind === "touch") {
+            await mutation.pause();
+          }
+          return await originalWrite(input);
+        });
+      let current = reason !== "already retired";
+      const resetting = closeAcpRuntimeForSession({
+        cfg: { session: { store: storePath } },
+        agentId: "main",
+        sessionKey,
+        reason: "session-reset",
+        assertCurrent: () => assert(current, "reset caller retired"),
+      });
+      const outcome = expect(resetting).rejects.toThrow("reset caller retired");
+      try {
+        if (reason === "already retired") {
+          await outcome;
+          expect(intercepted).not.toHaveBeenCalled();
+        } else {
+          await Promise.race([
+            mutation.entered,
+            outcome.then(() => {
+              throw new Error("ACP reset settled before the metadata mutation boundary");
+            }),
+          ]);
+          current = false;
+          mutation.release();
+          await outcome;
+        }
+        expect(readState()).toEqual(before);
+      } finally {
+        mutation.release();
+        await outcome;
+      }
+    },
+  );
 });

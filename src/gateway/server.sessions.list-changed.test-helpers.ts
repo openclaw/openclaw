@@ -16,14 +16,6 @@ export function requireRecord(value: unknown, label: string): Record<string, unk
   return value;
 }
 
-function requireArray(value: unknown, label: string): unknown[] {
-  expect(Array.isArray(value), `${label} should be an array`).toBe(true);
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} should be an array`);
-  }
-  return value;
-}
-
 export function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
   for (const [key, value] of Object.entries(expected)) {
     expect(record[key], key).toEqual(value);
@@ -44,21 +36,6 @@ export function expectRespondPayload(respond: MockCalls): Record<string, unknown
   expect(ok).toBe(true);
   expect(error).toBeUndefined();
   return requireRecord(payload, "response payload");
-}
-
-export function findSession(
-  payload: Record<string, unknown>,
-  sessionKey: string,
-): Record<string, unknown> {
-  const sessions = requireArray(payload.sessions, "response sessions");
-  const session = sessions.find(
-    (candidate): candidate is Record<string, unknown> =>
-      isObjectRecord(candidate) && candidate.key === sessionKey,
-  );
-  if (!session) {
-    throw new Error(`Missing session ${sessionKey}`);
-  }
-  return session;
 }
 
 export function expectChangedBroadcast(
