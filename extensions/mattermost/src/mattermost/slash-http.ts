@@ -24,6 +24,7 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
@@ -412,14 +413,19 @@ async function authorizeSlashInvocation(params: {
         id: senderId,
         meta: { name: senderName },
       });
-      return {
-        ok: false,
-        denyText: core.channel.pairing.buildPairingReply({
-          channel: "mattermost",
-          idLine: `Your Mattermost user id: ${senderId}`,
-          code,
-        }),
-      };
+      // A full pending queue returns an empty code and stores no request. Deny with
+      // recovery guidance instead of an approve command that cannot succeed.
+      if (code) {
+        return {
+          ok: false,
+          denyText: core.channel.pairing.buildPairingReply({
+            channel: "mattermost",
+            idLine: `Your Mattermost user id: ${senderId}`,
+            code,
+          }),
+        };
+      }
+      return { ok: false, denyText: MATTERMOST_PAIRING_QUEUE_FULL_TEXT };
     }
 
     const denyText =

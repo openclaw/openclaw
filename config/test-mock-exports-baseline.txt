@@ -753,7 +753,6 @@
 ["extensions/mattermost/src/mattermost/directory.test.ts","./client.js","628a37b37b023b464934391e912b7f3b381037e7a081419957883cb7ca5a4cdd",1]
 ["extensions/mattermost/src/mattermost/monitor-auth.test.ts","./runtime-api.js","a9a8013fd193dff695d720ba8aa1545bfe5b9b57c903a26c0d8fda85dc0c61f1",1]
 ["extensions/mattermost/src/mattermost/monitor-interactions.question.test.ts","openclaw/plugin-sdk/question-gateway-runtime","7b5932417ebfeff9df333c97be062361a94a65e1e76307022743ef17dcd72e94",1]
-["extensions/mattermost/src/mattermost/monitor-model-picker.test.ts","./monitor-auth.js","cb60072bc4887799555d28a447870e9100fdf67cdaafabef83b63651cc45d5c3",1]
 ["extensions/mattermost/src/mattermost/monitor-model-picker.test.ts","./monitor-event-plan.js","9c27528583179624961d84ce8bdefd6fb12a18a4741ac607b71cc1e590f2c3c8",1]
 ["extensions/mattermost/src/mattermost/monitor-model-picker.test.ts","./reply-delivery.js","e562973575de2fade3f66a15c7d65047617db4b8e9d373d6fc6528b649fcd054",1]
 ["extensions/mattermost/src/mattermost/monitor-model-picker.test.ts","openclaw/plugin-sdk/webhook-request-guards","d68343bf2263f1dc1ac476592dce41c2e1024490280dcfb5bd466d8b8a7bc45c",1]
