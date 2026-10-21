@@ -160,7 +160,19 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
     const environment = { FIXTURE: value, NEXT: "retained" };
     const { env, label, plistPath, wrapper, envFile, args } = fixture("reinstall", environment);
     const expected = { programArguments, environment };
+    const legacy = path.join(
+      env.HOME,
+      "Library",
+      "LaunchAgents",
+      "ai.openclaw.legacy-gateway.plist",
+    );
+    await writeFile(legacy, "legacy definition", 0o600);
     await stageLaunchAgent(args);
+    expect(await readSnapshot(legacy)).toEqual({
+      contents: Buffer.from("legacy definition"),
+      mode: 0o600,
+    });
+    expect(native.launchctl).not.toHaveBeenCalled();
     await expect(readLaunchAgentProgramArguments(env)).resolves.toMatchObject(expected);
     await serviceFiles.rewriteLaunchAgentPlistForRestart({ env, label, plistPath });
     const plist = await fs.readFile(plistPath, "utf8");
@@ -265,6 +277,9 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
     await expect(install(args)).rejects.toThrow(
       publicationFailure ? "synthetic ownership conflict" : "synthetic activation refusal",
     );
+    if (publicationFailure) {
+      expect(native.launchctl).not.toHaveBeenCalled();
+    }
     expect(publications.at(-1)).toEqual({ contents: binaryPlist, mode });
     for (const [file, contents, permissions] of originalFiles) {
       expect(await readSnapshot(file)).toEqual({ contents, mode: permissions });

@@ -323,6 +323,16 @@ describe("launchctl list detection", () => {
 });
 
 describe("launchd process ancestry guards", () => {
+  const markService = (label = "ai.openclaw.gateway", xpc = "0") => {
+    for (const [key, value] of Object.entries({
+      XPC_SERVICE_NAME: xpc,
+      OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
+      OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
+      OPENCLAW_LAUNCHD_LABEL: label,
+    })) {
+      vi.stubEnv(key, value);
+    }
+  };
   beforeEach(() => {
     for (const key of Object.keys(EXTERNAL_PROCESS)) {
       vi.stubEnv(key, undefined);
@@ -339,25 +349,22 @@ describe("launchd process ancestry guards", () => {
     "allows external $action with inherited service markers (native: $native)",
     async ({ action, native }) => {
       setGatewayPlist();
-      for (const [key, value] of Object.entries({
-        XPC_SERVICE_NAME: native ? "ai.openclaw.gateway" : "0",
-        OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
-        OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-      })) {
-        vi.stubEnv(key, value);
-      }
+      markService("ai.openclaw.gateway", native ? "ai.openclaw.gateway" : "0");
       await expect(installOrUninstall(action)).resolves.not.toThrow();
       expect(getSelfAndAncestorPidsSync).toHaveBeenCalled();
     },
   );
 
   it.each([
-    ["a Gateway ancestor", true, 4242],
-    ["an external caller", false, 4242],
-    ["a service PID matching the host PID", false, process.pid],
-    ["a service PID matching the host parent PID", false, process.ppid],
-  ] as const)("restarts without env markers with %s", async (_name, inside, servicePid) => {
+    ["a Gateway ancestor", true, 4242, false],
+    ["a marked Gateway ancestor", true, 4242, true],
+    ["an external caller", false, 4242, false],
+    ["a service PID matching the host PID", false, process.pid, false],
+    ["a service PID matching the host parent PID", false, process.ppid, false],
+  ] as const)("restarts with %s", async (_name, inside, servicePid, marked) => {
+    if (marked) {
+      markService();
+    }
     state.printOutput = ["state = running", `pid = ${servicePid}`].join("\n");
     if (inside) {
       getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
@@ -382,9 +389,16 @@ describe("launchd process ancestry guards", () => {
     }
   });
 
-  it.each([false, true])(
-    "refuses stop without env markers with a Gateway ancestor (disable: %s)",
-    async (disable) => {
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ] as const)(
+    "refuses stop with a Gateway ancestor (disable: %s, marked: %s)",
+    async (disable, marked) => {
+      if (marked) {
+        markService();
+      }
       getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
       await expect(stopLaunchAgent(control({ disable }))).rejects.toThrow(
@@ -422,24 +436,31 @@ describe("launchd process ancestry guards", () => {
     },
   );
 
-  it("refuses install from a legacy Gateway ancestor after probing the target first", async () => {
-    const legacyServiceId = `${DOMAIN}/ai.openclaw.legacy-gateway`;
-    state.serviceStates.set(SERVICE_ID, "not-loaded");
-    state.serviceStates.set(legacyServiceId, "running");
-    getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
+  it.each([false, true])(
+    "refuses legacy Gateway install after probing target first (marked: %s)",
+    async (marked) => {
+      const legacyServiceId = `${DOMAIN}/ai.openclaw.legacy-gateway`;
+      state.serviceStates.set(SERVICE_ID, "not-loaded");
+      state.serviceStates.set(legacyServiceId, "running");
+      getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
-    vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.legacy-gateway");
-    await expect(install()).rejects.toThrow(
-      "Refusing to install LaunchAgent ai.openclaw.gateway from inside ai.openclaw.legacy-gateway",
-    );
+      if (marked) {
+        markService("ai.openclaw.legacy-gateway");
+      } else {
+        vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.legacy-gateway");
+      }
+      await expect(install()).rejects.toThrow(
+        "Refusing to install LaunchAgent ai.openclaw.gateway from inside ai.openclaw.legacy-gateway",
+      );
 
-    expect(state.fileWrites).toEqual([]);
-    expect(state.launchctlCalls).toEqual([
-      ["print", SERVICE_ID],
-      ["print", legacyServiceId],
-    ]);
-    expect(getSelfAndAncestorPidsSync).toHaveBeenCalledOnce();
-  });
+      expect(state.fileWrites).toEqual([]);
+      expect(state.launchctlCalls).toEqual([
+        ["print", SERVICE_ID],
+        ["print", legacyServiceId],
+      ]);
+      expect(getSelfAndAncestorPidsSync).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("LaunchAgent service membership", () => {

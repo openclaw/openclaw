@@ -330,50 +330,29 @@ describe("Startup entries", () => {
     expect(output).not.toContain("schtasks /Delete");
   });
 
-  it.each(["launcher", "last task"])(
-    "shares the inventory deadline with a late %s",
-    async (phase) => {
-      const { startupPath, taskName } = await startup("9.4", "Recovery");
-      let now = 10_000;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
-      const task = scheduledTask(taskName, startupPath);
-      vi.mocked(taskProbe.listScheduledTasks).mockImplementation(() => {
-        now += phase === "launcher" ? 59_990 : 50_000;
-        return phase === "launcher" ? [] : [task];
-      });
-      if (phase === "launcher") {
-        const readFile = fs.readFile.bind(fs);
-        vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-          const contents = await readFile(...args);
-          if (args[0] === startupPath) {
-            now += 20;
-          }
-          return contents;
-        });
-      } else {
-        vi.mocked(taskProbe.probeScheduledTaskState).mockImplementation(() => {
-          now += 9_999.5;
-          return { status: "found", ...task };
-        });
+  it("shares the inventory deadline with a late Startup launcher", async () => {
+    const { startupPath } = await startup("9.4", "Recovery");
+    let now = 10_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.mocked(taskProbe.listScheduledTasks).mockImplementation(() => {
+      now += 59_990;
+      return [];
+    });
+    const readFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      const contents = await readFile(...args);
+      if (args[0] === startupPath) {
+        now += 20;
       }
-      const inventory = await findExtraGatewayServices(environment(), { deep: true });
-      if (phase === "launcher") {
-        expect(inventory.services).toHaveLength(0);
-        expect(inventory.errors).toContainEqual({
-          source: startupPath,
-          message: "Startup launcher could not be inspected.",
-        });
-      } else {
-        expect(now).toBe(69_999.5);
-        expect(inventory).toEqual({
-          services: [
-            expect.objectContaining({ label: taskName, detail: expect.stringMatching(/^task:/) }),
-          ],
-          errors: [{ source: "schtasks", message: expect.stringMatching(/deadline expired/) }],
-        });
-      }
-    },
-  );
+      return contents;
+    });
+    const inventory = await findExtraGatewayServices(environment(), { deep: true });
+    expect(inventory.services).toHaveLength(0);
+    expect(inventory.errors).toContainEqual({
+      source: startupPath,
+      message: "Startup launcher could not be inspected.",
+    });
+  });
 
   it("reports recognizable malformed and unreadable entries without treating unrelated files as Gateways", async () => {
     const env = { ...environment(), OPENCLAW_WINDOWS_TASK_NAME: "Selected Custom" };
@@ -641,11 +620,16 @@ it.each([
     expect(now).toBe(exhaustedBy === "fractional query" ? 59_999.5 : 60_000);
     expect(observations.filter((startedAt) => startedAt >= 60_000)).toEqual([]);
     expect(inventory.services).toEqual([
-      expect.objectContaining({ ...gatewayFields, label: completed.snapshot.taskPath }),
+      expect.objectContaining({
+        ...gatewayFields,
+        label: completed.snapshot.taskPath,
+        detail: expect.stringMatching(/^task:/),
+      }),
     ]);
+    expect(inventory.errors).toHaveLength(1);
     expect(inventory.errors).toContainEqual({
       source: "schtasks",
-      message: expect.stringMatching(/\S/),
+      message: expect.stringMatching(/deadline expired/),
     });
   },
 );

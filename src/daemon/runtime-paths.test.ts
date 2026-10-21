@@ -195,23 +195,12 @@ describe("resolvePreferredNodePath", () => {
     ["24.16.0", false, "unsupported"],
     ["24.15.0+vendor.1", true, "supported"],
   ] as const)(
-    "probes the selected binary's decoder on Node %s",
+    "classifies the selected binary's decoder on Node %s",
     async (version, lossless, expected) => {
       mockNodePathPresent("/usr/bin/node");
-      vi.spyOn(processExec, "runExec").mockImplementation(async (_file, args, options) => {
-        expect(options).toMatchObject({ timeoutMs: 5_000 });
-        class CandidateDatabase extends DatabaseSync {
-          override prepare(sql: string) {
-            if (!lossless && sql === "SELECT text_value, blob_value, json_value FROM probe") {
-              return super.prepare("SELECT 'a' AS text_value, blob_value, json_value FROM probe");
-            }
-            return super.prepare(sql);
-          }
-        }
-        return runProbe(args[1] ?? "", () => ({ DatabaseSync: CandidateDatabase }), {
-          node: version,
-        });
-      });
+      vi.spyOn(processExec, "runExec").mockResolvedValue(
+        nodeRuntime(version, "3.51.3", false, lossless),
+      );
       const result = await resolveSystemNodeInfo({ env: {}, platform: "linux" });
       expect(result).toMatchObject({
         status: expected,

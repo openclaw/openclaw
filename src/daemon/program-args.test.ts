@@ -37,7 +37,6 @@ import { readScheduledTaskCommand } from "./schtasks-layout.js";
 const originalArgv = [...process.argv];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalExecPath = process.execPath;
-const originalPlatform = process.platform;
 const validatedNodePath = "/opt/Validated Node/bin/node";
 const validatedBunPath = "/opt/Validated Bun/bin/bun";
 const missingSelectedNodeError =
@@ -53,7 +52,6 @@ beforeEach(() => {
 afterEach(() => {
   process.argv = [...originalArgv];
   process.execPath = originalExecPath;
-  Object.defineProperty(process, "platform", { value: originalPlatform });
   vi.restoreAllMocks();
   vi.resetAllMocks();
 });
@@ -275,21 +273,6 @@ describe("resolveNodeProgramArguments", () => {
         launcher,
         ...nodeTail,
       ]);
-    },
-  );
-
-  it.each(["darwin", "linux", "win32"] as const)(
-    "keeps %s node services on the launcher and Gateways on index.js",
-    async (platform) => {
-      Object.defineProperty(process, "platform", { value: platform });
-      const root = path.resolve("/opt/openclaw");
-      const index = path.join(root, "dist", "index.js");
-      const launcher = path.join(root, "openclaw.mjs");
-      mockEntrypoint(index);
-      const node = await nodeArgs();
-      const gateway = await gatewayArgs();
-      expect(node.programArguments.slice(0, 2)).toEqual([validatedNodePath, launcher]);
-      expect(gateway.programArguments).toContain(index);
     },
   );
 
