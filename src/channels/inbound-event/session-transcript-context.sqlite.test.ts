@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
@@ -6,13 +7,13 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
 describe("session transcript channel context over SQLite", () => {
-  const fixture = useTempSessionsFixture("source-reply-context-");
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "source-reply-context-");
 
   it.each([false, true])(
     "keeps delivered close-outs beside their questions on subsequent turns (tool aborted: %s)",
@@ -21,7 +22,7 @@ describe("session transcript channel context over SQLite", () => {
         agentId: "main",
         sessionId: "telegram-conversation",
         sessionKey: "agent:main:main",
-        storePath: fixture.storePath(),
+        storePath: path.join(sessionDirs.make(), "sessions.json"),
       };
       await replaceSessionEntry(scope, {
         sessionId: scope.sessionId,
