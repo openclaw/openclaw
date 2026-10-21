@@ -2,7 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   createPluginCommandRuntime,
@@ -14,6 +14,7 @@ import {
   getActivePluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import {
   clearRuntimeConfigSnapshot,
@@ -25,12 +26,32 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import * as nativeCommandRoute from "./native-command-route.js";
-import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
+import {
+  forwardNativeCommand,
+  nativeCommandContext,
+} from "./native-command.dispatch.test-support.js";
 import {
   createMockCommandInteraction as createInteraction,
   createRouteState,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
+import {
+  channelId,
+  guildId,
+  createConfig,
+  guildConfig,
+  guildInteraction,
+  statusCommand,
+  cronCommand,
+  directDelivery,
+  dispatchedTurn,
+  emptyDispatchResult,
+  interceptDelivery,
+  expectSingleCallFirstArg,
+  expectNoFollowUpContent,
+  expectSilentSettlement,
+  expectEmptyWarning,
+} from "./native-command.test-support.js";
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 const runtimeModuleMocks = vi.hoisted(() => ({
@@ -76,35 +97,6 @@ const dispatchChannelInboundTurnForTest: typeof channelInbound.dispatchChannelIn
   return dispatchedTurn(plan, dispatchResult);
 };
 
-const emptyDispatchResult = { counts: { final: 0, block: 0, tool: 0 }, queuedFinal: false };
-type InboundPlan = Parameters<typeof channelInbound.dispatchChannelInboundTurn>[0];
-function interceptDelivery(run: (plan: InboundPlan) => Promise<DispatchResult | void>) {
-  vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(async (plan) =>
-    dispatchedTurn(plan, (await run(plan)) ?? emptyDispatchResult),
-  );
-}
-
-function directDelivery(plan: InboundPlan) {
-  if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
-    throw new Error("expected direct deliverer");
-  }
-  return plan.delivery.deliver;
-}
-
-type DispatchPlan = Pick<InboundPlan, "ctxPayload" | "route">;
-type DispatchResult = Extract<
-  Awaited<ReturnType<typeof channelInbound.dispatchChannelInboundTurn>>,
-  { dispatched: true }
->["dispatchResult"];
-function dispatchedTurn(plan: DispatchPlan, dispatchResult: DispatchResult) {
-  return {
-    admission: { kind: "dispatch" as const },
-    dispatched: true as const,
-    ctxPayload: plan.ctxPayload,
-    routeSessionKey: plan.route.sessionKey,
-    dispatchResult,
-  };
-}
 function dispatchAgentReply(
   cfg: OpenClawConfig,
   interaction: MockCommandInteraction,
@@ -129,40 +121,6 @@ function dispatchAgentReply(
   });
 }
 
-function createConfig(): OpenClawConfig {
-  return {
-    channels: { discord: { dm: { enabled: true }, dmPolicy: "open", allowFrom: ["*"] } },
-  };
-}
-
-const guildId = "345678901234567890";
-const channelId = "234567890123456789";
-function guildConfig(commands: OpenClawConfig["commands"]): OpenClawConfig {
-  return {
-    commands,
-    channels: {
-      discord: {
-        groupPolicy: "allowlist",
-        guilds: {
-          [guildId]: { channels: { [channelId]: { enabled: true, requireMention: false } } },
-        },
-      },
-    },
-  };
-}
-
-function guildInteraction() {
-  const interaction = createInteraction({
-    channelType: ChannelType.GuildText,
-    channelId,
-    guildId,
-    guildName: "Test Guild",
-    userId: "999999999999999999",
-  });
-  interaction.options.getString.mockReturnValue("now");
-  return interaction;
-}
-
 async function createNativeCommand(
   cfg: OpenClawConfig,
   commandSpec: NativeCommandSpec = {
@@ -180,40 +138,6 @@ async function createNativeCommand(
     ephemeralDefault: true,
     dispatchReplyFromConfig,
   });
-}
-
-const cronCommand: NativeCommandSpec = {
-  name: "cron_jobs",
-  description: "List cron jobs",
-  acceptsArgs: false,
-};
-
-type MockCalls = {
-  mock: { calls: unknown[][] };
-};
-
-function expectSingleCallFirstArg(mock: MockCalls, expected: Record<string, unknown>): void {
-  expect(mock.mock.calls).toHaveLength(1);
-  expect(mock.mock.calls[0]?.[0]).toEqual(expect.objectContaining(expected));
-}
-
-function expectNoFollowUpContent(interaction: MockCommandInteraction, content: string) {
-  expect(interaction.followUp).not.toHaveBeenCalledWith(expect.objectContaining({ content }));
-}
-
-function expectSilentSettlement(interaction: MockCommandInteraction) {
-  expect(interaction.followUp).not.toHaveBeenCalled();
-  expect(interaction.reply).not.toHaveBeenCalled();
-  expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
-}
-
-function expectEmptyWarning(interaction: MockCommandInteraction) {
-  expectSingleCallFirstArg(interaction.followUp, {
-    content: "⚠️ Command produced no visible reply.",
-    ephemeral: true,
-  });
-  expect(interaction.reply).not.toHaveBeenCalled();
-  expect(interaction.deleteReply).not.toHaveBeenCalled();
 }
 
 async function createPluginCommand(params: { cfg: OpenClawConfig; name: string }) {
@@ -272,14 +196,6 @@ function registerPairPlugin(
     }),
   ).toEqual({ ok: true });
   return handler;
-}
-
-async function createStatusCommand(cfg: OpenClawConfig) {
-  return await createNativeCommand(cfg, {
-    name: "status",
-    description: "Status",
-    acceptsArgs: false,
-  });
 }
 
 describe("Discord native plugin command dispatch", () => {
@@ -372,7 +288,7 @@ describe("Discord native plugin command dispatch", () => {
     vi.spyOn(nativeCommandRoute, "resolveDiscordNativeInteractionRouteState").mockImplementation(
       resolveRouteState,
     );
-    const command = await createStatusCommand(sourceCfg);
+    const command = await createNativeCommand(sourceCfg, statusCommand);
 
     await command.run(createInteraction());
     setRuntimeConfigSnapshot(runtimeCfg, runtimeCfg);
@@ -572,7 +488,7 @@ describe("Discord native plugin command dispatch", () => {
       channelType: ChannelType.GroupDM,
       channelId: "blocked-group",
     });
-    await (await createStatusCommand(cfg)).run(interaction);
+    await (await createNativeCommand(cfg, statusCommand)).run(interaction);
     expect(dispatchReply).not.toHaveBeenCalled();
     expectSingleCallFirstArg(interaction.followUp, {
       content: "This group DM is not allowed.",
@@ -847,6 +763,191 @@ describe("Discord native plugin command dispatch", () => {
       from: "discord:channel:partial-thread-123",
       messageThreadId: "partial-thread-123",
       threadParentId: "partial-parent-456",
+    });
+  });
+
+  describe("guild command authorization and arguments", () => {
+    const OWNER = "123456789012345678";
+    const OTHER = "999999999999999999";
+    const ownerUser = `user:${OWNER}`;
+    const ownerCommand = `discord:${OWNER}`;
+
+    beforeEach(() => {
+      vi.mocked(nativeCommandRoute.resolveDiscordNativeInteractionRouteState).mockRestore();
+      vi.mocked(sessionStore.getSessionEntryAsync).mockRestore();
+      vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(
+        forwardNativeCommand(dispatchReply, true),
+      );
+      cfg = guildConfig({ allowFrom: { discord: [ownerUser] } });
+      interaction = createInteraction({
+        userId: OWNER,
+        username: "discord-user",
+        globalName: "Discord User",
+        channelType: ChannelType.GuildText,
+        channelId,
+        guildId,
+        guildName: "Test Guild",
+      });
+    });
+
+    type GuildRun = {
+      userId?: string;
+      channelUsers?: string[];
+      commands?: OpenClawConfig["commands"];
+      discord?: Partial<DiscordAccountConfig>;
+      runtimeDiscordConfig?: DiscordAccountConfig;
+      commandSpec?: NativeCommandSpec;
+      optionValues?: Record<string, string>;
+    };
+    async function runGuild(params: GuildRun = {}) {
+      if (params.commands) {
+        cfg.commands = params.commands;
+      }
+      if (params.channelUsers) {
+        cfg.channels!.discord!.guilds![guildId]!.channels![channelId]!.users = params.channelUsers;
+      }
+      Object.assign(cfg.channels!.discord!, params.discord);
+      if (params.userId) {
+        interaction.user.id = params.userId;
+      }
+      interaction.options.getString.mockImplementation(
+        (name: string) => params.optionValues?.[name] ?? null,
+      );
+      return createDiscordNativeCommand({
+        command: params.commandSpec ?? { name: "ping", description: "Ping", acceptsArgs: false },
+        ...nativeCommandContext(cfg, params.runtimeDiscordConfig),
+        ephemeralDefault: true,
+      }).run(interaction);
+    }
+    function firstDispatch() {
+      const call = dispatchReply.mock.calls[0];
+      if (!call) {
+        throw new Error("expected dispatchReplyWithDispatcher call");
+      }
+      return call[0] as Parameters<typeof dispatchReplyWithDispatcher>[0];
+    }
+    async function expectAccess(params: GuildRun, allowed: boolean) {
+      await runGuild(params);
+      expect(dispatchReply).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      const content = "You are not authorized to use this command.";
+      if (allowed) {
+        expect(interaction.followUp).not.toHaveBeenCalledWith(expect.objectContaining({ content }));
+      } else {
+        expect(interaction.followUp).toHaveBeenCalledWith({ content, ephemeral: true });
+        expect(interaction.reply).not.toHaveBeenCalled();
+      }
+    }
+
+    it.each([false, true])(
+      "requires opt-in for explicit owner name matching: %s",
+      async (enabled) => {
+        await expectAccess(
+          {
+            commands: { ownerAllowFrom: ["discord:discord-user"] },
+            discord: { dangerouslyAllowNameMatching: enabled },
+          },
+          enabled,
+        );
+      },
+    );
+
+    it.each<[string, boolean, GuildRun]>([
+      [
+        "command allowlist overrides owner",
+        true,
+        {
+          userId: OTHER,
+          commands: { ownerAllowFrom: [ownerCommand], allowFrom: { discord: [`user:${OTHER}`] } },
+        },
+      ],
+      ["global command allowlist", true, { commands: { allowFrom: { "*": [ownerUser] } } }],
+      ["channel includes member", true, { channelUsers: [ownerUser], commands: {} }],
+      [
+        "channel excludes member",
+        false,
+        { userId: OTHER, channelUsers: [ownerUser], commands: {} },
+      ],
+      [
+        "Discord owner restriction",
+        false,
+        {
+          userId: OTHER,
+          commands: {},
+          discord: { allowFrom: [ownerUser] },
+        },
+      ],
+      [
+        "command owner rejects despite channel gate",
+        false,
+        { userId: OTHER, commands: { ownerAllowFrom: [ownerCommand] } },
+      ],
+      [
+        "matching guild allowlist",
+        true,
+        { userId: OTHER, commands: { allowFrom: { discord: [`guild:${guildId}`] } } },
+      ],
+      [
+        "nonmatching guild allowlist",
+        false,
+        { userId: OTHER, commands: { allowFrom: { discord: ["guild:000000000000000000"] } } },
+      ],
+    ])("enforces %s", async (_name, allowed, params) => {
+      await expectAccess(params, allowed);
+    });
+
+    it("uses the root discord maxLinesPerMessage when runtime discordConfig omits it", async () => {
+      const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join(
+        "\n",
+      );
+      await runGuild({
+        discord: { maxLinesPerMessage: 120 },
+        runtimeDiscordConfig: guildConfig({ allowFrom: { discord: [ownerUser] } }).channels!
+          .discord,
+      });
+      await firstDispatch().dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
+      expect(interaction.followUp).toHaveBeenCalledWith({ content: longReply, ephemeral: true });
+      expect(interaction.reply).not.toHaveBeenCalled();
+    });
+
+    it.each<[string, Record<string, string>, string]>([
+      [
+        "config",
+        { action: " GET ", path: " agents.defaults.model " },
+        "/config get agents.defaults.model",
+      ],
+      ["debug", { action: "unset" }, "/debug unset"],
+    ])(
+      "serializes structured /%s args and delivers the visible reply",
+      async (command, optionValues, expectedPrompt) => {
+        const visibleReply = `Handled ${expectedPrompt}`;
+        await runGuild({
+          commandSpec: { name: command, description: `Test ${command}`, acceptsArgs: true },
+          optionValues,
+        });
+        const call = firstDispatch();
+        expect(call.ctx.Body).toBe(expectedPrompt);
+        expect(call.ctx.CommandArgs?.raw).toBe(expectedPrompt.slice(command.length + 2));
+        await call.dispatcherOptions.deliver({ text: visibleReply }, { kind: "final" });
+        expect(interaction.followUp).toHaveBeenCalledWith({
+          content: visibleReply,
+          ephemeral: true,
+        });
+        expect(interaction.reply).not.toHaveBeenCalled();
+      },
+    );
+
+    it("swallows expired slash interactions before dispatch when defer returns Unknown interaction", async () => {
+      interaction.defer.mockRejectedValue({
+        status: 404,
+        discordCode: 10062,
+        rawBody: { message: "Unknown interaction", code: 10062 },
+      });
+      const result = await runGuild();
+      expect(result).toBeUndefined();
+      expect(interaction.defer).toHaveBeenCalledTimes(1);
+      expect(dispatchReply).not.toHaveBeenCalled();
+      expect(interaction.reply).not.toHaveBeenCalled();
+      expect(interaction.followUp).not.toHaveBeenCalled();
     });
   });
 

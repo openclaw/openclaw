@@ -35,20 +35,8 @@ export async function sendFinal(
 export async function createAutomaticDraftContext(
   overrides: AutomaticSourceDeliveryOverrides = {},
 ): Promise<Awaited<ReturnType<typeof createAutomaticSourceDeliveryContext>>> {
-  const cfg = (overrides.cfg ?? {}) as {
-    messages?: Record<string, unknown>;
-  } & Record<string, unknown>;
   // Draft tests own preview behavior; keep reaction timers out of their fake-clock lifecycle.
-  return await createAutomaticSourceDeliveryContext({
-    ...overrides,
-    cfg: {
-      ...cfg,
-      messages: {
-        ...cfg.messages,
-        statusReactions: { enabled: false },
-      },
-    },
-  });
+  return await createAutomaticSourceDeliveryContext(overrides, { disableStatusReactions: true });
 }
 
 export function getReactionEmojis(): string[] {

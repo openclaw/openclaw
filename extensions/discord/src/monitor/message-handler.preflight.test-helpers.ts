@@ -1,6 +1,5 @@
 import type { APIAttachment, APIMessage, APIUser } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { registerSessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import { onTestFinished } from "vitest";
 import { ChannelType, Message, MessageType } from "../internal/discord.js";
@@ -178,35 +177,4 @@ export function createThreadBinding(overrides?: Partial<SessionBindingRecord>) {
     metadata: { agentId: "main", boundBy: "test", webhookId: "wh-1", webhookToken: "tok-1" },
     ...overrides,
   } satisfies SessionBindingRecord;
-}
-
-export async function runThreadBoundPreflight(
-  params: Parameters<typeof createThreadClient>[0] & {
-    message: Message;
-    threadBinding: SessionBindingRecord;
-    discordConfig: DiscordConfig;
-    registerBindingAdapter?: boolean;
-  },
-) {
-  if (params.registerBindingAdapter) {
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation: (ref) =>
-        ref.conversationId === params.threadId ? params.threadBinding : null,
-    });
-  }
-
-  const { preflightDiscordMessage } = await import("./message-handler.preflight.js");
-  return preflightDiscordMessage(
-    createGuildPreflightArgs({
-      message: params.message,
-      discordConfig: params.discordConfig,
-      threadBindings: {
-        getByThreadId: (id: string) => (id === params.threadId ? params.threadBinding : undefined),
-      } as ThreadBindingManager,
-      client: createThreadClient(params),
-    }),
-  );
 }

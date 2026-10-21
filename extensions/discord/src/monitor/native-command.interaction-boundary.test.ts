@@ -13,6 +13,7 @@ import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native"
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { useBundledProviderPolicyArtifactsForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as runtimeConfig from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -97,6 +98,7 @@ function createHarness(
   const commands: NativeCommandSpec[] = [
     { name: "help", description: "Help", acceptsArgs: false },
     { name: "new", description: "New session", acceptsArgs: false },
+    { name: "reset", description: "Reset session", acceptsArgs: true },
     { name: "status", description: "Status", acceptsArgs: false },
     {
       name: "boundary-choice",
@@ -123,7 +125,7 @@ function createHarness(
     ),
   );
   client.componentHandler.register(createDiscordModelPickerFallbackButton(commandContext));
-  const post = vi.fn(async () => undefined);
+  const post = vi.fn(async (..._args: Parameters<typeof client.rest.post>) => undefined);
   const get = vi.fn(async (path: string) => {
     if (path === `/channels/${THREAD}`) {
       return { id: THREAD, type: ChannelType.PublicThread, parent_id: CHANNEL, name: "topic" };
@@ -503,4 +505,120 @@ it.each<Surface>(["status", "autocomplete", "picker"])(
   },
 );
 
+async function runReset(params: {
+  commandName: "new" | "reset";
+  guildChannels?: Record<string, { enabled?: boolean }>;
+  configuredBinding?: boolean;
+  allowFrom?: string[];
+}) {
+  const workspace = tempDirs.make("discord-native-reset-");
+  const scope = {
+    agentId: "main",
+    storePath: join(workspace, "sessions.json"),
+    sessionKey: `agent:main:discord:channel:${CHANNEL}`,
+  };
+  const sessionId = "existing-channel-session";
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { workspace } },
+    session: { store: scope.storePath },
+    commands: { allowFrom: { discord: params.allowFrom ?? [`user:${USER}`] } },
+    channels: {
+      discord: {
+        commands: { native: true },
+        guilds: { [GUILD]: { channels: params.guildChannels ?? { [CHANNEL]: { enabled: true } } } },
+      },
+    },
+    bindings: params.configuredBinding
+      ? [
+          {
+            type: "acp",
+            agentId: "main",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel", id: CHANNEL },
+            },
+            acp: { backend: "acpx" },
+          },
+        ]
+      : undefined,
+  };
+  await sessionStore.upsertSessionEntry({
+    ...scope,
+    entry: {
+      sessionId,
+      lifecycleRevision: "before-reset",
+      updatedAt: Date.now(),
+      totalTokens: 100,
+    },
+  });
+  harness = createHarness(cfg);
+  harness.dispatch.mockRestore();
+  harness.session.mockRestore();
+  await withRegisteredChannelIngress(
+    { plugin: discordPlugin, config: cfg, setRuntime: setDiscordRuntime },
+    async () => {
+      await harness.client.handleInteraction(
+        createInternalInteractionPayload({
+          ...interactionFor("status", CHANNEL),
+          data: { id: "reset-command", name: params.commandName, type: 1 },
+        }),
+      );
+    },
+  );
+  return {
+    entry: sessionStore.getSessionEntry(scope),
+    events: sessionStore.loadTranscriptEventsSync({ ...scope, sessionId }),
+    replies: harness.post.mock.calls.flatMap(([path, data]) => {
+      const body = data?.body;
+      return path === "/webhooks/app1/test-token" &&
+        body &&
+        typeof body === "object" &&
+        "content" in body
+        ? [body.content]
+        : [];
+    }),
+  };
+}
+
+it("persists and acknowledges /new", async () => {
+  const result = await runReset({ commandName: "new" });
+  expect(result.entry?.sessionId).toBe("existing-channel-session");
+  expect(result.entry?.lifecycleRevision).toBeTruthy();
+  expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
+  expect(result.events).toEqual(
+    expect.arrayContaining([expect.objectContaining({ type: "reset", reason: "new" })]),
+  );
+  expect(result.replies).toEqual(["✅ New session started."]);
+});
+
+const emptyAllowFrom: string[] = [];
+it.each([
+  ["reset", { guildChannels: { [CHANNEL]: { enabled: false } } }, "This channel is disabled."],
+  ["new", { guildChannels: { other: { enabled: true } } }, "This channel is not allowed."],
+  ["reset", { allowFrom: emptyAllowFrom }, undefined],
+] as const)("preserves the session on denied /%s (%s)", async (commandName, params, reply) => {
+  const result = await runReset({ commandName, ...params });
+  expect(result.entry?.lifecycleRevision).toBe("before-reset");
+  if (reply) {
+    expect(result.replies).toEqual([reply]);
+  } else {
+    expect(result.events).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "reset" })]),
+    );
+  }
+});
+
+it("lets the configured binding own reset admission", async () => {
+  const result = await runReset({
+    commandName: "reset",
+    guildChannels: { [CHANNEL]: { enabled: false } },
+    configuredBinding: true,
+  });
+  expect(result.replies).not.toContain("This channel is disabled.");
+  expect(result.replies).not.toContain("This channel is not allowed.");
+  expect(result.replies.length).toBeGreaterThan(0);
+});
+
 installDiscordIngressTestRuntime();
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
