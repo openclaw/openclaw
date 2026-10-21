@@ -3,6 +3,7 @@ import type { Api, AssistantMessageEventStreamContract, Model, StreamFn } from "
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApiRegistry, type ApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 
 const vertexStream = vi.fn();
 const registerApi = vi.fn();
@@ -22,16 +23,13 @@ const initialHost = getAiTransportHost();
 function makeModel<T extends Api>(
   overrides: Pick<Model<T>, "api" | "provider" | "baseUrl"> & Partial<Model<T>>,
 ): Model<T> {
-  return {
-    id: "test-model",
+  return makeProviderModel(overrides.api, overrides.provider, "test-model", {
     name: "Test Model",
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 4096,
     ...overrides,
-  };
+  });
 }
 
 function makeChatGPTModel(baseUrl: string) {
@@ -194,7 +192,7 @@ describe("prepareModelForSimpleCompletion", () => {
 
     const result = prepare({ model, cfg });
 
-    expect(resolveStream).toHaveBeenCalledTimes(1);
+    expect(resolveStream).toHaveBeenCalledOnce();
     expect(resolveStream.mock.calls[0]?.[0].config).toBe(cfg);
     expect(resolveStream).toHaveBeenCalledWith({
       provider: "ollama",
@@ -208,11 +206,10 @@ describe("prepareModelForSimpleCompletion", () => {
     });
     expect(registerApi).toHaveBeenCalledWith(apiRegistry, "ollama", expect.any(Function));
     const registeredStream = registerApi.mock.calls[0]?.[2] as StreamFn;
-    void registeredStream(
-      { ...model, headers: { Authorization: `Bearer ${sentinel}` } } as never,
-      {} as never,
-      { apiKey: sentinel, headers: { "X-Managed": `Bearer ${sentinel}` } } as never,
-    );
+    void registeredStream(model, {} as never, {
+      apiKey: sentinel,
+      headers: { "X-Managed": `Bearer ${sentinel}` },
+    });
     expect(pluginStreamFn).toHaveBeenCalledWith(
       expect.objectContaining({ headers: { Authorization: `Bearer ${secret}` } }),
       {},
