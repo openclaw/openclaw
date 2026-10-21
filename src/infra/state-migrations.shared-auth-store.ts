@@ -531,7 +531,7 @@ export function detectSharedAuthStoreMigration(params: {
     ownershipLocation: ownership.location,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
     classifyRetainedSource: (sourcePath, ownerId) =>
-      isRetainedSharedAuthSource(env, sourcePath, ownerId),
+      Boolean(isRetainedSharedAuthSource(env, sourcePath, ownerId)),
   });
   const sourcePath = selection.sourcePath;
   const ownerId = selection.ownerId === LEGACY_IMPLICIT_AGENT_ID ? undefined : selection.ownerId;
