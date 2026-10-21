@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import * as terminalText from "openclaw/plugin-sdk/text-chunking";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import {
@@ -22,16 +22,24 @@ import {
 import { projectNativeCatalogFixture } from "./session-catalog-projection.test-support.js";
 import type { CodexSessionCatalogPageParams } from "./session-catalog-types.js";
 
-const indexes: CodexCatalogIndex[] = [];
-const clients: ReturnType<typeof createClientHarness>[] = [];
-function createTrackedClient(options?: Parameters<typeof createClientHarness>[0]) {
-  const harness = createClientHarness(options);
-  clients.push(harness);
+function createTrackedClient(
+  respond?: (request: { method: string; params: CodexThreadListParams }) => unknown,
+) {
+  const harness = createClientHarness({
+    onWrite(line, send) {
+      const request = JSON.parse(line);
+      const result = respond?.(request);
+      if (result !== undefined) {
+        send({ id: request.id, result });
+      }
+    },
+  });
+  onTestFinished(() => harness.client.closeAndWait());
   return harness;
 }
 function catalog(options: Omit<CodexCatalogIndexOptions, "assertCurrent">) {
   const index = new CodexCatalogIndex({ ...options, assertCurrent: () => {} });
-  indexes.push(index);
+  onTestFinished(() => index.close());
   return index;
 }
 const ids = async (index: CodexCatalogIndex, params: CodexSessionCatalogPageParams = {}) =>
@@ -53,20 +61,17 @@ function sourceThread(overrides: Partial<CodexThread> = {}): CodexThread {
   };
 }
 
-async function fixture() {
+async function fixture(date = false) {
+  const timers = ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] as const;
+  vi.useFakeTimers({ toFake: date ? [...timers, "Date"] : [...timers] });
   const options = {
     ...catalogWebSocketOptions(`wss://catalog-source-${++fixtureId}.example.test/codex`),
     authToken: "synthetic-catalog-source-token",
   };
   const inventory = [sourceThread()];
-  const a = createTrackedClient({
-    onWrite(line, send) {
-      const request = JSON.parse(line);
-      if (request.method === "thread/list") {
-        send({ id: request.id, result: { data: inventory } });
-      }
-    },
-  });
+  const a = createTrackedClient(({ method }) =>
+    method === "thread/list" ? { data: inventory } : undefined,
+  );
   const b = createTrackedClient();
   await observeCodexCatalogClient(a.client, { startOptions: options });
   await observeCodexCatalogClient(b.client, { startOptions: options });
@@ -88,66 +93,51 @@ async function fixture() {
   return { a, b, index, inventory, readNative, active };
 }
 
-afterEach(async () => {
-  for (const { client } of clients) {
-    client.close();
-  }
-  await Promise.all([
-    ...indexes.splice(0).map((index) => index.close()),
-    ...clients.splice(0).map(({ client }) => client.closeAndWait()),
-  ]);
+afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-describe("Codex catalog physical status sources", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+it("ignores a buffered thread/read status after its source closes", async () => {
+  const { a, b, index, active } = await fixture();
+  const reading = a.client.request<{ thread: CodexThread }>(
+    "thread/read",
+    { threadId: "thread-1" },
+    { timeoutMs: 1_000 },
+  );
+  const request = JSON.parse(await a.waitForWrite(1));
+  const native = sourceThread({ status: { type: "active", activeFlags: ["stale-source-a"] } });
+  a.send({ id: request.id, result: { thread: native } });
+  a.client.close();
+  active(b, "source-b");
+  const response = await reading;
+  expect(response.thread).toEqual(native);
+  await index.upsertThread(response.thread);
+  expect((await index.list({})).sessions[0]).toMatchObject({
+    status: "active",
+    activeFlags: ["source-b"],
   });
-  it("ignores a buffered thread/read status after its source closes", async () => {
-    const { a, b, index, active } = await fixture();
-    const reading = a.client.request<{ thread: CodexThread }>(
-      "thread/read",
-      { threadId: "thread-1" },
-      { timeoutMs: 1_000 },
-    );
-    const request = JSON.parse(await a.waitForWrite(1));
-    const native = sourceThread({ status: { type: "active", activeFlags: ["stale-source-a"] } });
-    a.send({ id: request.id, result: { thread: native } });
-    a.client.close();
-    active(b, "source-b");
-    const response = await reading;
-    expect(response.thread).toEqual(native);
-    await index.upsertThread(response.thread);
-    expect((await index.list({})).sessions[0]).toMatchObject({
-      status: "active",
-      activeFlags: ["source-b"],
-    });
-    expect(JSON.stringify(index.get("thread-1"))).not.toContain('"closed"');
-  });
+  expect(JSON.stringify(index.get("thread-1"))).not.toContain('"closed"');
+});
 
-  it("keeps another source active when a DB-only list reports source-local notLoaded", async () => {
-    vi.useFakeTimers({
-      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-    });
-    const { b, index, inventory, readNative, active } = await fixture();
-    active(b, "source-b");
-    inventory[0] = sourceThread({ cwd: "/workspace/fresh", status: { type: "notLoaded" } });
-    await vi.advanceTimersByTimeAsync(15 * 60_000);
-    await index.list({});
-    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
-    await readNative.mock.results[1]!.value;
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions[0]?.cwd).toBe("/workspace/fresh");
-    });
-    await nextTurn();
-    expect((await index.list({})).sessions[0]).toMatchObject({
-      status: "active",
-      activeFlags: ["source-b"],
-    });
-    expect(readNative).toHaveBeenCalledTimes(2);
-    expect(readNative.mock.calls[1]?.[0]).toMatchObject({ useStateDbOnly: true });
+it("keeps another source active when a DB-only list reports source-local notLoaded", async () => {
+  const { b, index, inventory, readNative, active } = await fixture(true);
+  active(b, "source-b");
+  inventory[0] = sourceThread({ cwd: "/workspace/fresh", status: { type: "notLoaded" } });
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  await index.list({});
+  await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
+  await readNative.mock.results[1]!.value;
+  await vi.waitFor(async () =>
+    expect((await index.list({})).sessions[0]?.cwd).toBe("/workspace/fresh"),
+  );
+  await nextTurn();
+  expect((await index.list({})).sessions[0]).toMatchObject({
+    status: "active",
+    activeFlags: ["source-b"],
   });
+  expect(readNative).toHaveBeenCalledTimes(2);
+  expect(readNative.mock.calls[1]?.[0]).toMatchObject({ useStateDbOnly: true });
 });
 
 it("finishes reconnect hydration after an offline snapshot refresh and resumes periodic currency", async () => {
@@ -179,9 +169,7 @@ it("finishes reconnect hydration after an offline snapshot refresh and resumes p
   expect(await ids(index)).toEqual(["reconnected"]);
   readNative.mockResolvedValue({ rows: [row("later")] });
   await vi.advanceTimersByTimeAsync(15 * 60_000);
-  await vi.waitFor(async () => {
-    expect(await ids(index)).toEqual(["later"]);
-  });
+  await vi.waitFor(async () => expect(await ids(index)).toEqual(["later"]));
   await index.retire();
 });
 
@@ -199,12 +187,9 @@ it.each([
     recencyAt: position < 2 ? 200 : 100,
   }));
   const startOptions = catalogWebSocketOptions(`wss://cursor-${recencyAt}.example.test/codex`);
-  const harness = createTrackedClient({
-    onWrite(line, send) {
-      const request = JSON.parse(line);
-      expect(request).toMatchObject({ method: "thread/read", params: { threadId: "bravo" } });
-      send({ id: request.id, result: { thread: { ...threads[1], recencyAt } } });
-    },
+  const harness = createTrackedClient((request) => {
+    expect(request).toMatchObject({ method: "thread/read", params: { threadId: "bravo" } });
+    return { thread: { ...threads[1], recencyAt } };
   });
   const readNative = vi.fn(async () => projectNativeCatalogFixture({ data: threads }));
   const nativeReads = vi.spyOn(harness.client, "request");
@@ -229,9 +214,9 @@ it.each([
   });
   await harness.waitForWrite(0);
   await nativeReads.mock.results[0]!.value;
-  await vi.waitFor(async () => {
-    expect((await index.list({ limit: 1 })).sessions[0]?.threadId).toBe("bravo");
-  });
+  await vi.waitFor(async () =>
+    expect((await index.list({ limit: 1 })).sessions[0]?.threadId).toBe("bravo"),
+  );
   expect(await ids(index, { limit: 1, cursor: second.backwardsCursor })).toEqual(["alpha"]);
   expect(await ids(index, { limit: 64, cursor: second.backwardsCursor })).toEqual(["alpha"]);
   expect(await ids(index, { limit: 1, cursor: second.nextCursor })).toEqual(["charlie"]);
@@ -255,13 +240,10 @@ it.each([
       preview: before,
     });
     const requests: CodexThreadListParams[] = [];
-    const harness = createTrackedClient({
-      onWrite(line, send) {
-        const request = JSON.parse(line);
-        expect(request.method).toBe("thread/list");
-        requests.push(request.params);
-        send({ id: request.id, result: { data: [thread] } });
-      },
+    const harness = createTrackedClient((request) => {
+      expect(request.method).toBe("thread/list");
+      requests.push(request.params);
+      return { data: [thread] };
     });
     const index = catalog({
       homeId: "preview-transitions",
@@ -284,9 +266,9 @@ it.each([
     expect((await index.list({})).sessions[0]?.fallbackName).toBe(before || undefined);
     thread.preview = after;
     await vi.advanceTimersByTimeAsync(15 * 60_000);
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions[0]?.fallbackName).toBe(after || undefined);
-    });
+    await vi.waitFor(async () =>
+      expect((await index.list({})).sessions[0]?.fallbackName).toBe(after || undefined),
+    );
     expect(index.get(thread.id)?.preview).toBe(after);
     expect(requests).toHaveLength(2);
     expect(requests[1]).toMatchObject({ useStateDbOnly: true });

@@ -37,14 +37,10 @@ function nativeItemControl(source: CodexThreadItem[]) {
       };
     },
   );
-  return {
+  return createEligibleControl({
+    requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
     listItemPage,
-    control: createEligibleControl({
-      requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
-      listItemPage,
-      listTurnPage: vi.fn(async () => turnPage(source, "native-turn:turn-1")),
-    }),
-  };
+  });
 }
 
 function readTranscript(control: CodexSessionCatalogControl, limit: number, cursor?: string) {
@@ -61,7 +57,7 @@ function readTranscript(control: CodexSessionCatalogControl, limit: number, curs
 it("cuts native pages by wire bytes without losing raw output or advancing past omitted items", async () => {
   const output = "海🌱\n".repeat(80_000);
   const source = Array.from({ length: 36 }, (_, index) => commandItem(`tool-${index}`, output));
-  const { control, listItemPage } = nativeItemControl(source);
+  const control = nativeItemControl(source);
   const first = await readTranscript(control, 50);
   const second = await readTranscript(control, 7, first.nextCursor);
   const third = await readTranscript(control, 50, second.nextCursor);
@@ -74,7 +70,7 @@ it("cuts native pages by wire bytes without losing raw output or advancing past 
   expect(first.items.length).toBeGreaterThan(0);
   expect(first.items.length).toBeLessThan(source.length);
   expect(first.nextCursor).toBe(`native:${first.items.at(-1)?.id}`);
-  expect(listItemPage.mock.calls[1]?.[0].limit).toBeLessThan(50);
+  expect(vi.mocked(control.listItemPage).mock.calls[1]?.[0].limit).toBeLessThan(50);
   expect(delivered.map((item) => item.id)).toEqual(source.toReversed().map((item) => item.id));
   expect(pages.at(-1)?.nextCursor).toBeUndefined();
   for (const page of pages) {
@@ -83,16 +79,15 @@ it("cuts native pages by wire bytes without losing raw output or advancing past 
     ).toBeLessThanOrEqual(20 * 1024 * 1024);
   }
   for (const item of delivered) {
-    expect(item.raw).toMatchObject({ aggregatedOutput: output });
+    expect(item).toMatchObject({ raw: { aggregatedOutput: output }, truncated: true });
     expect(Buffer.byteLength(item.text ?? "", "utf8")).toBeLessThanOrEqual(512 * 1024);
     expect(item.text).toMatch(/…$/u);
-    expect(item.truncated).toBe(true);
   }
   expect(source.every((item) => item.aggregatedOutput === output)).toBe(true);
 });
 
 it("fails visibly when one complete raw item cannot fit the wire budget", async () => {
-  const { control } = nativeItemControl([commandItem("oversized", "x".repeat(20 * 1024 * 1024))]);
+  const control = nativeItemControl([commandItem("oversized", "x".repeat(20 * 1024 * 1024))]);
 
   await expect(readTranscript(control, 1)).rejects.toThrow(
     "Codex transcript item exceeds the safe response size",
@@ -124,8 +119,7 @@ it("resumes within a legacy turn after an append, then advances to the next nati
   expect(
     [first, second, third, fourth].flatMap((page) => page.items.map((item) => item.id)),
   ).toEqual(["item-6", "item-5", "item-4", "item-3", "item-2", "item-1", "item-0", "oldest"]);
-  expect(third.nextCursor).toBe("older-turns");
-  expect(fourth.nextCursor).toBeUndefined();
+  expect([third.nextCursor, fourth.nextCursor]).toEqual(["older-turns", undefined]);
   expect(listTurnPage.mock.calls.map(([request]) => request.limit)).toEqual([1, 1, 1, 1]);
   expect(listTurnPage.mock.calls[1]?.[0].cursor).toBe("turn-anchor");
 });
