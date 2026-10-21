@@ -107,11 +107,18 @@ export function useOAuthCoordinationFixture() {
       await fs.mkdir(directory, { recursive: true });
       return directory;
     },
-    resolve(agentDir: string | undefined, id = profileId) {
+    resolve(
+      agentDir: string | undefined,
+      id = profileId,
+      options: Partial<
+        Pick<Parameters<typeof resolver>[0], "cfg" | "signal" | "validateOAuthCredential">
+      > = {},
+    ) {
       assert.ok(agentDir, "expected a seeded agent directory");
       return fixture.work.track(() =>
         resolver({
           cfg: {},
+          ...options,
           store: ensureAuthProfileStore(agentDir),
           profileId: id,
           agentDir,

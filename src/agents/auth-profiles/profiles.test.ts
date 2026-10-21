@@ -354,22 +354,6 @@ describe("promoteAuthProfileInOrder", () => {
       expect(runtimeSnapshot(agentDir)).toEqual(initial);
     }));
 
-  it("does not persist runtime-only external profiles", () =>
-    withProfileState(async ({ agentDir }) => {
-      const profileId = "openai:default";
-      const runtimeStore: RuntimeAuthProfileStore = profileStore(
-        profileId,
-        oauth("external-access", "external-refresh"),
-        { runtimeExternalProfileIds: [profileId] },
-      );
-      publishSnapshots([{ agentDir, store: runtimeStore }]);
-
-      saveAuthProfileStore(runtimeStore, agentDir);
-
-      const persisted = loadPersisted(agentDir);
-      expect(persisted?.profiles[profileId]).toBeUndefined();
-    }));
-
   it.each(["before save", "before publication"] as const)(
     "preserves a runtime-only OAuth mutation %s",
     async (mutationTiming) => {
@@ -388,6 +372,8 @@ describe("promoteAuthProfileInOrder", () => {
         );
         saveAuthProfileStore(baselineStore, agentDir);
         publishSnapshots([{ agentDir, store: baselineStore }]);
+        saveAuthProfileStore(baselineStore, agentDir);
+        expect(loadPersisted(agentDir)?.profiles["anthropic:external"]).toBeUndefined();
         const snapshot = captureAuthProfileStorePersistenceSnapshot(agentDir);
 
         const mutateRuntimeStore = () => {

@@ -762,46 +762,41 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(stats?.cooldownClassification).toBeUndefined();
   });
 
-  it("cancels WHAM HTTP error response bodies", async () => {
-    const now = testNow;
-    const response = new Response("server busy", { status: 500 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    fetchMock.mockResolvedValueOnce(response);
-
-    const store = await markCodexFailureAt();
-
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(store.usageStats?.[codexId]?.cooldownUntil).toBe(now + 30_000);
-  });
-
-  it("falls back to a 30s cooldown when the WHAM probe fails", async () => {
-    const now = testNow;
-    fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
-    const store = await markCodexFailureAt({ reason: "unknown" });
-
-    expect(store.usageStats?.[codexId]?.cooldownUntil).toBe(now + 30_000);
-  });
-
-  it.each([
-    ["reset_after_seconds", { reset_after_seconds: Number.MAX_SAFE_INTEGER }],
-    ["reset_at", { reset_at: Number.MAX_SAFE_INTEGER }],
-  ])("does not pin profiles from unsafe WHAM %s values", async (_label, resetFields) => {
-    const now = testNow;
-    const store = makeStore({});
-    mockWhamResponse(200, {
-      rate_limit: {
-        limit_reached: true,
-        primary_window: { used_percent: 100, ...resetFields },
-      },
-    });
-
-    await markCodexFailureAt({ store });
-
-    const stats = store.usageStats?.[codexId];
-    expect(stats?.blockedUntil).toBeUndefined();
-    expect(stats?.cooldownUntil).toBe(now + 30_000);
-    expect(stats?.cooldownReason).toBe("rate_limit");
-  });
+  it.each(["http", "network", "reset_after_seconds", "reset_at"] as const)(
+    "falls back from an unusable WHAM %s response",
+    async (failure) => {
+      const response = new Response("server busy", { status: 500 });
+      const cancel =
+        failure === "http"
+          ? vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined)
+          : undefined;
+      if (failure === "http") {
+        fetchMock.mockResolvedValueOnce(response);
+      } else if (failure === "network") {
+        fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
+      } else {
+        mockWhamResponse(200, {
+          rate_limit: {
+            limit_reached: true,
+            primary_window: { used_percent: 100, [failure]: Number.MAX_SAFE_INTEGER },
+          },
+        });
+      }
+      const unsafeReset = failure === "reset_after_seconds" || failure === "reset_at";
+      const store = await markCodexFailureAt({
+        reason: failure === "network" ? "unknown" : "rate_limit",
+      });
+      const stats = store.usageStats?.[codexId];
+      expect(stats?.cooldownUntil).toBe(testNow + 30_000);
+      if (cancel) {
+        expect(cancel).toHaveBeenCalledOnce();
+      }
+      if (unsafeReset) {
+        expect(stats?.blockedUntil).toBeUndefined();
+        expect(stats?.cooldownReason).toBe("rate_limit");
+      }
+    },
+  );
 });
 
 describe("markAuthProfileFailure — per-model cooldown metadata", () => {

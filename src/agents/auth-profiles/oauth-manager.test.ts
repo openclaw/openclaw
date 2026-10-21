@@ -25,10 +25,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import {
-  oidcIdentity,
-  createOAuthRefreshCredential as createCredential,
-} from "./credential-fixtures.test-support.js";
+import { createOAuthRefreshCredential as createCredential } from "./credential-fixtures.test-support.js";
 import * as externalCliSync from "./external-cli-sync.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import {
@@ -446,53 +443,6 @@ describe("createOAuthManager", () => {
 
       expect(result).toBeNull();
       expect(refreshCredential).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects changed OIDC identity after CAS", async () => {
-    const identity = oidcIdentity();
-    const differentIdentity = oidcIdentity({ sub: "subject-b" });
-    await withOAuthTempRoot("oauth-manager-cas-different-identity-", async (tempRoot) => {
-      const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
-      const agentDir = path.join(tempRoot, "agents", "sub", "agent");
-      await fs.mkdir(mainAgentDir, { recursive: true });
-      await fs.mkdir(agentDir, { recursive: true });
-      const profileId = "openai:oauth";
-      const expired = createCredential({
-        access: "expired-access",
-        refresh: "expired-refresh",
-        expires: Date.now() - 60_000,
-        ...identity,
-      });
-      const relogged = createCredential({
-        access: "relogged-access",
-        refresh: "relogged-refresh",
-        expires: Date.now() + 10 * 60_000,
-        ...differentIdentity,
-      });
-      saveCredential(profileId, expired, agentDir);
-
-      const manager = createTestManager({
-        refreshCredential: vi.fn(async () => {
-          saveCredential(profileId, relogged, agentDir);
-          return {
-            access: "rotated-access",
-            refresh: "rotated-refresh",
-            expires: Date.now() + 60_000,
-          };
-        }),
-      });
-
-      await expect(resolve(manager, profileId, expired, agentDir)).rejects.toThrow(
-        "OAuth token refresh failed",
-      );
-      const persisted = readStored(agentDir);
-      expect(persisted.profiles[profileId]).toMatchObject({
-        type: "oauth",
-        access: "relogged-access",
-        refresh: "relogged-refresh",
-        ...differentIdentity,
-      });
     });
   });
 
