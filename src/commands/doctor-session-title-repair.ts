@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  loadSessionEntry,
   patchSessionEntryCore,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
@@ -96,7 +95,7 @@ export async function repairLegacySessionTitles(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () => {
-        const keys: string[] = [];
+        const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, sessionKey, recoveredFromProjections }) => {
@@ -106,26 +105,22 @@ export async function repairLegacySessionTitles(params: {
               !isIncognitoSessionKey(sessionKey) &&
               !hasExplicitSessionName(entry)
             ) {
-              keys.push(sessionKey);
+              sessions.push({ sessionKey, sessionId: entry.sessionId });
             }
           },
         );
-        return keys;
+        return sessions;
       },
     });
     if (!scan.ok) {
       continue;
     }
-    for (const sessionKey of scan.value) {
+    for (const { sessionKey, sessionId } of scan.value) {
       if (params.apply) {
         assertRepairAuthority();
       }
       try {
-        const entry = loadSessionEntry({ ...scope, sessionKey });
-        if (!entry || entry.incognito || hasExplicitSessionName(entry)) {
-          continue;
-        }
-        const session = { ...scope, sessionKey, sessionId: entry.sessionId, sessionEntry: entry };
+        const session = { ...scope, sessionKey, sessionId };
         const title = readLegacySessionTitle(session);
         if (!title) {
           continue;

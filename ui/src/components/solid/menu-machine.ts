@@ -7,10 +7,12 @@ import {
 } from "@zag-js/menu";
 import { isPointInPolygon } from "@zag-js/rect-utils";
 import { VanillaMachine, normalizeProps } from "@zag-js/vanilla";
-import { createEffect, createSignal, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
+import { revealInScrollRegion } from "../scroll-state.ts";
 
 // Focus events use bubbling DOM names; all other listener names stay canonical.
 const normalize = (props: object) => {
@@ -44,6 +46,8 @@ const normalizer: Parameters<typeof connect>[1] = {
 export type MenuBinding = {
   service: MenuService;
   read(): Api;
+  itemRef(): (element: HTMLElement) => void;
+  items(): HTMLElement[];
   pointerDelta(x: number): number;
   item(
     value: string,
@@ -67,8 +71,9 @@ export type MenuNavigationOptions = {
   value?: () => string | null;
 };
 
+// Embedded menu triggers opt in explicitly; submenu items keep their native roving focus.
 export const MENU_FORM_CONTROL_SELECTOR =
-  ':is(input, textarea, select, [data-form-control], button, a[href]):not([role^="menuitem"]):not([aria-haspopup="menu"])';
+  ':is(input, textarea, select, [data-form-control], button, a[href]):not([role^="menuitem"]):not([aria-haspopup="menu"]:not([data-form-control]))';
 
 export function useMenuMachine(
   overlay: Overlay,
@@ -80,17 +85,32 @@ export function useMenuMachine(
   let lastPointerX: number | undefined;
   let lastPointerY: number | undefined;
   let focusFromKeyboard = false;
+  // Retained-focus lists reveal keyboard, opening, and catalog highlights. A pointer
+  // highlight is already under the cursor; revealing a clipped edge row would fight
+  // an in-progress wheel or trackpad scroll.
+  let pointerHighlight = false;
+  const itemNodes = new Set<HTMLElement>();
   const ownsTarget = (target: HTMLElement) =>
     ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
     (options.surface === "listbox"
       ? overlay.surface.contains(target)
       : target.closest('[role="menu"]') === overlay.surface);
+  const items = () =>
+    [...itemNodes]
+      .filter((item) => item.isConnected && ownsTarget(item))
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
   const focusItem = (service: MenuService) => {
     if (!overlay.open) {
       return;
     }
     const id = service.computed("highlightedId");
-    const node = id ? service.scope.getById(id) : undefined;
+    const rows = items();
+    const node = id ? rows.find((item) => item.id === id) : undefined;
+    if (node && options.focus === "retain" && !pointerHighlight) {
+      revealInScrollRegion(overlay.surface, node);
+    }
     const active = service.scope.getActiveElement();
     if (
       active instanceof HTMLElement &&
@@ -99,10 +119,8 @@ export function useMenuMachine(
     ) {
       return;
     }
-    for (const item of overlay.surface.querySelectorAll<HTMLElement>("[data-menu-item]")) {
-      if (ownsTarget(item)) {
-        item.tabIndex = options.focus !== "retain" && item === node ? 0 : -1;
-      }
+    for (const item of rows) {
+      item.tabIndex = options.focus !== "retain" && item === node ? 0 : -1;
     }
     if (
       node &&
@@ -137,11 +155,8 @@ export function useMenuMachine(
             ? null
             : `${params.scope.id}:${value}`
           : // Submenu triggers keep the caller's logical value and their own DOM id.
-            ((value == null
-              ? null
-              : params.scope.query(
-                  `[data-menu-item="${CSS.escape(overlay.id)}"][data-value="${CSS.escape(value)}"]`,
-                )?.id) ?? computed.highlightedId(params));
+            ((value == null ? null : items().find((item) => item.dataset.value === value)?.id) ??
+              computed.highlightedId(params));
       },
     },
     implementations: {
@@ -163,9 +178,9 @@ export function useMenuMachine(
           };
           const doc = params.scope.getDoc();
           // Keep slow diagonal travel alive, then let Zag settle a stopped pointer.
-          doc.addEventListener("pointermove", keepMoving);
+          const stopMoving = listen(doc, "pointermove", keepMoving);
           return () => {
-            doc.removeEventListener("pointermove", keepMoving);
+            stopMoving();
             cancel();
           };
         },
@@ -175,13 +190,9 @@ export function useMenuMachine(
         highlightFirstItem(params) {
           // Keep Zag's queued opening focus aligned with the overlay's initial row.
           if (options.surface !== "listbox" && params.event.type !== "HOME") {
-            const initial = [
-              ...overlay.surface.querySelectorAll<HTMLElement>(
-                "[data-initial-focus][data-menu-item]",
-              ),
-            ].find(
+            const initial = items().find(
               (item) =>
-                ownsTarget(item) &&
+                item.hasAttribute("data-initial-focus") &&
                 !item.matches(":disabled") &&
                 item.getAttribute("aria-disabled") !== "true",
             );
@@ -248,7 +259,7 @@ export function useMenuMachine(
       const root = surface?.getRootNode();
       return root instanceof ShadowRoot ? root : (surface?.ownerDocument ?? document);
     },
-    dir: untrack(direction),
+    dir: "ltr",
     open: false,
     loopFocus: true,
     closeOnSelect: false,
@@ -281,23 +292,19 @@ export function useMenuMachine(
   // source, making each subsequent prop read replay the whole update history.
   const service = new VanillaMachine(adapted, () => props);
   const [revision, setRevision] = createSignal(0);
-  createEffect(direction, (dir) => {
-    if (props.dir !== dir) {
-      props.dir = dir;
-      setRevision((n) => n + 1);
-    }
-  });
   const read = () => {
     revision();
     return connect(service.service, normalizer);
   };
   onSettled(() => {
+    props.dir = direction();
+    // Machine transitions move roving focus synchronously; markup follows through the revision.
     const unsubscribe = service.subscribe((state) => {
       setRevision((n) => n + 1);
       focusItem(state);
     });
     const stopOpen = overlay.subscribe((open) => {
-      props.dir = untrack(direction);
+      props.dir = direction();
       props.open = open;
       // Deliver the same controlled transition as the menu open-prop watcher,
       // preserving the event that selected keyboard opening/closing behavior.
@@ -305,16 +312,17 @@ export function useMenuMachine(
         type: open ? "CONTROLLED.OPEN" : "CONTROLLED.CLOSE",
         previousEvent: service.service.event,
       });
+      if (open) {
+        pointerHighlight = false;
+      }
       if (open && options.items) {
-        untrack(() => {
-          const enabled = options.items!().filter((item) => !item.disabled);
-          service.send({
-            type: "HIGHLIGHTED.SET",
-            value:
-              enabled.find((item) => item.value === options.value?.())?.value ??
-              enabled[0]?.value ??
-              null,
-          });
+        const enabled = options.items().filter((item) => !item.disabled);
+        service.send({
+          type: "HIGHLIGHTED.SET",
+          value:
+            enabled.find((item) => item.value === options.value?.())?.value ??
+            enabled[0]?.value ??
+            null,
         });
       }
     });
@@ -334,21 +342,29 @@ export function useMenuMachine(
       }
     };
   });
-  // Keep Zag's imperative highlight within the currently enabled catalog.
+  // Synchronize Zag's imperative direction and highlight with the current inputs.
   createEffect(
-    () => [options.items?.(), read(), options.value?.()] as const,
-    ([items, api, selected]) => {
-      if (!items) {
+    () => [direction(), options.items?.(), read(), options.value?.()] as const,
+    ([dir, catalog, api, selected]) => {
+      if (props.dir !== dir) {
+        props.dir = dir;
+        setRevision((n) => n + 1);
+      }
+      if (!catalog) {
         return;
       }
-      const enabled = items.filter((item) => !item.disabled);
+      const enabled = catalog.filter((item) => !item.disabled);
       if (!enabled.some((item) => item.value === api.highlightedValue)) {
         const next =
           enabled.find((item) => item.value === selected)?.value ?? enabled[0]?.value ?? null;
         if (api.highlightedValue !== next) {
           // Zag queues send(); a stale catalog correction must not replace a later opening choice.
+          pointerHighlight = false;
           service.service.context.set("highlightedValue", next);
         }
+      }
+      if (options.focus === "retain") {
+        focusItem(service.service);
       }
     },
   );
@@ -356,6 +372,7 @@ export function useMenuMachine(
     if (event.defaultPrevented || event.isComposing || !overlay.open) {
       return;
     }
+    pointerHighlight = false;
     const editing =
       event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
     const fromButton =
@@ -415,6 +432,22 @@ export function useMenuMachine(
   return {
     service: service.service,
     read,
+    items,
+    itemRef() {
+      let item: HTMLElement | undefined;
+      onCleanup(() => {
+        if (item) {
+          itemNodes.delete(item);
+        }
+      });
+      return (element) => {
+        if (item) {
+          itemNodes.delete(item);
+        }
+        item = element;
+        itemNodes.add(element);
+      };
+    },
     keydown,
     pointerDelta(x) {
       const delta = lastPointerX === undefined ? 0 : x - lastPointerX;
@@ -472,6 +505,7 @@ export function useMenuMachine(
             return;
           }
           focusFromKeyboard = false;
+          pointerHighlight = true;
           result.onPointerMove?.(event);
         },
         tabIndex: options.focus !== "retain" && api.highlightedValue === value ? 0 : -1,
@@ -595,11 +629,8 @@ export function useMenuMachine(
             target.matches("input[data-search]") &&
             (e.key === "ArrowDown" || e.key === "Enter")
           ) {
-            const first = [
-              ...overlay.surface.querySelectorAll<HTMLElement>('[role^="menuitem"]'),
-            ].find(
+            const first = items().find(
               (item) =>
-                item.closest('[role="menu"]') === overlay.surface &&
                 !item.matches(":disabled") &&
                 item.getAttribute("aria-disabled") !== "true" &&
                 Boolean(target.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING),
@@ -620,6 +651,7 @@ export function useMenuMachine(
             return;
           }
           focusFromKeyboard = true;
+          pointerHighlight = false;
           const value = target.dataset.value;
           if (value && value !== read().highlightedValue) {
             read().setHighlightedValue(value);

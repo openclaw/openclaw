@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
@@ -29,6 +29,7 @@ import {
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createCronTool } from "./cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import * as gatewayModule from "./gateway.js";
 
 type Options = Parameters<typeof createCronTool>[0];
 const ok = { ok: true };
@@ -47,20 +48,7 @@ function createTestCronTool(opts?: Options): ReturnType<typeof createCronTool> {
   if (opts?.config) {
     setRuntimeConfigSnapshot(opts.config);
   }
-  return createCronTool(opts, {
-    callGatewayTool: async (method, gatewayOpts, params) => {
-      const result = await callGatewayMock({ method, params }, gatewayOpts);
-      if (
-        method === "cron.get" &&
-        isRecord(result) &&
-        Object.hasOwn(result, "payload") &&
-        !Object.hasOwn(result, "configRevision")
-      ) {
-        return { ...result, configRevision: "sha256:test" };
-      }
-      return result;
-    },
-  });
+  return createCronTool(opts);
 }
 
 function executeCron(args: Record<string, unknown>, opts?: Options) {
@@ -163,6 +151,21 @@ async function executeAddAndReadDelivery({
 }
 
 beforeEach(() => {
+  const gatewaySpy = vi
+    .spyOn(gatewayModule, "callGatewayTool")
+    .mockImplementation(async (method, gatewayOpts, params) => {
+      const result = await callGatewayMock({ method, params }, gatewayOpts);
+      if (
+        method === "cron.get" &&
+        isRecord(result) &&
+        Object.hasOwn(result, "payload") &&
+        !Object.hasOwn(result, "configRevision")
+      ) {
+        return { ...result, configRevision: "sha256:test" };
+      }
+      return result;
+    });
+  onTestFinished(() => gatewaySpy.mockRestore());
   setRuntimeConfigSnapshot({});
   callGatewayMock.mockClear().mockResolvedValue(ok);
   extractDeliveryInfoMock
@@ -259,6 +262,8 @@ it("pages only the current automation and hides other jobs, previews, and invent
     hasMore: false,
     nextOffset: null,
     deliveryPreviews: { "job-current": { label: "current", detail: "self" } },
+    includeDisabled: true,
+    inventoryHint: expect.stringContaining("Absence does not prove deletion"),
   });
 });
 
@@ -507,11 +512,18 @@ it("forwards null add ownership separately from authenticated caller identity", 
 });
 
 it("does not forward model-supplied callerScope", async () => {
+  callGatewayMock.mockResolvedValueOnce(storedAgentTurn("sha256:test"));
   await executeCron(
     { action: "remove", jobId: "job-1", callerScope: { kind: "agentTool", agentId: "worker" } },
     channelCaller,
   );
-  expect(readGatewayCall().params).toEqual({ id: "job-1" });
+  expect(callGatewayMock.mock.calls.map(([call]) => call)).toEqual([
+    { method: "cron.get", params: { id: "job-1" } },
+    {
+      method: "cron.remove",
+      params: { id: "job-1", expectedConfigRevision: "sha256:test" },
+    },
+  ]);
 });
 
 it("does not write when the admitted run aborts while lazy authority resolves", async () => {
@@ -630,30 +642,53 @@ it("keeps an explicit empty add offline and exact", async () => {
   expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
 });
 
-it.each([
-  {
-    name: "unknown finite names cannot pre-authorize a future tool",
-    toolsAllow: ["future__tool"],
-    creatorToolAllowlist: ["read"],
-    resolved: ["read"],
-    expected: [],
+it.each([false, true])(
+  "rejects uncaptured Codex app tools before saving a partial cap (deferred capture=%s)",
+  async (deferred) => {
+    const resolveCreatorToolAuthority = deferred
+      ? vi.fn(async () => ({
+          ...resolvedCreatorAuthority(["message"]),
+          holdsRuntimeAuthority: true as const,
+        }))
+      : undefined;
+    await expect(
+      executeCron(
+        addJob({ payload: agentTurn({ toolsAllow: ["message", "codex_apps.notion.fetch"] }) }),
+        {
+          agentSessionKey: "agent:main:main",
+          creatorToolAllowlist: ["message"],
+          resolveCreatorToolAuthority,
+        },
+      ),
+    ).rejects.toThrow('Requested automation tool "codex_apps.notion.fetch" cannot be carried');
+    if (resolveCreatorToolAuthority) {
+      expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    }
+    expect(callGatewayMock).not.toHaveBeenCalled();
   },
-  {
-    name: "symbolic groups resolve before persisting the cap",
-    toolsAllow: ["group:plugins"],
-    creatorToolAllowlist: undefined,
-    resolved: ["read", { name: "configured__lookup", pluginId: "bundle-mcp" }],
-    expected: ["configured__lookup"],
-  },
-])("$name", async ({ toolsAllow, creatorToolAllowlist, resolved, expected }) => {
-  const resolveCreatorToolAuthority = vi.fn(async () => resolvedCreatorAuthority(resolved));
-  await executeCron(addJob({ payload: agentTurn({ toolsAllow }) }), {
+);
+
+it("rejects unknown finite tools when the creator has no tools", async () => {
+  await expect(
+    executeCron(addJob({ payload: agentTurn({ toolsAllow: ["future__tool"] }) }), {
+      creatorToolAllowlist: [],
+    }),
+  ).rejects.toThrow('Requested automation tool "future__tool" cannot be carried');
+  expect(callGatewayMock).not.toHaveBeenCalled();
+});
+
+it("resolves symbolic groups before persisting the cap", async () => {
+  const resolveCreatorToolAuthority = vi.fn(async () =>
+    resolvedCreatorAuthority(["read", { name: "configured__lookup", pluginId: "bundle-mcp" }]),
+  );
+  await executeCron(addJob({ payload: agentTurn({ toolsAllow: ["group:plugins", "group:fs"] }) }), {
     agentSessionKey: "agent:main:main",
-    creatorToolAllowlist,
     resolveCreatorToolAuthority,
   });
   expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
-  expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: expected } });
+  expect(readGatewayCall().params).toMatchObject({
+    payload: { toolsAllow: ["read", "configured__lookup"] },
+  });
 });
 
 it("fails incomplete inherited and unknown finite adds while preserving known finite tools", async () => {
@@ -682,39 +717,38 @@ it("fails incomplete inherited and unknown finite adds while preserving known fi
   });
 });
 
-it.each([
-  {
-    name: "trigger-script update",
-    current: { id: "job-trigger", payload: { kind: "systemEvent", text: "changed" } },
-    job: { trigger: { script: "return { fire: false }" } },
-    expected: {
-      trigger: { script: "return { fire: false }" },
-      payload: {
-        kind: "systemEvent",
-        toolsAllow: ["read", "automations"],
-        toolsAllowIsDefault: true,
-      },
-    },
-  },
-  {
-    name: "dormant toolsAllow update without trigger state",
-    current: undefined,
-    job: { payload: { kind: "systemEvent", toolsAllow: ["read", "exec"] } },
-    expected: { payload: { kind: "systemEvent", toolsAllow: ["read"] } },
-  },
-])("caps a systemEvent $name to the creator tool surface", async ({ current, job, expected }) => {
-  if (current) {
-    callGatewayMock.mockResolvedValueOnce(current);
-  }
-  await executeCron(updateJob(current?.id ?? "job-dormant", job), restrictedCaller);
-  expect(readGatewayCall(current ? 1 : 0)).toEqual({
+it("caps a systemEvent trigger-script update to the creator tool surface", async () => {
+  callGatewayMock.mockResolvedValueOnce({
+    id: "job-trigger",
+    payload: { kind: "systemEvent", text: "changed" },
+  });
+  const trigger = { script: "return { fire: false }" };
+  await executeCron(updateJob("job-trigger", { trigger }), restrictedCaller);
+  expect(readGatewayCall(1)).toEqual({
     method: "cron.update",
     params: {
-      id: current?.id ?? "job-dormant",
-      ...(current ? { expectedConfigRevision: "sha256:test" } : {}),
-      patch: expected,
+      id: "job-trigger",
+      expectedConfigRevision: "sha256:test",
+      patch: {
+        trigger,
+        payload: {
+          kind: "systemEvent",
+          toolsAllow: ["read", "automations"],
+          toolsAllowIsDefault: true,
+        },
+      },
     },
   });
+});
+
+it("rejects unavailable tools on a dormant systemEvent update before writing", async () => {
+  await expect(
+    executeCron(
+      updateJob("job-dormant", { payload: { kind: "systemEvent", toolsAllow: ["read", "exec"] } }),
+      restrictedCaller,
+    ),
+  ).rejects.toThrow('Requested automation tool "exec" cannot be carried');
+  expect(callGatewayMock).not.toHaveBeenCalled();
 });
 
 it("does not stamp caller sessionKey when add targets isolated session", async () => {

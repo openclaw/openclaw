@@ -5,6 +5,18 @@ import { ChatPaneHeader } from "./chat-pane-header.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 
 export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
+  private browserAnnotationFocus = new Map<string, HTMLButtonElement>();
+  protected readonly registerBrowserAnnotationFocus = (
+    attachmentId: string,
+    button: HTMLButtonElement,
+  ) => {
+    this.browserAnnotationFocus.set(attachmentId, button);
+    return () => {
+      if (this.browserAnnotationFocus.get(attachmentId) === button) {
+        this.browserAnnotationFocus.delete(attachmentId);
+      }
+    };
+  };
   protected readonly removeBrowserAnnotation = (attachment: ChatAttachment) => {
     const state = this.state;
     if (!state) {
@@ -12,7 +24,7 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
     }
     const sourceSessionKey = state.sessionKey;
     const focusAfterUpdate = (target: () => HTMLElement | null | undefined) => {
-      void this.updateComplete.then(() => {
+      void this.awaitDomCommit().then(() => {
         if (this.state === state && this.state.sessionKey === sourceSessionKey) {
           target()?.focus({ preventScroll: true });
         }
@@ -30,14 +42,8 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
         },
         focusComposer: () =>
           focusAfterUpdate(() => getChatComposerState(this.presentationId).composerTextarea),
-        // Restored attachment cards own their controls; resolve after the card commits.
         focusRestoredAnnotation: (attachmentId) =>
-          focusAfterUpdate(() => {
-            const card = [
-              ...this.element.querySelectorAll<HTMLElement>("[data-attachment-id]"),
-            ].find((candidate) => candidate.dataset.attachmentId === attachmentId);
-            return card?.querySelector<HTMLButtonElement>("button");
-          }),
+          focusAfterUpdate(() => this.browserAnnotationFocus.get(attachmentId)),
       },
       attachment,
       {

@@ -152,18 +152,18 @@ async function publishManagedWrapper(params: {
       );
     }
     if (existing) {
-      await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
+      assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
       assertCurrent?.();
       // The wrapper is generated from the desktop bundle. If publication fails
       // after removal, the next acquisition rebuilds it without a rollback tree.
       await fs.rm(physicalTargetPath, { recursive: true });
     }
-    await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
+    assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     assertCurrent?.();
     await fs.rename(stagingPath, physicalTargetPath);
     return targetPath;
   } finally {
-    if (await directoryIdentityIsStable(parent)) {
+    if (directoryIdentityIsStable(parent)) {
       await fs.rm(stagingPath, { recursive: true, force: true });
     }
   }

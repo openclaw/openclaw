@@ -307,7 +307,7 @@ final class ComputerActionExecutionQueue {
     }
 
     @discardableResult
-    private func attemptInputRelease(inputScopeId: UUID?) -> Bool {
+    fileprivate func attemptInputRelease(inputScopeId: UUID?) -> Bool {
         let released = self.onInputRelease(inputScopeId)
         if let inputScopeId {
             if released {
@@ -497,14 +497,20 @@ final class ComputerActionService {
     {
         try checkScopeAllowed()
         let scope = inputScopeId ?? self.defaultInputScopeId
+        try self.checkApprovalAllowed(params.action, inputScopeId: scope)
         return try await self.executionQueue.perform(
             params,
             lifecycleGeneration: lifecycleGeneration,
             inputScopeId: scope)
         { [weak self] params, lifecycleGeneration in
             guard let self else { throw CancellationError() }
-            try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-            try checkScopeAllowed()
+            let checkExecutionAllowed: @MainActor () throws -> Void = { [weak self] in
+                guard let self else { throw CancellationError() }
+                try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+                try checkScopeAllowed()
+                try self.checkApprovalAllowed(params.action, inputScopeId: scope)
+            }
+            try checkExecutionAllowed()
             if params.deliveryMode == .background,
                params.windowRef == nil,
                !params.action.isWindowScopedOnly
@@ -516,12 +522,6 @@ final class ComputerActionService {
                         recommended: "window-pixel",
                         reasonCode: "no_window_target"))
             }
-            let checkExecutionAllowed: @MainActor () throws -> Void = { [weak self] in
-                guard let self else { throw CancellationError() }
-                try self.executionQueue.checkExecutionAllowed(
-                    lifecycleGeneration: lifecycleGeneration)
-                try checkScopeAllowed()
-            }
             if params.isWindowScopedRequest {
                 return try await self.window.perform(
                     params,
@@ -532,6 +532,16 @@ final class ComputerActionService {
                 params,
                 inputScopeId: scope,
                 checkExecutionAllowed: checkExecutionAllowed)
+        }
+    }
+
+    private func checkApprovalAllowed(_ action: OpenClawComputerAction, inputScopeId: UUID) throws {
+        do {
+            try ApprovalPromptState.shared.checkComputerAction(action)
+        } catch {
+            // Refusal must settle a split drag; failed releases stay with the queue's retry owner.
+            self.executionQueue.attemptInputRelease(inputScopeId: inputScopeId)
+            throw error
         }
     }
 

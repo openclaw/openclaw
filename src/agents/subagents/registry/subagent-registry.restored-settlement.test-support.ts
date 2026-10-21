@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { deleteGatewaySession } from "../../../gateway/server-methods/sessions-delete.js";
 import {
@@ -49,7 +48,6 @@ export async function activateSubagentRegistryWithRecoveryRuntime(
   recoveryRuntime: GatewayRecoveryRuntime,
 ): Promise<void> {
   const gatewayContext = {
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
     recoveryRuntime,
     trackExecution: trackAsyncWork,
     resolveGatewayContext: () => gatewayContext as never,
@@ -382,7 +380,6 @@ export function registerRestoredRequesterWakeSettlementTests({
       });
       let gatewayOpen = true;
       const instanceContext = {
-        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
         recoveryRuntime,
       } as never;
       const resolveInstance = () => (gatewayOpen ? instanceContext : undefined);

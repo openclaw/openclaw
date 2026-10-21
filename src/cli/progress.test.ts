@@ -180,7 +180,7 @@ describe("cli progress", () => {
     "releases the line after work callbacks %s",
     async (outcome) => {
       const { writes: events, stream } = captureOutput();
-      const oscSupported = supportsOscProgress(process.env, true);
+      const oscSupported = supportsOscProgress(process.env);
       const error = new Error("work failed");
       const work = withProgress({ label: "Work", stream, fallback: "line" }, async (reporter) => {
         onTestFinished(() => reporter.done());

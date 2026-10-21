@@ -4,6 +4,8 @@ import type {
 } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import {
@@ -11,7 +13,7 @@ import {
   modelProviderErrorMessage,
   modelProviderMutationWarnings,
 } from "./config-mutation.ts";
-import type { ModelProviderLogoutTarget } from "./data.ts";
+import type { ModelProviderLogoutTarget, ModelProviderPendingLogout } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
 import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.tsx";
 import { updateRecordEntry } from "./record-state.ts";
@@ -43,6 +45,7 @@ type ProfileActionsOptions = {
 };
 
 export function createModelProviderProfileActions(options: ProfileActionsOptions) {
+  let logoutConfirmation: AbortController | null = null;
   let probeEpochs = new Map<string, number>();
   const pendingOrders = new Map<string, PendingProfileOrder>();
   const activeOrderProviders = new Set<string>();
@@ -120,6 +123,32 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
     }
   }
 
+  function cancelLogout(): void {
+    logoutConfirmation?.abort();
+  }
+
+  async function requestLogout(pending: ModelProviderPendingLogout): Promise<void> {
+    if (logoutConfirmation || !options.canMutate() || options.isBusy(`logout:${pending.cardId}`)) {
+      return;
+    }
+    // Agent changes, reconnects and navigation abort this decision before it can
+    // authorize a logout under a different scope.
+    const controller = new AbortController();
+    logoutConfirmation = controller;
+    const confirmed = await showConfirmDialog({
+      title: t("modelProviders.logout.actionFor", { account: pending.label }),
+      message: t("modelProviders.logout.confirm", { provider: pending.label }),
+      confirmLabel: t("modelProviders.logout.action"),
+      danger: true,
+      signal: controller.signal,
+    }).finally(() => {
+      logoutConfirmation = null;
+    });
+    if (confirmed && !controller.signal.aborted && options.canMutate()) {
+      await logout(pending.cardId, pending.target);
+    }
+  }
+
   async function logout(cardId: string, target: ModelProviderLogoutTarget): Promise<void> {
     const client = options.getClient();
     const key = `logout:${cardId}`;
@@ -175,9 +204,10 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
       return;
     }
     activeOrderProviders.add(provider);
+    let pending: PendingProfileOrder | undefined;
     try {
       while (true) {
-        const pending = pendingOrders.get(provider);
+        pending = pendingOrders.get(provider);
         if (!pending) {
           return;
         }
@@ -185,7 +215,6 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
         if (!client || !options.canMutate()) {
           return;
         }
-        pendingOrders.delete(provider);
         const { agentId, isCurrent } = captureScope(client);
         try {
           const result = await client.request<ModelAuthOrderSetResult>("models.authOrderSet", {
@@ -196,6 +225,9 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
           invalidateModelAuthStatusRequests(client);
           if (!isCurrent()) {
             return;
+          }
+          if (pendingOrders.get(provider) === pending) {
+            pendingOrders.delete(provider);
           }
           if (pending.profileIds && !result.warning) {
             options.cancelRefresh();
@@ -214,16 +246,21 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
           if (!isCurrent()) {
             return;
           }
-          if (clearOptimisticOrder(provider, pending.optimisticOrder)) {
+          if (pendingOrders.get(provider) === pending) {
             showProfileActionError(error);
           }
+          return;
         }
       }
     } finally {
       activeOrderProviders.delete(provider);
       // A stale save can finish after a new agent queued the same provider.
       // Re-enter after releasing the slot so the new scope's intent is not stranded.
-      if (pendingOrders.has(provider) && options.canMutate()) {
+      if (
+        pendingOrders.has(provider) &&
+        pendingOrders.get(provider) !== pending &&
+        options.canMutate()
+      ) {
         void flushOrder(provider);
       }
     }
@@ -264,5 +301,15 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
     );
     options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
-  return { resetProbes, clearProbe, probe, resetOrders, setOrder, flushPendingOrders, logout };
+  return {
+    resetProbes,
+    clearProbe,
+    probe,
+    resetOrders,
+    setOrder,
+    flushPendingOrders,
+    cancelLogout,
+    requestLogout,
+    logout,
+  };
 }

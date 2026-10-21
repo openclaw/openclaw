@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   resolveGatewaySystemdServiceName,
   resolveGatewaySystemdServiceNameCandidates,
@@ -658,7 +659,11 @@ async function readSystemdServiceCommand(
         return command;
       })
       .catch((error: unknown) => {
-        if (opts?.requireEffective || findServiceOwnershipRefusal(error)) {
+        if (
+          opts?.requireEffective ||
+          findServiceOwnershipRefusal(error) ||
+          hasCommandProcessCleanupError(error)
+        ) {
           throw error;
         }
         opts?.onCommandInspection?.({ kind: "unavailable", error });
@@ -675,7 +680,11 @@ async function readSystemdServiceCommand(
     };
   } catch (error) {
     options?.onCommandInspection?.({ kind: "unavailable", error });
-    if (options?.requireEffective || findServiceOwnershipRefusal(error)) {
+    if (
+      options?.requireEffective ||
+      findServiceOwnershipRefusal(error) ||
+      hasCommandProcessCleanupError(error)
+    ) {
       throw error;
     }
     return null;

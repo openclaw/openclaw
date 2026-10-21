@@ -1,62 +1,49 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { AgentDatabaseSchemaAdmissionInvalidError } from "./agent-database-admission-error.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
-import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
+import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-contract.js";
+import { createAgentDatabaseNativeGeneration as createNative } from "./openclaw-agent-execution-native.js";
+import {
+  createAgentCreationWitnessFixture,
+  createAgentCreationWitnessSource as createSource,
+} from "./openclaw-agent-execution.creation-fixture.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    cleanup();
-  }),
-);
-
-function createSource(assertCurrent = () => {}): AgentDatabaseRequestExecutionSource {
-  return {
-    assertCurrent,
-    createAdmission: (binding) => () => ({
-      nativeLocations: binding.nativeLocations,
-      admission: workerAdmission.createSqliteWorkerOperationAdmission((request, grant) => {
-        binding.authorize(request);
-        if (!grant()) {
-          throw new Error("Schema admission fixture lost admission");
-        }
-      }, binding.attachment),
-    }),
+function fixture() {
+  const options = createAgentCreationWitnessFixture();
+  const { env } = options;
+  const { path } = openOpenClawAgentDatabase(options);
+  const generation = (identity?: AgentDatabaseExecutionFileIdentity) => {
+    const context = captureOpenClawStateWorkerContext({ env });
+    const lifetime = new AgentDatabaseExecutionLifetime().state;
+    const noop = () => {};
+    const native = createNative("main", path, context, lifetime, noop, noop, identity, noop, noop);
+    return Object.assign(native, { [Symbol.asyncDispose]: () => native.close() });
   };
+  return { env, options, path, generation };
 }
 
 it.each([false, true])(
   "preserves clean restart proof on refused worker admission (prepared: %s)",
   async (prepared) => {
-    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-refused-restart-")) };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    closeOpenClawAgentDatabaseByPath(database.path);
-    const seal = fs.readFileSync(`${database.path}.seal`, "utf8");
-    const identity = readDatabasePathIdentitySync(database.path);
-    const generation = createAgentDatabaseNativeGeneration(
-      "main",
-      database.path,
-      captureOpenClawStateWorkerContext({ env }),
-      new AgentDatabaseExecutionLifetime().state,
-      () => {},
-      () => {},
+    const { env, path, generation: createGeneration } = fixture();
+    closeOpenClawAgentDatabaseByPath(path);
+    const seal = fs.readFileSync(`${path}.seal`, "utf8");
+    const identity = readDatabasePathIdentitySync(path);
+    await using generation = createGeneration(
       prepared
         ? {
             kind: "file",
@@ -65,11 +52,9 @@ it.each([false, true])(
             nativeLocation: identity.canonicalPath,
           }
         : undefined,
-      () => {},
-      () => {},
     );
     let refused = false;
-    const refusal = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
+    using refusal = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
       if (
         request.stage === "prepare" &&
         isRecord(request.facts) &&
@@ -80,31 +65,20 @@ it.each([false, true])(
       }
       admit(request, grant);
     });
-    try {
-      await expect(generation.run(createSource(), async () => "forbidden")).rejects.toThrow();
-    } finally {
-      try {
-        await generation.close();
-      } finally {
-        refusal.mockRestore();
-      }
-    }
+    await expect(generation.run(createSource(), async () => "forbidden")).rejects.toThrow();
+    await generation.close();
+    refusal.mockRestore();
     expect(refused).toBe(true);
-    expect(
-      openOpenClawStateDatabase({ env })
-        .db.prepare("SELECT lease_id FROM agent_database_leases")
-        .all(),
-    ).toEqual([]);
-    expect(fs.readFileSync(`${database.path}.seal`, "utf8")).toBe(seal);
-    expect(readSqliteDatabaseCleanClose(database.path)).toBe(true);
+    const state = openOpenClawStateDatabase({ env }).db;
+    expect(state.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
+    expect(fs.readFileSync(`${path}.seal`, "utf8")).toBe(seal);
+    expect(readSqliteDatabaseCleanClose(path)).toBe(true);
   },
 );
 
 it("rejects malformed native schema receipts without replaying caller work", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-schema-invalid-")) };
-  const options = { agentId: "main", env };
-  const database = openOpenClawAgentDatabase(options);
-  closeOpenClawAgentDatabaseByPath(database.path);
+  const { options, path } = fixture();
+  closeOpenClawAgentDatabaseByPath(path);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   let publications = 0;
   const malformed = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
@@ -113,7 +87,7 @@ it("rejects malformed native schema receipts without replaying caller work", asy
       request.stage === "prepare" &&
       isRecord(facts) &&
       isRecord(facts.identity) &&
-      facts.identity.nativeLocation === database.path &&
+      facts.identity.nativeLocation === path &&
       facts.validation !== undefined
     ) {
       publications += 1;
@@ -121,7 +95,7 @@ it("rejects malformed native schema receipts without replaying caller work", asy
     }
     admit(request, grant);
   });
-  const source = createSource(() => execution.assertCurrent());
+  const source = { ...createSource(), assertCurrent: () => execution.assertCurrent() };
   const operation = vi.fn(async () => "not admitted");
   try {
     await expect(execution.runExisting(source, operation)).rejects.toBeInstanceOf(
@@ -133,4 +107,36 @@ it("rejects malformed native schema receipts without replaying caller work", asy
     malformed.mockRestore();
     await execution.release();
   }
+});
+
+it("admits schema and integrity once, then warm turns request only their writes", async () => {
+  const { path, generation: createGeneration } = fixture();
+  // Force cold verification; warm turns must reuse it (#166253).
+  invalidateOpenClawAgentDatabaseValidation(path);
+  await using generation = createGeneration();
+  const requests: string[] = [];
+  const source = createSource((request) => {
+    const kind = isRecord(request.facts) ? request.facts.kind : undefined;
+    requests.push(typeof kind === "string" ? `${request.stage}:${kind}` : request.stage);
+  });
+  const turn = (sessionId: string) =>
+    generation.run(
+      source,
+      (scope) =>
+        scope.execute({
+          type: "session.transcript.initialize",
+          input: { sessionKey: `agent:main:${sessionId}`, sessionId },
+        }),
+      undefined,
+      true,
+    );
+  await turn("first-turn");
+  expect(requests).toEqual(
+    expect.arrayContaining(["open", "prepare:agent-validation-start", "commit"]),
+  );
+  requests.length = 0;
+  await turn("second-turn");
+  await turn("third-turn");
+  const write = ["prepare", "transaction", "commit"];
+  expect(requests).toEqual([...write, ...write]);
 });

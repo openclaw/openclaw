@@ -1,4 +1,4 @@
-// Zalo tests cover accounts plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inspectZaloAccount,
@@ -7,22 +7,17 @@ import {
   resolveZaloAccount,
 } from "./accounts.js";
 import { zaloPlugin } from "./channel.js";
+import type { ZaloConfig } from "./types.js";
+
+const config = (zalo: ZaloConfig): OpenClawConfig => ({ channels: { zalo } });
 
 describe("resolveZaloAccount", () => {
+  afterEach(() => vi.unstubAllEnvs());
   it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
-    const cfg = {
-      channels: {
-        zalo: {
-          botToken: "default-token",
-          accounts: {
-            work: {
-              enabled: false,
-              botToken: "work-token",
-            },
-          },
-        },
-      },
-    };
+    const cfg = config({
+      botToken: "default-token",
+      accounts: { work: { enabled: false, botToken: "work-token" } },
+    });
 
     expect(listZaloAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultZaloAccountId(cfg)).toBe("default");
@@ -32,14 +27,7 @@ describe("resolveZaloAccount", () => {
   it("carries account-owned unavailable credential diagnostics into the resolved account", () => {
     const tokenFile = "/private/zalo-resolved-account-token";
     const resolved = resolveZaloAccount({
-      cfg: {
-        channels: {
-          zalo: {
-            botToken: "lower-priority-token",
-            accounts: { work: { tokenFile } },
-          },
-        },
-      },
+      cfg: config({ botToken: "lower-priority-token", accounts: { work: { tokenFile } } }),
       accountId: "work",
     });
 
@@ -57,11 +45,6 @@ describe("resolveZaloAccount", () => {
     });
     expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(tokenFile);
   });
-});
-
-describe("Zalo account SecretRef inspection", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
   const unresolvedRef = {
     source: "env" as const,
     provider: "default",
@@ -69,49 +52,38 @@ describe("Zalo account SecretRef inspection", () => {
   };
 
   it.each([
-    { botToken: "bot-token", webhookUrl: undefined, configured: true, mode: "polling" },
+    { botToken: "bot-token", webhookUrl: undefined, mode: "polling" },
     {
       botToken: unresolvedRef,
       webhookUrl: "https://bot.example.com/zalo",
-      configured: true,
       mode: "webhook",
     },
-  ])("reports $mode inspection with configured=$configured", async (entry) => {
-    const cfg = {
-      channels: {
-        zalo: {
-          accounts: {
-            work: {
-              botToken: entry.botToken,
-              webhookUrl: entry.webhookUrl,
-              dmPolicy: "open" as const,
-            },
-          },
-        },
+  ])("reports configured $mode inspection", async (entry) => {
+    const cfg = config({
+      accounts: {
+        work: { botToken: entry.botToken, webhookUrl: entry.webhookUrl, dmPolicy: "open" },
       },
-    };
+    });
     const account = inspectZaloAccount({ cfg, accountId: "work" });
-    expect(await zaloPlugin.config.isConfigured?.(account, cfg)).toBe(entry.configured);
+    expect(await zaloPlugin.config.isConfigured?.(account, cfg)).toBe(true);
     expect(account).toMatchObject({
       accountId: "work",
       enabled: true,
-      configured: entry.configured,
+      configured: true,
       mode: entry.mode,
       dmPolicy: "open",
     });
   });
 
   it("keeps direct account resolution strict", () => {
-    expect(() =>
-      resolveZaloAccount({ cfg: { channels: { zalo: { botToken: unresolvedRef } } } }),
-    ).toThrow(/unresolved SecretRef/);
+    expect(() => resolveZaloAccount({ cfg: config({ botToken: unresolvedRef }) })).toThrow(
+      /unresolved SecretRef/,
+    );
   });
 
   it("does not fall through an unavailable configured ref to the environment", () => {
     vi.stubEnv("ZALO_BOT_TOKEN", "lower-precedence-token");
-    const account = inspectZaloAccount({
-      cfg: { channels: { zalo: { botToken: unresolvedRef } } },
-    });
+    const account = inspectZaloAccount({ cfg: config({ botToken: unresolvedRef }) });
     expect(account).toMatchObject({
       token: "",
       tokenSource: "config",

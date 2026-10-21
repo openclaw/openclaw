@@ -1,79 +1,71 @@
-// Dashboard link tests cover dashboard command URL resolution and config snapshot handling.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ExitError } from "../runtime.js";
 import { dashboardCommand } from "./dashboard.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
-const resolveControlUiLinksMock = vi.hoisted(() => vi.fn());
-const detectBrowserOpenSupportMock = vi.hoisted(() => vi.fn());
-const openUrlMock = vi.hoisted(() => vi.fn());
-const openUrlPrivatelyMock = vi.hoisted(() => vi.fn());
-const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
-const copyToClipboardMock = vi.hoisted(() => vi.fn());
-const issueDeviceBootstrapTokenMock = vi.hoisted(() => vi.fn());
-const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
-const ensureDashboardGatewayReadyMock = vi.hoisted(() => vi.fn());
-const waitForControlUiDocumentMock = vi.hoisted(() => vi.fn());
+const readConfigFileSnapshot = vi.hoisted(() => vi.fn());
+const resolveGatewayPort = vi.hoisted(() => vi.fn());
+const resolveControlUiLinks = vi.hoisted(() => vi.fn());
+const detectBrowserOpenSupport = vi.hoisted(() => vi.fn());
+const openUrl = vi.hoisted(() => vi.fn());
+const openUrlPrivately = vi.hoisted(() => vi.fn());
+const formatControlUiSshHint = vi.hoisted(() => vi.fn());
+const copyToClipboard = vi.hoisted(() => vi.fn());
+const issueDeviceBootstrapToken = vi.hoisted(() => vi.fn());
+const resolveSecretRefValues = vi.hoisted(() => vi.fn());
+const ensureDashboardGatewayReady = vi.hoisted(() => vi.fn());
+const waitForControlUiDocument = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Dashboard links use synthetic config and ports, not operator state.
 vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  resolveGatewayPort: resolveGatewayPortMock,
+  readConfigFileSnapshot,
+  resolveGatewayPort,
 }));
 
+// mock-isolation: Capture link generation and browser handoff without opening a browser.
 vi.mock("./onboard-helpers.js", () => ({
-  resolveControlUiLinks: resolveControlUiLinksMock,
-  detectBrowserOpenSupport: detectBrowserOpenSupportMock,
-  openUrl: openUrlMock,
-  formatControlUiSshHint: formatControlUiSshHintMock,
+  resolveControlUiLinks,
+  detectBrowserOpenSupport,
+  openUrl,
+  formatControlUiSshHint,
 }));
 
 vi.mock("../infra/browser-handoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/browser-handoff.js")>()),
-  openUrlPrivately: openUrlPrivatelyMock,
+  openUrlPrivately,
 }));
 
-vi.mock("../infra/clipboard.js", () => ({
-  copyToClipboard: copyToClipboardMock,
-}));
+// mock-isolation: Observe clipboard handoff without changing the system clipboard.
+vi.mock("../infra/clipboard.js", () => ({ copyToClipboard }));
 
-vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock,
-}));
+// mock-isolation: Issue synthetic bootstrap tokens without creating real device authority.
+vi.mock("../infra/device-bootstrap.js", () => ({ issueDeviceBootstrapToken }));
 
-vi.mock("./gateway-readiness.js", () => ({
-  ensureDashboardGatewayReady: ensureDashboardGatewayReadyMock,
-}));
+// mock-isolation: Select readiness outcomes without starting or probing a real Gateway.
+vi.mock("./gateway-readiness.js", () => ({ ensureDashboardGatewayReady }));
 
 vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./control-ui-handoff.js")>()),
-  waitForControlUiDocument: waitForControlUiDocumentMock,
+  waitForControlUiDocument,
 }));
 
-vi.mock("../secrets/resolve.js", () => ({
-  resolveSecretRefValues: resolveSecretRefValuesMock,
-}));
+// mock-isolation: Resolve synthetic SecretRefs without invoking credential providers.
+vi.mock("../secrets/resolve.js", () => ({ resolveSecretRefValues }));
 
 const runtime = createTestRuntime();
 
-function resetRuntime() {
-  runtime.log.mockClear();
-  runtime.error.mockClear();
-  runtime.exit.mockClear();
+function output() {
+  return runtime.log.mock.calls.flat().map(String).join("\n");
 }
 
-function logMessages(): string[] {
-  return runtime.log.mock.calls.map(([message]) => String(message));
+function expectNoLoggedToken(token: string) {
+  expect(output()).not.toContain(token);
+  expect(output()).not.toContain("#token=");
 }
 
-function expectLogWith(text: string): void {
-  expect(logMessages().join("\n")).toContain(text);
-}
-
-function expectNoLogWith(text: string): void {
-  expect(logMessages().join("\n")).not.toContain(text);
-}
+const browserUrl =
+  "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789";
+const notReady = { ready: false, reason: "Gateway is not running." };
 
 function mockSnapshot(
   token: unknown = "abc",
@@ -82,248 +74,175 @@ function mockSnapshot(
     tls?: { enabled: boolean };
   },
 ) {
-  readConfigFileSnapshotMock.mockResolvedValue({
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    valid: true,
+  readConfigFileSnapshot.mockResolvedValue({
+    ...baseConfigSnapshot,
     config: { gateway: { auth: { token }, ...gatewayOptions } },
-    issues: [],
-    legacyIssues: [],
   });
-  resolveGatewayPortMock.mockReturnValue(18789);
-  resolveControlUiLinksMock.mockReturnValue({
+  resolveGatewayPort.mockReturnValue(18789);
+  resolveControlUiLinks.mockReturnValue({
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
   });
-  resolveSecretRefValuesMock.mockReset();
+  resolveSecretRefValues.mockReset();
 }
 
-describe("dashboardCommand", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
+afterEach(() => vi.unstubAllEnvs());
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  openUrlPrivately.mockReset().mockResolvedValue(true);
+  runtime.exit.mockReset();
+  issueDeviceBootstrapToken
+    .mockReset()
+    .mockResolvedValue({ token: "browser-bootstrap", expiresAtMs: 123_456 });
+  ensureDashboardGatewayReady.mockReset().mockResolvedValue({ ready: true, recovered: false });
+  waitForControlUiDocument.mockReset().mockResolvedValue({ ready: true });
+  copyToClipboard.mockResolvedValue(true);
+  detectBrowserOpenSupport.mockResolvedValue({ ok: true });
+  mockSnapshot();
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.CUSTOM_GATEWAY_TOKEN;
+});
+
+it("never logs the gateway token in the dashboard URL (CVE regression)", async () => {
+  const secretToken = "super-secret-bearer-token";
+  mockSnapshot(secretToken);
+
+  await dashboardCommand(runtime);
+
+  expect(copyToClipboard).toHaveBeenCalledWith(browserUrl);
+  expect(openUrlPrivately).toHaveBeenCalledWith(browserUrl);
+  expect(openUrl).not.toHaveBeenCalled();
+
+  expectNoLoggedToken(secretToken);
+  expect(runtime.log).toHaveBeenCalledWith("Dashboard URL: http://127.0.0.1:18789/");
+  expect(runtime.log).toHaveBeenCalledWith(
+    "One-time browser pairing included in browser/clipboard URL.",
+  );
+});
+
+it("preserves Gateway TLS after remote browser delivery fails", async () => {
+  vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
+  mockSnapshot("shhhh", {
+    controlUi: { basePath: "/control" },
+    tls: { enabled: true },
   });
-
-  beforeEach(() => {
-    resetRuntime();
-    readConfigFileSnapshotMock.mockClear();
-    resolveGatewayPortMock.mockClear();
-    resolveControlUiLinksMock.mockClear();
-    detectBrowserOpenSupportMock.mockClear();
-    openUrlMock.mockClear();
-    openUrlPrivatelyMock.mockReset().mockResolvedValue(true);
-    formatControlUiSshHintMock.mockClear();
-    copyToClipboardMock.mockClear();
-    issueDeviceBootstrapTokenMock.mockReset();
-    issueDeviceBootstrapTokenMock.mockResolvedValue({
-      token: "browser-bootstrap",
-      expiresAtMs: 123_456,
-    });
-    ensureDashboardGatewayReadyMock.mockReset();
-    ensureDashboardGatewayReadyMock.mockResolvedValue({
-      ready: true,
-      status: {},
-      recovered: false,
-    });
-    waitForControlUiDocumentMock.mockReset();
-    waitForControlUiDocumentMock.mockResolvedValue({ ready: true });
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CUSTOM_GATEWAY_TOKEN;
+  resolveControlUiLinks.mockReturnValue({
+    httpUrl: "https://127.0.0.1:18789/control/",
+    wsUrl: "wss://127.0.0.1:18789/control",
   });
+  copyToClipboard.mockResolvedValue(false);
+  openUrlPrivately.mockResolvedValue(false);
+  formatControlUiSshHint.mockReturnValue("ssh hint");
 
-  it("never logs the gateway token in the dashboard URL (CVE regression)", async () => {
-    const secretToken = "super-secret-bearer-token";
-    mockSnapshot(secretToken);
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlPrivatelyMock.mockResolvedValue(true);
+  await dashboardCommand(runtime);
 
-    await dashboardCommand(runtime);
-
-    // Clipboard and browser receive only the short-lived browser bootstrap.
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(openUrlPrivatelyMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    // The plain opener must never receive the credential URL.
-    expect(openUrlMock).not.toHaveBeenCalled();
-
-    // The logged output must never contain the token — it flows into
-    // console-captured log files readable by operator.read-scoped devices.
-    for (const call of runtime.log.mock.calls) {
-      const line = String(call[0]);
-      expect(line).not.toContain(secretToken);
-      expect(line).not.toContain("#token=");
-    }
-
-    // Base URL should be logged without the fragment.
-    expect(runtime.log).toHaveBeenCalledWith("Dashboard URL: http://127.0.0.1:18789/");
-    expect(runtime.log).toHaveBeenCalledWith(
-      "One-time browser pairing included in browser/clipboard URL.",
-    );
+  expect(formatControlUiSshHint).toHaveBeenCalledWith({
+    port: 18789,
+    basePath: "/control",
+    tlsEnabled: true,
   });
+  expect(runtime.log).toHaveBeenCalledWith("ssh hint");
+});
 
-  it("preserves Gateway TLS after remote browser delivery fails", async () => {
-    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
-    mockSnapshot("shhhh", {
-      controlUi: { basePath: "/control" },
-      tls: { enabled: true },
-    });
-    resolveControlUiLinksMock.mockReturnValue({
-      httpUrl: "https://127.0.0.1:18789/control/",
-      wsUrl: "wss://127.0.0.1:18789/control",
-    });
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlPrivatelyMock.mockResolvedValue(false);
-    formatControlUiSshHintMock.mockReturnValue("ssh hint");
+it("reports opener failure without claiming the host has no GUI", async () => {
+  mockSnapshot("shhhh");
+  openUrlPrivately.mockResolvedValue(false);
 
-    await dashboardCommand(runtime);
+  await dashboardCommand(runtime);
 
-    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
-      port: 18789,
-      basePath: "/control",
-      tlsEnabled: true,
-    });
-    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
+  expect(formatControlUiSshHint).not.toHaveBeenCalled();
+  expect(runtime.log).toHaveBeenCalledWith(
+    "Browser launch failed. Open the one-time pairing URL copied to clipboard.",
+  );
+});
+
+it("never passes token to SSH hint (CVE regression — SSH path)", async () => {
+  const secretToken = "super-secret-bearer-token";
+  mockSnapshot(secretToken);
+  copyToClipboard.mockResolvedValue(false);
+  detectBrowserOpenSupport.mockResolvedValue({ ok: false, reason: "ssh" });
+  formatControlUiSshHint.mockReturnValue("ssh hint without token");
+
+  await dashboardCommand(runtime);
+
+  expect(formatControlUiSshHint).toHaveBeenCalledWith({
+    port: 18789,
+    basePath: undefined,
+    tlsEnabled: false,
   });
+  const [sshHintOptions] = formatControlUiSshHint.mock.calls[0] ?? [];
+  expect(sshHintOptions).not.toHaveProperty("token");
 
-  it("reports opener failure without claiming the host has no GUI", async () => {
-    mockSnapshot("shhhh");
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlPrivatelyMock.mockResolvedValue(false);
+  expectNoLoggedToken(secretToken);
+  expect(openUrl).not.toHaveBeenCalled();
+  expect(runtime.log).toHaveBeenCalledWith("ssh hint without token");
+  expect(output()).toContain("OPENCLAW_GATEWAY_TOKEN");
+  expect(output()).toContain("key `token`");
+});
 
-    await dashboardCommand(runtime);
+it("guides no-token users to the explicit JSON handoff when clipboard delivery fails", async () => {
+  mockSnapshot("");
+  copyToClipboard.mockResolvedValue(false);
 
-    expect(formatControlUiSshHintMock).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Browser launch failed. Open the one-time pairing URL copied to clipboard.",
-    );
+  await dashboardCommand(runtime, { noOpen: true });
+
+  expect(runtime.log).not.toHaveBeenCalledWith(
+    "Browser launch disabled (--no-open). Use the URL above.",
+  );
+  expect(runtime.log).toHaveBeenCalledWith(
+    "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
+  );
+});
+
+it("uses browser bootstrap when the shared-token SecretRef is unresolved", async () => {
+  mockSnapshot({ source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" });
+  resolveSecretRefValues.mockRejectedValue(new Error("missing env var"));
+
+  await dashboardCommand(runtime);
+
+  expect(copyToClipboard).toHaveBeenCalledWith(browserUrl);
+  expect(output()).not.toContain("Token auto-auth unavailable");
+  expect(output()).not.toContain("missing env var");
+});
+
+it("emits one JSON readiness failure before an exiting runtime unwinds", async () => {
+  const { reason } = notReady;
+  ensureDashboardGatewayReady.mockResolvedValueOnce(notReady);
+  const exit = new ExitError(1);
+  runtime.exit.mockImplementationOnce(() => {
+    throw exit;
   });
+  await expect(dashboardCommand(runtime, { json: true })).rejects.toBe(exit);
+  expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+    JSON.stringify({ ok: false, error: { type: "cli_error", message: reason }, reason }),
+  );
+  expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+    "Gateway is not running.\nRun `openclaw gateway status --deep` for details, then retry `openclaw dashboard --json`.",
+  );
+  expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+});
 
-  it("never passes token to SSH hint (CVE regression — SSH path)", async () => {
-    const secretToken = "super-secret-bearer-token";
-    mockSnapshot(secretToken);
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: false, reason: "ssh" });
-    formatControlUiSshHintMock.mockReturnValue("ssh hint without token");
+it("does not copy or open when gateway readiness fails", async () => {
+  ensureDashboardGatewayReady.mockResolvedValueOnce(notReady);
 
-    await dashboardCommand(runtime);
+  await dashboardCommand(runtime);
 
-    // formatControlUiSshHint must NOT receive the token — the returned
-    // hint string is written to runtime.log, which flows into the same
-    // console-captured log file readable by operator.read-scoped devices.
-    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
-      port: 18789,
-      basePath: undefined,
-      tlsEnabled: false,
-    });
-    const [sshHintOptions] = formatControlUiSshHintMock.mock.calls[0] ?? [];
-    expect(sshHintOptions).not.toHaveProperty("token");
+  expect(readConfigFileSnapshot).toHaveBeenCalledTimes(1);
+  expect(copyToClipboard).not.toHaveBeenCalled();
+  expect(openUrl).not.toHaveBeenCalled();
+  expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+});
 
-    // Double-check: no logged line contains the secret.
-    for (const call of runtime.log.mock.calls) {
-      const line = String(call[0]);
-      expect(line).not.toContain(secretToken);
-      expect(line).not.toContain("#token=");
-    }
-    expect(openUrlMock).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith("ssh hint without token");
-    expectLogWith("OPENCLAW_GATEWAY_TOKEN");
-    expectLogWith("key `token`");
-  });
+it("fails closed when a browser pairing link cannot be issued", async () => {
+  issueDeviceBootstrapToken.mockRejectedValue(new Error("state store unavailable"));
 
-  it("guides no-token users to the explicit JSON handoff when clipboard delivery fails", async () => {
-    mockSnapshot("");
-    copyToClipboardMock.mockResolvedValue(false);
+  await dashboardCommand(runtime);
 
-    await dashboardCommand(runtime, { noOpen: true });
-
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      "Browser launch disabled (--no-open). Use the URL above.",
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
-    );
-  });
-
-  it("uses browser bootstrap when the shared-token SecretRef is unresolved", async () => {
-    mockSnapshot({
-      source: "env",
-      provider: "default",
-      id: "MISSING_GATEWAY_TOKEN",
-    });
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlPrivatelyMock.mockResolvedValue(true);
-    resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));
-
-    await dashboardCommand(runtime);
-
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expectNoLogWith("Token auto-auth unavailable");
-    expectNoLogWith("missing env var");
-  });
-
-  it("emits one JSON readiness failure before an exiting runtime unwinds", async () => {
-    mockSnapshot("abc");
-    const reason = "Gateway is not running.";
-    ensureDashboardGatewayReadyMock.mockResolvedValueOnce({
-      ready: false,
-      status: {},
-      reason,
-      recoverable: true,
-    });
-    const exit = new ExitError(1);
-    await runtime.exit.withImplementation(
-      () => {
-        throw exit;
-      },
-      async () => {
-        await expect(dashboardCommand(runtime, { json: true })).rejects.toBe(exit);
-      },
-    );
-    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-      JSON.stringify({ ok: false, error: { type: "cli_error", message: reason }, reason }),
-    );
-    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
-  });
-
-  it("does not copy or open when gateway readiness fails", async () => {
-    mockSnapshot("abc");
-    ensureDashboardGatewayReadyMock.mockResolvedValueOnce({
-      ready: false,
-      status: {},
-      reason: "Gateway is not running.",
-      recoverable: true,
-    });
-
-    await dashboardCommand(runtime);
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(copyToClipboardMock).not.toHaveBeenCalled();
-    expect(openUrlMock).not.toHaveBeenCalled();
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when a browser pairing link cannot be issued", async () => {
-    mockSnapshot("abc");
-    issueDeviceBootstrapTokenMock.mockRejectedValue(new Error("state store unavailable"));
-
-    await dashboardCommand(runtime);
-
-    expect(copyToClipboardMock).not.toHaveBeenCalled();
-    expect(openUrlMock).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Could not create a one-time browser pairing link: state store unavailable",
-    );
-  });
+  expect(copyToClipboard).not.toHaveBeenCalled();
+  expect(openUrl).not.toHaveBeenCalled();
+  expect(runtime.error).toHaveBeenCalledWith(
+    "Could not create a one-time browser pairing link: state store unavailable",
+  );
 });

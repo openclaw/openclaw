@@ -1,12 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import { trajectoryEventJsonSql } from "../trajectory/runtime-payload.js";
 import { jsonPathValue } from "./database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { MASKED_TRANSCRIPT_PROVIDER } from "./state-migrations.transcript-directives-transform.js";
 
 // Restored providers were all "***", so this row list is the complete undo record.
@@ -26,9 +28,10 @@ export type MaskedProviderResolver = (sessionId: string) => (model: string) => s
  * unmasked provider of trajectory runtime events for that model. A model recorded with
  * more than one provider in the session, or not at all, stays masked.
  */
-export function createMaskedProviderResolver(database: DatabaseSync): MaskedProviderResolver {
+export function createMaskedProviderResolver(database: EngineConnection): MaskedProviderResolver {
   const db =
     getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">>(database);
+  const eventJson = trajectoryEventJsonSql(database);
   const sessions = new Map<string, Map<string, string | null>>();
   return (sessionId) => (model) => {
     let providers = sessions.get(sessionId);
@@ -38,13 +41,9 @@ export function createMaskedProviderResolver(database: DatabaseSync): MaskedProv
         database,
         db
           .selectFrom("trajectory_runtime_events")
-          .select((eb) => [
-            jsonPathValue<unknown>(database, eb.ref("event_json"), sql.lit("$.modelId")).as(
-              "model",
-            ),
-            jsonPathValue<unknown>(database, eb.ref("event_json"), sql.lit("$.provider")).as(
-              "provider",
-            ),
+          .select([
+            jsonPathValue<unknown>(database, eventJson, sql.lit("$.modelId")).as("model"),
+            jsonPathValue<unknown>(database, eventJson, sql.lit("$.provider")).as("provider"),
           ])
           .distinct()
           .where("session_id", "=", sessionId),

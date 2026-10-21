@@ -18,11 +18,14 @@ import {
 } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  bindSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import * as sessionRows from "../session-row-projection-record.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
-import { controlUiHandlers, createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -214,7 +217,7 @@ describe("controlUi.sessionPreview", () => {
         .mockReturnValueOnce(prepared.promise);
       const respond = vi.fn<RespondFn>();
       const pending = expectDefined(
-        createControlUiHandlers()["controlUi.sessionPreview"],
+        controlUiHandlers["controlUi.sessionPreview"],
         "session preview handler",
       )(
         requestOptions({ sessionKey }, respond, {
@@ -259,7 +262,7 @@ describe("controlUi.sessionPreview", () => {
         });
       }
       const handler = expectDefined(
-        createControlUiHandlers()["controlUi.sessionPreview"],
+        controlUiHandlers["controlUi.sessionPreview"],
         "session preview handler",
       );
       const publications = new Map([
@@ -278,6 +281,9 @@ describe("controlUi.sessionPreview", () => {
         });
       onTestFinished(() => publication.mockRestore());
       const context = await createPreviewContext(cfg);
+      for (const agentId of publications.keys()) {
+        requireSessionRowProjection(context).describe({ key: "global", agentId });
+      }
       await Promise.all([...publications.values()].map((completion) => completion.promise));
       const statements = observeHostDataSql();
       onTestFinished(() => statements.restore());
@@ -351,6 +357,10 @@ describe("controlUi.sessionPreview", () => {
         });
       onTestFinished(() => publication.mockRestore());
       const context = await createPreviewContext();
+      requireSessionRowProjection(context).describe({
+        key: scope.sessionKey,
+        agentId: scope.agentId,
+      });
       await published.promise;
       const respond = vi.fn<RespondFn>();
       await expectDefined(

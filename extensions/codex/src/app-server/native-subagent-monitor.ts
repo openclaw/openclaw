@@ -150,9 +150,9 @@ class Monitor {
     this.interruptModelExecution = options.interruptModelExecution;
     this.interruptChildAndWait = options.interruptChildAndWait;
     this.admissionCustody = new CodexNativeSubagentAdmissionCustody({
-      parentState: (id) => this.parentStates.get(id),
-      knownChild: (id) => this.knownChildren.get(id),
-      childState: (runId) => this.childStates.get(runId),
+      parentStates: this.parentStates,
+      knownChildren: this.knownChildren,
+      childStates: this.childStates,
       runtime,
     });
     this.retainClient = options.retainClient;
@@ -167,7 +167,6 @@ class Monitor {
       currentChild: (id) => this.currentChild(id),
       isRegisteredChild: (child) => this.childStates.get(child.runId) === child,
       captureForget: options.captureChildThreadForget,
-      releaseDirectChild: releaseNativeDirectChild,
       clearRecoveryTimers: (child) => this.recovery.clearRecoveryTimers(child),
       markTerminalThread: (id, parentId) => this.recovery.markTerminalThread(id, parentId),
       unregisterChild: (child) => this.unregisterChild(child, { retainSubscription: false }),
@@ -181,14 +180,14 @@ class Monitor {
     );
     this.completionDelivery = new CodexNativeSubagentCompletionDelivery({
       deliver: (params) => runtime.deliverAgentHarnessCompletion(params),
-      retryDelaysMs: options.completionDeliveryRetryDelaysMs,
-      maxRetries: options.completionDeliveryMaxRetries,
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
       unregisterChild: (child) => this.unregisterChild(child),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
+      settleNestedCompletion: (state, child, assertCurrent) =>
+        this.assignments.settleNestedCompletion(state, child, assertCurrent),
       releaseClientRetentionIfIdle: () => this.releaseClientRetentionIfIdle(),
     });
     this.turnObservation = new CodexNativeSubagentTurnObservation({
@@ -306,6 +305,7 @@ class Monitor {
         // The mutation owner compares its binding row; retain only parent custody here.
       },
       isCurrent: (state) => this.isCurrentParent(state),
+      isNativeChildThread: (threadId) => this.historyRecovery.isNativeChildThread(threadId),
       readHistory: (assignment) =>
         this.historyRecovery.read(
           { ...assignment, nativeTurnId: assignment.nativeTurnId },
@@ -767,7 +767,7 @@ class Monitor {
               assertChild();
               await this.submissions.settleCancelled(state, child, assertChildCustody);
               assertChild();
-              await this.assignments.settleCancelled(state, child, assertChildCustody);
+              await this.assignments.acknowledge(state, child, assertChildCustody);
               assertChild();
               this.unregisterChild(child);
             }
@@ -1540,6 +1540,7 @@ class Monitor {
     this.recovery.markTerminalThread(childState.childThreadId, state.parentThreadId);
     releaseNativeDirectChild(childState);
     this.recovery.clearRecoveryTimers(childState);
+    this.releaseParentThreadIfChildrenTerminal(state.parentThreadId);
     this.completionDelivery.applyReceipts(
       state,
       childState.deliveryReceipts.record(
@@ -2248,11 +2249,7 @@ class Monitor {
     if (this.childStates.get(childState.runId) === childState) {
       this.childStates.delete(childState.runId);
     }
-    if (!this.hasChildrenForParent(childState.parentThreadId)) {
-      const releaseParentThread = this.parentThreadRetentions.get(childState.parentThreadId);
-      this.parentThreadRetentions.delete(childState.parentThreadId);
-      releaseParentThread?.();
-    }
+    this.releaseParentThreadIfChildrenTerminal(childState.parentThreadId);
     this.releaseClientRetentionIfIdle();
     const state = this.parentStates.get(childState.parentThreadId);
     if (state) {
@@ -2395,6 +2392,19 @@ class Monitor {
       }
     }
     return false;
+  }
+
+  private releaseParentThreadIfChildrenTerminal(parentThreadId: string): void {
+    for (const childState of this.childStates.values()) {
+      if (childState.parentThreadId === parentThreadId && !childState.terminal) {
+        return;
+      }
+    }
+    // Pending completion delivery keeps its own custody, but must not block
+    // the parent from resuming to receive those results.
+    const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
+    this.parentThreadRetentions.delete(parentThreadId);
+    releaseParentThread?.();
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {

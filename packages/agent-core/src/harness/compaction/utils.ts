@@ -95,7 +95,6 @@ export function computeFileLists(fileOps: FileOperations): {
 // next accumulation), so an unbounded join grows without limit in long
 // sessions. Hard caps keep the model-visible section bounded per the
 // context-budget invariant; overflow collapses to a "...and N more" line.
-export const MAX_FILE_OPS_SECTION_CHARS = 2_000;
 const MAX_FILE_OPS_LIST_CHARS = 900;
 
 function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {

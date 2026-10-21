@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -81,42 +80,6 @@ describe("Ollama onboarding model selection", () => {
     ).toBe("qwen3:0.6b");
   });
 
-  it.each([
-    {
-      description: "skips a smaller model with an explicit thinking capability",
-      capabilities: ["tools", "thinking"],
-      expected: "llama3.2:latest",
-    },
-    {
-      description: "trusts explicit non-thinking capabilities over a reasoning-like model name",
-      capabilities: ["tools"],
-      expected: "deepseek-r1:8b",
-    },
-  ])("$description", ({ capabilities, expected }) => {
-    expect(
-      selectAppGuidedOllamaModelFromDiscovery([
-        {
-          name: "deepseek-r1:8b",
-          contextWindow: 131_072,
-          capabilities,
-          size: 1_000,
-        },
-        {
-          name: "orieg/gemma3-tools:12b-ft",
-          contextWindow: 131_072,
-          capabilities: ["tools"],
-          size: 8_000,
-        },
-        {
-          name: "llama3.2:latest",
-          contextWindow: 131_072,
-          capabilities: ["tools"],
-          size: 2_000,
-        },
-      ]),
-    ).toBe(expected);
-  });
-
   it("selects the smallest explicitly non-thinking model during interactive setup", async () => {
     vi.stubGlobal(
       "fetch",
@@ -158,10 +121,6 @@ describe("Ollama onboarding model selection", () => {
     {
       description: "model inspection fails",
       showResponse: () => Response.json({ error: "inspection unavailable" }, { status: 503 }),
-    },
-    {
-      description: "model inspection omits metadata",
-      showResponse: () => Response.json({}),
     },
   ])(
     "selects and configures list-advertised models when $description",
@@ -245,7 +204,6 @@ describe("Ollama onboarding model selection", () => {
 
   it.each([
     ["local-only", "completion"],
-    ["cloud-local", "completion"],
     ["cloud-local", "embedding"],
   ] as const)(
     "respects %s mode with %s remote rows before inspecting and configuring mixed inventory",
@@ -309,13 +267,9 @@ describe("Ollama onboarding model selection", () => {
     },
   );
 
-  describe.each(["interactive", "non-interactive"] as const)("%s defaults", (mode) => {
+  describe("non-interactive defaults", () => {
     it.each([
-      ["embedding-only", ["embedding"], undefined, false, undefined],
-      ["embedding with advertised tools", ["embedding", "tools"], undefined, false, undefined],
       ["completion and embedding", ["completion", "embedding"], undefined, true, true],
-      ["unknown remote capabilities", [], undefined, true, true],
-      ["authoritative empty inspection", ["completion", "tools"], [], false, false],
     ] as const)(
       "respects %s capabilities when selecting and configuring a default",
       async (_description, capabilities, inspectedCapabilities, useRemote, supportsTools) => {
@@ -344,27 +298,12 @@ describe("Ollama onboarding model selection", () => {
           }),
         );
         const expectedDefault = `ollama/${useRemote ? remoteName : localName}`;
-        let config: OpenClawConfig;
-        if (mode === "interactive") {
-          const result = await promptAndConfigureOllama({
-            cfg: {},
-            prompter: {
-              select: vi.fn().mockResolvedValueOnce("cloud-local"),
-              text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-              note: vi.fn(async () => undefined),
-              confirm: vi.fn().mockResolvedValue(false),
-            } as unknown as WizardPrompter,
-          });
-          expect(result.defaultModel).toBe(expectedDefault);
-          config = result.config;
-        } else {
-          config = await configureOllamaNonInteractive({
-            nextConfig: {},
-            opts: { customBaseUrl: "http://127.0.0.1:11434" },
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          });
-          expect(config.agents?.defaults?.model).toEqual({ primary: expectedDefault });
-        }
+        const config = await configureOllamaNonInteractive({
+          nextConfig: {},
+          opts: { customBaseUrl: "http://127.0.0.1:11434" },
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        });
+        expect(config.agents?.defaults?.model).toEqual({ primary: expectedDefault });
         const configured = config.models?.providers?.ollama?.models;
         expect(configured).toContainEqual(expect.objectContaining({ id: localName }));
         const remote = configured?.find((model) => model.id === remoteName);

@@ -9,6 +9,16 @@ read_when:
 
 The Model Context Protocol (MCP) is how an agent borrows tools from another program: an MCP server exposes tools, resources, and prompts, and OpenClaw connects to it and makes those tools available to your agents. Server definitions live under `mcp.servers` in config, and the tools they expose go through the same tool-profile and tool-policy controls as everything else — connecting a server does not bypass your policy.
 
+When a server publishes usage instructions during initialization, the embedded
+agent receives them alongside its available tools. Direct tools include the
+guidance in the system prompt; tools deferred behind Tool Search or Code Mode
+provide it through discovery. If discovery shows an `instructionsHint`, load
+the server guidance with `tool_describe` or the Code Mode handle's `describe()`
+before calling the tool. To bound embedded prompt cost, OpenClaw keeps at most
+the first 2,000 characters per server, followed by a truncation marker when needed.
+The system prompt, Tool Search, and Code Mode share that capped text. Native
+Claude CLI loopback connections continue to receive the complete server guidance.
+
 <Note>
 This guide is about connecting third-party MCP servers **to OpenClaw**. For the reverse — exposing OpenClaw channel conversations to another MCP client — use [`openclaw mcp serve`](/cli/mcp#openclaw-as-an-mcp-server).
 </Note>
@@ -43,7 +53,7 @@ For legacy SSE servers, reconnecting to the same session endpoint preserves the
 session. If the server announces a new endpoint, OpenClaw reconnects and
 initializes a fresh session before sending further tool calls.
 
-When OpenClaw's built-in MCP client cannot start a server, new runtimes skip it during an exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. If that runtime has never listed the server successfully, the first turn after a retry is due waits for the bounded connection and catalog listing, so recovered tools are available on that turn. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory shows the server as unavailable, with that runtime's next retry time and a reachability check as the next step. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
+When OpenClaw's built-in MCP client cannot start a server, it retries with exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. The first connection for a server configuration and requester still waits for bounded initialization and catalog listing. After a startup failure, turns never wait for retries: recovery runs in the background, and recovered tools become available at the next turn boundary. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory keeps one unavailable notice per server while the failure persists, with that runtime's next retry time and a reachability check as the next step; recovery removes the notice without adding chat or transcript messages. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
 
 ## Add a server from the composer
 
@@ -107,6 +117,12 @@ The same `docs` server, written straight into config:
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
+Local `claude-cli` turns receive configured server tools through the Gateway's
+MCP bridge as `<server>__<tool>`, including when `tools.exec.host` is `"node"`.
+The Gateway owns the server connections, so Claude does not start duplicate
+stdio servers. Node execution does not change that mode's native Bash or user
+settings. See [CLI backend MCP overlays](/gateway/cli-backends#bundle-mcp-overlays).
+
 ## Interactive apps and plugin extensions
 
 MCP servers can also supply sandboxed interactive views. Enable the opt-in
@@ -147,6 +163,8 @@ For servers launched by OpenClaw's built-in MCP client, debug logs report stderr
 If a Streamable HTTP server refuses initialization with HTTP 401, its startup log and catalog diagnostic report `authentication refused (401)` alongside the configured server name. Check the credentials for that entry under `mcp.servers`, or sign in again if it uses OAuth. Response bodies and header values remain redacted; the diagnostic does not expose the server's raw error message.
 
 Set `auth: "oauth"` plus any required `oauth` metadata. In **Settings → MCP**, an administrator can select **Sign in** for an enabled HTTP server that uses shared native OAuth credentials. Approve access in the browser, then return to Settings. If the browser blocks the new tab, use the sign-in link in the dialog.
+
+For a server that supports Enterprise-Managed Authorization, configure `auth: "enterprise"` with the IdP and resource authorization-server clients, then run `openclaw mcp login <name>` in the Gateway's terminal. See [enterprise-managed authorization](/cli/mcp/transports#enterprise-managed-authorization). This is a shared operator connection; Settings sign-in currently supports native OAuth only.
 
 **Authentication saved** means credentials were saved on the Gateway selected when sign-in started. It does not prove the server is reachable or its tools work; run a check or use the connector next. Changing the selected Gateway or agent closes the dialog. A Gateway restart ends an unfinished browser sign-in, but does not remove saved credentials.
 

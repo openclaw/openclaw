@@ -1,11 +1,15 @@
+import { describeOpenAiCompatibleVideo } from "openclaw/plugin-sdk/media-understanding";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
-import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { wrapMoonshotStream } from "./native-video.js";
 import { applyMoonshotConfig, applyMoonshotConfigCn } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildMoonshotProvider, MOONSHOT_DEFAULT_MODEL_REF } from "./provider-catalog.js";
+import {
+  buildMoonshotProvider,
+  MOONSHOT_BASE_URL,
+  MOONSHOT_DEFAULT_MODEL_REF,
+} from "./provider-catalog.js";
 import {
   isMoonshotAlwaysThinkingModelId,
   isMoonshotK3NativeVideoRoute,
@@ -74,7 +78,26 @@ export default defineSingleProviderPluginEntry({
     isModernModelRef: ({ modelId }) => isMoonshotAlwaysThinkingModelId(modelId),
   },
   register(api) {
-    api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider({
+      id: "moonshot",
+      capabilities: ["image", "video"],
+      defaultModels: {
+        image: manifest.mediaUnderstandingProviderMetadata.moonshot.defaultModels.image,
+        video: manifest.mediaUnderstandingProviderMetadata.moonshot.defaultModels.video,
+      },
+      autoPriority: { video: 20 },
+      describeImage: undefined,
+      describeImages: undefined,
+      describeVideo: async (params) =>
+        describeOpenAiCompatibleVideo({
+          ...params,
+          defaultBaseUrl: MOONSHOT_BASE_URL,
+          defaultModel: manifest.mediaUnderstandingProviderMetadata.moonshot.defaultModels.video,
+          defaultPrompt: "Describe the video.",
+          provider: "moonshot",
+          providerLabel: "Moonshot",
+        }),
+    });
     api.registerWebSearchProvider(createKimiWebSearchProvider());
   },
 });

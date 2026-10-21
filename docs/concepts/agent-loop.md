@@ -19,7 +19,7 @@ execution, streaming, persistence.
 
 1. `agent` RPC validates params, resolves the session (`sessionKey`/`sessionId`), persists session metadata, and returns `{ runId, acceptedAt }` immediately.
 2. `agentCommand` runs the turn: resolves model + thinking/verbose/trace defaults, loads the skills snapshot, calls `runEmbeddedAgent`, and emits a fallback **lifecycle end/error** if the embedded loop did not already emit one.
-3. `runEmbeddedAgent`: serializes runs via per-session and global queues, resolves model + auth profile, builds the OpenClaw session, subscribes to runtime events, streams assistant/tool deltas, enforces the current model attempt's timeout (aborting that attempt on expiry), and returns payloads plus usage metadata. For Codex app-server turns, native Codex owns provider liveness and the exact `turn/completed` outcome; quiet periods and assistant output do not end the turn.
+3. `runEmbeddedAgent`: reserves the session controller turn before entering global capacity, resolves model + auth profile, builds the OpenClaw session, subscribes to runtime events, streams assistant/tool deltas, enforces the current model attempt's timeout (aborting that attempt on expiry), and returns payloads plus usage metadata. For Codex app-server turns, native Codex owns provider liveness and the exact `turn/completed` outcome; quiet periods and assistant output do not end the turn.
 4. `subscribeEmbeddedAgentSession` bridges runtime events to the `agent` stream: tool events to `stream: "tool"`, assistant deltas to `stream: "assistant"`, lifecycle events to `stream: "lifecycle"` (`phase: "start" | "finishing" | "end" | "error"`).
 5. `agent.wait` waits for the terminal outcome on a `runId` and returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`. Gateway RPC runs also wait for their terminal replay payload to be published, so a duplicate request after a terminal wait result can replay that outcome.
 
@@ -51,9 +51,19 @@ precedes the rejected response in the current turn. Failures that may have cause
 side effects, unfinished tools, and asynchronous work still block it; the
 continuation does not replay the original task or increase the retry budget.
 
+Recovery history stays available across attempts within the same run. The run
+releases message payloads from replaced recovery envelopes and when it ends,
+including envelopes retained by copied attempt parameters. Each accepted
+transcript write keeps its original attempt's persistence callbacks until it
+finishes, even after a reused manager binds a newer attempt or the bounded
+teardown wait expires.
+Completed attempt results stay outside the scope captured by retained harness
+callbacks, so those callbacks cannot keep completed message snapshots alive.
+Finalization and retry owners retain access to the results while processing them.
+
 ## Queueing and concurrency
 
-Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
+The session controller serializes turns by physical session identity before global capacity admission. Messaging channels choose a queue mode (steer/followup/collect/interrupt) over the same ordered inputs; direct native producers use that selector too. Nested compaction borrows the exact admitted turn rather than queuing behind itself. See [Command Queue](/concepts/queue).
 
 Before streaming, an admitted run records its durable `activeWriterRunId` claim. Every transcript append or rewrite supplies `expectedWriterRunId`, and the synchronous commit transaction verifies that it still matches the active claim. A superseded run therefore cannot commit stale transcript data. The SQLite writer queue orders per-agent mutations, while the Gateway state-directory lock prevents another Gateway or `openclaw agent --local` process from owning the same state directory concurrently.
 
@@ -204,6 +214,12 @@ The same publication decision covers agent frames, chat finals, progress snapsho
 and session lifecycle notifications. Execution settlement and cleanup continue
 independently of event publication.
 
+Transport lease cleanup after connection recovery is best effort. Disposal errors
+are logged without changing the turn result, and cleanup waits use the existing
+agent cleanup budget (10 seconds by default). A discarded refresh candidate's
+cleanup failure leaves the previous transport available for the retry. A timeout
+does not certify that the underlying resources have closed.
+
 For completed `chat.send` turns, clients may request compaction, fork, or rewind
 as soon as they receive chat `final`. These requests join the published turn's
 remaining transcript and admission cleanup before mutating the session. A
@@ -337,7 +353,7 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 - Active work with no recent progress reports as `session.stalled`. Owned model calls switch to `session.stalled` at or after the abort threshold; ownerless stale model/tool activity is not hidden as long-running.
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
-The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+The controller watchdog runs even when diagnostics are disabled. Its semantic-stall threshold is at least 5 minutes and 3x the warning threshold; actual execution deadlines and registered human-input, capacity, tool, and retry waits remain distinct. It requests Stop on the exact operation, while frozen finalization uses outcome-preserving cleanup. Diagnostics only project these facts: they do not reset lanes or force an owner idle. Failed cleanup remains visibly blocked and retains writer custody until actual settlement.
 
 Pending Code Mode `exec` and `wait` calls remain active tool work until they
 settle, including `awaitResults: true` calls waiting for nested work. Nested tool
@@ -372,6 +388,7 @@ settlement, or ownerless state.
 
 ## Related
 
+- [Session controller](/concepts/session-controller) - scheduling ownership and lifecycle invariants
 - [Tools](/tools) - available agent tools
 - [Hooks](/automation/hooks) - event-driven scripts triggered by agent lifecycle events
 - [Compaction](/concepts/compaction) - how long conversations are summarized

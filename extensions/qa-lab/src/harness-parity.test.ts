@@ -1,17 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildHarnessParityCell,
-  buildHarnessParityResult,
+  classifyHarnessParityDrift,
   type HarnessRuntimeParityCell,
   type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
-type HarnessVariant = Parameters<typeof buildHarnessParityCell>[0]["variant"];
 type CellOverrides = Partial<HarnessRuntimeParityCell>;
-
-const LEFT: HarnessVariant = { id: "left", label: "Left", runtime: "openclaw" };
-const RIGHT: HarnessVariant = { id: "right", label: "Right", runtime: "openclaw" };
 const ASSISTANT = '{"message":{"role":"assistant"}}\n';
 const TOOL = '{"message":{"role":"tool"}}\n';
 const TEXT = '{"message":{"role":"assistant","content":"same"}}\n';
@@ -59,16 +54,11 @@ function classify(
   right: CellOverrides,
   comparisonMode?: RuntimeParityComparisonMode,
 ) {
-  return buildHarnessParityResult({
-    scenarioId: "scenario",
-    left: liveCell(LEFT, makeCell(left)),
-    right: liveCell(RIGHT, makeCell(right)),
+  return classifyHarnessParityDrift({
+    left: makeCell(left),
+    right: makeCell(right),
     ...(comparisonMode ? { comparisonMode } : {}),
-  }).drift;
-}
-
-function liveCell(variant: HarnessVariant, cell: HarnessRuntimeParityCell) {
-  return buildHarnessParityCell({ variant, cell, tokenUsageSource: "live-usage" });
+  });
 }
 
 function promptReport(overrides: RuntimeParitySystemPromptReport) {
@@ -96,7 +86,9 @@ describe("harness parity", () => {
       ],
       ["system-prompt", promptReport({ skills: { promptChars: 12, hash: "skills-b" } })],
       ["tool-description", toolReport({ summaryHash: "summary-b" })],
+      ["tool-description", toolReport({ summaryChars: 10 })],
       ["tool-schema", toolReport({ schemaHash: "schema-b" })],
+      ["tool-schema", promptReport({ tools: { ...BASE_PROMPT_REPORT.tools, schemaChars: 22 } })],
     ] as const) {
       expect(classify({}, right)).toBe(drift);
     }
@@ -128,6 +120,16 @@ describe("harness parity", () => {
       expect(classify({ transcriptBytes: left }, { transcriptBytes: right })).toBe("structural");
     }
     expect(classify({ runtimeErrorClass: "timeout" }, {})).toBe("failure-mode");
+    expect(
+      classify(
+        {},
+        {
+          ...toolReport({ schemaHash: "changed" }),
+          transportErrorClass: "transport",
+          runtimeErrorClass: "runtime",
+        },
+      ),
+    ).toBe("failure-mode");
   });
 
   it("honors native workspace comparison mode for outcome-only harness proofs", () => {
@@ -184,118 +186,5 @@ describe("harness parity", () => {
         "outcome-only",
       ),
     ).toBe("tool-description");
-  });
-
-  it.each([
-    {
-      drift: "failure-mode",
-      right: { transportErrorClass: "transport", runtimeErrorClass: "runtime" },
-      details: "at least one harness variant hit a transport failure",
-    },
-    {
-      drift: "system-prompt",
-      right: {
-        systemPromptReport: {
-          ...BASE_PROMPT_REPORT,
-          systemPrompt: { ...BASE_PROMPT_REPORT.systemPrompt, chars: 101 },
-        },
-      },
-      details: "system prompt report differs",
-      promptDelta: { systemPromptChars: 1 },
-    },
-    {
-      drift: "tool-description",
-      right: {
-        systemPromptReport: {
-          ...BASE_PROMPT_REPORT,
-          tools: {
-            ...BASE_PROMPT_REPORT.tools,
-            entries: [{ ...BASE_PROMPT_REPORT.tools.entries[0], summaryChars: 10 }],
-          },
-        },
-      },
-      details: "tool description summary shape differs",
-      promptDelta: { toolSummaryChars: 2 },
-    },
-    {
-      drift: "tool-schema",
-      right: {
-        systemPromptReport: {
-          ...BASE_PROMPT_REPORT,
-          tools: { ...BASE_PROMPT_REPORT.tools, schemaChars: 22 },
-        },
-      },
-      details: "tool schema shape differs",
-      promptDelta: { toolSchemaChars: 2 },
-    },
-    {
-      drift: "tool-call-shape",
-      right: { toolCalls: [{ tool: "read", argsHash: "b", resultHash: "r" }] },
-      details: "tool call 1 differs (read/a vs read/b)",
-    },
-    {
-      drift: "tool-result-shape",
-      right: { toolCalls: [{ tool: "read", argsHash: "a", resultHash: "changed" }] },
-      details: "tool result 1 differs (read)",
-    },
-    {
-      drift: "structural",
-      right: {
-        transcriptBytes: '{"role":"assistant"}\n{"role":"tool"}\n',
-      },
-      details: "transcript/final-text structure differs (1 message records vs 2 message records)",
-    },
-    {
-      drift: "text-only",
-      right: { finalText: "different" },
-      details: "final text differs after whitespace normalization",
-    },
-    { drift: "none", right: {} },
-  ])("keeps complete result metadata for $drift", ({ drift, right, details, promptDelta }) => {
-    const source = makeCell({ toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }] });
-    const leftCell = liveCell(LEFT, source);
-    const rightCell = liveCell(RIGHT, {
-      ...source,
-      transcriptBytes: '{"type":"metadata"}\n' + source.transcriptBytes,
-      usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
-      ...right,
-    });
-
-    expect(
-      buildHarnessParityResult({ scenarioId: "metadata", left: leftCell, right: rightCell }),
-    ).toStrictEqual({
-      scenarioId: "metadata",
-      left: leftCell,
-      right: rightCell,
-      drift,
-      ...(drift === "none" ? {} : { driftDetails: details, firstDriftTurn: 1 }),
-      promptDelta: {
-        systemPromptChars: 0,
-        projectContextChars: 0,
-        skillPromptChars: 0,
-        toolSummaryChars: 0,
-        toolSchemaChars: 0,
-        toolCount: 0,
-        ...promptDelta,
-      },
-      tokenDeltaPercent: 100,
-    });
-  });
-
-  it("labels mock token estimates separately from live usage", () => {
-    const sourceCell = makeCell({ usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
-    const cell = buildHarnessParityCell({
-      variant: LEFT,
-      cell: sourceCell,
-      tokenUsageSource: "mock-estimate",
-    });
-    const inputChars = 100 + 12 + 8 + 20 + sourceCell.transcriptBytes.length;
-
-    expect(cell.tokenUsage.totalTokens).toBeGreaterThan(0);
-    expect(cell).toMatchObject({
-      tokenUsageSource: "mock-estimate",
-      tokenUsage: { inputTokens: Math.ceil(inputChars / 4) },
-      promptStats: { toolCount: 1 },
-    });
   });
 });

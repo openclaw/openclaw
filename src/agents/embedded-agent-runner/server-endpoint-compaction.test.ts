@@ -221,32 +221,26 @@ describe("attemptServerEndpointCompaction", () => {
     expect(requestAborted).toBe(true);
   });
 
-  const redactSecrets = { logging: { redactPatterns: ["NORTH-SECRET-\\d+"] } };
-
   it.each([
     { source: "user message", systemPrompt: "system", userText: "token NORTH-SECRET-17" },
     // xAI has no instructions field, so its compact input carries the system prompt.
     { source: "system prompt", systemPrompt: "session NORTH-SECRET-17", userText: "remember" },
-  ])(
-    "compacts source text verbatim when its $source contains a configured pattern",
-    async (testCase) => {
-      const warn = vi.spyOn(log, "warn").mockClear();
-      const session = createSession(model, undefined, testCase.userText);
-      const onUsage = vi.fn();
-      requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(model));
-      const { result } = attempt({
-        sessionManager: session.sessionManager,
-        context: { systemPrompt: testCase.systemPrompt, messages: session.messages },
-        config: redactSecrets,
-        onUsage,
-      });
+  ])("compacts secret-shaped source text verbatim in its $source", async (testCase) => {
+    const warn = vi.spyOn(log, "warn").mockClear();
+    const session = createSession(model, undefined, testCase.userText);
+    const onUsage = vi.fn();
+    requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(model));
+    const { result } = attempt({
+      sessionManager: session.sessionManager,
+      context: { systemPrompt: testCase.systemPrompt, messages: session.messages },
+      onUsage,
+    });
 
-      await expect(result).resolves.toBeDefined();
-      expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
-      expect(onUsage).toHaveBeenCalledOnce();
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
+    await expect(result).resolves.toBeDefined();
+    expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  });
 
   it("compacts through instructions when only the OpenAI system prompt holds a secret", async () => {
     const session = createSession(openAIModel);
@@ -256,7 +250,6 @@ describe("attemptServerEndpointCompaction", () => {
       model: openAIModel,
       sessionManager: session.sessionManager,
       context: { systemPrompt: "session NORTH-SECRET-17", messages: session.messages },
-      config: redactSecrets,
       onCompactionCommitted,
     });
 
@@ -280,7 +273,6 @@ describe("attemptServerEndpointCompaction", () => {
     const { result } = attempt({
       sessionManager: session.sessionManager,
       context: { systemPrompt: "system", messages: session.messages },
-      config: redactSecrets,
       onUsage,
       onCompactionCommitted,
     });

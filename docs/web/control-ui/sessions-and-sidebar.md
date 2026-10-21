@@ -129,10 +129,15 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-A temporary selected row appears in the sidebar immediately, at the top of the
-session list or under its agent in the agent roster, clearing the previous chat’s
-highlight without changing the saved session until creation is accepted.
+A temporary selected row appears at the top of the sidebar session list
+immediately, clearing the previous chat’s highlight without changing the saved
+session until creation is accepted. The agent roster (**Show all**) lists agents
+rather than sessions, so it shows no temporary row.
 The temporary row has no session actions; a failed creation restores the draft.
+Sessions created by another client or an agent appear through the sidebar's batched
+refresh, normally within five seconds. A busy Gateway can extend the refresh interval
+to fifteen seconds after the previous refresh finishes. Creating a conversation here
+still updates its list immediately when accepted.
 As soon as creation is accepted, the submitted prompt and attachments are cleared
 from the New session composer, without waiting for its chat preview to load. The
 submitted browser draft is retired before the confirmed conversation URL is
@@ -223,6 +228,12 @@ allowed, New session selects **New worktree** before submission. **Current check
 stays visible but disabled with an explanation. Allowed saved choices stay selected;
 an unavailable saved choice is corrected without clearing your prompt, model, or
 effort. The Gateway checks access again when the session is created.
+
+When failed Git discovery blocks a selected or restored **New worktree** choice,
+New session keeps that choice. A permission denial names the required access when
+the Gateway provides it and directs you to the person who manages OpenClaw;
+retrying alone cannot grant it. Other discovery failures retain the retry guidance.
+Your unsent draft stays available.
 
 Guests with session access can save these choices in their own profile without
 broader Gateway write permission. This does not allow changing another person's
@@ -397,7 +408,7 @@ Follow-up turns in an existing subagent session keep the parent’s activity rin
 
 When a child run fails or publishes an attention request, the parent chat shows the child’s name and full diagnostic above the composer, even if the parent has no new reply. **Open session** opens that child’s details. Opening the parent does not acknowledge a child’s active attention request; its notice follows the child’s read state, explicit clearing, and expiry.
 
-Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The preview shows all PRs supplied by the Gateway, which returns up to three for the branch. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed.
+Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The sidebar also counts pull requests published by the session and its accessible descendants, including delegated work on other branches. The hovercard combines those recorded publications with up to three PRs for the current branch, deduplicates links, and identifies each task branch. Recorded links remain available after a checkout changes or the Gateway restarts; unavailable GitHub metadata is labeled **Status unavailable**, never guessed from a publication receipt. The preview shows up to 20 recorded publications and indicates when more exist. Merely mentioning a PR in chat does not associate it with the task. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed.
 
 Hover a session with an enabled automation to inspect its attached jobs without leaving the conversation. The clock row shows the automation name for one job or a count for multiple jobs. Hover or focus that row to open a read-only flyout; clicking keeps it open. The flyout lists attached jobs, including paused jobs, and shows the selected job’s schedule, next run, current state, last outcome, and instructions. Expand **Full instructions** to read long prompts, commands, or scripts. Loading, empty, and unavailable states are explicit; a failed read offers **Retry**. **Open automation** opens the selected job in the existing editor, with the usual permissions for settings, history, and changes. Escape dismisses the flyout before the session hovercard. Cmd/Ctrl-click retains normal new-tab navigation. **Show all automations** on the Automations page clears the session filter.
 
@@ -495,14 +506,14 @@ Session previews are hidden by default for compact, single-line rows. Enable **S
 
 **Hide empty groups** in the same menu shows your current choice and opens three options:
 
-- **When filtering** (default): hide native session sections with no matching sessions while a specific owner or **Involving me** is selected.
+- **When filtering** (default): hide native session sections with no matching sessions while **Active**, **Snoozed**, or **Archived** status, a specific owner, or **Involving me** is selected.
 - **Always**: also hide empty native sections in the unfiltered view.
 - **Never**: keep empty groups available while filtering. Sessions still obey the active filters.
 
 This is a personal display preference, stored in this browser separately for each signed-in user and Gateway. It does not change another person’s view, group membership, order, or session access, and it is not synced across devices. Connections without an identified user keep a separate browser-only choice. An existing on/off browser choice is adopted once by the first resolved viewer: on becomes **Always**, while off becomes **When filtering**. Later viewers do not inherit that migrated choice.
 
 Changing or clearing an owner or status filter never changes the saved preference.
-**Reset** in the popover restores **When filtering** when the empty-group control is visible. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On phone-width layouts, the choices open as a page inside the filter sheet, with **Back**. Escape returns focus to the setting without closing the filter panel.
+**Reset** in the popover restores **When filtering** when the empty-group control is visible. Groups awaiting their initial session list stay visible. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On phone-width layouts, the choices open as a page inside the filter sheet, with **Back**. Escape returns focus to the setting without closing the filter panel.
 
 Native CLI catalogs appear only when they contain sessions matching the current owner filter. Empty catalogs stay hidden even when discovery fails or the CLI can start new sessions. Catalogs load on connection, then refresh every two minutes while the tab is visible. Returning to a hidden tab refreshes its catalog after a short coalescing delay; explicit refreshes and catalog actions do not wait for the periodic refresh. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
 

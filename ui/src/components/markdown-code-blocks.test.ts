@@ -120,7 +120,6 @@ it("reobserves retained Markdown DOM while fencing scans queued before hide or d
 });
 
 it("does not remeasure settled Markdown while neighboring prose streams", async () => {
-  vi.stubGlobal("ResizeObserver", undefined);
   const { container, section, blocks } = mountBlocks();
   const paragraph = document.createElement("p");
   paragraph.textContent = "First";

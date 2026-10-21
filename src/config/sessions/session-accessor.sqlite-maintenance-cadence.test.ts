@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -25,6 +26,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as candidates from "./session-accessor.sqlite-maintenance-candidates.js";
+import { prepareSessionEntryMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-store.js";
 import {
   prepareSessionMaintenanceInWorker,
   reclaimSessionMaintenanceInTransaction,
@@ -63,6 +65,110 @@ function createStore(entryCount: number, updatedAt = Date.now()) {
   }, options);
   return { database, options, storePath };
 }
+
+it("bounds expired-session SQL per maintenance request and drains the same archived set", async () => {
+  const { database, options, storePath } = createStore(500, Date.now() - 90 * DAY_MS);
+  const operation = await createPlanningOperation(options, {
+    maxAgeEntries: 64,
+    maxCapEntries: 64,
+    maintenance: resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxEntries: 1000,
+      pruneAfter: "30d",
+      preserveRecent: "1d",
+    }),
+  });
+  const statements = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["sql"],
+    () => "sql",
+  );
+  const preparedCounts: number[] = [];
+  const preparedRows: number[] = [];
+  const writerCounts: number[] = [];
+  const archived: string[] = [];
+  try {
+    for (let pass = 0; pass < 10; pass += 1) {
+      let before = statements.counts.sql;
+      const beforeRows = statements.rowCounts.sql;
+      const apply = runSqliteReadSnapshotSync(database.db, () =>
+        prepareSessionEntryMaintenanceInDatabase(
+          database,
+          operation.input,
+          () => operation.input.preservation,
+        ),
+      );
+      preparedCounts.push(statements.counts.sql - before);
+      preparedRows.push(statements.rowCounts.sql - beforeRows);
+      before = statements.counts.sql;
+      const plan = runOpenClawAgentWriteTransaction((current) => apply(current), options);
+      writerCounts.push(statements.counts.sql - before);
+      expect(plan.archived).toBeLessThanOrEqual(64);
+      archived.push(...plan.archivedEntries.map((entry) => entry.sessionKey));
+      if (!plan.ageContinuation) {
+        break;
+      }
+      operation.input.ageContinuation = plan.ageContinuation;
+    }
+    expect(archived.toSorted()).toEqual(
+      Array.from({ length: 500 }, (_, index) => key(index)).toSorted(),
+    );
+    expect(Math.max(...preparedCounts)).toBeLessThanOrEqual(24);
+    expect(Math.max(...preparedRows)).toBeLessThanOrEqual(256);
+    expect(Math.max(...writerCounts)).toBeLessThanOrEqual(96);
+  } finally {
+    statements.restore();
+  }
+  expect(
+    Array.from(
+      { length: 500 },
+      (_, index) => loadSessionEntry({ storePath, sessionKey: key(index) })?.archiveReason,
+    ),
+  ).toEqual(Array.from({ length: 500 }, () => "age-retention"));
+});
+
+it("pins age eligibility across pages and immediately revisits the next due boundary", async () => {
+  const now = Date.now();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
+  const { options, storePath } = createStore(64, now - 2_000);
+  runOpenClawAgentWriteTransaction((database) => {
+    writeSessionEntry(database, key(64), { sessionId: "cadence-64", updatedAt: now - 999 });
+  }, options);
+  const operation = await createPlanningOperation(options, {
+    maxAgeEntries: 64,
+    maxCapEntries: 64,
+    maintenance: {
+      ...resolveMaintenanceConfigFromInput(),
+      pruneAfterMs: 1_000,
+      archiveDashboardAfterMs: null,
+      preserveRecentMs: null,
+      maxEntries: 1_000,
+    },
+  });
+  const pass = () => {
+    const result = reclaimSessionMaintenanceInTransaction(operation, {});
+    if (result.kind !== "maintenance-plan") {
+      throw new Error("Expected an admitted age-retention page");
+    }
+    return result;
+  };
+  const first = pass();
+  expect(first.value.archived).toBe(64);
+  expect(first.value.ageContinuation).toMatchObject({ at: now });
+  operation.input.ageContinuation = first.value.ageContinuation;
+  vi.setSystemTime(now + 5);
+  const last = pass();
+  expect(last.value).toMatchObject({ archived: 0, entryRemovals: [] });
+  expect(last.value.ageContinuation).toBeUndefined();
+  expect(last.nextAt).toBe(now + 2);
+  expect(loadSessionEntry({ storePath, sessionKey: key(64) })?.archivedAt).toBeUndefined();
+
+  delete operation.input.ageContinuation;
+  const next = pass();
+  expect(next.value.archivedEntries).toEqual([{ sessionKey: key(64), sessionId: "cadence-64" }]);
+  expect(loadSessionEntry({ storePath, sessionKey: key(64) })?.archiveReason).toBe("age-retention");
+});
 
 async function createPlanningOperation(
   options: ReturnType<typeof createStore>["options"],
@@ -148,7 +254,7 @@ it.each(["participant", "owner"] as const)(
     const { database, storePath } = createStore(24);
     writeMetadata(storePath, kind, 0);
     const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
-    // One fact uses separate indexed probes; metadata writes must not repeat any of them.
+    // One fact combines dashboard and pending rows; metadata writes must not repeat either probe.
     const queries = trackSqliteStatementExecutions(
       requireNativeSqliteDatabase(database.db),
       ["after", "dashboards", "pending", "unexpected"],
@@ -165,7 +271,7 @@ it.each(["participant", "owner"] as const)(
         return sql.includes('"updated_at" > ?') ? "after" : "unexpected";
       },
     );
-    const expectedProbes = { after: 1, dashboards: 1, pending: 1, unexpected: 0 };
+    const expectedProbes = { after: 1, dashboards: 1, pending: 0, unexpected: 0 };
     const expectedRows = { after: 1, dashboards: 0, pending: 0, unexpected: 0 };
     try {
       await renameEntry(storePath, 0, "warm age facts");

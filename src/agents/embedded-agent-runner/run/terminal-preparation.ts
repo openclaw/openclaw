@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -21,6 +22,7 @@ import {
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
+import { isExecLikeToolName } from "../../tool-error-summary.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import type { NormalizedUsage } from "../../usage.js";
 import {
@@ -28,9 +30,12 @@ import {
   resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../delivery-evidence.js";
-import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
 import { resolveEmbeddedRunTerminalToolFailure } from "../terminal-tool-failure.js";
-import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
+import type {
+  EmbeddedAgentMeta,
+  EmbeddedAgentRunResult,
+  EmbeddedRunFailureSignal,
+} from "../types.js";
 import type { UsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
@@ -309,9 +314,14 @@ export function prepareEmbeddedRunTerminal(input: {
           },
           runParams.admittedRunContext?.operationalRunInstance,
         );
+  // Compaction can outlive an already completed current answer. Keep that final
+  // through the same scoped recovery path as a late prompt timeout.
+  const canRecoverCompletedAnswer =
+    timedOutDuringPrompt ||
+    (timedOutDuringCompaction && isEmbeddedRunTerminalTimeout(input.terminalState.outcome));
   const recoveredFinalAssistantTextAfterPromptTimeout =
     sourceReplyDeliveryState === "missing" &&
-    timedOutDuringPrompt &&
+    canRecoverCompletedAnswer &&
     !timeoutFinal &&
     ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
       ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
@@ -335,7 +345,7 @@ export function prepareEmbeddedRunTerminal(input: {
         })
       : undefined;
   const hasSuccessfulFinalAssistantAfterPromptTimeout =
-    timedOutDuringPrompt &&
+    canRecoverCompletedAnswer &&
     Boolean(
       payloadAlreadyContainsRecoveredFinalAssistant ||
       recoveredFinalAssistantPayloadsAfterPromptTimeout?.length,
@@ -350,10 +360,23 @@ export function prepareEmbeddedRunTerminal(input: {
     !attempt.lastToolError &&
     (attempt.toolMetas?.length ?? 0) === 0;
   const attemptToolSummary = buildTraceToolSummary(attempt);
-  const failureSignal = resolveEmbeddedRunFailureSignal({
-    trigger: runParams.trigger,
-    lastToolError: attempt.lastToolError,
-  });
+  // Cron execution denials must not look like successful silent completions.
+  let failureSignal: EmbeddedRunFailureSignal | undefined;
+  const lastToolError = attempt.lastToolError;
+  if (runParams.trigger === "cron" && lastToolError && isExecLikeToolName(lastToolError.toolName)) {
+    const code = normalizeOptionalString(lastToolError.errorCode);
+    if (code === "SYSTEM_RUN_DENIED" || code === "INVALID_REQUEST") {
+      const message = normalizeOptionalString(lastToolError.error) ?? code;
+      failureSignal = {
+        kind: "execution_denied",
+        source: "tool",
+        toolName: lastToolError.toolName,
+        code,
+        message,
+        fatalForCron: true,
+      };
+    }
+  }
   const terminalToolFailure = resolveEmbeddedRunTerminalToolFailure({
     trigger: runParams.trigger,
     codeModeEngaged: attempt.codeModeEngaged,

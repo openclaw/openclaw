@@ -20,7 +20,6 @@ type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway
 
 const RECEIPT_KEY_PREFIX = "update-failure-report:";
 const PREPARING_RECEIPT_STALE_AFTER_MS = 2 * 60_000;
-const ARTIFACT_SWEEP_STALE_AFTER_MS = 2 * 60_000;
 
 function retainedArtifactSweep(
   receipt: UpdateFailureReportReceipt,
@@ -135,8 +134,7 @@ export function reserveUpdateFailureReportReceiptRowSync(
     current.kind === "valid" &&
     currentReceipt?.status === "retryable" &&
     currentReceipt.cleanup === undefined &&
-    currentReceipt.replacementReady === true &&
-    currentReceipt.sweepOwnerId === undefined
+    currentReceipt.replacementReady === true
   ) {
     const replacement: UpdateFailureReportReceipt = {
       preparingSinceMs: nowMs,
@@ -161,7 +159,6 @@ export function refreshUpdateFailureReportReceiptPreparationRowSync(
   return mutateReceipt(db, attemptId, (currentReceipt) => {
     if (
       (currentReceipt.status !== "prepared" && currentReceipt.status !== "pending") ||
-      currentReceipt.sweepOwnerId !== undefined ||
       currentReceipt.reservationId !== reservationId
     ) {
       return false;
@@ -187,7 +184,6 @@ function preparationTransition(status: "prepared" | "pending") {
     mutateReceipt(db, attemptId, (currentReceipt) => {
       if (
         currentReceipt.status !== priorStatus ||
-        currentReceipt.sweepOwnerId !== undefined ||
         currentReceipt.reservationId !== reservationId ||
         currentReceipt.previewDigest !== previewDigest
       ) {
@@ -220,7 +216,6 @@ export function finalizeUpdateFailureReportReceiptRowSync(
   }
   return mutateReceipt(db, attemptId, (currentReceipt) => {
     if (
-      currentReceipt.sweepOwnerId !== undefined ||
       // Auth can refuse creation while still prepared. Only created requires a pending transport.
       (receipt.status === "fallback" || receipt.status === "retryable"
         ? currentReceipt.status !== "prepared" && currentReceipt.status !== "pending"
@@ -246,7 +241,6 @@ export function beginUpdateFailureReportReceiptCleanupRowSync(
 ): boolean {
   return mutateReceipt(db, attemptId, (currentReceipt) => {
     if (
-      currentReceipt.sweepOwnerId !== undefined ||
       (currentReceipt.status !== "preparing" &&
         currentReceipt.status !== "prepared" &&
         currentReceipt.status !== "retryable") ||
@@ -274,7 +268,6 @@ export function beginStaleUpdateFailureReportReceiptCleanupRowSync(
   return mutateReceipt(db, attemptId, (currentReceipt) => {
     const nowMs = Date.now();
     if (
-      currentReceipt.sweepOwnerId !== undefined ||
       (currentReceipt.status !== "preparing" && currentReceipt.status !== "prepared") ||
       currentReceipt.preparingSinceMs === undefined ||
       currentReceipt.preparingSinceMs > nowMs - PREPARING_RECEIPT_STALE_AFTER_MS ||
@@ -293,60 +286,6 @@ export function beginStaleUpdateFailureReportReceiptCleanupRowSync(
   });
 }
 
-/** Serializes one attempt-wide retired-artifact sweep against successor publication. */
-export function claimUpdateFailureReportArtifactSweepRowSync(
-  db: EngineConnection,
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-): boolean {
-  return mutateReceipt(db, attemptId, (currentReceipt) => {
-    const nowMs = Date.now();
-    if (
-      currentReceipt.artifactSweep !== "pending" ||
-      currentReceipt.reservationId !== expectedReservationId ||
-      (currentReceipt.sweepOwnerId !== undefined &&
-        currentReceipt.sweepSinceMs !== undefined &&
-        currentReceipt.sweepSinceMs > nowMs - ARTIFACT_SWEEP_STALE_AFTER_MS)
-    ) {
-      return false;
-    }
-    return {
-      ...currentReceipt,
-      sweepGeneration,
-      sweepOwnerId,
-      sweepSinceMs: nowMs,
-    };
-  });
-}
-
-/** Releases only the exact attempt-wide artifact sweep lease held by this worker. */
-export function releaseUpdateFailureReportArtifactSweepRowSync(
-  db: EngineConnection,
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-): boolean {
-  return mutateReceipt(db, attemptId, (currentReceipt) => {
-    if (
-      currentReceipt.reservationId !== expectedReservationId ||
-      currentReceipt.sweepOwnerId !== sweepOwnerId ||
-      currentReceipt.sweepGeneration !== sweepGeneration
-    ) {
-      return false;
-    }
-    const {
-      sweepGeneration: _generation,
-      sweepOwnerId: _owner,
-      sweepSinceMs: _since,
-      ...released
-    } = currentReceipt;
-    return released;
-  });
-}
-
 /** Completes one idempotent artifact cleanup after the cleanup intent has committed. */
 export function completeUpdateFailureReportReceiptCleanupRowSync(
   db: EngineConnection,
@@ -360,7 +299,6 @@ export function completeUpdateFailureReportReceiptCleanupRowSync(
     current.kind !== "valid" ||
     !currentReceipt ||
     currentReceipt.cleanup !== "pending" ||
-    currentReceipt.sweepOwnerId !== undefined ||
     currentReceipt.reservationId !== reservationId
   ) {
     return false;

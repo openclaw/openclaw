@@ -150,6 +150,13 @@ describe("node execution target resolution", () => {
     });
   });
 
+  it("tells the agent a missing node is lasting instead of retryable", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({ nodes: [] });
+    await expect(resolveNodeExecutionTarget(createDirectNodeRun().request)).rejects.toThrow(
+      "requires a paired node (none available). This lasts until the operator pairs",
+    );
+  });
+
   it("rejects inventory records without execution capabilities", async () => {
     callGatewayToolMock.mockResolvedValueOnce({
       nodes: [{ nodeId: "node-1", platform: "linux" }],

@@ -30,7 +30,7 @@ const remoteWorkspaceManifestScript = REMOTE_WORKSPACE_MANIFEST_JS;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const hashMetrics = () => ({ contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 });
+const hashMetrics = () => ({ contentHashCount: 0, memoHitCount: 0 });
 function remoteCapture(workspace: string, home: string, script = remoteWorkspaceManifestScript) {
   return async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
     const result = await runCommandWithTimeout(
@@ -124,10 +124,8 @@ it("bounds a maximum-entry memo envelope", () => {
       memo: JSON.parse(serializeRemoteWorkspaceHashMemo(memo)),
       metrics: {
         contentHashCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
-        contentHashDurationMs: Number.MAX_SAFE_INTEGER,
         memoHitCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
         memoTruncatedCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
-        totalDurationMs: Number.MAX_SAFE_INTEGER,
       },
     })}\n`,
   );

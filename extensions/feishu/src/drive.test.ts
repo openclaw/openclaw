@@ -4,12 +4,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
-const resolveAnyEnabledFeishuToolsConfigMock = vi.hoisted(() => vi.fn());
 const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 
-vi.mock("./tool-account.js", () => ({
+vi.mock("./tool-account.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tool-account.js")>()),
   createFeishuToolClient: createFeishuToolClientMock,
-  resolveAnyEnabledFeishuToolsConfig: resolveAnyEnabledFeishuToolsConfigMock,
 }));
 
 vi.mock("./comment-reaction.js", () => ({
@@ -219,15 +218,6 @@ describe("registerFeishuDriveTools", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveAnyEnabledFeishuToolsConfigMock.mockReturnValue({
-      doc: false,
-      chat: false,
-      wiki: false,
-      drive: true,
-      perm: false,
-      scopes: false,
-      bitable: false,
-    });
     createFeishuToolClientMock.mockReturnValue({
       request: requestMock,
     });

@@ -92,7 +92,7 @@ async function safeReadDir(dir: string): Promise<Dirent[]> {
   }
 }
 
-export async function readMemoryDir(dir: string): Promise<Dirent[]> {
+async function readMemoryDir(dir: string): Promise<Dirent[]> {
   try {
     return await fs.readdir(dir, { withFileTypes: true });
   } catch (error) {
@@ -116,28 +116,43 @@ async function isConfiguredAutoMemoryDirectory(dir: string): Promise<boolean> {
   }
 }
 
-async function probeMarkdownFiles(root: string): Promise<"found" | "absent" | "truncated"> {
-  const pending = [root];
+type MarkdownFileScan = {
+  files: string[];
+  truncatedBy?: "files" | "entries";
+};
+
+export async function listMarkdownFiles(root: string, maxFiles: number): Promise<MarkdownFileScan> {
+  const files: string[] = [];
+  const pending = [""];
   let visited = 0;
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) {
+  let truncatedBy: MarkdownFileScan["truncatedBy"];
+  scan: while (pending.length > 0) {
+    const relativeDir = pending.pop();
+    if (relativeDir === undefined) {
       break;
     }
-    for (const entry of await readMemoryDir(current)) {
+    for (const entry of await readMemoryDir(path.join(root, relativeDir))) {
       visited += 1;
       if (visited > CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES) {
-        return "truncated";
+        truncatedBy = "entries";
+        break scan;
       }
-      if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-        return "found";
-      }
+      const relativePath = path.join(relativeDir, entry.name);
       if (entry.isDirectory()) {
-        pending.push(path.join(current, entry.name));
+        pending.push(relativePath);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+        files.push(relativePath);
+        if (files.length > maxFiles) {
+          truncatedBy = "files";
+          break scan;
+        }
       }
     }
   }
-  return "absent";
+  return {
+    files: files.toSorted((left, right) => left.localeCompare(right)),
+    ...(truncatedBy ? { truncatedBy } : {}),
+  };
 }
 
 function autoMemorySourceId(sourcePath: string): string {
@@ -194,7 +209,8 @@ async function discoverAutoMemorySources(params: {
     }
     // A capped discovery probe must remain conservative: planning performs the
     // full bounded scan and reports oversized trees instead of hiding them.
-    if ((await probeMarkdownFiles(candidate.path)) === "absent") {
+    const scan = await listMarkdownFiles(candidate.path, 0);
+    if (scan.files.length === 0 && !scan.truncatedBy) {
       continue;
     }
     const canonical = await fs.realpath(candidate.path).catch(() => path.resolve(candidate.path));

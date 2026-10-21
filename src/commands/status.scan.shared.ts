@@ -1,4 +1,3 @@
-// Shared status scan helpers for gateway probing, Tailscale URL formatting, and memory status.
 // This file owns the cross-command contracts reused by normal, JSON, and status-all scans.
 
 import { existsSync } from "node:fs";
@@ -79,73 +78,6 @@ type StatusMemorySearchManagerResolver = (params: {
 }) => Promise<{
   manager: StatusMemorySearchManager | null;
 }>;
-
-async function applyLocalStatusRpcFallback(params: {
-  cfg: OpenClawConfig;
-  configPath: string;
-  gatewayMode: "local" | "remote";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult | null;
-  gatewayProbeAuth: GatewayProbeAuth;
-  timeoutMs: number;
-  gatewayProbeDeadlineMs: number;
-  enabled?: boolean;
-}): Promise<GatewayProbeResult | null> {
-  // Only retry ambiguous local loopback probes, never remote or origin-scoped endpoints.
-  if (
-    params.enabled === false ||
-    params.gatewayMode !== "local" ||
-    !params.gatewayProbe ||
-    params.gatewayProbe.ok ||
-    !isLoopbackGatewayUrl(params.gatewayUrl)
-  ) {
-    return params.gatewayProbe;
-  }
-  const error = params.gatewayProbe.error?.toLowerCase() ?? "";
-  if (!error.includes("timeout") && params.gatewayProbe.auth?.capability !== "unknown") {
-    return params.gatewayProbe;
-  }
-  // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
-  const status = await import("../gateway/call.js")
-    .then(({ callGateway }) => {
-      const timeoutMs = Math.min(2000, resolveStatusGatewayProbeTimeoutMs(params));
-      if (timeoutMs === 0) {
-        return null;
-      }
-      return callGateway<Partial<StatusSummary>>({
-        config: params.cfg,
-        configPath: params.configPath,
-        method: "status",
-        params: { includeChannelSummary: false, includeCliProjection: true },
-        token: params.gatewayProbeAuth.token,
-        password: params.gatewayProbeAuth.password,
-        timeoutMs,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      });
-    })
-    .catch(() => null);
-  if (!status) {
-    return params.gatewayProbe;
-  }
-  const auth = params.gatewayProbe.auth;
-  return {
-    ...params.gatewayProbe,
-    ok: true,
-    status,
-    ...(auth
-      ? {
-          auth:
-            auth.capability === "unknown"
-              ? {
-                  ...auth,
-                  capability: "read_only",
-                }
-              : auth,
-        }
-      : {}),
-  };
-}
 
 function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   if (cfg.memory && Object.hasOwn(cfg.memory, "search")) {
@@ -247,21 +179,59 @@ export async function resolveGatewayProbeSnapshot(params: {
             })
             .catch(() => null)
         : null;
-  const gatewayProbe = await applyLocalStatusRpcFallback({
-    cfg: params.cfg,
-    configPath: params.configPath,
-    gatewayMode,
-    gatewayUrl: gatewayConnection.url,
-    gatewayProbe: initialGatewayProbe,
-    gatewayProbeAuth: gatewayProbeAuthResolution.auth,
+  const fallbackBudget = {
     timeoutMs: remainingTimeoutMs(),
     gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
-    enabled:
-      !originScopedDeviceAuth &&
-      params.opts.localStatusRpcFallback !== false &&
-      remainingTimeoutMs() > 0 &&
-      (!readiness || canDiagnose),
-  });
+  };
+  let gatewayProbe = initialGatewayProbe;
+  // Only retry ambiguous local loopback probes, never remote or origin-scoped endpoints.
+  if (
+    !originScopedDeviceAuth &&
+    params.opts.localStatusRpcFallback !== false &&
+    remainingTimeoutMs() > 0 &&
+    (!readiness || canDiagnose) &&
+    gatewayMode === "local" &&
+    gatewayProbe &&
+    !gatewayProbe.ok &&
+    isLoopbackGatewayUrl(gatewayConnection.url)
+  ) {
+    const error = gatewayProbe.error?.toLowerCase() ?? "";
+    if (error.includes("timeout") || gatewayProbe.auth?.capability === "unknown") {
+      // Status can succeed after an ambiguous detail-probe handshake, within the same budget.
+      const status = await import("../gateway/call.js")
+        .then(({ callGateway }) => {
+          const timeoutMs = Math.min(2000, resolveStatusGatewayProbeTimeoutMs(fallbackBudget));
+          if (timeoutMs === 0) {
+            return null;
+          }
+          return callGateway<Partial<StatusSummary>>({
+            config: params.cfg,
+            configPath: params.configPath,
+            method: "status",
+            params: { includeChannelSummary: false, includeCliProjection: true },
+            token: gatewayProbeAuthResolution.auth.token,
+            password: gatewayProbeAuthResolution.auth.password,
+            timeoutMs,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          });
+        })
+        .catch(() => null);
+      if (status) {
+        const auth = gatewayProbe.auth;
+        gatewayProbe = {
+          ...gatewayProbe,
+          ok: true,
+          status,
+          ...(auth
+            ? {
+                auth: auth.capability === "unknown" ? { ...auth, capability: "read_only" } : auth,
+              }
+            : {}),
+        };
+      }
+    }
+  }
   if (gatewayProbeAuthWarning && gatewayProbe?.ok === false && !gatewayProbe.startupPhase) {
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`

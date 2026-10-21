@@ -13,6 +13,7 @@ import { resolveConversationRouteFingerprint } from "../config/sessions/conversa
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { currentConversationBindingPublication } from "../infra/outbound/current-conversation-bindings.publication.js";
 import { createChannelHandler } from "../infra/outbound/deliver-channel.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import type { SqliteWorkerOperations } from "../infra/sqlite-worker-contract.js";
@@ -22,6 +23,8 @@ import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plug
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createChannelTestPluginBase,
   createOutboundTestPlugin,
@@ -32,6 +35,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  prepareConversationDeliveryRouteAuthorization,
   resolveConversationRouteEligibilitiesForAgent,
   withAuthorizedConversationDelivery,
   withAuthorizedQueuedConversationDelivery,
@@ -356,3 +360,123 @@ it.each(["final", "queued"] as const)(
     }
   },
 );
+
+it("allows no-op binding delivery and fences a retained grant after reassignment", async () => {
+  const scope = { agentId: "main", databaseAgentId: "main", storePath };
+  const cfg: OpenClawConfig = {
+    ...config,
+    agents: { entries: { main: {}, other: {} } },
+  };
+  const peerId = "retained-binding-authority";
+  const sessionKey = `agent:main:reef:channel:${peerId}`;
+  const bindingRef = { channel: "reef", accountId: "default", conversationId: peerId };
+  replaceSessionEntrySync(
+    { ...scope, sessionKey },
+    {
+      sessionId: "session-retained-binding-authority",
+      updatedAt: 100,
+      chatType: "channel",
+      delivery: {
+        kind: "external",
+        route: {
+          channel: "reef",
+          accountId: "default",
+          target: { to: `reef:${peerId}`, chatType: "channel" },
+        },
+        context: { channel: "reef", accountId: "default", to: `reef:${peerId}` },
+        origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
+      },
+    },
+  );
+  const sendText = vi.fn().mockResolvedValue({ channel: "reef", messageId: "allowed" });
+  installReefPlugin({
+    ...createOutboundTestPlugin({ id: "reef", outbound: { deliveryMode: "direct", sendText } }),
+    conversationBindings: { supportsCurrentConversationBinding: true },
+  });
+  openOpenClawStateDatabase();
+  const identity = captureOpenClawStateWorkerContext().admission.identity.key;
+  expect(identity).toMatch(/^file:/);
+  const conversationRef = buildConversationRef({
+    channel: "reef",
+    accountId: "default",
+    kind: "channel",
+    peerId,
+  });
+  const conversation = await readConversation(scope, conversationRef);
+  expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
+  const authority = {
+    config: cfg,
+    readCurrentConfig: () => cfg,
+    agentId: "main",
+    conversationRef,
+    expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation!),
+  };
+  const bindings = getSessionBindingService();
+  await bindings.bind({
+    conversation: bindingRef,
+    targetSessionKey: sessionKey,
+    targetKind: "session",
+  });
+  const routeAuthority = await prepareConversationDeliveryRouteAuthorization({
+    ...authority,
+    conversation: conversation!,
+  });
+  type BindingChange = Parameters<
+    Parameters<typeof currentConversationBindingPublication.subscribeFacts>[0]
+  >[0];
+  const changes: BindingChange[] = [];
+  const unsubscribe = currentConversationBindingPublication.subscribeFacts((change) => {
+    changes.push(change);
+  });
+  try {
+    const handler = await createChannelHandler({
+      cfg,
+      channel: "reef",
+      to: `reef:${peerId}`,
+      withDirectAdapterHandoff: (initiate) =>
+        withAuthorizedConversationDelivery({ ...authority, scope, routeAuthority }, initiate),
+    });
+    const missingRef = { ...bindingRef, conversationId: "missing-retained-binding-authority" };
+    expect(await bindings.resolveByConversationAsync(missingRef)).toBeNull();
+    expect(changes).toHaveLength(2);
+    const [pending, settled] = changes;
+    if (
+      !pending ||
+      !("kind" in pending) ||
+      pending.kind !== "pending" ||
+      !settled ||
+      !("kind" in settled) ||
+      settled.kind !== "settled"
+    ) {
+      throw new Error("Missing native pending/settled binding operation");
+    }
+    expect(pending.identity).toBe(identity);
+    expect(settled.identity).toBe(identity);
+    expect(settled.operation).toBe(pending.operation);
+    expect(settled.outcome).toBe("unchanged");
+    await expect(handler.sendText("allowed after no-op settlement")).resolves.toMatchObject({
+      messageId: "allowed",
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+
+    // Only the runtime binding changes; the retained config, plugin, and conversation stay current.
+    const replacement = await bindings.bind({
+      conversation: bindingRef,
+      targetSessionKey: "agent:other:reef:channel:replacement",
+      targetKind: "session",
+    });
+    expect(replacement).toMatchObject({
+      targetSessionKey: "agent:other:reef:channel:replacement",
+    });
+    const committed = changes.find((change) => "receipt" in change);
+    expect(committed).toMatchObject({ receipt: { source: { identity } } });
+    expect(await readConversation(scope, conversationRef)).toEqual(conversation);
+    await expect(handler.sendText("rejected after runtime reassignment")).rejects.toThrow(
+      "Conversation binding ownership changed",
+    );
+    expect(sendText).toHaveBeenCalledOnce();
+  } finally {
+    unsubscribe();
+    routeAuthority.dispose();
+  }
+});

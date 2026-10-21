@@ -32,7 +32,9 @@ export function interruptPendingInputHistoryInDatabase(
           .where("session_key", "=", input.sessionKey)
           .where("session_id", "=", input.sessionId)
           .where("input_id", "in", input.ids)
-          .where("state", "=", "queued")
+          // Another history reader may have reconciled this snapshot first.
+          // Return its still-interrupted rows too, never stale queued facts.
+          .where("state", "in", ["queued", "interrupted"])
           .where("consumed_event_id", "is", null)
           .returning("input_id"),
       ).rows;

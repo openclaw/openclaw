@@ -6,7 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   hasPendingInputConsumptionColumn,
@@ -35,7 +35,7 @@ export function readPendingInputHistoryInDatabase(
   if (query.includeTotal === false) {
     return readPendingInputPageInDatabase(database, query, hasConsumption);
   }
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const db = getSessionKysely(database.db);
     let base = db
       .selectFrom("session_pending_inputs")
@@ -78,19 +78,23 @@ function readPendingInputPageInDatabase(
           .where("session_id", "=", query.sessionId)
           .$if(hasConsumption, (selection) => selection.where("consumed_event_id", "is", null))
           .$if(query.sessionSendRecovery === true, (selection) =>
-            selection
-              .where("state", "in", ["queued", "interrupted"])
-              .where((eb) =>
-                eb(
-                  jsonPathValue(
-                    database.db,
-                    eb.ref("message_json"),
-                    eb.val("$.__openclaw.sessionSendDelivery"),
+            selection.where("state", "in", ["queued", "interrupted"]).where((eb) =>
+              eb.or([
+                // Crash-left rows need reconciliation even without replayable custody.
+                eb("state", "=", "queued"),
+                ...["sessionSendDelivery", "chatInputRecovery"].map((field) =>
+                  eb(
+                    jsonPathValue(
+                      database.db,
+                      eb.ref("message_json"),
+                      eb.val(`$.__openclaw.${field}`),
+                    ),
+                    "is not",
+                    null,
                   ),
-                  "is not",
-                  null,
                 ),
-              ),
+              ]),
+            ),
           )
           .$if(query.before !== undefined, (selection) =>
             selection.where("seq", "<", query.before!),

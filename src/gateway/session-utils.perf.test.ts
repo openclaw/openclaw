@@ -203,7 +203,7 @@ describe("session list resolver cache", () => {
     });
   });
 
-  test.each(["startup", "dirty refresh"])(
+  test.each(["first page", "dirty refresh"])(
     "yields during expensive %s materialization without reprojecting unchanged rows",
     async (phase) => {
       await withStateDirEnv("openclaw-row-work-budget-", async () => {
@@ -217,6 +217,7 @@ describe("session list resolver cache", () => {
         let projection: SessionRowProjection | undefined;
         if (phase === "dirty refresh") {
           projection = await createSessionRowProjection({ cfg });
+          await listProjectedSessions({ projection, opts: { limit: rowCount } });
         }
         let rowsAtControl = 0;
         let control: Promise<void> | undefined;
@@ -233,6 +234,7 @@ describe("session list resolver cache", () => {
             await projection.ensureMaterialized();
           } else {
             projection = await createSessionRowProjection({ cfg });
+            await listProjectedSessions({ projection, opts: { limit: rowCount } });
           }
           await control;
           await projection.ensureMaterialized();

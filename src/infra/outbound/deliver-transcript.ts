@@ -1,18 +1,18 @@
 // Mirrors successful outbound payloads into the configured session transcript.
-import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   runWithoutOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.owner-context.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
-import type { OutboundMirror } from "./mirror.js";
 import { resolveOutboundPayloadMirrorText, type NormalizedOutboundPayload } from "./payloads.js";
 
 const log = createSubsystemLogger("outbound/deliver");
@@ -21,7 +21,7 @@ const loadTranscriptRuntime = createLazyRuntimeModule(
 );
 
 export async function mirrorDeliveredPayloads(params: {
-  delivery: DeliverOutboundPayloadsCoreParams;
+  delivery: Pick<DeliverOutboundPayloadsCoreParams, "cfg" | "channel" | "to" | "mirror">;
   payloads: readonly NormalizedOutboundPayload[];
 }): Promise<void> {
   const mirror = params.delivery.mirror;
@@ -38,24 +38,10 @@ export async function mirrorDeliveredPayloads(params: {
   if (!mirrorContent.text && mirrorContent.mediaUrls.length === 0) {
     return;
   }
-  await appendOutboundMirror({
-    cfg: params.delivery.cfg,
-    mirror: { ...mirror, ...mirrorContent },
-    logContext: { channel: params.delivery.channel, to: params.delivery.to },
-  });
-}
-
-/** Appends an accepted send's transcript copy; deferred copies run in the destination lane. */
-export async function appendOutboundMirror(params: {
-  cfg: OpenClawConfig;
-  mirror: OutboundMirror;
-  logContext?: Record<string, unknown>;
-}): Promise<void> {
-  const { mirror } = params;
   const warnFailure = (reason: string) =>
     log.warn(
       `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${reason}`,
-      { ...params.logContext, sessionKey: mirror.sessionKey },
+      { channel: params.delivery.channel, to: params.delivery.to, sessionKey: mirror.sessionKey },
     );
   // Transcript mirroring is best-effort bookkeeping after platform send.
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
@@ -73,11 +59,10 @@ export async function appendOutboundMirror(params: {
           ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
           : {}),
         ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-        text: mirror.text,
-        mediaUrls: mirror.mediaUrls,
+        ...mirrorContent,
         idempotencyKey: mirror.idempotencyKey,
         deliveryMirror: mirror.deliveryMirror,
-        config: params.cfg,
+        config: params.delivery.cfg,
       });
       if (!mirrorResult.ok) {
         warnFailure(mirrorResult.reason);
@@ -87,15 +72,24 @@ export async function appendOutboundMirror(params: {
     }
   };
   if (mirror.deferToSessionLane) {
-    // Do not await the requester lane: its turn can be waiting for this delivery.
-    // Keep shutdown custody, but discard the sender's work scope and writer claim.
+    // Do not await the requester: its turn can be waiting for this delivery.
+    // Retain shutdown custody while acquiring independent controller mutation ownership.
     const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
-    void runOutsideAsyncWorkScope(() =>
-      enqueueCommandInLane(
-        resolveSessionLane(mirror.sessionKey),
-        () => runWithoutOwnedSessionTranscriptWrites(append),
-        { taskIdentity: { taskKind: "delivery-mirror", sessionKey: mirror.sessionKey } },
-      ),
+    void runWithSessionControllerCleanup(() =>
+      runOutsideAsyncWorkScope(async () => {
+        const agentId = resolveSessionAgentId({
+          config: params.delivery.cfg,
+          sessionKey: mirror.sessionKey,
+          agentId: mirror.agentId,
+        });
+        await runSessionMutation({
+          scope: resolveSessionStorePathCore(params.delivery.cfg.session?.store, { agentId }),
+          identities: [mirror.sessionKey, mirror.expectedSessionId],
+          agentId,
+          policy: "wait",
+          run: () => runWithoutOwnedSessionTranscriptWrites(append),
+        });
+      }),
     )
       .catch((error: unknown) => warnFailure(formatErrorMessage(error)))
       .finally(() => releaseRootWork?.());

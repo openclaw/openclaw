@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability as finalize,
@@ -10,7 +10,7 @@ import {
   rewrapToolWithBeforeToolCallHook as rewrapHook,
   wrapToolWithBeforeToolCallHook as wrapHook,
 } from "./agent-tools.before-tool-call.js";
-import { normalizeToolParameters } from "./agent-tools.schema.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
 import {
   applyToolSearchCatalog as applyCatalog,
@@ -71,6 +71,14 @@ function catalogFixture(wait = reader(), toolExecutionAllow?: string[]) {
     return applyCatalog(params);
   };
   return { tool, params, catalogRef, apply, wait };
+}
+// An offered reader keeps the collector definition (prompt-cache stability); execution
+// denial of the reader is enforced by the spawn guard, not by hiding the fields.
+function expectOfferedCollection(tool: { parameters: unknown; description: unknown }) {
+  for (const field of ["collect", "outputSchema", "groupId"]) {
+    expect(tool.parameters).toHaveProperty(`properties.${field}`);
+  }
+  expect(tool.description).toContain("collect=true");
 }
 function expectHiddenCollection(tool: { parameters: unknown; description: unknown }) {
   expect(tool.parameters).toHaveProperty("properties.fastMode");
@@ -159,7 +167,7 @@ describe("collector tool availability", () => {
     const { tool, params, catalogRef, apply } = catalogFixture(reader(), allow);
     const expectUnavailable = async () => {
       await expectCollectionDenied(tool);
-      expect(tool.parameters).not.toHaveProperty("properties.collect");
+      expect(tool.parameters).toHaveProperty("properties.collect");
     };
     apply();
     expect(tool.parameters).toHaveProperty("properties.collect");
@@ -200,7 +208,13 @@ describe("collector tool availability", () => {
     const source = spawnTool();
     const wait = reader();
     finalize([source, wait]);
-    const normalized = normalizeToolParameters(source, { modelProvider: "google" });
+    const [normalized] = finalizeAgentTools({
+      tools: [source, wait],
+      modelProvider: "google",
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
 
     finalize([normalized, wait]);
     expectNormalizedCollector(normalized);
@@ -228,7 +242,11 @@ describe("collector tool availability", () => {
         [tool, ...(kind === "missing" ? [] : [candidate])],
         kind === "denied" ? { toolExecutionAllow: ["sessions_spawn"] } : undefined,
       );
-      expectHiddenCollection(tool);
+      if (kind === "denied" || kind === "execution-denied") {
+        expectOfferedCollection(tool);
+      } else {
+        expectHiddenCollection(tool);
+      }
       await expectCollectionDenied(tool, "collect", {
         [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: "copied",
       });
@@ -278,8 +296,10 @@ describe("collector tool availability", () => {
         firstEntries.find((item) => item.name === "sessions_spawn")?.parameters,
       ).toHaveProperty("properties.collect");
       const entry = catalogRef.current?.entries.find((item) => item.name === "sessions_spawn");
-      expectHiddenCollection(tool);
-      expectHiddenCollection({ parameters: entry?.parameters, description: entry?.description });
+      const expectCollection =
+        readerState === "lookalike" ? expectHiddenCollection : expectOfferedCollection;
+      expectCollection(tool);
+      expectCollection({ parameters: entry?.parameters, description: entry?.description });
     },
   );
 

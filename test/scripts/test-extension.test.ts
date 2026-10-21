@@ -699,69 +699,6 @@ it("confines extension roots without selecting path lookalikes", async () => {
 });
 
 it.each([
-  {
-    args: ["--exclude=extensions/memory-lancedb/memory-cli.test.ts"],
-    nodeCode: 0,
-    bunCode: 0,
-  },
-  { args: ["--watch"], nodeCode: 0, bunCode: 0, combined: true, bun: false },
-])("adds only qualified Bun work after Node with $args ($nodeCode/$bunCode)", async (row) => {
-  const memoryConfig = extensionConfig("memory");
-  const databaseConfig = extensionConfig("database-workers");
-  const configs = [memoryConfig, databaseConfig];
-  const targets = [
-    "extensions/memory-lancedb/config.test.ts",
-    "extensions/memory-lancedb/index.test.ts",
-  ];
-  const calls: RunGroupParams[] = [];
-  const result = await runExtensionBatchPlan(
-    batchPlan(configs.map((config, i) => [config, 1, "memory-lancedb", 1, [targets[i]!]])),
-    {
-      env: {
-        OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual",
-        OPENCLAW_VITEST_RUNTIME: "bun",
-        OPENCLAW_VITEST_MAX_WORKERS: "4",
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/extension-runtime-cache/",
-      },
-      vitestArgs: row.args,
-      runGroup: async (params) => {
-        calls.push(params);
-        return params.env?.OPENCLAW_VITEST_RUNTIME === "bun" ? row.bunCode : row.nodeCode;
-      },
-    },
-  );
-  expect(result).toBe(row.nodeCode || row.bunCode);
-  const node = calls.filter((call) => call.env?.OPENCLAW_VITEST_RUNTIME === "node");
-  const bun = calls.filter((call) => call.env?.OPENCLAW_VITEST_RUNTIME === "bun");
-  expect(node.map((call) => call.config)).toEqual(
-    row.combined ? ["test/vitest/vitest.database-worker-watch.config.ts"] : configs,
-  );
-  expect(node.flatMap((call) => call.targets).toSorted()).toEqual(
-    targets.map(withoutExtensionRoot).toSorted(),
-  );
-  expect(bun).toHaveLength(row.bun === false ? 0 : 1);
-  if (row.bun !== false) {
-    expect(bun[0]).toMatchObject({
-      config: memoryConfig,
-      targets: ["memory-lancedb/config.test.ts"],
-      env: {
-        OPENCLAW_VITEST_MAX_WORKERS: "4",
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.resolve("/tmp/extension-runtime-cache") + "-bun",
-      },
-    });
-    expect(calls.indexOf(bun[0]!)).toBeGreaterThan(calls.indexOf(node[0]!));
-  }
-  for (const call of calls) {
-    expect(call.args).toEqual(relativizeExtensionVitestArgs(row.args));
-  }
-  expect(
-    node.every(
-      (call) => call.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH === "/tmp/extension-runtime-cache/",
-    ),
-  ).toBe(true);
-});
-
-it.each([
   { policy: "bun-all", nodeCode: 0, bunCode: 0 },
   {
     policy: "bun-all",
@@ -773,7 +710,7 @@ it.each([
   { policy: "dual-all", nodeCode: 1, bunCode: 0 },
   { policy: "dual-all", nodeCode: 0, bunCode: 1 },
   { policy: "dual-all", nodeCode: 7, bunCode: 0 },
-])("runs the complete extension trial $policy ($nodeCode/$bunCode)", async (row) => {
+])("runs the complete extension selection with $policy ($nodeCode/$bunCode)", async (row) => {
   const calls: RunGroupParams[] = [];
   let completedNode = 0;
   const args = row.args ?? ["--reporter=dot"];

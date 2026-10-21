@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  readSqliteDatabaseScopedWriteToken,
+} from "../../infra/sqlite-database-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -35,6 +39,7 @@ import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-pr
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { modelContextPageWriteScope } from "./session-model-context-pages.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
@@ -106,11 +111,30 @@ it("publishes history changes only after deletion while fresh reads observe sibl
   const { sessionKey } = base;
   const sessionId = "history-publication-old";
   const scope = { ...base, sessionId };
+  const history = Array.from({ length: 513 }, (_, index) => ({
+    ...transcript[0]!,
+    id: `event-${index}`,
+  }));
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
-  await replaceTranscriptEvents(scope, transcript);
+  await replaceTranscriptEvents(scope, history);
   const successor = { sessionId: "history-publication-current", updatedAt: 2 };
+  const pageScopes = [
+    modelContextPageWriteScope(sessionId, 0),
+    modelContextPageWriteScope(sessionId, 512),
+    modelContextPageWriteScope(successor.sessionId, 0),
+  ];
+  readSqliteDatabaseScopedWriteToken(database.db, pageScopes);
+  // Deletion must also retire pages retained before the transcript became shorter.
+  await replaceTranscriptEvents(scope, transcript);
   replaceSessionEntrySync(scope, successor);
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  const retainedPageScopes = () => {
+    const admission = captureSqliteDatabaseAdmissions(undefined, { location: database.path })[0];
+    return pageScopes.map((key) =>
+      admission?.writeScopes.has(JSON.stringify(["session-id", key.sessionId, key.partition])),
+    );
+  };
+  expect(retainedPageScopes()).toEqual([true, true, true]);
   // Warm the unpinned native reader before a separate connection changes protection.
   expect(loadSessionEntryReadOnly(scope)).toMatchObject(successor);
   const prepared = planSessionStateDeleteIfUnreferenced({
@@ -179,6 +203,7 @@ it("publishes history changes only after deletion while fresh reads observe sibl
         label: "sibling protection",
       });
       await expect(loadTranscriptEvents(scope)).resolves.toEqual(deleted ? [] : transcript);
+      expect(retainedPageScopes()).toEqual(deleted ? [false, false, true] : [true, true, true]);
     }
   } finally {
     stop();

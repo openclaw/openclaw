@@ -6,6 +6,7 @@ type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 export type UpdateRunReconciliationInput = {
   explicit?: boolean;
   runIds?: readonly string[];
+  excludeRunId?: string;
   requireAllActive?: boolean;
   legacyOnly?: boolean;
   /** Lightweight repair must still exclude unfinished post-core work at commit. */

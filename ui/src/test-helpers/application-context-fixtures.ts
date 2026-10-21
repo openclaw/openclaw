@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.ts";
 import type { GatewayEventFrame, GatewayEventListener } from "../api/gateway.ts";
 import type {
   ApplicationContext,
@@ -62,14 +63,9 @@ export function createApplicationGateway(
       return snapshot;
     },
     connect: () => undefined,
-    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents(listener: GatewayEventListener) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribe: (listener: (value: ApplicationGatewaySnapshot) => void) =>
+      registerListener(listeners, listener),
+    subscribeEvents: (listener: GatewayEventListener) => registerListener(eventListeners, listener),
   } as unknown as ApplicationGateway;
   return {
     gateway,
@@ -105,11 +101,6 @@ export function createNavigationPreferencesFixture(): ApplicationContext["naviga
         listener(snapshot);
       }
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
   };
 }

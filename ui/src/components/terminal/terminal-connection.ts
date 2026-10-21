@@ -22,6 +22,9 @@ export interface TerminalGatewayClient {
     options?: TerminalRequestOptions,
   ): Promise<T>;
   addEventListener(listener: (evt: Pick<EventFrame, "event" | "payload">) => void): () => void;
+  readonly recoveryScope?: string;
+  readonly recoveryScopeReady?: boolean;
+  readonly offlineRecoveryRetired?: boolean;
   /** Recovers unreplayable output gaps and terminal-open watchdog failures. */
   forceReconnect(reason: string): void;
 }
@@ -39,7 +42,7 @@ type TerminalExitInfo = {
 type TerminalReplay = {
   data: string;
   newlyObservedFrom: number;
-  mode: "initial" | "recovery";
+  mode: "initial" | "recovery" | "resume";
   signal: AbortSignal;
 };
 
@@ -132,6 +135,8 @@ export class TerminalConnection {
   // Fence for replies that outlive dispose(): without it a late open/attach
   // would resurrect stream state after its panel is gone or replaced by a reconnect.
   private disposed = false;
+  private suspended = false;
+  private transportGeneration = 0;
   private pendingOpenCount = 0;
 
   // Failed opens never register, so bound their pre-registration output.
@@ -199,6 +204,7 @@ export class TerminalConnection {
     params: TerminalOpenParams | SessionsCatalogStartTerminalParams,
     sink: SessionSink,
   ): Promise<TerminalOpenResult> {
+    const generation = this.transportGeneration;
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
@@ -207,7 +213,7 @@ export class TerminalConnection {
         }),
       );
     } catch (error) {
-      if (!isTerminalOpenTimeout(error)) {
+      if (generation !== this.transportGeneration || !isTerminalOpenTimeout(error)) {
         throw error;
       }
       if (isTerminalOpenRequestTimeout(error)) {
@@ -227,7 +233,7 @@ export class TerminalConnection {
       }
       throw new TerminalOpenUnusableSessionError(missingField);
     }
-    if (this.disposed) {
+    if (this.disposed || this.suspended || generation !== this.transportGeneration) {
       return result;
     }
     const stream = this.setStream(result.sessionId, sink, {
@@ -240,9 +246,10 @@ export class TerminalConnection {
 
   /** Rebinds a session and resets the emulator to its authoritative replay. */
   async attach(sessionId: string, sink: SessionSink): Promise<TerminalAttachResult> {
+    const generation = this.transportGeneration;
     const result = await this.requestReplay(sessionId);
     const offset = result.seq;
-    if (this.disposed) {
+    if (this.disposed || this.suspended || generation !== this.transportGeneration) {
       return result;
     }
     const stream = this.setStream(sessionId, sink, {
@@ -334,16 +341,28 @@ export class TerminalConnection {
     if (stream.recovering) {
       return;
     }
+    const signal = stream.abort.signal;
+    void this.reattachStream(sessionId, stream, gapFrame).catch(() => {
+      if (!signal.aborted) {
+        this.client.forceReconnect("terminal replay failed");
+      }
+    });
+  }
+
+  private async reattachStream(
+    sessionId: string,
+    stream: StreamState,
+    gapFrame?: Extract<PendingEvent, { kind: "data" }>,
+  ): Promise<void> {
     stream.recovering = true;
     const signal = stream.abort.signal;
-    void this.requestReplay(sessionId)
+    return this.requestReplay(sessionId)
       .then(async (result) => {
         if (signal.aborted) {
           return;
         }
         const offset = result.seq;
         const previouslyObservedThrough = stream.expectedSeq;
-        stream.expectedSeq = offset;
         // The ring may include both bytes already delivered and the gap's
         // missing suffix. Preserve that boundary so response-producing
         // emulators do not answer historical control queries twice.
@@ -355,12 +374,18 @@ export class TerminalConnection {
         await stream.sink.onReplay({
           data: result.buffer,
           newlyObservedFrom,
-          mode: "recovery",
+          mode:
+            !gapFrame &&
+            replayStart <= previouslyObservedThrough &&
+            offset >= previouslyObservedThrough
+              ? "resume"
+              : "recovery",
           signal,
         });
         if (signal.aborted) {
           return;
         }
+        stream.expectedSeq = offset;
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset);
       })
@@ -369,7 +394,7 @@ export class TerminalConnection {
           return;
         }
         const queued = this.pending.get(sessionId)?.drain();
-        if (queued?.some((event) => event.kind === "exit")) {
+        if (gapFrame && queued?.some((event) => event.kind === "exit")) {
           // The process can exit before the recovery attach finds it. Preserve
           // every received tail frame, then surface the terminal exit once.
           this.pending.delete(sessionId);
@@ -387,8 +412,34 @@ export class TerminalConnection {
         }
         stream.recovering = false;
         this.pending.delete(sessionId);
-        this.client.forceReconnect("terminal replay failed");
+        throw new Error("terminal replay failed");
       });
+  }
+
+  /** Retain stream offsets and sinks, but retire every request from the old transport. */
+  suspend(): void {
+    this.suspended = true;
+    this.transportGeneration += 1;
+    for (const stream of this.streams.values()) {
+      stream.abort.abort();
+    }
+    this.pending.clear();
+    this.dropSubscriptions();
+  }
+
+  async resume(): Promise<Map<string, unknown>> {
+    this.suspended = false;
+    const failures = new Map<string, unknown>();
+    await Promise.all(
+      [...this.streams].map(([sessionId, stream]) => {
+        stream.abort.abort();
+        stream.abort = new AbortController();
+        return this.reattachStream(sessionId, stream).catch((error: unknown) => {
+          failures.set(sessionId, error);
+        });
+      }),
+    );
+    return failures;
   }
 
   private flushPending(sessionId: string, stream: StreamState, coveredThroughSeq?: number): void {
@@ -471,17 +522,30 @@ export class TerminalConnection {
 
   private async requestAction(method: string, sessionId: string, params: unknown): Promise<void> {
     const stream = this.streams.get(sessionId);
-    // Transport failures stay with Gateway reconnect; only a negative acknowledgment ends this stream.
-    const result = await this.client.request<{ ok: boolean }>(method, params).catch(() => null);
-    if (result?.ok !== false || !stream || this.streams.get(sessionId) !== stream) {
+    const signal = stream?.abort.signal;
+    if (this.suspended || this.disposed || stream?.recovering) {
+      throw new Error("Terminal is reconnecting. Input was not sent.");
+    }
+    const result = await this.client.request<{ ok: boolean }>(method, params);
+    if (result == null || signal?.aborted) {
+      throw new Error("Terminal delivery could not be confirmed.");
+    }
+    if (result.ok || !stream || this.streams.get(sessionId) !== stream) {
       return;
     }
+    // Transport failures stay with Gateway reconnect; only a negative acknowledgment ends this stream.
     this.deliverExit(sessionId, stream, {
       exitCode: null,
       signal: null,
       reason: "disconnected",
       error: "Terminal session is no longer available. Open a new terminal session.",
     });
+  }
+
+  release(sessionId: string): void {
+    this.removeStream(sessionId);
+    this.pending.delete(sessionId);
+    this.maybeUnsubscribe();
   }
 
   async close(sessionId: string): Promise<void> {

@@ -17,6 +17,7 @@ import {
 import {
   ASYNC_DIAGNOSTIC_EVENT_NAMES,
   PRIORITY_ASYNC_DIAGNOSTIC_EVENT_NAMES,
+  PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES,
 } from "./diagnostic-event-queue-policy.js";
 import {
   cloneDiagnosticValueForListener,
@@ -1053,15 +1054,15 @@ function dispatchDiagnosticEvent(
         const event = eventForListener();
         metadataForListener ??= createDiagnosticMetadataForListener(metadata);
         const otel = isTrustedOtelDiagnosticListener(listener);
+        const hostPluginId = otel ? options.hostPluginId : undefined;
         let privateDataForListener = EMPTY_DIAGNOSTIC_PRIVATE_DATA;
-        if (interest?.includePrivateData !== false && (privateData || otel)) {
+        if (interest?.includePrivateData !== false && (privateData || hostPluginId)) {
           // Retain the host-owned transport for independently updated OTel installs.
           const cloned = structuredClone(privateData ?? {});
-          if (otel) {
+          if (hostPluginId) {
+            Object.assign(cloned, { hostPluginId });
+          } else if (otel) {
             Reflect.deleteProperty(cloned, "hostPluginId");
-            if (options.hostPluginId) {
-              Object.assign(cloned, { hostPluginId: options.hostPluginId });
-            }
           }
           privateDataForListener = deepFreezeDiagnosticValue(cloned);
         }
@@ -1589,17 +1590,7 @@ export function hasPendingInternalDiagnosticEvent(
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
   return onInternalDiagnosticEvent((event) => listener(event), {
     includeTrusted: [],
-    exclude: [
-      "log.record",
-      "gateway.rpc",
-      "sessions.list.retention",
-      "gateway.ws.event",
-      "gateway.ws.connections",
-      "gateway.event_loop.sample",
-      "gateway.main_thread.stall",
-      "gateway.http.cancelled",
-      "diagnostic.gc",
-    ],
+    exclude: PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES,
   });
 }
 

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { McpConnectionAuthorityError } from "../agents/mcp-connection-authority-error.js";
+import { mcpEnterpriseIdpStoreKey, type McpEnterpriseConfig } from "../agents/mcp-enterprise.js";
+import { clearMcpOAuthStore } from "../agents/mcp-oauth-store.js";
+import {
+  seedMcpOAuthStoreForTest,
+  withMcpOAuthTestLease,
+} from "../agents/mcp-oauth.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -8,6 +14,7 @@ import { makeContextParams } from "../gateway/server-request-context.test-suppor
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createPluginServiceMcpEvents } from "./service-mcp-events.js";
 import { createServiceCronHost } from "./services.test-support.js";
@@ -365,7 +372,14 @@ it("retains exact cleanup across benign refresh, removal, and connector config r
     }),
   ).rejects.toThrow("another webhook");
   // Object order is not subscription identity.
-  await prepared.subscribe({ arguments: { nested: { a: 1, b: 2 }, calendar: "work" } });
+  const callerArguments = { nested: { a: 1, b: 2 }, calendar: "work" };
+  const subscribing = prepared.subscribe({ arguments: callerArguments });
+  callerArguments.nested.a = 99;
+  await subscribing;
+  expect(mocks.request.mock.lastCall?.[0]).toMatchObject({
+    method: "events/subscribe",
+    params: { arguments: subscription.arguments },
+  });
   f.cfg = {
     mcp: { servers: { calendar: calendarServer("https://other.example/mcp") } },
   };
@@ -382,6 +396,7 @@ it("retains exact cleanup across benign refresh, removal, and connector config r
     server: { url: "https://calendar.example/mcp" },
     params: {
       name: subscription.name,
+      arguments: subscription.arguments,
       delivery: { mode: "webhook", url: subscription.delivery.url },
     },
   });
@@ -494,6 +509,61 @@ it("binds callback authority to the resolver lifetime, not rotating credentials 
   refreshed.dispose();
   reconnected.dispose();
   expect(resolver.disposed).toHaveBeenCalledTimes(4);
+});
+
+it("stops enterprise callback admission and subscription renewal before remote effects after logout", async () => {
+  await withOpenClawTestState({ label: "mcp-enterprise-event-final-effect" }, async () => {
+    const enterprise: McpEnterpriseConfig = {
+      identity: "shared",
+      idpIssuer: "https://idp.example.test",
+      idpClientId: "fixture-client",
+      idpClientSecret: "fixture-secret",
+      resourceIssuer: "https://auth.example.test",
+      resourceClientId: "fixture-resource-client",
+      resourceClientSecret: "fixture-resource-secret",
+      scope: "mcp.read",
+      redirectUrl: "http://localhost:3097/callback",
+    };
+    f.cfg.mcp!.servers!.calendar = {
+      ...calendarServer(),
+      auth: "enterprise",
+      enterprise,
+    };
+    const storeKey = mcpEnterpriseIdpStoreKey(enterprise);
+    const seed = (authorizationId: string) =>
+      seedMcpOAuthStoreForTest(storeKey, {
+        tokens: {
+          access_token: "fixture-idp-access",
+          id_token: "fixture-id-token",
+          token_type: "Bearer",
+        },
+        authorizationId,
+      });
+    seed("first-account");
+    const first = await prepare();
+    await first.subscribe();
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+    const firstPrincipal = first.principalId;
+    expect(() => first.assertCurrent()).not.toThrow();
+
+    await withMcpOAuthTestLease(storeKey, (lease, context) =>
+      clearMcpOAuthStore({ storeKey, lease, context }),
+    );
+    expect(first.assertCurrent).toThrow(McpConnectionAuthorityError);
+    await expect(first.revalidate()).rejects.toMatchObject(retired);
+    await expect(first.subscribe()).rejects.toMatchObject(retired);
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+
+    seed("replacement-account");
+    const replacement = await prepare();
+    expect(replacement.principalId).not.toBe(firstPrincipal);
+    await replacement.subscribe();
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+    await expect(first.list()).rejects.toMatchObject(retired);
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+    first.dispose();
+    replacement.dispose();
+  });
 });
 
 it("fails closed for a credential-only resolver that cannot assert live callback authority", async () => {

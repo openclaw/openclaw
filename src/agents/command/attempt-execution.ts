@@ -53,7 +53,6 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { isCliProvider } from "../model-selection.js";
-import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { resolveCommandReplyExpectation } from "../reply-completion.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -78,6 +77,7 @@ import {
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
+import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -228,25 +228,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         ? ["structured_output"]
         : undefined,
   });
-  const toolContext = {
-    messageChannel: params.messageChannel,
-    messageProvider: params.opts.messageProvider ?? params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    chatId: params.runContext.chatId,
-    channelContext: params.runContext.channelContext,
-    currentThreadTs: params.runContext.currentThreadTs,
-    currentInboundAudio: params.runContext.currentInboundAudio,
-    replyToMode: params.runContext.replyToMode,
-    senderId: params.runContext.senderId,
-    senderIsOwner: params.opts.senderIsOwner,
-    scheduledToolPolicy: params.opts.scheduledToolPolicy,
-    pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
-  };
+  const toolContext = buildCommandAttemptToolContext(params);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
@@ -310,15 +292,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     allowCliAuthProfileForwarding && !cliAuthNeedsSessionBinding
       ? await resolveCliExecutionAuthProfileId(buildCliAuthContext())
       : runtimeAuthPlan.forwardedAuthProfileId;
-  const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
-    provider: params.providerOverride,
-    harnessRuntime: agentHarnessPolicy.runtime,
-    agentHarnessId: requestedAgentHarnessId,
-    authProfileProvider: runtimeAuthPlan.authProfileProviderForAuth,
-    authProfileId,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
     sessionRuntimeOverride ??
@@ -369,6 +342,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,
       inputProvenance: params.opts.inputProvenance,
+      privateCompletion: params.opts.privateCompletion,
       skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
       sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
       taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
@@ -720,7 +694,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
     toolBindings: params.opts.toolBindings,
-    provider: embeddedAgentProvider,
+    provider: params.providerOverride,
     requestedRouteResolution: "resolved",
     resolvedModelSelection: params.resolvedModelSelection,
     modelThinkingCapability: params.modelThinkingCapability,
@@ -765,7 +739,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     onRetryWait: params.deferredLifecycle?.beginRetryWait,
     assistantErrorTranscript: params.assistantErrorTranscript,
     authProfileFailurePolicy: params.authProfileFailurePolicy,
-    onUserMessagePersisted: params.onUserMessagePersisted,
     onCompactionAccounting: params.onCompactionAccounting,
     onCompactionRequestBudget: params.onCompactionRequestBudget,
     onSuccessfulAuthProfile: params.onSuccessfulAuthProfile

@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { Show } from "solid-js";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import "../../../components/modal-dialog.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -11,6 +11,7 @@ export type DreamingToggleConfirmationProps = {
   // stops the sweep for every agent, not just the one this panel is showing.
   enabling: boolean;
   loading: boolean;
+  disabled: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   hasError: boolean;
@@ -19,7 +20,7 @@ export type DreamingToggleConfirmationProps = {
 export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmationProps) {
   const titleId = "dreaming-toggle-confirmation-title";
   const descriptionId = "dreaming-toggle-confirmation-description";
-  const action = createMemo(() => (props.enabling ? "enable" : "disable"));
+  const action = () => (props.enabling ? "enable" : "disable");
   const title = () => t(`dreaming.toggleConfirmation.${action()}Title`);
   const description = () => t("dreaming.toggleConfirmation.subtitle");
   const detail = () => t(`dreaming.toggleConfirmation.${action()}Detail`);
@@ -60,7 +61,7 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
           <openclaw-modal-actions class="exec-approval-actions">
             <button
               class={["btn", { primary: props.enabling, danger: !props.enabling }]}
-              disabled={props.loading}
+              disabled={props.disabled || props.loading}
               onClick={() => props.onConfirm()}
             >
               {props.loading ? t("dreaming.toggleConfirmation.saving") : confirmLabel()}

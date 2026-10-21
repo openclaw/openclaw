@@ -225,7 +225,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.environment.color":
     "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
   "gateway.controlUi.communityInvite":
-    "Show the compact Community entry in the Control UI served by this Gateway (default on). Selecting it opens Discord, Reddit, and X links. Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect. Earlier promotional-card dismissals do not hide this entry.",
+    "Show a dismissible Community card in the Control UI sidebar (default on), with Discord, Reddit, and X links. Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect. Existing browser-local dismissals remain honored.",
   "gateway.controlUi.newSessionModelDefaults":
     'Choose "configured" to start fresh Control UI drafts with the selected agent’s configured model, runtime and reasoning defaults instead of remembered selections. Default: "last-used". Explicit draft and conversation choices remain editable; Fast Mode and placement preferences are unchanged. Applies after browser refresh or reconnect.',
   "gateway.controlUi.github.host":
@@ -538,7 +538,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.allowSymlinkTargets":
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
-    "Enable passive skill rescans in one background worker about once per minute. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
+    "Enable filesystem-triggered skill discovery with a safety rescan every 30 minutes for missed events. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
   "skills.workshop.autonomous.mode":
     'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "off" disables background learning. Default: "auto".',
   "skills.workshop.autonomous.channelNotices":

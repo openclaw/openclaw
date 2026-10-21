@@ -288,10 +288,6 @@ export const EMPTY_CONFIG_SNAPSHOT = {
   issues: [],
 };
 
-export function createWizardTestRuntime() {
-  return wizardTestMocks.runtime;
-}
-
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });

@@ -7,12 +7,11 @@ import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-c
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.public.js";
-import { createDefaultDeps } from "../src/cli/deps.js";
-import { createMessageCliHelpers } from "../src/cli/program/message/helpers.js";
-import { registerMessageDiscordAdminCommands } from "../src/cli/program/message/register.discord-admin.js";
-import { registerMessageSearchCommand } from "../src/cli/program/message/register.permissions-search.js";
-import { registerMessageReadEditDeleteCommands } from "../src/cli/program/message/register.read-edit-delete.js";
-import { messageCommand } from "../src/commands/message.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "../src/cli/json-output-mode.js";
+import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
@@ -30,9 +29,14 @@ import {
 } from "../src/infra/agent-run-registry.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../src/plugins/runtime.js";
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
+import { defaultRuntime } from "../src/runtime.js";
 
 const graph = vi.hoisted(() => ({
   endpoint: undefined as { origin: string; signal: AbortSignal } | undefined,
@@ -294,13 +298,6 @@ async function createFixture(
       agentAccountId: "default",
       messageActionTurnCapability: turnCapability,
       config: cfg,
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-        resolvedConfig: config,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      }),
     }),
     {
       ...capabilityParams,
@@ -416,24 +413,56 @@ function expectGraphRequests(requests: GraphRequest[], action: Action, destinati
 }
 
 describe("Teams message CLI", () => {
-  async function runCli(
-    register: typeof registerMessageDiscordAdminCommands,
-    args: string[],
-    action: Action | "read",
-    json = true,
-  ) {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const command = new Command().name("message").exitOverride();
-    register(command, {
-      ...createMessageCliHelpers("msteams"),
-      runMessageAction: async (name, opts) => {
-        await messageCommand({ ...opts, action: name }, createDefaultDeps(), runtime);
-      },
+  async function runCli(args: string[], action: Action | "read", json = true) {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const command = new Command().name("openclaw").exitOverride();
+    registerMessageCommands(command, {
+      programVersion: "test",
+      messageChannelOptions: "msteams",
+      agentChannelOptions: "last|msteams",
     });
-
-    await command.parseAsync([...args, "--channel", "msteams", ...(json ? ["--json"] : [])], {
-      from: "user",
-    });
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("expected the Teams fixture registry");
+    }
+    const [configGuard, channelPluginIds, pluginLoader, oneShotExit] = await Promise.all([
+      import("../src/cli/program/config-guard.js"),
+      import("../src/plugins/channel-plugin-ids.js"),
+      import("../src/plugins/loader.js"),
+      import("../src/cli/one-shot-exit.js"),
+    ]);
+    // The harness owns config and registry admission; production owns parsed action dispatch.
+    const spies = [
+      vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined),
+      vi
+        .spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds")
+        .mockImplementation(({ channelIds }) => [...channelIds]),
+      vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry),
+      vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
+      vi
+        .spyOn(defaultRuntime, "writeJson")
+        .mockImplementation((value) => runtime.log(JSON.stringify(value))),
+      vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`unexpected CLI exit(${code})`);
+      }),
+      vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
+    ];
+    try {
+      const argv = ["message", ...args, "--channel", "msteams", ...(json ? ["--json"] : [])];
+      await withConsoleLogsRoutedToStderrForJson(
+        ["node", "openclaw", ...argv],
+        async () => {
+          applyResolvedCommandOutputMode(json);
+          await command.parseAsync(argv, { from: "user" });
+        },
+        { restoreChanges: true },
+      );
+    } finally {
+      for (const spy of spies) {
+        spy.mockRestore();
+      }
+    }
 
     expect(runtime.error).not.toHaveBeenCalled();
     if (!json) {
@@ -456,8 +485,8 @@ describe("Teams message CLI", () => {
     const readArgs = ["read", "--target", otherTarget, "--message-id", other.messageId];
     const searchArgs = ["search", "--channel-id", otherTarget, "--query", "planning"];
     const outputs = [
-      await runCli(registerMessageReadEditDeleteCommands, readArgs, "read", false),
-      await runCli(registerMessageSearchCommand, searchArgs, "search", false),
+      await runCli(readArgs, "read", false),
+      await runCli(searchArgs, "search", false),
     ];
     for (const output of outputs) {
       expect.soft(output).toContain(other.text);
@@ -471,13 +500,13 @@ describe("Teams message CLI", () => {
       from: messageSender,
       createdAt: messageCreatedAt,
     };
-    await expect(runCli(registerMessageReadEditDeleteCommands, readArgs, "read")).resolves.toEqual({
+    await expect(runCli(readArgs, "read")).resolves.toEqual({
       ok: true,
       channel: "msteams",
       action: "read",
       message,
     });
-    await expect(runCli(registerMessageSearchCommand, searchArgs, "search")).resolves.toEqual({
+    await expect(runCli(searchArgs, "search")).resolves.toEqual({
       ok: true,
       channel: "msteams",
       action: "search",
@@ -485,7 +514,6 @@ describe("Teams message CLI", () => {
       truncated: false,
     });
     const emptyOutput = await runCli(
-      registerMessageSearchCommand,
       ["search", "--channel-id", otherTarget, "--query", "unmatched"],
       "search",
       false,
@@ -497,7 +525,6 @@ describe("Teams message CLI", () => {
   it("reads a selected channel member without current conversation context", async () => {
     const fixture = await createFixture("none");
     const payload = await runCli(
-      registerMessageDiscordAdminCommands,
       ["member", "info", "--user-id", memberId, "--channel-id", otherTarget],
       "member-info",
     );
@@ -513,7 +540,6 @@ describe("Teams message CLI", () => {
     async ({ limit, count, truncated }) => {
       const fixture = await createFixture("none", "bundled", limit);
       const payload = await runCli(
-        registerMessageSearchCommand,
         ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", String(limit)],
         "search",
       );
@@ -528,7 +554,6 @@ describe("Teams message CLI", () => {
     const fixture = await createFixture("none");
     await expect(
       runCli(
-        registerMessageSearchCommand,
         ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", "abc"],
         "search",
       ),

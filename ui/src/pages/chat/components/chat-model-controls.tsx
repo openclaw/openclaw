@@ -90,7 +90,6 @@ export type ChatModelControlsProps = {
   onModelSelect?: (value: string, sessionKey: string, agentRuntime?: string | null) => unknown;
   onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
-  onRequestUpdate?: () => void;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
 };
 
@@ -596,7 +595,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           props.onModelSelect?.(next, targetSessionKey, agentRuntime),
         onTargetRetry: props.onModelPickerTargetRetry,
         onTargetSelect: props.onModelPickerTargetSelect,
-        onRequestUpdate: props.onRequestUpdate,
       },
       effort: {
         disabled: effortDisabled,
@@ -610,7 +608,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         thinking,
         onFastModeSelect: async (next, targetSessionKey) =>
           props.onFastModeSelect?.(next, targetSessionKey),
-        onRequestUpdate: props.onRequestUpdate,
         onThinkingSelect: async (next, targetSessionKey) =>
           props.onThinkingSelect?.(next, targetSessionKey),
         reserved: reserveEffortPicker,

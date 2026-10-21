@@ -46,7 +46,7 @@ import {
   captureScheduledCodexAppAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import { releaseCodexProbeClient } from "./shared-client.js";
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
@@ -289,7 +289,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         },
       });
     } finally {
-      releaseLeasedSharedCodexAppServerClient(client);
+      await releaseCodexProbeClient(client, connection.attemptClientFactory);
     }
   }
   let requireExplicitMessageTarget: boolean | undefined;
@@ -380,6 +380,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cwd: effectiveCwd ?? effectiveWorkspace,
       sandboxToolPolicy: sandbox?.tools,
       conversationToolPolicy: params.conversationToolPolicy,
+      requesterOrigin: params.requesterOrigin,
+      operatorProfileId: params.operatorProfileId,
+      conversationId: params.conversationId,
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: params.trustedInternalHandoff,
       scheduledToolPolicy: params.scheduledToolPolicy,
@@ -506,6 +509,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      messageToolFinalByDefault: params.messageToolFinalByDefault,
       onToolOutcome: onCodexToolOutcome,
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
       trigger: params.trigger,
@@ -553,6 +557,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? "direct"
         : resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
             connectionClass: connection.appServer.connectionClass,
+            nativeToolSurfaceEnabled,
           }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,

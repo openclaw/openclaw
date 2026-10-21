@@ -3,6 +3,7 @@ import type {
   SessionPlacement,
   SessionsDispatchResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   GatewayPayloadLimitError,
   GatewayRequestError,
@@ -336,6 +337,7 @@ export async function startSessionPlacementInitialTurn(
     messageId?: string;
     mode: SessionPlacementStartMode;
     cleanupOnCancellation?: () => boolean;
+    signal?: AbortSignal;
   },
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
@@ -416,9 +418,11 @@ export async function startSessionPlacementInitialTurn(
   }
   if (resolution.status === "rejected") {
     const state = typeof resolution.placement?.state === "string" ? resolution.placement.state : "";
+    const placementError =
+      resolution.placement?.state === "failed" ? resolution.placement.recoveryError : undefined;
     return {
       status: "dispatch-rejected",
-      error: dispatchError || (state ? `session placement became ${state}` : ""),
+      error: placementError || dispatchError || (state ? `session placement became ${state}` : ""),
     };
   }
   if (!isCurrent()) {
@@ -440,14 +444,22 @@ export async function startSessionPlacementInitialTurn(
     return rejectBeforeDelivery("placement recovery storage is unavailable", "send-not-started");
   }
   try {
-    const sent = await client.request("sessions.send", {
-      key: params.key,
-      agentId: params.agentId,
-      message,
-      ...(mentions?.length ? { mentions } : {}),
-      attachments: params.attachments,
-      idempotencyKey: messageId,
-    });
+    const sent = await client.request(
+      "sessions.send",
+      {
+        key: params.key,
+        agentId: params.agentId,
+        message,
+        ...(mentions?.length ? { mentions } : {}),
+        attachments: params.attachments,
+        idempotencyKey: messageId,
+      },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: params.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
     if (!isCurrent()) {
       return await cancelSessionPlacement(client, params, cleanupOnCancellation, messageId);
     }

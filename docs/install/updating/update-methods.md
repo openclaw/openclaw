@@ -571,6 +571,22 @@ needs attention.
 
     For a direct CLI update, scratch variables set by the invoking operator (`TMPDIR`, `TMP`, and `TEMP`) take precedence over managed-service defaults. For example, `TMPDIR="$HOME/.cache" openclaw update` checks that directory first and labels it `explicit-tmpdir` in snapshot capacity reports. The service still owns installation, profile, state, and runtime-path selection. This precedence fix belongs to the installed updater and takes effect for updates it performs after installation; a newer candidate cannot change an older updater's environment merge.
 
+    `TMPDIR` is scratch placement, not a relocation of the installation or durable state. Large update writes have these owners:
+
+    | Data | Location |
+    | --- | --- |
+    | Retained updater runtime | Explicit `TMPDIR`, otherwise a sibling of the installation when possible so unchanged files can be hard-linked; system temp is the fallback. |
+    | Disposable candidate state and plugin rehearsal | A capacity-checked directory, preferring explicit `TMPDIR`. |
+    | Plugin source captures during update finalization | Explicit `TMPDIR`; ordinary Gateway captures remain under the state directory. |
+    | SQLite read-only inspection snapshots | Explicit `XDG_CACHE_HOME`, then `TMPDIR` during updates; ordinary inspection retains its platform cache default. |
+    | Original-state captures | `<state-dir>.update-captures`, retained there so later recovery and cleanup can discover them. These are durable recovery artifacts, not disposable temp files. Known payload space is checked before capture; an unavailable optional capture produces a warning. |
+    | Doctor migration backups | Beside the database being migrated, retained for recovery rather than moved with temporary scratch. |
+    | Package candidates and rollback images | Beside the package-manager installation, so activation and rollback can rename on the same filesystem. Database backup admission checks the backup and restore volumes before migration. |
+    | Installed plugin projects | The selected state directory's npm/git roots; these are the installed plugins. |
+    | npm cache | npm's configured cache, independently of `TMPDIR`. Set npm's existing `npm_config_cache` variable to move it. |
+
+    A large temp volume does not supply free space to these durable destinations. Preserve recovery artifacts when freeing space. After a failed update, retry the reported recovery command or `openclaw update repair`; do not delete journals or captures to clear a pending recovery hold.
+
     This check runs in the installed updater; an already-installed 2026.9.3 updater retains its prior behavior for its own first upgrade hop.
 
   </Accordion>

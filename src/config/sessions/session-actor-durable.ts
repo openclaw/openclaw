@@ -135,6 +135,3 @@ export function createSessionActorFactory(
     },
   };
 }
-
-/** Existing durable callers share the same acquisition owner. */
-export const createDurableSessionActorFactory = createSessionActorFactory;

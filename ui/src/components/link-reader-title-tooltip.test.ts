@@ -54,7 +54,9 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
   const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
   const provider = document.createElement(tag) as LinkReaderHovercardProvider;
   provider.readers = [TEST_LINK_READER];
-  provider.client = createTestGatewayClient(request);
+  const client = createTestGatewayClient(request);
+  vi.spyOn(client, "connected", "get").mockReturnValue(true);
+  provider.client = client;
   const anchor = document.createElement("a");
   anchor.href = href;
   anchor.title = href;
@@ -203,7 +205,9 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   document.body.append(base);
   const provider = document.createElement(tag) as LinkReaderHovercardProvider;
   provider.readers = [TEST_LINK_READER];
-  provider.client = createTestGatewayClient(async () => response);
+  const client = createTestGatewayClient(() => Promise.resolve(response));
+  vi.spyOn(client, "connected", "get").mockReturnValue(true);
+  provider.client = client;
   provider.innerHTML = toSanitizedMarkdownHtml(
     `${href}\n\n[the **related** issue](${href} "${href}")\n\n[![Issue icon](data:image/png;base64,x "Icon hint")](${href} "Issue details")\n\n[](${href} "Issue details")\n\n[<button>](${href} "Issue details")\n\n[\\*](${href} "Issue details")\n\n[Documentation](https://example.com "Read the documentation")`,
   );

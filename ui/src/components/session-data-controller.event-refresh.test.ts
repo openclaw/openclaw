@@ -68,7 +68,7 @@ function createFilteredSessionController(
   const client = {
     request: <T>(method: string, params?: unknown): Promise<T> => {
       if (method === "sessions.groups.list") {
-        return Promise.resolve({ names: [], sectionOrder: [] } as T);
+        return Promise.resolve({ groups: [], sectionOrder: [] } as T);
       }
       if (method === "sessions.subscribe") {
         return Promise.resolve({ subscribed: true } as T);

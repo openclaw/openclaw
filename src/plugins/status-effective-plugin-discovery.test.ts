@@ -135,7 +135,6 @@ it.each([
       config,
       env: process.env,
       metadataSnapshot,
-      effectiveOnly: true,
       onlyPluginIds,
     });
 

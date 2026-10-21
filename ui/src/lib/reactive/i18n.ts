@@ -1,4 +1,5 @@
-import type { Locale } from "../../i18n/lib/registry.ts";
+import type { Locale } from "../../../../src/shared/control-ui-locale.ts";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { projectSource } from "./projection.ts";
 
@@ -8,7 +9,7 @@ type TranslationSource = {
   subscribe(listener: () => void): () => void;
 };
 
-const englishListeners = new Set<() => void>();
+const englishListeners = createChangeListeners({ snapshot: true });
 const registeredEnglish = new WeakSet<() => unknown>();
 
 /** Solid callers register their lazy English before reading its keys. */
@@ -16,10 +17,7 @@ export function registerEnglishCatalog<T>(register: () => T): T {
   const result = register();
   if (!registeredEnglish.has(register)) {
     registeredEnglish.add(register);
-    const snapshot = Array.from(englishListeners);
-    for (const notify of snapshot) {
-      notify();
-    }
+    englishListeners.publish();
   }
   return result;
 }
@@ -30,10 +28,10 @@ export function projectI18n(source: TranslationSource) {
     read: (current) => current,
     subscribe: (current, notify) => {
       const stopLocale = current.subscribe(notify);
-      englishListeners.add(notify);
+      const stopEnglish = englishListeners.subscribe(notify);
       return () => {
         stopLocale();
-        englishListeners.delete(notify);
+        stopEnglish();
       };
     },
     equality: "revision",

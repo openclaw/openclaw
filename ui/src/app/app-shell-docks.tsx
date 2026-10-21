@@ -56,7 +56,7 @@ export function ShellDocks(props: ShellDocksProps): SolidJSX.Element {
         ref={(element) => (props.elements.linkReaderPanel = element)}
         inert={props.navDrawerOpen}
         data-chat-autotype-exempt=""
-        prop:client={client()}
+        prop:client={gateway().client}
         prop:available={gateway().phase === "connected"}
         prop:readers={availableLinkReaders(gateway())}
         prop:agentId={props.selectedAgentId}

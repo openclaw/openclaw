@@ -1,9 +1,9 @@
 import "../../../styles/chat/session-rail.css";
 import "../../../styles/chat/working-indicator.css";
-import "./chat-comment-controller.ts";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
@@ -11,6 +11,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatTimeMs } from "../../../lib/format.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -20,7 +21,9 @@ import type {
 } from "../chat-session-companion.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
+import { ChatCommentController } from "./chat-comment-controller.ts";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
 import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
@@ -37,7 +40,6 @@ function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null 
   }
   return t("chat.rail.checksPending", { count: String(checks.running) });
 }
-const SESSION_RAIL_STARTER_KEYS = ["changed", "stopped", "remaining"] as const;
 const COMPANION_HINT_KEYS = {
   busy: "chat.rail.askBusy",
   "history-unavailable": "chat.rail.askHistoryUnavailable",
@@ -52,14 +54,18 @@ const COMPANION_HINT_KEYS = {
 >;
 
 type ChatSessionRailProps = {
+  presentation?: "desktop" | "mobile";
   sessionKey: string;
   digest: SessionObserverDigest | null;
   running: boolean;
   activeRunId: string | null;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
+  modelControls?: ChatModelControlsProps;
+  client: GatewayBrowserClient | null;
   connected: boolean;
   sendShortcut: ChatSendShortcut;
+  inputDeviceId?: string;
   onSubmit?: (question: string | ChatSessionCompanionTurn) => void;
   onDraftChange?: (draft: string) => void;
   onAttachmentsChange?: ChatAttachmentControlsProps["onAttachmentsChange"];
@@ -70,9 +76,16 @@ type ChatSessionRailProps = {
 };
 export type ChatSessionRailElement = SolidBridgeElement<ChatSessionRailProps>;
 
-function ChatSessionRailContent(props: ChatSessionRailProps) {
-  let region!: HTMLElement;
+const inputHandlers = new WeakMap<HTMLElement, () => void>();
+
+function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRailElement) {
+  let textarea: HTMLTextAreaElement | undefined;
   let thread!: HTMLDivElement;
+  const focusComposer = () => {
+    if (textarea && !textarea.disabled) {
+      textarea.focus({ preventScroll: true });
+    }
+  };
   const blocks = markdownBlocksRef(() => props.presented);
   const uploadConfig = createMemo(() => {
     const config = props.uploadConfig;
@@ -117,36 +130,49 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
       props.onSubmit?.(question);
     }
   };
-  // Focus the composer DOM only when the pane publishes a new focus intent.
-  const focusRequest = createMemo(() => props.focusRequest);
-  createEffect(focusRequest, (request) => {
-    if (!request) {
-      return undefined;
-    }
-    // The full-width mobile panel must commit before its input can take focus.
-    // Consume the pane's live intent after that commit, not while still hidden.
-    const frame = requestAnimationFrame(() => {
-      if (props.presented && request()) {
-        region
-          .querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")
-          ?.focus({ preventScroll: true });
+  onSettled(() => {
+    let focusRequest: ChatSessionRailProps["focusRequest"];
+    let scrollKey: string | undefined;
+    const syncInputs = () => {
+      const request = host.focusRequest;
+      if (request !== focusRequest) {
+        focusRequest = request;
+        cancelLayout(host);
+        if (request) {
+          // The mobile panel must commit before consuming the pane's focus intent.
+          scheduleLayout(host, () => () => {
+            if (host.presented && request()) {
+              focusComposer();
+            }
+          });
+        }
       }
-    });
-    return () => cancelAnimationFrame(frame);
-  });
-  const scrollKey = createMemo(() =>
-    JSON.stringify(props.companion.turns.map((turn) => [turn.question, turn.status])),
-  );
-  // The companion thread DOM follows newly submitted and settled turns.
-  createEffect(scrollKey, () => {
-    thread.scrollTop = thread.scrollHeight;
+      const nextScrollKey = JSON.stringify(
+        host.companion.turns.map((turn) => [turn.question, turn.status]),
+      );
+      if (nextScrollKey !== scrollKey) {
+        scrollKey = nextScrollKey;
+        scheduleLayout(thread, () => {
+          const bottom = thread.scrollHeight;
+          return () => {
+            thread.scrollTop = bottom;
+          };
+        });
+      }
+    };
+    inputHandlers.set(host, syncInputs);
+    syncInputs();
+    return () => {
+      inputHandlers.delete(host);
+      cancelLayout(host);
+      cancelLayout(thread);
+    };
   });
   const showPullRequests = () =>
     props.digest &&
     (!props.running || (props.activeRunId && props.digest.runId === props.activeRunId));
   return (
     <section
-      ref={(element) => (region = element)}
       class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded"
       role="region"
       aria-label={t("chat.rail.title")}
@@ -191,6 +217,8 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
         )}
         {!props.companion.loading && !props.companion.turns.length && (
           <PanelEmptyState
+            // Side chat keeps its native desktop empty; only mobile adopts the shared variant.
+            presentation={props.presentation === "mobile" ? "mobile" : undefined}
             icon={<Icon name="bot" />}
             heading={t("chat.sidePanel.companion")}
             description={t("chat.rail.empty")}
@@ -198,18 +226,18 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
         )}
         <For each={turns()} keyed={false}>
           {(turn) => {
-            const answered = createMemo(() => {
+            const answered = () => {
               const value = turn();
               return value.status === "answered" ? value : undefined;
-            });
-            const failed = createMemo(() => {
+            };
+            const failed = () => {
               const value = turn();
               return value.status === "failed" ? value : undefined;
-            });
-            const working = createMemo(() => {
+            };
+            const working = () => {
               const value = turn();
               return value.status === "pending" ? value : undefined;
-            });
+            };
             return (
               <article
                 class={[
@@ -303,35 +331,25 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
           }}
         </For>
       </div>
-      {!props.companion.turns.some((turn) => turn.status !== "failed") && (
-        <div class="chat-session-rail__starters">
-          <For each={SESSION_RAIL_STARTER_KEYS}>
-            {(key) => (
-              <button
-                class="chip chat-session-rail__starter"
-                type="button"
-                disabled={!props.connected}
-                onClick={() => props.onSubmit?.(t(`chat.rail.starters.${key}`))}
-              >
-                <Icon name="spark" />
-                <span>{t(`chat.rail.starters.${key}`)}</span>
-              </button>
-            )}
-          </For>
-        </div>
-      )}
-      <openclaw-chat-comment-controller
-        prop:paneId={`side-chat:${props.sessionKey}`}
-        prop:props={attachmentProps()}
-        prop:disabled={attachmentProps().disabled}
-        prop:sessionKey={props.sessionKey}
-        prop:presented={props.presented}
+      <ChatCommentController
+        onFocusComposer={focusComposer}
+        paneId={`side-chat:${props.sessionKey}`}
+        props={attachmentProps()}
+        disabled={Boolean(attachmentProps().disabled)}
+        sessionKey={props.sessionKey}
+        presented={props.presented}
       />
       <SessionRailComposer
+        textareaRef={(element) => (textarea = element)}
+        sessionKey={props.sessionKey}
         companion={props.companion}
+        modelControls={props.modelControls}
+        client={props.client}
         connected={props.connected}
+        presented={props.presented}
         pending={pending()}
         sendShortcut={props.sendShortcut}
+        inputDeviceId={props.inputDeviceId}
         attachmentProps={attachmentProps()}
         submit={submit}
         onDraftChange={props.onDraftChange}
@@ -341,15 +359,24 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
 }
 
 defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessionRailContent, {
+  propertyChanged: (host, key) => {
+    if (key === "companion" || key === "focusRequest") {
+      inputHandlers.get(host)?.();
+    }
+  },
   properties: {
+    presentation: { default: undefined, attribute: false },
     sessionKey: { default: "", attribute: false },
     digest: { default: null, attribute: false },
     running: { default: false, attribute: false },
     activeRunId: { default: null, attribute: false },
     pullRequests: { default: [], attribute: false },
     companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
+    modelControls: { default: undefined, attribute: false },
+    client: { default: null, attribute: false },
     connected: { default: false, attribute: false },
     sendShortcut: { default: "enter", attribute: false },
+    inputDeviceId: { default: undefined, attribute: false },
     onSubmit: { default: undefined, attribute: false },
     onDraftChange: { default: undefined, attribute: false },
     onAttachmentsChange: { default: undefined, attribute: false },
@@ -359,17 +386,3 @@ defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessio
     focusRequest: { default: undefined, attribute: false },
   },
 });
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-comment-controller": HTMLAttributes<HTMLElement> & {
-        "prop:paneId": string;
-        "prop:props": ChatAttachmentControlsProps;
-        "prop:disabled"?: boolean;
-        "prop:sessionKey": string;
-        "prop:presented": boolean;
-      };
-    }
-  }
-}

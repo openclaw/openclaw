@@ -146,13 +146,18 @@ describe.skipIf(!connection)("PostgreSQL search admission failures", () => {
   it("names insufficient schema creation privilege", () => {
     fixture(connection!, undefined, (admin) => {
       const role = `r6_${randomUUID().replaceAll("-", "")}`;
-      admin.exec(`CREATE ROLE ${pgSearchName(role)} LOGIN`);
+      const database = String(admin.prepare("SELECT current_database() AS name").get()?.name);
+      admin.exec(`CREATE ROLE ${pgSearchName(role)} LOGIN PASSWORD 'synthetic-search-privilege'`);
+      admin.exec(`GRANT CONNECT ON DATABASE ${pgSearchName(database)} TO ${pgSearchName(role)}`);
       try {
         const url = new URL(connection!);
         url.username = role;
-        url.password = "";
+        url.password = "synthetic-search-privilege";
         expect(() => fixture(url.href, search, () => {})).toThrow("insufficient CREATE privilege");
       } finally {
+        admin.exec(
+          `REVOKE CONNECT ON DATABASE ${pgSearchName(database)} FROM ${pgSearchName(role)}`,
+        );
         admin.exec(`DROP ROLE ${pgSearchName(role)}`);
       }
     });

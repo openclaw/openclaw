@@ -6,10 +6,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as gitExec from "../../infra/git-exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { requireGit } from "./git.js";
+import { deferWorktreeCleanup } from "./registry-retirement.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { isWorktreeRepositoryCorruptionError } from "./removal-errors.js";
 import { resolveRepository } from "./repository-paths.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
@@ -28,8 +29,8 @@ const initializeRepository = useManagedWorktreeTestRepository();
 const hour = 60 * 60_000;
 const read = (directory: string, name = "README.md") =>
   fs.readFile(path.join(directory, name), "utf8");
-const makeService = (env: NodeJS.ProcessEnv, now = IDLE_GC_MS + 2) =>
-  new ManagedWorktreeService({ env, now: () => now, getConfig: () => ({}) });
+const makeService = (env: NodeJS.ProcessEnv) =>
+  new ManagedWorktreeService({ env, getConfig: () => ({}) });
 const retryState = (env: NodeJS.ProcessEnv, id: string) => getRegistryWorktree(env, id)?.gcRetry;
 const timedOut = <T extends string | Buffer>(output: T, timeoutMs: number) => ({
   stdout: output,
@@ -86,6 +87,15 @@ async function editRecords(records: readonly ManagedWorktreeRecord[]) {
   }
 }
 
+async function setRetryAt(env: NodeJS.ProcessEnv, id: string, retryAt: number) {
+  const observed = getRegistryWorktree(env, id)!;
+  const retry = { ...observed.gcRetry!, retryAt };
+  expect(await deferWorktreeCleanup(env, { observed, reason: observed.gcProtection!, retry })).toBe(
+    true,
+  );
+  return retry;
+}
+
 it.each([
   ["error: invalid object 100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for 'file'", true],
   ["fatal: loose object aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is corrupt", true],
@@ -113,27 +123,34 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   });
   await requireGit(repo, ["remote", "set-url", "origin", path.join(root, "unavailable")]);
   await editRecords(records);
-  let now = IDLE_GC_MS + 2;
-  const gc = (retryDeferred = false) => makeService(env, now).gc({ retryDeferred });
+  const gc = (retryDeferred = false) => makeService(env).gc({ retryDeferred });
+  const firstStarted = Date.now();
   const first = await gc();
+  const firstFinished = Date.now();
   await closeOpenClawStateDatabaseAsync();
-  now += hour;
+  const failed = records.find((record) => retryState(env, record.id))!;
+  const initialRetry = retryState(env, failed.id)!;
+  expect(initialRetry.retryAt).toBeGreaterThanOrEqual(firstStarted + 2 * hour);
+  expect(initialRetry.retryAt).toBeLessThanOrEqual(firstFinished + 2 * hour);
+  const delayedRetry = await setRetryAt(env, failed.id, Date.now() + hour);
   const second = await gc();
   expect(first).toMatchObject({ failedCount: 1, deferredCount: 1 });
   const reasons = first.issues.map((issue) => issue.reason).join("\n");
   expect(reasons).toContain("has missing or corrupt Git objects");
   expect(reasons).toMatch(/repair/i);
-  const failed = records.find((record) => retryState(env, record.id))!;
   expect(retryState(env, failed.id)).toMatchObject({
     stage: "repository-corrupt",
     attempts: 1,
-    retryAt: now + hour,
+    retryAt: delayedRetry.retryAt,
   });
   expect(second.deferredCount).toBe(2);
 
-  now += hour;
+  await setRetryAt(env, failed.id, Date.now() - 1);
+  const secondStarted = Date.now();
   expect((await gc()).failedCount).toBe(1);
-  expect(retryState(env, failed.id)).toMatchObject({ attempts: 2, retryAt: now + 4 * hour });
+  expect(retryState(env, failed.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
+  expect(retryState(env, failed.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
+  expect(retryState(env, failed.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
   const [healthy] = await materialize(["healthy"], { repoRoot: source });
   expect((await gc()).removed).toEqual([healthy!.id]);
   await requireGit(repo, ["remote", "set-url", "origin", source]);
@@ -141,7 +158,7 @@ it("backs off shared-repository snapshots after a missing-object failure", async
     records.map((record) => record.id).toSorted(),
   );
   for (const record of records) {
-    const restored = await makeService(env, now).restore({ id: record.id });
+    const restored = await makeService(env).restore({ id: record.id });
     expect(await read(restored.path)).toBe("retained changes\n");
   }
 });
@@ -292,7 +309,6 @@ it("persists timeout backoff across restart and retries only when due or explici
   const { env, materialize } = await fixture();
   const record = (await materialize(["timed-out"]))[0]!;
   await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
-  let now = IDLE_GC_MS + 2;
   let attempts = 0;
   let fail = true;
   const execute = gitExec.executeGitCommandBytes;
@@ -305,32 +321,38 @@ it("persists timeout backoff across restart and retries only when due or explici
     }
     return await execute(cwd, args, options);
   });
-  const gc = () => makeService(env, now).gc();
+  const gc = () => makeService(env).gc();
+  const attemptStarted = Date.now();
   expect((await gc()).outcome).toBe("partial");
   const first = retryState(env, record.id);
   expect(first).toEqual({
     stage: "snapshot",
     elapsedMs: expect.any(Number),
     attempts: 1,
-    retryAt: now + 2 * hour,
+    retryAt: expect.any(Number),
   });
   expect(await read(record.path)).toBe("retained changes\n");
 
+  expect(first?.retryAt).toBeGreaterThanOrEqual(attemptStarted + 2 * hour);
+  expect(first?.retryAt).toBeLessThanOrEqual(Date.now() + 2 * hour);
+  const delayed = await setRetryAt(env, record.id, Date.now() + hour);
   await closeOpenClawStateDatabaseAsync();
-  now += hour;
   expect((await gc()).outcome).toBe("deferred");
   expect(attempts).toBe(1);
-  expect(retryState(env, record.id)).toEqual(first);
+  expect(retryState(env, record.id)).toEqual(delayed);
 
-  now += hour;
+  await setRetryAt(env, record.id, Date.now() - 1);
+  const secondStarted = Date.now();
   expect((await gc()).outcome).toBe("partial");
   expect(attempts).toBe(2);
-  expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: now + 4 * hour });
+  expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
+  expect(retryState(env, record.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
+  expect(retryState(env, record.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
   fail = false;
-  const retried = await makeService(env, now).gc({ retryDeferred: true });
+  const retried = await makeService(env).gc({ retryDeferred: true });
   expect(retried.removed).toEqual([record.id]);
   expect(attempts).toBe(3);
   expect(retryState(env, record.id)).toBeUndefined();
-  const restored = await makeService(env, now).restore({ id: record.id });
+  const restored = await makeService(env).restore({ id: record.id });
   expect(await read(restored.path)).toBe("retained changes\n");
 });

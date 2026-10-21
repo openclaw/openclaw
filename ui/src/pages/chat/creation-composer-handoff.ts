@@ -201,7 +201,6 @@ async function performCreatedComposerAdmission(
   if (failure) {
     // Never auto-send a later follower past an input that could not enter the outbox.
     setChatError(host, failure);
-    host.requestUpdate?.();
   } else if (!transfer.initialRejected) {
     const updates = admitted
       .filter((id) => owner.locate(host, id))

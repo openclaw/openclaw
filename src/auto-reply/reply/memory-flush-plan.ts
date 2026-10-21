@@ -38,10 +38,7 @@ function resolveMemoryFlushTiming(params: {
     return null;
   }
 
-  // Invalid config values retain the established defaults instead of changing flush admission.
-  let softThresholdTokens = Math.floor(
-    asNonNegativeFiniteNumber(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
-  );
+  let softThresholdTokens = defaults?.softThresholdTokens ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const forceFlushTranscriptBytes =
     parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;

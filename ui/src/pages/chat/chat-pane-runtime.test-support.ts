@@ -3,10 +3,10 @@ import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { createChatPaneView } from "./chat-pane-runtime-view.tsx";
 import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
-import type { ChatPaneProps } from "./chat-pane.tsx";
 
 export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
   element: HTMLElement,
@@ -14,7 +14,7 @@ export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
 ) => R;
 
 export type PaneTestLifecycle = {
-  invalidate(): void;
+  awaitDomCommit(): Promise<boolean>;
   prepareRender(): void;
   commitRender(): void;
   connectedCallback(): void;
@@ -73,38 +73,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
   const runtime = paneTestRuntimes.get(element)!;
   const bound = new WeakMap<object, unknown>();
   const lifecycle = new Set(["connectedCallback", "disconnectedCallback"]);
-  // Direct fixture assignments stand in for the bridge's explicit invalidation.
-  const inputs = new Set<string>([
-    "mcpAppLaunch",
-    "paneId",
-    "paneLabel",
-    "presentationId",
-    "chatMessagesBySession",
-    "sessionSnapshotStore",
-    "sessionKey",
-    "routeLoadingSkeleton",
-    "agentId",
-    "inputRegion",
-    "compact",
-    "onBackToSubagents",
-    "workContext",
-    "draft",
-    "focusComposer",
-    "dashboardExpanded",
-    "routeFace",
-    "onFaceChange",
-    "onFocusPane",
-    "onSessionDeleted",
-    "narrow",
-    "mergedChrome",
-    "navDrawerOpen",
-    "onboarding",
-    "onOpenSplitView",
-    "onSplitDown",
-    "onSplitRight",
-    "onClosePane",
-    "boardProvider",
-  ] satisfies (keyof ChatPaneProps)[]);
+  const inputs = new Set<string>(chatPanePropertyKeys);
   const owner = (key: PropertyKey) =>
     !lifecycle.has(String(key)) && (key in runtime || !(key in element)) ? runtime : element;
   const pane = new Proxy(element, {
@@ -123,7 +92,8 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       }
       if (key === "prepareRender") {
         return () => {
-          runtime.chatState.prepareRender();
+          runtime.chatState.publishPendingRunState();
+          runtime.chatState.captureRenderChanges();
           runtime.synchronizeInputs({});
         };
       }
@@ -146,9 +116,21 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
     set(_target, key, value) {
       const source = owner(key);
       const previous = Reflect.get(source, key);
+      if (inputs.has(String(key)) && !Object.is(previous, value)) {
+        runtime.chatState.publishPendingRunState();
+      }
       const applied = Reflect.set(source, key, value);
       if (applied && inputs.has(String(key)) && !Object.is(previous, value)) {
-        runtime.invalidate();
+        if (runtime.isConnected) {
+          void runtime.awaitDomCommit();
+          runtime.synchronizeInputs({
+            sessionKey: key === "sessionKey",
+            inputRegion: key === "inputRegion",
+            draft: key === "draft",
+            focusComposer: key === "focusComposer",
+          });
+          runtime.refreshBoardSubscriptions();
+        }
       }
       return applied;
     },
@@ -172,7 +154,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       return key in runtime || key in element;
     },
   });
-  // SAFETY: This test adapter forwards controller members and native DOM access to their owners.
+  // SAFETY: This test adapter forwards runtime members and native DOM access to their owners.
   return pane as R & HTMLElement & PaneTestLifecycle;
 }
 

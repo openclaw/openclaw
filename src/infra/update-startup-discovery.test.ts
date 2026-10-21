@@ -1,6 +1,7 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   createGatewaySchedulerClock,
@@ -37,84 +38,96 @@ vi.mock("../model-catalog/remote-refresh.js", () => ({
   refreshRemoteModelCatalog: async () => ({ status: "disabled" }),
 }));
 
-it("returns cleanup before slow dev git discovery schedules a campaign", async ({ signal }) => {
-  const remoteFetchDelayMs = 65_653;
-  const entered = createDeferred();
-  const remoteFinished = createDeferred();
-  vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
-  vi.mocked(checkUpdateStatus).mockImplementation(({ fetchGit, timeoutMs }) => {
-    const isRemoteFetch = fetchGit === true;
-    const effectiveTimeoutMs = timeoutMs ?? (isRemoteFetch ? 120_000 : 6000);
-    const remoteFetchFinished = isRemoteFetch && effectiveTimeoutMs >= remoteFetchDelayMs;
-    const status = createDevGitStatus({
-      upstreamSha: remoteFetchFinished ? "upstream-sha" : null,
-      ahead: remoteFetchFinished ? 0 : null,
-      behind: remoteFetchFinished ? 2 : null,
-      fetchOk: isRemoteFetch ? remoteFetchFinished : null,
-    });
-    if (!isRemoteFetch) {
-      return Promise.resolve(status);
-    }
-    entered.resolve();
-    return remoteFinished.promise.then(() => status);
-  });
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let check: ReturnType<typeof createGatewayUpdateCheck>;
+let config: OpenClawConfig;
+const info = vi.fn();
+beforeEach(async () => {
+  vi.clearAllMocks();
   const state = await createOpenClawTestState({
     label: "update-startup-discovery",
     env: { NODE_ENV: "production", VITEST: undefined, OPENCLAW_NO_AUTO_UPDATE: undefined },
   });
-  const clock = createGatewaySchedulerClock(Date.now());
+  clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
+  config = {};
   resetUpdateAvailableStateForTest(scheduler);
-  let stop: (() => Promise<void>) | undefined;
+  vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+  check = createGatewayUpdateCheck({
+    lifecycle: createGatewayUpdateLifecycle(scheduler),
+    getConfig: () => config,
+    log: { info },
+    isNixMode: false,
+    applyRemoteCatalogUpdate: async () => "unchanged",
+  });
+  return async () => {
+    await Promise.all([check.stop(), scheduler.stop()]);
+    resetUpdateAvailableStateForTest(scheduler);
+    await closeStateDatabaseForTest();
+    await state.cleanup();
+  };
+});
+
+it("reports a failed background update check and keeps its next check scheduled", async () => {
+  vi.mocked(checkUpdateStatus).mockRejectedValue(new Error("synthetic update discovery failure"));
+  check.start();
+  await clock.advanceBy(0);
+  expect(info).toHaveBeenCalledExactlyOnceWith(
+    "update check failed; retrying at the next scheduled check",
+    { error: "Error: synthetic update discovery failure" },
+  );
+  expect(checkUpdateStatus).toHaveBeenCalledOnce();
+  await clock.advanceBy(24 * 60 * 60_000);
+  expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
+  expect(info).toHaveBeenCalledTimes(2);
+});
+
+it("returns cleanup before slow dev git discovery schedules a campaign", async ({ signal }) => {
+  const remoteFetchDelayMs = 65_653;
+  const entered = createDeferred();
+  const remoteFinished = createDeferred();
+  config = { update: { channel: "dev", auto: { enabled: true } } };
+  vi.mocked(checkUpdateStatus).mockImplementation(async ({ fetchGit }) => {
+    if (!fetchGit) {
+      return createDevGitStatus({ upstreamSha: null, ahead: null, behind: null, fetchOk: null });
+    }
+    entered.resolve();
+    await remoteFinished.promise;
+    return createDevGitStatus();
+  });
   let checking: ReturnType<typeof clock.advanceBy> = undefined;
 
   try {
-    const check = createGatewayUpdateCheck({
-      lifecycle: createGatewayUpdateLifecycle(scheduler),
-      getConfig: () => ({ update: { channel: "dev", auto: { enabled: true } } }),
-      log: { info: vi.fn() },
-      isNixMode: false,
-      applyRemoteCatalogUpdate: async () => "unchanged",
-    });
-    stop = check.stop;
     check.start();
     checking = clock.advanceBy(0);
 
-    expect(stop).toEqual(expect.any(Function));
+    expect(check.stop).toEqual(expect.any(Function));
     await withinTest(entered.promise, signal);
-    expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
-    expect(checkUpdateStatus).toHaveBeenNthCalledWith(1, {
+    const common = {
       root: "/opt/openclaw",
       signal: expect.any(AbortSignal),
+      includeRegistry: false,
+      useDetachedDevUpstream: true,
+    };
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
+    expect(checkUpdateStatus).toHaveBeenNthCalledWith(1, {
+      ...common,
       timeoutMs: resolveGatewayStartupTiming().deadlineMs,
       onGitProbeTimeout: expect.any(Function),
       fetchGit: false,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
     });
-    expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, {
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-    });
+    expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, { ...common, fetchGit: true });
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
 
     await clock.advanceBy(remoteFetchDelayMs);
     remoteFinished.resolve();
     await checking;
-    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
-    expect(getUpdateSchedule()?.install?.git).toMatchObject({
-      status: "behind",
-      commitsBehind: 2,
+    expect(getUpdateSchedule()).toMatchObject({
+      campaign: { state: "countdown" },
+      install: { git: { status: "behind", commitsBehind: 2 } },
     });
   } finally {
     remoteFinished.resolve();
-    await Promise.all([checking, stop?.()]);
-    await scheduler.stop();
-    resetUpdateAvailableStateForTest(scheduler);
-    await closeStateDatabaseForTest();
-    await state.cleanup();
+    await Promise.all([checking, check.stop()]);
   }
 });

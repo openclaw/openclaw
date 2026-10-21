@@ -35,9 +35,6 @@ function decodeCompressedTranscriptPayload(bytes: unknown, rawBytes: unknown): s
     throw new Error("Invalid compressed transcript payload bounds");
   }
   const codec = resolveZstdCodec();
-  if (!codec) {
-    throw new Error("Cannot decode compressed transcript payload: this runtime lacks zstd support");
-  }
   const decoded = codec.decompress(bytes, rawBytes);
   if (decoded.byteLength !== rawBytes) {
     throw new Error("Compressed transcript payload length does not match its recorded UTF-8 size");

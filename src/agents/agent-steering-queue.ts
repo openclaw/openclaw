@@ -87,13 +87,12 @@ function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQue
 function listPendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: ReadonlyMap<string, SubagentRunRecord>;
   requesterSessionKey: string;
-  now?: number;
+  now: number;
 }): AgentSteeringQueueItem[] {
   const requesterSessionKey = params.requesterSessionKey.trim();
   if (!requesterSessionKey) {
     return [];
   }
-  const now = params.now ?? Date.now();
   const items: AgentSteeringQueueItem[] = [];
   for (const [runId, entry] of params.runs.entries()) {
     const { delivery, requesterStorePath, requesterAgentId } = entry;
@@ -101,7 +100,7 @@ function listPendingAgentSteeringItemsFromSubagentRuns(params: {
     if (!delivery || !payload) {
       continue;
     }
-    const staleLease = isStaleLease(delivery, now);
+    const staleLease = isStaleLease(delivery, params.now);
     if (entry.cleanupHandled === true && !staleLease) {
       continue;
     }
@@ -183,7 +182,6 @@ export async function preparePendingAgentSteeringLease(params: {
   runs: ReadonlyMap<string, SubagentRunRecord>;
   requesterSessionKey: string;
   leaseId: string;
-  now?: number;
   readResult: (entry: SubagentRunRecord) => Promise<PreparedAnnounceResult>;
 }): Promise<
   | {
@@ -196,7 +194,7 @@ export async function preparePendingAgentSteeringLease(params: {
   | undefined
 > {
   const selection = await selectPromptBoundedItems(
-    listPendingAgentSteeringItemsFromSubagentRuns(params),
+    listPendingAgentSteeringItemsFromSubagentRuns({ ...params, now: Date.now() }),
     params.readResult,
   );
   if (!selection) {
@@ -221,7 +219,7 @@ export async function preparePendingAgentSteeringLease(params: {
     runIds,
     isCurrent,
     plan(rows) {
-      const now = params.now ?? Date.now();
+      const now = Date.now();
       const pending = new Set(
         listPendingAgentSteeringItemsFromSubagentRuns({ ...params, runs: rows, now }).map(
           (item) => item.runId,
@@ -305,9 +303,9 @@ function planAgentSteeringSettlement(
 
 /** Acknowledge only the lease that actually supplied this requester prompt. */
 export function planAgentSteeringAcknowledgment(
-  params: AgentSteeringLease & { now?: number },
+  params: AgentSteeringLease,
 ): SubagentRunMutation<number> {
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   return planAgentSteeringSettlement(params, () => ({
     status: "delivered",
     deliveredAt: now,

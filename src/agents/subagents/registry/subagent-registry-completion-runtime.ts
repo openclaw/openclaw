@@ -20,6 +20,8 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { GATEWAY_ADMISSION_RETRY_DELAY_MS } from "./subagent-registry-helpers.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
@@ -37,8 +39,6 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
-
-const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 
 /** Admit terminal evidence before transport-specific grace or deadline reconciliation. */
 export async function prepareSubagentTerminalObservation(params: {
@@ -134,10 +134,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
   completeSubagentRun: (params: SubagentCompletionRequest) => Promise<void>;
   scheduleSweep: (params?: { delayMs?: number }) => void;
   resumeRun: (runId: string) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const { runs, resumed, retryTimers, completeSubagentRun, scheduleSweep, resumeRun, warn } =
-    config;
+  const { runs, resumed, retryTimers, completeSubagentRun, scheduleSweep, resumeRun } = config;
 
   const currentEntry = (params: Pick<SubagentCompletionRequest, "runId" | "expectedEntry">) =>
     params.expectedEntry
@@ -164,7 +162,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
           throw error;
         }
         const current = currentEntry(params);
-        warn(message, {
+        subagentRegistryLog.warn(message, {
           source,
           runId: params.runId,
           childSessionKey: current?.childSessionKey,
@@ -324,7 +322,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       if (!isGatewayRestartDraining()) {
         throw error;
       }
-      warn("subagent completion deferred during gateway restart", {
+      subagentRegistryLog.warn("subagent completion deferred during gateway restart", {
         source,
         runId: params.runId,
       });
@@ -339,7 +337,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     warning = "failed to complete subagent run in background",
   ) {
     void completeSubagentRunWithRecovery(params, source).catch((error: unknown) => {
-      warn(warning, { source, runId: params.runId, error });
+      subagentRegistryLog.warn(warning, { source, runId: params.runId, error });
     });
   }
 
@@ -431,7 +429,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         throw error;
       }
       if (isGatewayRestartDraining() && Boolean(getCurrentSubagentRunOwner(runs, entry))) {
-        warn("subagent completion deferred during gateway restart", {
+        subagentRegistryLog.warn("subagent completion deferred during gateway restart", {
           source: "explicit-failed-mark",
           runId,
         });
@@ -442,7 +440,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         );
         return 1;
       }
-      warn("failed to durably finalize interrupted subagent run", {
+      subagentRegistryLog.warn("failed to durably finalize interrupted subagent run", {
         runId,
         childSessionKey: entry.childSessionKey,
         error,
@@ -474,7 +472,6 @@ export function createSubagentResumeReader(params: {
     entry: SubagentRunRecord,
     context: OpenClawStateWorkerContext,
   ) => void;
-  warn: (message: string, meta: Record<string, unknown>) => void;
 }) {
   const pendingResumeChecks = new Map<object, object>();
   function read(
@@ -535,7 +532,7 @@ export function createSubagentResumeReader(params: {
         if (pendingResumeChecks.get(resumeKey) !== token) {
           return;
         }
-        params.warn("subagent session read deferred before resume", { runId, error });
+        subagentRegistryLog.warn("subagent session read deferred before resume", { runId, error });
         if (pendingResumeChecks.get(resumeKey) === token && isHostCurrent()) {
           params.retryAfterDrain(runId, entry, stateContext);
         }
@@ -592,7 +589,7 @@ export function createSubagentResumeReader(params: {
       });
     } catch (error) {
       release();
-      params.warn("subagent session read deferred before resume", { runId, error });
+      subagentRegistryLog.warn("subagent session read deferred before resume", { runId, error });
     }
   }
   return {
@@ -601,6 +598,5 @@ export function createSubagentResumeReader(params: {
       pendingResumeChecks.has(getSubagentRunRuntimeKey(entry)),
     retirePending: (entry: SubagentRunRecord) =>
       pendingResumeChecks.delete(getSubagentRunRuntimeKey(entry)),
-    reset: () => pendingResumeChecks.clear(),
   };
 }

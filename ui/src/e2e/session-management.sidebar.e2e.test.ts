@@ -6,6 +6,7 @@ import {
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -291,9 +292,7 @@ suite.define(() => {
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
       const sidebarToggle = page.locator('[data-navigation-view="sessions"]');
-      const drawerToggle = page
-        .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-        .first();
+      const drawerToggle = navigationDrawerToggle(page);
       const sessionMenu = page.getByRole("menu", { name: "Actions for Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
@@ -516,7 +515,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps sidebar sessions visible through transport and client replacement reconnects", async () => {
+  it("retains sidebar sessions through transport loss and reloads them after client replacement", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:disconnect-proof";
@@ -562,6 +561,7 @@ suite.define(() => {
         '.sidebar-identity-menu [data-value="command:retry-connect"]',
       );
       await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
+      await gateway.closeLatest(1006, "synthetic failed attempt");
       await retryConnection.click();
       await expect.poll(() => pinnedEntry.count()).toBe(1);
       await captureUiProof(suite, page, "sidebar-sessions-during-client-replacement.png");
@@ -584,11 +584,12 @@ suite.define(() => {
         })
         .toBeGreaterThan(reconnectPreviewCount);
       await sidebarRow.waitFor({ state: "visible" });
-      expect(await sidebarRows.count()).toBe(3);
+      // A replacement client retires membership; only the fresh route descriptor is ready.
+      expect(await sidebarRows.count()).toBe(1);
       for (const otherKey of otherSessionKeys) {
-        await page
-          .locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`)
-          .waitFor({ state: "visible" });
+        expect(
+          await page.locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`).count(),
+        ).toBe(0);
       }
 
       const firstReconnectListCount = (await gateway.getRequests("sessions.list", rosterMatch))

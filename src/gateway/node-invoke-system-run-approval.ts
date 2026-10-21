@@ -1,4 +1,3 @@
-// system.run approval sanitizer.
 // Verifies forwarded node exec approvals against stored operator decisions.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";

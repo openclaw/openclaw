@@ -86,6 +86,23 @@ recorded predecessor, allowing retirement of a binding not yet transferred after
 compaction without adopting it during preparation. Ordinary compaction does not
 invoke this hook and continues to preserve native thread continuity.
 
+### Fresh native thread seeds
+
+The optional `hostCapabilities.prepareBoundedSeed({ assertCurrent, signal, tokenBudget })`
+returns a readonly `AgentMessage[]`. Call it after native reuse fails, before
+injecting history; older version-1 hosts keep their bounded selection.
+The host captures the target, configuration, source authority, and atomic
+summary persistence. It attempts one compaction for uncovered omitted history.
+Pass the final history allowance as `tokenBudget`: valid smaller values narrow
+the captured budget; larger, invalid, or non-finite values cannot widen it.
+Restored text and image costs count toward the bound. Reuse returned message
+instances with `prepareContextMedia` to avoid rereading their prepared snapshots.
+Active requests and refresh handoffs reserve delivery tokens but are not trimmed
+by the historical byte cap; preparation rejects if they alone exceed the allowance.
+Pass the native binding's current-authority assertion and cancellation signal.
+A retired capability rejects and cannot target another session. Explicit
+context engines retain their own projections.
+
 ## Shared native binding lifecycle
 
 Official harnesses use the JavaScript-only private

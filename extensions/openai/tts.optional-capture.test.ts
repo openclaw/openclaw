@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { openaiTTS } from "./tts.js";
+import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
 const mocks = vi.hoisted(() => ({
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
@@ -34,16 +34,14 @@ it.each(["present", "rejected"] as const)(
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
     }
     await expect(
-      openaiTTS({
+      buildOpenAISpeechProvider().synthesize({
         text: "Hello",
-        apiKey: "fixture-key",
-        baseUrl: "https://api.openai.com/v1",
-        model: "tts-1",
-        voice: "alloy",
-        responseFormat: "mp3",
+        cfg: {},
+        providerConfig: { apiKey: "fixture-key", model: "tts-1", voice: "alloy" },
+        target: "audio-file",
         timeoutMs: 1_000,
       }),
-    ).resolves.toEqual(Buffer.from("speech"));
+    ).resolves.toMatchObject({ audioBuffer: Buffer.from("speech") });
     expect(mocks.fetch).toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://api.openai.com/v1/audio/speech" }),
     );

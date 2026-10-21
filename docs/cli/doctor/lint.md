@@ -19,10 +19,11 @@ The setup assistant's `doctor` action uses this read-only lint posture in an iso
 process. It reports findings without applying repairs or migrations. Run
 `openclaw doctor --fix` separately on the Gateway host when you intend to repair state.
 
-Full reports reuse a private shared-state snapshot for ordinary reads within the
-report, preserving the live database and its WAL files. Each new report reads a
-fresh snapshot. Checks that need writable inspection state or independent database
-verification retain their own copies; `--only` checks prepare state on demand.
+Reports reuse a private shared-state snapshot for ordinary reads within the report,
+preserving the live database and its WAL files. `--only` reports prepare that shared
+snapshot on the first shared-state read.
+Each new report reads a fresh snapshot. Checks that need writable inspection state
+or independent database verification retain their own copies.
 
 Read-only reports preserve existing SQLite database, WAL, and shared-memory files,
 including their modification times. An older shared-state schema produces a
@@ -30,7 +31,8 @@ including their modification times. An older shared-state schema produces a
 not upgrade it. Ordinary Doctor and explicit repair retain their migration behavior.
 
 Doctor retires private database readers and writers before removing inspection
-snapshots. A cleanup failure preserves completed findings and check counts;
+snapshots, including their cached database admissions so status cannot report a
+removed inspection image. A cleanup failure preserves completed findings and check counts;
 updater runs report failed temporary-file removal as a warning. If database
 retirement fails, Doctor reports the error and leaves the private snapshot in place.
 
@@ -56,6 +58,10 @@ semantic indexes. It is opt-in through `--only` or `--all`, so plain `doctor --l
 unchanged. It reports missing llama.cpp setup and the interactive `models auth login` remediation
 without claiming full Gateway readiness, starting services, downloading models, or changing
 config.
+
+This check snapshots agent databases only when memory search is enabled and the
+agent's effective provider is `local`. Agents using the default or another remote
+provider do not need a database snapshot for this check.
 
 Human output is compact:
 

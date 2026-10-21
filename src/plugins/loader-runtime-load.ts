@@ -1,10 +1,14 @@
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
+import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
+import { listProfilesForProvider } from "../agents/auth-profiles/profile-list.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
 import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
@@ -32,8 +36,11 @@ import { createProviderRegistryResolver } from "./providers.runtime-core.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
-import { createRuntimeModelAuth } from "./runtime/runtime-model-auth.js";
 import type { PluginRuntime } from "./runtime/types.js";
+
+const loadModelAuthRuntime = createLazyRuntimeModule(
+  () => import("./runtime/runtime-model-auth.runtime.js"),
+);
 
 // Construction only binds callbacks. No profile reads, plugin loads, or network work occur here.
 // Hoisted entry functions let cold auth discovery re-enter this same binding without a module cycle.
@@ -59,7 +66,10 @@ const providerRegistry = Object.freeze(
 const providerHooks = Object.freeze(createProviderHookRuntime(providerRegistry));
 const externalProfiles = Object.freeze(createProviderExternalAuthResolver(providerHooks));
 const externalAuth = Object.freeze(
-  createExternalAuthRuntime(externalProfiles.resolveExternalAuthProfilesWithPlugins),
+  createExternalAuthRuntime(
+    externalProfiles.resolveExternalAuthProfilesWithPlugins,
+    externalProfiles.withPreparedExternalAuthProfiles,
+  ),
 );
 const authStore = Object.freeze(createAuthProfileStoreRuntime(externalAuth));
 const authAvailability = Object.freeze(
@@ -70,28 +80,62 @@ let modelConfig: NativePluginLoadBindings["modelConfig"] | undefined;
 let capabilityCatalogContext: NativePluginLoadBindings["capabilityCatalogContext"] | undefined;
 // Imports of store/hook facades must not construct unrelated policy surfaces.
 // Consumers share immutable defaults and retain their own mutable method views.
-const loaderBindings: NativePluginLoadBindings = Object.freeze({
+const loaderBindings: NativePluginLoadBindings = {
   get modelAuth() {
-    return (modelAuth ??= Object.freeze(
-      createRuntimeModelAuth({
+    if (!modelAuth) {
+      const getApiKeyForModel = createLazyRuntimeMethod(
+        loadModelAuthRuntime,
+        (runtime) => runtime.getApiKeyForModel,
+      );
+      const getRuntimeAuthForModel = createLazyRuntimeMethod(
+        loadModelAuthRuntime,
+        (runtime) => runtime.getRuntimeAuthForModelCore,
+      );
+      const resolveApiKeyForProvider = createLazyRuntimeMethod(
+        loadModelAuthRuntime,
+        (runtime) => runtime.resolveProviderRuntimeApiKey,
+      );
+      modelAuth = {
+        resolveProviderIdForAuth,
         ensureAuthProfileStore: authStore.ensureAuthProfileStore,
         ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
+        resolveAuthProfileOrder,
+        listProfilesForProvider,
         isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
         isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
-      }),
-    ));
+        getApiKeyForModel: (params) =>
+          getApiKeyForModel({
+            model: params.model,
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+          }),
+        getRuntimeAuthForModel: (params) =>
+          getRuntimeAuthForModel({
+            model: params.model,
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+          }),
+        resolveApiKeyForProvider: (params) =>
+          resolveApiKeyForProvider({
+            provider: params.provider,
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+          }),
+      };
+    }
+    return modelAuth;
   },
   get modelConfig() {
-    return (modelConfig ??= Object.freeze({
+    return (modelConfig ??= {
       resolveDefaultModelForAgent,
       resolveAllowedModelRef: resolveAllowedModelRefCore,
       resolveModelRuntimePolicy,
-    }));
+    });
   },
   get capabilityCatalogContext() {
     return (capabilityCatalogContext ??= createPluginCapabilityCatalogContext(authAvailability));
   },
-});
+};
 
 export const nativePluginBindings = Object.freeze({
   providerRegistry,

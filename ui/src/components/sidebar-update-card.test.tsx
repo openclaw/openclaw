@@ -13,7 +13,7 @@ import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update
 
 let originalWebkit: PropertyDescriptor | undefined;
 const checkFailure = "Could not check the latest update";
-const reconnectFailure = "Actions are unavailable while the Gateway reconnects.";
+const reconnectFailure = "Could not refresh. Check your connection and try again.";
 async function settle() {
   await Promise.resolve();
   flush();
@@ -138,6 +138,21 @@ afterEach(async () => {
 });
 
 describe("SidebarUpdateCard", () => {
+  it("reviews updates through the latest callback on the retained card", async () => {
+    const initial = vi.fn();
+    const current = vi.fn();
+    const card = await mount(stableUpdate, {
+      statusBanner: { tone: "warn", text: "Review available update" },
+      onReviewUpdate: initial,
+    });
+    const review = card.find<HTMLButtonElement>(".sidebar-update-card__review")!;
+    await card.update({ onReviewUpdate: current });
+    review.click();
+    expect(current).toHaveBeenCalledOnce();
+    expect(initial).not.toHaveBeenCalled();
+    expect(card.find(".sidebar-update-card__review")).toBe(review);
+  });
+
   it.each([
     ["native", false],
     ["native", true],

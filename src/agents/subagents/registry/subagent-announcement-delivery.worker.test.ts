@@ -376,10 +376,6 @@ it("refuses an old registered wake after its descendant read outlives a successo
       registryState.clearSubagentRunsReadCacheForTest();
       return nativeWake.maybeWakeRequesterAfterAllChildrenSettled({
         ...params,
-        transitionBatch: async (...args) => {
-          mutations.push({ entry: params.settledEntry, kind: "transition" });
-          return params.transitionBatch(...args);
-        },
         completeBatch: async (...args) => {
           mutations.push({ entry: params.settledEntry, kind: "complete" });
           return params.completeBatch(...args);

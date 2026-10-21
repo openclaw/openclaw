@@ -304,6 +304,10 @@ The accepted spawn receipt describes this path: collect the result with
 `agents_wait`, or await `agents.run()` in OpenClaw Code Mode. Do not use
 `sessions_yield` to wait for collector children. They do not send completion notifications.
 
+If OpenClaw cannot recover the requester for a queued collector after a restart,
+it records a failed launch and asks you to submit the task again. This can affect
+queued collectors created by older versions.
+
 Embedded and CLI-backed collector turns are not offered `sessions_yield`. If an
 override reaches the tool, it returns an error explaining that collector results
 are collected explicitly. A collector that nevertheless yields through another
@@ -579,6 +583,7 @@ type AgentsWaitResult = {
     structured?: unknown;
     error?: string;
     schemaError?: string;
+    reason?: "yielded_without_result";
     sessionKey: string;
     label?: string;
     usage?: { inputTokens: number; outputTokens: number };
@@ -596,6 +601,10 @@ A completed item can contain partial `structured` data and still have
 `error` is the authoritative terminal failure. Recovery code should prefer a
 nonblank `error`, then `schemaError`, then a nonblank `result`, and finally a
 run/status fallback.
+
+`reason: "yielded_without_result"` marks a collector that the registry settled as
+failed after a legacy yield with no recorded outcome. Branch on it rather than on
+`error` text; every other completion omits it.
 
 Individual failed items do not make a mixed `agents_wait` poll a top-level tool
 error. The poll remains a successful JSON result so callers can process its

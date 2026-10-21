@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  sendDurableMessageBatch,
-  type ChannelMessageSendMediaContext,
-  type ChannelMessageSendTextContext,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -27,42 +23,49 @@ const cfg = {
   channels: {
     clickclack: {
       accounts: {
-        alpha: {
-          baseUrl: "https://alpha.example",
-          token: "fixture-alpha-token",
-          workspace: "wsp_alpha",
-        },
-        beta: {
-          baseUrl: "https://beta.example",
-          token: "fixture-beta-token",
-          workspace: "wsp_beta",
-        },
+        alpha: accountConfig("alpha"),
+        beta: accountConfig("beta"),
       },
     },
   },
 };
 
-type Registration = "message" | "outbound";
 type Account = "alpha" | "beta";
-type HttpRequest = { url: string; init?: RequestInit };
+type HttpRequest = { url: string; init?: RequestInit; body: unknown };
 type RequestStage = "dm" | "upload" | "message" | "attachment" | "reconciliation" | "upload lookup";
 
-function senders(registration: Registration) {
-  const text =
-    registration === "message"
-      ? clickClackPlugin.message?.send?.text
-      : clickClackPlugin.outbound?.sendText;
-  const media =
-    registration === "message"
-      ? clickClackPlugin.message?.send?.media
-      : clickClackPlugin.outbound?.sendMedia;
-  if (!text || !media) {
-    throw new Error(`Missing ClickClack ${registration} sender`);
-  }
+function accountConfig(account: Account) {
   return {
-    text: async (ctx: Omit<ChannelMessageSendTextContext, "onDeliveryResult">) => text(ctx),
-    media: async (ctx: Omit<ChannelMessageSendMediaContext, "onDeliveryResult">) => media(ctx),
+    baseUrl: `https://${account}.example`,
+    token: `fixture-${account}-token`,
+    workspace: `wsp_${account}`,
   };
+}
+
+const uploadPath = "POST /api/uploads";
+const messagePath = "POST /api/channels/chn_alpha/messages";
+const attachmentPath = "POST /api/messages/msg_alpha/attachments";
+const reconciliationPath = "GET /api/messages/msg_alpha";
+const mediaPaths = [uploadPath, messagePath, attachmentPath];
+function expectedDelivery(kind = "text") {
+  return {
+    channel: "clickclack",
+    messageId: "msg_alpha",
+    receipt: { parts: [{ platformMessageId: "msg_alpha", kind }] },
+  };
+}
+
+const acceptedAlpha = { status: "fulfilled", value: { messageId: "msg_alpha" } };
+const retiredSender = {
+  status: "rejected",
+  error: { message: expect.stringContaining("sender retired") },
+};
+
+function required<T>(value: T | undefined): T {
+  if (value === undefined) {
+    throw new Error("Missing ClickClack sender");
+  }
+  return value;
 }
 
 function observe<T>(operation: Promise<T>) {
@@ -97,9 +100,9 @@ function createRequestGate() {
   const entered = createDeferred<void>();
   const release = createDeferred<void>();
   return {
-    hold: async () => {
+    hold: () => {
       entered.resolve();
-      await release.promise;
+      return release.promise;
     },
     release: release.resolve,
     entered: async (outcome: Promise<unknown>) => {
@@ -131,62 +134,61 @@ function installTransport(
       if (account !== "alpha" && account !== "beta") {
         throw new Error(`Unexpected ClickClack host: ${url.host}`);
       }
-      requests.push({ url: url.href, init });
-      const method = init?.method ?? "GET";
-      let stage: RequestStage;
-      let response: () => Response;
-      if (method === "POST" && url.pathname === "/api/dms") {
-        stage = "dm";
-        response = () => Response.json({ conversation: { id: `dcn_${account}` } }, { status: 201 });
-      } else if (method === "GET" && url.pathname === "/api/uploads/by-nonce") {
-        stage = "upload lookup";
-        response = () =>
-          new Response("Not found", {
-            status: 404,
-            headers: { "X-ClickClack-Upload-Nonce": "supported" },
-          });
-      } else if (method === "POST" && url.pathname === "/api/uploads") {
-        stage = "upload";
-        response = () =>
-          Response.json(
-            { upload: { id: `upl_${account}`, filename: "proof.txt" } },
-            { status: 201 },
+      requests.push({
+        url: url.href,
+        init,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+      const respond = async (stage: RequestStage, response: () => Response) => {
+        await options.beforeResponse?.(stage, account);
+        return response();
+      };
+      const created = (body: unknown) => Response.json(body, { status: 201 });
+      const request = `${init?.method ?? "GET"} ${url.pathname}`;
+      switch (request) {
+        case "POST /api/dms":
+          return respond("dm", () => created({ conversation: { id: `dcn_${account}` } }));
+        case "GET /api/uploads/by-nonce":
+          return respond(
+            "upload lookup",
+            () =>
+              new Response("Not found", {
+                status: 404,
+                headers: { "X-ClickClack-Upload-Nonce": "supported" },
+              }),
           );
-      } else if (
-        method === "POST" &&
-        (url.pathname === `/api/dms/dcn_${account}/messages` ||
-          url.pathname === `/api/channels/chn_${account}/messages`)
-      ) {
-        stage = "message";
-        response = () => Response.json({ message: { id: `msg_${account}` } }, { status: 201 });
-      } else if (method === "POST" && url.pathname === `/api/messages/msg_${account}/attachments`) {
-        stage = "attachment";
-        const attempt = (attachmentAttempts.get(account) ?? 0) + 1;
-        attachmentAttempts.set(account, attempt);
-        response = () => {
-          if (options.firstAttachmentFails && attempt === 1) {
-            throw new Error("First attachment response was lost");
-          }
-          return Response.json({ ok: true });
-        };
-      } else if (method === "GET" && url.pathname === `/api/messages/msg_${account}`) {
-        stage = "reconciliation";
-        response = () => {
-          if (options.reconciliationFails) {
-            throw new Error("Attachment reconciliation was unavailable");
-          }
-          return Response.json({
-            message: {
-              id: `msg_${account}`,
-              attachments: options.reconciledAttachment ? [{ id: `upl_${account}` }] : [],
-            },
+        case "POST /api/uploads":
+          return respond("upload", () =>
+            created({ upload: { id: `upl_${account}`, filename: "proof.txt" } }),
+          );
+        case `POST /api/dms/dcn_${account}/messages`:
+        case `POST /api/channels/chn_${account}/messages`:
+          return respond("message", () => created({ message: { id: `msg_${account}` } }));
+        case `POST /api/messages/msg_${account}/attachments`: {
+          const attempt = (attachmentAttempts.get(account) ?? 0) + 1;
+          attachmentAttempts.set(account, attempt);
+          return respond("attachment", () => {
+            if (options.firstAttachmentFails && attempt === 1) {
+              throw new Error("First attachment response was lost");
+            }
+            return Response.json({ ok: true });
           });
-        };
-      } else {
-        throw new Error(`Unexpected ClickClack request: ${method} ${url.href}`);
+        }
+        case `GET /api/messages/msg_${account}`:
+          return respond("reconciliation", () => {
+            if (options.reconciliationFails) {
+              throw new Error("Attachment reconciliation was unavailable");
+            }
+            return Response.json({
+              message: {
+                id: `msg_${account}`,
+                attachments: options.reconciledAttachment ? [{ id: `upl_${account}` }] : [],
+              },
+            });
+          });
+        default:
+          throw new Error(`Unexpected ClickClack request: ${request}`);
       }
-      await options.beforeResponse?.(stage, account);
-      return response();
     }),
   );
   return requests;
@@ -201,14 +203,6 @@ function expectAccountRequests(requests: HttpRequest[], account: Account) {
     expect(new URL(url).origin).toBe(`https://${account}.example`);
     expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer fixture-${account}-token`);
   }
-}
-
-function jsonBody(request: HttpRequest | undefined): unknown {
-  const body = request?.init?.body;
-  if (typeof body !== "string") {
-    throw new Error("Expected a JSON ClickClack request body");
-  }
-  return JSON.parse(body);
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -268,13 +262,10 @@ afterEach(() => {
 describe("ClickClack sender authority", () => {
   it("stops the outbound sender after a deferred upload is revoked", async () => {
     const { result, requests } = await withDeferredResponse("upload", "revoked", (context) =>
-      senders("outbound").media({ ...mediaContext(), ...context }),
+      required(clickClackPlugin.outbound?.sendMedia)({ ...mediaContext(), ...context }),
     );
-    expect(result).toMatchObject({
-      status: "rejected",
-      error: { message: expect.stringContaining("sender retired") },
-    });
-    expect(requestPaths(requests)).toEqual(["POST /api/uploads"]);
+    expect(result).toMatchObject(retiredSender);
+    expect(requestPaths(requests)).toEqual([uploadPath]);
   });
 
   it.each(["active", "revoked"] as const)(
@@ -283,12 +274,13 @@ describe("ClickClack sender authority", () => {
       const { result, requests } = await withDeferredResponse(
         "reconciliation",
         state,
-        (context) => senders("message").media({ ...mediaContext(), ...context }),
+        (context) =>
+          required(clickClackPlugin.message?.send?.media)({ ...mediaContext(), ...context }),
         { firstAttachmentFails: true, reconciliationFails: state === "active" },
       );
       expect(result).toMatchObject(
         state === "active"
-          ? { status: "fulfilled", value: { messageId: "msg_alpha" } }
+          ? acceptedAlpha
           : {
               status: "rejected",
               error: {
@@ -297,21 +289,19 @@ describe("ClickClack sender authority", () => {
                 deliveryResult: {
                   visibleReplySent: true,
                   messageIds: ["msg_alpha"],
-                  receipt: { parts: [{ platformMessageId: "msg_alpha", kind: "text" }] },
+                  receipt: expectedDelivery().receipt,
                 },
               },
             },
       );
       expect(requestPaths(requests)).toEqual([
-        "POST /api/uploads",
-        "POST /api/channels/chn_alpha/messages",
-        "POST /api/messages/msg_alpha/attachments",
-        "GET /api/messages/msg_alpha",
-        ...(state === "active" ? ["POST /api/messages/msg_alpha/attachments"] : []),
+        ...mediaPaths,
+        reconciliationPath,
+        ...(state === "active" ? [attachmentPath] : []),
       ]);
-      expect(jsonBody(requests[2])).toEqual({ upload_id: "upl_alpha" });
+      expect(requests[2]?.body).toEqual({ upload_id: "upl_alpha" });
       if (state === "active") {
-        expect(jsonBody(requests[4])).toEqual({ upload_id: "upl_alpha" });
+        expect(requests[4]?.body).toEqual({ upload_id: "upl_alpha" });
       }
     },
   );
@@ -322,15 +312,14 @@ describe("ClickClack sender authority", () => {
       const { result, requests } = await withDeferredResponse(
         stage,
         "revoked",
-        (context) => senders("outbound").media({ ...mediaContext(), ...context }),
+        (context) =>
+          required(clickClackPlugin.outbound?.sendMedia)({ ...mediaContext(), ...context }),
         { firstAttachmentFails: stage === "reconciliation", reconciledAttachment: true },
       );
-      expect(result).toMatchObject({ status: "fulfilled", value: { messageId: "msg_alpha" } });
+      expect(result).toMatchObject(acceptedAlpha);
       expect(requestPaths(requests)).toEqual([
-        "POST /api/uploads",
-        "POST /api/channels/chn_alpha/messages",
-        "POST /api/messages/msg_alpha/attachments",
-        ...(stage === "reconciliation" ? ["GET /api/messages/msg_alpha"] : []),
+        ...mediaPaths,
+        ...(stage === "reconciliation" ? [reconciliationPath] : []),
       ]);
     },
   );
@@ -344,7 +333,7 @@ it("keeps a revoked outbound sender independent from an active message account",
   const alpha = createAuthority();
   const beta = createAuthority();
   const first = observe(
-    senders("outbound").text({
+    required(clickClackPlugin.outbound?.sendText)({
       cfg,
       accountId: "alpha",
       to: "dm:usr_alpha",
@@ -353,7 +342,7 @@ it("keeps a revoked outbound sender independent from an active message account",
     }),
   );
   const second = observe(
-    senders("message").text({
+    required(clickClackPlugin.message?.send?.text)({
       cfg,
       accountId: "beta",
       to: "dm:usr_beta",
@@ -366,10 +355,7 @@ it("keeps a revoked outbound sender independent from an active message account",
     await Promise.all([gates.alpha.entered(first), gates.beta.entered(second)]);
     alpha.revoke();
     gates.alpha.release();
-    expect(await first).toMatchObject({
-      status: "rejected",
-      error: { message: expect.stringContaining("sender retired") },
-    });
+    expect(await first).toMatchObject(retiredSender);
     gates.beta.release();
     expect(await second).toMatchObject({ status: "fulfilled", value: { messageId: "msg_beta" } });
     const alphaRequests = requests.filter(({ url }) => new URL(url).hostname === "alpha.example");
@@ -381,15 +367,15 @@ it("keeps a revoked outbound sender independent from an active message account",
       "POST /api/dms",
       "POST /api/dms/dcn_beta/messages",
     ]);
-    expect(jsonBody(alphaRequests[0])).toEqual({
+    expect(alphaRequests[0]?.body).toEqual({
       workspace_id: "wsp_alpha",
       member_ids: ["usr_alpha"],
     });
-    expect(jsonBody(betaRequests[0])).toEqual({
+    expect(betaRequests[0]?.body).toEqual({
       workspace_id: "wsp_beta",
       member_ids: ["usr_beta"],
     });
-    expect(jsonBody(betaRequests[1])).toEqual({
+    expect(betaRequests[1]?.body).toEqual({
       body: "Beta reply",
       quoted_message_id: "msg_quote",
     });
@@ -401,15 +387,11 @@ it("keeps a revoked outbound sender independent from an active message account",
 });
 
 it("reports the legacy accepted text identity before a later attachment is revoked", async () => {
-  const sender = clickClackPlugin.outbound?.sendMedia;
-  if (!sender) {
-    throw new Error("Missing ClickClack legacy media sender");
-  }
   const requests = installTransport();
   const authority = createAuthority();
   const progress: unknown[] = [];
   const result = await observe(
-    sender({
+    required(clickClackPlugin.outbound?.sendMedia)({
       ...mediaContext(),
       ...authority.context,
       onDeliveryResult: (delivery) => {
@@ -418,22 +400,12 @@ it("reports the legacy accepted text identity before a later attachment is revok
       },
     }),
   );
-  expect(progress).toMatchObject([
-    {
-      channel: "clickclack",
-      messageId: "msg_alpha",
-      receipt: { parts: [{ platformMessageId: "msg_alpha", kind: "text" }] },
-    },
-  ]);
-  expect(progress).toHaveLength(1);
+  expect(progress).toMatchObject([expectedDelivery()]);
   expect(result).toMatchObject({
     status: "rejected",
     error: { sentBeforeError: true, deliveryResult: { messageIds: ["msg_alpha"] } },
   });
-  expect(requestPaths(requests)).toEqual([
-    "POST /api/uploads",
-    "POST /api/channels/chn_alpha/messages",
-  ]);
+  expect(requestPaths(requests)).toEqual([uploadPath, messagePath]);
 });
 
 it.each(["active", "revoked"] as const)(
@@ -465,23 +437,9 @@ it.each(["active", "revoked"] as const)(
       const send = result.value;
       expect(send).toMatchObject({
         status: state === "active" ? "sent" : "partial_failed",
-        results: [
-          {
-            channel: "clickclack",
-            messageId: "msg_alpha",
-            receipt: {
-              parts: [
-                { platformMessageId: "msg_alpha", kind: state === "active" ? "media" : "text" },
-              ],
-            },
-          },
-        ],
+        results: [expectedDelivery(state === "active" ? "media" : "text")],
+        receipt: { platformMessageIds: ["msg_alpha"] },
       });
-      if (send.status !== "sent" && send.status !== "partial_failed") {
-        throw new Error(`Expected an identified delivery, got ${send.status}`);
-      }
-      expect(send.results).toHaveLength(1);
-      expect(send.receipt.platformMessageIds).toEqual(["msg_alpha"]);
       const queued = readQueuedDeliveryEntriesForTest(stateDir);
       if (state === "revoked") {
         expect(send).toMatchObject({
@@ -496,17 +454,16 @@ it.each(["active", "revoked"] as const)(
             recoveryState: "unknown_after_send",
           },
         ]);
-        expect(queued).toHaveLength(1);
       } else {
         expect(queued).toEqual([]);
       }
       expect(requestPaths(requests)).toEqual([
         "GET /api/uploads/by-nonce",
-        "POST /api/uploads",
-        "POST /api/channels/chn_alpha/messages",
-        ...(state === "active" ? ["POST /api/messages/msg_alpha/attachments"] : []),
+        uploadPath,
+        messagePath,
+        ...(state === "active" ? [attachmentPath] : []),
       ]);
-      expect(jsonBody(requests[2])).toMatchObject({
+      expect(requests[2]?.body).toMatchObject({
         body: "A file reply",
         quoted_message_id: "msg_quote",
       });

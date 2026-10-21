@@ -9,7 +9,7 @@ import { listConfiguredSessionStoreAgentIds } from "./targets-configured-agents.
 export async function resolveAllAgentSessionStoreTargetsAsync(
   cfg: OpenClawConfig,
   options: { env?: NodeJS.ProcessEnv; registeredDatabases?: SessionStoreRegistryRead } = {},
-): Promise<SessionStoreTarget[]> {
+): Promise<Readonly<SessionStoreTarget>[]> {
   const request = prepareSessionStoreTargetInventory(
     cfg,
     listConfiguredSessionStoreAgentIds(cfg),
@@ -46,7 +46,7 @@ export async function resolveExistingAgentSessionStoreTargetsAsync(
   cfg: OpenClawConfig,
   agentId: string,
   options: { env?: NodeJS.ProcessEnv; excludeStorePath?: string } = {},
-): Promise<SessionStoreTarget[]> {
+): Promise<Readonly<SessionStoreTarget>[]> {
   const request = prepareSessionStoreTargetInventory(cfg, [agentId], options.env);
   return prepareSessionStoreTargetInventoryRead(request).withRead(async (inventory) => {
     const selected = inventory.agents[0];

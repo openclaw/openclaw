@@ -1,19 +1,21 @@
 import { createSignal, onCleanup } from "solid-js";
-import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { downloadBlobFile } from "../../../lib/download.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
+import type { FileReaderDownload } from "./chat-sidebar-content-types.ts";
 
 registerFilePreviewEnglish();
 
 export function FileDownloadButton(props: {
   scopeKey: string;
-  download: (signal: AbortSignal) => Promise<SessionFileDownload | null>;
+  download: (signal: AbortSignal) => Promise<FileReaderDownload | null>;
   class: string;
   disabled?: boolean;
+  showLabel?: boolean;
 }) {
   const [pending, setPending] = createSignal(false);
   let request: AbortController | null = null;
@@ -30,6 +32,10 @@ export function FileDownloadButton(props: {
     try {
       const file = await props.download(controller.signal);
       if (file && current()) {
+        if ("blob" in file) {
+          downloadBlobFile(file.filename, file.blob);
+          return;
+        }
         // The browser owns the byte stream and save progress, not a JavaScript Blob.
         const link = document.createElement("a");
         link.href = file.url;
@@ -58,14 +64,15 @@ export function FileDownloadButton(props: {
         type="button"
         aria-label={label()}
         disabled={props.disabled || pending()}
-        ref={(button) =>
-          button.addEventListener("click", (event) => {
-            event.stopPropagation();
-            void download();
-          })
-        }
+        onClick={(event) => {
+          event.stopPropagation();
+          void download();
+        }}
       >
         <Icon name="download" />
+        {props.showLabel ? (
+          <span>{t(pending() ? "chat.detailPanel.downloading" : "chat.attachments.download")}</span>
+        ) : undefined}
       </button>
     </openclaw-tooltip>
   );

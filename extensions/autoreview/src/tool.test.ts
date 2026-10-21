@@ -339,3 +339,83 @@ it.each([{ passes: 0 }, { timeoutSeconds: 0 }, { openclawBin: "/untrusted" }])(
     expect(test.command).not.toHaveBeenCalled();
   },
 );
+
+it.each([null, 900.25])(
+  "retains canonical per-pass timeout %s across the complete plan",
+  async (timeoutSeconds) => {
+    const test = fixture({
+      passes: 2,
+      extraRequestFields: { engine_timeout_seconds: timeoutSeconds },
+    });
+    await test.tool.execute("review", params);
+    expect(test.command).toHaveBeenCalledTimes(2);
+    for (const [argv, options] of test.command.mock.calls) {
+      if (timeoutSeconds === null) {
+        expect(argv).not.toContain("--timeout");
+      } else {
+        expect(argv).toEqual(expect.arrayContaining(["--timeout", "901"]));
+      }
+      expect(options).toMatchObject({ timeoutMs: timeoutSeconds === null ? undefined : 900_250 });
+    }
+    expect(test.response()).toMatchObject({ pass: 2, status: "done" });
+  },
+);
+
+it("reports an owned reviewer timeout as failure rather than a completed review", async () => {
+  const test = fixture();
+  const run = test.command.getMockImplementation()!;
+  test.command.mockImplementation(async (...args) => ({
+    ...(await run(...args)),
+    code: null,
+    killed: true,
+    termination: "timeout",
+  }));
+  await expect(test.tool.execute("review", params)).rejects.toThrow(
+    "Reviewer command failed (exit none, timeout",
+  );
+  expect(test.response()).toMatchObject({ status: "failed", output: null });
+  expect(test.command).toHaveBeenCalledOnce();
+});
+
+it.each(["caller", "model authority"])(
+  "cancels the helper and reviewer after %s revocation",
+  async (owner) => {
+    const test = fixture();
+    const caller = new AbortController();
+    const model = new AbortController();
+    const started = Promise.withResolvers<void>();
+    const cancellation = new Error("Review cancelled");
+    let reviewerSignal: AbortSignal | undefined;
+    let cwd: string | undefined;
+    if (owner === "model authority") {
+      test.context.modelExecution!.run = async (_selection, action) =>
+        await action({
+          agentId: "caller",
+          model: "fixture/preferred",
+          signal: model.signal,
+          assertCurrent: () => model.signal.throwIfAborted(),
+        });
+    }
+    test.command.mockImplementation(async (_argv, options) => {
+      if (typeof options === "number") {
+        throw new Error("expected process options");
+      }
+      reviewerSignal = options.signal;
+      cwd = options.cwd;
+      started.resolve();
+      const cancelled = Promise.withResolvers<Awaited<ReturnType<Command>>>();
+      options.signal?.addEventListener("abort", () => cancelled.reject(cancellation), {
+        once: true,
+      });
+      return await cancelled.promise;
+    });
+    const result = test.tool.execute("review", params, caller.signal);
+    const rejected = expect(result).rejects.toThrow("Review cancelled");
+    await started.promise;
+    (owner === "caller" ? caller : model).abort(cancellation);
+    await rejected;
+    expect(reviewerSignal?.aborted).toBe(true);
+    expect(test.response()).toBeUndefined();
+    await expect(fs.stat(path.dirname(cwd!))).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);

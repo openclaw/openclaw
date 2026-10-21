@@ -1,4 +1,3 @@
-/** Tests Gateway exec approval to ACP permission relay helpers. */
 import { describe, expect, it } from "vitest";
 import {
   buildAcpPermissionRequest,
@@ -10,10 +9,7 @@ import {
 function buildOptionsForAllowedDecisions(allowedDecisions: unknown) {
   return buildAcpPermissionRequest({
     sessionId: "session-1",
-    event: {
-      approvalId: "approval-1",
-      command: "echo ok",
-    },
+    event: { approvalId: "approval-1", command: "echo ok" },
     details: { allowedDecisions },
   }).options;
 }
@@ -66,27 +62,12 @@ describe("ACP permission relay helpers", () => {
           command: "echo ok",
           host: "gateway",
         },
-        _meta: {
-          toolName: "exec",
-          approvalId: "approval-1",
-        },
+        _meta: { toolName: "exec", approvalId: "approval-1" },
       },
       options: [
-        {
-          optionId: "allow-once",
-          name: "Allow once",
-          kind: "allow_once",
-        },
-        {
-          optionId: "allow-always",
-          name: "Allow always",
-          kind: "allow_always",
-        },
-        {
-          optionId: "deny",
-          name: "Deny",
-          kind: "reject_once",
-        },
+        { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+        { optionId: "allow-always", name: "Allow always", kind: "allow_always" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
       ],
     });
   });
@@ -124,21 +105,12 @@ describe("ACP permission relay helpers", () => {
 
   it("maps selected ACP outcomes back to Gateway decisions", () => {
     const options = buildOptionsForAllowedDecisions(["allow-once", "allow-always", "deny"]);
-
-    expect(
-      resolveGatewayDecisionFromPermissionOutcome(
-        { outcome: { outcome: "selected", optionId: "allow-always" } },
-        options,
-      ),
-    ).toBe("allow-always");
-    expect(
-      resolveGatewayDecisionFromPermissionOutcome(
-        { outcome: { outcome: "selected", optionId: "missing" } },
-        options,
-      ),
-    ).toBeUndefined();
-    expect(
-      resolveGatewayDecisionFromPermissionOutcome({ outcome: { outcome: "cancelled" } }, options),
-    ).toBeUndefined();
+    const decide = (outcome: Parameters<typeof resolveGatewayDecisionFromPermissionOutcome>[0]) =>
+      resolveGatewayDecisionFromPermissionOutcome(outcome, options);
+    expect(decide({ outcome: { outcome: "selected", optionId: "allow-always" } })).toBe(
+      "allow-always",
+    );
+    expect(decide({ outcome: { outcome: "selected", optionId: "missing" } })).toBeUndefined();
+    expect(decide({ outcome: { outcome: "cancelled" } })).toBeUndefined();
   });
 });

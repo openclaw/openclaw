@@ -60,12 +60,14 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.providerErrorMessagePreview).toBe("pass: opaque…7890 rejected");
   });
 
-  it("redacts provider error types as well as message previews", () => {
+  it("redacts structured provider codes and types as well as message previews", () => {
     const observed = buildApiErrorObservationFields(
       JSON.stringify({
         error: { type: `x-api-key: ${OBSERVATION_BEARER_TOKEN}`, message: "Request failed" },
       }),
+      { code: `x-api-key: ${OBSERVATION_BEARER_TOKEN}` },
     );
+    expect(observed.providerErrorCode).toBe("x-api-key: ***");
     expect(observed.providerErrorType).toBe("x-api-key: ***");
   });
 

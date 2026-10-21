@@ -25,6 +25,7 @@ import {
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   MAX_SESSION_PARTICIPANTS,
 } from "../config/sessions/session-entry-provenance.js";
@@ -205,6 +206,7 @@ export function readSessionRowInputs(params: {
       key,
       entry,
       lightweight,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
       swarm: buildSessionSwarmSummary(
         params.rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
         key,
@@ -382,7 +384,7 @@ function projectSessionRowProfiles(
   );
   return {
     createdActor: projectSessionActor(
-      entry?.createdActor,
+      resolveSessionCreatorActor(entry?.createdActor),
       userProfileIdentityById,
       cfg,
       Boolean(sessionCreatorProfileId(entry?.createdActor)),
@@ -424,7 +426,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
 
   const row: GatewaySessionRow = {
     key,
-    sessionModelRevision: sessionModelRevision(entry),
+    sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,

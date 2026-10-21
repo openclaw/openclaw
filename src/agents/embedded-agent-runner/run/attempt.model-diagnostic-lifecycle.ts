@@ -1,4 +1,4 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
+import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,6 +13,7 @@ import {
   diagnosticHttpStatusCode,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
+import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   type DiagnosticEventInput,
@@ -34,6 +35,8 @@ import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { recordReasoningSuppressedDiagnostic } from "../../../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -56,6 +59,7 @@ export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   onStarted?: (callId: string) => void;
   /** Request observation ended; cleanup settlement and replay admission remain separately owned. */
   onFinished?: (callId: string) => void;
@@ -283,7 +287,12 @@ export function createModelLifecycle(params: {
     },
   };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
-  const observer = params.createObserver(areDiagnosticsEnabledForProcess());
+  const observer = params.createObserver(
+    areDiagnosticsEnabledForProcess() &&
+      (hasInternalDiagnosticEventInterest("model.call.started", true) ||
+        hasInternalDiagnosticEventInterest("model.call.completed", true) ||
+        hasInternalDiagnosticEventInterest("model.call.error", true)),
+  );
   const eventBase: ModelCallEventBase = {
     ...modelCallHookEventBase({ ...params.ctx, callId }),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
@@ -291,9 +300,13 @@ export function createModelLifecycle(params: {
     ...(observer.promptStats ? { promptStats: observer.promptStats } : {}),
     trace,
   };
+  const watchdogAttempt = params.ctx.diagnosticOwner?.watchdogAttempt;
   const reportStreamProgress = createModelCallStreamProgressReporter({
     config: params.ctx.config,
     target: eventBase,
+    recordProgress: watchdogAttempt
+      ? () => watchdogAttempt.progress("transport", "model_call:stream_progress")
+      : undefined,
   });
   emitCoreModelRequestStartedDiagnosticEvent(
     eventBase,
@@ -365,6 +378,19 @@ export function createModelLifecycle(params: {
   signal?.addEventListener("abort", clearWait, { once: true });
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
+    if (observer.state.reasoningSuppressed) {
+      const warning = recordReasoningSuppressedDiagnostic(
+        {
+          sessionKey: eventBase.sessionKey,
+          sessionId: eventBase.sessionId ?? (eventBase.sessionKey ? undefined : eventBase.runId),
+        },
+        eventBase.provider,
+        eventBase.model,
+      );
+      if (warning) {
+        log.warn(warning);
+      }
+    }
     if (observer.state.terminalEventEmitted) {
       return;
     }

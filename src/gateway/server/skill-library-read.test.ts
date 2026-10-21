@@ -362,13 +362,13 @@ describe("Gateway pinned manual library read", () => {
             const alice = await connectProfile(
               port,
               "alice@example.test",
-              state.path("alice-device.sqlite"),
+              state.path("alice-device", "client", "credentials.sqlite"),
             );
             sockets.push(alice);
             const bob = await connectProfile(
               port,
               "bob@example.test",
-              state.path("bob-device.sqlite"),
+              state.path("bob-device", "client", "credentials.sqlite"),
             );
             sockets.push(bob);
             const saved = (await rpc(alice, "skills.library.save", {

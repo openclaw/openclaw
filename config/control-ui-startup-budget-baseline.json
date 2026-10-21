@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 338803,
-  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
-  "updatedAt": "2026-10-17"
+  "startupJsGzipBytes": 324900,
+  "reason": "Enterprise MCP auth config adds 338 B to measured startup JS; retain 100 B below the committed baseline cap.",
+  "updatedAt": "2026-10-20"
 }

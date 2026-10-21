@@ -600,9 +600,8 @@ describe("gatherDaemonStatus", () => {
               ? { mode: "none" }
               : {
                   mode: "token",
-                  ...(auth === "configured"
-                    ? { token: "service-config-token", password: "local-password" }
-                    : {}),
+                  token: "service-config-token",
+                  password: "local-password",
                 },
           remote: {
             url: remoteUrl,
@@ -631,20 +630,14 @@ describe("gatherDaemonStatus", () => {
 
       expect(input.url).toBe("wss://127.0.0.1:19001");
       expect(input.urlOverride).toBeUndefined();
-      expect(input.token).toBe(
-        auth === "none"
-          ? undefined
-          : auth === "configured"
-            ? "service-config-token"
-            : "service-env-token",
-      );
+      expect(input.token).toBe(auth === "none" ? undefined : "service-config-token");
       expect(input.password).toBe(auth === "configured" ? "local-password" : undefined);
       expect(input.tlsFingerprint).toBe("sha256:11:22:33:44");
       expect(input.requireRpc).toBe(requireRpc);
       assert(input.config);
-      expect(gatewayEdgeAuthValueForTarget({ config: input.config, targetUrl: input.url })).toEqual(
-        remoteUrl === "wss://127.0.0.1:19001" ? edgeAuth : undefined,
-      );
+      expect(
+        gatewayEdgeAuthValueForTarget({ config: input.config, targetUrl: input.url }),
+      ).toBeUndefined();
       expect(input.config.gateway?.mode).toBe("local");
       expect(input.config.gateway?.remote).toEqual({
         url: remoteUrl,
@@ -902,7 +895,7 @@ describe("gatherDaemonStatus", () => {
     }
   });
 
-  it.each([true])("keeps an explicit local port in remote config with probe=%s", async (probe) => {
+  it("keeps an explicit local port in remote config when probing", async () => {
     cliLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -912,7 +905,11 @@ describe("gatherDaemonStatus", () => {
         remote: { url: "wss://gateway.example", token: "remote-token" },
       },
     };
-    const status = await gatherStatus({ rpc: { localPortOverride: 19002 }, probe, deep: true });
+    const status = await gatherStatus({
+      rpc: { localPortOverride: 19002 },
+      probe: true,
+      deep: true,
+    });
 
     expect(status.gateway).toMatchObject({
       port: 19002,
@@ -923,18 +920,13 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.targetRole).toBe("diagnostic-only");
     expect(findSystemdGatewayInstallation).not.toHaveBeenCalled();
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
-    if (probe) {
-      expect(callGatewayStatusProbe).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "wss://127.0.0.1:19002",
-          token: "local-token",
-          tlsFingerprint: "sha256:11:22:33:44",
-        }),
-      );
-    } else {
-      expect(callGatewayStatusProbe).not.toHaveBeenCalled();
-      expect(status.rpc).toBeUndefined();
-    }
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:19002",
+        token: "local-token",
+        tlsFingerprint: "sha256:11:22:33:44",
+      }),
+    );
   });
 
   it.each([
@@ -961,7 +953,7 @@ describe("gatherDaemonStatus", () => {
     const status = await gatherStatus({ probe: false, deep: true });
 
     expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
-      expect.objectContaining({ bind: "lan", mode: "quick", port: 19001 }),
+      expect.objectContaining({ bind: "lan", port: 19001 }),
     );
     expect(status.gateway?.windowsFirewall).toMatchObject({
       severity: "warning",

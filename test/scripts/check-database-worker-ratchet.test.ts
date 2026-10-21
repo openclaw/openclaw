@@ -4,10 +4,85 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
 import { inventory } from "../../scripts/database-worker-inventory.mjs";
+import * as databaseWorkerCompat from "../../scripts/lib/database-worker-compat.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses identical source snapshots while keeping head analysis fresh and invalidating changed bases", () => {
+  const root = tempDirs.make("openclaw-sqlite-cached-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  fs.mkdirSync(path.join(root, "src"));
+  const file = path.join(root, "src/runtime.ts");
+  const source = "executeSqliteQuerySync(query);\n";
+  fs.writeFileSync(file, source);
+  git("init");
+  git("add", "src");
+  git("commit", "-m", "base");
+  const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(file, source.repeat(2));
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(inspect).toHaveBeenCalledTimes(2);
+
+  git("add", "src");
+  git("commit", "-m", "changed base");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(3);
+
+  // Simulate an edit after module load without changing the running test's source files.
+  const analyzerFile = path.resolve("scripts/lib/database-worker-compat.mts");
+  const readFile = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+    const bytes = readFile(filePath, options);
+    return filePath !== analyzerFile
+      ? bytes
+      : typeof bytes === "string"
+        ? `${bytes}\n`
+        : Buffer.concat([bytes, Buffer.from("\n")]);
+  });
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(7);
+});
+
+it.each(["contents", "added path", "renamed path", "deleted path"])(
+  "analyzes both complete snapshots after a source change: %s",
+  (change) => {
+    const root = tempDirs.make("openclaw-sqlite-snapshot-ratchet-");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+        cwd: root,
+        stdio: "pipe",
+      });
+    fs.mkdirSync(path.join(root, "src"));
+    const file = path.join(root, "src/runtime.ts");
+    fs.writeFileSync(file, "export const value = 1;\n");
+    git("init");
+    git("add", "src");
+    git("commit", "-m", "base");
+    if (change === "contents") {
+      fs.writeFileSync(file, "export const value = 2;\n");
+    } else if (change === "added path") {
+      fs.writeFileSync(path.join(root, "src/added.ts"), "export const value = 1;\n");
+    } else if (change === "renamed path") {
+      fs.renameSync(file, path.join(root, "src/renamed.ts"));
+    } else {
+      fs.rmSync(file);
+    }
+    const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(inspect).toHaveBeenCalledTimes(2);
+  },
+);
 
 it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
   const root = tempDirs.make("openclaw-sqlite-suite-ratchet-");
@@ -202,7 +277,7 @@ function anotherFactory() {
   fs.mkdirSync(path.dirname(eventFile), { recursive: true });
   const eventSource = `
 import { executeSqliteQuerySync as query } from "./queries.js";
-function recordSessionStateEventInDatabase() {
+function recordSessionStateEventsInDatabase() {
   query(sql);
   const registeredWatcherKeys = notify
     ? query(sql).rows.map(() => query(sql))
@@ -228,7 +303,7 @@ function anotherRecorder() {
     operation: "createPlacementTurnClaimOps.releaseTurn",
   });
   expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
-    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
+    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventsInDatabase" })),
   );
   expect(
     rows.find((row) => row.file === eventRelative && row.tier === "T1")?.calls[0],

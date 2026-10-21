@@ -1,39 +1,17 @@
-// Browser tests cover browser cli.lazy plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isBrowserMachineOutput } from "../../cli-output-mode.js";
 
 const manageMocks = vi.hoisted(() => {
   const doctorAction = vi.fn();
-  const openAction = vi.fn();
-  const startAction = vi.fn();
-  const statusAction = vi.fn();
-  const tabNewAction = vi.fn();
   const tabsAction = vi.fn();
   const registerBrowserManageCommands = vi.fn((browser: Command) => {
-    browser.command("start").description("Start browser").action(startAction);
-    browser.command("status").description("Show browser status").action(statusAction);
-    browser.command("tabs").description("List tabs").action(tabsAction);
-    browser
-      .command("tab")
-      .description("Tab shortcuts")
-      .command("new")
-      .description("Open a new tab")
-      .action(tabNewAction);
-    browser.command("open").description("Open URL").argument("<url>").action(openAction);
-    browser
-      .command("doctor")
-      .description("Check browser plugin readiness")
-      .option("--deep", "Run a live snapshot check")
-      .action(doctorAction);
+    browser.command("tabs").action(tabsAction);
+    browser.command("doctor").option("--deep").action(doctorAction);
   });
   return {
     doctorAction,
-    openAction,
     registerBrowserManageCommands,
-    startAction,
-    statusAction,
-    tabNewAction,
     tabsAction,
   };
 });
@@ -92,6 +70,17 @@ vi.mock("./browser-cli-state.js", () => stateMocks);
 vi.mock("./browser-cli-extension.js", () => extensionMocks);
 
 const { registerBrowserCli } = await import("./browser-cli.js");
+const machineOutput = (...args: string[]) =>
+  isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", ...args] });
+
+async function run(args: string[], positionalOptions = true) {
+  const program = new Command().name("openclaw");
+  if (positionalOptions) {
+    program.enablePositionalOptions();
+  }
+  registerBrowserCli(program, ["node", "openclaw", ...args]);
+  await program.parseAsync(args, { from: "user" });
+}
 
 function requireFirstCall<TArgs extends unknown[]>(
   mock: { mock: { calls: TArgs[] } },
@@ -113,54 +102,19 @@ function requireTrailingCommand(args: unknown[], label: string): Command {
 }
 
 describe("registerBrowserCli lazy browser subcommands", () => {
-  it.each([["session storage", ["browser", "storage", "session", "get", "key"]]])(
-    "declares default JSON output for %s",
-    (_name, args) => {
-      expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
-    },
-  );
-
-  it.each(["uninstall-host"])("declares explicit JSON output for extension %s", (subcommand) => {
-    expect(
-      isBrowserMachineOutput({
-        argv: ["node", "openclaw", "browser", "extension", subcommand, "--json"],
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps human browser commands out of machine-output mode", () => {
-    expect(isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "status"] })).toBe(false);
-    expect(
-      isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "cookies", "set"] }),
-    ).toBe(false);
-  });
-
-  it("accepts supported root options after browser", () => {
-    expect(
-      isBrowserMachineOutput({
-        argv: ["node", "openclaw", "browser", "--log-level", "debug", "evaluate"],
-      }),
-    ).toBe(true);
+  it.each([
+    { args: ["storage", "session", "get", "key"], machine: true },
+    { args: ["extension", "uninstall-host", "--json"], machine: true },
+    { args: ["status"], machine: false },
+    { args: ["cookies", "set"], machine: false },
+    { args: ["--log-level", "debug", "evaluate"], machine: true },
+  ])("detects machine=$machine output for $args", ({ args, machine }) => {
+    expect(machineOutput(...args)).toBe(machine);
   });
 
   beforeEach(() => {
     vi.unstubAllEnvs();
-    manageMocks.registerBrowserManageCommands.mockClear();
-    manageMocks.doctorAction.mockClear();
-    manageMocks.openAction.mockClear();
-    manageMocks.startAction.mockClear();
-    manageMocks.statusAction.mockClear();
-    manageMocks.tabNewAction.mockClear();
-    manageMocks.tabsAction.mockClear();
-    cookieSyncMocks.registerBrowserCookieSyncCommand.mockClear();
-    inspectMocks.registerBrowserInspectCommands.mockClear();
-    actionInputMocks.registerBrowserActionInputCommands.mockClear();
-    actionInputMocks.waitAction.mockClear();
-    actionObserveMocks.registerBrowserActionObserveCommands.mockClear();
-    debugMocks.registerBrowserDebugCommands.mockClear();
-    stateMocks.registerBrowserStateCommands.mockClear();
-    stateMocks.cookieSetAction.mockClear();
-    extensionMocks.registerBrowserExtensionCommands.mockClear();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -168,12 +122,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
   });
 
   it("loads browser doctor from the manage group so --deep is available", async () => {
-    const program = new Command();
-    program.name("openclaw");
-
-    registerBrowserCli(program, ["node", "openclaw", "browser", "doctor", "--deep"]);
-
-    await program.parseAsync(["browser", "doctor", "--deep"], { from: "user" });
+    await run(["browser", "doctor", "--deep"], false);
 
     expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
     expect(debugMocks.registerBrowserDebugCommands).not.toHaveBeenCalled();
@@ -183,22 +132,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
   });
 
   it("keeps explicit Gateway and wait URLs under their separate owners", async () => {
-    const program = new Command().name("openclaw").enablePositionalOptions();
-    registerBrowserCli(program, [
-      "node",
-      "openclaw",
-      "browser",
-      "--url",
-      "ws://127.0.0.1:18789",
-      "wait",
-      "--url",
-      "**/done",
-    ]);
-
-    await program.parseAsync(
-      ["browser", "--url", "ws://127.0.0.1:18789", "wait", "--url", "**/done"],
-      { from: "user" },
-    );
+    await run(["browser", "--url", "ws://127.0.0.1:18789", "wait", "--url", "**/done"]);
 
     const [opts, parent] = requireFirstCall(actionInputMocks.waitAction, "wait action call");
     expect(opts).toMatchObject({ url: "**/done" });
@@ -206,36 +140,20 @@ describe("registerBrowserCli lazy browser subcommands", () => {
   });
 
   it("accepts the shipped trailing browser profile order after lazy loading", async () => {
-    const program = new Command().name("openclaw").enablePositionalOptions();
-    registerBrowserCli(program, [
-      "node",
-      "openclaw",
-      "browser",
-      "tabs",
-      "--browser-profile",
-      "remote",
-      "--timeout",
-      "60000",
-    ]);
-
-    await program.parseAsync(
-      ["browser", "tabs", "--browser-profile", "remote", "--timeout", "60000"],
-      {
-        from: "user",
-      },
-    );
+    await run(["browser", "tabs", "--browser-profile", "remote", "--timeout", "60000"]);
 
     const tabsCommand = requireTrailingCommand(
       requireFirstCall(manageMocks.tabsAction, "tabs action call"),
       "tabs action",
     );
-    expect(tabsCommand.parent?.opts().browserProfile).toBe("remote");
-    expect(tabsCommand.parent?.opts().timeout).toBe("60000");
+    expect(tabsCommand.parent?.opts()).toMatchObject({
+      browserProfile: "remote",
+      timeout: "60000",
+    });
   });
 
   it("preserves parent timeout before a nested lazily loaded storage-family leaf", async () => {
-    const program = new Command().name("openclaw").enablePositionalOptions();
-    const args = [
+    await run([
       "browser",
       "--timeout",
       "60000",
@@ -246,10 +164,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
       "set",
       "session",
       "abc",
-    ];
-    registerBrowserCli(program, ["node", "openclaw", ...args]);
-
-    await program.parseAsync(args, { from: "user" });
+    ]);
 
     const cookieCall = requireFirstCall(stateMocks.cookieSetAction, "cookie set action call");
     expect(cookieCall[3]).toMatchObject({ timeout: "60000", browserProfile: "work", json: true });
@@ -257,8 +172,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
 
   it("can eagerly register all browser groups for compatibility", async () => {
     vi.stubEnv("OPENCLAW_DISABLE_LAZY_SUBCOMMANDS", "1");
-    const program = new Command();
-    program.name("openclaw");
+    const program = new Command().name("openclaw");
 
     registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
 

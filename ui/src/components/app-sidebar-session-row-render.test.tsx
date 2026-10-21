@@ -68,12 +68,12 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner(
-    { dashboards: null, loadMoreDashboards() {} },
-    props,
-    context,
-    props,
-  );
+  const host = new AppSidebarOwner({ dashboards: null, loadMoreDashboards() {} }, context, props);
+  // The full sidebar mounts this owner; row-only fixtures keep the supplied catalog summary.
+  host.sessionPullRequests = {
+    summary: (_sessionKey, _worktreeId, initial) => initial,
+    count: () => undefined,
+  };
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
   if (snapshot) {
@@ -202,7 +202,7 @@ it("keeps cached agent rows while the live roster settles", async () => {
         return { ts: 1, path: "", count: 0, defaults: {}, sessions: [] };
       }
       if (method === "sessions.groups.list") {
-        return { names: [], sectionOrder: [] };
+        return { groups: [], sectionOrder: [] };
       }
       if (method === "sessions.subscribe") {
         return { subscribed: true };
@@ -321,7 +321,7 @@ it.each([false, null, undefined])(
 
 it.each(["owner", "icon"] as const)(
   "retains %s artwork and actions when live rows republish unchanged presentation",
-  async (kind) => {
+  (kind) => {
     const { dom, session, current, setCurrent } = mountRow({
       label: "Research",
       color: "blue",
@@ -330,7 +330,7 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada" } },
     });
     const chip = dom.query("openclaw-session-owner-chip");
-    await chip?.updateComplete;
+    flush();
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
     const graphic = content.querySelector("svg");
@@ -362,7 +362,6 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
     });
     flush();
-    await chip?.updateComplete;
     expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
     expect(archive.querySelector("svg")).toBe(archiveIcon);
     expect(content.firstElementChild).toBe(artwork);
@@ -413,11 +412,14 @@ it("renders the saved chip identity before agent discovery without reviving anot
     );
     expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
   });
+  // The visible name already labels the trigger; no hover tooltip repeats it.
+  expect(dom.query("openclaw-tooltip")).toBeNull();
   host.sessionKey = "agent:other:thread";
   context.agentSelection.set("other");
   update();
   expect(dom.query("openclaw-sidebar-agent-card")).toBeNull();
   expect(dom.query(".sidebar-workspace-header")).not.toBeNull();
+  expect(dom.query("openclaw-tooltip")).toBeNull();
 });
 
 it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
@@ -500,7 +502,7 @@ it.each([false, true])(
   "keeps row facepiles idle with unchanged inputs (owner: %s), while admitting new presence",
   async (withOwner) => {
     const { host, container, dom } = createHost();
-    const session = projectSidebarSession({
+    let session = projectSidebarSession({
       key: "agent:main:thread",
       owner: withOwner
         ? { actor: { type: "human", id: "ada", identity: { type: "profile", id: "ada" } } }
@@ -546,8 +548,9 @@ it.each([false, true])(
       withOwner ? undefined : "ada",
     );
 
-    session.owner = {
-      actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } },
+    session = {
+      ...session,
+      owner: { actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } } },
     };
     update();
     await facepile.updateComplete;

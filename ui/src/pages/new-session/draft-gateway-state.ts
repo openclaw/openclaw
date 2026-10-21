@@ -325,16 +325,6 @@ export class DraftGatewayState {
     return this.preferences.loading || this.identityPreferences?.mode === "loading";
   }
 
-  resolvedGroupCategory(): string | undefined {
-    const snapshot = this.read();
-    return isGatewayMethodAdvertised(
-      snapshot.context?.gateway.snapshot ?? {},
-      "sessions.groups.defaults",
-    ) === true
-      ? catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions)
-      : undefined;
-  }
-
   refreshCloudProfiles(): Promise<void> {
     if (this.cloudProfileStatus === "pending") {
       const queued =
@@ -719,6 +709,7 @@ export class DraftGatewayState {
       }
       this.callbacks.changed();
     };
+    // The preference lease requires this live-authority predicate when publishing results.
     this.stopPreferences = preferences.subscribe(
       notify,
       () =>

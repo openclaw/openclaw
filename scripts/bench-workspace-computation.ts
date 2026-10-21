@@ -25,6 +25,7 @@ import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 
 const exec = promisify(execFile);
+const diagnostics = channel("openclaw.worker.task");
 const scenarios = ["inventory", "manifest", "delta", "unchanged", "compare"] as const;
 type Scenario = (typeof scenarios)[number];
 type Options = {
@@ -319,7 +320,6 @@ async function childMain(fixturePath: string): Promise<void> {
   process.send?.({ type: "ready", port: address.port, moduleLoadMs });
   let sequence = 0;
   const taskEvents: Array<Record<string, unknown>> = [];
-  const diagnostics = channel("openclaw.worker.task");
   const observe = (event: unknown) => {
     taskEvents.push(event as Record<string, unknown>);
   };

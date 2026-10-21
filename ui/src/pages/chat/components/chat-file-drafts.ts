@@ -24,21 +24,30 @@ const retainedFileDrafts = new Map<
 let stopReloadGuard: (() => void) | undefined;
 let reviewingDrafts = false;
 
-async function reviewRetainedFileDrafts() {
+export async function reviewRetainedFileDrafts(target?: {
+  file: FileSidebarContent;
+  isCurrent: () => boolean;
+}) {
   if (reviewingDrafts || retainedFileDrafts.size === 0) {
+    return;
+  }
+  const records = [...retainedFileDrafts].filter(
+    ([key]) => !target || key === retainedFileDraftKey(target.file),
+  );
+  if (records.length === 0 || (target && !target.isCurrent())) {
     return;
   }
   reviewingDrafts = true;
   try {
     await reviewFileDrafts(
-      [...retainedFileDrafts].map(([key, record]) => ({
+      records.map(([key, record]) => ({
         name: record.name,
         path: record.path,
         context: record.context,
         content: record.draft.content,
-        isCurrent: () => retainedFileDrafts.get(key) === record,
+        isCurrent: () => (!target || target.isCurrent()) && retainedFileDrafts.get(key) === record,
         discard: () => {
-          if (retainedFileDrafts.get(key) !== record) {
+          if ((target && !target.isCurrent()) || retainedFileDrafts.get(key) !== record) {
             return false;
           }
           retainedFileDrafts.delete(key);

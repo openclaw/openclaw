@@ -16,6 +16,89 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
+  it("exports worst-isolate headroom with bounded labels and retires missing baselines", () => {
+    const metrics = createMetricsHarness();
+    const memory = {
+      rssBytes: 1000,
+      heapTotalBytes: 800,
+      heapUsedBytes: 300,
+      heapSizeLimitBytes: 1000,
+      oldGenerationAfterGcBytes: 200,
+      externalBytes: 20,
+      arrayBuffersBytes: 10,
+    };
+    try {
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          workerHeaps: [
+            {
+              script: "sqlite-store.worker.js",
+              threadId: 101,
+              heapUsed: 900,
+              heapTotal: 1000,
+              heapSizeLimitBytes: 1000,
+              oldGenerationAfterGcBytes: 800,
+            },
+            {
+              script: "sqlite-store.worker.js",
+              threadId: 102,
+              heapUsed: 100,
+              heapTotal: 200,
+              heapSizeLimitBytes: 2000,
+              oldGenerationAfterGcBytes: 50,
+            },
+            {
+              script: "other",
+              threadId: 103,
+              heapUsed: 0,
+              heapTotal: 200,
+              heapSizeLimitBytes: 500,
+              oldGenerationAfterGcBytes: 0,
+            },
+          ],
+        },
+      });
+      const rendered = metrics.render();
+      for (const [thread, limit, used, old, ratio] of [
+        ["main", 1000, 0.3, 200, 0.2],
+        ["sqlite-store.worker.js", 1000, 0.9, 800, 0.8],
+        ["other", 500, 0, 0, 0],
+      ] as const) {
+        for (const [name, value] of [
+          ["size_limit_bytes", limit],
+          ["used_ratio", used],
+          ["old_generation_after_gc_bytes", old],
+          ["old_generation_after_gc_ratio", ratio],
+        ] as const) {
+          expect(rendered).toContain(`openclaw_heap_${name}{thread="${thread}"} ${value}\n`);
+        }
+      }
+      expect(rendered.match(/^openclaw_heap_used_ratio\{/gm)).toHaveLength(3);
+      expect(rendered).not.toMatch(/threadId|thread="10[123]"/);
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          oldGenerationAfterGcBytes: undefined,
+          workerHeaps: [{ script: "other", heapUsed: 10, heapTotal: 20, heapSizeLimitBytes: 100 }],
+        },
+      });
+      const next = metrics.render();
+      expect(next).not.toContain("openclaw_heap_old_generation_after_gc");
+      expect(next).not.toContain('thread="sqlite-store.worker.js"');
+      expect(next).toContain('openclaw_heap_used_ratio{thread="other"} 0.1\n');
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: { ...memory, heapSizeLimitBytes: undefined },
+      });
+      expect(metrics.render()).not.toContain("openclaw_heap_used_ratio");
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("counts attributed main-thread stalls by task and reports bounded-buffer losses", () => {
     const metrics = createMetricsHarness();
     try {
@@ -98,6 +181,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
         type: "diagnostic.memory.sample",
         memory: {
           ...memory,
+          anonymousRssBytes: 700,
+          anonymousSwapBytes: 0,
           workerHeaps: [
             {
               script: "code-mode-node.worker.js",
@@ -123,6 +208,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
         },
       });
       const before = metrics.render();
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="rss"} 700\n');
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="swap"} 0\n');
       expect(before).toContain(
         'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="1",thread="code-mode-node.worker.js"} 2\n',
       );
@@ -172,6 +259,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
         },
       });
       const after = metrics.render();
+      expect(after).not.toContain("openclaw_process_anonymous_memory_bytes");
       expect(after).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 50\n');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="limit"');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="2"}');
@@ -605,7 +693,7 @@ describe("diagnostics-prometheus runtime identity", () => {
         metrics.record({ type: "gateway.rpc", method: `method.${index}`, phase: "received" });
       }
       expect(metrics.render()).toContain(info);
-      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 53");
+      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 2153");
       metrics.stop();
       expect(metrics.render()).toBe("");
       identity.processInstanceId = "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea";

@@ -100,7 +100,6 @@ function mockReadyDashboard() {
   mocks.ensureDashboardGatewayReady.mockResolvedValue({
     ready: true,
     recovered: false,
-    status: {},
   });
 }
 
@@ -212,12 +211,10 @@ describe("dashboardCommand --json", () => {
     );
   });
 
-  it("prints one failure object and exits non-zero when not ready", async () => {
+  it("prints JSON and actionable stderr before exiting when not ready", async () => {
     mocks.ensureDashboardGatewayReady.mockResolvedValue({
       ready: false,
       reason: "Gateway is not running.",
-      recoverable: false,
-      status: {},
     });
 
     await dashboardCommand(runtime, { json: true });
@@ -239,6 +236,9 @@ describe("dashboardCommand --json", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway is not running.\nRun `openclaw gateway status --deep` for details, then retry `openclaw dashboard --json`.",
+    );
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 

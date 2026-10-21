@@ -1,20 +1,23 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadControlUiGitHubPreview } from "./preview.js";
+import { loadControlUiGitHubPreview as loadPreview } from "./preview.js";
 import {
+  avatarDataUrl,
+  conditionalPreviewFixture,
   githubJson,
   managedIdentity,
   pngResponse,
   previewPayload,
+  previewFetch,
   previewTarget,
-  publicRepository,
   requestUrl,
 } from "./preview.test-support.js";
 
 describe("GitHub preview decoration cache", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("shares anonymous avatars across distinct previews while keeping metadata credential-scoped", async () => {
@@ -45,22 +48,18 @@ describe("GitHub preview decoration cache", () => {
         };
         const identities = [managedIdentity("first"), managedIdentity("second")];
         const previews = await Promise.all(
-          [1, 2, 3, 4].map((number) =>
-            loadControlUiGitHubPreview(previewTarget(number), identities[number % 2], transport),
+          [1, 2].map((number) =>
+            loadPreview(previewTarget(number), identities[number % 2], transport),
           ),
         );
         expect(previews.map((preview) => preview.title)).toEqual([
           "Bearer token-second",
           "Bearer token-first",
-          "Bearer token-second",
-          "Bearer token-first",
         ]);
-        expect(
-          previews.every((preview) => preview.avatarDataUrl === "data:image/png;base64,iVBORw=="),
-        ).toBe(true);
+        expect(previews.every((preview) => preview.avatarDataUrl === avatarDataUrl)).toBe(true);
         expect(avatarReads).toBe(1);
         expect(avatarHeaders).toEqual([undefined]);
-        await loadControlUiGitHubPreview(previewTarget(5), identities[0], transport);
+        await loadPreview(previewTarget(5), identities[0], transport);
         expect(avatarReads).toBe(1);
       },
     );
@@ -82,30 +81,21 @@ describe("GitHub preview decoration cache", () => {
       const avatar = createDeferred<Response>();
       const avatarStarted = createDeferred<void>();
       let avatarReads = 0;
-      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-        const url = requestUrl(input);
+      let avatarSignal: AbortSignal | null | undefined;
+      const fetchMock = previewFetch(async (url, init) => {
         if (url.includes("avatars.githubusercontent.com")) {
           avatarReads += 1;
+          avatarSignal = init?.signal;
           avatarStarted.resolve();
-          const signal = init?.signal;
-          return new Promise<Response>((resolve, reject) => {
-            const onAbort = () => reject(new DOMException("Aborted", "AbortError"));
-            signal?.addEventListener("abort", onAbort, { once: true });
-            void avatar.promise.then((response) => {
-              signal?.removeEventListener("abort", onAbort);
-              resolve(response);
-            });
-          });
+          return avatar.promise;
         }
         return url.endsWith(`/issues/${initiator === "older" ? 2 : 1}`)
           ? metadata.promise
           : githubJson(previewPayload());
       });
       const settled = vi.fn();
-      const older = loadControlUiGitHubPreview(previewTarget(1), undefined, fetchMock).then(
-        settled,
-      );
-      const newer = loadControlUiGitHubPreview(previewTarget(2), undefined, fetchMock);
+      const older = loadPreview(previewTarget(1), undefined, fetchMock).then(settled);
+      const newer = loadPreview(previewTarget(2), undefined, fetchMock);
       try {
         await avatarStarted.promise;
         metadata.resolve(githubJson(previewPayload()));
@@ -117,22 +107,22 @@ describe("GitHub preview decoration cache", () => {
         );
         expect(settled.mock.calls[0]?.[0].avatarDataUrl).toBeUndefined();
         expect(deadlines[1]!.signal.aborted).toBe(false);
+        expect(avatarSignal).toHaveProperty("aborted", false);
         avatar.resolve(pngResponse());
-        expect((await newer).avatarDataUrl).toBe("data:image/png;base64,iVBORw==");
+        expect((await newer).avatarDataUrl).toBe(avatarDataUrl);
         expect(avatarReads).toBe(1);
       } finally {
         metadata.resolve(githubJson(previewPayload()));
         avatar.resolve(pngResponse());
         await Promise.all([older, newer]);
-        vi.useRealTimers();
       }
     },
   );
 
   it("retries failed avatars and evicts the oldest of 200 retained images", async () => {
     let avatarReads = 0;
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-      const url = new URL(requestUrl(input));
+    const fetchMock = previewFetch(async (rawUrl) => {
+      const url = new URL(rawUrl);
       if (url.hostname === "avatars.githubusercontent.com") {
         return ++avatarReads === 1 ? new Response(null, { status: 503 }) : pngResponse();
       }
@@ -143,10 +133,9 @@ describe("GitHub preview decoration cache", () => {
         }),
       );
     });
-    const load = (number: number) =>
-      loadControlUiGitHubPreview(previewTarget(number), undefined, fetchMock, true);
+    const load = (number: number) => loadPreview(previewTarget(number), undefined, fetchMock, true);
     expect((await load(1)).avatarDataUrl).toBeUndefined();
-    expect((await load(1)).avatarDataUrl).toBe("data:image/png;base64,iVBORw==");
+    expect((await load(1)).avatarDataUrl).toBe(avatarDataUrl);
     expect(avatarReads).toBe(2);
     for (let number = 2; number <= 201; number += 1) {
       await load(number);
@@ -159,53 +148,23 @@ describe("GitHub preview decoration cache", () => {
   });
 
   it.each(["issue", "pull"] as const)(
-    "reuses unchanged %s decoration without extending its five-minute age",
+    "refreshes expired %s decoration without blocking readers or extending its age",
     async (kind) => {
+      vi.useFakeTimers();
       let now = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => now);
-      let avatarReads = 0;
-      let avatarVersion = 1;
-      let metadataReads = 0;
-      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-        const url = requestUrl(input);
-        if (url.includes("avatars.githubusercontent.com")) {
-          avatarReads += 1;
-          return new Response(new Uint8Array([avatarVersion]), {
-            headers: { "Content-Type": "image/png" },
-          });
-        }
-        if (url.endsWith("/repos/openclaw/openclaw")) {
-          return publicRepository();
-        }
-        metadataReads += 1;
-        if (new Headers(init?.headers).has("If-None-Match")) {
-          return new Response(null, { status: 304 });
-        }
-        const response = githubJson(
-          url.includes("/commits")
-            ? [
-                {
-                  commit: {
-                    message: [
-                      "Co-authored-by: Ada <20+ada@users.noreply.github.com>",
-                      "Co-authored-by: Mira <7+mira@users.noreply.github.com>",
-                      "Co-authored-by: Alan <31+alan@users.noreply.github.com>",
-                      "Co-authored-by: Grace <99+grace@users.noreply.github.com>",
-                    ].join("\n"),
-                  },
-                },
-              ]
-            : previewPayload(),
-        );
-        response.headers.set("etag", url.includes("/commits") ? '"commits"' : '"item"');
-        return response;
+      const f = conditionalPreviewFixture(kind, 940005, {
+        authors: [
+          ["Ada", 20],
+          ["Mira", 7],
+          ["Alan", 31],
+          ["Grace", 99],
+        ],
       });
-      const target = previewTarget(940005, kind);
-      const identity = managedIdentity(`decoration-age-${kind}`);
-      const load = () => loadControlUiGitHubPreview(target, identity, fetchMock, true);
+      const { state, avatars, refreshed, load } = f;
       const first = await load();
       const coldReads = kind === "pull" ? 4 : 1;
-      expect(avatarReads).toBe(coldReads);
+      expect(avatars).toHaveLength(coldReads);
       if (kind === "pull") {
         expect(first.coAuthorCount).toBe(4);
         expect(first.coAuthors?.map((author) => author.login)).toEqual(["ada", "mira", "alan"]);
@@ -213,10 +172,21 @@ describe("GitHub preview decoration cache", () => {
       for (const elapsed of [60_000, 60_000, 179_999]) {
         now += elapsed;
         expect(await load()).toEqual(first);
-        expect(avatarReads).toBe(coldReads);
+        expect(avatars).toHaveLength(coldReads);
       }
       now += 1;
-      avatarVersion = 2;
+      state.avatar = 2;
+      const delivered = vi.fn();
+      const readers = Promise.all([load(), load()]).then(delivered);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(delivered).toHaveBeenCalledExactlyOnceWith([first, first]);
+        expect(avatars).toHaveLength(2 * coldReads);
+      } finally {
+        refreshed.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        await readers;
+      }
       expect(await load()).toEqual({
         ...first,
         avatarDataUrl: "data:image/png;base64,Ag==",
@@ -229,61 +199,31 @@ describe("GitHub preview decoration cache", () => {
             }
           : {}),
       });
-      expect(avatarReads).toBe(2 * coldReads);
-      expect(metadataReads).toBe(kind === "pull" ? 10 : 5);
+      expect(avatars).toHaveLength(2 * coldReads);
+      expect(f.itemHeaders.length + f.commitsHeaders.length).toBe(kind === "pull" ? 14 : 7);
     },
   );
 
   it("reuses avatars across metadata changes and excludes a changed author", async () => {
-    let itemVersion = 1;
-    let commitsVersion = 1;
-    let login = "steipete";
-    const avatarUrls: string[] = [];
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-      const url = requestUrl(input);
-      if (url.includes("avatars.githubusercontent.com")) {
-        avatarUrls.push(url);
-        return pngResponse();
-      }
-      if (url.endsWith("/repos/openclaw/openclaw")) {
-        return publicRepository();
-      }
-      const isCommits = url.includes("/commits");
-      const etag = `"${isCommits ? "commits" : "item"}-${isCommits ? commitsVersion : itemVersion}"`;
-      if (new Headers(init?.headers).get("If-None-Match") === etag) {
-        return new Response(null, { status: 304 });
-      }
-      const response = githubJson(
-        isCommits
-          ? [{ commit: { message: "Co-authored-by: Ada <20+ada@users.noreply.github.com>" } }]
-          : previewPayload({
-              title: `Version ${itemVersion}`,
-              user: { login, avatar_url: "https://avatars.githubusercontent.com/u/58493" },
-            }),
-      );
-      response.headers.set("etag", etag);
-      return response;
+    const { state, avatars, load } = conditionalPreviewFixture("pull", 940006, {
+      authors: [["Ada", 20]],
     });
-    const target = previewTarget(940006, "pull");
-    const identity = managedIdentity("independent-decoration");
-    const load = () => loadControlUiGitHubPreview(target, identity, fetchMock, true);
     const first = await load();
-    expect(avatarUrls.splice(0)).toEqual([
+    expect(avatars.splice(0)).toEqual([
       "https://avatars.githubusercontent.com/u/58493?s=64",
       "https://avatars.githubusercontent.com/u/20?s=64",
     ]);
-    itemVersion += 1;
+    state.item += 1;
     expect(await load()).toEqual({ ...first, title: "Version 2" });
-    expect(avatarUrls.splice(0)).toEqual([]);
-    commitsVersion += 1;
+    expect(avatars.splice(0)).toEqual([]);
+    state.commits += 1;
     expect(await load()).toEqual({ ...first, title: "Version 2" });
-    expect(avatarUrls.splice(0)).toEqual([]);
-    itemVersion += 1;
-    login = "ada";
+    expect(avatars.splice(0)).toEqual([]);
+    state.item += 1;
+    state.login = "ada";
     const changedAuthor = await load();
     expect(changedAuthor).toMatchObject({ login: "ada", title: "Version 3" });
-    expect(changedAuthor.coAuthors).toBeUndefined();
-    expect(changedAuthor.coAuthorCount).toBeUndefined();
-    expect(avatarUrls).toEqual([]);
+    expect([changedAuthor.coAuthors, changedAuthor.coAuthorCount]).toEqual([undefined, undefined]);
+    expect(avatars).toEqual([]);
   });
 });

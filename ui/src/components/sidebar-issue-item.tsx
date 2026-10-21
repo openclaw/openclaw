@@ -17,11 +17,12 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { SidebarApprovalRow } from "./exec-approval-card-solid.tsx";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
+import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { SidebarDismissButton, SidebarNotificationCard } from "./sidebar-notification-card.tsx";
 import { SidebarUpdateCard } from "./sidebar-update-card.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import { askBrandLabel } from "./theme-brand-label.ts";
-import "./viewer-facepile.ts";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
@@ -36,6 +37,7 @@ export function renderSidebarMentionItem(params: {
   mention: MentionInboxItem;
   context: Pick<ApplicationContext, "basePath">;
   dismissing: boolean;
+  canDismiss: boolean;
   onDismiss: () => void;
   onNavigate: ApplicationContext["navigate"];
 }) {
@@ -71,15 +73,10 @@ export function renderSidebarMentionItem(params: {
             title={mention().sessionTitle}
             detail={label()}
             timestampMs={mention().createdAt}
-            icon={
-              <openclaw-viewer-avatar
-                prop:user={sender()}
-                prop:markAsViewer={false}
-                variant="footer"
-              />
-            }
+            icon={<ViewerAvatar user={sender()} markAsViewer={false} variant="footer" />}
             onDismiss={params.onDismiss}
             dismissing={params.dismissing}
+            dismissDisabled={!params.canDismiss}
             body={
               <>
                 {mention().excerpt ? (
@@ -87,6 +84,7 @@ export function renderSidebarMentionItem(params: {
                 ) : null}
                 <div class="sidebar-issues-panel__actions sidebar-mention-row__actions">
                   <a
+                    ref={sidebarAttentionFocusRef()}
                     class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
                     href={target().href}
                     onClick={(event) => {
@@ -135,6 +133,7 @@ export function renderSidebarApprovalItem(params: {
     <SidebarApprovalRow
       approval={params.approval}
       busy={snapshot().approvalBusy}
+      connected={params.context.gateway.snapshot.phase === "connected"}
       canGrant={snapshot().approvalCanGrant}
       error={snapshot().approvalErrors.get(params.approval.id) ?? null}
       openSessionHref={sessionTarget()?.href}
@@ -266,7 +265,11 @@ export function renderSidebarScopeUpgradeItem(params: {
       ]}
       data-attention-kind="scopeUpgrade"
     >
-      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
+      <summary
+        ref={sidebarAttentionFocusRef("row")}
+        class="sidebar-issues-panel__summary"
+        data-issue-row-focus
+      >
         <span class="sidebar-issues-panel__icon" aria-hidden="true">
           <Icon name="shieldQuestion" />
         </span>
@@ -289,6 +292,7 @@ export function renderSidebarScopeUpgradeItem(params: {
         {params.state.phase === "available" || params.state.phase === "requesting" ? (
           <div class="sidebar-issues-panel__actions">
             <button
+              ref={sidebarAttentionFocusRef()}
               type="button"
               class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
               disabled={params.state.phase === "requesting"}
@@ -309,6 +313,7 @@ export function renderSidebarScopeUpgradeItem(params: {
           <div class="sidebar-issues-panel__actions">
             {retryable() ? (
               <button
+                ref={sidebarAttentionFocusRef()}
                 type="button"
                 class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
                 onClick={() => params.onRetry()}
@@ -317,6 +322,7 @@ export function renderSidebarScopeUpgradeItem(params: {
               </button>
             ) : null}
             <button
+              ref={sidebarAttentionFocusRef()}
               type="button"
               class="sidebar-issues-panel__action"
               onClick={() => params.onCancel()}
@@ -407,7 +413,11 @@ export function SidebarIssueItem(props: {
           ]}
           data-attention-kind={props.item.kind}
         >
-          <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
+          <summary
+            ref={sidebarAttentionFocusRef("row")}
+            class="sidebar-issues-panel__summary"
+            data-issue-row-focus
+          >
             <SidebarIssueContent item={props.item} />
             <SidebarDismissButton
               itemLabel={props.item.label}
@@ -427,6 +437,7 @@ export function SidebarIssueItem(props: {
               <Show when={props.item.inlineAction}>
                 {(action) => (
                   <button
+                    ref={sidebarAttentionFocusRef()}
                     type="button"
                     class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
                     onClick={() => props.handlers.onNavigate(action().routeId)}
@@ -436,6 +447,7 @@ export function SidebarIssueItem(props: {
                 )}
               </Show>
               <button
+                ref={sidebarAttentionFocusRef()}
                 type="button"
                 class={[
                   "sidebar-issues-panel__action",
@@ -460,6 +472,7 @@ export function SidebarIssueItem(props: {
         >
           <div class="sidebar-issues-panel__summary sidebar-issues-panel__summary--navigation">
             <a
+              ref={sidebarAttentionFocusRef("row")}
               class="sidebar-issues-panel__navigation-link"
               href={pathForRoute(action().routeId, props.handlers.basePath)}
               data-issue-row-focus

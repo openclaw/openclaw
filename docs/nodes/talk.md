@@ -113,6 +113,10 @@ with your own values.
 }
 ```
 
+Provider selection in `talk.provider` and `talk.realtime.provider` matches keys in
+the corresponding `providers` map without regard to case or surrounding whitespace.
+When configuring multiple providers, select one explicitly.
+
 OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Select
 `gpt-live-1` for the public API or `gpt-live-1-codex` for the Codex route in
 **Settings → Talk**. The public API requires a Platform key; the Codex route

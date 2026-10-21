@@ -10,9 +10,14 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const repo = path.resolve(import.meta.dirname, "../..");
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const workflow = parse(fs.readFileSync(path.join(repo, ".github/workflows/ci.yml"), "utf8"));
-const swiftStep = workflow.jobs["macos-swift"].steps.find(
-  (step: { name?: string }) => step.name === "Swift test",
+const swiftSteps = workflow.jobs["macos-swift"].steps;
+const swiftBuildStep = swiftSteps.find(
+  (step: { name?: string }) => step.name === "Build Swift tests",
 ).run as string;
+const swiftStep =
+  swiftBuildStep +
+  "\n" +
+  swiftSteps.find((step: { name?: string }) => step.name === "Swift test").run;
 
 function eventStream(...kinds: string[]) {
   return (
@@ -379,7 +384,7 @@ if (process.argv[2] === 'print') {
           .find((line) => line.startsWith("recovery-artifact-path="));
         expect(artifactLine).toBeDefined();
         const artifact = artifactLine!.slice("recovery-artifact-path=".length);
-        expect(fs.readdirSync(artifact)).toEqual(
+        expect(fs.readdirSync(artifact).toSorted()).toEqual(
           hosts === 2 ? ["phase-0-events.jsonl", "phase-1-events.jsonl"] : ["phase-0-events.jsonl"],
         );
         expect(fs.readFileSync(path.join(artifact, "phase-0-events.jsonl"), "utf8")).toContain(
@@ -405,6 +410,24 @@ if (process.argv[2] === 'print') {
   it.each(["scripts/test-macos-native.mts"])("routes %s through macOS CI", (changedPath) => {
     expect(detectChangedScope([changedPath])).toMatchObject({ runNode: true, runMacos: true });
   });
+
+  it.each([false, true])(
+    "builds before runtime availability (artifact present: %s)",
+    (available) => {
+      const f = fixture();
+      if (available) {
+        fs.mkdirSync(path.join(f.root, "workspace/dist"));
+        fs.writeFileSync(
+          path.join(f.root, "workspace/dist/entry.js"),
+          "throw new Error('must not load CLI while building');",
+        );
+      }
+      const result = f.run(swiftBuildStep);
+      expect(result.status, result.stderr).toBe(0);
+      expect(f.calls().map((call) => [call.tool, call.args[0]])).toEqual([["swift", "build"]]);
+      expect(fs.readFileSync(f.env.GITHUB_OUTPUT, "utf8")).toContain("debug-tests-built=true");
+    },
+  );
 
   it.each([
     { defaultCode: 0, renderedCode: 0, namedCode: 0, logicalCpu: "3", expectedWidth: "3" },

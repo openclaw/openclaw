@@ -571,12 +571,14 @@ export async function runBuildAllSteps(
         status: await runManagedCommand({
           bin: invocation.command,
           args:
-            script === "scripts/tsdown-build.mts" ||
-            script === "scripts/write-unified-entry-dts.ts" ||
-            script === "scripts/write-plugin-sdk-entry-dts.ts" ||
-            script === "scripts/runtime-postbuild.mts"
-              ? distArtifactEntryArgs(script, invocation.args.slice(3))
-              : invocation.args,
+            invocation.args[0] === "scripts/ui.js"
+              ? distArtifactEntryArgs("scripts/ui.js", invocation.args.slice(1), { native: true })
+              : script === "scripts/tsdown-build.mts" ||
+                  script === "scripts/write-unified-entry-dts.ts" ||
+                  script === "scripts/write-plugin-sdk-entry-dts.ts" ||
+                  script === "scripts/runtime-postbuild.mts"
+                ? distArtifactEntryArgs(script, invocation.args.slice(3))
+                : invocation.args,
           ...invocation.options,
           signal: params.signal,
           requireProcessTreeExit: process.platform !== "win32",

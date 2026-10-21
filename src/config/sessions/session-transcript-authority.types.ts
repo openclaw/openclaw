@@ -1,4 +1,4 @@
-import type { SessionRowAssistantMessage } from "../../gateway/session-row-transcript-preview.js";
+import type { SessionRowAssistantMessageUpdate } from "../../gateway/session-row-transcript-preview.js";
 import type { SqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import type { SessionTranscriptTerminalModel } from "../../sessions/transcript-terminal-model.js";
 import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
@@ -16,7 +16,7 @@ export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
   needsRebuild: number | null;
   /** Absent needs a tail lookup; null is a known empty bounded preview. */
   lastMessagePreview?: string | null;
-  lastAssistantMessage?: SessionRowAssistantMessage | null;
+  lastAssistantMessage?: SessionRowAssistantMessageUpdate;
   terminalModel?: SessionTranscriptTerminalModel | null;
   actorRewrite?: {
     before: SessionTranscriptContextVersion;

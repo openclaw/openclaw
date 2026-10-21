@@ -3,6 +3,7 @@
 import { expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createTestChatPane,
@@ -10,7 +11,6 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { SubagentRoster } from "./chat-spawned-subagent.ts";
 import { renderChatComposerNotices } from "./chat-view-notices.tsx";
-import type { ChatChildAttention } from "./components/chat-child-attention.tsx";
 
 type ChildRosterPane = TestChatPane & {
   resolveChatReadTarget: () => { sessionKey: string; agentId?: string } | undefined;
@@ -47,8 +47,8 @@ it.each([
         expiresAt: Date.now() + 60_000,
       },
     } satisfies GatewaySessionRow;
-    Reflect.set(pane, "swarmHydrator", { rows: [child], hydrated: true, childrenRead: true });
-    Reflect.set(pane, "swarmEnabled", false);
+    Reflect.set(pane.swarm, "hydrator", { rows: [child], hydrated: true, childrenRead: true });
+    Reflect.set(pane.swarm, "enabled", false);
     const container = document.body.appendChild(document.createElement("div"));
     try {
       const roster = pane.projectChildRoster(pane.resolveChatReadTarget());
@@ -63,9 +63,9 @@ it.each([
         () => renderChatComposerNotices({ sessionKey: routeKey, messages: [], ...roster }),
         { container },
       );
-      const notice = container.querySelector<ChatChildAttention>("openclaw-chat-child-attention");
+      const notice = container.querySelector<HTMLElement>("openclaw-chat-child-attention");
       expect(notice).not.toBeNull();
-      await notice!.updateComplete;
+      flush();
       expect(notice!.querySelector(".chat-child-attention")?.textContent).toContain(
         child.agentStatus.note,
       );
@@ -78,7 +78,7 @@ it.each([
       });
     } finally {
       container.remove();
-      Reflect.set(pane, "swarmHydrator", null);
+      Reflect.set(pane.swarm, "hydrator", null);
       vi.useRealTimers();
     }
   },

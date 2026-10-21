@@ -1,5 +1,5 @@
 import "./mcp-manager.test-support.js";
-import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import { SdkErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/client";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +87,34 @@ describe("node host MCP manager", () => {
     expect(events.healthy).toEqual(["terminateSession", "transport.close", "client.close"]);
   });
 
+  it.each([false, true])(
+    "reports a rejected session close without interrupting sibling cleanup (failure: %s)",
+    async (failed) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const client = createClient();
+      const sibling = createClient();
+      if (failed) {
+        client.close.mockRejectedValue(new Error("close refused"));
+      }
+      const warn = vi.fn();
+      const manager = await startManager(
+        { createClient: (name) => (name === "docs" ? client : sibling), warn },
+        { docs: { command: "docs" }, sibling: { command: "sibling" } },
+      );
+
+      await expect(manager.close()).resolves.toBeUndefined();
+      expect(sibling.close).toHaveBeenCalledOnce();
+      if (failed) {
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          'node host MCP server "docs" cleanup could not be confirmed; check the server process',
+        );
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("parses nodeHost.mcp config, isolates failures, filters tools, and shuts down", async () => {
     const parsed = OpenClawSchema.parse({
       nodeHost: {
@@ -130,12 +158,60 @@ describe("node host MCP manager", () => {
     );
     expect(docs.callTool).toHaveBeenCalledWith(
       { name: "search", arguments: { query: "x" } },
-      undefined,
       { timeout: 120_000 },
     );
 
     await manager.close();
     expect(docs.close).toHaveBeenCalledOnce();
+  });
+
+  it("skips enterprise auth on node hosts without retrying and directs setup to the Gateway", async () => {
+    vi.useFakeTimers();
+    const parsed = OpenClawSchema.parse({
+      nodeHost: {
+        mcp: {
+          servers: {
+            enterprise: {
+              url: "https://enterprise.example.com/mcp",
+              transport: "streamable-http",
+              auth: "enterprise",
+              enterprise: {
+                identity: "shared",
+                idpIssuer: "https://idp.example.com",
+                idpClientId: "idp-client",
+                idpClientSecret: "fixture-idp-secret",
+                resourceIssuer: "https://auth.example.com",
+                resourceClientId: "resource-client",
+                resourceClientSecret: "fixture-resource-secret",
+                scope: "mcp.read",
+                redirectUrl: "http://localhost:3097/callback",
+              },
+            },
+            docs: { command: "docs" },
+          },
+        },
+      },
+    });
+    const createClientFor = vi.fn(() => createClient({ tools: [tool("search")] }));
+    const resolveTransportFor = vi.fn(() => transport);
+    const warn = vi.fn();
+    const manager = await startManager(
+      { createClient: createClientFor, resolveTransport: resolveTransportFor, warn },
+      parsed.nodeHost?.mcp?.servers,
+    );
+
+    expect(createClientFor).toHaveBeenCalledOnce();
+    expect(resolveTransportFor).toHaveBeenCalledOnce();
+    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toEqual(["docs"]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      'node host MCP server "enterprise" skipped: enterprise-managed authorization is not supported on node hosts; configure it in mcp.servers on the Gateway and run openclaw mcp login <server-name> there',
+    );
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(createClientFor).toHaveBeenCalledOnce();
+    await expect(
+      manager.callMcpTool({ server: "enterprise", tool: "search" }),
+    ).rejects.toMatchObject({ code: "MCP_SERVER_UNAVAILABLE" });
+    await manager.close();
   });
 
   it.each<[Record<string, Tool[]>, string[]]>([
@@ -329,7 +405,7 @@ describe("node host MCP manager", () => {
     const manager = await starting;
 
     expect(slow.request).toHaveBeenCalledTimes(2);
-    expect(slow.request.mock.calls.map((call) => call[2]?.timeout)).toEqual([50, 50]);
+    expect(slow.request.mock.calls.map((call) => call[1]?.timeout)).toEqual([50, 50]);
     expect(slow.close).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("timed out after 50ms"));
@@ -443,10 +519,13 @@ describe("node host MCP manager", () => {
 
     const pending = callTool(manager, "slow", { signal: controller.signal });
     await vi.waitFor(() => expect(client.callTool).toHaveBeenCalledOnce());
-    expect(client.callTool).toHaveBeenCalledWith({ name: "slow", arguments: {} }, undefined, {
-      timeout: 120_000,
-      signal: controller.signal,
-    });
+    expect(client.callTool).toHaveBeenCalledWith(
+      { name: "slow", arguments: {} },
+      {
+        timeout: 120_000,
+        signal: controller.signal,
+      },
+    );
 
     controller.abort(new Error("node invocation canceled"));
 
@@ -461,7 +540,7 @@ describe("node host MCP manager", () => {
         await new Promise((resolve) => {
           setTimeout(resolve, options?.timeout ?? 1);
         });
-        throw Object.assign(new Error("request timed out"), { code: ErrorCode.RequestTimeout });
+        throw Object.assign(new Error("request timed out"), { code: SdkErrorCode.RequestTimeout });
       },
     });
     const manager = await startManager(
@@ -474,9 +553,12 @@ describe("node host MCP manager", () => {
     await expect(callTool(manager, "slow", { timeoutMs: 50 })).rejects.toMatchObject({
       code: "MCP_TOOL_TIMEOUT",
     });
-    expect(client.callTool).toHaveBeenCalledWith({ name: "slow", arguments: {} }, undefined, {
-      timeout: 5,
-    });
+    expect(client.callTool).toHaveBeenCalledWith(
+      { name: "slow", arguments: {} },
+      {
+        timeout: 5,
+      },
+    );
     await expect(manager.callMcpTool({ server: "missing", tool: "slow" })).rejects.toMatchObject({
       code: "MCP_SERVER_UNAVAILABLE",
     });
@@ -495,9 +577,12 @@ describe("node host MCP manager", () => {
     );
 
     await callTool(manager, "search", { timeoutMs: 1e306 });
-    expect(client.callTool).toHaveBeenCalledWith({ name: "search", arguments: {} }, undefined, {
-      timeout: MAX_TIMER_TIMEOUT_MS,
-    });
+    expect(client.callTool).toHaveBeenCalledWith(
+      { name: "search", arguments: {} },
+      {
+        timeout: MAX_TIMER_TIMEOUT_MS,
+      },
+    );
     await manager.close();
   });
 

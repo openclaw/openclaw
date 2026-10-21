@@ -7,7 +7,12 @@ export type { InputDialogOptions } from "./input-dialog-types.ts";
 
 let inputActive = false;
 
-function presentInputDialog(options: InputDialogOptions): Promise<string | null> {
+/** Native prompts block reentrancy; reject a second request instead of stacking it. */
+export function showInputDialog(options: InputDialogOptions): Promise<string | null> {
+  if (inputActive) {
+    return Promise.resolve(null);
+  }
+  inputActive = true;
   return withPromiseModalHost<string | null>({ signal: options.signal, value: null }, (modal) =>
     modal.render(() =>
       createComponent(InputDialogView, {
@@ -16,16 +21,7 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
         settled: () => modal.settled,
       }),
     ),
-  );
-}
-
-/** Native prompts block reentrancy; reject a second request instead of stacking it. */
-export function showInputDialog(options: InputDialogOptions): Promise<string | null> {
-  if (inputActive) {
-    return Promise.resolve(null);
-  }
-  inputActive = true;
-  return presentInputDialog(options).finally(() => {
+  ).finally(() => {
     inputActive = false;
   });
 }

@@ -121,6 +121,11 @@ model, and auth-profile fallback rules still apply. Explicit session or
 configured runtime choices remain strict: an incompatible runtime reports a
 placement error and requires a compatible destination before retrying.
 
+When a failed cloud-worker candidate has already committed output, its fallback
+continues from that output, including completed tool results. The worker starts
+from the matching transcript leaf. Unrelated transcript changes still retain the
+admission fence and can reject the worker's commit rather than overwrite history.
+
 When configured fallback stops because the agent run reaches a final timeout or
 the idle-timeout cost-runaway breaker returns a terminal error, the
 `model-fallback/decision` logger records `model_fallback_chain_stopped` with
@@ -300,9 +305,15 @@ Use a user-pinned profile to make one account/key the durable first preference f
 
 When a profile fails due to auth or rate-limit errors, OpenClaw marks it in cooldown and moves to the next profile. A timeout that looks like rate limiting counts as such a failure.
 
+Same-model rate-limit retries also record the failed profile before waiting. A positive, finite `Retry-After` sets the new cooldown, capped at 24 hours; without one, the existing rate-limit backoff applies. An active cooldown keeps its original expiry. An available quota probe cannot shorten the provider's retry deadline. Later runs see that cooldown through normal profile selection and status. The waiting run keeps its existing same-model retry schedule, and model-scoped cooldowns still allow other models on the same profile.
+
+After bounded recovery, a model-silent or request timeout records profile cooldown only when an authorized replacement profile is selected or a model fallback is configured; otherwise the profile stays available for the next turn.
+
 A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). OpenRouter and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. There is no user configuration setting.
 
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
+
+A delayed WHAM failure check cannot reinstate an exhaustion block after a newer successful request with the same credential.
 
 <AccordionGroup>
   <Accordion title="What lands in the rate-limit / timeout bucket">

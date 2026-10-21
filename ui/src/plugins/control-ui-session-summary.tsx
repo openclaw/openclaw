@@ -1,16 +1,7 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  untrack,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../components/markdown.ts";
@@ -56,9 +47,7 @@ type SummaryScope = {
   session: BoardGetParams;
 };
 
-function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope }) {
-  // The keyed parent replaces this entire history lifetime when its scope changes.
-  const scope = untrack(() => props.scope);
+function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
   const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
   const [error, setError] = createSignal(false);
   let alive = true;
@@ -73,15 +62,12 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
     scope.gateway.connectionRevision === scope.revision &&
     props.session?.sessionKey === scope.session.sessionKey &&
     props.session?.agentId === scope.session.agentId;
-  onCleanup(() => {
-    alive = false;
-  });
   const store = sessionProgressCardsForGateway(scope.gateway);
-  const progress = projectProgressCard({
+  const progress = projectProgressCard(() => ({
     store,
     target: scope.session,
     options: { admitAutomaticRead: current },
-  });
+  }));
   const refresh = async () => {
     if (!current()) {
       return;
@@ -127,6 +113,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
         snapshot = { ...result, messages: result.messages?.slice(-20) };
       }
       setHistory(snapshot);
+      onSettled(hydrateIdentities);
     } catch {
       if (current()) {
         setError(true);
@@ -134,9 +121,8 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
     }
   };
   const refreshes = createSessionEventRefreshCoordinator({ active: true, refresh });
-  onCleanup(() => refreshes.dispose());
-  onCleanup(
-    scope.gateway.subscribeEvents((event) => {
+  onSettled(() => {
+    const stop = scope.gateway.subscribeEvents((event) => {
       if (event.event !== "sessions.changed" && event.event !== "session.message") {
         return;
       }
@@ -156,10 +142,13 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
       ) {
         refreshes.schedule();
       }
-    }),
-  );
-  onSettled(() => {
+    });
     refreshes.scheduleRetry(0);
+    return () => {
+      alive = false;
+      stop();
+      refreshes.dispose();
+    };
   });
   const messages = createMemo(() =>
     (history()?.messages ?? []).slice(-20).flatMap((message) => {
@@ -202,29 +191,32 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
       return [{ text, label, sender, agentId, agent, time, role: message.role }];
     }),
   );
+  const hydrateIdentities = () => {
+    if (current()) {
+      void props.agentIdentity?.ensure(
+        messages().flatMap((message) =>
+          !message.sender && message.agentId ? [message.agentId] : [],
+        ),
+      );
+    }
+  };
   const identity = createMemo(() => props.agentIdentity);
   const identities = createMemo(() => {
     const source = identity();
     return source
       ? projectSource(source, {
           read: (owner) => owner,
-          subscribe: (owner, notify) => owner.subscribe(notify),
+          subscribe: (owner, notify) => {
+            onSettled(hydrateIdentities);
+            return owner.subscribe(() => {
+              notify();
+              onSettled(hydrateIdentities);
+            });
+          },
           equality: "revision",
         })
       : null;
   });
-  // Hydrate the external avatar identity owner for the visible message authors.
-  createEffect(
-    () => ({
-      owner: identities()?.read(),
-      ids: messages().flatMap((message) =>
-        !message.sender && message.agentId ? [message.agentId] : [],
-      ),
-    }),
-    ({ owner, ids }) => {
-      void owner?.ensure(ids);
-    },
-  );
   return (
     <div class="plugin-session-summary">
       <Show when={progress.read().error || progress.read().card !== null}>
@@ -382,7 +374,7 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
         keyed
         fallback={<p role="status">{t("pluginUi.sessionHistoryUnavailable")}</p>}
       >
-        {(current) => <SessionHistory {...props} scope={current} />}
+        {(current) => SessionHistory(props, current)}
       </Show>
     </Show>
   );

@@ -25,6 +25,7 @@ it.each(["token", "password"] as const)(
       policyPath,
       JSON.stringify({ gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } } }),
     );
+    const user = "operator@example.invalid";
     const config: OpenClawConfig = {
       plugins: { entries: { policy: { enabled: true, config: { path: policyPath } } } },
       gateway: {
@@ -36,11 +37,8 @@ it.each(["token", "password"] as const)(
           password: { source: "env", provider: "default", id: "SYNTHETIC_SERVING_PASSWORD" },
           allowTailscale: true,
           rateLimit: { maxAttempts: 5, windowMs: 30_000, lockoutMs: 60_000, exemptLoopback: false },
-          identityScopes: { "operator@example.invalid": ["operator.read"] },
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            allowUsers: ["operator@example.invalid"],
-          },
+          identityScopes: { [user]: ["operator.read"] },
+          trustedProxy: { userHeader: "x-forwarded-user", allowUsers: [user] },
         },
         trustedProxies: ["192.0.2.1"],
       },
@@ -80,9 +78,9 @@ it.each(["token", "password"] as const)(
           identityScopes: config.gateway?.auth?.identityScopes,
           trustedProxy: config.gateway?.auth?.trustedProxy,
           allowTailscale: false,
+          token: expect.any(String),
         },
       });
-      expect(copied.gateway?.auth?.token).toEqual(expect.any(String));
       expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
       expect(copied.gateway?.auth?.password).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
@@ -109,35 +107,27 @@ it("keeps workspace-confined avatars as valid as the serving config", async () =
   const root = tempDirs.make("candidate-avatar-");
   await materializeUpdateCandidateStateWorker(root);
   const workspace = (id: string) => path.join(root, "workspaces", id);
+  const avatar = (id: string, value: string) => ({
+    workspace: workspace(id),
+    identity: { avatar: value },
+  });
   const config: OpenClawConfig = {
     agents: {
       ownership: "explicit",
       entries: {
-        main: { workspace: workspace("main"), identity: { avatar: `${workspace("main")}/a.png` } },
-        relative: { workspace: workspace("relative"), identity: { avatar: "avatars/a.png" } },
+        main: avatar("main", `${workspace("main")}/a.png`),
+        relative: avatar("relative", "avatars/a.png"),
         // Explicit local syntax must not be rewritten into a home or URI-like value.
-        tilde: { workspace: workspace("tilde"), identity: { avatar: "./~a.png" } },
-        colon: { workspace: workspace("colon"), identity: { avatar: "./custom:a.png" } },
-        absoluteTilde: {
-          workspace: workspace("absoluteTilde"),
-          identity: { avatar: `${workspace("absoluteTilde")}/~a.png` },
-        },
+        tilde: avatar("tilde", "./~a.png"),
+        colon: avatar("colon", "./custom:a.png"),
+        absoluteTilde: avatar("absoluteTilde", `${workspace("absoluteTilde")}/~a.png`),
         remote: { identity: { avatar: "https://example.invalid/a.png" } },
-        escaped: { workspace: workspace("escaped"), identity: { avatar: `${root}/a.png` } },
+        escaped: avatar("escaped", `${root}/a.png`),
         // The candidate names workspaces by id, so ../<id> would land back inside it.
-        renamed: {
-          workspace: workspace("other"),
-          identity: { avatar: `${workspace("renamed")}/a.png` },
-        },
-        aliased: { workspace: workspace("main"), identity: { avatar: "../main/a.png" } },
-        climbed: {
-          workspace: workspace("climbed"),
-          identity: { avatar: "../../workspaces/climbed/a.png" },
-        },
-        relativeRenamed: {
-          workspace: workspace("other"),
-          identity: { avatar: "../relativeRenamed/a.png" },
-        },
+        renamed: avatar("other", `${workspace("renamed")}/a.png`),
+        aliased: avatar("main", "../main/a.png"),
+        climbed: avatar("climbed", "../../workspaces/climbed/a.png"),
+        relativeRenamed: avatar("other", "../relativeRenamed/a.png"),
       },
     },
   };

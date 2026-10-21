@@ -19,7 +19,7 @@ export async function runCopilotAttempt(
   params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
 ): Promise<AgentHarnessAttemptResult> {
-  const now = deps.now ?? Date.now;
+  const now = Date.now;
   const attemptStartedAt = now();
   const prepared = prepareCopilotAttemptContext(params, deps);
   const { settledToolFinalization, input, messages, modelRef, hookContext } = prepared;

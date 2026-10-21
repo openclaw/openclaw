@@ -35,10 +35,11 @@ import {
   readPendingSendStatus,
   resetChatThreadState,
   setExpansionState,
+  subscribeExpansionState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
-import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import { readLiveTerminalRevision, rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
@@ -1371,6 +1372,201 @@ describe("buildCachedChatItems", () => {
     },
   );
 
+  it.each([
+    {
+      savedReceipt: false,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      tailFirst: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      shortcode: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 2,
+      shortcode: true,
+      otherShortcode: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+      includeOriginal: false,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+      savedReply: false,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      search: true,
+    },
+    { savedReceipt: true, finalRun: "other-run", finalView: "cv_final", live: true, count: 2 },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_other",
+      live: true,
+      count: 2,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: false,
+      count: 2,
+    },
+  ])(
+    "reconciles only the owned final Canvas tail: %j",
+    ({
+      savedReceipt,
+      finalRun,
+      finalView,
+      live,
+      count,
+      tailFirst = false,
+      shortcode = false,
+      otherShortcode = false,
+      steer = false,
+      includeOriginal = true,
+      savedReply = true,
+      search = false,
+    }) => {
+      const runId = "final-widget-run";
+      const parentToolCallId = "call_widget|fc_widget";
+      const output = canvasToolOutput("cv_final", "Counter", 100);
+      const nested = {
+        role: "custom",
+        runId,
+        timestamp: 1_002,
+        __openclaw: { id: "nested-receipt", seq: 2, runId },
+        content: [
+          { type: "toolCall", id: "nested-widget", name: "show_widget", runId, parentToolCallId },
+          {
+            type: "toolResult",
+            role: "toolResult",
+            toolCallId: "nested-widget",
+            toolName: "show_widget",
+            runId,
+            parentToolCallId,
+            content: [{ type: "text", text: output }],
+          },
+        ],
+      };
+      const canvas = {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_final",
+        },
+      };
+      const saved = assistant([textBlock("Your counter is ready."), canvas], 1_003, {
+        __openclaw: { id: "saved-final", seq: 3, runId },
+      });
+      const final = assistant(
+        [
+          textBlock(
+            "Final tail." +
+              (shortcode ? ' [embed ref="cv_final" /]' : "") +
+              (otherShortcode ? ' [embed ref="cv_other" /]' : ""),
+          ),
+          { ...canvas, preview: { ...canvas.preview, viewId: finalView } },
+        ],
+        1_005,
+        { __openclaw: { runId: finalRun } },
+      );
+      const terminal = live ? rememberLiveTerminalRun(final, finalRun) : final;
+      const messages = [
+        ...(includeOriginal ? [nativeUser(runId, "Show a counter", 1_000, { runId })] : []),
+        ...(tailFirst ? [terminal] : []),
+        ...(savedReceipt ? [nested] : []),
+        ...(savedReply ? [saved] : []),
+        ...(steer
+          ? [
+              nativeUser("steer-input", "Keep going", 1_004, {
+                id: "steer",
+                seq: 4,
+                steerTargetRunId: runId,
+              }),
+            ]
+          : []),
+        ...(tailFirst ? [] : [terminal]),
+      ];
+      const original = structuredClone(messages);
+      const terminalRevision = readLiveTerminalRevision();
+      const groups = messageGroups({
+        messages,
+        toolMessages: savedReceipt ? [] : [nested],
+        showToolCalls: true,
+        searchOpen: search,
+        searchQuery: search ? "Final tail." : "",
+      });
+      expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(count);
+      if (!search) {
+        expect(cardsIn(groups).some((card) => card.callId === "nested-widget")).toBe(true);
+      }
+      expect(
+        groups
+          .flatMap(normalizedBlocks)
+          .flatMap((block) => (block.type === "text" ? [block.text?.trim()] : [])),
+      ).toContain("Final tail.");
+      if (savedReply && !search) {
+        expect(groups.flatMap(normalizedBlocks)).toContainEqual(
+          textBlock("Your counter is ready."),
+        );
+      }
+      expect(messages).toEqual(original);
+      expect(readLiveTerminalRevision()).toBe(terminalRevision);
+    },
+  );
+
   it("keeps live previews when separate runs reuse a call and view ID", () => {
     const groups = messageGroups({
       messages: [
@@ -1455,7 +1651,7 @@ describe("expansion-state render dependencies", () => {
     expect(getExpandedUserMessages("main").get("user-message")).toBe(false);
   });
 
-  it("prunes cards removed during search when the same visible projection becomes complete", () => {
+  it("prunes implicit defaults when the same visible projection becomes complete", () => {
     const sessionKey = "search-removes-hidden-card";
     const group = (key: string) =>
       preparedGroup(
@@ -1468,10 +1664,8 @@ describe("expansion-state render dependencies", () => {
     syncToolCardExpansionState(sessionKey, [hidden, visible], false);
     const expanded = getExpandedToolCards(sessionKey);
     const hiddenCardId = "hidden-card:toolcard:0";
-    setExpansionState(expanded, hiddenCardId, true);
-
     syncToolCardExpansionState(sessionKey, visibleProjection, false, true);
-    expect(expanded.get(hiddenCardId)).toBe(true);
+    expect(expanded.get(hiddenCardId)).toBe(false);
     const filteredVersion = getExpansionStateVersion(expanded);
 
     syncToolCardExpansionState(sessionKey, visibleProjection, false);
@@ -1479,6 +1673,37 @@ describe("expansion-state render dependencies", () => {
     expect(expanded.has(hiddenCardId)).toBe(false);
     expect(expanded.has("visible-card:toolcard:0")).toBe(true);
     expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
+  });
+
+  it("retains explicit choices when sibling panes have different loaded history", () => {
+    const sessionKey = "split-history-disclosures";
+    const group = (key: string) =>
+      preparedGroup(
+        key,
+        assistant([{ type: "toolcall", id: `call-${key}`, name: "browser.open" }]),
+      );
+    const older = group("older-card");
+    const recent = group("recent-card");
+    const complete = [older, recent];
+    const partial = [recent];
+    syncToolCardExpansionState(sessionKey, complete, false);
+    const expanded = getExpandedToolCards(sessionKey);
+    const notify = vi.fn();
+    const unsubscribe = subscribeExpansionState(expanded, notify);
+    try {
+      setExpansionState(expanded, "older-card:toolcard:0", true);
+      expect(notify).toHaveBeenCalledTimes(1);
+
+      syncToolCardExpansionState(sessionKey, partial, false);
+      syncToolCardExpansionState(sessionKey, complete, false);
+
+      expect(expanded.get("older-card:toolcard:0")).toBe(true);
+      expect(notify).toHaveBeenCalledTimes(1);
+      setExpansionState(expanded, "older-card:toolcard:0", false);
+      expect(notify).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("auto-expands retained cards hidden while transcript search is active", () => {

@@ -51,7 +51,6 @@ async function readPromptStream(stream: AsyncIterable<unknown>, source: string):
 export async function resolveAgentExecPrompt(
   positionalMessage: string | undefined,
   messageFile: string | undefined,
-  stdin: AsyncIterable<unknown> = process.stdin,
 ): Promise<string> {
   const file = messageFile?.trim();
   const hasPositional = positionalMessage !== undefined;
@@ -62,7 +61,7 @@ export async function resolveAgentExecPrompt(
     throw new Error("--message-file must not be empty.");
   }
   if (file) {
-    const stream = file === "-" ? stdin : createReadStream(file);
+    const stream = file === "-" ? process.stdin : createReadStream(file);
     try {
       return await readPromptStream(stream, file === "-" ? "stdin" : `Message file ${file}`);
     } catch (error) {

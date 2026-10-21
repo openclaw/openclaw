@@ -1,6 +1,8 @@
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
+import type { SQLInputValue } from "node:sqlite";
 import { getEnvironmentData, threadId } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { admitStoreSearch } from "../infra/database-engine/adapters.js";
@@ -20,15 +22,15 @@ import {
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const dirs = useAutoCleanupTempDirTracker(afterAll);
-const text: SearchSchema = {
-  text: {
-    body: {
-      table: "memory_index_chunks",
-      fields: ["text"],
-      postgres: { identity: "chunk_rowid" },
-    },
-  },
-};
+const textSchema = (
+  name: string,
+  table: string,
+  field: string,
+  identity: string,
+): SearchSchema => ({
+  text: { [name]: { table, fields: [field], postgres: { identity } } },
+});
+const text = textSchema("body", "memory_index_chunks", "text", "chunk_rowid");
 const vector: SearchSchema = {
   vector: {
     chunks: {
@@ -45,19 +47,26 @@ const vector: SearchSchema = {
   },
 };
 
-it("leaves SQLite extension admission and statements unchanged", () => {
-  using db = openNodeSqliteDatabase(":memory:");
+function captureStatements(run: () => void) {
   const statements: unknown[] = [];
   const observe = (event: unknown) => statements.push(event);
   const events = channel("openclaw.database.statement");
   events.subscribe(observe);
   try {
-    admitAgentEngineSearchExtensions(db, { "memory.text": text }, () => {
-      throw new Error("SQLite must retain its own memory admission");
-    });
+    run();
   } finally {
     events.unsubscribe(observe);
   }
+  return statements;
+}
+
+it("leaves SQLite extension admission and statements unchanged", () => {
+  using db = openNodeSqliteDatabase(":memory:");
+  const statements = captureStatements(() => {
+    admitAgentEngineSearchExtensions(db, { "memory.text": text }, () => {
+      throw new Error("SQLite must retain its own memory admission");
+    });
+  });
   expect(statements).toEqual([]);
 });
 
@@ -65,15 +74,18 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
   let anchor: ReturnType<typeof openNodeSqliteDatabase>;
   let databasePath: string;
   let db: PostgresSqlConnection;
+  const get = (sql: string, ...values: SQLInputValue[]) => db.prepare(sql).get(...values);
+  const extensions = () =>
+    String(get("SELECT search_extensions FROM openclaw_schema_meta")?.search_extensions);
   const opened: PostgresSqlConnection[] = [];
-  const open = () =>
+  const open = (selectedAnchor = anchor) =>
     withDatabaseEngineSelection(
       {
         effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
         postgres: { connection: connection!, schemaPrefix: "memory_admission_test" },
       },
       () => {
-        const result = openAgentEngineStore(anchor, "main", databasePath);
+        const result = openAgentEngineStore(selectedAnchor, "main", databasePath);
         if (!isPostgresSqlConnection(result)) {
           throw new Error("Expected PostgreSQL agent store");
         }
@@ -100,92 +112,52 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
     });
   });
 
-  it("admits enabled memory definitions with model dimensions and re-admits them on restart", () => {
+  it("re-admits persisted memory extensions without DDL", () => {
     withEngineStoreAdmission(() => {
       expect(
-        db
-          .prepare(
-            "SELECT to_jsonb(meta)->>'search_extensions' AS search_extensions FROM openclaw_schema_meta meta",
-          )
-          .get(),
+        get(
+          "SELECT to_jsonb(meta)->>'search_extensions' AS search_extensions FROM openclaw_schema_meta meta",
+        ),
       ).toEqual({ search_extensions: null });
       const stages: string[] = [];
-      admitAgentEngineSearchExtensions(
-        db,
-        { "memory.text": text, "memory.vector": vector },
-        (stage) => {
-          stages.push(stage);
-        },
-      );
+      const definitions = { "memory.text": text, "memory.vector": vector };
+      admitAgentEngineSearchExtensions(db, definitions, (stage) => stages.push(stage));
       expect(stages).toEqual(["transaction", "commit"]);
       expect(
-        db
-          .prepare(
-            "SELECT t.typname AS type, a.atttypmod AS dimensions FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid WHERE a.attrelid = 'memory_index_chunks_vec'::regclass AND a.attname = 'embedding'",
-          )
-          .get(),
+        get(
+          "SELECT t.typname AS type, a.atttypmod AS dimensions FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid WHERE a.attrelid = 'memory_index_chunks_vec'::regclass AND a.attname = 'embedding'",
+        ),
       ).toEqual({ type: "vector", dimensions: 3 });
 
-      const statements: string[] = [];
-      const events = channel("openclaw.database.statement");
-      const observe = (value: unknown) => {
-        if (
-          value &&
-          typeof value === "object" &&
-          "engine" in value &&
-          value.engine === "postgres" &&
-          "sql" in value &&
-          typeof value.sql === "string"
-        ) {
-          statements.push(value.sql);
-        }
-      };
-      const previous = db;
-      previous.close();
+      db.close();
       // Forget process-local admission to exercise the persisted extension definitions.
       publishSqliteDatabaseSchemaChange(anchor);
-      events.subscribe(observe);
-      try {
+      const statements = captureStatements(() => {
         db = open();
         const rebound = admitStoreSearch(db, vector);
         expect(rebound.vector).not.toBeNull();
         expect(rebound.vectors.chunks?.postgres?.dimensions).toBe(3);
-      } finally {
-        events.unsubscribe(observe);
-      }
+      }).flatMap((value) =>
+        isRecord(value) && value.engine === "postgres" && typeof value.sql === "string"
+          ? [value.sql]
+          : [],
+      );
       expect(statements.length).toBeGreaterThan(0);
       expect(
         statements.filter((sql) =>
           /\bCREATE\s+(?:SCHEMA|TABLE|INDEX|FUNCTION|TEXT\s+SEARCH)\b/i.test(sql),
         ),
       ).toEqual([]);
-      expect(
-        JSON.parse(
-          String(
-            db.prepare("SELECT search_extensions FROM openclaw_schema_meta").get()
-              ?.search_extensions,
-          ),
-        ),
-      ).toEqual({ "memory.text": text, "memory.vector": vector });
+      expect(JSON.parse(extensions())).toEqual(definitions);
     });
   });
 
-  it("rolls back derived DDL and metadata when live commit authority expires", () => {
+  it("rolls back DDL and metadata after commit authority expires", () => {
     withEngineStoreAdmission(() => {
       expect(() =>
         admitAgentEngineSearchExtensions(
           db,
-          {
-            "memory.paths": {
-              text: {
-                paths: {
-                  table: "memory_index_sources",
-                  fields: ["path"],
-                  postgres: { identity: "id" },
-                },
-              },
-            },
-          },
+          { "memory.paths": textSchema("paths", "memory_index_sources", "path", "id") },
           (stage) => {
             if (stage === "commit") {
               throw new Error("Memory owner retired before commit");
@@ -193,18 +165,34 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
           },
         ),
       ).toThrow("Memory owner retired before commit");
+      expect(extensions()).not.toContain("memory.paths");
       expect(
-        String(
-          db.prepare("SELECT search_extensions FROM openclaw_schema_meta").get()?.search_extensions,
+        get(
+          "SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = 'memory_index_sources' AND column_name = 'openclaw_search'",
+          getPostgresPhysicalFacts(db)!.namespace,
         ),
-      ).not.toContain("memory.paths");
-      expect(
-        db
-          .prepare(
-            "SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = 'memory_index_sources' AND column_name = 'openclaw_search'",
-          )
-          .get(getPostgresPhysicalFacts(db)!.namespace),
       ).toBeUndefined();
+    });
+  });
+
+  it("admits a first-use search extension on a new handle sharing physical admission", () => {
+    withEngineStoreAdmission(() => {
+      using nextAnchor = openNodeSqliteDatabase(databasePath);
+      const next = open(nextAnchor);
+      try {
+        expect(getPostgresPhysicalFacts(next)).toBe(getPostgresPhysicalFacts(db));
+        const paths = { "memory.paths": textSchema("paths", "memory_index_sources", "path", "id") };
+        admitAgentEngineSearchExtensions(next, paths, () => {});
+        // A second publication must consume the committed definition without reinstalling DDL.
+        admitAgentEngineSearchExtensions(next, paths, () => {});
+        expect(JSON.parse(extensions())).toEqual({
+          "memory.text": text,
+          "memory.vector": vector,
+          "memory.paths": textSchema("paths", "memory_index_sources", "path", "id"),
+        });
+      } finally {
+        next.close();
+      }
     });
   });
 });

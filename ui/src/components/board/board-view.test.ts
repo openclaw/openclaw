@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import "../mcp-app-view-registration.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
@@ -478,7 +478,6 @@ describe("openclaw-board-view", () => {
   it("shows stale MCP Apps with retry and delete without breaking the board", async () => {
     const widgetAppView = vi.fn(async () => ({
       status: "stale" as const,
-      error: "origin transcript pruned",
     }));
     const refreshWidgetAppView = vi.fn(async () => ({
       status: "ready" as const,
@@ -509,6 +508,7 @@ describe("openclaw-board-view", () => {
         "mcp-app-retried",
       ),
     );
+    expect(view.querySelector("mcp-app-view .mount")).not.toBeNull();
     expect(refreshWidgetAppView).toHaveBeenCalledWith("alpha", 1);
   });
 

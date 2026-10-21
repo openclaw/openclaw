@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
@@ -9,8 +9,13 @@ import {
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SidebarDropdown, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
-import { renderSidebarRailPinMenuForMenus } from "./sidebar-menus-render.tsx";
+import { SessionOrganizer } from "./session-organizer.ts";
+import {
+  renderSidebarRailPinMenuForMenus,
+  renderSidebarSessionMenuForMenus,
+} from "./sidebar-menus-render.tsx";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
 
 it("keeps modified sidebar links native and handles ordinary navigation", () => {
@@ -39,6 +44,81 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   expect(navigate).toHaveBeenCalledOnce();
 });
 
+it("uses the current preload callbacks without replacing a sidebar link", () => {
+  const SidebarNavLink = renderSidebarNavLink;
+  const preload = vi.fn();
+  const cancel = vi.fn();
+  const [handlers, setHandlers] = createSignal<{
+    onPreload?: (event: Event, immediate?: boolean) => void;
+    onCancelPreload?: (event: Event) => void;
+  }>({});
+  const view = render(() => (
+    <SidebarNavLink
+      href="/sessions"
+      active={false}
+      icon={<span />}
+      label="Sessions"
+      onNavigate={vi.fn()}
+      {...handlers()}
+    />
+  ));
+  const link = view.getByRole("link", { name: "Sessions" });
+  setHandlers({ onPreload: preload, onCancelPreload: cancel });
+  flush();
+  for (const type of ["focus", "pointerenter", "touchstart", "blur", "pointerleave"]) {
+    link.dispatchEvent(new Event(type, { bubbles: true }));
+  }
+  expect(preload.mock.calls.map(([event, immediate]) => [event.type, immediate])).toEqual([
+    ["focus", undefined],
+    ["pointerenter", undefined],
+    ["touchstart", true],
+  ]);
+  expect(cancel.mock.calls.map(([event]) => event.type)).toEqual(["blur", "pointerleave"]);
+  setHandlers({});
+  flush();
+  link.dispatchEvent(new Event("touchstart", { bubbles: true }));
+  link.dispatchEvent(new Event("blur", { bubbles: true }));
+  expect(preload).toHaveBeenCalledTimes(3);
+  expect(cancel).toHaveBeenCalledTimes(2);
+  expect(view.getByRole("link", { name: "Sessions" })).toBe(link);
+});
+
+it("uses current section actions while retaining the header", () => {
+  const initialToggle = vi.fn();
+  const currentToggle = vi.fn();
+  const initialContext = vi.fn();
+  const currentContext = vi.fn();
+  const [current, setCurrent] = createSignal(false);
+  const view = render(() => (
+    <SectionHeader
+      sectionId="work"
+      sectionHeaders={new Map()}
+      content="Work"
+      draggable={false}
+      onStartDrag={vi.fn()}
+      onFinishDrag={vi.fn()}
+      onContextMenu={current() ? currentContext : initialContext}
+      status={{
+        content: "Expand",
+        label: "Expand work",
+        expanded: false,
+        onToggle: current() ? currentToggle : initialToggle,
+      }}
+    />
+  ));
+  const button = view.getByRole("button", { name: "Expand work" });
+  const header = button.parentElement!;
+  setCurrent(true);
+  flush();
+  button.click();
+  header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+  expect(currentToggle).toHaveBeenCalledOnce();
+  expect(currentContext).toHaveBeenCalledOnce();
+  expect(initialToggle).not.toHaveBeenCalled();
+  expect(initialContext).not.toHaveBeenCalled();
+  expect(view.getByRole("button", { name: "Expand work" })).toBe(button);
+});
+
 it("delivers an action selected through the shared sidebar menu", async () => {
   const select = vi.fn();
   const view = render(() => (
@@ -56,6 +136,51 @@ it("delivers an action selected through the shared sidebar menu", async () => {
   );
   view.getByRole("menuitem", { name: "Customize", hidden: true }).click();
   await waitForSolid(() => expect(select).toHaveBeenCalledExactlyOnceWith("customize"));
+});
+
+it("keeps personal pinning and navigation usable in an offline session menu", async () => {
+  const session = { key: "agent:main:review", sessionId: "review-id", label: "Review" };
+  const pin = vi.fn();
+  const menus = {
+    sessionMenu: { x: 12, y: 30, session },
+    pluginActionLifetime: new AbortController(),
+    closeSessionMenu: vi.fn(),
+    triggers: new Map(),
+  } as unknown as SidebarMenus;
+  const host = {
+    connected: false,
+    sessionDataContext: {
+      gateway: { snapshot: { phase: "reconnecting", client: null, hello: null } },
+      agents: { state: { agentsList: null } },
+      sessions: { archiveVisibility: () => null },
+    },
+    sessionData: {
+      sessionsResult: { sessions: [session] },
+      sessionResultsByAgent: {},
+      childSessionRowsByParent: {},
+    },
+    findSidebarMenuSessionByKey: () => session,
+    selectedVisibleSessions: () => [],
+    readSessionMutationAccess: () => ({ allowed: false, reason: "Reconnect" }),
+    knownSessionGroups: () => [],
+    sessionOrganizer: {
+      isPersonalSessionPin: () => false,
+      setPersonalSessionPin: pin,
+      runSessionAction(...args: Parameters<SessionOrganizer["runSessionAction"]>) {
+        return SessionOrganizer.prototype.runSessionAction.call(this, ...args);
+      },
+    },
+  } as unknown as Parameters<typeof renderSidebarSessionMenuForMenus>[1];
+  const view = render(() => renderSidebarSessionMenuForMenus(menus, host, menus.sessionMenu!));
+  flush();
+  const action = (value: string) =>
+    view.container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!;
+  expect(action("rename").disabled).toBe(true);
+  expect(action("toggle-unread").disabled).toBe(true);
+  expect(action("copy-session-link").disabled).toBe(false);
+  expect(action("toggle-pin").disabled).toBe(false);
+  action("toggle-pin").click();
+  await waitForSolid(() => expect(pin).toHaveBeenCalledExactlyOnceWith(session.key, true));
 });
 
 it("retires sidebar hover callbacks with the mounted menu", async () => {
@@ -135,16 +260,6 @@ describe("sidebar rail pin menu", () => {
       await sidebar.updateComplete;
       const host = getAppSidebarOwner(sidebar.hostElement)!;
       const pins = document.createElement("div");
-      for (const entry of entries) {
-        const pin = document.createElement("div");
-        pin.className = "sidebar-rail__pin";
-        pin.dataset.sidebarEntry = entry;
-        pins.append(pin);
-      }
-      const trigger = document.createElement("button");
-      pins.append(trigger);
-      document.body.append(pins);
-      onTestFinished(() => pins.remove());
       const { menus, disposeMenus } = createRoot((disposeRoot) => ({
         menus: createSidebarMenus({
           host,
@@ -154,6 +269,17 @@ describe("sidebar rail pin menu", () => {
         disposeMenus: disposeRoot,
       }));
       onTestFinished(disposeMenus);
+      for (const entry of entries) {
+        const pin = document.createElement("div");
+        pin.className = "sidebar-rail__pin";
+        pin.dataset.sidebarEntry = entry;
+        pins.append(pin);
+        menus.railPins.set(entry, pin);
+      }
+      const trigger = document.createElement("button");
+      pins.append(trigger);
+      document.body.append(pins);
+      onTestFinished(() => pins.remove());
       menus.triggers.set("railPin", trigger);
       const position: NonNullable<SidebarMenus["railPinMenuPosition"]> = {
         x: 12,

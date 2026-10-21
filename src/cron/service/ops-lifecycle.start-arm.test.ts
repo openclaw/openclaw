@@ -50,14 +50,13 @@ it.each([false, true])(
     `);
     }
     const enqueueSystemEvent = vi.fn();
-    const log = { ...noopLogger, debug: vi.fn(), warn: vi.fn() };
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
     const { cron: service, state } = createCronServiceWithStateForTest({
       scheduler,
       storePath,
       cronEnabled: true,
-      log,
+      log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
@@ -86,21 +85,21 @@ it.each([false, true])(
           await cron.start();
         }
       });
+      const tick = async (delayMs: number, expected: string[], drain = true) => {
+        clock.setTime(clock.clock.now() + delayMs);
+        await wake(state);
+        if (drain) {
+          await waitForCronRunQueue(state);
+        }
+        expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(expected);
+      };
       database.exec("DROP TRIGGER IF EXISTS reject_startup_terminal_write");
       expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
       cron.pauseScheduling();
-      clock.setTime(clock.clock.now() + 15_000);
-      await wake(state);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
+      await tick(15_000, ["overdue"], false);
       cron.resumeScheduling();
-      clock.setTime(clock.clock.now() + 15_000);
-      await wake(state);
-      await waitForCronRunQueue(state);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
-      clock.setTime(clock.clock.now() + 60_000);
-      await wake(state);
-      await waitForCronRunQueue(state);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
+      await tick(15_000, ["overdue", "upcoming"]);
+      await tick(60_000, ["overdue", "upcoming"]);
     } finally {
       cron.stop();
       await scheduler.stop();

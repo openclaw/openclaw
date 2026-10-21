@@ -99,11 +99,9 @@ let eligibleBytes = 0;
 const usedHashMemo = new Map();
 const metrics = {
   contentHashCount: 0,
-  contentHashDurationMs: 0,
   memoHitCount: 0,
   memoTruncatedCount: 0,
 };
-const startedAt = performance.now();
 function fail(message) {
   throw new Error(message);
 }
@@ -203,13 +201,17 @@ function addWithParents(relative) {
 function walk(relativeDirectory) {
   const absoluteDirectory = relativeDirectory ? path.join(root, relativeDirectory) : root;
   const names = [];
+  let hasDerivedEntry = false;
+  let hasIncludedEntry = false;
   const directory = fs.opendirSync(absoluteDirectory);
   try {
     for (;;) {
       const entry = directory.readSync();
       if (!entry) break;
       const relative = relativeDirectory ? relativeDirectory + "/" + entry.name : entry.name;
-      if ((!relativeDirectory && entry.name === ".git") || isDerivedWorkspacePath(relative, isStagedInput(relative))) {
+      if (!relativeDirectory && entry.name === ".git") continue;
+      if (isDerivedWorkspacePath(relative, isStagedInput(relative))) {
+        hasDerivedEntry = true;
         continue;
       }
       names.push(entry.name);
@@ -224,11 +226,16 @@ function walk(relativeDirectory) {
     const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
     const absolute = path.join(root, relative);
     const stats = fs.lstatSync(absolute);
-    recordNode(relative, absolute, stats);
     if (stats.isDirectory()) {
-      walk(relative);
+      if (!walk(relative)) {
+        hasDerivedEntry = true;
+        continue;
+      }
     }
+    recordNode(relative, absolute, stats);
+    hasIncludedEntry = true;
   }
+  return hasIncludedEntry || !hasDerivedEntry;
 }
 async function nulPaths(args) {
   const value = await readManifestGit(root, ["ls-files", "-z", ...args], MAX_WORKSPACE_INVENTORY_PATH_BYTES);
@@ -294,11 +301,12 @@ async function eligiblePaths() {
   }
   for (const priorManifestDigest of priorManifestDigests) {
     const manifestRoot = path.join(process.env.HOME, ".openclaw-worker", "manifests");
-    for (const entry of readPriorManifestEntries(manifestRoot, priorManifestDigest)) {
+    const priorEntries = readPriorManifestEntries(manifestRoot, priorManifestDigest);
+    for (const entry of priorEntries) {
       if (!entry || typeof entry.path !== "string") fail("invalid prior workspace manifest entry");
-      if (!isDerivedWorkspacePath(entry.path, isStagedInput(entry.path))) {
-        addSelected(entry.path);
-      }
+    }
+    for (const entry of projectWorkspaceEntries(priorEntries.toSorted(compareManifestPaths), isStagedInput)) {
+      addSelected(entry.path);
     }
   }
   return [...selected].filter((relative) => !isDerivedWorkspacePath(relative, isStagedInput(relative))).sort();
@@ -358,7 +366,6 @@ async function hashFiles(entries) {
         if (sha256) {
           metrics.memoHitCount += 1;
         } else {
-          const hashStartedAt = performance.now();
           const hash = crypto.createHash("sha256");
           const stream = handle.createReadStream({ autoClose: false, signal: controller.signal });
           let bytes = 0;
@@ -369,8 +376,6 @@ async function hashFiles(entries) {
           }
           sha256 = hash.digest("hex");
           metrics.contentHashCount += 1;
-          // Concurrent samples overlap; their sum is hashing effort, not wall time.
-          metrics.contentHashDurationMs += performance.now() - hashStartedAt;
         }
         const after = await handle.stat({ bigint: true });
         if (workspaceStatIdentity("worker", after) !== identity) {
@@ -480,12 +485,11 @@ async function main() {
       usedHashMemo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, MAX_WORKSPACE_HASH_MEMO_BYTES,
     );
     metrics.memoTruncatedCount = usedHashMemo.size - memo.length;
-    const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };
     process.stdout.write(JSON.stringify({
       version: 1,
       manifestRef,
       memo,
-      metrics: measured,
+      metrics,
     }) + "\n");
   } else {
     process.stdout.write(manifestRef + "\n");

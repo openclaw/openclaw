@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 
-export type PostedTask = {
+type PostedTask = {
   input?: string;
   taskId?: number;
   responseId?: number;

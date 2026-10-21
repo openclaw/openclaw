@@ -160,6 +160,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   homedir: () => string;
   agentDatabaseTargets: readonly { agentId: string; path: string }[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  integrityCheck?: "quick" | "full";
   orphanSessionStores?: ReturnType<typeof inspectOrphanSessionStoreEndpoints>;
   pluginSessionStoreAgentIds: readonly string[];
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
@@ -203,6 +204,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
     configuredAgentDatabaseTargets: params.agentDatabaseTargets,
     env: stateEnv,
     preparedDiscovery: params.agentDatabaseMigrationDiscovery,
+    integrityCheck: params.integrityCheck,
   };
   let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
     params.mode === "doctor" ? [] : undefined;
@@ -228,6 +230,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             apply: true,
             cfg: params.config,
             env: stateEnv,
+            integrityCheck: params.integrityCheck,
             targets: preparedRepairTargets?.map((target) => ({
               agentId: target.agentId,
               storePath: target.path,

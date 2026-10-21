@@ -21,27 +21,26 @@ import {
 import * as desktopAuth from "./desktop-panel-credentials.ts";
 import type { DesktopPanelControls, DesktopPanelInputs } from "./desktop-panel-inputs.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
+import {
+  createDesktopPanelLifecycle,
+  type DesktopPanelInputSnapshot,
+} from "./desktop-panel-lifecycle.ts";
+import type { DesktopPanelState, DesktopSizingMode } from "./desktop-panel-state.ts";
+import { projectDesktopPanelView } from "./desktop-panel-view-data.ts";
 import { DesktopSessionOwner } from "./desktop-session-owner.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import { createDesktopHostSetupOwner } from "./host-desktop-setup.ts";
 
 registerDesktopEnglish();
 
 /** Synchronous authority for connections, credentials, and source selection; Solid owns rendering. */
-export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>) {
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+export function createDesktopPanel(
+  host: SolidBridgeElement<DesktopPanelInputs>,
+  scheduleAfterRender: (callback: () => void | (() => void)) => void,
+) {
+  const notify = () => lifecycle.notify();
   let active = false;
   let controls: DesktopPanelControls;
-  let surface: HTMLElement | undefined;
-  let waitingForSurface: ((target: HTMLElement | undefined) => void) | undefined;
-  const surfaceRef = (target: HTMLElement | undefined) => {
-    surface = target;
-    if (target) {
-      waitingForSurface?.(target);
-      waitingForSurface = undefined;
-    }
-  };
   let environments: EnvironmentSummary[] = [];
   let loading = false;
   let phase: DesktopPanelState = "picker";
@@ -51,18 +50,24 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
   let errorText: string | null = null;
   let noticeText: string | null = null;
   let disconnectedReason: string | null = null;
+  // Presentation facts only; connection admission and recovery remain with the native owner.
+  let connectionTransition: "connecting" | "taking-control" | "switching-to-viewing" = "connecting";
+  let connectionFailure: "error" | "lost" | "closed" | null = null;
   let desktopApps: WorkerDesktopAppId[] = [];
-  let sizingMode: desktopTransport.DesktopSizingMode = "fit";
+  let sizingMode: DesktopSizingMode = "fit";
   let canResize = false;
   const handoff = new DesktopConnectionHandoff();
   let savedCredentials: DesktopCredentials | undefined;
   let credentialAuth: "vnc-password" | "ard-account" | undefined;
   let pendingConnection: PendingDesktopConnection | null = null;
   let operation = 0;
+  const recheck = () => void refreshEnvironments(undefined, undefined, true);
+  const hostSetup = createDesktopHostSetupOwner(host, notify, recheck);
   let controlTakeoverRecoveryUsed = false;
   // Automatic resolution follows the session; an explicit choice owns its pop-out target.
   let selection: "pending" | "resolved" | "explicit" | "picker" = "pending";
   const usesAutomaticSource = () => selection === "pending" || selection === "resolved";
+  const automaticPicker = () => usesAutomaticSource() && host.embedded && host.sessionKey !== null;
   const sessionSource = new DesktopSessionOwner(
     host,
     notify,
@@ -108,6 +113,14 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
     isEmbedded: () => host.embedded,
     notify,
   });
+  const lifecycle = createDesktopPanelLifecycle(host, scheduleAfterRender, {
+    dockLayout,
+    reconcile,
+    // Inventory and target events admit connection changes in the synchronous owner.
+    subscribeClient: (client) => sessionSource.subscribe(client),
+    handleToggleRequest: (event) => handleToggleRequest(event),
+    detach,
+  });
 
   const audioTarget = () => ({
     connected: phase === "connected",
@@ -123,9 +136,13 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
     }
     sessionSource.clearDesktopSource();
     savedCredentials = undefined;
+    dockLayout.dispose();
   }
 
-  function reconcile(next: DesktopPanelInputs, previous?: DesktopPanelInputs): void {
+  function reconcile(
+    next: DesktopPanelInputSnapshot,
+    previous: DesktopPanelInputSnapshot | undefined,
+  ): void {
     if (next.suppressed !== previous?.suppressed) {
       const restored = dockLayout.setSuppressed(host.suppressed);
       if (host.suppressed) {
@@ -257,6 +274,7 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
     sizingMode = "fit";
     canResize = false;
     disconnectedReason = null;
+    hostSetup.clear();
     notify();
     sessionSource.clearDesktopSource();
   }
@@ -269,8 +287,7 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
       controls.mobileKeyboard.reset();
     }
     operation += 1;
-    waitingForSurface?.(undefined);
-    waitingForSurface = undefined;
+    lifecycle.cancelSurfaceWait();
     pendingConnection = null;
     handoff.begin(retainViewer);
     if (!retainViewer) {
@@ -319,6 +336,7 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
       const inventory = await inventoryRequest.result;
       if (inventory && inventoryRequest.isCurrent()) {
         requestedSource = inventory.selectedSource;
+        hostSetup.set(automaticPicker() ? (inventory.hostSetup ?? null) : null);
         environments = inventory.environments;
         notify();
         refreshed = true;
@@ -343,7 +361,7 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
         notify();
         await connectEnvironment(requestedSource, host.documentControl);
       } else if (host.requestedSource !== null || host.sessionKey !== null) {
-        noticeText = t("desktop.sourceUnavailable");
+        noticeText = hostSetup.view() ? null : t("desktop.sourceUnavailable");
         notify();
       }
     }
@@ -390,12 +408,20 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
     if (!environmentId || !client || !host.available || (host.embedded && !host.presented)) {
       return;
     }
+    connectionTransition =
+      phase === "connected" && currentId === environmentId && controlling !== control
+        ? control
+          ? "taking-control"
+          : "switching-to-viewing"
+        : "connecting";
+    connectionFailure = null;
     if (currentId !== environmentId) {
       savedCredentials = undefined;
       credentialAuth = undefined;
       sizingMode = "fit";
     }
     canResize = false;
+    hostSetup.clear();
     const environment = environments.find((candidate) => candidate.id === environmentId);
     desktopApps = [...(environment?.worker?.desktopApps ?? [])];
     disconnectConnection(currentId === environmentId);
@@ -472,11 +498,7 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
     phase = "connecting";
     notify();
     try {
-      const target =
-        surface ??
-        (await new Promise<HTMLElement | undefined>((resolve) => {
-          waitingForSurface = resolve;
-        }));
+      const target = lifecycle.surface() ?? (await lifecycle.waitForSurface());
       if (pending.operationId !== operation) {
         return;
       }
@@ -533,6 +555,7 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
       return;
     }
     disconnectConnection();
+    connectionFailure = "error";
     phase = "disconnected";
     disconnectedReason = formatUiError(error);
     notify();
@@ -596,6 +619,7 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
       void connectEnvironment(environmentId, false, true);
       return;
     }
+    connectionFailure = clean ? "closed" : "lost";
     phase = "disconnected";
     disconnectedReason =
       formatUiExternalText(reason, code ? t("desktop.closeCode", { code: String(code) }) : "") ||
@@ -605,18 +629,14 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
 
   return {
     notify,
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    attach(nextControls: DesktopPanelControls) {
+    subscribe: lifecycle.subscribe,
+    attach(nextControls: DesktopPanelControls, retainOpen: boolean) {
       controls = nextControls;
       active = true;
-      return detach;
+      lifecycle.attach(retainOpen);
     },
-    surface: () => surface,
+    inputsChanged: notify,
+    surface: lifecycle.surface,
     launchTarget: () => ({
       client: host.client,
       source: currentSource,
@@ -625,97 +645,84 @@ export function createDesktopPanel(host: SolidBridgeElement<DesktopPanelInputs>)
       apps: desktopApps,
     }),
     get view() {
-      return {
-        documentMode: host.documentMode,
-        embedded: host.embedded,
-        surfaceRef,
-        workspaceControls: host.workspaceControls,
-        content: {
-          state: phase,
+      return projectDesktopPanelView(
+        {
+          host,
+          surfaceRef: lifecycle.surfaceRef,
+          environments,
+          currentId,
+          phase,
           loading,
           automaticSource: usesAutomaticSource(),
-          hasTarget: host.sessionKey !== null || host.requestedSource !== null,
-          errorText: controls.launcher.feedback().error ?? errorText,
+          hostSetup: hostSetup.view(),
+          controlling,
+          errorText,
           noticeText,
-          availability: sessionSource.desktopAvailability,
-          picker: {
-            automatic: usesAutomaticSource() && host.embedded && host.sessionKey !== null,
-            environments,
-            onRefresh: () => void refreshEnvironments(undefined, undefined, true),
-            onConnect: (environmentId: string) => {
-              selection = "explicit";
-              notify();
-              void connectEnvironment(environmentId, false);
-            },
-          },
-          credentials: {
-            ardAccount: credentialAuth === "ard-account",
-            username: savedCredentials?.username ?? "",
-            onSubmit: handleCredentialsSubmit,
-          },
-          recovery: {
-            reason: disconnectedReason,
-            onRetry: () => {
-              if ((phase === "inventory-error" && host.documentMode) || !currentId) {
-                if (selection !== "picker") {
-                  selection = "pending";
-                }
-                phase = "picker";
-                notify();
-                void refreshEnvironments(undefined, undefined, true);
-                return;
-              }
-              if (phase === "inventory-error" && currentId) {
-                void connectRequestedEnvironment(currentId);
-                return;
-              }
-              void connectEnvironment(currentId, controlling);
-            },
-          },
+          disconnectedReason,
+          connectionTransition,
+          connectionFailure,
+          controlTakeoverRecoveryUsed,
+          desktopApps,
+          sizingMode,
+          canResize,
+          username: savedCredentials?.username ?? "",
+          ardAccount: credentialAuth === "ard-account",
+          controls,
+          sessionSource,
+          dockLayout,
         },
-        controlling,
-        desktopApps,
-        launchingApp: controls.launcher.feedback().app ?? null,
-        startup: sessionSource.startupEnvironment,
-        sizing: {
-          mode: sizingMode,
-          canResize: canResize && controlling && phase === "connected",
-          onChange: (mode: desktopTransport.DesktopSizingMode) => {
+        {
+          onRefresh: recheck,
+          onConnect: (environmentId) => {
+            selection = "explicit";
+            notify();
+            void connectEnvironment(environmentId, false);
+          },
+          onCredentialsSubmit: handleCredentialsSubmit,
+          onBack: selection === "explicit" ? () => returnToPicker() : undefined,
+          onRetry: () => {
+            if ((phase === "inventory-error" && host.documentMode) || !currentId) {
+              selection = selection === "picker" ? "picker" : "pending";
+              phase = "picker";
+              notify();
+              void refreshEnvironments(undefined, undefined, true);
+              return;
+            }
+            if (phase === "inventory-error" && currentId) {
+              void connectRequestedEnvironment(currentId);
+              return;
+            }
+            void connectEnvironment(currentId, controlling);
+          },
+          onSizingChange: (mode) => {
             sizingMode = mode;
             notify();
             handoff.setSizingMode(mode);
           },
+          onControlToggle: () => void connectEnvironment(currentId, !controlling),
+          onTakeControl: () => void connectEnvironment(currentId, true),
+          onLaunch: (app) => void controls.launcher.launch(app),
+          onClose: closePanel,
+          onDocumentClose: () => host.onDocumentClose?.(),
+          focusTarget: () => ({
+            basePath: host.basePath,
+            source: currentId,
+            control: controlling,
+            workspaceControls: host.workspaceControls,
+          }),
+          onDisconnect: () => {
+            if (host.embedded && (host.sessionKey !== null || host.suppliedEnvironments !== null)) {
+              handleDesktopDisconnect(currentId, { clean: true });
+            } else {
+              returnToPicker();
+            }
+          },
         },
-        mobileKeyboard: controls.mobileKeyboard,
-        pictureInPicture: controls.pictureInPicture,
-        audio: controls.audio,
-        fullscreenMode: controls.fullscreenMode,
-        dockLayout,
-        onControlToggle: () => void connectEnvironment(currentId, !controlling),
-        onTakeControl: () => void connectEnvironment(currentId, true),
-        onLaunch: (app: WorkerDesktopAppId) => void controls.launcher.launch(app),
-        onClose: closePanel,
-        onDocumentClose: () => host.onDocumentClose?.(),
-        focusTarget: () => ({
-          basePath: host.basePath,
-          source: currentId,
-          control: controlling,
-          workspaceControls: host.workspaceControls,
-        }),
-        onDisconnect: () => {
-          if (host.embedded && (host.sessionKey !== null || host.suppliedEnvironments !== null)) {
-            handleDesktopDisconnect(currentId, { clean: true });
-          } else {
-            returnToPicker();
-          }
-        },
-      };
+      );
     },
     audioTarget,
     keyboardTarget,
-    sessionSource,
     dockLayout,
-    reconcile,
     handleToggleRequest,
   };
 }

@@ -698,7 +698,6 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
           mediaMaxMb: account.config.mediaMaxMb,
           slashCommand: account.config.slashCommand,
           setStatus: ctx.setStatus as (next: Record<string, unknown>) => void,
-          getStatus: ctx.getStatus as () => Record<string, unknown>,
         });
       },
     },

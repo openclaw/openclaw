@@ -13,15 +13,21 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  getCurrentSessionControllerOwner,
+  withSessionControllerOwner,
+} from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
-  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { clearFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -80,7 +86,53 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
   } finally {
     scopeClosed.resolve();
     requestRoot.release();
-    clearFollowupQueueForTest(key);
+    clearFollowupQueue(key);
     resetGatewayWorkAdmission();
+  }
+});
+
+it("admits a queued successor without borrowing the retiring turn that wakes its mailbox", async () => {
+  const key = "agent:main:retiring-drain-owner";
+  const sessionId = "retiring-drain-owner-session";
+  const previous = createReplyOperation({ sessionKey: key, sessionId, resetTriggered: false });
+  const outcome = createDeferredCore<string>();
+  const queued = createRun({ prompt: "successor" });
+  queued.run.sessionId = sessionId;
+  queued.run.sessionKey = key;
+  try {
+    withSessionControllerOwner(previous, () => {
+      enqueueFollowupRun(key, queued, { mode: "followup", debounceMs: 0, cap: 10 });
+      scheduleFollowupDrain(key, async () => {
+        // Backend admission must acquire new custody, not stale ambient ownership.
+        try {
+          expect(getCurrentSessionControllerOwner()).toBeUndefined();
+          const successor = createReplyOperation({
+            sessionKey: key,
+            sessionId,
+            resetTriggered: false,
+            mailboxClaim: queued.controllerInput!.claim!,
+          });
+          try {
+            outcome.resolve(
+              await withSessionControllerOwner(successor, () =>
+                withSessionTurn({ sessionKey: key, sessionId }, async (operation) => {
+                  expect(operation).toBe(successor);
+                  return "successor completed";
+                }),
+              ),
+            );
+          } finally {
+            successor.complete();
+          }
+        } catch (error) {
+          outcome.reject(error);
+        }
+      });
+      previous.complete();
+    });
+    await expect(outcome.promise).resolves.toBe("successor completed");
+  } finally {
+    previous.complete();
+    clearFollowupQueue(key);
   }
 });

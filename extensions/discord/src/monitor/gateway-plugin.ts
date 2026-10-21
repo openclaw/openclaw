@@ -11,10 +11,10 @@ import {
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { assertDiscordEndpointGatewayUrl, getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import * as discordGateway from "../internal/gateway.js";
-import { WebSocket } from "../internal/ws-runtime.js";
 import { createDiscordDnsLookup, createDiscordEndpointDnsLookup } from "../network-config.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
@@ -25,7 +25,6 @@ import {
   resolveDiscordGatewayInfoTimeoutMs,
   resolveGatewayInfoWithFallback,
   type DiscordGatewayFetch,
-  type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
 
 const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
@@ -72,10 +71,11 @@ function formatDiscordGatewayCloseReason(reason: Buffer): string {
   if (!text) {
     return `<${reason.length} bytes>`;
   }
-  if (text.length <= DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS)}...`;
+  return truncateWithMarker(text, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS, {
+    marker: "...",
+    reserve: 0,
+    trimEnd: false,
+  });
 }
 
 function formatDiscordGatewayTransportErrorLog(params: {
@@ -93,27 +93,6 @@ function formatDiscordGatewayTransportErrorLog(params: {
     `message=${params.error.message}`,
   ].filter(Boolean);
   return `discord: gateway websocket error ${details.join(" ")}`;
-}
-
-function formatDiscordGatewayTransportCloseLog(params: {
-  flowId: string;
-  code: number;
-  reason: Buffer;
-  lastError?: DiscordGatewayTransportErrorDetails;
-}): string {
-  const receiverLimit =
-    params.code === DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE ||
-    params.lastError?.code === DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE;
-  const details = [
-    `flow=${params.flowId}`,
-    `code=${params.code}`,
-    `reasonBytes=${params.reason.length}`,
-    `reason=${formatDiscordGatewayCloseReason(params.reason)}`,
-    params.lastError?.code ? `lastErrorCode=${params.lastError.code}` : undefined,
-    params.lastError?.message ? `lastError=${params.lastError.message}` : undefined,
-    receiverLimit ? "hint=possible ws receiver buffered-parts limit" : undefined,
-  ].filter(Boolean);
-  return `discord: gateway websocket closed ${details.join(" ")}`;
 }
 
 type ResolveDiscordGatewayIntentsParams = {
@@ -145,187 +124,6 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
     intents |= discordGateway.GatewayIntents.GuildMembers;
   }
   return intents;
-}
-
-function createGatewayPlugin(params: {
-  intents: number;
-  gatewayInfoTimeoutMs: number;
-  endpoint?: DiscordGatewayEndpoint;
-  fetchImpl: DiscordGatewayFetch;
-  fetchInit?: DiscordGatewayFetchInit;
-  wsAgent?: DiscordGatewayWebSocketAgent;
-  runtime?: RuntimeEnv;
-}): discordGateway.GatewayPlugin {
-  class OpenClawGatewayPlugin extends discordGateway.GatewayPlugin {
-    private gatewayInfoUsedFallback = false;
-
-    constructor() {
-      super({ intents: params.intents });
-    }
-
-    override registerClient(client: DiscordGatewayClient) {
-      const registration = this.registerClientInternal(client);
-      // Client construction starts plugin hooks without awaiting them. Mark the
-      // promise handled immediately, then let startup await the original promise.
-      registration.catch(() => {});
-      registrationPromises.set(this, registration);
-      return registration;
-    }
-
-    private async registerClientInternal(client: DiscordGatewayClient) {
-      // Publish the client reference before the metadata fetch can yield, so an external
-      // connect()->identify() cannot silently drop IDENTIFY (#52372).
-      this.client = client;
-
-      if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
-        const resolved = await fetchDiscordGatewayInfoWithTimeout({
-          token: client.options.token,
-          ...(params.endpoint ? { gatewayBotUrl: params.endpoint.gatewayBotUrl } : {}),
-          fetchImpl: params.fetchImpl,
-          fetchInit: params.fetchInit,
-          timeoutMs: params.gatewayInfoTimeoutMs,
-        })
-          .then((info) => ({
-            info,
-            usedFallback: false,
-          }))
-          .catch((error: unknown) => {
-            if (params.endpoint) {
-              throw error;
-            }
-            return resolveGatewayInfoWithFallback({ runtime: params.runtime, error });
-          });
-        this.gatewayInfo = resolved.info;
-        this.gatewayInfoUsedFallback = resolved.usedFallback;
-      }
-      // If the lifecycle timeout already started a socket while metadata was
-      // loading, do not register again; it would close that socket and open another one.
-      if (this.ws != null || this.isConnecting) {
-        return;
-      }
-      return super.registerClient(client);
-    }
-
-    override createWebSocket(url: string) {
-      if (!url) {
-        throw new Error("Gateway URL is required");
-      }
-      assertDiscordEndpointGatewayUrl(url, params.endpoint?.gatewayOrigin);
-      const wsFlowId = randomUUID();
-      // Avoid Node's undici-backed global WebSocket here. We have seen late
-      // close-path crashes during Discord gateway teardown; the ws transport is
-      // already our proxy path and behaves predictably for lifecycle cleanup.
-      const socket = new WebSocket(url, {
-        ...discordGateway.DISCORD_GATEWAY_WS_CLIENT_OPTIONS,
-        ...(params.wsAgent ? { agent: params.wsAgent } : {}),
-      });
-      let lastTransportError: DiscordGatewayTransportErrorDetails | undefined;
-      const emitTransportActivity = () => {
-        if (this.ws !== socket) {
-          return;
-        }
-        this.emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: Date.now() });
-      };
-      // Finalization retains capture failures; observe Promises returned by the SDK view.
-      const captureEvent = (
-        event: () => Omit<Parameters<typeof captureWsEventAsync>[0], "url" | "flowId" | "meta">,
-      ) => {
-        void captureWsEventAsync({
-          url,
-          ...event(),
-          flowId: wsFlowId,
-          meta: { subsystem: "discord-gateway" },
-        }).catch(() => {});
-      };
-      captureEvent(() => ({ direction: "local", kind: "ws-open" }));
-      socket.on("message", (data: unknown) => {
-        emitTransportActivity();
-        captureEvent(() => ({
-          direction: "inbound",
-          kind: "ws-frame",
-          payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
-        }));
-      });
-      socket.on("close", (code: number, closeReason: Buffer) => {
-        captureEvent(() => ({
-          direction: "local",
-          kind: "ws-close",
-          closeCode: code,
-          payload: closeReason,
-        }));
-        if (
-          (code !== 1000 && code !== 1001) ||
-          closeReason.length > 0 ||
-          lastTransportError !== undefined
-        ) {
-          params.runtime?.log?.(
-            warn(
-              formatDiscordGatewayTransportCloseLog({
-                flowId: wsFlowId,
-                code,
-                reason: closeReason,
-                lastError: lastTransportError,
-              }),
-            ),
-          );
-        }
-      });
-      socket.on("error", (error: Error) => {
-        lastTransportError = describeDiscordGatewayTransportError(error);
-        captureEvent(() => ({
-          direction: "local",
-          kind: "error",
-          errorText: error.message,
-        }));
-        params.runtime?.log?.(
-          warn(
-            formatDiscordGatewayTransportErrorLog({ flowId: wsFlowId, error: lastTransportError }),
-          ),
-        );
-      });
-      socket.binaryType = "arraybuffer";
-      return socket;
-    }
-  }
-
-  return new OpenClawGatewayPlugin();
-}
-
-function createDiscordGatewayMetadataFetch(
-  debugCaptureEnabled: boolean,
-  transport?: { endpoint?: DiscordGatewayEndpoint; proxyUrl?: string },
-): DiscordGatewayFetch {
-  const endpoint = transport?.endpoint;
-  if (endpoint) {
-    return (input, init) => {
-      const signal = init?.signal instanceof AbortSignal ? init.signal : undefined;
-      return endpoint.fetch(input, {
-        ...(init?.headers ? { headers: init.headers } : {}),
-        ...(signal ? { signal } : {}),
-      });
-    };
-  }
-  return (input, init) =>
-    fetchDiscordGatewayMetadataGuarded(input, init, {
-      ...(debugCaptureEnabled
-        ? {}
-        : {
-            capture: {
-              flowId: randomUUID(),
-              meta: { subsystem: "discord-gateway-metadata" },
-            },
-          }),
-      ...(transport?.proxyUrl ? { proxyUrl: transport.proxyUrl } : {}),
-    });
-}
-
-export function waitForDiscordGatewayPluginRegistration(
-  plugin: unknown,
-): Promise<void> | undefined {
-  if (typeof plugin !== "object" || plugin === null) {
-    return undefined;
-  }
-  return registrationPromises.get(plugin as discordGateway.GatewayPlugin);
 }
 
 export function createDiscordGatewayPlugin(params: {
@@ -377,13 +175,183 @@ export function createDiscordGatewayPlugin(params: {
         fetchDiscordGatewayMetadataGuarded(input, init, { capture: false });
     }
   }
+  const { runtime } = params;
 
-  return createGatewayPlugin({
-    intents,
-    gatewayInfoTimeoutMs,
-    ...(endpoint ? { endpoint } : {}),
-    fetchImpl,
-    runtime: params.runtime,
-    ...(wsAgent ? { wsAgent } : {}),
-  });
+  class OpenClawGatewayPlugin extends discordGateway.GatewayPlugin {
+    private gatewayInfoUsedFallback = false;
+
+    constructor() {
+      super({ intents });
+    }
+
+    override registerClient(client: DiscordGatewayClient) {
+      const registration = this.registerClientInternal(client);
+      // Client construction starts plugin hooks without awaiting them. Mark the
+      // promise handled immediately, then let startup await the original promise.
+      registration.catch(() => {});
+      registrationPromises.set(this, registration);
+      return registration;
+    }
+
+    private async registerClientInternal(client: DiscordGatewayClient) {
+      // Publish the client reference before the metadata fetch can yield, so an external
+      // connect()->identify() cannot silently drop IDENTIFY (#52372).
+      this.client = client;
+
+      if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
+        const resolved = await fetchDiscordGatewayInfoWithTimeout({
+          token: client.options.token,
+          ...(endpoint ? { gatewayBotUrl: endpoint.gatewayBotUrl } : {}),
+          fetchImpl,
+          timeoutMs: gatewayInfoTimeoutMs,
+        })
+          .then((info) => ({
+            info,
+            usedFallback: false,
+          }))
+          .catch((error: unknown) => {
+            if (endpoint) {
+              throw error;
+            }
+            return resolveGatewayInfoWithFallback({ runtime, error });
+          });
+        this.gatewayInfo = resolved.info;
+        this.gatewayInfoUsedFallback = resolved.usedFallback;
+      }
+      // If the lifecycle timeout already started a socket while metadata was
+      // loading, do not register again; it would close that socket and open another one.
+      if (this.ws != null || this.isConnecting) {
+        return;
+      }
+      return super.registerClient(client);
+    }
+
+    override createWebSocket(url: string) {
+      if (!url) {
+        throw new Error("Gateway URL is required");
+      }
+      assertDiscordEndpointGatewayUrl(url, endpoint?.gatewayOrigin);
+      const wsFlowId = randomUUID();
+      // Avoid Node's undici-backed global WebSocket here. We have seen late
+      // close-path crashes during Discord gateway teardown; the ws transport is
+      // already our proxy path and behaves predictably for lifecycle cleanup.
+      const socket = new WebSocket(url, {
+        ...discordGateway.DISCORD_GATEWAY_WS_CLIENT_OPTIONS,
+        ...(wsAgent ? { agent: wsAgent } : {}),
+      });
+      let lastTransportError: DiscordGatewayTransportErrorDetails | undefined;
+      const emitTransportActivity = () => {
+        if (this.ws !== socket) {
+          return;
+        }
+        this.emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: Date.now() });
+      };
+      // Finalization retains capture failures; observe Promises returned by the SDK view.
+      const captureEvent = (
+        event: () => Omit<Parameters<typeof captureWsEventAsync>[0], "url" | "flowId" | "meta">,
+      ) => {
+        void captureWsEventAsync({
+          url,
+          ...event(),
+          flowId: wsFlowId,
+          meta: { subsystem: "discord-gateway" },
+        }).catch(() => {});
+      };
+      captureEvent(() => ({ direction: "local", kind: "ws-open" }));
+      socket.on("message", (data: unknown) => {
+        emitTransportActivity();
+        captureEvent(() => ({
+          direction: "inbound",
+          kind: "ws-frame",
+          payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
+        }));
+      });
+      socket.on("close", (code: number, closeReason: Buffer) => {
+        captureEvent(() => ({
+          direction: "local",
+          kind: "ws-close",
+          closeCode: code,
+          payload: closeReason,
+        }));
+        if (
+          (code !== 1000 && code !== 1001) ||
+          closeReason.length > 0 ||
+          lastTransportError !== undefined
+        ) {
+          runtime.log?.(
+            warn(
+              `discord: gateway websocket closed ${[
+                `flow=${wsFlowId}`,
+                `code=${code}`,
+                `reasonBytes=${closeReason.length}`,
+                `reason=${formatDiscordGatewayCloseReason(closeReason)}`,
+                lastTransportError?.code ? `lastErrorCode=${lastTransportError.code}` : undefined,
+                lastTransportError?.message ? `lastError=${lastTransportError.message}` : undefined,
+                code === DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE ||
+                lastTransportError?.code === DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE
+                  ? "hint=possible ws receiver buffered-parts limit"
+                  : undefined,
+              ]
+                .filter(Boolean)
+                .join(" ")}`,
+            ),
+          );
+        }
+      });
+      socket.on("error", (error: Error) => {
+        lastTransportError = describeDiscordGatewayTransportError(error);
+        captureEvent(() => ({
+          direction: "local",
+          kind: "error",
+          errorText: error.message,
+        }));
+        runtime.log?.(
+          warn(
+            formatDiscordGatewayTransportErrorLog({ flowId: wsFlowId, error: lastTransportError }),
+          ),
+        );
+      });
+      socket.binaryType = "arraybuffer";
+      return socket;
+    }
+  }
+
+  return new OpenClawGatewayPlugin();
+}
+
+function createDiscordGatewayMetadataFetch(
+  debugCaptureEnabled: boolean,
+  transport?: { endpoint?: DiscordGatewayEndpoint; proxyUrl?: string },
+): DiscordGatewayFetch {
+  const endpoint = transport?.endpoint;
+  if (endpoint) {
+    return (input, init) => {
+      const signal = init?.signal instanceof AbortSignal ? init.signal : undefined;
+      return endpoint.fetch(input, {
+        ...(init?.headers ? { headers: init.headers } : {}),
+        ...(signal ? { signal } : {}),
+      });
+    };
+  }
+  return (input, init) =>
+    fetchDiscordGatewayMetadataGuarded(input, init, {
+      ...(debugCaptureEnabled
+        ? {}
+        : {
+            capture: {
+              flowId: randomUUID(),
+              meta: { subsystem: "discord-gateway-metadata" },
+            },
+          }),
+      ...(transport?.proxyUrl ? { proxyUrl: transport.proxyUrl } : {}),
+    });
+}
+
+export function waitForDiscordGatewayPluginRegistration(
+  plugin: unknown,
+): Promise<void> | undefined {
+  if (typeof plugin !== "object" || plugin === null) {
+    return undefined;
+  }
+  return registrationPromises.get(plugin as discordGateway.GatewayPlugin);
 }

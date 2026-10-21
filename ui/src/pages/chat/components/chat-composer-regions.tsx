@@ -1,10 +1,9 @@
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, Show, untrack } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
-import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
+import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
 import { isChatRunWorking } from "./chat-composer-state.ts";
-import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 export function ComposerQueue(view: { composer: ChatComposerProps; showAbortableUi: boolean }) {
   const canAct = () =>
@@ -26,30 +25,17 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
   );
 }
 
-export function ComposerInputScope(props: {
-  state: ChatComposerState;
-  children: import("@solidjs/web").JSX.Element;
-}) {
-  const state = untrack(() => props.state);
-  onCleanup(() => {
-    state.composerInputRef?.();
-  });
-  return untrack(() => props.children);
+export function ComposerInputScope(props: { children: import("@solidjs/web").JSX.Element }) {
+  // This scope retains one native input subtree, including its focus and undo history.
+  const initialChildren = untrack(() => props.children);
+  return initialChildren;
 }
 
 export function ComposerProgress(view: { composer: ChatComposerProps; shown: boolean }) {
-  const [revision, setRevision] = createSignal(0);
-  createEffect(
-    () => view.composer.progressCardVisibility,
-    (binding) =>
-      binding
-        ? listen(binding.owner, PRESENTATION_CHANGED_EVENT, () => setRevision((value) => value + 1))
-        : undefined,
+  const visibility = createMemo(() =>
+    projectPresentation(view.composer.progressCardVisibility ?? true),
   );
-  const presented = () => {
-    revision();
-    return view.composer.progressCardVisibility?.isPresented() ?? true;
-  };
+  const presented = () => visibility().read();
   return (
     <Show
       when={presented() && Boolean(view.composer.progressCard)}
@@ -79,6 +65,7 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
             sessionIdentity: view.composer.progressCardIdentity,
             cardLifetime: view.composer.progressCardLifetime,
             readingHistory: view.composer.readingHistory,
+            getTranscriptElement: view.composer.getTranscriptElement,
             onManipulate: view.composer.onProgressManipulate,
           }}
           refreshAction={

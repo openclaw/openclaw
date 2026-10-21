@@ -24,7 +24,7 @@ class WorkerInferenceProxyError extends Error {
 
 type WorkerInferenceHandlers = {
   onEvent?: (event: WorkerInferenceEventParams) => void;
-  onStreamGap?: (gap: { expectedSeq: number; receivedSeq: number }) => void;
+  onStreamGap?: () => void;
 };
 
 type InferenceOperation = {
@@ -63,9 +63,8 @@ export class WorkerInferenceProxyClient {
     this.unsubscribers = [
       connection.onReady(() => this.resume()),
       connection.onTerminalError((error) => this.rejectAllOperations(error)),
-      connection.rpc.onInferenceEvent((frame) => this.handlePayload(frame.payload)),
-      connection.rpc.onInferenceTerminal((frame) => this.handlePayload(frame.payload)),
     ];
+    connection.rpc.onInferenceFrame = (frame) => this.handlePayload(frame.payload);
   }
 
   start(
@@ -109,6 +108,7 @@ export class WorkerInferenceProxyClient {
       return;
     }
     this.disposed = true;
+    this.connection.rpc.onInferenceFrame = () => {};
     for (const unsubscribe of this.unsubscribers) {
       unsubscribe();
     }
@@ -183,10 +183,7 @@ export class WorkerInferenceProxyClient {
     // Catch callbacks here; the frame dispatcher otherwise swallows listener errors.
     try {
       if (payload.seq !== operation.lastSeq + 1) {
-        operation.handlers.onStreamGap?.({
-          expectedSeq: operation.lastSeq + 1,
-          receivedSeq: payload.seq,
-        });
+        operation.handlers.onStreamGap?.();
       }
       operation.lastSeq = payload.seq;
       if ("event" in payload) {

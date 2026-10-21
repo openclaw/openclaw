@@ -1,4 +1,3 @@
-// Slack tests cover doctor plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackDoctor } from "./doctor.js";
 
@@ -23,14 +22,30 @@ async function collectSlackWarnings(
   );
 }
 
-function getSlackCompatibilityNormalizer(): NonNullable<
-  typeof slackDoctor.normalizeCompatibilityConfig
-> {
+function normalizeSlack(slack: Record<string, unknown>) {
   const normalize = slackDoctor.normalizeCompatibilityConfig;
   if (!normalize) {
     throw new Error("Expected slack doctor to expose normalizeCompatibilityConfig");
   }
-  return normalize;
+  return normalize({ cfg: { channels: { slack } } as never });
+}
+
+function previewWarnings(slack: Record<string, unknown>) {
+  return slackDoctor.collectPreviewWarnings?.({
+    cfg: { channels: { slack } } as never,
+    doctorFixCommand: "openclaw doctor --fix",
+    env: {},
+  });
+}
+
+function expectWarning(warnings: string[], ...texts: string[]) {
+  expect(warnings).toEqual(
+    expect.arrayContaining(texts.map((text) => expect.stringContaining(text))),
+  );
+}
+
+function emptyChannels(...keys: string[]): Record<string, Record<string, never>> {
+  return Object.fromEntries(keys.map((key) => [key, {}]));
 }
 
 describe("slack doctor", () => {
@@ -44,18 +59,10 @@ describe("slack doctor", () => {
       error: "Slack auth.test identified a bot token; user identity requires a user OAuth token",
     });
 
-    const warnings = await slackDoctor.collectPreviewWarnings?.({
-      cfg: {
-        channels: {
-          slack: {
-            postAs: "user",
-            userToken: "test-user-token",
-            appToken: "test-app-token",
-          },
-        },
-      } as never,
-      doctorFixCommand: "openclaw doctor --fix",
-      env: {},
+    const warnings = await previewWarnings({
+      postAs: "user",
+      userToken: "test-user-token",
+      appToken: "test-app-token",
     });
 
     expect(warnings).toEqual([
@@ -80,28 +87,16 @@ describe("slack doctor", () => {
       user: { id: "U12345678", name: "test-human" },
     });
 
-    const warnings = await slackDoctor.collectPreviewWarnings?.({
-      cfg: { channels: { slack } } as never,
-      doctorFixCommand: "openclaw doctor --fix",
-      env: {},
-    });
+    const warnings = await previewWarnings(slack);
 
     expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(expected)]));
     expect(warnings?.join("\n")).not.toContain("test-user-token");
   });
 
   it("leaves bot-identity doctor behavior unchanged", async () => {
-    const warnings = await slackDoctor.collectPreviewWarnings?.({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "test-bot-token",
-            appToken: "test-app-token",
-          },
-        },
-      } as never,
-      doctorFixCommand: "openclaw doctor --fix",
-      env: {},
+    const warnings = await previewWarnings({
+      botToken: "test-bot-token",
+      appToken: "test-app-token",
     });
 
     expect(warnings).toEqual([]);
@@ -109,40 +104,18 @@ describe("slack doctor", () => {
   });
 
   it("warns when mutable allowlist entries rely on disabled name matching", async () => {
-    const warnings = await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: {
-            slack: {
-              allowFrom: ["alice"],
-              accounts: {
-                work: {
-                  dm: {
-                    allowFrom: ["U12345678"],
-                  },
-                  channels: {
-                    general: {
-                      users: ["bob"],
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as never,
-      }),
+    const warnings = await collectSlackWarnings({
+      allowFrom: ["alice"],
+      accounts: {
+        work: { dm: { allowFrom: ["U12345678"] }, channels: { general: { users: ["bob"] } } },
+      },
+    });
+    expectWarning(
+      warnings,
+      "mutable allowlist entries across slack",
+      "channels.slack.allowFrom: alice",
+      "channels.slack.accounts.work.channels.general.users: bob",
     );
-    expect(
-      warnings?.some((warning) => warning.includes("mutable allowlist entries across slack")),
-    ).toBe(true);
-    expect(warnings?.some((warning) => warning.includes("channels.slack.allowFrom: alice"))).toBe(
-      true,
-    );
-    expect(
-      warnings?.some((warning) =>
-        warning.includes("channels.slack.accounts.work.channels.general.users: bob"),
-      ),
-    ).toBe(true);
   });
 
   it("accepts workspace-qualified channel and user ids as stable policy entries", async () => {
@@ -160,50 +133,55 @@ describe("slack doctor", () => {
 
   it("warns for name-keyed allowlist channels but accepts routed ID forms (#81665)", async () => {
     const warnings = await collectSlackWarnings({
-      channels: {
-        "example-channel": {},
-        community: {},
-        C0AL2GDUA7J: {},
-        c0al2gdua7k: {},
-        "channel:C0AL2GDUA7L": {},
-        "channel:c0al2gdua7m": {},
-        "team:T11111111:channel:C0AL2GDUA7S": {},
-        D0AL2GDUA7Q: {},
-        "channel:d0al2gdua7r": {},
-        "channel:dabcdefgh": {},
-        "team:T11111111:channel:D0AL2GDUA7T": {},
-        "channel:customers": {},
-        "CHANNEL:C0AL2GDUA7N": {},
-        "channel:C0al2gdua7p": {},
-        "*": {},
-      },
+      channels: emptyChannels(
+        "example-channel",
+        "community",
+        "C0AL2GDUA7J",
+        "c0al2gdua7k",
+        "channel:C0AL2GDUA7L",
+        "channel:c0al2gdua7m",
+        "team:T11111111:channel:C0AL2GDUA7S",
+        "D0AL2GDUA7Q",
+        "channel:d0al2gdua7r",
+        "channel:dabcdefgh",
+        "team:T11111111:channel:D0AL2GDUA7T",
+        "channel:customers",
+        "CHANNEL:C0AL2GDUA7N",
+        "channel:C0al2gdua7p",
+        "*",
+      ),
     });
 
     const nameKeyWarnings = warnings.filter((warning) =>
       warning.includes("Re-key it with the channel's"),
     );
-    expect(nameKeyWarnings).toHaveLength(5);
-    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."example-channel"');
-    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."*" applies instead');
-    expect(nameKeyWarnings[1]).toContain('channels.slack.channels."community" is ambiguous');
-    expect(nameKeyWarnings[2]).toContain(
-      'channels.slack.channels."channel:customers" is ambiguous',
+    expect(nameKeyWarnings).toEqual(
+      [
+        '"example-channel"',
+        '"community" is ambiguous',
+        '"channel:customers" is ambiguous',
+        '"CHANNEL:C0AL2GDUA7N"',
+        '"channel:C0al2gdua7p"',
+      ].map((key) => expect.stringContaining(`channels.slack.channels.${key}`)),
     );
-    expect(nameKeyWarnings[3]).toContain('channels.slack.channels."CHANNEL:C0AL2GDUA7N"');
-    expect(nameKeyWarnings[4]).toContain('channels.slack.channels."channel:C0al2gdua7p"');
+    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."*" applies instead');
     const dmWarnings = warnings.filter((warning) =>
       warning.includes("is a Slack DM conversation ID"),
     );
-    expect(dmWarnings).toHaveLength(4);
-    expect(dmWarnings[0]).toContain('channels.slack.channels."D0AL2GDUA7Q"');
-    expect(dmWarnings[1]).toContain('channels.slack.channels."channel:d0al2gdua7r"');
-    expect(dmWarnings[2]).toContain('channels.slack.channels."channel:dabcdefgh"');
-    expect(dmWarnings[3]).toContain('channels.slack.channels."team:T11111111:channel:D0AL2GDUA7T"');
+    expect(dmWarnings).toEqual(
+      [
+        "D0AL2GDUA7Q",
+        "channel:d0al2gdua7r",
+        "channel:dabcdefgh",
+        "team:T11111111:channel:D0AL2GDUA7T",
+      ].map((key) => expect.stringContaining(`channels.slack.channels."${key}"`)),
+    );
     expect(dmWarnings[0]).toContain("channels.slack.dmPolicy");
   });
 
   it("uses account policy and name-matching overrides for name-keyed channels (#81665)", async () => {
     const overlongName = "a".repeat(81);
+    const invalidNames = ["@help", "##help", "help+", "Support", "-", "___", "#--", overlongName];
     const warnings = await collectSlackWarnings({
       groupPolicy: "open",
       channels: { "root-room": {} },
@@ -221,24 +199,17 @@ describe("slack doctor", () => {
         nameMatching: {
           groupPolicy: "allowlist",
           dangerouslyAllowNameMatching: true,
-          channels: {
-            support: {},
-            "#help": {},
-            "crème-brûlée": {},
-            d0customers: {},
-            dabcdefgh: {},
-            "channel:customers": {},
-            "<#C0AL2GDUA7J>": {},
-            "slack:C0AL2GDUA7K": {},
-            "@help": {},
-            "##help": {},
-            "help+": {},
-            Support: {},
-            "-": {},
-            ___: {},
-            "#--": {},
-            [overlongName]: {},
-          },
+          channels: emptyChannels(
+            "support",
+            "#help",
+            "crème-brûlée",
+            "d0customers",
+            "dabcdefgh",
+            "channel:customers",
+            "<#C0AL2GDUA7J>",
+            "slack:C0AL2GDUA7K",
+            ...invalidNames,
+          ),
         },
       },
     });
@@ -251,52 +222,24 @@ describe("slack doctor", () => {
       warning.includes('channels.slack.channels."root-room"'),
     );
     expect(rootWarning).toContain("messages from the channel are dropped");
-    expect(
-      nameKeyWarnings.some((warning) =>
-        warning.includes('channels.slack.accounts.explicitAllowlist.channels."engineering"'),
-      ),
-    ).toBe(true);
-    expect(
-      nameKeyWarnings.some((warning) =>
-        warning.includes(
-          'channels.slack.accounts.nameMatching.channels."channel:customers" is ambiguous',
-        ),
-      ),
-    ).toBe(true);
-    expect(
-      nameKeyWarnings.some((warning) =>
-        warning.includes('channels.slack.accounts.nameMatching.channels."<#C0AL2GDUA7J>"'),
-      ),
-    ).toBe(true);
-    expect(
-      nameKeyWarnings.some((warning) =>
-        warning.includes('channels.slack.accounts.nameMatching.channels."slack:C0AL2GDUA7K"'),
-      ),
-    ).toBe(true);
-    for (const invalidName of [
-      "@help",
-      "##help",
-      "help+",
-      "Support",
-      "-",
-      "___",
-      "#--",
-      overlongName,
+    expectWarning(
+      nameKeyWarnings,
+      'channels.slack.accounts.explicitAllowlist.channels."engineering"',
+    );
+    for (const key of [
+      'channel:customers" is ambiguous',
+      '<#C0AL2GDUA7J>"',
+      'slack:C0AL2GDUA7K"',
+      ...invalidNames.map((name) => `${name}"`),
     ]) {
-      expect(
-        nameKeyWarnings.some((warning) =>
-          warning.includes(`channels.slack.accounts.nameMatching.channels."${invalidName}"`),
-        ),
-      ).toBe(true);
+      expectWarning(nameKeyWarnings, `channels.slack.accounts.nameMatching.channels."${key}`);
     }
 
     const sharedOpenWarnings = await collectSlackWarnings(
       { channels: { "shared-room": {} } },
       { groupPolicy: "open" },
     );
-    expect(
-      sharedOpenWarnings.some((warning) => warning.includes("not a routable Slack channel ID")),
-    ).toBe(true);
+    expectWarning(sharedOpenWarnings, "not a routable Slack channel ID");
   });
 
   it("treats bare lowercase D forms as ambiguous without name matching", async () => {
@@ -318,38 +261,18 @@ describe("slack doctor", () => {
   });
 
   it("normalizes legacy slack streaming aliases into the nested streaming shape", () => {
-    const normalize = getSlackCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          slack: {
-            streamMode: "status_final",
-            chunkMode: "newline",
-            blockStreaming: true,
-            blockStreamingCoalesce: {
-              idleMs: 250,
-            },
-            accounts: {
-              work: {
-                streaming: false,
-                nativeStreaming: false,
-              },
-            },
-          },
-        },
-      } as never,
+    const result = normalizeSlack({
+      streamMode: "status_final",
+      chunkMode: "newline",
+      blockStreaming: true,
+      blockStreamingCoalesce: { idleMs: 250 },
+      accounts: { work: { streaming: false, nativeStreaming: false } },
     });
 
     expect(result.config.channels?.slack?.streaming).toEqual({
       mode: "progress",
       chunkMode: "newline",
-      block: {
-        enabled: true,
-        coalesce: {
-          idleMs: 250,
-        },
-      },
+      block: { enabled: true, coalesce: { idleMs: 250 } },
     });
     expect(result.config.channels?.slack?.accounts?.work?.streaming).toEqual({
       mode: "off",
@@ -368,18 +291,7 @@ describe("slack doctor", () => {
   });
 
   it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
-    const normalize = getSlackCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          slack: {
-            streamMode: "status_final",
-            streaming: false,
-          },
-        },
-      } as never,
-    });
+    const result = normalizeSlack({ streamMode: "status_final", streaming: false });
 
     expect(result.config.channels?.slack?.streaming).toEqual({
       mode: "progress",
@@ -391,39 +303,18 @@ describe("slack doctor", () => {
   });
 
   it("moves legacy thread mention policy to canonical root and account config", () => {
-    const normalize = getSlackCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          slack: {
-            thread: { requireExplicitMention: true, historyScope: "channel" },
-            accounts: {
-              work: {
-                thread: { requireExplicitMention: false },
-              },
-            },
-          },
-        },
-      } as never,
+    const result = normalizeSlack({
+      thread: { requireExplicitMention: true, historyScope: "channel" },
+      accounts: { work: { thread: { requireExplicitMention: false } } },
     });
 
-    expect(result.config.channels?.slack).toMatchObject({
-      thread: { historyScope: "channel" },
-      implicitMentions: { threadParticipation: false },
-      accounts: {
-        work: {
-          implicitMentions: { threadParticipation: true },
-        },
-      },
-    });
-    expect(result.config.channels?.slack?.implicitMentions).toEqual({
-      threadParticipation: false,
-    });
-    expect(result.config.channels?.slack?.accounts?.work?.implicitMentions).toEqual({
-      threadParticipation: true,
-    });
-    expect(result.config.channels?.slack?.accounts?.work?.thread).toBeUndefined();
+    const slack = result.config.channels?.slack;
+    expect(slack?.thread).toMatchObject({ historyScope: "channel" });
+    expect([
+      slack?.implicitMentions,
+      slack?.accounts?.work?.implicitMentions,
+      slack?.accounts?.work?.thread,
+    ]).toEqual([{ threadParticipation: false }, { threadParticipation: true }, undefined]);
     expect(result.changes).toEqual([
       "Moved channels.slack.thread.requireExplicitMention → channels.slack.implicitMentions.threadParticipation (false).",
       "Moved channels.slack.accounts.work.thread.requireExplicitMention → channels.slack.accounts.work.implicitMentions.threadParticipation (true).",

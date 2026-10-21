@@ -61,6 +61,7 @@ function readerClient(system = false): GatewayClient {
 
 async function listAgents(
   cfg: () => OpenClawConfig,
+  expected: string[],
   client = readerClient(),
   catalog: GatewayRequestContext["readPreparedGatewayModelCatalog"] = async () => ({ entries: [] }),
 ) {
@@ -76,7 +77,12 @@ async function listAgents(
     respond,
     isWebchatConnect: () => false,
   });
-  return respond;
+  // Routing metadata describes Gateway ownership, independently of the reader's roster.
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    true,
+    { ...roster, agents: roster.agents.filter((agent) => expected.includes(agent.id)) },
+    undefined,
+  );
 }
 
 test.each([
@@ -87,13 +93,7 @@ test.each([
 ])(
   "agents.list scopes discovery for agents=$agents system=$system",
   async ({ agents, system, expected }) => {
-    const respond = await listAgents(() => roleConfig(agents), readerClient(system));
-    // Routing metadata describes Gateway ownership, independently of the reader's roster.
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      true,
-      { ...roster, agents: roster.agents.filter((agent) => expected.includes(agent.id)) },
-      undefined,
-    );
+    await listAgents(() => roleConfig(agents), expected, readerClient(system));
   },
 );
 
@@ -103,6 +103,7 @@ test("agents.list applies role changes made while catalog preparation is pending
   const released = createDeferred();
   const response = listAgents(
     () => cfg,
+    ["research"],
     readerClient(),
     async () => {
       started.resolve();
@@ -113,9 +114,5 @@ test("agents.list applies role changes made while catalog preparation is pending
   await started.promise;
   cfg = roleConfig(["research"]);
   released.resolve();
-  expect(await response).toHaveBeenCalledExactlyOnceWith(
-    true,
-    { ...roster, agents: [roster.agents[1]] },
-    undefined,
-  );
+  await response;
 });

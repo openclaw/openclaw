@@ -19,6 +19,7 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { hasNodeErrorCode } from "./path-guards.js";
@@ -41,7 +42,7 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
-import { readUpdatePhysicalDatabaseGenerations } from "./update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
 export const UpdateDatabaseBackupSchema = z.object({
@@ -98,6 +99,7 @@ type BackupInput = {
   additionalPaths?: readonly string[];
   additionalFiles?: readonly string[];
   preserveSourceArtifacts?: boolean;
+  integrityCheck?: "quick" | "full";
   /** Native migration owns the stopped Gateway until Doctor takes custody. */
   stopped?: boolean;
   postgresOffline?: boolean;
@@ -252,16 +254,9 @@ async function canonicalDatabaseInventory(
         canonical = await fs.realpath(spelling);
         present.add(canonical);
       } catch (error) {
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         // A dangling alias is not proof that a database was absent.
-        const entry = await fs.lstat(spelling).catch((cause: unknown) => {
-          if (!hasNodeErrorCode(cause, "ENOENT")) {
-            throw cause;
-          }
-          return undefined;
-        });
+        const entry = await fs.lstat(spelling).catch(ignoreMissingPath);
         if (entry) {
           throw new Error(`Update database path cannot be resolved: ${spelling}`, { cause: error });
         }
@@ -383,6 +378,10 @@ export async function createUpdateDatabaseBackupInProcess(
           },
           preserveRowIds: true,
           requireNonEmptySource: true,
+          integrity:
+            engines.get(sourcePath)?.engine === "sqlite" && input.integrityCheck
+              ? { check: input.integrityCheck }
+              : undefined,
         });
     const engine = engines.get(sourcePath)!;
     let postgres;
@@ -474,9 +473,6 @@ export async function createUpdateDatabaseBackup({
         paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
         pluginOwners: undefined,
       };
-  const postgresPaths = prepared.paths.filter(
-    (file) => readBackupEngine(file).engine === "postgres",
-  );
   const additionalPaths = [...(input.additionalPaths ?? []), ...prepared.paths].map((file) =>
     path.resolve(file),
   );
@@ -509,6 +505,11 @@ export async function createUpdateDatabaseBackup({
         acquisition?.mode === "maintenance-owner" &&
         maintenanceOwnerHasSourceCustody(scope, shared) &&
         !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(shared);
+      // Only maintenance admission consumes this classification. Other callers
+      // let the backup worker inspect engines without another full source image.
+      const postgresPaths = custody
+        ? prepared.paths.filter((file) => readBackupEngine(file).engine === "postgres")
+        : [];
       const inspectionPlan =
         custody && maintenanceOwnerMayCopySourcesInProcess(scope, shared)
           ? await discoverUpdateStateSchemaInspectionInProcess({

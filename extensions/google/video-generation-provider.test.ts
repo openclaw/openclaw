@@ -1,9 +1,10 @@
 // Google tests cover video generation provider plugin behavior.
-import type { Video } from "@google/genai";
+import { ApiError, type Video } from "@google/genai";
+import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {
@@ -37,18 +38,18 @@ vi.mock("./google-genai-runtime.js", () => ({
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
+import { googleVideoGenerationProvider } from "./video-generation-provider.js";
 
-function mockGoogleApiKeyAuth() {
+function mockGoogleApiKeyAuth(apiKey = "google-key") {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-    apiKey: "google-key",
+    apiKey,
     source: "env",
     mode: "api-key",
   });
 }
 
 function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
-  return buildGoogleVideoGenerationProvider().generateVideo({
+  return googleVideoGenerationProvider.generateVideo({
     provider: "google",
     model: "veo-3.1-fast-generate-preview",
     prompt: "A tiny robot watering a windowsill garden",
@@ -153,11 +154,73 @@ describe("google video generation provider", () => {
   });
 
   it("declares explicit mode capabilities", () => {
-    const provider = buildGoogleVideoGenerationProvider();
+    const provider = googleVideoGenerationProvider;
     expectExplicitVideoGenerationCapabilities(provider);
     expect(provider.capabilities.generate?.supportsAudio).toBe(false);
     expect(provider.capabilities.imageToVideo?.supportsAudio).toBe(false);
     expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(false);
+  });
+
+  it.each([
+    "sdk-create",
+    "sdk-poll",
+    "sdk-operation",
+    "rest-body",
+    "rest-status",
+    "rest-operation",
+    "download-status",
+  ] as const)("redacts the active credential from %s diagnostics", async (path) => {
+    const credential = "opaque-video-key42";
+    const diagnostic = `provider diagnostic ${credential}`;
+    mockGoogleApiKeyAuth(path === "download-status" ? "google-key" : credential);
+    if (path === "sdk-create") {
+      generateVideosMock.mockRejectedValue(new ApiError({ status: 403, message: diagnostic }));
+    } else if (path === "sdk-poll") {
+      vi.useFakeTimers();
+      generateVideosMock.mockResolvedValue({ done: false, name: "operations/pending" });
+      getVideosOperationMock.mockRejectedValue(new ApiError({ status: 403, message: diagnostic }));
+    } else if (path === "sdk-operation") {
+      generateVideosMock.mockResolvedValue({ done: true, error: { message: diagnostic } });
+    } else if (path === "download-status") {
+      generateVideosMock.mockResolvedValue(
+        completedVideo({
+          uri: `https://generativelanguage.googleapis.com/v1beta/files/video:download?key=${credential}`,
+          mimeType: "video/mp4",
+        }),
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 403, statusText: diagnostic })),
+      );
+    } else {
+      generateVideosMock.mockRejectedValue(new ApiError({ status: 404, message: "sdk 404" }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (path === "rest-body") {
+            return Response.json({ error: { message: diagnostic } }, { status: 403 });
+          }
+          if (path === "rest-status") {
+            return new Response(null, { status: 403, statusText: diagnostic });
+          }
+          return Response.json({ done: true, error: { message: diagnostic } });
+        }),
+      );
+    }
+
+    const result = generateVideo().catch((error: unknown) => error);
+    if (path === "sdk-poll") {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    const error = await result;
+    assert(error instanceof Error);
+    expect(formatErrorMessage(error)).not.toContain(credential);
+    expect(error.message).toContain("provider diagnostic");
+    if (path === "sdk-create" || path === "sdk-poll") {
+      expect(error).toMatchObject({ name: "ApiError", status: 403 });
+    } else if (path === "rest-body" || path === "rest-status") {
+      expect(error).toMatchObject({ status: 403, statusCode: 403 });
+    }
   });
 
   it("submits generation and returns inline video bytes", async () => {
@@ -586,6 +649,50 @@ describe("google video generation provider", () => {
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
   });
 
+  it.each(["headers", "body"] as const)(
+    "bounds REST %s waits by the operation deadline",
+    async (phase) => {
+      vi.useFakeTimers();
+      mockGoogleApiKeyAuth();
+      generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+      const started = Promise.withResolvers<void>();
+      const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("expected request cancellation signal");
+        }
+        if (phase === "headers") {
+          return new Promise<Response>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(toStringifiedError(signal.reason)), {
+              once: true,
+            });
+            started.resolve();
+          });
+        }
+        const response = new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
+            },
+          }),
+        );
+        started.resolve();
+        return Promise.resolve(response);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const rejection = expect(generateVideo({ timeoutMs: 1_000 })).rejects.toMatchObject({
+        name: "TimeoutError",
+        message: "request timed out",
+      });
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await rejection;
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("bounds successful Google REST operation JSON bodies instead of buffering the whole response", async () => {
     mockGoogleApiKeyAuth();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
@@ -604,15 +711,18 @@ describe("google video generation provider", () => {
   });
 
   it("reports malformed Google REST operation JSON with a stable provider error", async () => {
-    mockGoogleApiKeyAuth();
+    const credential = "opaque-video-key42";
+    mockGoogleApiKeyAuth(credential);
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{ nope", { status: 200 })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(credential, { status: 200 })));
 
-    await expect(
-      generateVideo({
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google video operation response: malformed JSON response");
+    const error: unknown = await generateVideo({ durationSeconds: 3 }).catch(
+      (cause: unknown) => cause,
+    );
+    assert(error instanceof Error);
+    expect(error.message).toBe("Google video operation response: malformed JSON response");
+    expect(formatErrorMessage(error)).not.toContain(credential);
+    expect(error.cause).toBeUndefined();
   });
 
   it("rejects invalid UTF-8 in Google REST operation JSON before parsing", async () => {

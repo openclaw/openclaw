@@ -30,6 +30,8 @@ export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
+  /** Restrict mixed tool owners to reads before the recovery surface is filtered. */
+  forceRestartSafeTools?: boolean;
   /**
    * Overrides the originating-channel sender for blocking questions. An actual
    * harness prompt reservation retains delivery ownership.
@@ -89,7 +91,7 @@ export type OpenClawSharedToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   runtimeToolAllowlist?: string[];
-  /** Host-prepared proof that this exact session can request Gateway publication. */
+  /** Host-enabled Gateway publication request surface; the broker checks target and credentials. */
   githubPublicationAvailable?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
@@ -98,12 +100,13 @@ export type OpenClawSharedToolsOptions = {
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   inboundEventKind?: InboundEventKind;
-  /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
+  /** Offer the heartbeat tool definition without accepting responses outside heartbeat runs. */
+  offerHeartbeatTool?: boolean;
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;
@@ -165,6 +168,7 @@ export type OpenClawToolsOptions = {
   sandboxWorkspaceMediaReadAllowed?: boolean;
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
+  cronSandboxContext?: CronToolOptions["sandboxContext"];
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   /** Prepared profile authority for the gateway tool's configuration-read actions. */

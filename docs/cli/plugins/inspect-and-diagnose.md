@@ -27,6 +27,12 @@ uses `loaded`. JSON retains the underlying registry status and separate `importe
 Known-incompatible plugins remain visible with their repair guidance. Their
 diagnostics do not prevent inspection of other plugins, including with `--runtime`.
 
+An unfinished plugin data migration also prevents runtime evaluation. The plugin
+stays visible with its Doctor action instead of running against unmigrated data.
+Stop the Gateway, run `openclaw doctor --fix` against the same state and config,
+then start the Gateway again. A reload that encounters this condition refuses the
+replacement before stopping the existing plugin.
+
 For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 
 Plugin-owned CLI commands are usually installed as root `openclaw` command groups, but plugins may also register nested commands under a core parent such as `openclaw nodes`. After `inspect --runtime` shows a command under `cliCommands`, run it at the listed path; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.

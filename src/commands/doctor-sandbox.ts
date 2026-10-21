@@ -2,14 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
+import { resolveSandboxScope } from "../agents/sandbox/config.js";
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
-  isDockerDaemonUnavailable,
-  resolveSandboxScope,
-} from "../agents/sandbox.js";
-import {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
@@ -17,6 +14,7 @@ import {
 } from "../agents/sandbox/constants.js";
 import {
   DOCKER_SANDBOX_ENGINE,
+  isDockerDaemonUnavailable,
   PODMAN_SANDBOX_ENGINE,
   validateSandboxContainerEngineTarget,
 } from "../agents/sandbox/docker.js";

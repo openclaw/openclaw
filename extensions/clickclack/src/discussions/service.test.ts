@@ -1,3 +1,4 @@
+import "./service-http-mock.test-support.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -11,6 +12,8 @@ import {
   discussionChannel,
   MANAGED_CONTRACT_FIELDS,
   createHarness,
+  reserveTestExternalRef,
+  testBindingGeneration,
   testExternalRef,
 } from "./service-test-support.js";
 
@@ -171,7 +174,6 @@ describe("ClickClack discussion service", () => {
 
   it("opens one channel with stable URLs", async () => {
     const h = createHarness({ label: "Release Planning", category: "Projects" });
-    h.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
     const sessionKey = "agent:main:main";
 
     expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
@@ -205,7 +207,7 @@ describe("ClickClack discussion service", () => {
       name: "release-planning",
       kind: "public",
       external_managed: true,
-      external_ref: testExternalRef(sessionKey),
+      external_ref: testExternalRef(sessionKey, h.runtime),
       external_url: "https://control.example/control/chat/main",
       sidebar_section: "Projects",
       display_title: "Release Planning",
@@ -348,7 +350,7 @@ describe("ClickClack discussion service", () => {
       "does not yet have a concrete session id",
     );
 
-    expect(h.client.workspaces).not.toHaveBeenCalled();
+    expect(h.workspaces).not.toHaveBeenCalled();
     expect(h.channels).not.toHaveBeenCalled();
     expect(h.createChannel).not.toHaveBeenCalled();
   });
@@ -401,7 +403,7 @@ describe("ClickClack discussion service", () => {
     const h = createHarness({ sessionId: "session-old", label: "Resettable" });
     const sessionKey = "agent:main:resettable";
     await h.service.open(sessionKey);
-    const externalRef = testExternalRef(sessionKey);
+    const externalRef = testExternalRef(sessionKey, h.runtime);
 
     h.setSessionEntry({ sessionId: "session-new", label: "Resettable" });
     expect((await h.service.readLatestMessages(sessionKey, 30)).text).toBe(
@@ -564,7 +566,7 @@ describe("ClickClack discussion service", () => {
   it("adopts a remotely created channel by external reference after an interrupted open", async () => {
     const harness = createHarness({ label: "Release Planning", category: "Projects" });
     const sessionKey = "agent:main:recover";
-    const externalRef = testExternalRef(sessionKey);
+    const externalRef = await reserveTestExternalRef(harness.runtime, sessionKey);
     vi.mocked(harness.channels).mockResolvedValue([
       discussionChannel({
         id: "chn_recovered",
@@ -605,24 +607,24 @@ describe("ClickClack discussion service", () => {
   });
 
   it("reuses a pending generation after an interrupted create", async () => {
-    const generationFactory = vi.fn(() => "pending-generation");
-    const h = createHarness(
-      { label: "Interrupted create" },
-      { bindingGenerationFactory: generationFactory },
-    );
+    const h = createHarness({ label: "Interrupted create" });
     const sessionKey = "agent:main:interrupted-create";
     await interruptCreate(h);
 
     await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
     const firstRef = h.createChannel.mock.calls[0]?.[1].external_ref;
+    const firstGeneration = testBindingGeneration(h.runtime, sessionKey);
+    expect(firstRef).toBe(testExternalRef(sessionKey, h.runtime));
     expect(h.generationStore.lookup(sessionKey)).toMatchObject({
-      generation: "pending-generation",
+      generation: firstGeneration,
+      pending: expect.objectContaining({ externalRef: firstRef }),
     });
 
     await h.service.reconcileAll();
 
     expect(h.createChannel.mock.calls[1]?.[1].external_ref).toBe(firstRef);
-    expect(generationFactory).toHaveBeenCalledTimes(1);
+    expect(testBindingGeneration(h.runtime, sessionKey)).toBe(firstGeneration);
+    expect(h.store.lookup(sessionKey)).toMatchObject({ externalRef: firstRef });
     expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
   });
 
@@ -755,7 +757,7 @@ describe("ClickClack discussion service", () => {
   it("retains a pre-existing channel reservation after definitive adoption failures", async () => {
     const h = createHarness({ label: "Existing adoption failure" });
     const sessionKey = "agent:main:existing-adoption-failure";
-    const externalRef = testExternalRef(sessionKey);
+    const externalRef = await reserveTestExternalRef(h.runtime, sessionKey);
     h.channels.mockResolvedValue([
       managedRoom({
         id: "chn_existing_adoption_failure",
@@ -777,7 +779,7 @@ describe("ClickClack discussion service", () => {
   it("retains an adopted channel reservation when conflict relisting fails", async () => {
     const harness = createHarness({ label: "Adopted conflict" });
     const sessionKey = "agent:main:adopted-conflict";
-    const externalRef = testExternalRef(sessionKey);
+    const externalRef = await reserveTestExternalRef(harness.runtime, sessionKey);
     vi.mocked(harness.channels)
       .mockResolvedValueOnce([
         discussionChannel({
@@ -924,11 +926,7 @@ describe("ClickClack discussion service", () => {
   });
 
   it("reconciles an ambiguous create after discussions are disabled", async () => {
-    const generations = ["disabled-generation", "replacement-generation"];
-    const h = createHarness(
-      { label: "Disable during create" },
-      { bindingGenerationFactory: () => generations.shift() ?? "unexpected-generation" },
-    );
+    const h = createHarness({ label: "Disable during create" });
     const sessionKey = "agent:main:disable-during-create";
     await interruptCreate(h);
     await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
@@ -976,6 +974,7 @@ describe("ClickClack discussion service", () => {
     harness.config.channels!.clickclack!.accounts = {
       replacement: {
         baseUrl: "https://replacement-clickclack.example",
+        apiBaseUrl: harness.transportBaseUrl,
         token: "test-token-placeholder",
         workspace: "team",
         discussions: { enabled: true, workspace: "team" },

@@ -21,6 +21,7 @@ import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
@@ -134,7 +135,7 @@ it("notifies leaf branding consumers when a newly selected built-in palette load
   current().request.mockResolvedValue(
     catalog({ ...definition, mascot: "none", avatarHat: "fedora" }),
   );
-  current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   try {
     await vi.dynamicImportSettled();
     flush();
@@ -169,6 +170,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   favicon.type = "image/svg+xml";
   favicon.setAttribute("href", "/favicon.svg");
   document.head.append(favicon);
+  bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   let response = catalog();
@@ -181,7 +183,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
     }
     throw new Error(`Unexpected request ${method}`);
   });
-  current().opts.onHello?.({
+  current().testOptions.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
     snapshot: {
       presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "profile-alias" } }],
@@ -204,7 +206,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       avatarHat: "fedora",
       dark: createThemePaletteFixture({ background: "#221133" }),
     });
-    current().opts.onEvent?.(
+    current().testOptions.onEvent?.(
       createGatewayEvent("users.prefs.changed", {
         profileId: "canonical-profile",
         keys: ["ui.theme"],
@@ -255,7 +257,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       dark: createThemePaletteFixture({ background: "#332244" }),
     });
     response.theme = { ...descriptor, artwork };
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
     await vi.waitFor(() =>
       expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
         "--bg: #332244;",
@@ -278,7 +280,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
       current: { ...response.current, id: "claw", requestedId: descriptor.id },
     };
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe("claw"));
     expect(applicationTheme.settings.theme).toBe(descriptor.id);
     expect(applicationTheme.catalog?.unavailableId).toBe(descriptor.id);
@@ -289,13 +291,14 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
     expect(favicon.getAttribute("href")).toBe("/favicon.svg");
 
     response = catalog();
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
     expect(clients).toHaveLength(1);
     expect(current().stopped).toBe(0);
   } finally {
     applicationTheme.dispose();
     gateway.stop();
+    bindControlUiDocumentHead({ themeColors: [], favicons: [] });
     favicon.remove();
   }
 });
@@ -318,7 +321,7 @@ it("retries a failed selected palette only after an explicit catalog retry", asy
     }
     throw new Error(`Unexpected request ${method}`);
   });
-  current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   try {
     await vi.waitFor(() =>
       expect(applicationTheme.catalog?.error).toBe("Theme palette temporarily unavailable"),
@@ -377,7 +380,7 @@ it("does not report a previous palette failure after a local theme switch", asyn
     }
     return Promise.reject(new Error(`Unexpected request ${method}`));
   });
-  current().opts.onHello?.({
+  current().testOptions.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
     auth: { role: "operator", scopes: ["operator.read"] },
     snapshot: {
@@ -431,10 +434,10 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     }
     return Promise.reject(new Error(`Unexpected request ${method}`));
   });
-  current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   try {
     await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toContainEqual(descriptor));
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
     await vi.waitFor(() => expect(lists).toBe(2));
     patchSettings({ theme: descriptor.id });
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
@@ -449,7 +452,7 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     });
     const delayed = createDeferred<ThemesGetResult>();
     paletteResponse = delayed.promise;
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
     await vi.waitFor(() => expect(paletteReads).toBe(2));
     expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
     expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
@@ -465,7 +468,7 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
 
     const failed = createDeferred<ThemesGetResult>();
     paletteResponse = failed.promise;
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
     await vi.waitFor(() => expect(paletteReads).toBe(3));
     failed.reject(new Error("Palette refresh temporarily failed"));
     await failed.promise.catch(() => undefined);
@@ -529,7 +532,7 @@ it.each([
       auth: { role: "operator", scopes: ["operator.read"] },
       snapshot: { presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "first" } }] },
     });
-    current().opts.onHello?.(hello());
+    current().testOptions.onHello?.(hello());
     try {
       await vi.waitFor(() =>
         expect(current().request).toHaveBeenCalledWith(
@@ -556,11 +559,11 @@ it.each([
           : nextCatalog,
       );
       if (boundary === "profile") {
-        current().opts.onEvent?.(
+        current().testOptions.onEvent?.(
           createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
         );
       } else {
-        current().opts.onHello?.(hello());
+        current().testOptions.onHello?.(hello());
       }
       if (palette) {
         await vi.waitFor(() =>
@@ -601,7 +604,7 @@ it.each(["Appearance discovery", "profile selection"] as const)(
     const unsubscribe = applicationTheme.subscribe(published);
     gateway.start();
     current().request.mockResolvedValue(catalog());
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
     try {
       await vi.dynamicImportSettled();
       expect(current().request).not.toHaveBeenCalled();

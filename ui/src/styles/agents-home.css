@@ -1,14 +1,5 @@
 .agents-home {
-  padding: 0 24px 24px;
-}
-
-.agents-home__header .content-header {
-  max-height: none;
-  padding: 4px 24px 16px;
-}
-
-.agents-home__header .page-header-actions {
-  flex-shrink: 0;
+  padding-bottom: 24px;
 }
 
 .agents-home__card {
@@ -91,6 +82,28 @@
   height: 44px;
   min-height: 44px;
   padding-left: 36px;
+}
+
+.agents-home__claw-categories {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 0 12px;
+  margin-bottom: 8px;
+}
+
+.agents-home__claw-categories .btn {
+  flex: 0 0 auto;
+}
+
+.agents-home__claw-category--active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.agents-home__claw-section-title {
+  margin: 24px 0 12px;
+  font-size: 14px;
 }
 
 .agents-home__grid,
@@ -176,6 +189,12 @@
   color: var(--accent);
 }
 
+.agents-home__claw-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .agents-home__claw-art svg {
   width: 20px;
   height: 20px;
@@ -225,18 +244,7 @@
 
 @media (max-width: 560px) {
   .agents-home {
-    padding: 0 16px 16px;
-  }
-
-  .agents-home__header .content-header {
-    flex-direction: column;
-    align-items: stretch;
-    padding-inline: 16px;
-  }
-
-  .agents-home__header .page-header-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
+    padding-bottom: 16px;
   }
 
   .agents-home__explore-toolbar {

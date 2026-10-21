@@ -10,7 +10,6 @@ import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
-import { resolveReplyDirectiveRouting } from "../../auto-reply/reply/get-reply-directives-routing.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
@@ -393,20 +392,6 @@ describe("prepareChatSendUserTurn", () => {
       expect(prepared.ctx.CommandSource).toBe(suppressed ? undefined : "text");
       expect(prepared.ctx.CommandInterpretationSuppressed).toBe(suppressed ? true : undefined);
       const ctx = finalizeInboundContext(prepared.ctx);
-      const routed = resolveReplyDirectiveRouting({
-        commandText: ctx.commandText,
-        agentText: ctx.agentText,
-        modelAliases: [],
-        canInterpretTextDirectives: !suppressed,
-        isAuthorizedSender: !suppressed,
-        isGroup: false,
-        wasMentioned: false,
-        ctx,
-        cfg: {},
-        agentId: "main",
-        resetTriggered: false,
-      });
-      expect(routed.hasInlineStatus).toBe(false);
       if (inboundMessage.startsWith("/skill")) {
         expect(normalizeCommandBody(ctx.commandText)).toBe("/skill weather\nfirst\n  second");
       }

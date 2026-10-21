@@ -13,9 +13,7 @@ import {
   buildSuppressedBuiltInModelError,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import type { ModelRegistry } from "../sessions/model-registry.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
@@ -171,24 +169,18 @@ export async function resolveDynamicModelAuthProfile(params: {
       preferredProfile: params.preferredProfile,
     }),
   };
-  const providers = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: params.provider,
-    config: params.cfg,
-  });
   const store = await loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
   params.abortSignal?.throwIfAborted();
   const profileId =
     explicitProfileId ??
-    providers.flatMap((provider) =>
-      resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store,
-        provider,
-        preferredProfile: params.preferredProfile,
-        forModel: params.modelId,
-        includePendingOAuthRefresh: true,
-      }),
-    )[0];
+    resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store,
+      provider: params.provider,
+      preferredProfile: params.preferredProfile,
+      forModel: params.modelId,
+      includePendingOAuthRefresh: true,
+    })[0];
   if (!profileId) {
     return {};
   }
@@ -382,7 +374,7 @@ export async function resolveModelWithPreparedRegistry(
   }
   return params.skipConfiguredFallback
     ? undefined
-    : buildConfiguredFallbackModel({
+    : normalizeConfiguredProviderModel({
         ...params,
         providerMetadataOwners: params.modelRegistry.getProviderMetadataOwners(),
       });

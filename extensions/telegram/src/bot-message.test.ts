@@ -247,25 +247,16 @@ describe("telegram bot message processor", () => {
   });
 
   it("runs the dispatch-start lifecycle after context creation and before dispatch", async () => {
-    const sendTyping = vi.fn().mockResolvedValue(undefined);
     const onDispatchStart = vi.fn(async () => undefined);
-    buildTelegramMessageContext.mockResolvedValue(
-      createMessageContext({
-        sendTyping,
-      }),
-    );
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await expect(processSampleMessage(processMessage, { onDispatchStart })).resolves.toEqual({
       kind: "completed",
     });
 
-    expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(onDispatchStart).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(requireInvocationOrder(sendTyping.mock, "send typing invocation")).toBeLessThan(
-      requireInvocationOrder(onDispatchStart.mock, "dispatch-start invocation"),
-    );
     expect(requireInvocationOrder(onDispatchStart.mock, "dispatch-start invocation")).toBeLessThan(
       requireInvocationOrder(dispatchTelegramMessage.mock, "message dispatch invocation"),
     );
@@ -318,21 +309,6 @@ describe("telegram bot message processor", () => {
       }),
     );
     expect(JSON.stringify(verboseLog.mock.calls)).not.toContain(body);
-  });
-
-  it("keeps dispatch running when the early typing cue fails", async () => {
-    const sendTyping = vi.fn().mockRejectedValue(new Error("typing failed"));
-    buildTelegramMessageContext.mockResolvedValue(
-      createMessageContext({
-        sendTyping,
-      }),
-    );
-
-    const processMessage = createTelegramMessageProcessor(baseDeps);
-    await expect(processSampleMessage(processMessage)).resolves.toEqual({ kind: "completed" });
-
-    expect(sendTyping).toHaveBeenCalledTimes(1);
-    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
 
   it("sends user-visible fallback when dispatch throws", async () => {
@@ -662,7 +638,7 @@ describe("telegram bot message processor", () => {
           turnAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
         });
       }
-      turnAdoptionLifecycle?.onAbandoned?.();
+      await turnAdoptionLifecycle?.onAbandoned?.();
       return { kind: "completed" };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import {
   createGeneratedPluginTempRoot,
@@ -9,9 +9,25 @@ import {
 } from "./generated-plugin-test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
+const schemaWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "plugins" ? { ...logger, warn: schemaWarn } : logger;
+    },
+  };
+});
+
 installGeneratedPluginTempRootCleanup();
 
-beforeEach(clearPluginMetadataLifecycleCaches);
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+  schemaWarn.mockClear();
+});
 
 function writePlugin(
   rootDir: string,
@@ -110,6 +126,38 @@ describe("bundled plugin public surfaces", () => {
         ...explicitHints,
       },
     });
+    expect(schemaWarn).not.toHaveBeenCalled();
+  });
+
+  it("warns when selected channel schema evaluation fails and retains manifest metadata", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-config-failure-");
+    const pluginDir = writePlugin(tempRoot, {
+      packageOpenClaw: { channel },
+      manifest: {
+        channels: ["alpha"],
+        channelConfigs: {
+          alpha: { schema: schema("manifest", "boolean"), uiHints: explicitHints },
+        },
+      },
+    });
+    const modulePath = path.join(pluginDir, "src", "config-schema.js");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(
+      modulePath,
+      'throw new Error("schema fixture initialization failed");\n',
+      "utf8",
+    );
+
+    expect(channelConfig(tempRoot)).toEqual({
+      schema: schema("manifest", "boolean"),
+      label: "Alpha Root Label",
+      description: "Alpha Root Description",
+      uiHints: explicitHints,
+    });
+    expect(schemaWarn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(`from ${modulePath}; using manifest metadata`),
+      { error: expect.objectContaining({ message: "schema fixture initialization failed" }) },
+    );
   });
 
   it("captures top-level public surface artifacts without duplicating the primary entrypoints", () => {
@@ -173,5 +221,6 @@ describe("bundled plugin public surfaces", () => {
       description: "Alpha Root Description",
     });
     expect(fs.existsSync(markerPath)).toBe(false);
+    expect(schemaWarn).not.toHaveBeenCalled();
   });
 });

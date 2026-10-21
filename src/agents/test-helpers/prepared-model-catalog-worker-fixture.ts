@@ -32,21 +32,20 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
 
-function createJwtWithExp(exp: number, marker?: string): string {
-  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
-    "base64url",
-  );
-  return `header.${payload}.signature`;
-}
-
 export function writeCodexAuth(codexHome: string, marker: string): void {
   const authPath = path.join(codexHome, "auth.json");
+  const payload = Buffer.from(
+    JSON.stringify({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      ...(marker ? { marker } : {}),
+    }),
+  ).toString("base64url");
   fs.writeFileSync(
     authPath,
     JSON.stringify({
       auth_mode: "chatgpt",
       tokens: {
-        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
+        access_token: `header.${payload}.signature`,
         refresh_token: `refresh-${marker}-not-real`,
       },
     }),
@@ -57,6 +56,8 @@ export function writeCodexAuth(codexHome: string, marker: string): void {
 }
 
 const waitTimeoutMs = 30_000;
+const catalogStartCount = (marker: string) =>
+  fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").split("start\n").length - 1 : 0;
 
 export function usePreparedCatalogWorkerFixtures(
   fixtureOptions: { observeCatalogWork?: boolean } = {},
@@ -174,8 +175,7 @@ export function usePreparedCatalogWorkerFixtures(
       fixture: { marker: string; agentDir: string },
     ) => {
       const { marker, agentDir } = fixture;
-      const before = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "";
-      const count = before.split("start\n").length;
+      const count = catalogStartCount(marker) + 1;
       const completed = createDeferredCore<unknown>();
       catalogSettlements.set(agentDir, completed.resolve);
       return (operation: PromiseLike<unknown>, signal: AbortSignal) =>
@@ -203,8 +203,7 @@ async function catalogFixtureEventBeforeSettlement(
   operation: PromiseLike<unknown>,
   count = 1,
 ): Promise<void> {
-  const recorded = () =>
-    fs.existsSync(marker) && fs.readFileSync(marker, "utf8").split("start\n").length - 1 >= count;
+  const recorded = () => catalogStartCount(marker) >= count;
   const settled = Promise.resolve(operation).then(
     () => {
       expect(recorded(), `Catalog task settled before start reached ${marker}`).toBe(true);
@@ -381,18 +380,14 @@ export async function loadCompletedFullCatalog(
   await expect
     .poll(
       () => {
-        const catalog = snapshot.readFullModelCatalog!();
-        if (
-          catalog &&
-          isPreparedModelCatalogFull(catalog) &&
-          !catalog.pendingProviders?.length &&
-          !catalog.refreshFailed &&
-          (!options?.refresh || catalog !== previous)
-        ) {
-          completed = catalog;
-          return true;
-        }
-        return false;
+        completed = snapshot.readFullModelCatalog!();
+        return Boolean(
+          completed &&
+          isPreparedModelCatalogFull(completed) &&
+          !completed.pendingProviders?.length &&
+          !completed.refreshFailed &&
+          (!options?.refresh || completed !== previous),
+        );
       },
       { timeout: waitTimeoutMs },
     )

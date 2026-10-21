@@ -3,7 +3,6 @@ import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import {
   getInstallationTarget,
   installationTargetEnv,
@@ -36,16 +35,11 @@ import {
 } from "./cli-live-session-registry.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
-import {
-  CLAUDE_SELECTED_AUTH_ENV_KEYS,
-  CLI_BACKEND_PRESERVE_ENV,
-  NODE_CLAUDE_FORWARD_ENV_KEYS,
-  parseCliBackendPreserveEnv,
-  resolveNodeClaudeAuthEnv,
-} from "./execute-logging.js";
+import { NODE_CLAUDE_FORWARD_ENV_KEYS, resolveNodeClaudeAuthEnv } from "./execute-logging.js";
 import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
+import { resolveCliChildEnv } from "./execution-env.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import {
   buildCliArgs,
@@ -76,36 +70,6 @@ function exactToolAvailabilityError(params: {
   });
 }
 
-function assertExactToolAvailabilityRuntimeVersion(params: {
-  backendId: string;
-  policy: NonNullable<
-    PreparedCliRunContext["backendResolved"]["runtimeArtifact"]
-  >["exactToolAvailabilityVersionPolicy"];
-  executableIdentity: Awaited<ReturnType<typeof resolveCliExecutableIdentity>>;
-  isolatedCompletion: boolean;
-}): void {
-  const artifact = params.executableIdentity?.runtimeArtifact;
-  const packageVersion = artifact?.kind === "package-tree" ? artifact.packageVersion : undefined;
-  const parsedVersion = packageVersion ? parseSemver(packageVersion) : null;
-  const prereleaseChannel = parsedVersion?.prerelease[0];
-  const minimumVersion =
-    parsedVersion?.prerelease.length === 0
-      ? params.policy?.stableMinimum
-      : typeof prereleaseChannel === "string"
-        ? params.policy?.prereleaseMinimums?.[prereleaseChannel]
-        : undefined;
-  const comparison =
-    packageVersion && minimumVersion ? compareValidSemver(packageVersion, minimumVersion) : null;
-  if (comparison !== null && comparison >= 0) {
-    return;
-  }
-  throw exactToolAvailabilityError({
-    code: "unsupported",
-    isolatedCompletion: params.isolatedCompletion,
-    message: `CLI backend ${params.backendId} requires a supported package version for exact per-run tool availability${minimumVersion ? ` (requires >=${minimumVersion}` : " (unsupported release line"}${packageVersion ? `; found ${packageVersion})` : ")"}`,
-  });
-}
-
 type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
   /** Receives the exact composed prompt sent to the CLI, once per attempt. */
@@ -121,6 +85,9 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
+  // A writer that replays history may put saved history in this prompt: a fresh recovery
+  // prompt, or durable reference context and interrupted inputs on a resumed turn.
+  const carriesSavedHistory = inputContext.cliHistoryWriter?.replaysHistory === true;
   // Reuse the writer's run authority; each transport checks private history
   // separately at its disclosure boundary.
   const context = inputContext.cliHistoryWriter
@@ -159,10 +126,9 @@ export async function executePreparedCliRun(
   const shouldSendSystemPrompt =
     systemPromptArg &&
     (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume);
-  const systemPromptFile =
-    !nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt
-      ? await executeDeps.writeCliSystemPromptFile({ backend, systemPrompt: systemPromptArg })
-      : undefined;
+  let systemPromptFile:
+    | Awaited<ReturnType<typeof executeDeps.writeCliSystemPromptFile>>
+    | undefined;
   const nodeSystemPrompt = nodePlacement && shouldSendSystemPrompt ? systemPromptArg : undefined;
 
   const basePrompt = cliSessionIdToUse
@@ -297,6 +263,12 @@ export async function executePreparedCliRun(
     assertCurrent();
     await context.preparedBackend.beforeExecution?.();
     assertCurrent();
+    if (!nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt) {
+      systemPromptFile = await executeDeps.writeCliSystemPromptFile({
+        backend,
+        systemPrompt: systemPromptArg,
+      });
+    }
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =
       params.skillsSnapshot && !params.controlOperation
@@ -334,16 +306,7 @@ export async function executePreparedCliRun(
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
       const preparedBackendEnv = context.preparedBackend.env ?? {};
-      const hasSelectedClaudeAuth =
-        Boolean(context.preparedBackend.secretInput) ||
-        [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) => Object.hasOwn(preparedBackendEnv, key));
-      const selectedClaudeClearEnv = hasSelectedClaudeAuth
-        ? new Set(backend.clearEnv ?? [])
-        : undefined;
-      const configuredBackendEnv = Object.fromEntries(
-        Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
-      );
-      const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
+      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(context.preparedBackend);
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
@@ -359,27 +322,12 @@ export async function executePreparedCliRun(
       const nodeClearEnv = [
         ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
       ];
-      const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
-      const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
-      for (const key of backend.clearEnv ?? []) {
-        if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
-          delete env[key];
-        }
-      }
-      if (Object.keys(backendEnv).length > 0) {
-        Object.assign(
-          env,
-          sanitizeHostExecEnv({
-            baseEnv: {},
-            overrides: backendEnv,
-            blockPathOverrides: true,
-          }),
-        );
-      }
       Object.assign(env, mcpCaptureAttempt.env, localProcessEnv);
       // Never mark Claude CLI as host-managed. That marker routes runs into
       // Anthropic's separate host-managed usage tier instead of normal CLI use.
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+      // The history writer's native owner must be the one this final environment selects.
+      context.cliHistoryWriter?.bindExecutionEnv(env, carriesSavedHistory);
 
       let executionCommand = backend.command;
       let executionArgv0: string | undefined;
@@ -418,12 +366,28 @@ export async function executePreparedCliRun(
           });
         }
         if (exactToolAvailabilityVersionPolicy) {
-          assertExactToolAvailabilityRuntimeVersion({
-            backendId: context.backendResolved.id,
-            policy: exactToolAvailabilityVersionPolicy,
-            executableIdentity,
-            isolatedCompletion: params.isolatedCompletion === true,
-          });
+          const artifact = executableIdentity.runtimeArtifact;
+          const packageVersion =
+            artifact?.kind === "package-tree" ? artifact.packageVersion : undefined;
+          const parsedVersion = packageVersion ? parseSemver(packageVersion) : null;
+          const prereleaseChannel = parsedVersion?.prerelease[0];
+          const minimumVersion =
+            parsedVersion?.prerelease.length === 0
+              ? exactToolAvailabilityVersionPolicy.stableMinimum
+              : typeof prereleaseChannel === "string"
+                ? exactToolAvailabilityVersionPolicy.prereleaseMinimums?.[prereleaseChannel]
+                : undefined;
+          const comparison =
+            packageVersion && minimumVersion
+              ? compareValidSemver(packageVersion, minimumVersion)
+              : null;
+          if (comparison === null || comparison < 0) {
+            throw exactToolAvailabilityError({
+              code: "unsupported",
+              isolatedCompletion: params.isolatedCompletion === true,
+              message: `CLI backend ${context.backendResolved.id} requires a supported package version for exact per-run tool availability${minimumVersion ? ` (requires >=${minimumVersion}` : " (unsupported release line"}${packageVersion ? `; found ${packageVersion})` : ")"}`,
+            });
+          }
         }
         executionCommand = executableIdentity.invocation.command;
         executionArgv0 = executableIdentity.invocation.argv0;
@@ -559,6 +523,8 @@ export async function executePreparedCliRun(
     } catch (error) {
       recordRunError(error);
     } finally {
+      // Attest a token the CLI rotated during the run before any of its rows commit.
+      await context.cliHistoryWriter?.settleNativeLogin();
       await toolTracking.finishDeliveryTracking({
         useManagedClaudeLiveSession,
         recordRunError,

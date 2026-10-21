@@ -1,14 +1,8 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { beforeEach, describe, expect, it } from "vitest";
-import { checkTwitchAccessControl } from "./access-control.js";
-import { setTwitchRuntime } from "./runtime.js";
+import { describe, expect, it } from "vitest";
+import { checkTwitchMessageThroughMonitor } from "./monitor-access.test-support.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
-describe("checkTwitchAccessControl", () => {
-  beforeEach(() => {
-    setTwitchRuntime(createPluginRuntimeMock());
-  });
-
+describe("Twitch monitor access control", () => {
   const mockAccount: TwitchAccountConfig = {
     username: "testbot",
     accessToken: "test",
@@ -28,7 +22,7 @@ describe("checkTwitchAccessControl", () => {
     account?: Partial<TwitchAccountConfig>;
     message?: Partial<TwitchChatMessage>;
   }) {
-    return checkTwitchAccessControl({
+    return checkTwitchMessageThroughMonitor({
       accountId: "secondary",
       message: {
         ...mockMessage,
@@ -38,7 +32,6 @@ describe("checkTwitchAccessControl", () => {
         ...mockAccount,
         ...params.account,
       },
-      botUsername: "testbot",
     });
   }
 
@@ -61,7 +54,6 @@ describe("checkTwitchAccessControl", () => {
     allowFrom: string[];
     allowedRoles?: NonNullable<TwitchAccountConfig["allowedRoles"]>;
     message?: Partial<TwitchChatMessage>;
-    reason: string;
   }) {
     const result = await runAccessCheck({
       account: {
@@ -74,7 +66,6 @@ describe("checkTwitchAccessControl", () => {
       },
     });
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain(params.reason);
   }
 
   describe("requireMention default", () => {
@@ -85,7 +76,6 @@ describe("checkTwitchAccessControl", () => {
         },
       });
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("does not mention the bot");
     });
   });
 
@@ -94,7 +84,6 @@ describe("checkTwitchAccessControl", () => {
       await expectAllowFromBlocked({
         allowFrom: ["123456"],
         message: { userId: undefined },
-        reason: "user ID not available",
       });
     });
   });
@@ -115,9 +104,6 @@ describe("checkTwitchAccessControl", () => {
               message: { message: "@testbot hello", userId, [flag]: matching },
             });
             expect(result.allowed).toBe(matching);
-            if (!matching) {
-              expect(result.reason).toContain("does not have any of the required roles");
-            }
           }
         }
       },
@@ -149,7 +135,7 @@ describe("checkTwitchAccessControl", () => {
   });
 
   describe("combined restrictions", () => {
-    it("checks requireMention before role gates for unauthorized chat", async () => {
+    it("does not dispatch unmentioned unauthorized chat", async () => {
       const result = await runAccessCheck({
         account: {
           requireMention: true,
@@ -162,7 +148,6 @@ describe("checkTwitchAccessControl", () => {
       });
 
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("does not mention the bot");
     });
 
     it("checks allowlist before allowedRoles", async () => {

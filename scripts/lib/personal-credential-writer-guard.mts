@@ -1,5 +1,5 @@
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { SymbolFlags, type Symbol } from "typescript/sync";
 import type { NativeTypeScriptProject } from "./native-typescript.mts";
 
 const accounts = "src/state/user-model-accounts.ts";
@@ -505,7 +505,12 @@ const callers = new Map<string, readonly string[]>([
   ]),
   [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
-    [key(sessionEntries, "writeSessionEntry")],
+    [
+      key(
+        "src/config/sessions/session-accessor.sqlite-entry-write.ts",
+        "prepareSessionEntryWrite/write",
+      ),
+    ],
   ],
   [
     key(sessionArtifacts, "deleteSessionNodeArtifacts"),

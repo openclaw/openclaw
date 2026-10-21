@@ -35,7 +35,11 @@ import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { transcriptEventJsonSql, transcriptEventResetNavigationSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventResetNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 function readBoundedRetentionRanges(
@@ -315,12 +319,21 @@ export function readSessionTranscriptBoundedActiveContextCore(
           transcript
             .select([
               "seq",
-              "navigation_valid",
+              transcriptPredicateSql(projection.database.db, "navigation_valid").as(
+                "navigation_valid",
+              ),
               /* kysely-allow-raw: reject an oversized header before acquiring its JSON payload. */
               sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
             ])
             .where((eb) =>
-              eb.or([eb("navigation_type", "=", "session"), eb("navigation_valid", "=", 0)]),
+              eb.or([
+                eb(
+                  transcriptPredicateSql(projection.database.db, "navigation_type"),
+                  "=",
+                  "session",
+                ),
+                eb(transcriptPredicateSql(projection.database.db, "navigation_valid"), "=", 0),
+              ]),
             )
             .orderBy("seq", "asc")
             .limit(1),
@@ -447,17 +460,17 @@ export function readSessionTranscriptBoundedActiveContextCore(
     }
     const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
     // One payload read follows all byte decisions; header-first ordering also supports migrated mirrors.
-    const payloads = new Map<number, TranscriptEvent>(
-      (payloadSequences.length === 0
-        ? []
-        : executeSqliteQuerySync(
-            projection.database.db,
-            transcript
-              .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
-              .where("seq", "in", payloadSequences),
-          ).rows
-      ).map((row) => [row.seq, JSON.parse(row.event_json)]),
-    );
+    const payloads = new Map<number, TranscriptEvent>();
+    if (payloadSequences.length > 0) {
+      for (const row of iterateSqliteQuerySync(
+        projection.database.db,
+        transcript
+          .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
+          .where("seq", "in", payloadSequences),
+      )) {
+        payloads.set(row.seq, JSON.parse(row.event_json));
+      }
+    }
     // Retain logical ancestry across the byte cutoff without loading parent payloads.
     // Raw parent_id can point into an abandoned branch after a leaf control.
     const parents = projection.hasUnindexedPrefix

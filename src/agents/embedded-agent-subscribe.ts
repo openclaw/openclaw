@@ -1,7 +1,4 @@
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-/**
- * Subscribes to embedded-agent sessions and streams formatted replies/events.
- */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -380,10 +377,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     captureModelEvent,
     incrementCompactionCount,
     noteCompactionTokensAfter,
-    getUsageTotals,
-    getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
-    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
   const removeSourceReplyTerminalHook = installToolAuthoredSourceReplyTerminalHook({

@@ -342,10 +342,12 @@ The session-header chip reads only cards linked to its session through the
 These narrower reads preserve the existing rendering.
 
 The Gateway shares the first `workboard.cards.list` page per board filter at each
-store revision, including concurrent reads. Session-filtered and continuation
-reads do not retain a payload cache. Card and board writes invalidate cached
-pages before the next read. Each response includes all board summaries, so a
-change to another board invalidates the page too.
+store revision, including concurrent reads. Board summaries are shared across
+`workboard.boards.list` and all card-list queries at that same revision.
+Session-filtered and continuation reads do not retain a card payload cache.
+Card and board writes invalidate cached pages and summaries before the next
+read. Each response includes all board summaries, so a change to another board
+invalidates the page too.
 
 The Control UI and dashboard widgets show when more cards are available and
 offer **Load more cards**. Card search, filters, and widget counts apply to loaded
@@ -485,6 +487,12 @@ Promotion only moves `todo` cards to `ready`; every other status returns an
 error without changing the card, including when `force` is set. To recover
 blocked work, use `workboard_unblock` first to move it to `todo`.
 `force` only bypasses dependency or schedule holds.
+
+Once a managed worker blocks its attempt, late lifecycle observations from that
+attempt cannot settle it again. Unblocking and promoting the card leaves it
+`ready` for a fresh dispatch and preserves the blocked attempt's failure. Ignored
+observations are logged with the card and attempt IDs. Explicitly linking a
+different session still allows that session's lifecycle to synchronize.
 
 ## Dispatch
 

@@ -66,7 +66,6 @@ export type ChatComposerPersistenceState = ChatComposerScope & {
   chatQueue: ChatQueueItem[];
   lastError?: string | null;
   chatError?: string | null;
-  requestUpdate?: () => void;
 };
 
 export type DurableChatComposerPersistenceState = ChatComposerPersistenceState & {

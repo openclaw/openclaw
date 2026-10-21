@@ -79,6 +79,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
     eventLog: [],
     eventLogRevision: 0,
     connect() {},
+    defer: () => false,
     setSessionKey() {},
     start() {},
     stop() {},
@@ -250,7 +251,9 @@ describe("sidebar snapshot lifecycle", () => {
       () => test.snapshotOwner.disconnect(),
     );
     test.snapshotOwner.connect();
-    await Promise.all([test.restored, sessions.whenCachedRosterSettled()]);
+    await test.restored;
+    await vi.runOnlyPendingTimersAsync();
+    await sessions.whenCachedRosterSettled();
     expect(sessions.state.result?.sessions).toEqual(roster.result.sessions);
     expect(sessions.state.resultCached).toBe(true);
     expect(test.host.sidebarSnapshot).toEqual(saved);

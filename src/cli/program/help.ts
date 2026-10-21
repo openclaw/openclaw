@@ -1,27 +1,32 @@
-import type { Command } from "commander";
+import { type Command, InvalidArgumentError } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../../infra/git-commit.js";
 import { formatConsoleDiagnosticBlock } from "../../logging/json-console-line.js";
+import { ALLOWED_LOG_LEVELS, tryParseLogLevel } from "../../logging/levels.js";
 import { ExitError } from "../../runtime.js";
 import { escapeRegExp } from "../../utils.js";
 import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { CLI_NAME } from "../cli-name.js";
 import { formatHelpExamples } from "../help-format.js";
-import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import {
   getCommanderErrorCommandNames,
   getCommanderErrorCommandPath,
 } from "./commander-parse-facts.js";
-import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
+import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
-import { getSubCliCommandsWithSubcommands } from "./subcli-descriptors.js";
+import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
 
 const CLI_NAME_PATTERN = escapeRegExp(CLI_NAME);
+const CLI_LOG_LEVEL_VALUES = ALLOWED_LOG_LEVELS.join("|");
 const ROOT_COMMANDS_WITH_SUBCOMMANDS = new Set([
-  ...getCoreCliCommandsWithSubcommands(),
-  ...getSubCliCommandsWithSubcommands(),
+  ...getCoreCliCommandDescriptors()
+    .filter((descriptor) => descriptor.hasSubcommands)
+    .map((descriptor) => descriptor.name),
+  ...getSubCliCommandMetadata()
+    .filter((descriptor) => descriptor.hasSubcommands)
+    .map((descriptor) => descriptor.name),
 ]);
 const ROOT_COMMANDS_HINT =
   "Hint: commands suffixed with * have subcommands. Run <command> --help for details.";
@@ -94,7 +99,13 @@ export function configureProgramHelp(
     .option(
       "--log-level <level>",
       `Global log level override for file + console (${CLI_LOG_LEVEL_VALUES})`,
-      parseCliLogLevelOption,
+      (value) => {
+        const parsed = tryParseLogLevel(value);
+        if (!parsed) {
+          throw new InvalidArgumentError(`Invalid --log-level (use ${CLI_LOG_LEVEL_VALUES})`);
+        }
+        return parsed;
+      },
     );
 
   program.option("--no-color", "Disable ANSI colors", false);

@@ -254,10 +254,14 @@ helper's fingerprint. Explicit runtime links into those recovery artifacts are
 rejected; the evidence remains untouched for its recovery owner.
 
 Unchanged retained runtime files use hard links when the filesystem supports
-them. Retention verifies each source before linking and checks the resulting
-inode and metadata, without rehashing bytes for the change time caused by its
-own link. Files requiring independent plugin-safety checks or relocation still
-use verified copies.
+them. The same-inode path does not rehash content. If linking changes file
+identity, retention verifies size, mode, and a stable content hash against the
+inventory, accepting equivalent filesystem copy-up. A failed check makes the
+whole retained runtime unusable: the updater logs a warning naming the file and
+check, leaves the tree unbound, and continues. Package rollback keeps its separate
+verified backup; the warning makes clear that no verified retained rollback
+runtime is available. Files requiring plugin-safety checks or relocation use
+verified copies.
 
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,
@@ -1183,6 +1187,15 @@ refuses immediately. This wait ends at the same deadline as the state wait, so
 time spent waiting for state ownership shortens it. If the database is still open
 at the deadline, maintenance stops with the holder's PID and the usual
 deferred-maintenance warning (`agent-database-lease-active`).
+
+An unused agent database stays open only briefly in a CLI process: a CLI
+command, including a plugin command, closes it about 30 seconds after its last
+use, so Doctor's wait ends soon after that process goes idle. The
+Gateway keeps unused databases open for up to 30 minutes and closes them when it
+stops. A process that is still reading or writing keeps its database open until
+the work finishes. Processes started from a release without this change keep
+their unused databases open for up to 30 minutes, which can outlast the wait;
+stop them before updating.
 
 An active Gateway suspension keeps installation changes under its host operation’s
 control. The installation watcher does not independently restart the Gateway

@@ -11,13 +11,29 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
 
+const mocks = vi.hoisted(() => ({
+  createGatewayUpdateCheck:
+    vi.fn<typeof import("../infra/update-startup.js").createGatewayUpdateCheck>(),
+  startUpdateRunWatcher: vi.fn<typeof import("./update-run-watcher.js").startUpdateRunWatcher>(),
+}));
+
+vi.mock("../infra/update-startup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-startup.js")>()),
+  createGatewayUpdateCheck: mocks.createGatewayUpdateCheck,
+}));
+
+vi.mock("./update-run-watcher.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-run-watcher.js")>()),
+  startUpdateRunWatcher: mocks.startUpdateRunWatcher,
+}));
+
 vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-runtime.js")>()),
   applyRemoteModelCatalogUpdate: vi.fn(),
 }));
 
 type UpdateCheckStartupParams = Parameters<typeof createDeferredGatewayUpdateCheck>[0];
-type UpdateCheck = Awaited<ReturnType<UpdateCheckStartupParams["createUpdateCheck"]>>;
+type UpdateCheck = ReturnType<typeof import("../infra/update-startup.js").createGatewayUpdateCheck>;
 type Initialization = Awaited<ReturnType<UpdateCheck["initialize"]>>;
 const initialized: Initialization = {
   root: null,
@@ -34,11 +50,20 @@ beforeEach(async () => {
   resetGatewayWorkAdmission();
   scheduler = createTestGatewayScheduler();
   state = await createOpenClawTestState({ label: "gateway-update-check" });
+  // Keep cold partial-mock loading outside the factory-readiness assertion window.
+  await import("../infra/update-startup.js");
   defaultUpdateCheck = {
     initialize: vi.fn(async () => initialized),
     start: vi.fn(),
     stop: vi.fn(async () => {}),
   };
+  mocks.createGatewayUpdateCheck.mockReset().mockReturnValue(defaultUpdateCheck);
+  mocks.startUpdateRunWatcher
+    .mockReset()
+    .mockImplementation(
+      (await vi.importActual<typeof import("./update-run-watcher.js")>("./update-run-watcher.js"))
+        .startUpdateRunWatcher,
+    );
 });
 
 afterEach(async () => {
@@ -57,7 +82,6 @@ afterEach(async () => {
 async function startUpdateCheck(overrides: Partial<UpdateCheckStartupParams> = {}, start = true) {
   const owner = createDeferredGatewayUpdateCheck({
     scheduler,
-    createUpdateCheck: () => defaultUpdateCheck,
     getConfig: () => ({}),
     getPluginRegistry: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },
@@ -78,8 +102,7 @@ async function waitForGatewayTestState(assertion: () => void | Promise<void>) {
 }
 
 it("owns RPC update work when autonomous checks never start", async () => {
-  const createUpdateCheck = vi.fn(() => defaultUpdateCheck);
-  const owner = await startUpdateCheck({ createUpdateCheck }, false);
+  const owner = await startUpdateCheck({}, false);
   const lifecycle = currentUpdateCheckLifecycle();
   const entered = createDeferred();
   const cleanup = createDeferred();
@@ -97,7 +120,7 @@ it("owns RPC update work when autonomous checks never start", async () => {
   try {
     await cancelled.promise;
     expect(stopped).not.toHaveBeenCalled();
-    expect(createUpdateCheck).not.toHaveBeenCalled();
+    expect(mocks.createGatewayUpdateCheck).not.toHaveBeenCalled();
   } finally {
     cleanup.resolve();
     await Promise.all([work, stopping]);
@@ -123,16 +146,13 @@ it.each(["background", "early manual"])(
           .filter((client) => !filter || filter(client as never))
           .map((client) => client.connId),
       );
-    const createGatewayUpdateCheck = vi.fn<UpdateCheckStartupParams["createUpdateCheck"]>(
-      () => defaultUpdateCheck,
-    );
+    const createGatewayUpdateCheck = mocks.createGatewayUpdateCheck;
 
     const ready = createDeferred();
     const result = await startUpdateCheck({
       ...(source === "early manual" ? { waitForPostReadyWork: () => ready.promise } : {}),
       broadcastToConnIds,
       getClientConnIds,
-      createUpdateCheck: createGatewayUpdateCheck,
     });
     if (source === "background") {
       await waitForGatewayTestState(() => expect(createGatewayUpdateCheck).toHaveBeenCalledOnce());
@@ -190,32 +210,48 @@ it.each(["background", "early manual"])(
 );
 
 it.each(["factory", "initialization"])("fences and joins a pending %s on close", async (phase) => {
-  const factory = createDeferred<UpdateCheck>();
+  const factory = createDeferred();
+  const factoryEntered = vi.fn();
+  const updateStartup = await vi.importActual<typeof import("../infra/update-startup.js")>(
+    "../infra/update-startup.js",
+  );
+  if (phase === "factory") {
+    // Gate the real lazy import; the exported factory remains synchronous.
+    vi.doMock("../infra/update-startup.js", async () => {
+      factoryEntered();
+      await factory.promise;
+      return { ...updateStartup, createGatewayUpdateCheck: mocks.createGatewayUpdateCheck };
+    });
+  }
   const initialization = createDeferred<Initialization>();
+  const initializationEntered = createDeferred();
   const cleanup = createDeferred();
   const updateCheck = {
-    initialize: vi.fn(() => initialization.promise),
+    initialize: vi.fn(() => {
+      initializationEntered.resolve();
+      return initialization.promise;
+    }),
     start: vi.fn(),
     stop: vi.fn(() => cleanup.promise),
   };
-  const createGatewayUpdateCheck = vi.fn(() =>
-    phase === "factory" ? factory.promise : updateCheck,
-  );
-  const result = await startUpdateCheck({ createUpdateCheck: createGatewayUpdateCheck });
+  mocks.createGatewayUpdateCheck.mockReturnValue(updateCheck);
+  const result = await startUpdateCheck();
   const stopped = vi.fn();
   let stopping: Promise<void> | undefined;
   try {
     if (phase === "initialization") {
+      await initializationEntered.promise;
       expect(updateCheck.initialize).toHaveBeenCalledOnce();
     } else {
-      await waitForGatewayTestState(() => expect(createGatewayUpdateCheck).toHaveBeenCalledOnce());
+      await waitForGatewayTestState(() => expect(factoryEntered).toHaveBeenCalledOnce());
+      expect(mocks.createGatewayUpdateCheck).not.toHaveBeenCalled();
     }
     stopping = result.stop().then(stopped);
     if (phase === "factory") {
       await Promise.resolve();
       expect(stopped).not.toHaveBeenCalled();
       expect(updateCheck.stop).not.toHaveBeenCalled();
-      factory.resolve(updateCheck);
+      factory.resolve();
       await waitForGatewayTestState(() => expect(updateCheck.stop).toHaveBeenCalledOnce());
       expect(updateCheck.initialize).not.toHaveBeenCalled();
     } else {
@@ -226,10 +262,20 @@ it.each(["factory", "initialization"])("fences and joins a pending %s on close",
     expect(stopped).not.toHaveBeenCalled();
     expect(updateCheck.start).not.toHaveBeenCalled();
   } finally {
-    factory.resolve(updateCheck);
+    factory.resolve();
     cleanup.resolve();
     initialization.resolve(await defaultUpdateCheck.initialize());
-    await (stopping ?? result.stop());
+    try {
+      await (stopping ?? result.stop());
+    } finally {
+      if (phase === "factory") {
+        // Keep the captured mock namespace, not a fresh singleton graph.
+        vi.doMock("../infra/update-startup.js", () => ({
+          ...updateStartup,
+          createGatewayUpdateCheck: mocks.createGatewayUpdateCheck,
+        }));
+      }
+    }
   }
   await result.stop();
   expect(updateCheck.stop).toHaveBeenCalledOnce();
@@ -238,14 +284,13 @@ it.each(["factory", "initialization"])("fences and joins a pending %s on close",
 it("joins update notices before releasing the update-check shutdown owner", async () => {
   const notices = createDeferred();
   const stopWatcher = vi.fn(() => notices.promise);
-  const watcherModule = await import("./update-run-watcher.js");
-  vi.spyOn(watcherModule, "startUpdateRunWatcher").mockReturnValue({ stop: stopWatcher });
+  mocks.startUpdateRunWatcher.mockReturnValue({ stop: stopWatcher });
   const result = await startUpdateCheck();
   const stopped = vi.fn();
   const stopping = result.stop().then(stopped);
   try {
     expect(stopWatcher).toHaveBeenCalledOnce();
-    expect(defaultUpdateCheck.stop).toHaveBeenCalledOnce();
+    await waitForGatewayTestState(() => expect(defaultUpdateCheck.stop).toHaveBeenCalledOnce());
     await nextTurn();
     expect(stopped).not.toHaveBeenCalled();
     notices.resolve();
@@ -284,13 +329,11 @@ it("adopts scheduled remote catalogs inside the live Gateway registry scope", as
     return "published";
   });
   let applyRemoteCatalogUpdate: ((signal: AbortSignal) => Promise<unknown>) | undefined;
-  await startUpdateCheck({
-    getPluginRegistry: () => gatewayRegistry,
-    createUpdateCheck: (params) => {
-      applyRemoteCatalogUpdate = params.applyRemoteCatalogUpdate;
-      return defaultUpdateCheck;
-    },
+  mocks.createGatewayUpdateCheck.mockImplementation((params) => {
+    applyRemoteCatalogUpdate = params.applyRemoteCatalogUpdate;
+    return defaultUpdateCheck;
   });
+  await startUpdateCheck({ getPluginRegistry: () => gatewayRegistry });
   await waitForGatewayTestState(() => expect(applyRemoteCatalogUpdate).toBeDefined());
 
   await expect(applyRemoteCatalogUpdate!(new AbortController().signal)).resolves.toBe("published");

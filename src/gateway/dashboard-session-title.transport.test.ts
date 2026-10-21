@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import { slugifyWorktreeTitle, validateName } from "../agents/worktrees/name.js";
 import { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
@@ -9,6 +11,8 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { dashboardTitleRuntimeEntrypoints } from "./dashboard-session-title-runtime.test-support.js";
 import {
   maybeGenerateDashboardSessionTitle,
   prepareDashboardSessionTitle,
@@ -109,31 +113,99 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
       expect(loadSessionEntry(scope)?.displayName).toBeUndefined();
     });
   });
-  it("disables configured native Ollama thinking only for the utility request", async () => {
+  it("disables configured native Ollama thinking only for the utility request", async ({
+    signal,
+  }) => {
     await withTitleProvider(
       "Utility thinking disabled",
-      async ({ cfg, agentDir, requests }) => {
+      async ({ cfg, agentDir, requests, env }) => {
         const definition = cfg.models!.providers!.ollama!.models[1]!;
         definition.reasoning = true;
         definition.params = { think: true, num_ctx: 8192 };
-        await runIsolatedCompletion({
-          config: cfg,
-          agentId: "main",
-          agentDir,
-          provider: "ollama",
-          model: "qwen3.6:35b",
-          thinkLevel: "high",
-          systemPrompt: "Write a title.",
-          prompt: "Debug title generation.",
-          timeoutMs: 5_000,
-        });
-        await expect(
-          prepareDashboardSessionTitle({
-            cfg,
-            agentId: "main",
-            userMessage: "Debug title generation.",
-          }),
-        ).resolves.toBe("Utility thinking disabled");
+        const lifetime = createFixtureLifetime();
+        try {
+          await lifetime.run(async () => {
+            const root = lifetime.createTempDir("dashboard-title-native-");
+            const bundled = path.join(root, "bundled");
+            const pluginRoot = path.join(bundled, "ollama");
+            const isolatedUrl = resolveRuntimeWorkerUrl(dashboardTitleRuntimeEntrypoints.isolated);
+            const dashboardUrl = resolveRuntimeWorkerUrl(
+              dashboardTitleRuntimeEntrypoints.dashboard,
+            );
+            const configUrl = resolveRuntimeWorkerUrl(dashboardTitleRuntimeEntrypoints.config);
+            const ollamaUrl = resolveRuntimeWorkerUrl(dashboardTitleRuntimeEntrypoints.ollama);
+            await fs.mkdir(pluginRoot, { recursive: true });
+            await fs.copyFile(
+              new URL("../../extensions/ollama/openclaw.plugin.json", import.meta.url),
+              path.join(pluginRoot, "openclaw.plugin.json"),
+            );
+            await fs.writeFile(
+              path.join(pluginRoot, "index.mjs"),
+              `export { default } from ${JSON.stringify(ollamaUrl.href)};`,
+            );
+            // A fresh child keeps the real provider and callers in one compiled graph;
+            // the normal request still budgets all preparation and execution at five seconds.
+            const script = `
+              import assert from "node:assert/strict";
+              const { runIsolatedCompletion } = await import(${JSON.stringify(isolatedUrl.href)});
+              const { prepareDashboardSessionTitle } = await import(${JSON.stringify(dashboardUrl.href)});
+              const { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } = await import(${JSON.stringify(configUrl.href)});
+              const cfg = ${JSON.stringify(cfg)};
+              setRuntimeConfigSnapshot(cfg);
+              try {
+                await runIsolatedCompletion({
+                  config: cfg, agentId: "main", agentDir: ${JSON.stringify(agentDir)},
+                  provider: "ollama", model: "qwen3.6:35b", thinkLevel: "high",
+                  systemPrompt: "Write a title.", prompt: "Debug title generation.", timeoutMs: 5_000,
+                });
+                const title = await prepareDashboardSessionTitle({
+                  cfg, agentId: "main", userMessage: "Debug title generation.",
+                });
+                assert.equal(title, "Utility thinking disabled");
+                process.stdout.write(JSON.stringify({ title }));
+              } finally {
+                clearRuntimeConfigSnapshot();
+              }
+            `;
+            const result = await lifetime.track(
+              runNodeScript(
+                (workerArgv) => [
+                  ...workerArgv(isolatedUrl).slice(0, -1),
+                  "--input-type=module",
+                  "--eval",
+                  script,
+                ],
+                {
+                  PATH: process.env.PATH,
+                  SystemRoot: process.env.SystemRoot,
+                  ...env,
+                  TMPDIR: root,
+                  TMP: root,
+                  TEMP: root,
+                  XDG_CONFIG_HOME: path.join(root, "config"),
+                  XDG_CACHE_HOME: path.join(root, "cache"),
+                  XDG_DATA_HOME: path.join(root, "data"),
+                  XDG_STATE_HOME: path.join(root, "state"),
+                  OPENCLAW_BUNDLED_PLUGINS_DIR: bundled,
+                  OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+                  OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+                  VITEST: "true",
+                },
+                30_000,
+                {
+                  signal,
+                  maxBuffer: 64 * 1024,
+                  requireProcessTreeExit: process.platform !== "win32",
+                },
+              ),
+            );
+            expect(result.error, result.stderr).toBeUndefined();
+            expect(result.status, result.stderr).toBe(0);
+            expect(JSON.parse(result.stdout)).toEqual({ title: "Utility thinking disabled" });
+          });
+        } finally {
+          await lifetime.cleanup();
+        }
         expect(requests.map(({ url, body }) => ({ url, think: body.think }))).toEqual([
           { url: "/api/chat", think: true },
           { url: "/api/chat", think: false },

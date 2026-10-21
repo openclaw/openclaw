@@ -20,21 +20,23 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
   return (
     <>
       <HubPageHeader<"sessions" | "worktrees">
-        id="sessions"
         active="sessions"
-        tabs={[
-          { value: "sessions", label: t("tabs.sessions") },
-          { value: "worktrees", label: t("tabs.worktrees") },
-        ]}
-        ariaLabel={t("sessionsPage.hubTablistLabel")}
-        panelId="sessions-hub-panel"
+        tabs={{
+          id: "sessions",
+          items: [
+            { value: "sessions", label: t("tabs.sessions") },
+            { value: "worktrees", label: t("tabs.worktrees") },
+          ],
+          ariaLabel: t("sessionsPage.hubTablistLabel"),
+          panelId: "sessions-hub-panel",
+          onSelect: (tab) => {
+            if (tab !== "sessions") {
+              context.navigate(tab);
+            }
+          },
+        }}
         docsUrl="https://docs.openclaw.ai/concepts/session"
         class="sessions-hub-header"
-        onSelect={(tab) => {
-          if (tab !== "sessions") {
-            context.navigate(tab);
-          }
-        }}
         actions={
           <AgentScopeControl
             agents={(() => {
@@ -59,10 +61,8 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
 
 export function SessionsPage(props: { routeData?: SessionsRouteData }) {
   // The mount seeds the sessions owner; later route receipts retarget its Gateway queries.
-  const page = createSessionsPage(
-    useApplication(),
-    untrack(() => props.routeData),
-  );
+  const initialRouteData = untrack(() => props.routeData);
+  const page = createSessionsPage(useApplication(), initialRouteData);
   createEffect(
     () => props.routeData,
     (routeData) => page.setRouteData(routeData),

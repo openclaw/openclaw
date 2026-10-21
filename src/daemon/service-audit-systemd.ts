@@ -1,4 +1,3 @@
-/** Audits effective systemd service settings and managed unit backups. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -18,6 +17,7 @@ import type {
 } from "./service-audit-types.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import { resolveManagedGatewayServiceCommand } from "./service-types.js";
+import { SYSTEMD_DIRECTIVES } from "./systemd-directives.js";
 import { execSystemctlUser } from "./systemd-exec.js";
 import {
   resolveSystemdServiceName,
@@ -338,10 +338,12 @@ async function auditSystemdDefinition(
                 key,
                 sourcePath,
                 reason:
-                  sourcePath === unitPath
-                    ? "Unrecognized directive or value in the managed unit."
-                    : "Operator drop-in overrides installer policy.",
-                message: `Systemd ${key} contains an unrecognized setting.`,
+                  sourcePath !== unitPath
+                    ? "Operator drop-in overrides installer policy."
+                    : "The installer would replace a custom directive in the managed unit.",
+                message: SYSTEMD_DIRECTIVES.has(key)
+                  ? `Custom systemd ${key}; not changed.`
+                  : `Systemd ${key} contains an unrecognized setting.`,
               },
       );
     }

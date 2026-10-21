@@ -20,6 +20,7 @@ import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/s
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
 import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
+import { captureMemoryDatabaseWriteOptions } from "./manager-database-admission.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
@@ -134,7 +135,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             purpose,
             acquireLocalService: params.acquireLocalService,
           });
-          const databaseOptions = MemoryIndexDatabase.captureWriteOptions(
+          const databaseOptions = captureMemoryDatabaseWriteOptions(
             agentId,
             settings.store.databasePath,
             source?.publishedDatabase,
@@ -276,7 +277,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     };
     this.vector.enabled = effectiveSettings.store.vector.enabled;
     this.vector.extensionPath = effectiveSettings.store.vector.extensionPath;
-    const meta = this.readMeta();
+    const meta = this.database.facts.meta;
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
@@ -307,7 +308,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
-        this.ensureIntervalSync();
         void this.runInBackgroundContext(() => this.ensureSessionStartupCatchup()).catch(
           (err: unknown) => {
             log.warn("memory session startup catch-up failed: " + String(err));
@@ -336,8 +336,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
-    if (this.syncing) {
-      return await this.syncing;
+    if (this.syncing || this.reindexProgress) {
+      return await this.syncBackground(params);
     }
     await this.syncOutcomes.track(() =>
       runMemorySearchMaintenance({
@@ -369,6 +369,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     options?: {
       allowEmbeddingBootstrapFallback?: boolean;
       queuedSessionOwner?: boolean;
+      background?: boolean;
     },
   ): Promise<void> {
     if (this.syncing) {
@@ -390,11 +391,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         // Watch events accepted after source planning belong to the next pass.
         // Joining the old promise alone would strand them until another search.
         if (
-          params?.reason === "watch" &&
-          this.dirty &&
           !this.closing &&
           !this.closed &&
-          this.memoryWatchGeneration > this.syncingMemoryWatchGeneration
+          (this.reindexProgress ||
+            (params?.reason === "watch" &&
+              this.dirty &&
+              this.memoryWatchGeneration > this.syncingMemoryWatchGeneration))
         ) {
           return await this.syncAdmitted(params, options);
         }
@@ -417,6 +419,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     // watch facts can admit another pass; joined callers cannot spin on dirty.
     this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
     const run = async () => {
+      this.syncIsBackground = options?.background ?? false;
       let outcome: MemorySyncOutcome;
       await this.publishedDatabase.withPublicationGeneration(async () => {
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
@@ -663,22 +666,17 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   async close(): Promise<void> {
-    const existingClose = this.closePromise;
-    if (existingClose) {
-      await existingClose;
-      return;
+    if (this.closePromise) {
+      return this.closePromise;
     }
-    const closeOperation = this.withPublishedDatabase(() =>
+    this.closePromise = this.withPublishedDatabase(() =>
       this.publishedDatabaseReleased ? this.retryFailedClose() : this.closeOnce(),
     );
-    this.closePromise = closeOperation;
     try {
-      await closeOperation;
+      await this.closePromise;
       this.managerRegistry.deleteIfCurrent(this.cacheKey, this);
     } catch (err) {
-      if (this.closePromise === closeOperation) {
-        this.closePromise = null;
-      }
+      this.closePromise = null;
       throw err;
     }
   }
@@ -687,6 +685,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const errors: unknown[] = [];
     // A retained observer failure must not strand independently owned resources.
     await this.closeWatchResources().catch((error: unknown) => errors.push(error));
+    await this.discardReindex().catch((error: unknown) => errors.push(error));
     const retirementErrors = await this.drainPendingProviderRetirements();
     if (this.providersPendingRetirement.size > 0) {
       errors.push(toErrorObject(retirementErrors.at(-1), "Embedding provider retirement failed"));

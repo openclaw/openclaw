@@ -208,7 +208,8 @@ function parseStoredPairing(stored) {
 }
 
 /** Own serialized validation and mutation at the extension pairing storage boundary. */
-export function createPairingConfigStore(storage) {
+export function createPairingConfigStore() {
+  const storage = chrome.storage.local;
   const run = createSerialQueue();
   let invalidObserved = false;
   let invalidationRevision = 0;

@@ -8,6 +8,7 @@ import { registerSkillLibraryEnglish } from "../i18n/locales/en-skill-library.ts
 import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { createDevicesViewProps } from "../test-helpers/devices-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { DevicesView } from "./devices/view.tsx";
@@ -98,7 +99,17 @@ it("does not rescan a large skill library for unrelated read errors while preser
   let library!: ReturnType<typeof createSkillLibrary>;
   const view = mountSolid(() => {
     library = createSkillLibrary({
-      snapshot: null,
+      snapshot: {
+        client,
+        phase: "connected",
+        offlineStable: false,
+        hello: gatewayHelloForMethods([]),
+        canvasPluginSurfaceUrl: null,
+        assistantAgentId: null,
+        sessionKey: "main",
+        lastError: null,
+        lastErrorCode: null,
+      },
       capture: () => ({ client, epoch: 0 }),
       isCurrent: (scope) => scope.client === client && scope.epoch === 0,
     });

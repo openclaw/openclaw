@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
 import {
@@ -12,7 +11,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import {
-  formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
@@ -21,9 +19,6 @@ import { isMediaGenerationOperationCurrent } from "../media-generation-activity.
 import { deliverSubagentAnnouncement } from "../subagents/announce/subagent-announce-delivery.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-completion");
-// Only blocked results missed the requester; retain references instead of resending.
-// Bound the process-local failure summary independently of durable transcript retention.
-const MEDIA_GENERATION_RETAINED_RESULT_MAX_CHARS = 4_000;
 
 export type MediaGenerationTaskHandle = {
   taskId: string;
@@ -120,30 +115,6 @@ export type MediaGenerationCompletionWakeOutcome =
   | { status: "queued" }
   | { status: "pending" }
   | { status: "permanent_failure" };
-
-export function retainBlockedMediaReferences(
-  terminalResult: RequiredCompletionTerminalResult | undefined,
-  attachments: AgentGeneratedAttachment[] | undefined,
-): RequiredCompletionTerminalResult | undefined {
-  if (terminalResult?.terminalOutcome !== "blocked") {
-    return terminalResult;
-  }
-  const referenceLines = formatGeneratedAttachmentLines(attachments);
-  if (referenceLines.length === 0) {
-    return terminalResult;
-  }
-  const terminalSummary = [
-    terminalResult.terminalSummary,
-    "Retained generated media:",
-    ...referenceLines,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-  return {
-    ...terminalResult,
-    terminalSummary: truncateUtf16Safe(terminalSummary, MEDIA_GENERATION_RETAINED_RESULT_MAX_CHARS),
-  };
-}
 
 export async function wakeMediaGenerationTaskCompletion(params: {
   handle: MediaGenerationTaskHandle | null;

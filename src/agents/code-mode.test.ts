@@ -171,12 +171,25 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(indexed);
   });
 
-  it("includes resolvable callable contracts in the catalog prompt", () => {
+  it("includes resolvable callable contracts in the catalog prompt", async () => {
     const alpha = pluginTool("alpha_tool", "Another deferred description.");
     alpha.outputSchema = Type.Array(
       Type.Object({ id: Type.String(), score: Type.Number() }, { additionalProperties: false }),
     );
-    const { catalogPrompt } = catalog([
+    const incomplete = pluginTool("incomplete_tool", "Use schedule to start the source.");
+    incomplete.parameters = Type.Object({
+      job: Type.Object({
+        ...Object.fromEntries(
+          Array.from({ length: 16 }, (_, index) => [
+            `metadata_${String(index).padStart(2, "0")}`,
+            Type.Optional(Type.String()),
+          ]),
+        ),
+        schedule: Type.Optional(Type.Object({ kind: Type.Literal("stream") })),
+      }),
+    });
+    const { catalogPrompt, ctx } = catalog([
+      incomplete,
       pluginTool("zeta_tool", "Description stays deferred."),
       alpha,
       { ...fakeTool("read", "Read file"), parameters: readToolInputSchema },
@@ -198,6 +211,29 @@ describe("Code Mode catalog and model-visible surface", () => {
       expect(prompt).not.toContain(fragment);
     }
     expect(prompt.indexOf("alpha_tool")).toBeLessThan(prompt.indexOf("zeta_tool"));
+    const incompleteLine = prompt.split("\n").find((line) => line.startsWith("- incomplete_tool "));
+    expect(incompleteLine).toContain("...");
+    expect(incompleteLine).not.toContain("schedule");
+    expect(prompt).toContain(
+      "If an input hint leaves needed arguments unclear (`...` or `unknown`), read `await callableName.describe()`",
+    );
+    expect(prompt).toContain("Call globals directly when their input contract is clear");
+    const described = await runCodeModeScriptHeadless({
+      ctx,
+      code: "return await incomplete_tool.describe();",
+    });
+    expect(described).toMatchObject({
+      status: "completed",
+      value: {
+        description: "Use schedule to start the source.",
+        parameters: {
+          properties: {
+            job: { properties: { schedule: { properties: { kind: { const: "stream" } } } } },
+          },
+        },
+      },
+    });
+    expect(incomplete.execute).not.toHaveBeenCalled();
   });
 
   function catalogIndex(targets: AnyAgentTool[]) {

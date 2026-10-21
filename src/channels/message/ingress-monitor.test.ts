@@ -393,8 +393,12 @@ describe("channel ingress monitor", () => {
         rawEvent: JSON.stringify(event),
       } satisfies StoredEvent;
       const drainErrors: unknown[] = [];
+      const { promise: deliveryStarted, resolve: markDeliveryStarted } = createDeferred();
+      const { promise: deliveryGate, resolve: releaseDelivery } = createDeferred();
       const oldDeliver = vi.fn(
         async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+          markDeliveryStarted();
+          await deliveryGate;
           try {
             await runWithGatewayIndependentRootWorkAdmission(async () => {
               await lifecycle.onAdopted();
@@ -426,24 +430,11 @@ describe("channel ingress monitor", () => {
       try {
         await oldMonitor.waitForIdle();
 
-        const { promise: pendingScanStarted, resolve: markPendingScanStarted } = createDeferred();
-        const { promise: pendingScanGate, resolve: releasePendingScan } = createDeferred();
-        const listUnsettled = queue.listUnsettled!.bind(queue);
-        let gateNextPendingScan = true;
-        queue.listUnsettled = async (...args) => {
-          if (gateNextPendingScan) {
-            gateNextPendingScan = false;
-            markPendingScanStarted();
-            await pendingScanGate;
-          }
-          return await listUnsettled(...args);
-        };
-
-        oldMonitor.requestDrain();
-        await pendingScanStarted;
-        markGatewayRestartDraining();
         await queue.enqueue(event.id, storedEvent, { laneKey: "lane:a" });
-        releasePendingScan();
+        oldMonitor.requestDrain();
+        await deliveryStarted;
+        markGatewayRestartDraining();
+        releaseDelivery();
         await vi.waitFor(() => expect(drainErrors.length).toBeGreaterThan(0));
 
         for (let cycle = 0; cycle < 8; cycle += 1) {
@@ -486,6 +477,7 @@ describe("channel ingress monitor", () => {
           queue.enqueue(event.id, { version: 1, rawEvent: "duplicate" }),
         ).resolves.toMatchObject({ kind: "completed" });
       } finally {
+        releaseDelivery();
         await successorMonitor?.stop();
         await oldMonitor.stop();
         resetGatewayWorkAdmission();

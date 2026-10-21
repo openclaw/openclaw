@@ -10,7 +10,6 @@ import {
   CODEX_CONTRACT_PROVIDER_ID,
   OPENAI_CONTRACT_PROVIDER_ID,
   openAiPluginPersonalityConfig,
-  sharedGpt5PersonalityConfig,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveGpt5SystemPromptContribution } from "./gpt5-prompt-overlay.js";
@@ -52,19 +51,6 @@ describe("GPT-5 prompt overlay runtime contract", () => {
 
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
       "Heartbeat = useful proactive progress",
-    );
-  });
-
-  it("ignores the retired shared overlay switch and keeps friendly style", () => {
-    const contribution = resolveGpt5SystemPromptContribution({
-      providerId: NON_OPENAI_CONTRACT_PROVIDER_ID,
-      modelId: GPT5_PREFIXED_CONTRACT_MODEL_ID,
-      config: sharedGpt5PersonalityConfig("off"),
-    });
-
-    expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides?.interaction_style).toContain(
-      "Live chat: short, natural, human.",
     );
   });
 

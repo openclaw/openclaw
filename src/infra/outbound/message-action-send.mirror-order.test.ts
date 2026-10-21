@@ -1,6 +1,7 @@
 // Failed sends must not rewrite the main session's route or mint a conversation identity.
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -11,6 +12,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  captureGatewayRootWorkReleaseObserver,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -150,20 +157,33 @@ describe("outbound mirror route ordering", () => {
   describe("Gateway-executed plugin sends", () => {
     const OTHER_SESSION_KEY = "agent:main:testchat:direct:12345";
     const gatewayRequest = vi.fn();
-    const sendViaGateway = (sessionKey: string) =>
-      runMessageAction({
-        cfg,
-        action: "send",
-        params: { channel: "testchat", to: "user:12345", message: "card details" },
-        agentId: "main",
-        sessionKey,
-        dryRun: false,
-        gateway: {
-          clientName: GATEWAY_CLIENT_NAMES.CLI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          request: gatewayRequest,
-        },
-      });
+    const sendViaGateway = async (input: Partial<Parameters<typeof runMessageAction>[0]> = {}) => {
+      let drained = Promise.resolve();
+      const result = await runWithGatewayIndependentRootWorkAdmission(async () => {
+        const observe = captureGatewayRootWorkReleaseObserver();
+        if (!observe) {
+          throw new Error("missing Gateway root admission");
+        }
+        drained = new Promise<void>((resolve) => {
+          observe(() => resolve());
+        });
+        return runMessageAction({
+          cfg,
+          action: "send",
+          params: { channel: "testchat", to: "user:12345", message: "card details" },
+          agentId: "main",
+          sessionKey: MAIN_SESSION_KEY,
+          dryRun: false,
+          gateway: {
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            request: gatewayRequest,
+          },
+          ...input,
+        });
+      }, "gateway-mirror-test");
+      return { result, drained };
+    };
     const transcriptEvents = (sessionKey: string) => {
       const entry = loadExactSessionEntry({ ...transcriptScope(), sessionKey })?.entry;
       if (!entry?.sessionId) {
@@ -187,39 +207,79 @@ describe("outbound mirror route ordering", () => {
       executionMode = "local";
     });
 
-    it("mirrors a send to another conversation into the destination session", async () => {
-      // A running turn fences transcript writes to its own session.
-      const result = await withSessionTranscriptWriteAssertion(
-        transcriptScope(),
-        () => {},
-        () => sendViaGateway(MAIN_SESSION_KEY),
-      );
-
-      expect(result.handledBy).toBe("plugin");
-      expect(gatewayRequest).toHaveBeenCalledOnce();
-      expect(handleAction).not.toHaveBeenCalled();
-      await vi.waitFor(() =>
-        expect(
-          transcriptEvents(OTHER_SESSION_KEY).filter((event) =>
-            expect.objectContaining({ type: "message" }).asymmetricMatch(event),
+    it("mirrors a send after the destination turn, outside the source writer", async ({
+      signal,
+    }) => {
+      const target = {
+        ...transcriptScope(),
+        sessionKey: OTHER_SESSION_KEY,
+        sessionId: "destination",
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 100 });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const turn = withSessionTurn(target, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      let drained = Promise.resolve();
+      try {
+        await withinTest(entered.promise, signal);
+        const sent = await withinTest(
+          withSessionTranscriptWriteAssertion(
+            transcriptScope(),
+            () => {},
+            () => sendViaGateway(),
           ),
+          signal,
+        );
+        drained = sent.drained;
+        expect(sent.result.handledBy).toBe("plugin");
+        expect(gatewayRequest).toHaveBeenCalledOnce();
+        expect(handleAction).not.toHaveBeenCalled();
+        expect(
+          transcriptEvents(OTHER_SESSION_KEY).filter((event) => event.type === "message"),
+        ).toEqual([]);
+        release.resolve();
+        await withinTest(turn, signal);
+        await withinTest(drained, signal);
+        expect(
+          transcriptEvents(OTHER_SESSION_KEY).filter((event) => event.type === "message"),
         ).toEqual([
           expect.objectContaining({
-            message: expect.objectContaining({
-              content: [{ type: "text", text: "card details" }],
-            }),
+            message: expect.objectContaining({ content: [{ type: "text", text: "card details" }] }),
           }),
-        ]),
-      );
+        ]);
+        expect(
+          transcriptEvents(MAIN_SESSION_KEY).filter((event) => event.type === "message"),
+        ).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([turn, drained]);
+      }
     });
 
-    it("leaves a send into the requester's own session to the Gateway's source-reply mirror", async () => {
-      await sendViaGateway(OTHER_SESSION_KEY);
-
+    it.each([
+      { name: "current source", input: { sessionKey: OTHER_SESSION_KEY } },
+      { name: "source-reply override", input: { sourceReplySessionKey: OTHER_SESSION_KEY } },
+      { name: "suppressed mirror", input: { suppressTranscriptMirror: true } },
+      { name: "suppressed send", receipt: { status: "suppressed" } },
+      { name: "failed send", receipt: { ok: false, error: "send failed", messageId: "attempt" } },
+      { name: "dry-run receipt", receipt: { dryRun: true, messageId: "preview" } },
+      {
+        name: "partial delivery",
+        receipt: { deliveryStatus: "partial_failed", sentBeforeError: true, messageId: "partial" },
+      },
+    ])("does not add a destination mirror for $name", async ({ input, receipt }) => {
+      if (receipt) {
+        gatewayRequest.mockResolvedValueOnce(receipt);
+      }
+      const { drained } = await sendViaGateway(input);
+      await drained;
       expect(gatewayRequest).toHaveBeenCalledOnce();
-      expect(transcriptEvents(OTHER_SESSION_KEY)).not.toContainEqual(
-        expect.objectContaining({ type: "message" }),
-      );
+      expect(
+        transcriptEvents(OTHER_SESSION_KEY).filter((event) => event.type === "message"),
+      ).toEqual([]);
     });
   });
 

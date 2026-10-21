@@ -11,6 +11,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  chatMetadataCommandFields,
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
@@ -186,7 +187,7 @@ describe("gateway chat metadata native session ownership", () => {
     const acpRead = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
     try {
       expect(await harness.read({ ...request, includeModels: false })).toEqual({
-        commands: [{ name: "command-1-1" }],
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
         swarmEnabled: true,
         revision: expect.any(String),
       });
@@ -335,6 +336,7 @@ test.each([
     read: () => ({}),
     agent: {
       agentId: "main",
+      revision: "fixture-commands",
       owner,
       authStore: { version: 1, profiles: {} },
       authModes: {},

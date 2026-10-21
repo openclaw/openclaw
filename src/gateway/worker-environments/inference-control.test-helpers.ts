@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import {
@@ -19,27 +20,17 @@ export function createWorkerInferenceDrainService(
     reserveSessionDrain: (sessionId) => {
       const completed = createDeferred();
       let drain: WorkerInferenceSessionDrain | undefined;
-      let started = false;
-      const release = () => drain?.release();
       return {
-        assertReserved: () => {},
-        release,
-        accept: () => ({
-          drained: completed.promise,
-          hasWork: () => drain?.hasWork() ?? false,
-          release,
-          start: () => {
-            if (started) {
-              return;
-            }
-            started = true;
-            try {
-              drain = startDrain(sessionId);
-              void drain.drained.then(completed.resolve, completed.reject);
-            } catch (error) {
-              completed.reject(error);
-            }
-          },
+        drained: completed.promise,
+        hasWork: () => drain?.hasWork() ?? false,
+        release: () => drain?.release(),
+        start: vi.fn<() => void>().mockImplementationOnce(() => {
+          try {
+            drain = startDrain(sessionId);
+            completed.resolve(drain.drained);
+          } catch (error) {
+            completed.reject(error);
+          }
         }),
       };
     },

@@ -27,6 +27,10 @@ import type {
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
+import type {
+  SidebarProjectionMemo,
+  SidebarSessionRowProjection,
+} from "./sidebar-projection-cache.ts";
 
 export type SidebarProjectionHost = {
   readonly sessionData: SessionDataOwner;
@@ -66,26 +70,6 @@ export type SidebarProjectionHost = {
   knownSectionOrder(): string[];
   visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
 };
-
-/** Slot identities belong to the publishing owners; projection never compares row contents. */
-export class SidebarProjectionMemo<T> {
-  private slots: readonly unknown[] | undefined;
-  private value!: T;
-
-  read(inputs: () => readonly unknown[], project: () => T): T {
-    const slots = inputs();
-    if (
-      !this.slots ||
-      slots.length !== this.slots.length ||
-      slots.some((slot, index) => !Object.is(slot, this.slots![index]))
-    ) {
-      this.value = project();
-      // Stateful projection may publish created order, membership, or subtitles.
-      this.slots = inputs();
-    }
-    return this.value;
-  }
-}
 
 export function sidebarNavigationInputs(
   host: SidebarProjectionHost,
@@ -175,7 +159,11 @@ export function memoizedSidebarSections(
         catalogIds: catalogs.map((catalog) => catalog.id),
         collapsedSections,
         emptyGroupsMode: host.sessionsEmptyGroupsMode,
-        ownerFiltered: host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive,
+        ownerFilter: host.sessionOwnerFilterActive
+          ? "owner"
+          : host.sessionInvolvingMeFilterActive
+            ? "involvingMe"
+            : null,
         visibleSessionLimits: roster ? rosterLimits : host.sessionData.visibleSessionLimits,
         sortMode: host.effectiveSessionSortMode(),
         statusFilter: host.sessionsStatusFilter,
@@ -200,7 +188,7 @@ export function memoizedSidebarSections(
 export function projectSidebarNavigation(
   host: SidebarProjectionHost,
   compareSessions: (a: GatewaySessionRow, b: GatewaySessionRow) => number,
-  runtimeSampledAtByRow: WeakMap<GatewaySessionRow, number>,
+  rowProjection: SidebarSessionRowProjection,
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined,
 ) {
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
@@ -222,7 +210,7 @@ export function projectSidebarNavigation(
     statusFilter: host.sessionsStatusFilter,
     compareSessions,
     highlightCurrentSession: isSessionRouteId(host.activeRouteId) && !creating,
-    runtimeSampledAtByRow,
+    rowProjection,
     loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
     outboxAttentionCountForSessionKey: (key) =>
       host.storedOutboxes?.attentionCountForSession(key) ?? 0,

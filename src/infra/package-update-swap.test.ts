@@ -11,7 +11,6 @@ import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
-import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let base: string;
@@ -197,42 +196,6 @@ describe("retained package backup retirement", () => {
 });
 
 describe("launcher backup capture", () => {
-  it.runIf(process.platform !== "win32")(
-    "names a changed backup target and retains the failed copy before activation",
-    async () => {
-      const { params, launcher, packageRoot } = await createPackageSwapFixture(base);
-      await fs.unlink(launcher);
-      await fs.symlink("../lib/node_modules/openclaw/package.json", launcher);
-      const original = await fs.lstat(launcher);
-      const rename = fs.rename.bind(fs);
-      let backup = "";
-      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-        await rename(...args);
-        if (!path.basename(path.dirname(String(args[1]))).startsWith(".openclaw.shim-backup-")) {
-          return;
-        }
-        backup = String(args[1]);
-        await fs.unlink(backup);
-        await fs.symlink("different-target", backup);
-      });
-      const beforeActivate = vi.fn();
-      const result = await swapStagedPackageInstall({ ...params, beforeActivate });
-      expect(result.status).toBe("failed");
-      expect(result.step.stderrTail).toContain("differing fields: target");
-      expect(result.step.stderrTail).toContain(`failed copy retained at ${backup}`);
-      expect(updateRunStepsFromResultStep(result.step)[0]?.detail).toBe(
-        "Exit code: 1; Package rollback launcher backup changed: [redacted-path]",
-      );
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect((await fs.lstat(launcher)).ino).toBe(original.ino);
-      await expectVersion(packageRoot, "1.0.0");
-      expect(await fs.lstat(backup)).toBeDefined();
-      expect(result.step.stderrTail).toContain("../lib/node_modules/openclaw/package.json");
-      expect(result.step.stderrTail).toContain("different-target");
-      expect(await fs.readlink(backup)).toBe("different-target");
-    },
-  );
-
   it("preserves the installation after launcher backup and cleanup fail", async () => {
     const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
     const secondLauncher = `${launcher}.cmd`;
