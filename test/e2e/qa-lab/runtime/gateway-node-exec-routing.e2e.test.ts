@@ -24,7 +24,6 @@ import {
   createChildEnv,
   readNode,
   startNodeProcess,
-  startNodeGateway,
   stopChild,
   waitForNode,
   type CapturedChild,
@@ -41,6 +40,7 @@ it(
   "exec routes real commands only to an eligible selected node",
   { timeout: TEST_TIMEOUT_MS },
   async () => {
+    const repoRoot = process.cwd();
     const root = tempDirs.make("openclaw-node-exec-routing-");
     const owner = createQaGatewayChild();
     const children: CapturedChild[] = [];
@@ -106,9 +106,22 @@ it(
 
     await runQaGatewayFixture(
       async () => {
-        const gateway = await startNodeGateway(
-          owner,
-          (cfg) => ({
+        const gateway = await owner.start({
+          repoRoot,
+          command: {
+            executablePath: process.execPath,
+            argsPrefix: ["dist/index.js"],
+            cwd: repoRoot,
+            usePackagedPlugins: true,
+          },
+          transportBaseUrl: "http://127.0.0.1",
+          controlUiEnabled: false,
+          runtimeEnvPatch: {
+            OPENCLAW_SKIP_CHANNELS: "1",
+            OPENCLAW_SKIP_PROVIDERS: "1",
+            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          },
+          mutateConfig: (cfg) => ({
             ...cfg,
             plugins: { enabled: false },
             gateway: {
@@ -120,8 +133,7 @@ it(
               },
             },
           }),
-          "index",
-        );
+        });
         const callerHome = path.join(root, "caller");
         const callerState = path.join(callerHome, "state");
         const callerConfig = path.join(callerHome, "openclaw.json");
