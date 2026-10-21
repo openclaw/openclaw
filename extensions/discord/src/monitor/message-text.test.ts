@@ -28,11 +28,15 @@ function forwardedText(message: Record<string, unknown>) {
   );
 }
 
+const forwardedImage = {
+  id: "forwarded-image",
+  filename: "forwarded.png",
+  content_type: "image/png",
+  url: "https://cdn.discordapp.com/forwarded.png",
+};
+
 function asReferencedForwardMessage(params: {
   content?: string;
-  components?: Array<Record<string, unknown>>;
-  embeds?: Array<{ title?: string; description?: string }>;
-  attachments?: Array<Record<string, unknown>>;
   messageReferenceType?: MessageReferenceType;
 }) {
   return asMessage({
@@ -46,10 +50,10 @@ function asReferencedForwardMessage(params: {
       id: "m0",
       channelId: "c1",
       content: params.content ?? "",
-      components: params.components ?? [],
-      attachments: params.attachments ?? [],
-      embeds: params.embeds ?? [],
-      flags: params.components ? MessageFlags.IsComponentsV2 : 0,
+      components: [],
+      attachments: [],
+      embeds: [],
+      flags: 0,
       stickers: [],
       author: { id: "u2", username: "Bob", discriminator: "0" },
     }),
@@ -90,64 +94,39 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toBe("");
   });
 
-  it("resolves user mentions in content", () => {
-    const text = resolveDiscordMessageText(
-      asMessage({
-        content: "Hello <@123> and <@456>!",
-        mentionedUsers: [
-          { id: "123", username: "alice", globalName: "Alice Wonderland", discriminator: "0" },
-          { id: "456", username: "bob", discriminator: "0" },
-        ],
-      }),
-    );
-    expect(text).toBe("Hello @Alice Wonderland and @bob!");
-  });
-
-  it("preserves literal replacement tokens in mention labels", () => {
-    const label = "a$'b $& big$$money a$`b";
-    const text = resolveDiscordMessageText(
-      asMessage({
-        content: "Hello <@1> and <@!1>, meet <@2>!",
-        mentionedUsers: [
-          { id: "1", globalName: label, username: "fallback" },
-          { id: "2", username: label },
-        ],
-      }),
-    );
-    expect(text).toBe(`Hello @${label} and @${label}, meet @${label}!`);
-  });
-
-  it("uses the user ID when mention names are absent", () => {
-    const text = resolveDiscordMessageText(
-      asMessage({
-        content: "Hello <@1> and <@!1>!",
-        mentionedUsers: [{ id: "1" }],
-      }),
-    );
-    expect(text).toBe("Hello @1 and @1!");
-  });
-
-  it("keeps the primary body empty for sticker-only messages", () => {
-    const text = resolveDiscordMessageText(
-      asMessage({
-        content: "",
-        stickers: [{ id: "sticker-3", name: "party", format_type: StickerFormatType.PNG }],
-      }),
-    );
-
-    expect(text).toBe("");
+  const label = "a$'b $& big$$money a$`b";
+  it.each([
+    {
+      name: "global names and username fallbacks",
+      content: "Hello <@123> and <@456>!",
+      mentionedUsers: [
+        { id: "123", username: "alice", globalName: "Alice Wonderland", discriminator: "0" },
+        { id: "456", username: "bob", discriminator: "0" },
+      ],
+      expected: "Hello @Alice Wonderland and @bob!",
+    },
+    {
+      name: "literal replacement tokens",
+      content: "Hello <@1> and <@!1>, meet <@2>!",
+      mentionedUsers: [
+        { id: "1", globalName: label, username: "fallback" },
+        { id: "2", username: label },
+      ],
+      expected: `Hello @${label} and @${label}, meet @${label}!`,
+    },
+    {
+      name: "user IDs when names are absent",
+      content: "Hello <@1> and <@!1>!",
+      mentionedUsers: [{ id: "1" }],
+      expected: "Hello @1 and @1!",
+    },
+  ])("resolves mentions with $name", ({ content, mentionedUsers, expected }) => {
+    expect(resolveDiscordMessageText(asMessage({ content, mentionedUsers }))).toBe(expected);
   });
 
   it("renders forwarded media facts as text without the legacy single-item count", () => {
     const attachmentText = forwardedText({
-      attachments: [
-        {
-          id: "forwarded-image",
-          filename: "forwarded.png",
-          content_type: "image/png",
-          url: "https://cdn.discordapp.com/forwarded.png",
-        },
-      ],
+      attachments: [forwardedImage],
     });
 
     expect(attachmentText).toContain("<media:image>");
@@ -157,15 +136,7 @@ describe("resolveDiscordMessageText", () => {
   it("renders forwarded captions together with their media facts", () => {
     const text = forwardedText({
       content: "look at this",
-      embeds: [],
-      attachments: [
-        {
-          id: "forwarded-image",
-          filename: "forwarded.png",
-          content_type: "image/png",
-          url: "https://cdn.discordapp.com/forwarded.png",
-        },
-      ],
+      attachments: [forwardedImage],
     });
 
     expect(text).toContain("look at this\n<media:image>");
@@ -173,8 +144,6 @@ describe("resolveDiscordMessageText", () => {
 
   it("preserves audio classification in forwarded text-only previews", () => {
     const text = forwardedText({
-      content: "",
-      embeds: [],
       attachments: [
         {
           id: "forwarded-audio",
@@ -233,23 +202,30 @@ describe("resolveDiscordMessageText", () => {
     expect(resolveDiscordMessageText(new Message(client, "partial-message"))).toBe("");
   });
 
-  it("joins embed title and description when content is empty", () => {
-    expect(
-      resolveDiscordMessageText(
-        asMessage({ content: "", embeds: [{ title: "Breaking", description: "Details" }] }),
-      ),
-    ).toBe("Breaking\nDetails");
-  });
-
-  it("prefers message content over embed fallback text", () => {
-    expect(
-      resolveDiscordMessageText(
-        asMessage({
-          content: "hello from content",
-          embeds: [{ title: "Breaking", description: "Details" }],
-        }),
-      ),
-    ).toBe("hello from content");
+  it.each([
+    {
+      name: "empty sticker-only primary body",
+      message: {
+        content: "",
+        stickers: [{ id: "sticker-3", name: "party", format_type: StickerFormatType.PNG }],
+      },
+      expected: "",
+    },
+    {
+      name: "embed fallback",
+      message: { content: "", embeds: [{ title: "Breaking", description: "Details" }] },
+      expected: "Breaking\nDetails",
+    },
+    {
+      name: "content before embed fallback",
+      message: {
+        content: "hello from content",
+        embeds: [{ title: "Breaking", description: "Details" }],
+      },
+      expected: "hello from content",
+    },
+  ])("renders $name", ({ message, expected }) => {
+    expect(resolveDiscordMessageText(asMessage(message))).toBe(expected);
   });
 
   it("preserves text from later embeds in forwarded message snapshots", () => {

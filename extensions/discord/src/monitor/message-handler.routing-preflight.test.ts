@@ -189,7 +189,7 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
       }
       return lookup(ref);
     });
-    const { effectiveRoute: route } = await prepare(
+    const prepared = await prepare(
       cfg,
       {
         ...scope,
@@ -201,6 +201,7 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
       },
       direct,
     );
+    const route = prepared.effectiveRoute;
     holdRead = true;
     expect(route.agentId).toBe(configured || stale ? "work" : "main");
     if (configured) {
@@ -208,6 +209,8 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
     }
     if (stale) {
       expect(route.sessionKey).toBe(`agent:work:discord:channel:${channelId}`);
+      expect(prepared.boundSessionKey).toBeUndefined();
+      expect(prepared.threadBinding).toBeUndefined();
     }
     const autoThread =
       scenario === "derived"

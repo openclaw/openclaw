@@ -39,11 +39,16 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   resolveDirectStatusReplyForSession: vi.fn(),
   getSessionEntry: vi.fn(),
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+  loadWebMedia: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof SessionTranscriptRuntime>()),
   recordDeliveredCommandExchange: runtimeModuleMocks.recordDeliveredCommandExchange,
+}));
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
+  loadWebMedia: runtimeModuleMocks.loadWebMedia,
 }));
 const {
   pluginCommandHandler: pluginHandler,
@@ -72,11 +77,21 @@ const dispatchChannelInboundTurnForTest: typeof channelInbound.dispatchChannelIn
 };
 
 const emptyDispatchResult = { counts: { final: 0, block: 0, tool: 0 }, queuedFinal: false };
+type InboundPlan = Parameters<typeof channelInbound.dispatchChannelInboundTurn>[0];
+function interceptDelivery(run: (plan: InboundPlan) => Promise<DispatchResult | void>) {
+  vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(async (plan) =>
+    dispatchedTurn(plan, (await run(plan)) ?? emptyDispatchResult),
+  );
+}
 
-type DispatchPlan = Pick<
-  Parameters<typeof channelInbound.dispatchChannelInboundTurn>[0],
-  "ctxPayload" | "route"
->;
+function directDelivery(plan: InboundPlan) {
+  if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
+    throw new Error("expected direct deliverer");
+  }
+  return plan.delivery.deliver;
+}
+
+type DispatchPlan = Pick<InboundPlan, "ctxPayload" | "route">;
 type DispatchResult = Extract<
   Awaited<ReturnType<typeof channelInbound.dispatchChannelInboundTurn>>,
   { dispatched: true }
@@ -546,50 +561,35 @@ describe("Discord native plugin command dispatch", () => {
   }
 
   it("rejects group DM slash commands outside dm.groupChannels before dispatch", async () => {
-    cfg = {
-      commands: {
-        allowFrom: {
-          discord: ["user:owner"],
-        },
-      },
-      channels: {
-        discord: {
-          dmPolicy: "open",
-          dm: {
-            enabled: true,
-            groupEnabled: true,
-            groupChannels: ["allowed-group"],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    cfg.commands = { allowFrom: { discord: ["user:owner"] } };
+    cfg.channels!.discord!.dm = {
+      enabled: true,
+      groupEnabled: true,
+      groupChannels: ["allowed-group"],
+    };
+    delete cfg.channels!.discord!.allowFrom;
     interaction = createInteraction({
       channelType: ChannelType.GroupDM,
       channelId: "blocked-group",
     });
-    const dispatchSpy = dispatchReply;
-    const command = await createStatusCommand(cfg);
-
-    await command.run(interaction);
-
-    expect(dispatchSpy).not.toHaveBeenCalled();
+    await (await createStatusCommand(cfg)).run(interaction);
+    expect(dispatchReply).not.toHaveBeenCalled();
     expectSingleCallFirstArg(interaction.followUp, {
       content: "This group DM is not allowed.",
     });
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
-  it("settles an accepted active-run steer without an empty warning", async () => {
-    dispatchReply.mockResolvedValue({
-      ...emptyDispatchResult,
-      deferredToActiveRun: "steer",
-    } as never);
-    await runNativeCommand({
-      name: "steer",
-      description: "Steer an active run.",
-      acceptsArgs: true,
-    });
-
+  it.each([
+    { label: "active-run steer", name: "steer", result: { deferredToActiveRun: "steer" } },
+    {
+      label: "deliberate command silence",
+      name: "new",
+      result: { deliberateSilentTerminalReply: true },
+    },
+  ])("settles $label without an empty warning", async ({ name, result }) => {
+    dispatchReply.mockResolvedValue({ ...emptyDispatchResult, ...result });
+    await runNativeCommand({ name, description: name, acceptsArgs: true });
     expectSilentSettlement(interaction);
   });
 
@@ -605,20 +605,9 @@ describe("Discord native plugin command dispatch", () => {
     expectEmptyWarning(interaction);
   });
 
-  it("settles deliberate command silence without an empty warning", async () => {
-    dispatchReply.mockResolvedValue({
-      ...emptyDispatchResult,
-      deliberateSilentTerminalReply: true,
-    } as never);
-    await runNativeCommand();
-
-    expectSilentSettlement(interaction);
-  });
-
   it("warns when a final delivery observer does not report its outcome", async () => {
-    vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(async (plan) => {
+    interceptDelivery(async (plan) => {
       await plan.delivery.onDelivered?.({ text: "unreported" }, { kind: "final" }, undefined);
-      return dispatchedTurn(plan, emptyDispatchResult);
     });
     await runNativeCommand();
 
@@ -626,9 +615,8 @@ describe("Discord native plugin command dispatch", () => {
   });
 
   it("settles repeated suppressed finals without an empty warning", async () => {
-    const count = 2;
-    vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(async (plan) => {
-      for (let index = 0; index < count; index += 1) {
+    interceptDelivery(async (plan) => {
+      for (let index = 0; index < 2; index += 1) {
         await plan.delivery.onDelivered?.(
           { text: "cancelled" },
           { kind: "final" },
@@ -638,7 +626,6 @@ describe("Discord native plugin command dispatch", () => {
           },
         );
       }
-      return dispatchedTurn(plan, emptyDispatchResult);
     });
     await runNativeCommand();
 
@@ -648,30 +635,25 @@ describe("Discord native plugin command dispatch", () => {
   });
 
   it("preserves a hidden error final and its metadata", async () => {
-    const isError = true;
     interaction.responseState = "deferred";
     const finalReply = setReplyPayloadMetadata(
-      { text: "scope-aware model selection result", isError },
+      { text: "scope-aware model selection result", isError: true },
       { assistantMessageIndex: 3 },
     );
-    vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(async (plan) => {
-      if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
-        throw new Error("expected direct deliverer");
-      }
+    interceptDelivery(async (plan) => {
       const info = { kind: "final" as const };
-      const deliveryResult = await plan.delivery.deliver(finalReply, info);
+      const deliveryResult = await directDelivery(plan)(finalReply, info);
       expect(deliveryResult).toEqual({
         visibleReplySent: false,
         suppression: { reason: "channel_transform" },
       });
       await plan.delivery.onDelivered?.(finalReply, info, deliveryResult);
-      return dispatchedTurn(plan, emptyDispatchResult);
     });
 
     const result = await dispatchAgentReply(cfg, interaction, true);
 
     expect(result.hiddenFinalReply).toBe(finalReply);
-    expect(result.hiddenFinalReply?.isError).toBe(isError);
+    expect(result.hiddenFinalReply?.isError).toBe(true);
     expectSilentSettlement(interaction);
   });
 
@@ -688,7 +670,7 @@ describe("Discord native plugin command dispatch", () => {
     },
   ])("does not capture a hidden final for $label", async ({ payload, suppression }) => {
     interaction.responseState = "deferred";
-    vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(async (plan) => {
+    interceptDelivery(async (plan) => {
       await plan.delivery.onDelivered?.(
         payload,
         { kind: "final" },
@@ -697,7 +679,6 @@ describe("Discord native plugin command dispatch", () => {
           suppression,
         },
       );
-      return dispatchedTurn(plan, emptyDispatchResult);
     });
 
     const result = await dispatchAgentReply(cfg, interaction, true);
@@ -710,27 +691,14 @@ describe("Discord native plugin command dispatch", () => {
     interaction.followUp
       .mockResolvedValueOnce({ ok: true })
       .mockRejectedValueOnce({ discordCode: 10062, message: "Unknown interaction" });
-    dispatchReply.mockImplementation(
-      async ({
-        dispatcherOptions,
-      }: {
-        dispatcherOptions: {
-          deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
-          onError?: (error: unknown, info: { kind: "final" }) => void;
-        };
-      }) => {
-        try {
-          await dispatcherOptions.deliver({ text: "x".repeat(2500) }, { kind: "final" });
-        } catch (error) {
-          dispatcherOptions.onError?.(error, { kind: "final" });
-        }
-        return {
-          counts: { final: 0, block: 0, tool: 0 },
-          failedCounts: { final: 1, block: 0, tool: 0 },
-          queuedFinal: false,
-        };
-      },
-    );
+    interceptDelivery(async (plan) => {
+      try {
+        await directDelivery(plan)({ text: "x".repeat(2500) }, { kind: "final" });
+      } catch (error) {
+        plan.delivery.onError?.(error, { kind: "final" });
+      }
+      return { ...emptyDispatchResult, failedCounts: { final: 1, block: 0, tool: 0 } };
+    });
     await runNativeCommand();
 
     expect(interaction.followUp).toHaveBeenCalledTimes(2);
@@ -744,7 +712,7 @@ describe("Discord native plugin command dispatch", () => {
       discordCode: 10062,
       message: "Unknown interaction",
     });
-    vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(async (plan) => {
+    interceptDelivery(async (plan) => {
       const reportSuppressed = (suppressedKind: "block" | "final" | "tool") =>
         plan.delivery.onDelivered?.(
           { text: "cancelled intermediate reply" },
@@ -755,10 +723,7 @@ describe("Discord native plugin command dispatch", () => {
           },
         );
       await reportSuppressed("final");
-      if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
-        throw new Error("expected direct deliverer");
-      }
-      const deliver = plan.delivery.deliver;
+      const deliver = directDelivery(plan);
       const payload = { text: "expired before delivery" };
       const info = { kind: "final" as const };
       let deliveryError: unknown;
@@ -770,11 +735,11 @@ describe("Discord native plugin command dispatch", () => {
       }
       expect(deliveryError).toBeInstanceOf(PlatformMessageNotDispatchedError);
       await reportSuppressed("final");
-      return dispatchedTurn(plan, {
+      return {
         counts: { final: 0, block: 0, tool: 0 },
         failedCounts: { final: 1, block: 0, tool: 0 },
         queuedFinal: false,
-      });
+      };
     });
     await runNativeCommand();
 
@@ -791,27 +756,25 @@ describe("Discord native plugin command dispatch", () => {
     interaction.followUp
       .mockResolvedValueOnce({ ok: true })
       .mockRejectedValueOnce(new Error("provider connection failed"));
-    vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(async (plan) => {
-      if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
-        throw new Error("expected direct delivery adapter");
-      }
+    interceptDelivery(async (plan) => {
+      const deliver = directDelivery(plan);
       let failedFinals = 0;
       for (const outcome of outcomes) {
         const payload = { text: `${outcome} final` };
         const info = { kind: "final" as const };
         try {
-          const result = await plan.delivery.deliver(payload, info);
+          const result = await deliver(payload, info);
           await plan.delivery.onDelivered?.(payload, info, result);
         } catch (error) {
           failedFinals += 1;
           plan.delivery.onError?.(error, info);
         }
       }
-      return dispatchedTurn(plan, {
+      return {
         counts: { final: 1, block: 0, tool: 0 },
         failedCounts: { final: failedFinals, block: 0, tool: 0 },
         queuedFinal: false,
-      });
+      };
     });
     await runNativeCommand();
 
@@ -884,6 +847,129 @@ describe("Discord native plugin command dispatch", () => {
       from: "discord:channel:partial-thread-123",
       messageThreadId: "partial-thread-123",
       threadParentId: "partial-parent-456",
+    });
+  });
+
+  describe("direct status replies", () => {
+    const { loadWebMedia } = runtimeModuleMocks;
+    beforeEach(() => {
+      cfg.commands = { allowFrom: { discord: ["user:owner"] } };
+      cfg.channels!.discord!.groupPolicy = "open";
+      cfg.channels!.discord!.guilds = {
+        guild1: {
+          requireMention: true,
+          channels: { chan1: { allow: true, requireMention: true } },
+        },
+      };
+      vi.spyOn(nativeCommandRoute, "resolveDiscordNativeInteractionRouteState").mockImplementation(
+        ({ accountId }) => createRouteState({ sessionKey: "agent:main:main", accountId }),
+      );
+      loadWebMedia.mockResolvedValue({ buffer: Buffer.from("image"), fileName: "status.png" });
+    });
+
+    async function runStatus(pluginExecute?: ReturnType<typeof vi.fn>) {
+      const command = await createNativeCommand(cfg, {
+        name: "status",
+        description: "Status",
+        acceptsArgs: false,
+        ...(pluginExecute
+          ? {
+              requireAuth: true,
+              prepareDispatch: () => ({
+                kind: "plugin" as const,
+                invocation: { runtime: { execute: pluginExecute }, selection: Object.freeze({}) },
+              }),
+            }
+          : {}),
+      } as never);
+      await command.run(interaction);
+    }
+
+    it("delivers an embed-only direct status reply without reporting it unavailable", async () => {
+      const embeds = [{ title: "Status", description: "All systems operational" }];
+      statusReply.mockResolvedValue({ channelData: { discord: { embeds } } });
+      await runStatus();
+      expect(dispatchReply).not.toHaveBeenCalled();
+      expect(interaction.followUp).toHaveBeenCalledOnce();
+      expect(interaction.followUp.mock.calls[0]?.[0]).toStrictEqual({ embeds, ephemeral: true });
+    });
+
+    it("prioritizes direct status replies over matching plugin commands", async () => {
+      const executePluginCommand = vi.fn(async () => ({ text: "plugin status" }));
+      await runStatus(executePluginCommand);
+      expect(statusReply).toHaveBeenCalledTimes(1);
+      expect(executePluginCommand).not.toHaveBeenCalled();
+      expect(dispatchReply).not.toHaveBeenCalled();
+      expect(interaction.reply).not.toHaveBeenCalled();
+      expect(interaction.followUp).toHaveBeenCalledOnce();
+      expect(interaction.followUp.mock.calls[0]?.[0]).toStrictEqual({
+        content: "status reply",
+        ephemeral: true,
+      });
+      expect(recordExchange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          commandText: "/status",
+          replyText: "status reply",
+          commandId: expect.stringMatching(/^discord:default:/),
+        }),
+      );
+    });
+
+    it.each([false, true])(
+      "records the unavailable status only after delivery (failed=%s)",
+      async (failed) => {
+        statusReply.mockResolvedValue(undefined);
+        if (failed) {
+          interaction.followUp.mockRejectedValueOnce({ discordCode: 10062 });
+        }
+        await runStatus();
+        expect(recordExchange).toHaveBeenCalledTimes(failed ? 0 : 1);
+        if (!failed) {
+          expect(recordExchange).toHaveBeenCalledWith(
+            expect.objectContaining({
+              commandText: "/status",
+              replyText: "Status unavailable.",
+            }),
+          );
+        }
+      },
+    );
+
+    it("keeps direct status media follow-up chunks ephemeral", async () => {
+      statusReply.mockResolvedValue({
+        text: `status image\n${"x".repeat(2200)}`,
+        mediaUrls: ["https://example.com/status.png"],
+      });
+      await runStatus();
+      expect(loadWebMedia).toHaveBeenCalledExactlyOnceWith("https://example.com/status.png", {
+        localRoots: expect.any(Array),
+      });
+      expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
+      expect(interaction.followUp.mock.calls[0]?.[0]).toMatchObject({
+        ephemeral: true,
+        files: [{ name: "status.png" }],
+      });
+      for (const [payload] of interaction.followUp.mock.calls) {
+        expect(payload.ephemeral).toBe(true);
+      }
+      expect(interaction.reply).not.toHaveBeenCalled();
+    });
+
+    it("passes through the effective guild activation when requireMention is disabled", async () => {
+      cfg.channels!.discord!.guilds!.guild1!.channels!.chan1!.requireMention = false;
+      interaction = createInteraction({
+        channelType: ChannelType.GuildText,
+        channelId: "chan1",
+        guildId: "guild1",
+        guildName: "Guild One",
+      });
+      await runStatus();
+      const statusCall = statusReply.mock.calls[0]?.[0] as Parameters<
+        typeof commandStatus.resolveDirectStatusReplyForSession
+      >[0];
+      expect(statusCall).toMatchObject({ channel: "discord", isGroup: true });
+      expect(statusCall.defaultGroupActivation?.()).toBe("always");
     });
   });
 });

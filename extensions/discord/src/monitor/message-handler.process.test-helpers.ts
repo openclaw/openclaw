@@ -4,6 +4,7 @@ import { firstMockArg } from "../test-support/mock-calls.js";
 export { firstMockArg, firstMockCall } from "../test-support/mock-calls.js";
 import {
   createAutomaticSourceDeliveryContext,
+  createBaseContext,
   createDiscordDraftStream,
   createMockDraftStream,
   deliverDiscordReply,
@@ -14,6 +15,22 @@ import {
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 
 type AutomaticSourceDeliveryOverrides = Parameters<typeof createAutomaticSourceDeliveryContext>[0];
+
+export async function runBase(overrides: Parameters<typeof createBaseContext>[0] = {}) {
+  await runProcessDiscordMessage(await createBaseContext(overrides));
+}
+
+export async function sendFinal(
+  params: DispatchInboundParams | undefined,
+  payload: Parameters<DispatchInboundParams["dispatcher"]["sendFinalReply"]>[0],
+  wait = true,
+) {
+  await params?.dispatcher.sendFinalReply(payload);
+  if (wait) {
+    await params?.dispatcher.waitForIdle();
+  }
+  return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+}
 
 export async function createAutomaticDraftContext(
   overrides: AutomaticSourceDeliveryOverrides = {},
@@ -50,9 +67,7 @@ export function expectRecordFields(
   record: Record<string, unknown>,
   fields: Record<string, unknown>,
 ) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
+  expect(Object.fromEntries(Object.keys(fields).map((key) => [key, record[key]]))).toEqual(fields);
 }
 
 export function expectReactAckCallAt(
@@ -110,19 +125,23 @@ export function getDeliveredFinalTexts(): string[] {
   });
 }
 
-// The final answer is delivered on its own: no synthesized activity receipt is
-// ever appended beneath it.
-export function expectFinalAnswerText(answer: string) {
-  expect(getDeliveredFinalTexts()[0] ?? "").toBe(answer);
-}
-
 export function expectFreshFinalText(text: string) {
-  const finalParams = deliverDiscordReply.mock.calls
+  const firstFinal = deliverDiscordReply.mock.calls
     .map((call) => requireRecord(call[0], "deliverDiscordReply params"))
     .find((params) => params.kind === "final");
-  expect(finalParams).toBeDefined();
-  const replies = (finalParams as { replies?: Array<{ text?: string }> }).replies;
+  expect(firstFinal).toBeDefined();
+  const replies = (firstFinal as { replies?: Array<{ text?: string }> }).replies;
   expect(replies?.[0]?.text).toBe(text);
+}
+
+type DispatchResult = Awaited<ReturnType<typeof dispatchInboundMessage>>;
+export function mockDispatch(
+  run: (params: DispatchInboundParams | undefined) => Promise<DispatchResult | void>,
+) {
+  dispatchInboundMessage.mockImplementationOnce(
+    async (params) =>
+      (await run(params)) ?? { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } },
+  );
 }
 
 export function useProgressDraftStartDelay() {

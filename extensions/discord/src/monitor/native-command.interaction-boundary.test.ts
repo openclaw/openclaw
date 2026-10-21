@@ -9,6 +9,7 @@ import {
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -93,41 +94,34 @@ function createHarness(
     postApplySettleMs: 0,
     dispatchReplyFromConfig,
   };
-  const client = createInternalTestClient([
-    createDiscordNativeCommand({
-      ...commandContext,
-      ephemeralDefault: true,
-      command: { name: "help", description: "Help", acceptsArgs: false },
-    }),
-    createDiscordNativeCommand({
-      ...commandContext,
-      ephemeralDefault: true,
-      command: { name: "new", description: "New session", acceptsArgs: false },
-    }),
-    createDiscordNativeCommand({
-      ...commandContext,
-      ephemeralDefault: true,
-      command: { name: "status", description: "Status", acceptsArgs: false },
-    }),
-    createDiscordNativeCommand({
-      ...commandContext,
-      ephemeralDefault: true,
-      command: {
-        name: "boundary-choice",
-        description: "Choose",
-        acceptsArgs: true,
-        args: [
-          {
-            name: "choice",
-            description: "Choice",
-            type: "string",
-            preferAutocomplete: true,
-            choices: ({ model }) => [model ?? "unresolved"],
-          },
-        ],
-      },
-    }),
-  ]);
+  const commands: NativeCommandSpec[] = [
+    { name: "help", description: "Help", acceptsArgs: false },
+    { name: "new", description: "New session", acceptsArgs: false },
+    { name: "status", description: "Status", acceptsArgs: false },
+    {
+      name: "boundary-choice",
+      description: "Choose",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "choice",
+          description: "Choice",
+          type: "string",
+          preferAutocomplete: true,
+          choices: ({ model }) => [model ?? "unresolved"],
+        },
+      ],
+    },
+  ];
+  const client = createInternalTestClient(
+    commands.map((command) =>
+      createDiscordNativeCommand({
+        ...commandContext,
+        ephemeralDefault: true,
+        command,
+      }),
+    ),
+  );
   client.componentHandler.register(createDiscordModelPickerFallbackButton(commandContext));
   const post = vi.fn(async () => undefined);
   const get = vi.fn(async (path: string) => {

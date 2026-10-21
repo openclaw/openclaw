@@ -53,7 +53,7 @@ export function createThreadClient(params: {
 export function createGuildEvent(params: {
   channelId: string;
   guildId: string;
-  author: Message["author"];
+  author?: Message["author"];
   message: Message;
   includeGuildObject?: boolean;
 }): DiscordMessageEvent {
@@ -63,7 +63,7 @@ export function createGuildEvent(params: {
     ...(params.includeGuildObject === false
       ? {}
       : { guild: { id: params.guildId, name: "Guild One" } }),
-    author: params.author,
+    author: params.author ?? params.message.author,
     message: params.message,
   } as unknown as DiscordMessageEvent;
 }
@@ -135,6 +135,33 @@ export function createDiscordPreflightArgs(
   };
 }
 
+export function createGuildPreflightArgs({
+  message,
+  channelId = message.channelId,
+  guildId = "guild-1",
+  client = createGuildTextClient(channelId),
+  cfg = DEFAULT_PREFLIGHT_CFG,
+  discordConfig = {},
+  includeGuildObject,
+  ...overrides
+}: {
+  message: Message;
+  channelId?: string;
+  guildId?: string;
+  includeGuildObject?: boolean;
+} & Partial<Omit<PreflightArgs, "data">>): PreflightArgs {
+  return {
+    ...createDiscordPreflightArgs({
+      cfg,
+      discordConfig,
+      data: createGuildEvent({ channelId, guildId, message, includeGuildObject }),
+      client,
+      threadBindings: overrides.threadBindings,
+    }),
+    ...overrides,
+  };
+}
+
 export function createThreadBinding(overrides?: Partial<SessionBindingRecord>) {
   return {
     bindingId: "default:thread-1",
@@ -158,7 +185,6 @@ export async function runThreadBoundPreflight(
     message: Message;
     threadBinding: SessionBindingRecord;
     discordConfig: DiscordConfig;
-    threadBindings: ThreadBindingManager;
     registerBindingAdapter?: boolean;
   },
 ) {
@@ -174,18 +200,12 @@ export async function runThreadBoundPreflight(
 
   const { preflightDiscordMessage } = await import("./message-handler.preflight.js");
   return preflightDiscordMessage(
-    createDiscordPreflightArgs({
-      cfg: DEFAULT_PREFLIGHT_CFG,
+    createGuildPreflightArgs({
+      message: params.message,
       discordConfig: params.discordConfig,
       threadBindings: {
         getByThreadId: (id: string) => (id === params.threadId ? params.threadBinding : undefined),
       } as ThreadBindingManager,
-      data: createGuildEvent({
-        channelId: params.threadId,
-        guildId: "guild-1",
-        author: params.message.author,
-        message: params.message,
-      }),
       client: createThreadClient(params),
     }),
   );

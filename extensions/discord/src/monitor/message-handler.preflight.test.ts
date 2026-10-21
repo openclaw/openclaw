@@ -53,6 +53,7 @@ import {
   createThreadBinding,
   createDiscordMessage,
   createDiscordPreflightArgs,
+  createGuildPreflightArgs,
   runThreadBoundPreflight,
   createGuildEvent,
   createGuildTextClient,
@@ -152,37 +153,29 @@ function allowedChannel(guildId: string, channelId: string, requireMention: bool
 }
 
 async function runGuildPreflight({
+  message,
   channelId,
   guildId,
-  message,
-  includeGuildObject,
-  cfg = DEFAULT_PREFLIGHT_CFG,
-  discordConfig = {},
-  client = createGuildTextClient(channelId),
-  botUserId = "openclaw-bot",
+  content = "hello",
+  messageOptions = {},
   ...overrides
 }: {
   channelId: string;
   guildId: string;
-  message: import("../internal/discord.js").Message;
+  message?: import("../internal/discord.js").Message;
+  content?: string;
+  messageOptions?: Partial<Parameters<typeof createDiscordMessage>[0]>;
   includeGuildObject?: boolean;
 } & Partial<Omit<Parameters<typeof preflightDiscordMessage>[0], "data">>) {
-  return preflightDiscordMessage({
-    ...createPreflightArgs({
-      cfg,
-      discordConfig,
-      data: createGuildEvent({
-        channelId,
-        guildId,
-        author: message.author,
-        message,
-        includeGuildObject,
-      }),
-      client,
+  return preflightDiscordMessage(
+    createGuildPreflightArgs({
+      message: message ?? makeMessage("message-1", channelId, content, messageOptions),
+      channelId,
+      guildId,
+      threadBindings: defaultThreadBindings,
+      ...overrides,
     }),
-    botUserId,
-    ...overrides,
-  });
+  );
 }
 
 async function runDmPreflight({
@@ -282,7 +275,6 @@ describe("preflightDiscordMessage", () => {
     );
 
     const result = await runThreadBoundPreflight({
-      threadBindings: defaultThreadBindings,
       threadId,
       parentId,
       message,
@@ -319,50 +311,6 @@ describe("preflightDiscordMessage", () => {
 
     const preflight = expectPreflightResult(result);
     expect(preflight.threadBinding).toEqual(binding);
-  });
-
-  it("ignores stale route-shaped bindings after the configured agent changes", async () => {
-    const channelId = "stale-route";
-    const binding = createThreadBinding({
-      targetKind: "session",
-      targetSessionKey: `agent:oldagent:discord:channel:${channelId}`,
-      conversation: { channel: "discord", accountId: "default", conversationId: channelId },
-      metadata: undefined,
-    });
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation: (ref) => (ref.conversationId === channelId ? binding : null),
-    });
-    const result = await runGuildPreflight({
-      channelId,
-      guildId: "guild-stale-route",
-      message: makeMessage("stale-route", channelId, "which agent is this?", {
-        author: ALICE,
-      }),
-      cfg: {
-        agents: { entries: { newagent: {} } },
-        bindings: [
-          {
-            agentId: "newagent",
-            match: {
-              channel: "discord",
-              accountId: "default",
-              peer: { kind: "channel", id: channelId },
-            },
-          },
-        ],
-        channels: { discord: {} },
-      },
-      discordConfig: { allowBots: true },
-      guildEntries: allowedChannel("guild-stale-route", channelId, false),
-    });
-    const preflight = expectPreflightResult(result);
-    expect(preflight.route.agentId).toBe("newagent");
-    expect(preflight.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
-    expect(preflight.boundSessionKey).toBeUndefined();
-    expect(preflight.threadBinding).toBeUndefined();
   });
 
   it("preflights direct-message voice notes without mention gating", async () => {
@@ -522,7 +470,6 @@ describe("preflightDiscordMessage", () => {
       });
 
       const result = await runThreadBoundPreflight({
-        threadBindings: defaultThreadBindings,
         threadId,
         parentId,
         message,
@@ -893,28 +840,13 @@ describe("preflightDiscordMessage", () => {
   });
 
   it.each([
-    {
-      name: "authoritative mention",
-      content: "hi <@123456789012345678>",
-      mentions: true,
-      accepted: true,
-    },
-    { name: "authoritative absence", content: "hi <@123456789012345678>", accepted: false },
-    {
-      name: "raw nickname mention fallback",
-      content: "hi <@!123456789012345678>",
-      unavailable: true,
-      accepted: true,
-    },
-    {
-      name: "escaped fallback token",
-      content: "example: \\<@123456789012345678>",
-      unavailable: true,
-      accepted: false,
-    },
-  ])(
-    "uses $name when hydrating mention metadata",
-    async ({ content, mentions, unavailable, accepted }) => {
+    ["authoritative mention", "hi <@123456789012345678>", true, false, true],
+    ["authoritative absence", "hi <@123456789012345678>", false, false, false],
+    ["raw nickname mention fallback", "hi <@!123456789012345678>", false, true, true],
+    ["escaped fallback token", "example: \\<@123456789012345678>", false, true, false],
+  ] as const)(
+    "uses %s when hydrating mention metadata",
+    async (_name, content, mentions, unavailable, accepted) => {
       const channelId = "channel-bot-hydration";
       const botUserId = "123456789012345678";
       const message = createDiscordMessage({ id: "1002", channelId, content, author: RELAY });
@@ -949,12 +881,10 @@ describe("preflightDiscordMessage", () => {
   it("routes ordinary guild text control commands through authorization instead of dropping them", async () => {
     const channelId = "channel-text-control-command";
     const guildId = "guild-text-control-command";
-    const message = makeMessage("m-text-control-command", channelId, "/steer keep digging");
-
     const result = await runGuildPreflight({
       channelId,
       guildId,
-      message,
+      content: "/steer keep digging",
       allowFrom: ["discord:user-1"],
       guildEntries: allowedChannel(guildId, channelId, true),
     });
@@ -969,14 +899,11 @@ describe("preflightDiscordMessage", () => {
   it("still drops Discord native command echo messages", async () => {
     const channelId = "channel-native-command-echo";
     const guildId = "guild-native-command-echo";
-    const message = makeMessage("m-native-command-echo", channelId, "/steer keep digging", {
-      type: MessageType.ChatInputCommand,
-    });
-
     const result = await runGuildPreflight({
       channelId,
       guildId,
-      message,
+      content: "/steer keep digging",
+      messageOptions: { type: MessageType.ChatInputCommand },
       allowFrom: ["discord:user-1"],
       guildEntries: allowedChannel(guildId, channelId, true),
     });
@@ -987,19 +914,11 @@ describe("preflightDiscordMessage", () => {
   it("does not mask mention gating when bot id is missing but mention patterns can detect", async () => {
     const channelId = "channel-missing-bot-id-mention-gate";
     const guildId = "guild-missing-bot-id-mention-gate";
-    const message = makeMessage(
-      "m-missing-bot-id-mention-gate",
+    const result = await runGuildPreflight({
       channelId,
-      "general update without the configured mention",
-    );
-
-    const result = await preflightDiscordMessage({
-      ...createPreflightArgs({
-        cfg: MENTION_CFG,
-        discordConfig: {},
-        data: createGuildEvent({ channelId, guildId, author: message.author, message }),
-        client: createGuildTextClient(channelId),
-      }),
+      guildId,
+      content: "general update without the configured mention",
+      cfg: MENTION_CFG,
       botUserId: undefined,
       guildEntries: allowedChannel(guildId, channelId, true),
     });
@@ -1010,18 +929,11 @@ describe("preflightDiscordMessage", () => {
   it("treats @everyone as a mention when requireMention is true", async () => {
     const channelId = "channel-everyone-mention";
     const guildId = "guild-everyone-mention";
-    const message = createDiscordMessage({
-      id: "m-everyone-mention",
-      channelId,
-      content: "@everyone standup time!",
-      mentionedEveryone: true,
-      author: HUMAN,
-    });
-
     const result = await runGuildPreflight({
       channelId,
       guildId,
-      message,
+      content: "@everyone standup time!",
+      messageOptions: { mentionedEveryone: true },
       guildEntries: { [guildId]: { requireMention: true, ignoreOtherMentions: true } },
     });
 
@@ -1079,12 +991,11 @@ describe("preflightDiscordMessage", () => {
   it("uses fetched thread metadata during mention preflight", async () => {
     const threadId = "thread-partial-owner";
     const parentId = "parent-partial-owner";
-    const message = makeMessage("m-thread-partial-owner", threadId, "thread hello");
     const result = await runGuildPreflight({
       client: createThreadClient({ threadId, parentId }),
       channelId: threadId,
       guildId: "guild-1",
-      message,
+      content: "thread hello",
       includeGuildObject: false,
       guildEntries: allowedChannel("guild-1", parentId, false),
     });
@@ -1095,28 +1006,13 @@ describe("preflightDiscordMessage", () => {
   });
 
   it.each([
-    {
-      name: "another bot",
-      accepted: false,
-    },
-    {
-      name: "forwarded bot message",
-      forwarded: true,
-      accepted: true,
-    },
-    {
-      name: "explicit current-bot mention",
-      mentioned: true,
-      accepted: true,
-    },
-    {
-      name: "webhook bot",
-      webhookId: "webhook-1",
-      accepted: true,
-    },
-  ])(
-    "applies ignoreOtherMentions to $name",
-    async ({ forwarded, mentioned, webhookId, accepted }) => {
+    ["another bot", false, false, undefined, false],
+    ["forwarded bot message", true, false, undefined, true],
+    ["explicit current-bot mention", false, true, undefined, true],
+    ["webhook bot", false, false, "webhook-1", true],
+  ] as const)(
+    "applies ignoreOtherMentions to %s",
+    async (_name, forwarded, mentioned, webhookId, accepted) => {
       const channelId = "channel-other-bot-reply";
       const message = createDiscordMessage({
         id: "other-bot-reply",
@@ -1229,18 +1125,12 @@ describe("preflightDiscordMessage", () => {
   it("does not count bot-sent @everyone as a mention", async () => {
     const channelId = "channel-everyone-1";
     const guildId = "guild-everyone-1";
-    const client = createGuildTextClient(channelId);
-    const message = makeMessage("m-everyone-1", channelId, "@everyone heads up", {
-      mentionedEveryone: true,
-      author: RELAY,
-    });
-
     const result = await runGuildPreflight({
       discordConfig: { allowBots: true },
-      client,
       channelId,
       guildId,
-      message,
+      content: "@everyone heads up",
+      messageOptions: { mentionedEveryone: true, author: RELAY },
       guildEntries: { [guildId]: { requireMention: false } },
     });
 
@@ -1252,19 +1142,15 @@ describe("preflightDiscordMessage", () => {
   it("does not transcribe guild audio from unauthorized members", async () => {
     const channelId = "channel-audio-unauthorized-1";
     const guildId = "guild-audio-unauthorized-1";
-    const client = createGuildTextClient(channelId);
-
-    const message = makeMessage("m-audio-unauthorized-1", channelId, "", {
-      attachments: [VOICE_ATTACHMENT],
-      author: { id: "user-2", bot: false, username: "Mallory" },
-    });
-
     const result = await runGuildPreflight({
       cfg: MENTION_CFG,
-      client,
       channelId,
       guildId,
-      message,
+      content: "",
+      messageOptions: {
+        attachments: [VOICE_ATTACHMENT],
+        author: { id: "user-2", bot: false, username: "Mallory" },
+      },
       guildEntries: {
         [guildId]: {
           channels: { [channelId]: { enabled: true, requireMention: true, users: ["user-1"] } },

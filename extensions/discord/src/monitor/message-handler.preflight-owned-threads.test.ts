@@ -7,10 +7,8 @@ import { DiscordConfigSchema } from "../config-schema.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
-  createDiscordPreflightArgs,
-  createGuildEvent,
+  createGuildPreflightArgs,
   createThreadClient,
-  DEFAULT_PREFLIGHT_CFG,
 } from "./message-handler.preflight.test-helpers.js";
 
 beforeEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
@@ -85,30 +83,28 @@ describe("Discord bot-owned thread mention gating", () => {
         : undefined,
       author: { id: humanId, bot: false, username: "Pat" },
     });
-    const result = await preflightDiscordMessage({
-      ...createDiscordPreflightArgs({
-        cfg: DEFAULT_PREFLIGHT_CFG,
-        discordConfig: {},
-        data: createGuildEvent({ channelId, guildId: "guild-1", author: message.author, message }),
+    const result = await preflightDiscordMessage(
+      createGuildPreflightArgs({
+        message,
         client: createThreadClient({ threadId: channelId, parentId, ownerId: scenario.ownerId }),
-      }),
-      groupPolicy: "allowlist",
-      guildEntries: {
-        "guild-1": {
-          requireMention: true,
-          requireMentionInBotThreads: scenario.relaxedParent ? false : undefined,
-          channels: {
-            [parentId]: {
-              enabled: true,
-              requireMention: !scenario.relaxedParent,
-              requireMentionInBotThreads: scenario.strict,
-              autoThread: scenario.autoThread,
-              users: scenario.users ?? [humanId],
+        groupPolicy: "allowlist",
+        guildEntries: {
+          "guild-1": {
+            requireMention: true,
+            requireMentionInBotThreads: scenario.relaxedParent ? false : undefined,
+            channels: {
+              [parentId]: {
+                enabled: true,
+                requireMention: !scenario.relaxedParent,
+                requireMentionInBotThreads: scenario.strict,
+                autoThread: scenario.autoThread,
+                users: scenario.users ?? [humanId],
+              },
             },
           },
         },
-      },
-    });
+      }),
+    );
     if (!scenario.admitted) {
       expect(result).toBeNull();
       return;
