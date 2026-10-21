@@ -1123,7 +1123,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   );
 
   it.each([
-    { name: "delta blocks", partials: ["hello"], block: "lo world", expected: "hellolo world" },
+    { name: "overlapping delta", partials: ["hello"], block: "lo world", expected: "hello world" },
     {
       name: "new generation snapshots",
       partials: [

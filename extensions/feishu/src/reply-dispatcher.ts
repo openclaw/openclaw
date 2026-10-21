@@ -342,7 +342,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     const mode = options?.mode ?? "snapshot";
     if (mode === "delta") {
-      streamText = `${streamText}${nextText}`;
+      streamText = mergeStreamingText(streamText, nextText);
     } else {
       const currentSnapshotText = snapshotBaseText
         ? streamText.slice(snapshotBaseText.length)
