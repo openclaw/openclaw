@@ -46,6 +46,46 @@ import {
 
 const fixture = useChatAbortRegistryFixture();
 
+function registeredRun(
+  scope: { sessionKey: string } & Parameters<typeof createActiveRun>[1],
+  runId: string,
+  queued = false,
+) {
+  const run = createActiveRun(scope.sessionKey, { ...scope, runId, queued });
+  registerRpcSource(runId, run);
+  return run;
+}
+
+function expectChangedLeaf(respond: Awaited<ReturnType<typeof invokeChatAbortHandler>>) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+  );
+}
+
+function registerChild(
+  scope: { sessionKey: string; agentId: string; storePath: string },
+  runId: string,
+  requesterSessionKey: string,
+  options: Pick<Parameters<typeof registerSubagentRun>[0], "collect" | "queued"> = {},
+) {
+  return registerSubagentRun({
+    runId,
+    childSessionKey: scope.sessionKey,
+    childAgentId: scope.agentId,
+    sessionEntry: loadSessionEntryReadOnly(scope),
+    requesterSessionKey,
+    requesterAgentId: scope.agentId,
+    requesterDisplayKey: requesterSessionKey,
+    requesterTurnRunId: "parent",
+    task: runId,
+    cleanup: "keep",
+    ...options,
+    expectsCompletionMessage: false,
+  });
+}
+
 function createGuardedStopFixture() {
   const storePath = path.join(fixture.stateDir, "shared.sqlite");
   const cfg: OpenClawConfig = {
@@ -73,8 +113,7 @@ function createGuardedStopFixture() {
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
   });
-  const otherRun = createActiveRun(other.sessionKey, { ...other, runId: "other-owner" });
-  registerRpcSource("other-owner", otherRun);
+  const otherRun = registeredRun(other, "other-owner");
   const send = (sessionKey: string, extra: Record<string, unknown> = {}) =>
     invokeChatAbortHandler({
       handler: (options) =>
@@ -103,21 +142,7 @@ function createGuardedStopFixture() {
         activeRunIds: [`${runId}-capacity`],
       }),
     ).toBe(true);
-    await registerSubagentRun({
-      runId,
-      childSessionKey: scope.sessionKey,
-      childAgentId: "ops",
-      sessionEntry: loadSessionEntryReadOnly(scope),
-      requesterSessionKey,
-      requesterAgentId: "ops",
-      requesterDisplayKey: requesterSessionKey,
-      requesterTurnRunId: "parent",
-      task: runId,
-      cleanup: "keep",
-      collect: true,
-      queued: true,
-      expectsCompletionMessage: false,
-    });
+    await registerChild(scope, runId, requesterSessionKey, { collect: true, queued: true });
     const start = vi.fn(async () => {});
     activateSwarmRun({
       groupId,
@@ -174,14 +199,8 @@ it.each([
     appendStopCanary(selected, "current-leaf", "selected conversation");
     await waitForSessionTranscriptProjection(selected);
     const before = await loadTranscriptEvents(selected);
-    const active = createActiveRun(selected.sessionKey, { ...selected, runId: "parent" });
-    const queued = createActiveRun(selected.sessionKey, {
-      ...selected,
-      runId: "queued",
-      queued: true,
-    });
-    registerRpcSource("parent", active);
-    registerRpcSource("queued", queued);
+    const active = registeredRun(selected, "parent");
+    const queued = registeredRun(selected, "queued", true);
     const respond = await test.send(key, extra);
 
     if (accepted) {
@@ -191,11 +210,7 @@ it.each([
         runIds: ["queued", "parent"],
       });
     } else {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-      );
+      expectChangedLeaf(respond);
     }
     expect(active.input.abortSignal.aborted, name).toBe(accepted);
     expect(queued.input.abortSignal.aborted, name).toBe(accepted);
@@ -211,8 +226,7 @@ it.each(["replacement", "branch"] as const)(
   async (change) => {
     const test = createGuardedStopFixture();
     const child = await test.child("original-child");
-    const parent = createActiveRun(test.parent.sessionKey, { ...test.parent, runId: "parent" });
-    registerRpcSource("parent", parent);
+    const parent = registeredRun(test.parent, "parent");
     test.context.chatRunState.getOrCreate("parent").buffer = "captured parent partial";
     let successor: ReturnType<typeof createActiveRun> | undefined;
     let successorQueue: ReturnType<typeof createActiveRun> | undefined;
@@ -232,17 +246,8 @@ it.each(["replacement", "branch"] as const)(
             });
           }
           appendStopCanary(replacement, "successor-leaf", "successor conversation");
-          successor = createActiveRun(replacement.sessionKey, {
-            ...replacement,
-            runId: "successor",
-          });
-          successorQueue = createActiveRun(replacement.sessionKey, {
-            ...replacement,
-            runId: "successor-queued",
-            queued: true,
-          });
-          registerRpcSource("successor", successor);
-          registerRpcSource("successor-queued", successorQueue);
+          successor = registeredRun(replacement, "successor");
+          successorQueue = registeredRun(replacement, "successor-queued", true);
           successorChild = test.child("successor-child");
         } catch (error) {
           callbackError = error;
@@ -259,11 +264,7 @@ it.each(["replacement", "branch"] as const)(
       await changed.promise;
       expect(callbackError).toBeUndefined();
       expect(parent.input.abortSignal.aborted).toBe(true);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-      );
+      expectChangedLeaf(respond);
       expect(successor?.input.abortSignal.aborted).toBe(false);
       expect(successorQueue?.input.abortSignal.aborted).toBe(false);
       expect(test.otherRun.input.abortSignal.aborted).toBe(false);
@@ -318,21 +319,8 @@ it("typed Stop settles child cancellation accepted before its parent guard chang
   const test = createGuardedStopFixture();
   const child = test.seed("agent:ops:subagent:authority-child", "ops", "authority-child-session");
   const runId = "authority-child";
-  await registerSubagentRun({
-    runId,
-    childSessionKey: child.sessionKey,
-    childAgentId: "ops",
-    sessionEntry: loadSessionEntryReadOnly(child),
-    requesterSessionKey: test.parent.sessionKey,
-    requesterAgentId: "ops",
-    requesterDisplayKey: test.parent.sessionKey,
-    requesterTurnRunId: "parent",
-    task: "remain active until cancellation is accepted",
-    cleanup: "keep",
-    expectsCompletionMessage: false,
-  });
-  const parent = createActiveRun(test.parent.sessionKey, { ...test.parent, runId: "parent" });
-  registerRpcSource("parent", parent);
+  await registerChild(child, runId, test.parent.sessionKey);
+  const parent = registeredRun(test.parent, "parent");
   const controller = new AbortController();
   const changeParent = () => appendStopCanary(test.parent, "later-leaf", "changed parent");
   const abort = vi.fn(() => {
@@ -347,11 +335,7 @@ it("typed Stop settles child cancellation accepted before its parent guard chang
       sessionId: test.parent.sessionId,
     });
     expect(parent.input.abortSignal.aborted).toBe(true);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    );
+    expectChangedLeaf(respond);
     expect(controller.signal.aborted).toBe(true);
     expect(abort).toHaveBeenCalledOnce();
     const retained = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "retained child");
@@ -371,8 +355,7 @@ it("typed Stop cannot acquire a replacement collector after cancellation prepara
     true,
   );
   const descendant = await test.child("collector-descendant", collector.sessionKey);
-  const old = createActiveRun(collector.sessionKey, { ...collector, runId: "old-collector" });
-  registerRpcSource("old-collector", old);
+  const old = registeredRun(collector, "old-collector");
   test.context.chatRunState.getOrCreate("old-collector").buffer = "old collector partial";
   const entered = createDeferred();
   const resume = createDeferred();
@@ -406,24 +389,11 @@ it("typed Stop cannot acquire a replacement collector after cancellation prepara
       updatedAt: Date.now(),
     });
     appendStopCanary(replacement, "replacement-leaf", "replacement collector canary");
-    const successor = createActiveRun(collector.sessionKey, {
-      ...replacement,
-      runId: "successor-collector",
-    });
-    const queued = createActiveRun(collector.sessionKey, {
-      ...replacement,
-      runId: "successor-queued",
-      queued: true,
-    });
-    registerRpcSource("successor-collector", successor);
-    registerRpcSource("successor-queued", queued);
+    const successor = registeredRun(replacement, "successor-collector");
+    const queued = registeredRun(replacement, "successor-queued", true);
     resume.resolve();
     const respond = await pending;
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    );
+    expectChangedLeaf(respond);
     for (const run of [old, successor, queued, test.otherRun]) {
       expect(run.input.abortSignal.aborted).toBe(false);
     }
@@ -516,21 +486,15 @@ it.each([
         sessionKey: childSessionKey,
         defaultSessionId: `${runId}-session`,
       });
-      await registerSubagentRun({
+      await registerChild(
+        { storePath, sessionKey: childSessionKey, agentId: "main" },
         runId,
-        childSessionKey,
-        childAgentId: "main",
-        sessionEntry: loadSessionEntryReadOnly({ storePath, sessionKey: childSessionKey }),
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: sessionKey,
-        requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
-        queued: runId === "queued",
-        expectsCompletionMessage: false,
-      });
+        sessionKey,
+        {
+          collect: true,
+          queued: runId === "queued",
+        },
+      );
     }
     const dispatch = vi.fn(async () => {});
     enqueueSwarmRun({
