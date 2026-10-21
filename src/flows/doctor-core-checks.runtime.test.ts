@@ -698,54 +698,40 @@ describe("doctor gateway runtime checks", () => {
   });
 
   it.each([
-    {
-      label: "missing",
-      installed: false,
-      loadState: "not-loaded",
-      runtimeStatus: "stopped",
-      message: "Gateway service is not installed.",
-      path: "gateway.mode",
-      fixHint: "Run `openclaw gateway install` to install the service.",
-    },
-    {
-      label: "installed but not loaded",
-      installed: true,
-      loadState: "not-loaded",
-      runtimeStatus: "stopped",
-      message: "Gateway service is installed but not loaded.",
-      path: "/tmp/gateway.service",
-      fixHint: "Start the installed service with `openclaw gateway start`.",
-    },
-    {
-      label: "loaded with unconfirmed runtime",
-      installed: true,
-      loadState: "loaded",
-      runtimeStatus: "unknown",
-      message: "Gateway service runtime is unknown, not running.",
-      path: "/tmp/gateway.service",
-      fixHint:
-        "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
-    },
-  ])("reports actionable advice for a $label local gateway daemon", async (entry) => {
+    [
+      "missing",
+      "Gateway service is not installed.",
+      "Run `openclaw gateway install` to install the service.",
+    ],
+    [
+      "unloaded",
+      "Gateway service is installed but not loaded.",
+      "Start the installed service with `openclaw gateway start`.",
+    ],
+    [
+      "unconfirmed",
+      "Gateway service runtime is unknown, not running.",
+      "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
+    ],
+  ])("reports actionable advice for a %s local gateway daemon", async (state, message, fixHint) => {
+    const installed = state !== "missing";
     mocks.serviceState.mockResolvedValueOnce({
-      installed: entry.installed,
-      loadState: { status: entry.loadState },
+      ...runningService(),
+      installed,
+      loadState: { status: state === "unconfirmed" ? "loaded" : "not-loaded" },
       running: false,
-      env: {},
-      command: entry.installed
-        ? { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" }
-        : null,
-      runtime: { status: entry.runtimeStatus },
+      command: installed ? runningService().command : null,
+      runtime: { status: state === "unconfirmed" ? "unknown" : "stopped" },
     });
 
     expect(await inspectDaemon({ cfg: localConfig })).toEqual([
       {
         checkId: "core/doctor/gateway-daemon",
         severity: "warning",
-        message: entry.message,
-        path: entry.path,
+        message,
+        path: installed ? "/tmp/gateway.service" : "gateway.mode",
         target: "openclaw-gateway",
-        fixHint: entry.fixHint,
+        fixHint,
       },
     ]);
   });

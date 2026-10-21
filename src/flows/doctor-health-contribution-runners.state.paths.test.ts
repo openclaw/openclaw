@@ -12,6 +12,10 @@ import {
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+} from "./doctor-health-context.test-support.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { initialDoctorHealthContribution } from "./doctor-health-contributions-selection.test-support.js";
 
@@ -117,32 +121,13 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
 }
 
 function context(env: NodeJS.ProcessEnv = {}, shouldRepair = true): DoctorHealthFlowContext {
-  return {
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  return createDoctorHealthFlowContext({
     options: { repair: shouldRepair },
-    prompter: {
-      confirm: async () => shouldRepair,
-      confirmAutoFix: async () => shouldRepair,
-      confirmAggressiveAutoFix: async () => shouldRepair,
-      confirmRuntimeRepair: async () => shouldRepair,
-      select: async (_params, fallback) => fallback,
-      shouldRepair,
-      shouldForce: false,
-      repairMode: {
-        shouldRepair,
-        shouldForce: false,
-        nonInteractive: true,
-        canPrompt: false,
-        updateInProgress: false,
-      },
-    },
-    configResult: { cfg: {} },
-    cfg: {},
-    cfgForPersistence: {},
-    sourceConfigValid: true,
+    prompter: createDoctorPrompterFixture(shouldRepair),
+    configResult: { confirmedConfigSource: undefined },
     configPath: String.raw`C:\synthetic\state\openclaw.json`,
     env,
-  };
+  });
 }
 
 describe("Doctor Windows database path repair", () => {
