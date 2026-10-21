@@ -172,13 +172,7 @@ export function createScheduledBeamTestRunner(options: Parameters<typeof createB
     id: "mirror",
     delayMs: 0,
     everyMs: 30_000,
-    run: async () => {
-      try {
-        await runner.tick();
-      } finally {
-        settled.resolve();
-      }
-    },
+    run: () => runner.tick().finally(() => settled.resolve()),
   });
   return {
     tick: () => vi.advanceTimersByTimeAsync(0),
