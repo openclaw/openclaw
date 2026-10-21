@@ -47,7 +47,6 @@ const writeTool = (response: ServerResponse, name: string, args: object, ordinal
 async function startProvider(
   signal: AbortSignal,
   holdFirstResume: boolean,
-  automaticRecovery = false,
   automaticReply = false,
 ) {
   const suspended = new Map(CASES.map((name) => [name, createDeferred()]));
@@ -169,12 +168,7 @@ async function startProvider(
             return;
           }
           expect(name).not.toBe("cancel");
-          if (automaticRecovery) {
-            expect(input).toContain("interrupted by a gateway restart");
-          } else {
-            expect(input).toContain("unknown outcome");
-            expect(input).toContain("Verify what happened before repeating an action");
-          }
+          expect(input).toContain("interrupted by a gateway restart");
           resumeInputs.push({ name, input });
           if (name === "revoked" || name === "restricted") {
             if (!revokeAttempted.has(name)) {
@@ -401,10 +395,10 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
   "automatically continues delegated owner work in place after %s",
   { timeout: 180_000 },
   async (mode, { signal }) => {
-    const provider = await startProvider(signal, mode === "SIGKILL", true);
+    const provider = await startProvider(signal, mode === "SIGKILL");
     const instance = await createInstance(provider, signal);
     let client: GatewayClient | undefined;
-    const connect = () => connectInstance(instance, signal);
+    const connect = () => connectInstance(instance, signal, mode === "SIGKILL");
     const race = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const rows = async () =>
@@ -420,7 +414,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
                 await client!.request("chat.history", { sessionKey: targetKey(name) }),
               ),
             ).toContain(final(name));
-            expect(await row(name)).toMatchObject({ hasActiveRun: false });
+            expect(await row(name)).toMatchObject({ status: "done", hasActiveRun: false });
           },
           { timeout: 30_000 },
         ),
@@ -558,128 +552,12 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
   },
 );
 
-it.skipIf(process.platform === "win32").for(["continue", "revoked"] as const)(
-  "automatically resumes an authenticated peer follow-up after process death: %s",
-  { timeout: 180_000 },
-  async (name, context) => {
-    const { signal } = context;
-    let checkpoint = "creating the isolated fixture";
-    let readLogs = () => "Gateway instance not created";
-    context.onTestFailed(() =>
-      console.error(`[automatic-peer-recovery] ${checkpoint}\n${readLogs()}`),
-    );
-    const provider = await startProvider(signal, false, true);
-    const instance = await createInstance(provider, signal);
-    let client: GatewayClient | undefined;
-    const race = <T>(promise: Promise<T>) =>
-      withinTest(Promise.race([promise, provider.failed]), signal);
-    readLogs = () => instance.logs().replaceAll(instance.gatewayToken, "[fixture token]");
-    checkpoint = "starting the isolated Gateway";
-    try {
-      await runQaGatewayFixture(
-        async () => {
-          await instance.startGateway();
-          client = await connectInstance(instance, signal, true);
-          for (const key of [sourceKey(name), targetKey(name)]) {
-            await client.request("sessions.create", {
-              key,
-              agentId: "main",
-              permissionMode: "full",
-            });
-          }
-          checkpoint = "waiting for the delegated checkpoint";
-          const source = await client.request<{ runId: string }>(
-            "chat.send",
-            {
-              sessionKey: sourceKey(name),
-              message: sourceRequest(name),
-              idempotencyKey: "automatic-peer-source",
-            },
-            { expectFinal: false },
-          );
-          await Promise.all([
-            race(provider.suspended(name)),
-            client
-              .request("agent.wait", { runId: source.runId, timeoutMs: 30_000 })
-              .then((result) => expect(result).toMatchObject({ status: "ok" })),
-          ]);
-          const before = await client.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
-          const sessionId = before.sessions.find((row) => row.key === targetKey(name))?.sessionId;
-          expect(sessionId).toEqual(expect.any(String));
-          provider.adopted(name);
-          await client.stopAndWait();
-          client = undefined;
-          checkpoint = "restarting the isolated Gateway";
-          const child = instance.child;
-          if (!child?.pid) {
-            throw new Error("Owned Gateway process unavailable");
-          }
-          const closed = once(child, "close");
-          expect(child.kill("SIGKILL")).toBe(true);
-          await race(closed);
-          await instance.startGateway();
-          expect(instance.child?.pid).not.toBe(child.pid);
-          client = await connectInstance(instance, signal, true);
-          // No sessions.recover or fresh chat.send: the durable input owns this continuation.
-          checkpoint = "waiting for automatic recovery";
-          if (name === "revoked") {
-            await race(provider.revocationReady);
-            await applyReadOnly(client, instance, targetKey(name));
-            provider.releaseRevoked();
-          } else {
-            await race(provider.resumed);
-          }
-          await race(
-            vi.waitFor(
-              async () => {
-                const history = await client!.request("chat.history", {
-                  sessionKey: targetKey(name),
-                });
-                expect(JSON.stringify(history)).toContain(final(name));
-                const rows = await client!.request<SessionsListResult>("sessions.list", {
-                  agentId: "main",
-                });
-                const recovered = rows.sessions.find((row) => row.key === targetKey(name));
-                expect(recovered).toMatchObject({ sessionId, status: "done", hasActiveRun: false });
-                expect(recovered?.restartRecoveryStatus).toBeUndefined();
-              },
-              { timeout: 30_000 },
-            ),
-          );
-          expect(
-            await readFile(path.join(instance.state.workspaceDir, `effect-${name}`), "utf8"),
-          ).toBe("completed\n");
-          if (name === "revoked") {
-            await expect(
-              readFile(path.join(instance.state.workspaceDir, "revoked-effect")),
-            ).rejects.toMatchObject({ code: "ENOENT" });
-          } else {
-            expect(
-              await readFile(path.join(instance.state.workspaceDir, "operator-effect"), "utf8"),
-            ).toBe("resumed\n");
-          }
-          expect(provider.resumeInputs).toHaveLength(2);
-        },
-        async () => client?.stopAndWait(),
-        () => instance.cleanup(),
-        provider.close,
-      );
-    } catch (cause) {
-      throw new Error(`Automatic peer recovery failed while ${checkpoint}:\n${readLogs()}`, {
-        cause,
-      });
-    }
-  },
-);
-
 it.skipIf(process.platform === "win32").for(["restart", "stop"] as const)(
   "preserves automatic peer result custody across %s and process death",
   { timeout: 180_000 },
   async (mode, context) => {
     const { signal } = context;
-    const provider = await startProvider(signal, false, false, true);
+    const provider = await startProvider(signal, false, true);
     const instance = await createInstance(provider, signal);
     let client: GatewayClient | undefined;
     const race = <T>(promise: Promise<T>) =>

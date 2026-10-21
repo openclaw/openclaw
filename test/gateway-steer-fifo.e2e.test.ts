@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../packages/gateway-protocol/src/client-info.js";
@@ -18,11 +19,8 @@ import {
   restartModelConfig,
   readRestartTrace as readTrace,
 } from "./gateway-restart.test-support.js";
-import {
-  listenLoopback,
-  readRequestText,
-  respondJson,
-} from "./helpers/gateway-integration-fixtures.js";
+import { readRequestText } from "./helpers/gateway-integration-fixtures.js";
+import { startOpenAiResponsesModelServer } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -101,17 +99,10 @@ async function startMockModelServer(holdSecondResponse = false) {
   const firstResponse = createDeferred();
   const secondResponse = createDeferred();
   let firstResponseKind: FirstResponseKind = "final";
-  const server = createServer((req, res) => {
-    void (async () => {
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      if (req.method === "GET" && url.pathname === "/v1/models") {
-        respondJson(res, { data: [{ id: "steer-fifo", object: "model" }] });
-        return;
-      }
-      if (req.method !== "POST" || url.pathname !== "/v1/responses") {
-        res.writeHead(404).end();
-        return;
-      }
+  const server = await startOpenAiResponsesModelServer({
+    modelId: "steer-fifo",
+    bindError: "steer FIFO model server did not bind",
+    onRequest: async (req, res) => {
       const body = await readRequestText(req);
       requests.push({ body: body ? (JSON.parse(body) as Record<string, unknown>) : {} });
       const requestIndex = requests.length;
@@ -147,16 +138,11 @@ async function startMockModelServer(holdSecondResponse = false) {
         messageId: `msg_steer_fifo_${requestIndex}`,
         responseId: `resp_steer_fifo_${requestIndex}`,
       });
-    })().catch((error: unknown) => {
-      if (!res.destroyed) {
-        respondJson(res, { error: { message: String(error) } }, 500);
-      }
-    });
+    },
   });
-  const baseUrl = await listenLoopback(server);
   let stopped = false;
   return {
-    baseUrl,
+    baseUrl: server.baseUrl,
     requests,
     releaseFirst: (kind: FirstResponseKind) => {
       firstResponseKind = kind;
@@ -170,10 +156,7 @@ async function startMockModelServer(holdSecondResponse = false) {
       stopped = true;
       firstResponse.resolve();
       secondResponse.resolve();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
-      });
+      await server.close();
     },
   };
 }
@@ -586,16 +569,11 @@ async function waitForSessionIdle(fixture: GatewayFixture, sinceSeq: number): Pr
       sinceSeq,
       limit: 20,
     });
-    expect(
-      (snapshot.events ?? []).some(
-        (event) =>
-          event.type === "session.state" && event.outcome === "idle" && event.queueDepth === 0,
-      ),
-    ).toBe(true);
+    expect(snapshot.events).toContainEqual(
+      expect.objectContaining({ type: "session.state", outcome: "idle", queueDepth: 0 }),
+    );
   }, WAIT_OPTS);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await setImmediate();
 }
 
 function contentText(content: unknown): string {
@@ -685,9 +663,7 @@ describe("Gateway steer FIFO", () => {
           const steerResult = await directChat(fixture, steerMarker, steerRunId, "steer");
           expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
           expect(fixture.modelServer.requests).toHaveLength(1);
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await setImmediate();
           expect(fixture.chatFinalRunIds).not.toContain(steerRunId);
         }
       } finally {
@@ -700,9 +676,7 @@ describe("Gateway steer FIFO", () => {
         async () => expect(await readTrace(steeringTools.tracePath)).toEqual(trace),
         WAIT_OPTS,
       );
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
 
       const gateOutput = assertSteeringOrder(fixture.modelServer.requests[1], steerMarker);
       expect(await readTrace(steeringTools.tracePath)).toEqual(trace);

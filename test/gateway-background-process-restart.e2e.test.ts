@@ -1,7 +1,6 @@
 // Real process replacement covers the idle-session handoff that owner tests cannot prove.
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -39,9 +38,6 @@ const CANCEL_FINAL = "BACKGROUND_PROCESS_CANCELLED";
 const RECOVERY_FINAL = "BACKGROUND_PROCESS_LOSS_RECONCILED";
 const REVOKED_FINAL = "BACKGROUND_PROCESS_REVOKED_WRITE_DENIED";
 const LOST_NOTICE = "process was lost when the Gateway restarted";
-
-const writeTool = (response: ServerResponse, name: string, args: object, ordinal: number) =>
-  writeRestartToolCall(response, "exec", name, args, ordinal);
 
 async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
   const firstRecovery = createDeferred<string>();
@@ -83,8 +79,9 @@ async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
           const tool = (name: string, args: object) => {
             const nameOnWire = tools.includes(name) ? name : "dispatch_action";
             expect(tools).toContain(nameOnWire);
-            writeTool(
+            writeRestartToolCall(
               response,
+              "exec",
               nameOnWire,
               nameOnWire === name ? args : { id: name, args },
               ordinal,
@@ -234,6 +231,10 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
       },
     });
     let client: GatewayClient | undefined;
+    const calls = (kind: (typeof provider.calls)[number]["kind"]) =>
+      provider.calls.filter((call) => call.kind === kind);
+    const readEffect = (file: string) =>
+      readFile(path.join(instance.state.workspaceDir, file), "utf8");
     const connect = () => connectRestartClient(instance, { mode: "backend" }, signal);
     const waitForIdleFinal = async (sessionKey: string, final: string) => {
       await withinTest(
@@ -315,9 +316,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
           await waitForIdleFinal(sessionKey, final);
         }
         await client.request("sessions.patch", { key: REVOKED_KEY, permissionMode: "read-only" });
-        expect(await readFile(path.join(instance.state.workspaceDir, "exec-count"), "utf8")).toBe(
-          "started\n",
-        );
+        expect(await readEffect("exec-count")).toBe("started\n");
         provider.beginRecovery();
         await restart(mode);
         await withinTest(Promise.race([provider.firstRecovery, provider.failed]), signal);
@@ -328,14 +327,12 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
           provider.releaseRecovery();
         }
         await waitForIdleFinal(SESSION_KEY, RECOVERY_FINAL);
-        expect(provider.calls.filter((call) => call.kind === "revocation-recovery")).toHaveLength(
-          2,
-        );
+        expect(calls("revocation-recovery")).toHaveLength(2);
         await expect(
           readFile(path.join(instance.state.workspaceDir, "revoked-effect")),
         ).rejects.toMatchObject({ code: "ENOENT" });
         // Display history hides exec inputs; count notices at the model boundary.
-        const recoveries = provider.calls.filter((call) => call.kind === "recovery");
+        const recoveries = calls("recovery");
         for (const recovery of recoveries) {
           expect(
             recovery.input.match(/process was lost when the Gateway restarted/gi),
@@ -345,23 +342,13 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         expect(recoveryCount).toBe(mode === "SIGKILL" ? 2 : 1);
         await restart("managed");
         await waitForIdleFinal(SESSION_KEY, RECOVERY_FINAL);
-        expect(provider.calls.filter((call) => call.kind === "recovery")).toHaveLength(
-          recoveryCount,
-        );
+        expect(calls("recovery")).toHaveLength(recoveryCount);
         await waitForIdleFinal(CANCEL_KEY, CANCEL_FINAL);
         await waitForIdleFinal(REVOKED_KEY, REVOKED_FINAL);
-        expect(provider.calls.filter((call) => call.kind === "revocation-recovery")).toHaveLength(
-          2,
-        );
-        expect(await readFile(path.join(instance.state.workspaceDir, "exec-count"), "utf8")).toBe(
-          "started\n",
-        );
-        expect(await readFile(path.join(instance.state.workspaceDir, "cancel-count"), "utf8")).toBe(
-          "started\n",
-        );
+        expect(calls("revocation-recovery")).toHaveLength(2);
         expect(
-          await readFile(path.join(instance.state.workspaceDir, "revoked-count"), "utf8"),
-        ).toBe("started\n");
+          await Promise.all(["exec-count", "cancel-count", "revoked-count"].map(readEffect)),
+        ).toEqual(["started\n", "started\n", "started\n"]);
       },
       async () => client?.stopAndWait(),
       () => instance.cleanup(),

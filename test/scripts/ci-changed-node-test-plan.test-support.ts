@@ -55,7 +55,6 @@ export function expectSameFields<K extends PropertyKey>(
 export const gatewayCallsitesGuard = "src/gateway/client-callsites.guard.test.ts";
 
 export const smokeTestFiles = new Set([
-  "test/gateway-rpc-exporters.test.ts",
   "src/config/io.load-async.test.ts",
   "src/config/io.compat.test.ts",
   "src/config/utility-model-separation-migration.io.test.ts",

@@ -3695,7 +3695,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
   "test/extension-import-boundaries.test.ts",
   "test/extension-test-boundary.test.ts",
-  "test/gateway-rpc-exporters.test.ts",
   "test/helpers/gateway-multi-acquisition.test.ts",
   "test/helpers/gateway-status-acquisition.test.ts",
   "test/helpers/openclaw-test-instance.acquisition.test.ts",

@@ -284,27 +284,8 @@ it(
     const managed = createScenario("managed");
     const killed = createScenario("killed");
     const scenarios = [...rawRecoveries, stopped, managed, killed];
-    let phase = "provider-start";
-    let readLogs = () => "Gateway instance not created";
-    const pendingCompletions = new Set<string>();
-    // Timeout reporting must not wait for the suspended test body to unwind.
-    context.onTestFailed(() => {
-      console.error(
-        "[process-shutdown-recovery]",
-        JSON.stringify({
-          phase,
-          pendingCompletions: [...pendingCompletions],
-          calls: scenarios.map(({ name, calls }) => ({
-            name,
-            phases: calls.map((call) => call.phase),
-          })),
-          logs: readLogs(),
-        }),
-      );
-    });
     const provider = await startProvider(scenarios, signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
-    phase = "fixture-create";
     const instance = await createOpenClawTestInstance({
       name: "gateway-process-shutdown-recovery",
       entrypoint: ["dist/index.js"],
@@ -317,7 +298,9 @@ it(
         OPENCLAW_NO_RESPAWN: "1",
       },
     });
-    readLogs = () => instance.logs().replaceAll(instance.gatewayToken, "[fixture token]");
+    context.onTestFailed(() =>
+      console.error(instance.logs().replaceAll(instance.gatewayToken, "[fixture token]")),
+    );
     let client: GatewayClient | undefined;
     const gate = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
@@ -352,7 +335,6 @@ it(
       await client.request("sessions.subscribe", { agentId: "main" });
     };
     const start = async (scenario: Scenario) => {
-      phase = `start-${scenario.name}:create-session`;
       const created = await client!.request<{ sessionId: string }>("sessions.create", {
         key: scenario.key,
         agentId: "main",
@@ -360,7 +342,6 @@ it(
         permissionMode: "full",
       });
       scenario.sessionId = created.sessionId;
-      phase = `start-${scenario.name}:admit`;
       const accepted = await client!.request<{ runId: string }>(
         "agent",
         {
@@ -374,7 +355,6 @@ it(
         { expectFinal: false },
       );
       scenario.runId = accepted.runId;
-      phase = `start-${scenario.name}:wait-first-output`;
       await gate(scenario === tool ? provider.toolStarted : scenario.partialSeen.promise);
     };
     const stopProcess = async (mode: "raw" | "managed" | "kill") => {
@@ -382,7 +362,6 @@ it(
       if (!child?.pid) {
         throw new Error("Owned Gateway process unavailable");
       }
-      phase = `shutdown-${mode}:close-client`;
       await client?.stopAndWait();
       client = undefined;
       const closed = once(child, "close");
@@ -396,7 +375,6 @@ it(
         ).toBe(true);
       }
       expect(child.kill(mode === "kill" ? "SIGKILL" : "SIGTERM")).toBe(true);
-      phase = `shutdown-${mode}:wait-process-close`;
       const outcome = await gate(closed);
       expect(outcome, instance.logs()).toEqual(mode === "kill" ? [null, "SIGKILL"] : [0, null]);
       return child.pid;
@@ -405,9 +383,7 @@ it(
       asRecord(readRestartSession(instance.state.agentDir(), scenario.key));
     const finish = async (scenario: Scenario) => {
       scenario.releaseResponse.resolve();
-      pendingCompletions.add(scenario.name);
       await gate(scenario.completed.promise);
-      pendingCompletions.delete(scenario.name);
       const listed = await client!.request<SessionsListResult>("sessions.list", {
         agentId: "main",
       });
@@ -435,19 +411,18 @@ it(
     };
     await runQaGatewayFixture(
       async () => {
-        try {
-          const pluginId = "shutdown-tool-checkpoint";
-          const pluginDir = instance.state.path("checkpoint-plugin");
+        const pluginId = "shutdown-tool-checkpoint";
+        const pluginDir = instance.state.path("checkpoint-plugin");
 
-          // The policy hook waits through cancellation; reset must revoke before its tool effect.
-          await writeRestartPlugin(
-            pluginDir,
-            {
-              id: pluginId,
-              activation: { onStartup: true },
-              configSchema: { type: "object", additionalProperties: false, properties: {} },
-            },
-            `export default {
+        // The policy hook waits through cancellation; reset must revoke before its tool effect.
+        await writeRestartPlugin(
+          pluginDir,
+          {
+            id: pluginId,
+            activation: { onStartup: true },
+            configSchema: { type: "object", additionalProperties: false, properties: {} },
+          },
+          `export default {
               id: ${JSON.stringify(pluginId)},
               register(api) {
                 api.on("before_tool_call", async (event, ctx) => {
@@ -469,186 +444,148 @@ it(
                 }, { matcher: ["exec"] });
               },
             };`,
-            "index.mjs",
-          );
-          await instance.state.writeConfig({
-            update: { checkOnStart: false },
-            browser: { enabled: false },
-            discovery: { mdns: { mode: "off" } },
-            plugins: {
-              enabled: true,
-              allow: [pluginId],
-              load: { paths: [pluginDir] },
-              entries: { [pluginId]: { enabled: true } },
-              slots: { memory: "none" },
-            },
-            ...restartModelConfig(
-              model,
-              instance.state.workspaceDir,
-              { maxConcurrent: 8 },
-              { catalogRefresh: { enabled: false } },
-            ),
-            tools: {
-              allow: ["exec", "process"],
-              exec: { mode: "full", host: "gateway" },
-              codeMode: { enabled: false },
-            },
-            gateway: {
-              mode: "local",
-              bind: "loopback",
-              port: instance.port,
-              auth: { mode: "token", token: instance.gatewayToken },
-              controlUi: { enabled: false },
-            },
-          });
-          phase = "initial:gateway-start";
-          await instance.startGateway();
-          phase = "initial:client-connect";
-          await connect();
-          phase = "raw-sigterm";
-          await start(stream);
-          await start(tool);
-          await start(stopped);
-          phase = "explicit-stop:abort";
-          expect(await client!.request("sessions.abort", { key: stopped.key })).toMatchObject({
-            status: "aborted",
-          });
-          phase = "explicit-stop:wait-terminal";
-          expect(
-            await client!.request("agent.wait", { runId: stopped.runId, timeoutMs: 60_000 }),
-          ).toMatchObject({ status: "error" });
-          stopped.phase = "cancelled";
-          await start(reset);
-          await start(parallelA);
-          await start(parallelB);
-          const predecessor = await stopProcess("raw");
-          for (const scenario of rawRecoveries) {
-            const entry = readStoppedEntry(scenario);
-            expect(entry).toMatchObject({
-              sessionId: scenario.sessionId,
-              status: "interrupted",
-              mainRestartRecovery: expect.any(Object),
-            });
-            expect(entry.restartRecoveryTerminalRunIds ?? []).not.toContain(scenario.runId);
-            scenario.phase = "recovery";
-          }
-          expect(readStoppedEntry(stopped)).toMatchObject({ status: "killed" });
-          const resetRevision = readStoppedEntry(reset).lifecycleRevision;
-          expect(resetRevision).toBeTypeOf("string");
-          phase = "raw-recovery:gateway-start";
-          await instance.startGateway();
-          expect(instance.child?.pid).not.toBe(predecessor);
-          phase = "raw-recovery:client-connect";
-          await connect();
-          // Four distinct turns must reach the provider while every response is held.
-          phase = "raw-recovery:wait-four-provider-requests";
-          await gate(provider.fourRecoveriesSeen);
-          const firstRecoveries = provider.recoveryStarts();
-          expect(firstRecoveries).toHaveLength(4);
-          expect(provider.peakRecoveryConcurrency()).toBe(4);
-          const firstFinished = firstRecoveries.find((scenario) => scenario !== reset);
-          if (!firstFinished) {
-            throw new Error("Expected a started recovery that is not being reset");
-          }
-          phase = `raw-recovery:finish-first-${firstFinished.name}`;
-          await finish(firstFinished);
-          phase = "raw-recovery:wait-all-provider-requests";
-          await gate(Promise.all(rawRecoveries.map((scenario) => scenario.recoverySeen.promise)));
-          const finishing = Promise.all(
-            rawRecoveries
-              .filter((scenario) => scenario !== reset && scenario !== firstFinished)
-              .map(finish),
-          );
-          void finishing.catch(() => {});
-          phase = "raw-recovery:wait-reset-provider-request";
-          await gate(reset.recoverySeen.promise);
-          phase = "recovery-tool-checkpoint";
-          await gate(provider.toolCheckpoint);
-          phase = "revoke-recovery";
-          const resetting = client!.request<{
-            ok: boolean;
-            entry: { sessionId: string; lifecycleRevision: string };
-          }>("sessions.reset", { key: reset.key, reason: "reset" });
-          void resetting.catch(() => {});
-          phase = "revoke-recovery:wait-tool-cancel";
-          await gate(provider.toolCancelled);
-          provider.releaseToolCheckpoint();
-          phase = "revoke-recovery:wait-reset-result";
-          const resetResult = await gate(resetting);
-          expect(resetResult).toMatchObject({
-            ok: true,
-            entry: { sessionId: reset.sessionId, lifecycleRevision: expect.any(String) },
-          });
-          expect(resetResult.entry.lifecycleRevision).not.toBe(resetRevision);
-          expect(resetResult.entry).not.toHaveProperty("mainRestartRecovery");
-          reset.phase = "cancelled";
-          phase = "raw-recovery:wait-remaining-completions";
-          await gate(finishing);
-          const afterReset = await client!.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
-          const replacement = afterReset.sessions.find((row) => row.key === reset.key);
-          expect(replacement).toMatchObject({ sessionId: reset.sessionId, hasActiveRun: false });
-          expect(afterReset.sessions.find((row) => row.key === stopped.key)).toMatchObject({
-            status: "killed",
-            hasActiveRun: false,
-          });
-          expect(provider.effects()).toBe(1);
-          expect(provider.forbiddenEffects()).toBe(0);
-
-          phase = "managed-restart";
-          await start(managed);
-          await stopProcess("managed");
-          expect(readStoppedEntry(managed)).toMatchObject({
+          "index.mjs",
+        );
+        await instance.state.writeConfig({
+          update: { checkOnStart: false },
+          browser: { enabled: false },
+          discovery: { mdns: { mode: "off" } },
+          plugins: {
+            enabled: true,
+            allow: [pluginId],
+            load: { paths: [pluginDir] },
+            entries: { [pluginId]: { enabled: true } },
+            slots: { memory: "none" },
+          },
+          ...restartModelConfig(
+            model,
+            instance.state.workspaceDir,
+            { maxConcurrent: 8 },
+            { catalogRefresh: { enabled: false } },
+          ),
+          tools: {
+            allow: ["exec", "process"],
+            exec: { mode: "full", host: "gateway" },
+            codeMode: { enabled: false },
+          },
+          gateway: {
+            mode: "local",
+            bind: "loopback",
+            port: instance.port,
+            auth: { mode: "token", token: instance.gatewayToken },
+            controlUi: { enabled: false },
+          },
+        });
+        await instance.startGateway();
+        await connect();
+        await start(stream);
+        await start(tool);
+        await start(stopped);
+        expect(await client!.request("sessions.abort", { key: stopped.key })).toMatchObject({
+          status: "aborted",
+        });
+        expect(
+          await client!.request("agent.wait", { runId: stopped.runId, timeoutMs: 60_000 }),
+        ).toMatchObject({ status: "error" });
+        stopped.phase = "cancelled";
+        await start(reset);
+        await start(parallelA);
+        await start(parallelB);
+        const predecessor = await stopProcess("raw");
+        for (const scenario of rawRecoveries) {
+          const entry = readStoppedEntry(scenario);
+          expect(entry).toMatchObject({
+            sessionId: scenario.sessionId,
             status: "interrupted",
-            sessionId: managed.sessionId,
+            mainRestartRecovery: expect.any(Object),
           });
-          managed.phase = "held-recovery";
-          phase = "managed-recovery:gateway-start";
-          await instance.startGateway();
-          phase = "managed-recovery:client-connect";
-          await connect();
-          phase = "managed-recovery:wait-provider-request";
-          await gate(managed.recoverySeen.promise);
-          // Kill both an admitted original turn and a turn already recovering from restart.
-          phase = "sigkill-during-recovery";
-          await start(killed);
-          await stopProcess("kill");
-          managed.phase = "recovery";
-          killed.phase = "recovery";
-          phase = "second-recovery:gateway-start";
-          await instance.startGateway();
-          phase = "second-recovery:client-connect";
-          await connect();
-          phase = "second-recovery:wait-completions";
-          await gate(Promise.all([finish(managed), finish(killed)]));
-          expect(stopped.calls).toHaveLength(1);
-          expect(reset.calls).toHaveLength(2);
-          expect(managed.calls.map((call) => call.phase)).toEqual([
-            "initial",
-            "held-recovery",
-            "recovery",
-          ]);
-          expect(killed.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
-          for (const scenario of [parallelA, parallelB]) {
-            expect(scenario.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
-          }
-          expect(provider.peakRecoveryConcurrency()).toBe(4);
-          expect(provider.effects()).toBe(1);
-          expect(provider.forbiddenEffects()).toBe(0);
-        } catch (cause) {
-          throw new Error(
-            JSON.stringify({
-              phase,
-              calls: scenarios.map(({ name, calls }) => ({
-                name,
-                phases: calls.map((call) => call.phase),
-              })),
-              logs: instance.logs(),
-            }).replaceAll(instance.gatewayToken, "[fixture token]"),
-            { cause },
-          );
+          expect(entry.restartRecoveryTerminalRunIds ?? []).not.toContain(scenario.runId);
+          scenario.phase = "recovery";
         }
+        expect(readStoppedEntry(stopped)).toMatchObject({ status: "killed" });
+        const resetRevision = readStoppedEntry(reset).lifecycleRevision;
+        expect(resetRevision).toBeTypeOf("string");
+        await instance.startGateway();
+        expect(instance.child?.pid).not.toBe(predecessor);
+        await connect();
+        // Four distinct turns must reach the provider while every response is held.
+        await gate(provider.fourRecoveriesSeen);
+        const firstRecoveries = provider.recoveryStarts();
+        expect(firstRecoveries).toHaveLength(4);
+        expect(provider.peakRecoveryConcurrency()).toBe(4);
+        const firstFinished = firstRecoveries.find((scenario) => scenario !== reset);
+        if (!firstFinished) {
+          throw new Error("Expected a started recovery that is not being reset");
+        }
+        await finish(firstFinished);
+        await gate(Promise.all(rawRecoveries.map((scenario) => scenario.recoverySeen.promise)));
+        const finishing = Promise.all(
+          rawRecoveries
+            .filter((scenario) => scenario !== reset && scenario !== firstFinished)
+            .map(finish),
+        );
+        void finishing.catch(() => {});
+        await gate(reset.recoverySeen.promise);
+        await gate(provider.toolCheckpoint);
+        const resetting = client!.request<{
+          ok: boolean;
+          entry: { sessionId: string; lifecycleRevision: string };
+        }>("sessions.reset", { key: reset.key, reason: "reset" });
+        void resetting.catch(() => {});
+        await gate(provider.toolCancelled);
+        provider.releaseToolCheckpoint();
+        const resetResult = await gate(resetting);
+        expect(resetResult).toMatchObject({
+          ok: true,
+          entry: { sessionId: reset.sessionId, lifecycleRevision: expect.any(String) },
+        });
+        expect(resetResult.entry.lifecycleRevision).not.toBe(resetRevision);
+        expect(resetResult.entry).not.toHaveProperty("mainRestartRecovery");
+        reset.phase = "cancelled";
+        await gate(finishing);
+        const afterReset = await client!.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        const replacement = afterReset.sessions.find((row) => row.key === reset.key);
+        expect(replacement).toMatchObject({ sessionId: reset.sessionId, hasActiveRun: false });
+        expect(afterReset.sessions.find((row) => row.key === stopped.key)).toMatchObject({
+          status: "killed",
+          hasActiveRun: false,
+        });
+        expect(provider.effects()).toBe(1);
+        expect(provider.forbiddenEffects()).toBe(0);
+        await start(managed);
+        await stopProcess("managed");
+        expect(readStoppedEntry(managed)).toMatchObject({
+          status: "interrupted",
+          sessionId: managed.sessionId,
+        });
+        managed.phase = "held-recovery";
+        await instance.startGateway();
+        await connect();
+        await gate(managed.recoverySeen.promise);
+        // Kill both an admitted original turn and a turn already recovering from restart.
+        await start(killed);
+        await stopProcess("kill");
+        managed.phase = "recovery";
+        killed.phase = "recovery";
+        await instance.startGateway();
+        await connect();
+        await gate(Promise.all([finish(managed), finish(killed)]));
+        expect(stopped.calls).toHaveLength(1);
+        expect(reset.calls).toHaveLength(2);
+        expect(managed.calls.map((call) => call.phase)).toEqual([
+          "initial",
+          "held-recovery",
+          "recovery",
+        ]);
+        expect(killed.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
+        for (const scenario of [parallelA, parallelB]) {
+          expect(scenario.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
+        }
+        expect(provider.peakRecoveryConcurrency()).toBe(4);
+        expect(provider.effects()).toBe(1);
+        expect(provider.forbiddenEffects()).toBe(0);
       },
       async () => {
         provider.releaseToolCheckpoint();

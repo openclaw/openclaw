@@ -1,13 +1,12 @@
 // E2E: hook dispatch and cron complete inside the shared capacity budget.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { readRequestText } from "./helpers/gateway-integration-fixtures.js";
 import {
-  listenLoopback,
-  readRequestText,
-  respondJson,
-} from "./helpers/gateway-integration-fixtures.js";
-import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -140,7 +139,7 @@ describe("Gateway hook concurrency", () => {
       );
       expect(modelServer.active(), instance.logs()).toBe(SHARED_BUDGET);
 
-      const addResult = await instance.cli([
+      const cronJob = await cliJson<{ id?: string }>(instance, [
         "cron",
         "add",
         "--name",
@@ -154,17 +153,12 @@ describe("Gateway hook concurrency", () => {
         "--no-deliver",
         "--json",
       ]);
-      expect(addResult.code, addResult.stderr).toBe(0);
-      const cronJob = JSON.parse(addResult.stdout) as { id?: string };
       expect(cronJob.id).toEqual(expect.any(String));
-
-      const runResult = await instance.cli(["cron", "run", cronJob.id ?? ""]);
-      expect(runResult.code, runResult.stderr).toBe(0);
-      const cronRun = JSON.parse(runResult.stdout) as {
+      const cronRun = await cliJson<{
         enqueued?: boolean;
         ok?: boolean;
         runId?: string;
-      };
+      }>(instance, ["cron", "run", cronJob.id ?? ""]);
       expect(cronRun).toMatchObject({
         enqueued: true,
         ok: true,
@@ -297,51 +291,31 @@ async function startHeldModelServer() {
   let active = 0;
   let peak = 0;
   let requestCount = 0;
-  const server = createServer((request, response) => {
-    void handleModelRequest(request, response).catch((error: unknown) => {
-      if (response.destroyed) {
-        return;
+  const server = await startOpenAiResponsesModelServer({
+    modelId: "hook-concurrency",
+    bindError: "hook concurrency model server did not bind",
+    onRequest: async (request, response) => {
+      const requestBody = await readRequestText(request);
+      const index = requestCount;
+      requestCount += 1;
+      requestBodies[index] = requestBody;
+      const release = createDeferred();
+      releases[index] = release;
+      if (!holdRequests) {
+        release.resolve();
       }
-      respondJson(response, { error: { message: String(error) } }, 500);
-    });
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        await release.promise;
+        if (!response.destroyed) {
+          writeModelResponse(response, index, replyTexts.get(index));
+        }
+      } finally {
+        active -= 1;
+      }
+    },
   });
-
-  async function handleModelRequest(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method === "GET" && url.pathname === "/v1/models") {
-      respondJson(response, { data: [{ id: "hook-concurrency", object: "model" }] });
-      return;
-    }
-    if (request.method !== "POST" || url.pathname !== "/v1/responses") {
-      response.writeHead(404).end();
-      return;
-    }
-
-    const requestBody = await readRequestText(request);
-    const index = requestCount;
-    requestCount += 1;
-    requestBodies[index] = requestBody;
-    const release = createDeferred();
-    releases[index] = release;
-    if (!holdRequests) {
-      release.resolve();
-    }
-    active += 1;
-    peak = Math.max(peak, active);
-    try {
-      await release.promise;
-      if (!response.destroyed) {
-        writeModelResponse(response, index, replyTexts.get(index));
-      }
-    } finally {
-      active -= 1;
-    }
-  }
-
-  const url = await listenLoopback(server);
 
   const releaseAll = () => {
     holdRequests = false;
@@ -364,13 +338,10 @@ async function startHeldModelServer() {
     releaseAll,
     requestBody: (index: number) => requestBodies[index],
     requestCount: () => requestCount,
-    url,
+    url: server.baseUrl,
     close: async () => {
       releaseAll();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await server.close();
     },
   };
 }
@@ -382,19 +353,10 @@ async function waitForCronRun(
 ): Promise<void> {
   await vi.waitFor(
     async () => {
-      const result = await instance.cli([
-        "cron",
-        "runs",
-        "--id",
-        jobId,
-        "--run-id",
-        runId,
-        "--json",
-      ]);
-      expect(result.code, result.stderr).toBe(0);
-      const history = JSON.parse(result.stdout) as {
-        entries?: Array<{ runId?: string; status?: string }>;
-      };
+      const history = await cliJson<{ entries?: Array<{ runId?: string; status?: string }> }>(
+        instance,
+        ["cron", "runs", "--id", jobId, "--run-id", runId, "--json"],
+      );
       expect(history.entries).toContainEqual(expect.objectContaining({ runId, status: "ok" }));
     },
     { interval: 200, timeout: 30_000 },
@@ -408,9 +370,12 @@ async function waitForQueuedSharedLane(
 ): Promise<void> {
   await vi.waitFor(
     async () => {
-      const result = await instance.cli(["gateway", "call", "diagnostics.lanes", "--json"]);
-      expect(result.code, result.stderr).toBe(0);
-      const diagnostics = JSON.parse(result.stdout) as { lanes: unknown[] };
+      const diagnostics = await cliJson<{ lanes: unknown[] }>(instance, [
+        "gateway",
+        "call",
+        "diagnostics.lanes",
+        "--json",
+      ]);
       expect(diagnostics.lanes).toContainEqual(
         expect.objectContaining({
           lane,
@@ -424,6 +389,12 @@ async function waitForQueuedSharedLane(
     },
     { interval: 200, timeout: 30_000 },
   );
+}
+
+async function cliJson<T>(instance: OpenClawTestInstance, args: string[]): Promise<T> {
+  const result = await instance.cli(args);
+  expect(result.code, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as T;
 }
 
 function writeModelResponse(response: ServerResponse, sequence: number, replyText?: string): void {

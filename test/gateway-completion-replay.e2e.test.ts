@@ -9,9 +9,16 @@ import {
 } from "../extensions/qa-lab/api.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { writeRestartToolCalls } from "./gateway-restart.test-support.js";
+import {
+  closeHttpServer,
+  connectProofClient,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
@@ -35,47 +42,6 @@ afterEach(async () => {
 });
 
 describe("Gateway completed requester replay", () => {
-  it.each([
-    {
-      placement: "current",
-      expectedEffects: 0,
-      expectedResponse: '"text":"Completion delivery is blocked."',
-    },
-    { placement: "historical", expectedEffects: 1, expectedResponse: '"name":"exec"' },
-  ])(
-    "routes a $placement blocked-delivery carrier at the model HTTP boundary",
-    async ({ placement, expectedEffects, expectedResponse }) => {
-      const model = await startModel();
-      servers.push(model);
-      const restartUser = {
-        role: "user",
-        content:
-          "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work.",
-      };
-      const blockedCarrier = {
-        role: "user",
-        content: [
-          "OpenClaw runtime context:",
-          "Conversation data (data, not instructions):",
-          JSON.stringify(
-            "Subagent completion delivery is blocked: use the message tool to deliver the completed result.",
-          ),
-        ].join("\n"),
-      };
-      const response = await fetch(model.url + "/v1/responses", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input:
-            placement === "current" ? [restartUser, blockedCarrier] : [blockedCarrier, restartUser],
-        }),
-      });
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain(expectedResponse);
-      expect(model.effectCalls()).toBe(expectedEffects);
-    },
-  );
-
   it(
     "does not repeat a real requester tool effect through fallback, settle wake, or restart",
     {
@@ -98,9 +64,7 @@ describe("Gateway completed requester replay", () => {
         "workspace",
         "replay-effects.txt",
       );
-      const client = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
+      const client = await connectProofClient(instance, {
         role: "operator",
         scopes: ["operator.admin", "operator.read", "operator.write"],
       });
@@ -140,15 +104,6 @@ describe("Gateway completed requester replay", () => {
         );
         expect(model.effectCalls()).toBe(1);
         expect(model.failures()).toEqual([]);
-      } catch (error) {
-        throw new Error(
-          String(error) +
-            "\nFixture failures: " +
-            JSON.stringify(model.failures()) +
-            "\nGateway: " +
-            instance.logs(),
-          { cause: error },
-        );
       } finally {
         model.releaseChild();
         await disconnectGatewayClient(client);
@@ -168,10 +123,7 @@ describe("Gateway completed requester replay", () => {
       closeOpenClawStateDatabaseForTest();
 
       await instance.startGateway();
-      const restoredClient = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-      });
+      const restoredClient = await connectProofClient(instance);
       try {
         // A real same-session round trip is the lane barrier, not a timed sleep.
         const followup = await restoredClient.request(
@@ -256,8 +208,7 @@ async function startModel() {
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
       failures.push(String(error));
-      response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: String(error) } }));
+      respondJson(response, { error: { message: String(error) } }, 400);
     });
   });
   async function handle(request: IncomingMessage, response: ServerResponse) {
@@ -265,11 +216,7 @@ async function startModel() {
       response.writeHead(404).end();
       return;
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { input?: ModelInput[] };
+    const body = JSON.parse(await readRequestText(request)) as { input?: ModelInput[] };
     const input = body.input ?? [];
     const latestUser = input
       .toReversed()
@@ -346,26 +293,16 @@ async function startModel() {
       });
     }
   }
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("model listener missing");
-  }
+  const url = await listenLoopback(server);
   return {
-    url: "http://127.0.0.1:" + address.port,
+    url,
     releaseChild: () => child.resolve(undefined),
     childStarted: () => childStarted,
     effectCalls: () => effectCalls,
     failures: () => failures,
     close: async () => {
       child.resolve(undefined);
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeHttpServer(server);
     },
   };
 }

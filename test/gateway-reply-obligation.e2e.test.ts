@@ -7,10 +7,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { writeRestartToolCalls } from "./gateway-restart.test-support.js";
+import { connectProofClient, respondJson } from "./helpers/gateway-integration-fixtures.js";
 import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
@@ -93,9 +94,7 @@ it(
     expect(prepared.code, prepared.stderr).toBe(0);
     await gateway.startGateway();
     const errorSessions: unknown[] = [];
-    const client = await connectGatewayClient({
-      url: gateway.url,
-      token: gateway.gatewayToken,
+    const client = await connectProofClient(gateway, {
       role: "operator",
       scopes: ["operator.admin", "operator.read", "operator.write"],
       deviceIdentity: loadOrCreateDeviceIdentity({
@@ -290,8 +289,7 @@ async function startFixture(scenarios: Scenario[]) {
       createServer((request, response) => {
         void handle(request, response).catch((error: unknown) => {
           failures.push(String(error));
-          response.writeHead(400, { "content-type": "application/json" });
-          response.end(JSON.stringify({ error: { message: String(error) } }));
+          respondJson(response, { error: { message: String(error) } }, 400);
         });
       }),
   });
