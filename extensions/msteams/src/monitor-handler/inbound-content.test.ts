@@ -31,6 +31,8 @@ const htmlSummary = {
   srcHosts: [],
   attachmentIds: [],
 };
+const pdf = { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" } as const;
+const serviceUrl = "https://smba.trafficmanager.net/amer/";
 
 function setup(
   options: {
@@ -83,6 +85,16 @@ function setup(
   return { run, log, resolveTeamAadGroupId };
 }
 
+function personal(options: Parameters<typeof setup>[0] = {}) {
+  return setup({ conversationType: "personal", conversationId: "a:bf-dm-id", ...options });
+}
+
+function graphRecovery(unresolved: MSTeamsInboundMedia, recovered: MSTeamsInboundMedia) {
+  vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([unresolved]);
+  vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({ media: [recovered] });
+  return setup({ advertisedMedia: [unresolved], teamAadGroupId: "team-aad-guid" }).run();
+}
+
 describe("Teams inbound content", () => {
   beforeEach(() => {
     vi.mocked(downloadMSTeamsAttachments).mockReset().mockResolvedValue([]);
@@ -102,16 +114,10 @@ describe("Teams inbound content", () => {
   });
 
   it("replaces aligned direct facts and retains additional unavailable media", async () => {
-    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([
-      { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
-      { kind: "image" },
-    ]);
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([pdf, { kind: "image" }]);
     expect(await setup({ advertisedMedia: [{ kind: "document" }] }).run()).toEqual({
       agentBody: "hello\n\n[msteams attachment unavailable]",
-      inboundMedia: [
-        { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
-        { kind: "image" },
-      ],
+      inboundMedia: [pdf, { kind: "image" }],
     });
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
@@ -124,41 +130,29 @@ describe("Teams inbound content", () => {
       kind: "document",
       sourceId: "graph-attachment-2",
     } as const;
-    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([unresolved]);
-    vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({ media: [recovered] });
-    expect(
-      await setup({ advertisedMedia: [unresolved], teamAadGroupId: "team-aad-guid" }).run(),
-    ).toEqual({
+    expect(await graphRecovery(unresolved, recovered)).toEqual({
       agentBody: "hello\n\n[msteams attachment unavailable]",
       inboundMedia: [unresolved, recovered],
     });
   });
 
   it("refines an unresolved slot using Graph content-type evidence", async () => {
-    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([{ kind: "document" }]);
-    vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({
-      media: [{ kind: "image", contentType: "image/png", sourceId: "graph-image-1" }],
-    });
-    expect(
-      (
-        await setup({
-          advertisedMedia: [{ kind: "document" }],
-          teamAadGroupId: "team-aad-guid",
-        }).run()
-      )?.inboundMedia,
-    ).toEqual([{ kind: "image", contentType: "image/png", sourceId: "graph-image-1" }]);
+    const recovered = {
+      kind: "image",
+      contentType: "image/png",
+      sourceId: "graph-image-1",
+    } as const;
+    const result = await graphRecovery({ kind: "document" }, recovered);
+    expect(result?.inboundMedia).toEqual([recovered]);
   });
 
   it("preserves the advertised kind when matching Graph media has no type evidence", async () => {
     const unresolved = { kind: "image", sourceId: "hosted-image-1" } as const;
-    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([unresolved]);
-    vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({
-      media: [{ kind: "document", sourceId: "hosted-image-1" }],
+    const result = await graphRecovery(unresolved, {
+      kind: "document",
+      sourceId: "hosted-image-1",
     });
-    expect(
-      (await setup({ advertisedMedia: [unresolved], teamAadGroupId: "team-aad-guid" }).run())
-        ?.inboundMedia,
-    ).toEqual([unresolved]);
+    expect(result?.inboundMedia).toEqual([unresolved]);
   });
 
   it.each([
@@ -224,41 +218,32 @@ describe("Teams inbound content", () => {
     "recovers %s via Bot Framework without Graph ID rewriting",
     async (conversationId) => {
       vi.mocked(downloadMSTeamsBotFrameworkAttachments).mockResolvedValue({
-        media: [{ path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" }],
+        media: [pdf],
         attachmentCount: 1,
       });
-      const result = await setup({
-        conversationType: "personal",
+      const result = await personal({
         conversationId,
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        serviceUrl,
       }).run();
       expect(downloadMSTeamsBotFrameworkAttachments).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          serviceUrl: "https://smba.trafficmanager.net/amer/",
+          serviceUrl,
           attachmentIds: ["att-0", "att-1"],
         }),
       );
       expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
-      expect(result?.inboundMedia).toEqual([
-        { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
-      ]);
+      expect(result?.inboundMedia).toEqual([pdf]);
     },
   );
 
   it("does not switch an empty Bot Framework result to Graph", async () => {
-    await setup({
-      conversationType: "personal",
-      conversationId: "a:bf-dm-id",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
-    }).run();
+    await personal({ serviceUrl }).run();
     expect(downloadMSTeamsBotFrameworkAttachments).toHaveBeenCalledTimes(1);
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
 
   it("does not fetch mention-only personal HTML", async () => {
-    await setup({
-      conversationType: "personal",
-      conversationId: "a:bf-dm-id",
+    await personal({
       attachments: [{ contentType: "text/html", content: "<div><at>Bot</at> hello</div>" }],
     }).run();
     expect(downloadMSTeamsBotFrameworkAttachments).not.toHaveBeenCalled();
@@ -266,7 +251,7 @@ describe("Teams inbound content", () => {
   });
 
   it("logs missing service URLs without trying another identifier space", async () => {
-    const { run, log } = setup({ conversationType: "personal", conversationId: "a:bf-dm-id" });
+    const { run, log } = personal();
     await run();
     expect(downloadMSTeamsBotFrameworkAttachments).not.toHaveBeenCalled();
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
