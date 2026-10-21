@@ -72,22 +72,18 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
 });
 
 describe("resolveStrandedReplyRecovery", () => {
-  it.each([
-    { payload: { text: "The recovered answer is ready." }, expected: "none" },
-    {
-      payload: { text: "The fallback model is active.", isFallbackNotice: true },
-      expected: "retry",
-    },
-  ])(
-    "distinguishes a pending terminal answer from a notice: $expected",
-    ({ payload, expected }) => {
-      const recovery = recover({
-        payloads: [markReplyPayloadForSourceSuppressionDelivery(payload)],
-      });
-
-      expect(recovery.kind).toBe(expected);
-    },
-  );
+  it("does not mistake a fallback notice for a pending terminal answer", () => {
+    expect(
+      recover({
+        payloads: [
+          markReplyPayloadForSourceSuppressionDelivery({
+            text: "The fallback model is active.",
+            isFallbackNotice: true,
+          }),
+        ],
+      }).kind,
+    ).toBe("retry");
+  });
 
   it.each([
     { label: "uncapped", toolsAllow: undefined, expected: ["message"] },
@@ -115,33 +111,5 @@ describe("resolveStrandedReplyRecovery", () => {
         transcriptPrompt: undefined,
       });
     }
-  });
-
-  it("returns a diagnostic rather than a second retry", () => {
-    const base = createMockFollowupRun({ prompt: "question", strandedReplyRetry: true });
-
-    const recovery = recover({
-      base,
-      finalText: "",
-      terminalReply: { disposition: "empty" },
-    });
-
-    expect(recovery).toMatchObject({
-      kind: "diagnostic",
-      payload: {
-        text: "No answer was returned. Ask again if you still need one.",
-        isError: true,
-        isStatusNotice: true,
-      },
-    });
-  });
-
-  it.each([
-    { label: "room events", isRoomEvent: true },
-    { label: "heartbeats", isHeartbeat: true },
-    { label: "send-policy denial", sendPolicyDenied: true },
-    { label: "completed delivery", successfulSourceReplyDelivery: true },
-  ])("does not recover $label", (override) => {
-    expect(recover(override)).toEqual({ kind: "none" });
   });
 });

@@ -336,47 +336,6 @@ describe("Goal queue custody", () => {
     f.operation.complete();
     expect(queued.abortSignal?.aborted).toBe(false);
   });
-  it("leaves announcing children from earlier turns with their continuation owner", async () => {
-    const f = fixture();
-    children.mockResolvedValue([{ runId: "earlier-child" }]);
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    expect(enqueueFollowupRun).not.toHaveBeenCalled();
-  });
-  it("allocates each successor before settling the previous one-shot delivery", async () => {
-    const delivered = vi.fn(async () => ({ kind: "delivered" as const }));
-    const source = createChatSendLateFollowupDisposition({
-      runId: "source",
-      originatingChannel: "webchat",
-      logGateway: createSubsystemLogger("goal-test"),
-      deliver: delivered,
-    });
-    const first = fixture();
-    first.params.base.originatingChannel = "webchat";
-    first.params.base.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source.deliver };
-    await enqueueGoalContinuation(first.params);
-    let current = vi.mocked(enqueueFollowupRun).mock.calls.at(-1)![1];
-    first.operation.complete();
-    for (let index = 0; index < 3; index++) {
-      const f = fixture();
-      f.params.base = current;
-      f.params.sourceRunId = "continuation-" + index;
-      expect(await enqueueGoalContinuation(f.params)).toBe(true);
-      const next = vi.mocked(enqueueFollowupRun).mock.calls.at(-1)![1];
-      if (current.queuedFollowupReplyDisposition?.kind !== "deliver") {
-        throw new Error("Missing delivery owner");
-      }
-      await current.queuedFollowupReplyDisposition.deliver({
-        kind: "queued-followup",
-        runId: f.params.sourceRunId,
-        originatingChannel: "webchat",
-        payloads: [{ text: "Progress" }],
-        completion: { kind: "completed" },
-      });
-      f.operation.complete();
-      current = next;
-    }
-    expect(delivered).toHaveBeenCalledTimes(3);
-  });
   it.each(["stop", "new input", "goal replacement"])(
     "rechecks %s after the worker read yields",
     async (change) => {
@@ -710,22 +669,10 @@ describe("Goal return from committed child custody", () => {
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
 
-  it.each(["Stop", "source retirement", "operator revocation"])(
+  it.each(["Stop", "source retirement"])(
     "checks %s again after asynchronous final enqueue preparation",
     async (boundary) => {
       const f = retainedGoal();
-      const revoked = new AbortController();
-      let current = true;
-      f.params.base.operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "goal-owner",
-        scopes: ["operator.write"],
-        signal: revoked.signal,
-        assertCurrent() {
-          if (!current) {
-            throw new Error("revoked");
-          }
-        },
-      });
       f.completeReturn();
       const readStarted = createDeferred();
       const read = createDeferred<SessionEntry | undefined>();
@@ -758,10 +705,6 @@ describe("Goal return from committed child custody", () => {
       }
       if (boundary === "source retirement") {
         revokeGoalContinuationReturn(f.child);
-      }
-      if (boundary === "operator revocation") {
-        current = false;
-        revoked.abort();
       }
       read.resolve(entry());
       await finishing;

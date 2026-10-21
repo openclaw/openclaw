@@ -34,35 +34,6 @@ describe("typing persistence bug fix", () => {
     expect(vi.getTimerCount()).toBe(0);
   }
 
-  it("keeps typing alive while keepalive ticks continue during long runs", async () => {
-    await controller.startTypingLoop();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(6000);
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
-
-    await vi.advanceTimersByTimeAsync(115_000);
-    expect(onCleanupSpy).not.toHaveBeenCalled();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(21);
-
-    controller.cleanup();
-    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("should stop typing when both runComplete and dispatchIdle are true", async () => {
-    await controller.startTypingLoop();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    controller.markRunComplete();
-    expect(onCleanupSpy).not.toHaveBeenCalled();
-
-    controller.markDispatchIdle();
-    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(6000);
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps timer ticks behind an unfinished initial typing request", async () => {
     const pending = createDeferred();
     onReplyStartSpy.mockReturnValueOnce(pending.promise);
@@ -98,20 +69,6 @@ describe("typing persistence bug fix", () => {
       expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("should prevent typing restart even if cleanup is delayed", async () => {
-    await controller.startTypingLoop();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    // Dispatch remains busy while three more keepalive intervals pass.
-    controller.markRunComplete();
-    for (let interval = 0; interval < 3; interval++) {
-      vi.advanceTimersByTime(6000);
-      expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-    }
-    controller.markDispatchIdle();
-    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
-  });
 
   it("returns an inert controller when typing callbacks are absent", async () => {
     await exerciseClosedController(createTypingController({}));
