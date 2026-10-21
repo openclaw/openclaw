@@ -178,18 +178,17 @@ it("preserves profile actors and distinguishes unknown from absent profileless e
       ]);
       const listed = await request("session.members.listEvidence");
       const listing = sessionMembersListEvidenceResult(listed);
-      const memberEvidence = listing.members[0];
-      expect(listing).toMatchObject({ members: [{ identityId: member.id }] });
-      if (item.name === "present") {
-        expect(memberEvidence).toMatchObject({ addedBy: "profile-ada" });
-      } else {
-        expect(memberEvidence).not.toHaveProperty("addedBy");
-        if (item.name === "unknown") {
-          expect(memberEvidence).toMatchObject({ addedByState: "unknown" });
-        } else {
-          expect(memberEvidence).not.toHaveProperty("addedByState");
-        }
-      }
+      expect(listing.members).toEqual([
+        {
+          identityId: member.id,
+          addedAt: expect.any(Number),
+          ...(item.name === "present"
+            ? { addedBy: "profile-ada" }
+            : item.name === "unknown"
+              ? { addedByState: "unknown" }
+              : {}),
+        },
+      ]);
       const legacyListed = await request("session.members.list");
       expect(legacyListed[0]?.[0]).toBe(item.name === "present");
       if (item.name === "present") {

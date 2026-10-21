@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -114,4 +115,8 @@ export function registerSessionSuggestionTestLifecycle(mocks: {
     vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
   });
+}
+
+export function readSuggestionClaim(db: DatabaseSync, id: string) {
+  return db.prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?").get(id);
 }

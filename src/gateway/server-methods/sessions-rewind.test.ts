@@ -30,6 +30,7 @@ import {
   expectCutFailure,
   expectCutReply,
   holdLifecycle,
+  installHarness,
   invokeHandler as invoke,
   messageCutContext as context,
   restrictedOperator,
@@ -40,6 +41,7 @@ import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   readMediaBuffer: vi.fn(),
+  upstreamFork: vi.fn(),
 }));
 
 // Queued sources stay idle: this boundary only cuts history and settles pending work.
@@ -95,6 +97,7 @@ import {
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   captureSessionTarget,
   type SessionTarget,
@@ -112,6 +115,7 @@ import {
   captureSessionControllerStop,
 } from "../../sessions/session-controller.stop.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 
@@ -359,29 +363,6 @@ describe("session message-cut methods", () => {
       params: { sessionKey: "agent:main:never-materialized" },
     });
     expectCutReply(respond, { branches: [] });
-  });
-
-  it("lists branches and switches to an inactive tip", async () => {
-    const listed = await invoke("sessions.branches.list");
-    expectCutReply(listed, {
-      branches: [
-        expect.objectContaining({
-          leafEntryId: "assistant-entry",
-          headline: "answer",
-          messageCount: 2,
-          active: true,
-        }),
-        expect.objectContaining({
-          leafEntryId: "off-path-entry",
-          headline: "inactive",
-          messageCount: 1,
-          active: false,
-        }),
-      ],
-    });
-
-    const switched = await invoke("sessions.branches.switch", "off-path-entry");
-    expectCutReply(switched, {});
   });
 
   it("clears queued session work after a successful branch switch", async () => {
@@ -699,6 +680,186 @@ describe("session message-cut methods", () => {
         code: ErrorCodes.UNAVAILABLE,
         message: `${label} is unavailable while the agent is working.`,
       });
+    },
+  );
+});
+
+const forkFailure = {
+  status: "failed",
+  code: "upstream-unavailable",
+  message: "Codex is offline. Try again.",
+};
+
+function installUpstreamForkHarness(
+  executionEnvironment?: "host-only",
+  contract: "dual" | "legacy" | "v2" = "v2",
+): void {
+  const sessionFork = {
+    upstreamKinds: ["codex-app-server" as const],
+    fork: mocks.upstreamFork,
+  };
+  installHarness({
+    ...(contract !== "v2"
+      ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }
+      : {}),
+    ...(contract !== "legacy"
+      ? {
+          sessionForkV2: {
+            ...(executionEnvironment ? { executionEnvironment } : {}),
+            ...sessionFork,
+          },
+        }
+      : {}),
+  });
+}
+
+function entries() {
+  return readSessionEntrySummariesInWorker({
+    agentId: "main",
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  });
+}
+
+function expectExternalOwner(respond: ReturnType<typeof vi.fn>) {
+  expectCutFailure(respond, {
+    code: ErrorCodes.INVALID_REQUEST,
+    message: expect.stringContaining("external agent harness"),
+  });
+}
+
+describe("upstream session message-cut methods", () => {
+  beforeEach(() => {
+    mocks.upstreamFork.mockReset();
+    expect(
+      upsertSessionUpstreamLink({
+        agentId: "main",
+        catalogId: "codex",
+        hostId: "gateway:local",
+        marker: { turnId: "turn-2", userMessageCount: 1 },
+        sessionKey,
+        threadId: "thread-source",
+        upstreamKind: "codex-app-server",
+        upstreamRef: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
+      }),
+    ).toBe(true);
+  });
+  it("rejects mutation but lists empty branches for externally owned conversations", async () => {
+    const respond = await invoke("sessions.branches.switch", "off-path-entry");
+    expectExternalOwner(respond);
+    // Listing is read-only: "no local branches" is the truthful steady state,
+    // not an error to latch into the UI.
+    const listed = await invoke("sessions.branches.list");
+    expectCutReply(listed, { branches: [] });
+  });
+
+  it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
+    "rejects %s for upstream-linked sessions even with a fork-capable harness",
+    async (method) => {
+      installUpstreamForkHarness();
+      expectExternalOwner(await invoke(method));
+      expect(mocks.upstreamFork).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delegates complete upstream fork materialization to the harness", async () => {
+    installUpstreamForkHarness(undefined, "dual");
+    mocks.upstreamFork.mockResolvedValue({
+      status: "created",
+      key: "agent:main:dashboard:forked",
+      editorText: "edit me",
+    });
+
+    const respond = await invoke("sessions.fork");
+    expectCutReply(respond, { editorText: "edit me", sessionKey: "agent:main:dashboard:forked" });
+    expect(mocks.upstreamFork).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assertCurrent: expect.any(Function),
+        source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
+        targetKey: expect.stringMatching(/^agent:main:dashboard:/),
+        upstream: expect.objectContaining({
+          catalogId: "codex",
+          hostId: "gateway:local",
+          kind: "codex-app-server",
+          threadId: "thread-source",
+        }),
+      }),
+    );
+  });
+
+  it.each(["created", "failed"] as const)(
+    "expires native-write authority when the upstream fork settles %s",
+    async (outcome) => {
+      installUpstreamForkHarness();
+      let retainedAssertCurrent: (() => void) | undefined;
+      mocks.upstreamFork.mockImplementation(
+        async ({ assertCurrent }: { assertCurrent: () => void }) => {
+          assertCurrent();
+          retainedAssertCurrent = assertCurrent;
+          return outcome === "created"
+            ? { status: "created", key: "agent:main:dashboard:forked" }
+            : forkFailure;
+        },
+      );
+
+      await invoke("sessions.fork");
+
+      const nativeWrites = vi.fn();
+      expect(() => {
+        expectDefined(retainedAssertCurrent, "retained native-write authority")();
+        nativeWrites();
+      }).toThrow("Session initialization source is closed");
+      expect(nativeWrites).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["dual", "legacy", "v2"] as const)(
+    "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",
+    async (contract) => {
+      const { options } = await restrictedOperator(
+        `sandbox-required-${contract}-fork@example.com`,
+        "main",
+        "required",
+        false,
+      );
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      installUpstreamForkHarness("host-only", contract);
+      const fork = await withPluginRuntimeGatewayRequestScope(
+        { client: options.client, isWebchatConnect: () => false },
+        () => invoke("sessions.fork", undefined, options),
+      );
+      expectCutFailure(fork, {
+        details: expect.objectContaining({
+          code: "AGENT_RUNTIME_RESTRICTED",
+          reason: "sandbox-required",
+        }),
+      });
+      expect(mocks.upstreamFork).not.toHaveBeenCalled();
+      expect(await entries()).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    { failure: forkFailure, code: ErrorCodes.UNAVAILABLE },
+    {
+      failure: {
+        status: "failed",
+        code: "drift-mismatch",
+        message: "boundary failed: drift-mismatch",
+      },
+      code: ErrorCodes.INVALID_REQUEST,
+    },
+  ])(
+    "passes through $failure.code without mutating the local session",
+    async ({ failure, code }) => {
+      installUpstreamForkHarness();
+      mocks.upstreamFork.mockResolvedValue(failure);
+      const entryCount = (await entries()).length;
+      expectCutFailure(await invoke("sessions.fork"), {
+        code,
+        details: { reason: failure.code },
+        message: failure.message,
+      });
+      expect(await entries()).toHaveLength(entryCount);
     },
   );
 });

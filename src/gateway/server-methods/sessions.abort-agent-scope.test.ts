@@ -628,17 +628,22 @@ describe("sessions.abort agent scope", () => {
     expectRespondErrorMessage(respond, "session key agent does not match agentId");
   });
 
-  it("rejects explicit agentId mismatches before session mutations", async () => {
+  it.each(["mismatched", "unknown"])("rejects %s agents before session mutations", async (mode) => {
     const context = createContext({ globalScope: true });
-
-    for (const [method, params] of [
-      ["sessions.patch", { key: "agent:main:main", agentId: "work", label: "Work" }],
-      ["sessions.delete", { key: "agent:main:main", agentId: "work" }],
-      ["sessions.compact", { key: "agent:main:main", agentId: "work" }],
-    ] as const) {
-      const respond = await callSessions(method, params, { context, reqId: `req-${method}` });
-
-      expectRespondErrorMessage(respond, 'agent "work" does not match session key agent "main"');
+    const unknown = mode === "unknown";
+    const params = unknown
+      ? { key: "agent:typo:main" }
+      : { key: "agent:main:main", agentId: "work" };
+    const message = unknown
+      ? 'Unknown agent id "typo"'
+      : 'agent "work" does not match session key agent "main"';
+    for (const method of ["sessions.patch", "sessions.delete", "sessions.compact"] as const) {
+      const respond = await callSessions(
+        method,
+        { ...params, ...(method === "sessions.patch" ? { label: unknown ? "Typo" : "Work" } : {}) },
+        { context },
+      );
+      expectRespondErrorMessage(respond, message);
     }
   });
 
@@ -678,22 +683,5 @@ describe("sessions.abort agent scope", () => {
     );
 
     expectRespondErrorMessage(respond, 'Unknown agent id "work"');
-  });
-
-  it("rejects unknown inferred selected-global aliases before session mutations", async () => {
-    const context = createContext({ globalScope: true });
-
-    for (const [method, params] of [
-      ["sessions.patch", { key: "agent:typo:main", label: "Typo" }],
-      ["sessions.delete", { key: "agent:typo:main" }],
-      ["sessions.compact", { key: "agent:typo:main" }],
-    ] as const) {
-      const respond = await callSessions(method, params, {
-        context,
-        reqId: `req-${method}-unknown-alias`,
-      });
-
-      expectRespondErrorMessage(respond, 'Unknown agent id "typo"');
-    }
   });
 });

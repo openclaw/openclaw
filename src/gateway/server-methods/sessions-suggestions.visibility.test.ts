@@ -47,6 +47,7 @@ import {
   client,
   context,
   registerSessionSuggestionTestLifecycle,
+  readSuggestionClaim,
   requests,
   responseSuggestionId,
   sessionKey,
@@ -629,11 +630,7 @@ it.for(["add", "edit", "dismiss", "queue"] as const)(
         if (action === "add") {
           expect(await listSessionSuggestions(scope)).toEqual([]);
         } else {
-          expect(
-            database.db
-              .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
-              .get(id),
-          ).toEqual({
+          expect(readSuggestionClaim(database.db, id)).toEqual({
             state: action === "edit" ? "pending" : action === "dismiss" ? "dismissed" : "accepted",
             dispatch_token: null,
           });

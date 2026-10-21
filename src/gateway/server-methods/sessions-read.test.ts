@@ -39,6 +39,7 @@ import { agentsHandlers } from "./agents.js";
 import {
   identifiedClient,
   listSessions,
+  profileSessionEntry,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
 import { soloClient } from "./sessions-sharing.test-support.js";
@@ -742,10 +743,7 @@ test("searches rich displayed fields before selecting a page across visible agen
       await upsertSessionEntryCore(
         { agentId, sessionKey: `agent:${agentId}:${name}` },
         {
-          sessionId: name,
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+          ...profileSessionEntry(name, 1, "owner@example.com"),
           ...entry,
         },
       );

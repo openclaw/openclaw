@@ -26,6 +26,7 @@ import {
   client,
   context,
   registerSessionSuggestionTestLifecycle,
+  readSuggestionClaim,
   requests,
   responseSuggestionId,
   sessionKey,
@@ -144,9 +145,7 @@ it.each([
             : { code: "FORBIDDEN" },
       ),
     );
-    const stored = database.db
-      .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
-      .get(params.id);
+    const stored = readSuggestionClaim(database.db, params.id);
     expect(stored).toEqual({ state: "pending", dispatch_token: null });
   }),
 );
@@ -224,11 +223,10 @@ it("settles an accepted dispatch after caller revocation while its write waits",
       await reservation;
       expect(mocks.handleChatSend).toHaveBeenCalledOnce();
       expect(respond.mock.calls[0]?.[0]).toBe(true);
-      expect(
-        database.db
-          .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
-          .get(params.id),
-      ).toEqual({ state: "accepted", dispatch_token: null });
+      expect(readSuggestionClaim(database.db, params.id)).toEqual({
+        state: "accepted",
+        dispatch_token: null,
+      });
       hostCurrent = false;
       expect(() => admittedCheck!()).toThrow("host closed");
     } finally {
