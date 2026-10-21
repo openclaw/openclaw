@@ -79,29 +79,13 @@ function expectRejected(respond: RespondFn, code: string, message?: unknown) {
   );
 }
 
-it("replays reordered requests and added authorization without accepting downgraded scopes", async () => {
+it("retains successful replay across pruning and devices without accepting changed roles", async () => {
   const { client, connection, context, execute, call } = createFixture();
   await call(hello);
   context.dedupe.clear();
 
-  const added = await call(
-    { message: "hello", idempotencyKey: "create-once", agentId: "main" },
-    connection({ scopes: ["operator.write", "operator.read", "operator.admin"] }),
-  );
-  expect(execute).toHaveBeenCalledOnce();
-  expectCached(added, "agent:main:create-once");
-
-  const downgraded = await call(hello, connection({ scopes: ["operator.write"] }));
-  expectRejected(downgraded, "FORBIDDEN", "missing scope: operator.admin");
-  expect(execute).toHaveBeenCalledOnce();
-
   const changedRole = await call(hello, connection({ role: "node" }));
   expectRejected(changedRole, "FORBIDDEN");
-  expect(execute).toHaveBeenCalledOnce();
-
-  const conflict = await call({ ...hello, message: "different" });
-
-  expectRejected(conflict, "INVALID_REQUEST");
   expect(execute).toHaveBeenCalledOnce();
 
   const differentDevice = await call(

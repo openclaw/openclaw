@@ -4,6 +4,7 @@ import {
   type SessionCatalogHost,
   type SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -12,6 +13,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -26,13 +28,15 @@ import {
   type SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as profileAliases from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { catalogHost, catalogSession } from "./session-catalog.fixtures.test-support.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
+import { observeAliasRootProbes } from "./session-catalog.profile-probes.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const nativeSession = (overrides: Partial<SessionCatalogSession> = {}) =>
@@ -52,40 +56,61 @@ const delivery = () => {
 
 async function withCatalog(
   run: (fixture: Awaited<ReturnType<typeof createCatalog>>) => Promise<void>,
+  { solo = false, nativeHome = false } = {},
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-    let fixture: Awaited<ReturnType<typeof createCatalog>> | undefined;
-    try {
-      fixture = await createCatalog();
-      // Deferred providers must not race the response budget while privacy writes settle.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      await run(fixture);
-    } finally {
-      fixture?.projection.dispose();
-      setActivePluginRegistry(previousRegistry);
-      vi.useRealTimers();
-    }
-  });
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      prepareProfileCatalog: nativeHome,
+      env: nativeHome
+        ? {
+            OPENCLAW_STATE_DIR: undefined,
+            VITEST: undefined,
+            VITEST_POOL_ID: undefined,
+            VITEST_WORKER_ID: undefined,
+            NODE_ENV: "production",
+          }
+        : undefined,
+    },
+    async (state) => {
+      const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
+      let fixture: Awaited<ReturnType<typeof createCatalog>> | undefined;
+      try {
+        fixture = await createCatalog(solo, state.stateDir);
+        // Deferred providers must not race the response budget while privacy writes settle.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await run(fixture);
+      } finally {
+        fixture?.projection.dispose();
+        setActivePluginRegistry(previousRegistry);
+        vi.useRealTimers();
+      }
+    },
+  );
 }
 
-async function createCatalog() {
+async function createCatalog(solo: boolean, stateDir: string) {
+  ensureGatewayOwnerProfile("Gateway Owner");
   const caller = ensureProfileForEmail("catalog-caller@example.test");
-  const other = ensureProfileForEmail("catalog-other@example.test");
-  const config: OpenClawConfig = {
-    gateway: {
-      roles: {
-        default: "writer",
-        definitions: {
-          writer: {
-            sessions: { others: "write" },
-            agents: "*",
-            scopes: ["operator.read", "operator.write"],
+  const other = solo
+    ? { id: "catalog-other" }
+    : ensureProfileForEmail("catalog-other@example.test");
+  const config: OpenClawConfig = solo
+    ? {}
+    : {
+        gateway: {
+          roles: {
+            default: "writer",
+            definitions: {
+              writer: {
+                sessions: { others: "write" },
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
           },
         },
-      },
-    },
-  };
+      };
   setRuntimeConfigSnapshot(config);
   for (const [id, profileId, source, visibility] of [
     ["foreign", other.id, "profile", "shared"],
@@ -191,7 +216,7 @@ async function createCatalog() {
   const foreignOwner = client(other.id);
   const projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
   const call = async (
-    method: "list" | "read" | "continue" | "archive" = "list",
+    method: "list" | "read" | "import" | "continue" | "archive" = "list",
     params: Record<string, unknown> = {},
     requestClient = owner,
     broadcastToConnIds = vi.fn(),
@@ -252,6 +277,7 @@ async function createCatalog() {
     ).toBeUndefined();
   };
   return {
+    stateDir,
     call,
     config,
     registry,
@@ -499,6 +525,43 @@ describe("catalog delivery uses current canonical privacy", () => {
       expect(list).toHaveBeenCalledTimes(3);
     }));
 
+  it("refreshes aliases per progress publication without repeating alias root probes", () =>
+    withCatalog(
+      async ({ call, list, host, changeForeign, callerId, owner, stateDir }) => {
+        expect({
+          stateDir: process.env.OPENCLAW_STATE_DIR,
+          vitest: process.env.VITEST,
+          mode: process.env.NODE_ENV,
+        }).toEqual({ stateDir: undefined, vitest: undefined, mode: "production" });
+        await changeForeign({ visibility: "draft" });
+        list.mockImplementation(async ({ onHost }) => {
+          onHost?.(host);
+          await Promise.resolve();
+          linkEmail("catalog-other@example.test", callerId);
+          profileAliases.readUserProfileAliases(callerId);
+          onHost?.(host);
+          await Promise.resolve();
+          return [host];
+        });
+        profileAliases.readUserProfileAliases(callerId);
+        const probe = observeAliasRootProbes(stateDir);
+        const broadcast = vi.fn();
+        let respond: ReturnType<typeof vi.fn>;
+        try {
+          respond = await call("list", { progressId: "alias-merge" }, owner, broadcast);
+        } finally {
+          expect(probe.finish().aliasRootProbes).toBe(0);
+        }
+        expect(
+          broadcast.mock.calls.map(([, payload]) =>
+            payload.catalog.hosts[0].sessions.map(({ threadId }: { threadId: string }) => threadId),
+          ),
+        ).toEqual([["owned"], ["foreign", "owned"]]);
+        expect(rows(respond)).toEqual(["foreign", "owned"]);
+      },
+      { nativeHome: true },
+    ));
+
   it.each([false, true])(
     "retains the original adoption across replacement (late=%s)",
     async (late) =>
@@ -624,4 +687,265 @@ describe("catalog delivery uses current canonical privacy", () => {
         expect(allowed.mock.calls[0]?.[0]).toBe(true);
       }),
   );
+});
+
+type CatalogFixture = Awaited<ReturnType<typeof createCatalog>>;
+function cap(
+  { config }: CatalogFixture,
+  others: "none" | "view" | "write",
+  agents: "*" | string[] = "*",
+) {
+  config.gateway = {
+    roles: {
+      default: "writer",
+      definitions: {
+        writer: { sessions: { others }, agents, scopes: ["operator.read", "operator.write"] },
+      },
+    },
+  };
+}
+
+describe("catalog caller visibility", () => {
+  it.each(["foreign", "collision", "Gateway owner"] as const)(
+    "rejects %s targets before provider dispatch",
+    (kind) =>
+      withCatalog(async (fixture) => {
+        if (kind === "collision") {
+          cap(fixture, "none");
+        } else {
+          delete fixture.config.gateway;
+        }
+        const { call, owner, read, continueSession, archive } = fixture;
+        if (kind === "Gateway owner") {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: "agent:main:foreign" },
+            {
+              createdActor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
+            },
+          );
+        }
+        const client =
+          kind === "Gateway owner"
+            ? {
+                ...owner,
+                authenticatedUserProfile: {
+                  ...owner.authenticatedUserProfile!,
+                  profileId: GATEWAY_OWNER_PROFILE_ID,
+                },
+              }
+            : owner;
+        if (kind === "collision") {
+          for (let pass = 0; pass < 2; pass++) {
+            expect(rows(await call())).toEqual(["owned"]);
+          }
+        }
+        const methods =
+          kind === "Gateway owner"
+            ? (["read"] as const)
+            : kind === "collision"
+              ? (["read", "continue", "archive"] as const)
+              : (["read", "import", "continue", "archive"] as const);
+        for (const method of methods) {
+          expect(
+            await call(
+              method,
+              { threadId: kind === "collision" ? "collision" : "foreign" },
+              client,
+            ),
+          ).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: ErrorCodes.FORBIDDEN,
+              ...(kind === "collision"
+                ? {}
+                : { message: "session catalog thread is not visible to this caller" }),
+            }),
+          );
+        }
+        for (const dispatch of [read, continueSession, archive]) {
+          expect(dispatch).not.toHaveBeenCalled();
+        }
+      }),
+  );
+
+  it("shares only Gateway-hosted catalog rows with authenticated operators", () =>
+    withCatalog(async ({ call, registry, list, owner, host }) => {
+      const shared = nativeSession({ threadId: "shared-snapshot" });
+      const sharedHost = { ...host, sessions: [shared] };
+      const sharedRead = vi.fn(async () => ({
+        hostId: host.hostId,
+        threadId: shared.threadId,
+        items: [],
+      }));
+      registry.sessionCatalogs.unshift({
+        pluginId: "beam",
+        source: import.meta.url,
+        provider: {
+          id: "beam",
+          label: "Beam",
+          audience: "gateway-operators",
+          list: async () => [sharedHost],
+          read: sharedRead,
+        },
+      });
+      list.mockResolvedValue([{ ...host, sessions: [nativeSession()] }]);
+      const client = {
+        ...owner,
+        authenticatedUserProfile: undefined,
+        connect: { ...owner.connect, scopes: ["operator.read"] },
+      };
+      const listed = await call("list", {}, client);
+      expect(listed.mock.calls[0]?.[1]?.catalogs).toEqual([
+        expect.objectContaining({
+          id: "beam",
+          hosts: [expect.objectContaining({ sessions: [shared] })],
+        }),
+        expect.objectContaining({
+          id: "fixture",
+          hosts: [expect.objectContaining({ sessions: [] })],
+        }),
+      ]);
+      expect(
+        await call("read", { catalogId: "beam", threadId: shared.threadId }, client),
+      ).toHaveBeenCalledWith(true, expect.objectContaining({ threadId: shared.threadId }));
+      expect(sharedRead).toHaveBeenCalledOnce();
+    }));
+
+  it("keeps solo Gateway list and read responses unfiltered", () =>
+    withCatalog(
+      async ({ call, list, read, host, owner }) => {
+        const listedHost = { ...host, sessions: [nativeSession()] };
+        const page = { hostId: host.hostId, threadId: "published-native", items: [] };
+        list.mockResolvedValue([listedHost]);
+        read.mockResolvedValue(page);
+        const client = { ...owner, connect: { ...owner.connect, scopes: ["operator.read"] } };
+        expect((await call("list", {}, client)).mock.calls[0]?.[1]?.catalogs[0]?.hosts).toEqual([
+          listedHost,
+        ]);
+        expect(await call("read", {}, client)).toHaveBeenCalledWith(true, page);
+      },
+      { solo: true },
+    ));
+
+  it("shares concurrent enumeration when only owner attribution arrives", () =>
+    withCatalog(
+      async ({ call, list, host, owner }) => {
+        const release = createDeferredCore();
+        const listedHost = { ...host, sessions: [nativeSession()] };
+        list.mockImplementation(async () => {
+          await release.promise;
+          return [listedHost];
+        });
+        const client: GatewayClient = { ...owner, authenticatedUserProfile: undefined };
+        const before = call("list", {}, client);
+        client.authenticatedUserProfile = {
+          ...owner.authenticatedUserProfile!,
+          profileId: GATEWAY_OWNER_PROFILE_ID,
+        };
+        const after = call("list", {}, client);
+        release.resolve();
+        for (const respond of await Promise.all([before, after])) {
+          expect(respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts).toEqual([listedHost]);
+        }
+        expect(list).toHaveBeenCalledOnce();
+      },
+      { solo: true },
+    ));
+
+  it("pages before authorizing an older owner thread", () =>
+    withCatalog(async (fixture) => {
+      cap(fixture, "none");
+      const { call, list, host } = fixture;
+      list.mockImplementation(async ({ cursors }) => [
+        {
+          ...host,
+          sessions: host.sessions.filter(
+            ({ threadId }) => threadId === (cursors ? "owned" : "foreign"),
+          ),
+          ...(cursors ? {} : { nextCursor: "page-2" }),
+        },
+      ]);
+      expect(await call("read", { threadId: "owned" })).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ threadId: "owned" }),
+      );
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cursors: { [host.hostId]: "page-2" } }),
+      );
+    }));
+
+  it("keeps a none role owner-only with a single identity", () =>
+    withCatalog(
+      async (fixture) => {
+        cap(fixture, "none");
+        expect(rows(await fixture.call())).toEqual(["owned"]);
+        expect(await fixture.call("read", { threadId: "foreign" })).toHaveBeenCalledWith(
+          false,
+          undefined,
+          forbidden,
+        );
+        expect(fixture.read).not.toHaveBeenCalled();
+      },
+      { solo: true },
+    ));
+
+  it.each([false, true])(
+    "requires explicit membership for view-capped foreign mutations (member=%s)",
+    (member) =>
+      withCatalog(async (fixture) => {
+        cap(fixture, "view");
+        if (member) {
+          addSessionMember(
+            { agentId: "main", sessionKey: "agent:main:foreign" },
+            { identityId: fixture.callerId, addedBy: "fixture" },
+          );
+          await fixture.projection.prepareMembership();
+        }
+        for (const method of member ? (["archive"] as const) : (["continue", "archive"] as const)) {
+          const result = await fixture.call(method, { threadId: "foreign" });
+          if (member) {
+            expect(result).toHaveBeenCalledWith(true, { ok: true });
+            expect(fixture.archive).toHaveBeenCalledOnce();
+          } else {
+            expect(result).toHaveBeenCalledWith(false, undefined, forbidden);
+            expect(
+              fixture[method === "archive" ? "archive" : "continueSession"],
+            ).not.toHaveBeenCalled();
+          }
+        }
+        expect(fixture.read).not.toHaveBeenCalled();
+      }),
+  );
+
+  it("rejects adoption before creating a disallowed agent session", () =>
+    withCatalog(async (fixture) => {
+      cap(fixture, "write", ["research"]);
+      expect(await fixture.call("continue", { threadId: "owned" })).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.FORBIDDEN,
+          message: expect.stringContaining('cannot create sessions for agent "main"'),
+        }),
+      );
+      expect(fixture.continueSession).not.toHaveBeenCalled();
+    }));
+
+  it("keeps operator.admin unrestricted despite a configured none role", () =>
+    withCatalog(async (fixture) => {
+      cap(fixture, "none");
+      const host = { ...fixture.host, sessions: [nativeSession()] };
+      fixture.list.mockResolvedValue([host]);
+      expect(
+        (
+          await fixture.call(
+            "list",
+            {},
+            { ...fixture.owner, connect: { ...fixture.owner.connect, scopes: ["operator.admin"] } },
+          )
+        ).mock.calls[0]?.[1]?.catalogs[0]?.hosts,
+      ).toEqual([host]);
+    }));
 });

@@ -2716,7 +2716,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/session-catalog-resident-entries.test.ts",
   "src/gateway/server-methods/session-catalog-selection.test.ts",
   "src/gateway/server-methods/session-catalog-terminal-start.test.ts",
-  "src/gateway/server-methods/session-catalog-visibility.test.ts",
   "src/gateway/server-methods/session-catalog.performance.test.ts",
   "src/gateway/server-methods/session-catalog.test.ts",
   "src/gateway/server-methods/session-change-event.fallback.test.ts",

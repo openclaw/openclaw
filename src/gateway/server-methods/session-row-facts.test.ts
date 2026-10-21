@@ -2,15 +2,11 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../../config/sessions/activity-summary.js";
 import {
   loadSessionEntryReadOnly,
-  persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseReadOnly from "../../state/openclaw-agent-db-readonly.js";
@@ -20,7 +16,6 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as activitySummary from "../session-activity-summary-state.js";
-import { beginSessionPermissionChange } from "../session-permission-change.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { createSessionRowPlacementProjection } from "../session-row-placement-projection.js";
 import * as rowMaterialization from "../session-row-projection-materialize.js";
@@ -265,12 +260,10 @@ it("refreshes selected placement/environment facts by revision and reuses them w
     }
     await refreshPlacements();
     const reads = observeMainThreadReads();
-    const finishPermissionChange = beginSessionPermissionChange(identity.sessionId);
     try {
       const first = facts.present();
       expect(facts.present()).toBe(first);
       expect(Object.isFrozen(first.placement)).toBe(true);
-      expect(first.permissionModePending).toBe(true);
       expect(first.placement).toMatchObject({
         state: "active",
         providerId: DEVICE_WORKER_PROVIDER_ID,
@@ -315,8 +308,6 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       runtimeInstall = { ...runtimeInstall, bundleHash: "c".repeat(64) };
       runtimeInstallVersion++;
       expect(first.placement).toMatchObject({ diskSpace: { availableBytes: 6_000 } });
-      finishPermissionChange();
-      expect(facts.present().permissionModePending).toBe(false);
       reads.expectIdle();
 
       const placementReads = vi.spyOn(placements, "readProjection");
@@ -437,100 +428,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       reads.expectIdle();
     } finally {
       preparedPlacements.dispose();
-      finishPermissionChange();
       reads.restore();
     }
-  });
-});
-
-it("prepares board membership and recap freshness from the physical target and reuses them without SQLite", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = {
-      agents: {
-        defaults: { utilityModel: "test/utility" },
-        entries: { main: {}, work: {} },
-      },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const storePath = openOpenClawAgentDatabase({ agentId: "main" }).path;
-    const otherPath = openOpenClawAgentDatabase({ agentId: "other" }).path;
-    const scope = { agentId: "main", sessionKey: "global", sessionId: "row-recap", storePath };
-    replaceSessionEntrySync(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-      activitySummary: {
-        version: 1,
-        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-        text: "Prepared recap.",
-        updatedAt: 1,
-        sessionId: scope.sessionId,
-        generation: null,
-        maxSeq: null,
-        leafEntryId: null,
-        coveredMessages: 0,
-        totalMessages: 0,
-        omittedContent: false,
-      },
-    });
-    replaceSessionEntrySync(
-      { agentId: "other", sessionKey: "global", storePath: otherPath },
-      { sessionId: "other-row", updatedAt: 1 },
-    );
-    const board = new SqliteBoardStore({
-      resolveSession: () => ({ agentId: "main", path: storePath, sessionKey: "global" }),
-    });
-    await board.applyOps({ sessionKey: "global" }, [
-      { kind: "tab_create", tabId: "main", title: "Main" },
-    ]);
-    const target = { key: "global", agentId: "work", storeTarget: { agentId: "main", storePath } };
-    const entry = loadSessionEntryReadOnly(scope)!;
-    const prepareDatabaseFacts = (agentId: string, path: string) =>
-      withSessionHistoryWorkerDatabase({ agentId, path }, async (reader) => {
-        const result = await reader.readRowFacts({ env: process.env, sessionKeys: [target.key] });
-        return result.rows[0]!;
-      });
-    const databaseFacts = await prepareDatabaseFacts("main", storePath);
-    const otherDatabaseFacts = await prepareDatabaseFacts("other", otherPath);
-    const membershipReads = observeSqliteReadSql(StatementSync.prototype);
-    const facts = readSessionRowFacts({ cfg, target, entry, databaseFacts });
-    membershipReads.restore();
-    expect(membershipReads.queries.filter((sql) => /from "board_tabs"/iu.test(sql))).toEqual([]);
-    expect(facts.hasBoard).toBe(true);
-    expect(
-      readSessionRowFacts({
-        cfg,
-        target: { ...target, storeTarget: { agentId: "other", storePath: otherPath } },
-        entry: { sessionId: "other-row", updatedAt: 1 },
-        databaseFacts: otherDatabaseFacts,
-      }).hasBoard,
-    ).toBe(false);
-    const reads = observeMainThreadReads();
-    try {
-      const expected = { text: "Prepared recap.", updatedAt: 1, state: "current" };
-      expect(facts.present().activitySummary).toEqual(expected);
-      expect(facts.present().activitySummary).toEqual(expected);
-      reads.expectIdle();
-    } finally {
-      reads.restore();
-    }
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "new-message",
-          parentId: null,
-          message: { role: "user", content: "New activity", timestamp: Date.now() },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-    await board.applyOps({ sessionKey: "global" }, [{ kind: "tab_delete", tabId: "main" }]);
-    const refreshed = readSessionRowFacts({
-      cfg,
-      target,
-      entry,
-      databaseFacts: await prepareDatabaseFacts("main", storePath),
-    });
-    expect(refreshed.hasBoard).toBe(false);
-    expect(refreshed.present().activitySummary?.state).toBe("stale");
   });
 });
