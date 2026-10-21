@@ -361,28 +361,24 @@ describe("setup activation credentials and configuration", () => {
               if (revocation === "abort") {
                 controller.abort();
               } else {
-                expect(
-                  await upsertAuthProfileWithLock({
+                const replace = (replacement: AuthProfileCredential) =>
+                  upsertAuthProfileWithLock({
                     agentDir: setup.agentDir,
                     profileId,
-                    credential: {
-                      ...source,
-                      type: "api_key",
-                      keyRef: {
-                        source: "env",
-                        provider: "default",
-                        id: "UNREAD_REPLACEMENT_FIXTURE",
-                      },
+                    credential: replacement,
+                  });
+                expect(
+                  await replace({
+                    ...source,
+                    type: "api_key",
+                    keyRef: {
+                      source: "env",
+                      provider: "default",
+                      id: "UNREAD_REPLACEMENT_FIXTURE",
                     },
                   }),
                 ).not.toBeNull();
-                expect(
-                  await upsertAuthProfileWithLock({
-                    agentDir: setup.agentDir,
-                    profileId,
-                    credential: source,
-                  }),
-                ).not.toBeNull();
+                expect(await replace(source)).not.toBeNull();
               }
               revoked();
             },
@@ -412,16 +408,13 @@ describe("setup activation credentials and configuration", () => {
       clientId: "saved-registration",
       authorizationScope: "openid profile resource.invoke offline_access",
     } as const;
-    await upsertAuthProfileWithLock({
-      profileId: "openai:saved",
-      credential: savedCredential,
-      agentDir: setup.agentDir,
-    });
-    await upsertAuthProfileWithLock({
-      profileId: "other:saved",
-      credential: { ...savedCredential, provider: "other" },
-      agentDir: setup.agentDir,
-    });
+    for (const provider of ["openai", "other"]) {
+      await upsertAuthProfileWithLock({
+        profileId: `${provider}:saved`,
+        credential: { ...savedCredential, provider },
+        agentDir: setup.agentDir,
+      });
+    }
 
     const result = await setup.activate();
 
@@ -455,36 +448,31 @@ describe("setup activation credentials and configuration", () => {
     expect(created.createdAgentIds).toEqual(["coordinator", "researcher", "writer", "reviewer"]);
     for (const agentId of created.createdAgentIds ?? []) {
       const modelId = modelRef.slice("openai/".length);
-      expect(
-        resolveModelRuntimePolicy({
-          config: created.config,
-          agentId,
-          provider: "openai",
-          modelId,
-        }).policy?.id,
-      ).toBe("openclaw");
-      expect(
-        (
-          await setup.resolveAuth({
-            provider: "openai",
-            cfg: created.config,
-            agentDir: resolveAgentDir(created.config, agentId),
-            workspaceDir: path.join(setup.workspace, agentId),
-            profileId: setup.readProfile()?.[0],
-            lockedProfile: true,
-            modelId,
-            modelApi: "openai-responses",
-          })
-        ).profileId,
-      ).toBe(setup.readProfile()?.[0]);
-    }
-    expect(
-      buildAllowedModelSet({
+      const policy = resolveModelRuntimePolicy({
+        config: created.config,
+        agentId,
+        provider: "openai",
+        modelId,
+      });
+      expect(policy.policy?.id).toBe("openclaw");
+      const auth = await setup.resolveAuth({
+        provider: "openai",
         cfg: created.config,
-        catalog: [],
-        defaultProvider: "openai",
-      }).allowAny,
-    ).toBe(true);
+        agentDir: resolveAgentDir(created.config, agentId),
+        workspaceDir: path.join(setup.workspace, agentId),
+        profileId: setup.readProfile()?.[0],
+        lockedProfile: true,
+        modelId,
+        modelApi: "openai-responses",
+      });
+      expect(auth.profileId).toBe(setup.readProfile()?.[0]);
+    }
+    const allowed = buildAllowedModelSet({
+      cfg: created.config,
+      catalog: [],
+      defaultProvider: "openai",
+    });
+    expect(allowed.allowAny).toBe(true);
     expect(created.config.agents?.defaults?.model).toBe(`${modelRef}@${setup.readProfile()?.[0]}`);
   });
 
@@ -984,15 +972,8 @@ describe("saved provider replacement", () => {
       baseUrl: "https://unrelated.example/v1",
     };
     configured.models.providers.unrelated = unrelatedProvider;
-    await persistProviderAuthProfilesAfterLogin({
-      config: configured,
-      agentDir: setup.agentDir,
-      profiles: [
-        { profileId: "openai:original", credential: { ...credential, key: "original-key" } },
-      ],
-    });
-    await fs.writeFile(setup.configPath, JSON.stringify(configured));
-    clearConfigCache();
+    await saveProfile(setup, "openai:original", configured, { ...credential, key: "original-key" });
+    await writeConfig(setup, configured);
     const unrelatedRuntimeProvider = structuredClone(
       (await readSnapshot()).config.models?.providers?.unrelated,
     );

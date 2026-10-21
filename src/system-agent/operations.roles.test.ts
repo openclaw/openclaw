@@ -8,14 +8,11 @@ import {
   type SystemAgentToolDirective,
 } from "../agents/tools/system-agent-tool.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as agentProvenance from "../state/agent-provenance.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import {
   describeSystemAgentPersistentOperation,
@@ -50,34 +47,23 @@ type State = ReturnType<typeof createSystemAgentTestRuntime> & {
   original: string;
 };
 function withState(run: (state: State) => Promise<void>): Promise<void> {
-  return withTestDir({ prefix: "openclaw-custodian-roles-" }, (root) => {
-    const configPath = path.join(root, "openclaw.json");
-    return withEnvAsync(
-      {
-        OPENCLAW_STATE_DIR: root,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_WORKSPACE_DIR: undefined,
-        OPENCLAW_HOME: root,
-      },
-      async () => {
-        resetConfigRuntimeState();
-        try {
-          const original = JSON.stringify({
-            agents: {
-              ownership: "explicit",
-              entries: { ambient: { workspace: path.join(root, "ambient") } },
-            },
-          });
-          await fs.writeFile(configPath, original);
-          await run({ root, configPath, original, ...createSystemAgentTestRuntime() });
-        } finally {
-          closeOpenClawAgentDatabasesForTest();
-          closeOpenClawStateDatabaseForTest();
-          resetConfigRuntimeState();
-        }
-      },
-    );
-  });
+  return withOpenClawTestState(
+    { label: "custodian-roles", layout: "state-only", applyEnv: false },
+    async (state) => {
+      const root = state.stateDir;
+      const { configPath } = state;
+      Object.assign(state.envVars, { OPENCLAW_HOME: root, OPENCLAW_WORKSPACE_DIR: undefined });
+      state.applyEnv();
+      const original = JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          entries: { ambient: { workspace: path.join(root, "ambient") } },
+        },
+      });
+      await fs.writeFile(configPath, original);
+      await run({ root, configPath, original, ...createSystemAgentTestRuntime() });
+    },
+  );
 }
 
 async function readConfig(): Promise<OpenClawConfig> {

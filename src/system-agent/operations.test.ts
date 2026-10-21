@@ -3,6 +3,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgent } from "../agents/agent-create.js";
 import { runConfigSet } from "../cli/config-cli.js";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -63,20 +64,14 @@ const mockConfig = vi.hoisted(() => {
     readConfigFileSnapshot: vi.fn(async () => {
       const config = structuredClone(state.config);
       return {
-        path: "/tmp/openclaw.json",
+        ...createSnapshot({ sourceConfig: config, hash: "mock-hash-0" }),
         exists: state.exists,
         valid: state.valid,
         raw: state.exists ? `${JSON.stringify(config)}\n` : null,
         parsed: state.exists ? config : undefined,
         sourceConfigBeforeMigrations: config,
-        sourceConfig: config,
-        resolved: config,
-        runtimeConfig: config,
-        config,
         hash: state.exists ? "mock-hash-0" : undefined,
         issues: state.exists ? [] : [{ path: "", message: "missing config" }],
-        warnings: [],
-        legacyIssues: [],
       };
     }),
     getRuntimeConfig() {

@@ -4,6 +4,7 @@ import {
   baseParams,
   type CommitTransform,
   codexPluginMetadataSnapshot,
+  committed,
   getSetupApplyMocks,
   mainAgentModelConfig,
   materializePluginDefaults,
@@ -11,6 +12,8 @@ import {
   resetSetupApplyMocks,
   setSetupCommitState,
   snapshot,
+  snapshotSequence,
+  transformAttempt,
 } from "./setup-apply.test-harness.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -67,20 +70,6 @@ function startAbsent() {
 function agentConfig(agentDir: string): OpenClawConfig {
   return { agents: { defaults: { model: "openai/gpt-5.5" }, entries: { main: { agentDir } } } };
 }
-function committed(
-  result: Awaited<ReturnType<CommitTransform>>,
-  previousHash: string | null,
-  config = result.nextConfig,
-) {
-  mocks.state.persistedConfig = config;
-  return {
-    nextConfig: config,
-    path: "/tmp/openclaw.json",
-    previousHash,
-    persistedHash: "persisted",
-    result: result.result,
-  };
-}
 function persistedReads(
   initial: ReturnType<typeof snapshot>,
   materialize: (config: OpenClawConfig) => OpenClawConfig,
@@ -89,10 +78,7 @@ function persistedReads(
     const config = mocks.state.persistedConfig ?? initial.config;
     return { ...snapshot("persisted", config), runtimeConfig: materialize(config) };
   };
-  mocks.readVerifiedSnapshot
-    .mockResolvedValueOnce(initial)
-    .mockResolvedValueOnce(initial)
-    .mockImplementation(async () => persisted());
+  mocks.readVerifiedSnapshot.mockImplementation(snapshotSequence(initial, initial, persisted));
   return persisted;
 }
 
@@ -326,31 +312,14 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     } satisfies OpenClawConfig;
     const initialSnapshot = start(initial, "hash-1");
     const concurrentSnapshot = snapshot("hash-2", concurrent);
-    let setupReads = 0;
-    mocks.readSnapshot.mockImplementation(async () =>
-      setupReads++ === 0
-        ? initialSnapshot
-        : snapshot("persisted", mocks.state.persistedConfig ?? concurrent),
-    );
-    let verifiedReads = 0;
-    mocks.readVerifiedSnapshot.mockImplementation(async () =>
-      ++verifiedReads <= 2
-        ? initialSnapshot
-        : verifiedReads === 3
-          ? concurrentSnapshot
-          : snapshot("persisted", mocks.state.persistedConfig ?? concurrent),
+    const persisted = () => snapshot("persisted", mocks.state.persistedConfig ?? concurrent);
+    mocks.readSnapshot.mockImplementation(snapshotSequence(initialSnapshot, persisted));
+    mocks.readVerifiedSnapshot.mockImplementation(
+      snapshotSequence(initialSnapshot, initialSnapshot, concurrentSnapshot, persisted),
     );
     mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
-      await params.transform(initial, {
-        previousHash: "hash-1",
-        snapshot: initialSnapshot,
-        attempt: 0,
-      });
-      const result = await params.transform(concurrent, {
-        previousHash: "hash-2",
-        snapshot: concurrentSnapshot,
-        attempt: 1,
-      });
+      await transformAttempt(params.transform, initialSnapshot);
+      const result = await transformAttempt(params.transform, concurrentSnapshot, 1);
       mocks.events.push("commit");
       return committed(result, "hash-2");
     });
@@ -382,19 +351,15 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const drifted = mainAgentModelConfig("anthropic/claude-opus-4-8");
     const initialSnapshot = start(initial);
     const driftedSnapshot = snapshot("persisted", drifted);
-    mocks.readSnapshot
-      .mockResolvedValueOnce(initialSnapshot)
-      .mockResolvedValueOnce(driftedSnapshot);
-    mocks.readVerifiedSnapshot
-      .mockResolvedValueOnce(initialSnapshot)
-      .mockResolvedValueOnce(initialSnapshot)
-      .mockResolvedValueOnce(driftedSnapshot);
+    const fallback = () => mocks.state.initialSnapshot;
+    mocks.readSnapshot.mockImplementation(
+      snapshotSequence(initialSnapshot, driftedSnapshot, fallback),
+    );
+    mocks.readVerifiedSnapshot.mockImplementation(
+      snapshotSequence(initialSnapshot, initialSnapshot, driftedSnapshot, fallback),
+    );
     mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
-      const result = await params.transform(initial, {
-        previousHash: "probe",
-        snapshot: initialSnapshot,
-        attempt: 0,
-      });
+      const result = await transformAttempt(params.transform, initialSnapshot);
       return committed(result, "probe", drifted);
     });
 

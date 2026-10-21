@@ -9,7 +9,6 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { executeSystemAgentOperation as executeOperation } from "./operations.js";
 import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
-import type { SystemAgentOverview } from "./overview.js";
 import type { SystemAgentSetupApplyResult } from "./setup-apply.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
 import { verifySetupInferenceConfig } from "./setup-inference.js";
@@ -147,7 +146,7 @@ let restoreBackend: () => void;
 let runtime: ReturnType<typeof createSystemAgentTestRuntime>["runtime"];
 let lines: string[];
 type ApplySetup = typeof applySystemAgentSetup;
-let applySetup: ReturnType<typeof vi.fn<ApplySetup>>;
+const applySetup = vi.mocked(applySystemAgentSetup);
 type Verify = typeof verifySetupInferenceConfig;
 type Options = NonNullable<Parameters<typeof executeOperation>[2]>;
 function run(operation: Parameters<typeof executeOperation>[0], options: Options = {}) {
@@ -183,20 +182,8 @@ const verified = () => ({ ok: true as const, modelRef: model, latencyMs: 5 });
 const withModel = (primary = model): OpenClawConfig => ({
   agents: { defaults: { model: { primary } }, entries: { main: {} } },
 });
-function overview(defaultModel: string | undefined = model): SystemAgentOverview {
-  const command = { command: "unused", found: false, error: "not found" };
-  return createSystemAgentOverviewFixture({
-    defaultModel,
-    config: { path: configPath, exists: true, valid: true, issues: [], hash: null },
-    tools: {
-      codex: command,
-      claude: command,
-      gemini: command,
-      apiKeys: { openai: true, anthropic: false },
-    },
-    gateway: { url: "ws://127.0.0.1:18789", source: "local loopback", reachable: false },
-  });
-}
+const overview = (defaultModel: string | undefined = model) =>
+  createSystemAgentOverviewFixture({ defaultModel });
 function setupResult(
   overrides: Partial<SystemAgentSetupApplyResult> = {},
 ): SystemAgentSetupApplyResult {
@@ -315,13 +302,10 @@ afterAll(() => {
   restoreBackend();
 });
 beforeEach(() => {
-  vi.mocked(applySystemAgentSetup)
-    .mockReset()
-    .mockImplementation((...args) => applySetup(...args));
+  applySetup.mockReset().mockImplementation(async () => setupResult());
   vi.mocked(verifySetupInferenceConfig)
     .mockReset()
     .mockImplementation(async () => verified());
-  applySetup = vi.fn<ApplySetup>(async () => setupResult());
   mockConfig.reset();
   mockConfig.set(withModel());
   localOnboarding.states.clear();

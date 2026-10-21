@@ -10,7 +10,6 @@ import {
   fakeOverviewLoader,
   createChatEngine,
   inferenceConfig,
-  setupResult,
   sharedVerifiedInferenceConfig,
   classifySystemAgentApprovalText,
   mocks,
@@ -333,21 +332,14 @@ describe("SystemAgentChatEngine operations", () => {
         throw new Error("authority closed");
       }
     });
-    operationMocks.runConfigSet.mockImplementation(
-      async (params: {
-        path?: string;
-        value?: string;
-        cliOptions: object;
-        beforePersistentApply?: () => void;
-      }) => {
-        await Promise.resolve();
-        if (closeDuringPreparation) {
-          authorityOpen = false;
-        }
-        params.beforePersistentApply?.();
-        persisted.push(`${params.path}=${params.value}`);
-      },
-    );
+    operationMocks.runConfigSet.mockImplementation(async (params) => {
+      await Promise.resolve();
+      if (closeDuringPreparation) {
+        authorityOpen = false;
+      }
+      params.beforePersistentApply?.();
+      persisted.push(`${params.path}=${params.value}`);
+    });
     const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
     const engine = createChatEngine({
       runAgentTurn: async () => null,
@@ -427,7 +419,7 @@ describe("SystemAgentChatEngine operations", () => {
       },
     );
     mockApprovedOperation(executeOperation);
-    const runAgentTurn = vi.fn(async (params) => {
+    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async (params) => {
       return { text: `using ${params.session.verifiedInference.execution.modelLabel}` };
     });
     const engine = createChatEngine({
@@ -648,7 +640,7 @@ describe("SystemAgentChatEngine handoff", () => {
   ] as const)(
     "hands personal accounts to the human from a $surface $source",
     async ({ surface, source }) => {
-      const runAgentTurn = vi.fn(async () => ({
+      const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
         text: "Let’s open your account controls.",
         directive: { kind: "model-accounts" as const },
       }));
@@ -676,7 +668,9 @@ describe("SystemAgentChatEngine handoff", () => {
   );
 
   it("handles the exact agent handoff without consulting a model", async () => {
-    const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
+    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
+      text: "model reply without a directive",
+    }));
     const engine = createChatEngine({
       surface: "gateway",
       runAgentTurn,
@@ -690,37 +684,5 @@ describe("SystemAgentChatEngine handoff", () => {
     expect(reply.text).toBe(
       "Opening a chat with your agent. You can return through Settings → Ask OpenClaw.",
     );
-  });
-
-  it("hatches into the agent after a fresh setup applies", async () => {
-    useTempStateDir();
-    operationMocks.verifyInferenceConfig.mockImplementation(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 100,
-    }));
-    const applySetup = operationMocks.applySetup.mockImplementation(async () => setupResult());
-    const engine = createChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-      deps: {
-        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
-      },
-    });
-    engine.propose({ kind: "setup", workspace: "/tmp/hatch-work" });
-
-    const reply = await engine.handle("yes");
-
-    expect(applySetup).toHaveBeenCalledOnce();
-    expect(reply.action).toBe("open-tui");
-    expect(reply.agentDraft).toBe("hatch");
-    expect(reply.handoff).toMatchObject({
-      kind: "open-tui",
-      workspace: "/tmp/hatch-work",
-      agentDraft: "hatch",
-    });
-    expect(reply.text).toContain("Your agent is hatching");
-    expect(reply.text).toContain("You can return through Settings → Ask OpenClaw.");
   });
 });

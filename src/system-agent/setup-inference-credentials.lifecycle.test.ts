@@ -36,18 +36,11 @@ import {
   buildGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
 } from "../gateway/config-reload-plan.js";
-import type { GatewayClient } from "../gateway/server-methods/client-types.js";
-import { modelsAuthLoginHandlers } from "../gateway/server-methods/models-auth-login.js";
 import { whenAdmittedWizardSessionSettled } from "../gateway/server-methods/setup-admission.js";
 import * as setupExecution from "../gateway/server-methods/system-agent-execution.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
-import { createWizardSessionTracker } from "../gateway/server-wizard-sessions.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import * as providerChoices from "../plugins/provider-auth-choices.js";
-import * as providerRuntime from "../plugins/providers.runtime.js";
-import type { ProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -58,13 +51,18 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import { fixture, modelRef, tempDirs } from "./setup-inference-activate.test-support.js";
+import {
+  fixture,
+  modelRef,
+  setupLoginSession,
+  setupMuseProvider,
+  tempDirs,
+} from "./setup-inference-activate.test-support.js";
 import {
   activateSavedSetupCredential,
   type SetupCredentialActivationReceipt,
 } from "./setup-inference-credential-access.js";
 import { stageProviderAuthCandidate } from "./setup-inference-credentials.js";
-import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
 
 const installRuntime = vi.hoisted(() =>
   vi.fn<typeof OnboardingPluginInstall.ensureOnboardingPluginInstalled>(),
@@ -408,52 +406,13 @@ it.each([
     const previousDefaultModel = JSON.stringify(config.agents?.defaults?.model);
     await fs.writeFile(setup.configPath, `${JSON.stringify(config, null, 2)}\n`);
     clearConfigCache();
-    const choice: ProviderAuthChoiceMetadata = {
-      pluginId: "meta",
-      providerId: "meta",
-      methodId: "muse-code",
-      choiceId: "muse-code",
-      choiceLabel: "Muse Code",
-      appGuidedAuth: "device-code",
-    };
-    const provider: ProviderPlugin = {
-      id: "meta",
-      pluginId: "meta",
-      label: "Meta",
-      auth: [
-        {
-          id: "muse-code",
-          label: "Muse Code",
-          kind: "device_code",
-          run: async () => ({
-            profiles: [],
-            defaultModel: starter,
-            agentRuntimeId: "muse",
-          }),
-        },
-      ],
-    };
-    setup.resolveManifestProviderAuthChoice.mockReturnValue(choice);
-    vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
-    mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
     const phases: string[] = [];
     const verifySetup = vi.fn(async () => {
       phases.push("verify");
     });
-    setup.pluginRegistry.agentHarnesses.push({
-      pluginId: "muse",
-      source: "test",
-      harness: {
-        id: "muse",
-        label: "Muse Code",
-        authBootstrap: "harness",
-        executionEnvironment: "host-only",
-        supports: () => ({ supported: true }),
-        verifySetup,
-        runAttempt: async () => {
-          throw new Error("Native setup verification must not start a turn");
-        },
-      },
+    const choice = setupMuseProvider(setup, starter, {
+      verifySetup,
+      executionEnvironment: "host-only",
     });
     const record: PluginInstallRecord = {
       source: "npm",
@@ -534,17 +493,11 @@ it.each([
           }),
         ),
       );
-      const tracker = createWizardSessionTracker();
-      const client: GatewayClient = {
-        connId: "muse-access",
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          scopes: ["operator.admin"],
-          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-        },
-      };
-      const params = { sessionId: "muse-access", authChoice: "meta/muse-code", agentId: "main" };
+      const login = setupLoginSession(() => config, {
+        sessionId: "muse-access",
+        authChoice: "meta/muse-code",
+        agentId: "main",
+      });
       const unsubscribe = registerConfigWriteListener(
         (event) => {
           const claim = expectDefined(
@@ -573,22 +526,7 @@ it.each([
       );
       try {
         setRuntimeConfigSnapshot(config, config);
-        await expectDefined(
-          modelsAuthLoginHandlers["models.authLogin"],
-          "provider login handler",
-        )({
-          req: { type: "req", id: "muse-access", method: "models.authLogin", params },
-          params,
-          respond: vi.fn(),
-          // SAFETY: Provider login uses only the real session tracker and current fixture config.
-          context: { ...tracker, getRuntimeConfig: () => config } as GatewayRequestContext,
-          client,
-          isWebchatConnect: () => false,
-        });
-        const session = expectDefined(
-          tracker.wizardSessions.get(params.sessionId),
-          "login session",
-        );
+        const session = await login.start();
         let consent = await session.next();
         while (consent.step?.type === "progress") {
           consent = await session.next();

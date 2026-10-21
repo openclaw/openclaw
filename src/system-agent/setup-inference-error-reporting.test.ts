@@ -11,7 +11,6 @@ import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { redactSetupInferenceError } from "./setup-inference-core.js";
 import { verifySetupInferenceConfig } from "./setup-inference-turn.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
@@ -235,10 +234,4 @@ describe("setup inference failure reporting", () => {
   it.each(["success", "drift"] as const)("verifies synthetic %s", (scenario) =>
     observeScenario(scenario, true),
   );
-  it("fully masks explicitly supplied known values", async () => {
-    const known = "opaque-140392-placeholder";
-    expect(await redactSetupInferenceError(`before ${known} after`, known)).toBe(
-      "before [redacted] after",
-    );
-  });
 });

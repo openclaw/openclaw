@@ -1,6 +1,7 @@
 // Shared setup activation fixture; the test file owns lifecycle cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
@@ -14,6 +15,7 @@ import {
   fingerprintResolvedAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
+import type { AgentHarness } from "../agents/harness/types.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import * as modelAuth from "../agents/model-auth.js";
 import * as runtimePlugins from "../agents/runtime-plugins.js";
@@ -21,6 +23,11 @@ import * as onboardInference from "../commands/onboard-inference.js";
 import * as codexRuntimePlugin from "../commands/runtime-plugin-install.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayClient } from "../gateway/server-methods/client-types.js";
+import { modelsAuthLoginHandlers } from "../gateway/server-methods/models-auth-login.js";
+import { whenAdmittedWizardSessionSettled } from "../gateway/server-methods/setup-admission.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import { createWizardSessionTracker } from "../gateway/server-wizard-sessions.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
@@ -53,6 +60,96 @@ export const credential = {
   key: "fixture-saved-key",
 } as const;
 type RunParams = Parameters<typeof embeddedAgent.runEmbeddedAgent>[0];
+
+export function setupLoginSession(
+  config: () => OpenClawConfig,
+  params: { sessionId: string; authChoice: string; agentId?: string },
+  clientOptions: Pick<GatewayClient, "connId" | "connectionSignal"> = { connId: params.sessionId },
+) {
+  const tracker = createWizardSessionTracker();
+  const client: GatewayClient = {
+    ...clientOptions,
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      scopes: ["operator.admin"],
+      client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+    },
+  };
+  return {
+    client,
+    async start() {
+      await expectDefined(
+        modelsAuthLoginHandlers["models.authLogin"],
+        "provider login handler",
+      )({
+        req: { type: "req", id: params.sessionId, method: "models.authLogin", params },
+        params,
+        respond: vi.fn(),
+        // SAFETY: Login uses only this real session tracker and the supplied fixture config.
+        context: { ...tracker, getRuntimeConfig: config } as GatewayRequestContext,
+        client,
+        isWebchatConnect: () => false,
+      });
+      return expectDefined(tracker.wizardSessions.get(params.sessionId), "login session");
+    },
+    async cancel() {
+      for (const session of tracker.wizardSessions.values()) {
+        session.cancel();
+        await whenAdmittedWizardSessionSettled(session);
+      }
+    },
+  };
+}
+
+export function setupMuseProvider(
+  setup: Awaited<ReturnType<typeof fixture>>,
+  model: string,
+  options: Partial<Pick<AgentHarness, "supports" | "verifySetup" | "executionEnvironment">> & {
+    methodId?: string;
+  } = {},
+) {
+  const { methodId = "muse-code", ...harnessOptions } = options;
+  const choice = {
+    pluginId: "meta",
+    providerId: "meta",
+    methodId,
+    choiceId: methodId,
+    choiceLabel: "Muse Code",
+    appGuidedAuth: "device-code" as const,
+  };
+  const provider: ProviderPlugin = {
+    id: "meta",
+    pluginId: "meta",
+    label: "Meta",
+    auth: [
+      {
+        id: methodId,
+        label: "Muse Code",
+        kind: "device_code",
+        run: async () => ({ profiles: [], defaultModel: model, agentRuntimeId: "muse" }),
+      },
+    ],
+  };
+  setup.resolveManifestProviderAuthChoice.mockReturnValue(choice);
+  vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
+  mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
+  setup.pluginRegistry.agentHarnesses.push({
+    pluginId: "muse",
+    source: "test",
+    harness: {
+      id: "muse",
+      label: "Muse Code",
+      authBootstrap: "harness",
+      supports: () => ({ supported: true }),
+      ...harnessOptions,
+      runAttempt: async () => {
+        throw new Error("Native setup verification must not start a turn");
+      },
+    },
+  });
+  return choice;
+}
 
 export async function fixture(
   options: {
