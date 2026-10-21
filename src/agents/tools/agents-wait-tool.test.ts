@@ -768,8 +768,24 @@ describe("agents_wait", () => {
     expect(isToolResultError(result)).toBe(true);
   });
 
+  it("treats a single string id as a one-id batch", async () => {
+    const result = await createMainSessionWaitTool().execute("call", {
+      ids: " missing ",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toEqual({
+      completed: [],
+      pending: [],
+      errors: [{ runId: "missing", error: "not_found" }],
+      success: false,
+    });
+  });
+
   it.each([
     { ids: [" ", "\t"], timeoutSeconds: 0, error: "at least one non-empty run id" },
+    { timeoutSeconds: 0, error: "at least one non-empty run id" },
+    { ids: [7], timeoutSeconds: 0, error: "at least one non-empty run id" },
     {
       ids: Array.from({ length: 1_001 }, (_, index) => `run-${index}`),
       error: "at most 1000 ids",
