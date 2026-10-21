@@ -57,6 +57,7 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
+import { SqliteMutationWorkerRetiredError } from "./session-accessor.sqlite-worker-request.js";
 import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
@@ -443,8 +444,7 @@ function startPendingMaintenance(databasePath: string, owner: SessionEntryMainte
   // Publish the join before a pass can synchronously retire itself.
   owner.active = Promise.resolve().then(async () => {
     if (!isMaintenanceOwnerCurrent(databasePath, owner)) {
-      retireMaintenanceOwner(databasePath, owner);
-      return;
+      return retireMaintenanceOwner(databasePath, owner);
     }
     // Keep command cleanup custody while automatic work uses the runtime worker path.
     const run = () => runPendingMaintenance(databasePath, owner);
@@ -468,8 +468,7 @@ async function runPendingMaintenance(
     }
   };
   if (!isCurrent()) {
-    retireMaintenanceOwner(databasePath, owner);
-    return;
+    return retireMaintenanceOwner(databasePath, owner);
   }
   const generation = owner.generation;
   const activeSessionKeys = new Set(owner.activeSessionKeys);
@@ -482,8 +481,7 @@ async function runPendingMaintenance(
     owner.execution ??= owner.captureExecution();
     const maintenance = resolveOwnerMaintenance(owner);
     if (maintenance.mode === "warn") {
-      retireMaintenanceOwner(databasePath, owner);
-      return;
+      return retireMaintenanceOwner(databasePath, owner);
     }
     const assertInputsCurrent = () => {
       if (!isCurrent()) {
@@ -506,9 +504,7 @@ async function runPendingMaintenance(
       }
     };
     const captureProtection = () => {
-      for (const key of owner.activeSessionKeys) {
-        activeSessionKeys.add(key);
-      }
+      owner.activeSessionKeys.forEach((key) => activeSessionKeys.add(key));
       return { activeSessionKeys: [...activeSessionKeys], preservation: capturePreservation() };
     };
     // A running pass keeps its captured policy; configuration changes apply to the next pass.
@@ -702,11 +698,15 @@ async function runPendingMaintenance(
       }
       return;
     }
-    // Retirement can refuse the next worker admission; independent failures stay visible.
+    // Retirement can refuse new admission or cancel a retained request; independent failures stay visible.
     if (
       !isGatewayRestartDrainError(error) &&
       !(planningChanged && getGatewayRestartDrainSignal().aborted) &&
-      !(owner.retirement && error instanceof AgentDatabaseExecutionAdmissionClosedError)
+      !(
+        owner.retirement &&
+        (error instanceof AgentDatabaseExecutionAdmissionClosedError ||
+          error instanceof SqliteMutationWorkerRetiredError)
+      )
     ) {
       log.warn("SQLite automatic session maintenance failed", details);
     }

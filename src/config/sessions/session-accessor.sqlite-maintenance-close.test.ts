@@ -17,6 +17,10 @@ import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js"
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import { observeNextPeriodicMaintenance } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
+import {
+  SqliteMutationWorkerRetiredError,
+  withSqliteMutationWorkerLifetime,
+} from "./session-accessor.sqlite-worker-request.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -160,8 +164,13 @@ it.for([false, true])(
 
 it.for([
   "retired admission",
+  "retired mutation",
   "live admission",
+  "live mutation",
   "retired plain error",
+  "retired plain mutation",
+  "retired wrapped mutation",
+  "retired aggregate",
   "retired I/O error",
 ] as const)(
   "reports automatic maintenance failures accurately for %s",
@@ -180,10 +189,22 @@ it.for([
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       const message = "Agent database execution admission is closed";
+      const mutationMessage = "SQLite mutation Worker request was revoked";
       const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
       vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
       const warn = vi.spyOn(logger, "warn");
       vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementationOnce(async () => {
+        if (scenario === "retired mutation") {
+          return withSqliteMutationWorkerLifetime(
+            { ...scope, path: database.path },
+            async ({ assertCurrent }) => {
+              entered.resolve();
+              await resume.promise;
+              assertCurrent();
+              throw new Error("Retired mutation admitted maintenance");
+            },
+          );
+        }
         entered.resolve();
         await resume.promise;
         if (scenario === "retired admission") {
@@ -194,8 +215,28 @@ it.for([
         if (scenario === "live admission") {
           throw new AgentDatabaseExecutionAdmissionClosedError(message);
         }
+        if (scenario === "live mutation") {
+          throw new SqliteMutationWorkerRetiredError();
+        }
         if (scenario === "retired plain error") {
           throw new Error(message);
+        }
+        if (scenario === "retired plain mutation") {
+          throw new Error(mutationMessage);
+        }
+        if (scenario === "retired wrapped mutation") {
+          throw new Error("mutation cleanup failed", {
+            cause: new SqliteMutationWorkerRetiredError(),
+          });
+        }
+        if (scenario === "retired aggregate") {
+          throw new AggregateError(
+            [
+              new SqliteMutationWorkerRetiredError(),
+              Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
+            ],
+            "mutation and cleanup failed",
+          );
         }
         throw new Error("maintenance write failed", {
           cause: Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
@@ -206,7 +247,7 @@ it.for([
       try {
         maintenanceKick.kickSessionEntryMaintenanceAfterWrite(request);
         await withinTest(entered.promise, signal);
-        if (scenario !== "live admission") {
+        if (scenario !== "live admission" && scenario !== "live mutation") {
           closing = closeOpenClawAgentDatabaseByPathAsync(database.path);
         }
         resume.resolve();
@@ -215,16 +256,22 @@ it.for([
         } else {
           await scheduled(signal);
         }
-        if (scenario === "retired admission") {
+        if (scenario === "retired admission" || scenario === "retired mutation") {
           expect(warn).not.toHaveBeenCalled();
         } else {
+          const expectedErrors = {
+            "live admission": message,
+            "live mutation": mutationMessage,
+            "retired plain error": message,
+            "retired plain mutation": mutationMessage,
+            "retired wrapped mutation": `mutation cleanup failed | ${mutationMessage}`,
+            "retired aggregate": `mutation and cleanup failed | ${mutationMessage} | disk I/O error | SQLITE_IOERR`,
+            "retired I/O error": "maintenance write failed | disk I/O error | SQLITE_IOERR",
+          };
           expect(warn).toHaveBeenCalledExactlyOnceWith(
             "SQLite automatic session maintenance failed",
             {
-              error:
-                scenario === "retired I/O error"
-                  ? "maintenance write failed | disk I/O error | SQLITE_IOERR"
-                  : message,
+              error: expectedErrors[scenario],
               path: database.path,
             },
           );
