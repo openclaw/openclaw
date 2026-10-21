@@ -12,8 +12,8 @@ type BrewResolutionOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-function resolveBrewFromPath(pathEnv = process.env.PATH): string | undefined {
-  for (const dir of (pathEnv ?? "").split(path.delimiter)) {
+function resolveBrewFromPath(): string | undefined {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
     const trimmed = dir.trim();
     if (!trimmed || !path.isAbsolute(trimmed)) {
       continue;
