@@ -122,7 +122,9 @@ async function runAndTouchSibling(params: {
   return outcome;
 }
 
-const SELF_ACTIONS = ["status", "list", "get", "remove", "runs", "next_check"];
+// The self-scoped schema never offers job creation. Its exact action list is
+// owned by cron-tool-schema.ts and grows with active-run features.
+const SELF_ACTIONS = expect.not.arrayContaining(["add"]);
 
 it("cron-triggered turns cannot act on another automation", async () => {
   const outcome = await runAndTouchSibling({ trigger: "cron" });
