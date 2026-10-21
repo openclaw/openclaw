@@ -216,25 +216,21 @@ describe("usage archive identity", () => {
       },
     ) => (await resolveUsageSessionSource({ agentId: "main", sessionId, ...params }))?.sessionFile;
     await fs.writeFile(artifact, "explicit artifact");
-    const historicalInput = {
-      sessionEntry: { sessionFile: marker, sessionId, updatedAt: 1 },
-      sessionFile: artifact,
-    };
-    expect(await resolve(historicalInput)).toBe(artifact);
-    expect(await resolve({ ...historicalInput, sessionFile: foreign })).toBeUndefined();
+    expect(await resolve({ sessionFile: artifact })).toBe(artifact);
+    expect(await resolve({ sessionFile: foreign })).toBeUndefined();
     expect(await resolve({ sessionFile: stale })).toBeUndefined();
     expect(await resolve({ sessionFile: marker })).toBe(marker);
-    const historicalPath = { sessionEntry: { sessionFile: artifact, sessionId, updatedAt: 1 } };
-    expect(await resolve({ sessionId, ...historicalPath })).toBe(
-      path.join(sessionsDir, `${sessionId}.jsonl`),
-    );
+    expect(await resolve({ sessionId })).toBe(path.join(sessionsDir, `${sessionId}.jsonl`));
     const sessionTarget = { agentId: "main", sessionId, sessionKey: "agent:main:cost", storePath };
     const mismatchedTarget = { ...sessionTarget, sessionKey: "agent:main:other-cost" };
+    const family = {
+      usageFamilyKey: mismatchedTarget.sessionKey,
+      usageFamilySessionIds: ["previous-session", "other-session"],
+    };
     await upsertSessionEntryCore(mismatchedTarget, {
       sessionId: "other-session",
       updatedAt: 1,
-      usageFamilyKey: mismatchedTarget.sessionKey,
-      usageFamilySessionIds: ["previous-session", "other-session"],
+      ...family,
     });
     const sql = observeMainThreadSql();
     try {
@@ -256,12 +252,7 @@ describe("usage archive identity", () => {
           sessionId: "other-session",
           sessionTarget: { ...mismatchedTarget, sessionId: "other-session" },
         }),
-      ).toMatchObject({
-        entry: {
-          usageFamilyKey: mismatchedTarget.sessionKey,
-          usageFamilySessionIds: ["previous-session", "other-session"],
-        },
-      });
+      ).toMatchObject({ entry: family });
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -443,72 +434,18 @@ describe("usage archive identity", () => {
     expect(readCold(database.db, missingScope.sessionId)).toBeDefined();
   });
 
-  it("discovers and reads compressed deleted archives for a non-main agent", async ({ signal }) => {
-    const agentId = "worker";
-    const { manager, sessionId, sessionFile } = await archiveFixture({
-      reason: "deleted",
-      agentId,
-      generated: true,
-    });
-    const sourceStats = await fs.stat(sessionFile);
-    const sessions = await discoverAllSessions({ agentId });
-    expect(sessions).toEqual([{ sessionId, sessionFile, mtime: sourceStats.mtimeMs }]);
-
-    const resolved = expectDefined(await resolveTranscript(sessionFile), "resolved archive");
-    expect(resolved).toMatchObject({
-      size: Buffer.byteLength(serialize(manager)),
-      mtimeMs: sourceStats.mtimeMs,
-    });
-    expect(resolved.filePath).not.toBe(sessionFile);
-
-    const cacheLookup = { agentId, config, sessions: [{ sessionId, sessionFile }] };
-    expect(readRollups(agentId)).toEqual([]);
-    await withWork(async (work) => {
-      expect(
-        await racePromiseWithAbortSignal(
-          work.track(() => cachedSessions(cacheLookup)),
-          signal,
-        ),
-      ).toMatchObject({
-        summaries: [null],
-        cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
-      });
-      await racePromiseWithAbortSignal(
-        work.runWhenIdle(() => undefined),
-        signal,
-      );
-      expect(readRollups(agentId)).toHaveLength(1);
-    });
-    expect(await cachedSessions({ ...cacheLookup, requestRefresh: false })).toMatchObject({
-      summaries: [{ sessionId, sessionFile, totalTokens: 17 }],
-      cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0 },
-    });
-
-    const lookup = {
-      agentId,
-      sessionId: expectDefined(sessions[0], "discovered archive").sessionId,
-      config,
-    };
-    const summary = await sessionSummary(lookup);
-    expect(summary).toMatchObject({ sessionFile, totalTokens: 17 });
-    expect(await loadSessionLogs(lookup)).toEqual([
-      expect.objectContaining({ role: "user", content: "retained archive prompt" }),
-      expect.objectContaining({ role: "assistant", tokens: 17 }),
-    ]);
-    expect(await timeSeries(lookup)).toMatchObject({
-      sessionId,
-      points: [expect.objectContaining({ totalTokens: 17, cumulativeTokens: 17 })],
-    });
-    const firstRows = readRollups(agentId);
-    expect(firstRows.map((row) => row.key)).toEqual([resolved.filePath]);
-  });
-
-  it("excludes a compressed archive copy of SQLite only in its owning agent", async () => {
+  it("excludes a compressed archive copy of SQLite only in its owning agent", async ({
+    signal,
+  }) => {
     const manager = transcript(100);
     const sessionId = manager.getSessionId();
     await seed({ ...scopeFor(sessionId), sessionKey: "agent:main:main" }, 17, false);
     const mainArchive = await writeArchive(manager);
-    const workerArchive = await writeArchive(manager, { agentId: "worker" });
+    const workerArchive = await writeArchive(manager, {
+      agentId: "worker",
+      reason: "deleted",
+      generated: true,
+    });
     const readFile = vi.spyOn(fsSync, "readFileSync");
     try {
       await listTranscripts("main");
@@ -533,6 +470,36 @@ describe("usage archive identity", () => {
     ]);
     await expectTotal("main", 17);
     await expectDiscovery("worker", sessionId, workerArchive);
+    const cacheLookup = {
+      agentId: "worker",
+      config,
+      sessions: [{ sessionId, sessionFile: workerArchive }],
+    };
+    expect(readRollups("worker")).toEqual([]);
+    await withWork(async (work) => {
+      expect(
+        await racePromiseWithAbortSignal(
+          work.track(() => cachedSessions(cacheLookup)),
+          signal,
+        ),
+      ).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
+      });
+      await racePromiseWithAbortSignal(
+        work.runWhenIdle(() => undefined),
+        signal,
+      );
+      expect(readRollups("worker")).toHaveLength(1);
+    });
+    expect(await cachedSessions({ ...cacheLookup, requestRefresh: false })).toMatchObject({
+      summaries: [{ sessionId, sessionFile: workerArchive, totalTokens: 100 }],
+      cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0 },
+    });
+    expect(await sessionSummary({ agentId: "worker", sessionId, config })).toMatchObject({
+      sessionFile: workerArchive,
+      totalTokens: 100,
+    });
     await expectTotal("worker", 100);
   });
 

@@ -79,11 +79,10 @@ async function fixture(
   entry: Partial<InternalSessionEntry> = {},
   target = { sessionKey, sessionId },
 ) {
-  const { sessionKey: fixtureSessionKey, sessionId: fixtureSessionId } = target;
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   const binding = expectDefined(
     await acquireSessionActorStorage(
-      { agentId: "main", storePath, sessionKey: fixtureSessionKey, env },
+      { agentId: "main", storePath, sessionKey: target.sessionKey, env },
       { lifetime: { assertCurrent() {}, assertReadable() {} }, authority, create: true },
     ),
     "Production acquisition did not select memory storage",
@@ -91,13 +90,12 @@ async function fixture(
   const { actor } = binding;
   const scope = {
     agentId: "main",
-    sessionKey: fixtureSessionKey,
-    sessionId: fixtureSessionId,
+    ...target,
     storePath: binding.path,
   };
   const owner = memorySessionActorOwners.read({ agentId: "main", path: storePath })!;
   await commit(actor, "session.entry.create", {
-    entry: { sessionId: fixtureSessionId, updatedAt: 1, ...entry },
+    entry: { sessionId: target.sessionId, updatedAt: 1, ...entry },
     cwd: "/synthetic",
   });
   let next = 0;
@@ -137,7 +135,7 @@ async function fixture(
     sessionFile,
     ...target,
     refresh: () => refreshUsage(binding),
-    report: () => memoryReport({ binding, sessionFile }),
+    report: (files = [sessionFile]) => runUsage(binding, sessionReport(files)),
     snapshot: (input: SessionActorMemoryUsageReads["session.usage.snapshot"]["input"]) =>
       actor.storage!.read({ type: "session.usage.snapshot", input }, authority),
     corpus: () =>
@@ -156,7 +154,17 @@ async function cachedFixture(target = { sessionKey, sessionId }) {
   const entry =
     snapshot?.rollup &&
     decodeUsageCostRollup(snapshot.rollup.valueJson, "fixture", snapshot.rollup.blob ?? null);
-  return { ...cached, entry: expectDefined(entry, "Expected a production-generated usage rollup") };
+  return {
+    ...cached,
+    entry: expectDefined(entry, "Expected a production-generated usage rollup"),
+    write: (rollup: ReturnType<typeof paddedRollup>) =>
+      commit(
+        cached.actor,
+        "session.usage.write",
+        { sessionId: target.sessionId, rollup: { ...rollup, updatedAt: 1 } },
+        { kind: "committed", value: true },
+      ),
+  };
 }
 
 function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = false) {
@@ -178,28 +186,6 @@ function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = f
     }),
     blob: Uint8Array.from(raw),
   };
-}
-
-async function writeRollup(
-  cached: Awaited<ReturnType<typeof cachedFixture>>,
-  rollup: ReturnType<typeof paddedRollup>,
-) {
-  await commit(
-    cached.actor,
-    "session.usage.write",
-    {
-      sessionId: cached.sessionId,
-      rollup: { ...rollup, updatedAt: 1 },
-    },
-    { kind: "committed", value: true },
-  );
-}
-
-function memoryReport(
-  cached: { binding: Parameters<typeof runSessionActorUsage>[0]; sessionFile: string },
-  sessionFiles = [cached.sessionFile],
-) {
-  return runUsage(cached.binding, sessionReport(sessionFiles));
 }
 
 function sessionReport(sessionFiles: string[], pricingFingerprint = "fixture") {
@@ -227,8 +213,8 @@ describe("actor memory usage", () => {
           padding: "x".repeat(70 * 1024),
         });
       }
-      await writeRollup(cached, encoded);
-      const report = await memoryReport(cached);
+      await cached.write(encoded);
+      const report = await cached.report();
       expect(report).toMatchObject({
         kind: "sessions",
         summaries: [null],
@@ -254,14 +240,14 @@ describe("actor memory usage", () => {
         }),
       ).toEqual({ kind: "refresh", changed: mode !== "valid" });
       if (mode !== "valid") {
-        expect(await memoryReport(cached)).toMatchObject({
+        expect(await cached.report()).toMatchObject({
           summaries: [{ input: 5, output: 2 }],
           cacheStatus: { status: "fresh", staleFiles: 0 },
           invalidRows: [],
         });
       } else {
         await cached.append(7);
-        expect(await memoryReport(cached)).toMatchObject({
+        expect(await cached.report()).toMatchObject({
           staleSessionFiles: [cached.sessionFile],
           cacheStatus: { staleFiles: 1 },
         });
@@ -273,13 +259,13 @@ describe("actor memory usage", () => {
     const cached = await cachedFixture();
     const encoded = paddedRollup(cached.entry, 900 * 1024);
     const sessionFiles = [cached.sessionFile];
-    await writeRollup(cached, encoded);
+    await cached.write(encoded);
     for (let index = 1; index < 40; index++) {
       const next = await cachedFixture({
         sessionKey: `${sessionKey}-${index}`,
         sessionId: `budget-${index}`,
       });
-      await writeRollup(next, paddedRollup(next.entry, 900 * 1024));
+      await next.write(paddedRollup(next.entry, 900 * 1024));
       sessionFiles.push(next.sessionFile);
     }
     const snapshot = await cached.snapshot({
@@ -294,7 +280,7 @@ describe("actor memory usage", () => {
       ),
     ).toBeLessThanOrEqual(32 * 1024 * 1024);
     expect(snapshot.filter(({ rollup }) => rollup?.blob)).toHaveLength(36);
-    const report = await memoryReport(cached, sessionFiles);
+    const report = await cached.report(sessionFiles);
     expect(report).toMatchObject({
       kind: "sessions",
       summaries: Array(40).fill(null),
@@ -310,8 +296,8 @@ describe("actor memory usage", () => {
       const cached = await cachedFixture();
       const encoded = paddedRollup(cached.entry, 33 * 1024 * 1024, true);
       expect(encoded.blob.byteLength).toBeLessThan(1024 * 1024);
-      await writeRollup(cached, encoded);
-      const report = await memoryReport(cached);
+      await cached.write(encoded);
+      const report = await cached.report();
       expect(report).toMatchObject({
         kind: "sessions",
         summaries: [null],
@@ -328,7 +314,7 @@ describe("actor memory usage", () => {
       const cached = await cachedFixture();
       if (mode !== "valid") {
         const encoded = encodeUsageCostRollup(cached.entry);
-        await writeRollup(cached, { ...encoded, blob: new Uint8Array() });
+        await cached.write({ ...encoded, blob: new Uint8Array() });
       }
       const snapshot = await cached.snapshot({
         includeRollupBodies: true,
@@ -351,7 +337,7 @@ describe("actor memory usage", () => {
       if (mode === "valid") {
         const scope = new AsyncWorkScope();
         scope.beginClose(new Error("report cancelled"));
-        await expect(scope.run(() => memoryReport(cached))).rejects.toThrow("report cancelled");
+        await expect(scope.run(() => cached.report())).rejects.toThrow("report cancelled");
         await scope.drain();
       }
     },

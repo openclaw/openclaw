@@ -45,6 +45,7 @@ const mediaAttachments = {
   "/tmp/one.png": { type: "image" as const, path: "/tmp/one.png", mimeType: "image/png" },
   "/tmp/two.png": { type: "image" as const, path: "/tmp/two.png", mimeType: "image/png" },
 };
+const imageBlocks = (artifactId: string) => [{ type: "image", artifactId }];
 
 describe("session-delivery queue storage", () => {
   async function settleSessionDelivery(
@@ -198,26 +199,11 @@ describe("session-delivery queue storage", () => {
         expect(entry?.agentRunAttempt).toBeUndefined();
         expect(entry?.availableAt).toBeGreaterThan(Date.now());
 
-        await mergePrepared(
-          id,
-          "/tmp/one.png",
-          [{ type: "image", artifactId: "artifact-one" }],
-          queueContext,
-        );
+        await mergePrepared(id, "/tmp/one.png", imageBlocks("artifact-one"), queueContext);
         await expect(
-          mergePrepared(
-            id,
-            "/tmp/one.png",
-            [{ type: "image", artifactId: "replacement-must-not-win" }],
-            queueContext,
-          ),
-        ).resolves.toEqual([{ type: "image", artifactId: "artifact-one" }]);
-        await mergePrepared(
-          id,
-          "/tmp/two.png",
-          [{ type: "image", artifactId: "artifact-two" }],
-          queueContext,
-        );
+          mergePrepared(id, "/tmp/one.png", imageBlocks("replacement-must-not-win"), queueContext),
+        ).resolves.toEqual(imageBlocks("artifact-one"));
+        await mergePrepared(id, "/tmp/two.png", imageBlocks("artifact-two"), queueContext);
 
         await advanceRun(
           id,
@@ -235,8 +221,8 @@ describe("session-delivery queue storage", () => {
           expectedMediaUrls: ["/tmp/two.png"],
           expectedMediaAttachments: mediaAttachments,
           preparedMediaBlocks: {
-            "/tmp/one.png": [{ type: "image", artifactId: "artifact-one" }],
-            "/tmp/two.png": [{ type: "image", artifactId: "artifact-two" }],
+            "/tmp/one.png": imageBlocks("artifact-one"),
+            "/tmp/two.png": imageBlocks("artifact-two"),
           },
         });
         await fail(id, "fresh delivery failed", queueContext);
