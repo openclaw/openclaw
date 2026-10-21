@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSqliteWalBlockedReaderRecovery } from "./sqlite-wal-blocked-reader-recovery.js";
 import type { SqliteWalCheckpointSnapshot, SqliteWalHealth } from "./sqlite-wal-checkpoint.js";
@@ -76,5 +80,57 @@ describe("registerSqliteWalBlockedReaderRecovery", () => {
     expect(healthy).toHaveBeenCalledTimes(1);
     failing();
     warning.mockRestore();
+  });
+
+  it("folds a pinned WAL after recovery rotates the blocking reader", async () => {
+    // User-facing symptom regression: a stranded reader pins the WAL read mark so
+    // TRUNCATE checkpoints keep reporting busy and the -wal file keeps growing.
+    // After the recovery hook closes the pinning connection, a TRUNCATE checkpoint
+    // must complete (busy=0) and truncate the WAL to zero bytes.
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-wal-recovery-"));
+    try {
+      const dbPath = join(dir, "state.sqlite");
+      const writer = new DatabaseSync(dbPath);
+      writer.exec("PRAGMA journal_mode=WAL");
+      writer.exec("CREATE TABLE t (payload TEXT)");
+      const blocker = new DatabaseSync(dbPath);
+      blocker.exec("BEGIN");
+      blocker.prepare("SELECT count(*) FROM t").get();
+
+      const insert = writer.prepare("INSERT INTO t (payload) VALUES (?)");
+      for (let i = 0; i < 400; i += 1) {
+        insert.run("x".repeat(1024));
+      }
+
+      const checkpoint = writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+        busy: number;
+        log: number;
+        checkpointed: number;
+      };
+      expect(checkpoint.busy).toBe(1);
+      const pinnedWalBytes = statSync(`${dbPath}-wal`).size;
+      expect(pinnedWalBytes).toBeGreaterThan(0);
+
+      registerSqliteWalBlockedReaderRecovery(() => {
+        // Stands in for the pooled-connection rotation owners register.
+        blocker.close();
+      });
+      await publishBlocked(12);
+      // Give the hook one full notification tick before re-checkpointing.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+
+      const recovered = writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+        busy: number;
+        log: number;
+        checkpointed: number;
+      };
+      expect(recovered.busy).toBe(0);
+      expect(statSync(`${dbPath}-wal`).size).toBe(0);
+      writer.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
