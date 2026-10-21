@@ -52,6 +52,22 @@ suite.define(() => {
             const card = page.locator(".community-invite-card");
             const close = card.getByRole("button", { name: "Dismiss and don't show again" });
             await close.waitFor();
+            const closeAppearance = await close.evaluate((node) => {
+              const target = node.getBoundingClientRect();
+              const backdrop = getComputedStyle(node, "::before");
+              return {
+                targetWidth: target.width,
+                targetHeight: target.height,
+                background: getComputedStyle(node).backgroundColor,
+                backdropWidth: Number.parseFloat(backdrop.width),
+                backdropHeight: Number.parseFloat(backdrop.height),
+              };
+            });
+            expect(closeAppearance.background).toBe("rgba(0, 0, 0, 0)");
+            expect(closeAppearance.backdropWidth).toBeLessThanOrEqual(24);
+            expect(closeAppearance.backdropHeight).toBeLessThanOrEqual(24);
+            expect(closeAppearance.targetWidth).toBeGreaterThanOrEqual(mobile ? 44 : 24);
+            expect(closeAppearance.targetHeight).toBeGreaterThanOrEqual(mobile ? 44 : 24);
             const shell = page.locator(".sidebar-shell");
             const list = page.locator(".sidebar-shell__body");
             const cardBounds = (await card.boundingBox())!;
@@ -125,8 +141,17 @@ suite.define(() => {
             await page.locator('.sidebar-rail [data-navigation-view="pages"]').click();
             await close.waitFor();
             await page.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
+            await page.keyboard.press("Tab");
             await close.focus();
-            await page.keyboard.press("Enter");
+            expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
+            expect(
+              await close.evaluate((node) => getComputedStyle(node, "::before").outlineStyle),
+            ).toBe("solid");
+            if (mobile && mode === "light") {
+              await close.tap({ position: { x: 2, y: 2 } });
+            } else {
+              await page.keyboard.press("Enter");
+            }
             await card.waitFor({ state: "detached" });
             expect(
               await page.evaluate((key) => localStorage.getItem(key), dismissalKey),

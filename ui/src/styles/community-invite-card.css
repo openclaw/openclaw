@@ -72,35 +72,52 @@
     inset-block-start: var(--space-2, 8px);
     inset-inline-end: var(--space-2, 8px);
     display: grid;
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     place-items: center;
     padding: 0;
     border: 0;
-    border-radius: 50%;
-    /* These fixed translucent colors belong to photo chrome, not the theme surface. */
-    background: rgb(0 0 0 / 42%);
-    color: rgb(255 255 255 / 76%);
+    background: transparent;
+    color: rgb(255 255 255 / 90%);
     cursor: var(--cursor-action, default);
-    transition:
-      background 120ms ease,
-      color 120ms ease;
+    transition: color 120ms ease;
+  }
+
+  .invite__close::before {
+    content: "";
+    grid-area: 1 / 1;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    /* Keep photo chrome compact while the transparent button remains easy to tap. */
+    background: rgb(0 0 0 / 24%);
+    pointer-events: none;
+    transition: background 120ms ease;
   }
 
   .invite__close:hover {
-    background: rgb(255 255 255 / 14%);
     color: rgb(255 255 255);
   }
 
+  .invite__close:hover::before {
+    background: rgb(0 0 0 / 42%);
+  }
+
   .invite__close:focus-visible {
-    outline: 2px solid rgb(255 255 255 / 70%);
-    outline-offset: 1px;
+    outline: none;
+  }
+
+  .invite__close:focus-visible::before {
+    outline: 2px solid rgb(255 255 255 / 90%);
+    outline-offset: 2px;
   }
 
   .invite__close svg {
+    position: relative;
+    grid-area: 1 / 1;
     display: block;
-    width: 15px;
-    height: 15px;
+    width: 14px;
+    height: 14px;
     fill: none;
     stroke: currentcolor;
     stroke-width: 1.8;
@@ -202,6 +219,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .invite__close,
+    .invite__close::before,
     .invite__cta {
       transition: none;
     }
