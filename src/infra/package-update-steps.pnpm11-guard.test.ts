@@ -191,7 +191,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         }
         throw new Error(`unexpected command: ${command}`);
       };
-      const runStep = vi.fn(
+      const runStep = vi.fn<NonNullable<UpdateOptions["runStep"]>>(
         async ({ name, argv, cwd, env, input }): Promise<PackageUpdateStepResult> => {
           if (name === "package-install") {
             expect(input).toBe("");

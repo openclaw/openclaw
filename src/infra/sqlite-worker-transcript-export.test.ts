@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerTranscriptsCli } from "../cli/program/register.transcripts.js";
 import {
@@ -251,20 +250,32 @@ it.each([
 ])("recovers $name artifacts off-thread", async ({ count, modified }) => {
   const { session, files, hash, bytes, check } = await seed(count, modified);
 
-  const sql = observeHostDataSql();
+  const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare");
+  const executed: string[] = [];
+  // oxlint-disable-next-line typescript/unbound-method -- Preserve the native receiver.
+  const iterate = StatementSync.prototype.iterate;
+  const iterateSpy = vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(function (
+    this: StatementSync,
+    ...args
+  ) {
+    executed.push(this.sourceSQL);
+    return iterate.apply(this, args);
+  });
   try {
     const recovery = runCli(["path", session.sessionId, "--metadata"]);
     await expectRecovery(recovery, modified, files.metadataPath);
     await check(bytes, modified ? undefined : hash, []);
+    const sql = [...prepareSpy.mock.calls.map(([query]) => query), ...executed];
     expect(
-      sql.queries.filter(
+      sql.filter(
         (query) =>
           /^select\b/iu.test(query) && query.includes('from "meeting_transcript_utterances"'),
       ),
       "artifact recovery read transcript rows on the caller thread",
     ).toEqual([]);
   } finally {
-    sql.restore();
+    prepareSpy.mockRestore();
+    iterateSpy.mockRestore();
   }
 });
 

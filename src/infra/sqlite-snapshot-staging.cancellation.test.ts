@@ -9,13 +9,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
-import * as probe from "./sqlite-snapshot-staging-owner.test-support.js";
 import { reclaimAbandonedSqliteSnapshotsAsync } from "./sqlite-snapshot-staging.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 
@@ -150,11 +149,16 @@ function fixture(count = 3, payloadBytes = 4096) {
   const root = tempDirs.make("sqlite-reclaim-cancellation-");
   const cacheHome = path.join(root, "cache");
   const cache = path.join(cacheHome, "openclaw");
-  const source = probe.seedProbe(root, "source", "preserved", "PRAGMA user_version=3;");
+  const source = path.join(root, "source.sqlite");
   const gatePath = path.join(root, "gate.sqlite");
   const entered = createDeferredCore<Claim>();
   const harness = path.join(root, "worker.mts");
   const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(source);
+  database.exec(
+    "PRAGMA user_version=3; CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');",
+  );
+  database.close();
   const gate = new sqlite.DatabaseSync(gatePath);
   gate.exec("CREATE TABLE gate(value INTEGER); BEGIN IMMEDIATE;");
   fs.mkdirSync(cache, { recursive: true });
@@ -253,7 +257,8 @@ async function readSnapshot(source: string, signal?: AbortSignal): Promise<void>
   const prepared = await prepareSqliteReadOnlyLocation(source, { signal });
   try {
     // Windows test homes can put the prepared snapshot at the native path limit.
-    probe.expectWrappedProbe(prepared.location);
+    using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+    expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
   } finally {
     expect(await prepared.cleanupAsync()).toBe(true);
   }

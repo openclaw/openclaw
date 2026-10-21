@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import {
@@ -445,9 +445,8 @@ describe("voice consult registration authority", () => {
         readDatabasePathIdentitySync(targetPath).canonicalPath,
       ]);
       const coldSchemaSql: string[] = [];
-      observeHostDataSql((sql, database) => {
+      const observeColdSchemaSql = (database: DatabaseSync, sql: string) => {
         if (
-          database &&
           targetPaths.has(database.location() ?? "") &&
           !getOpenClawAgentDatabaseIfOpen(scope) &&
           /\b(?:sqlite_master|sqlite_schema|(?:pragma_)?(?:table_(?:xinfo|info)|index_(?:list|xinfo|info)|foreign_key_(?:list|check)|quick_check|integrity_check)|create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view))\b/i.test(
@@ -456,6 +455,24 @@ describe("voice consult registration authority", () => {
         ) {
           coldSchemaSql.push(sql);
         }
+      };
+      // oxlint-disable-next-line typescript/unbound-method -- Forward with the intercepted database receiver.
+      const prepare = DatabaseSync.prototype.prepare;
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        observeColdSchemaSql(this, sql);
+        return prepare.call(this, sql);
+      });
+      // oxlint-disable-next-line typescript/unbound-method -- Forward with the intercepted database receiver.
+      const execute = DatabaseSync.prototype.exec;
+      vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        observeColdSchemaSql(this, sql);
+        return execute.call(this, sql);
       });
       let checkedWhileCold = false;
       const { respond, pending } = toolCall(

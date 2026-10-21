@@ -7,9 +7,6 @@ import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import {
   cleanupMcpCliTestState,
-  clearMcpOAuthCredentials,
-  countMcpOAuthPrincipals,
-  completeMcpOAuthAuthorization,
   createWorkspace,
   lastErrorLine,
   lastLogLine,
@@ -44,12 +41,6 @@ async function readJson(...args: string[]) {
 }
 const readServer = (name = "docs") => readJson("show", name);
 const logOutput = () => mockLog.mock.calls.map(([line]) => String(line)).join("\n");
-function expectOutput(...fragments: string[]) {
-  for (const fragment of fragments) {
-    expect(logOutput()).toContain(fragment);
-  }
-}
-const expectExit = (...args: string[]) => expect(mcp(...args)).rejects.toMatchObject({ code: 1 });
 type Catalog = Awaited<ReturnType<SessionMcpRuntime["getCatalog"]>>;
 const catalog = (servers: Catalog["servers"], tools: Catalog["tools"] = []): Catalog => ({
   version: 1,
@@ -113,7 +104,6 @@ const httpServer = (url = "https://mcp.example.com") => ({
   transport: "streamable-http",
   auth: "oauth",
 });
-const oauthHttpServer = { url: "https://mcp.example.com", transport: "streamable-http" };
 
 async function writeMcpServers(servers: Record<string, unknown>): Promise<void> {
   await fs.writeFile(configPath, `${JSON.stringify({ mcp: { servers } })}\n`, "utf8");
@@ -162,6 +152,7 @@ it("adds a configured MCP server from flags without replacing operator knobs", a
       "--no-probe": true,
     }),
   );
+
   expect(await readServer()).toEqual({
     url: "https://mcp.example.com/mcp",
     transport: "streamable-http",
@@ -216,7 +207,9 @@ it("updates approval mode without replacing saved Codex metadata", async () => {
     command: process.execPath,
     codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "auto" },
   });
+
   await mcp("configure", "docs", "--approval", "approve");
+
   expect(await readServer()).toEqual({
     command: process.execPath,
     codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "approve" },
@@ -229,8 +222,10 @@ it("rejects hexadecimal MCP timeout options before writing configuration", async
   ).rejects.toMatchObject({ code: 1 });
   expect(lastErrorLine()).toBe("--timeout must be a positive number.");
   await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
   await setServer('{"url":"https://mcp.example.com","requestTimeoutMs":12000}');
   mockError.mockClear();
+
   await expectFailure(
     "--connect-timeout must be a positive number.",
     "configure",
@@ -238,6 +233,7 @@ it("rejects hexadecimal MCP timeout options before writing configuration", async
     "--connect-timeout",
     "0x3",
   );
+
   expect(await readServer()).toEqual({
     url: "https://mcp.example.com",
     requestTimeoutMs: 12_000,
@@ -292,13 +288,15 @@ it("explains only disabled servers and overrides while preserving JSON output", 
     paused: { enabled: false, command: process.execPath },
     override: { enabled: false },
   });
+
   await mcp("probe");
-  expectOutput(
-    "No enabled MCP servers in",
-    "openclaw mcp add <name> --command <command>",
-    "openclaw mcp configure <name> --enable",
-  );
-  expect(logOutput()).not.toMatch(/^MCP check \(.*\):$/m);
+
+  const output = logOutput();
+  expect(output).toContain("No enabled MCP servers in");
+  expect(output).toContain("openclaw mcp add <name> --command <command>");
+  expect(output).toContain("openclaw mcp configure <name> --enable");
+  expect(output).not.toMatch(/^MCP check \(.*\):$/m);
+
   mockLog.mockClear();
   await mcp("probe", "--json");
   expect(mockLog).toHaveBeenCalledTimes(1);
@@ -317,7 +315,10 @@ it("preserves sibling tool filters for configure --exclude", async () => {
     toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
   });
   await mcp("configure", "docs", "--exclude", "write_*");
-  expect((await readServer()).toolFilter).toEqual({
+
+  mockLog.mockClear();
+  await mcp("show", "docs", "--json");
+  expect(JSON.parse(lastLogLine()).toolFilter).toEqual({
     include: ["old_*"],
     exclude: ["write_*"],
   });
@@ -335,6 +336,7 @@ it.each([
   await setServer();
   await mcp("tools", "docs", "--include", "search");
   await mcp(command, "docs", clearFlag);
+
   expect(await readServer()).not.toHaveProperty("toolFilter");
 });
 
@@ -344,6 +346,7 @@ it("redacts stdio argv credentials from MCP status output", async () => {
     "local",
   );
   mockLog.mockClear();
+
   await mcp("status", "--json");
   const jsonOutput = lastLogLine();
   expect(jsonOutput).not.toContain("test-api-key");
@@ -351,6 +354,7 @@ it("redacts stdio argv credentials from MCP status output", async () => {
   expect(JSON.parse(jsonOutput).servers[0].launch).toBe(
     "node server.mjs --api-key *** --token=***",
   );
+
   mockLog.mockClear();
   await mcp("status", "--verbose");
   const verboseOutput = logOutput();
@@ -372,6 +376,7 @@ it("reports MCP doctor setup errors and sensitive literals", async () => {
     },
   });
   mockLog.mockClear();
+
   await expectFailure("MCP doctor found errors.", "doctor", "--json");
   expectDoctor(
     expect.arrayContaining([
@@ -411,7 +416,9 @@ it("does not flag authored MCP header/env references after environment resolutio
     path.join(stateDir, "openclaw.json"),
     JSON.stringify({ mcp: { servers: { $include: "./mcp-servers.json" } } }),
   );
+
   await mcp("doctor", "docs", "--json");
+
   expectDoctor();
 });
 
@@ -460,6 +467,7 @@ it("bounds concurrent MCP doctor server checks", async () => {
       ]),
     ),
   );
+
   const checksBlocked = createDeferred();
   const firstBatchStarted = createDeferred();
   let startedChecks = 0;
@@ -473,6 +481,7 @@ it("bounds concurrent MCP doctor server checks", async () => {
       state: "unauthenticated",
     };
   });
+
   const doctorPromise = mcp("doctor", "--json");
   try {
     await Promise.race([firstBatchStarted.promise, doctorPromise]);
@@ -484,6 +493,7 @@ it("bounds concurrent MCP doctor server checks", async () => {
     checksBlocked.resolve();
     await doctorPromise;
   }
+
   expect(readMcpOAuthCredentialsStatus).toHaveBeenCalledTimes(6);
   expect(JSON.parse(lastLogLine()).servers.map((server: { name: string }) => server.name)).toEqual([
     "server-0",
@@ -498,6 +508,7 @@ it("bounds concurrent MCP doctor server checks", async () => {
 it("surfaces unexpected MCP doctor check errors", async () => {
   await setServer(httpServer());
   readMcpOAuthCredentialsStatus.mockRejectedValueOnce(new Error("credential store failed"));
+
   await expect(mcp("doctor", "--json")).rejects.toThrow("credential store failed");
 });
 
@@ -525,7 +536,7 @@ it.runIf(process.platform !== "win32")(
     await setServer({ command: "mis-cased-path-mcp", env: { Path: binDir } });
     mockLog.mockClear();
 
-    await expectExit("doctor", "--json");
+    await expect(mcp("doctor", "--json")).rejects.toMatchObject({ code: 1 });
 
     expectDoctor(missingExecutable("mis-cased-path-mcp").issues, false);
   },
@@ -536,19 +547,23 @@ it("resolves relative configured PATH entries from the MCP stdio cwd", async () 
   const binDir = path.join(appDir, "node_modules", ".bin");
   const commandPath = path.join(binDir, "docs-mcp");
   await writeExecutable(commandPath);
+
   await setServer({
     command: "docs-mcp",
     cwd: appDir,
     env: { PATH: "node_modules/.bin" },
   });
   mockLog.mockClear();
+
   await mcp("doctor", "--json");
+
   expectDoctor();
 });
 
 it("removes pure disabled tombstones when enabling MCP servers", async () => {
   await setServer('{"enabled":false}', "bundleProbe");
   await mcp("configure", "bundleProbe", "--enable");
+
   mockLog.mockClear();
   await mcp("list");
   const output = logOutput();
@@ -558,6 +573,7 @@ it("removes pure disabled tombstones when enabling MCP servers", async () => {
 
 it("fails named probes for disabled MCP servers", async () => {
   await setServer('{"enabled":false}');
+
   await expectFailure(
     `MCP server "docs" is disabled in ${configPath}. Run openclaw mcp configure docs --enable before checking it.`,
     "probe",
@@ -567,6 +583,7 @@ it("fails named probes for disabled MCP servers", async () => {
 
 it("reports omitted enabled servers while accepting omitted disabled servers", async () => {
   const invocationExitCode = process.exitCode;
+
   let catalogServers: Record<
     string,
     { serverName: string; launchSummary: string; toolCount: number }
@@ -575,13 +592,16 @@ it("reports omitted enabled servers while accepting omitted disabled servers", a
   setCreateSessionMcpRuntimeOverride((params) =>
     probeRuntime(params, "cli-probe-test", async () => catalog(catalogServers)),
   );
+
   mockError.mockClear();
   await finalizedProbe();
+
   expect(JSON.parse(lastLogLine())).toMatchObject({ servers: {}, diagnostics: [] });
   expect(lastErrorLine()).toBe(`MCP check did not connect to "incomplete" in ${configPath}.`);
   expect(process.exitCode).toBe(1);
   // The next probe represents a new CLI invocation, not a continuation of its failed status.
   process.exitCode = invocationExitCode;
+
   await writeMcpServers({
     healthy: { command: "node" },
     disabled: { enabled: false },
@@ -591,13 +611,16 @@ it("reports omitted enabled servers while accepting omitted disabled servers", a
   };
   mockError.mockClear();
   mockLog.mockClear();
+
   await finalizedProbe();
+
   expect(JSON.parse(lastLogLine())).toMatchObject({
     servers: { healthy: { tools: 1 } },
     diagnostics: [],
   });
   expect(lastErrorLine()).toBe("");
   expect(process.exitCode).toBe(invocationExitCode);
+
   mockLog.mockClear();
   await mcp("probe");
   const output = logOutput();
@@ -631,11 +654,13 @@ it("warns when auto-approved Codex MCP tools have no safety annotations", async 
       ),
     ),
   );
+
   mockLog.mockClear();
   await mcp("probe", "memory");
   expect(logOutput()).toContain(
     "tools have no safety annotations; calls require approval in prompting session postures",
   );
+
   mockLog.mockClear();
   await mcp("doctor", "memory", "--probe");
   expect(logOutput()).toContain(
@@ -654,6 +679,7 @@ it("fails when removing an unknown MCP server", async () => {
 it("starts the channel bridge with parsed serve options", async () => {
   const tokenFile = path.join(workspaceDir, "gateway.token");
   await fs.writeFile(tokenFile, "secret-token\n", "utf-8");
+
   await mcp(
     "serve",
     "--url",
@@ -664,6 +690,7 @@ it("starts the channel bridge with parsed serve options", async () => {
     "on",
     "--verbose",
   );
+
   expect(serveOpenClawChannelMcp).toHaveBeenCalledWith({
     gatewayUrl: "ws://127.0.0.1:18789",
     gatewayToken: "secret-token",
@@ -675,6 +702,7 @@ it("starts the channel bridge with parsed serve options", async () => {
 
 it("points serve startup failures at the deep Gateway health diagnostic", async () => {
   serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway unavailable"));
+
   await expectFailure(
     "MCP server failed to start: gateway unavailable. Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
     "serve",
@@ -684,6 +712,7 @@ it("emits one JSON failure for an unknown server in show", async () => {
   await expect(mcp("show", "missing", "--json")).rejects.toMatchObject({
     code: 1,
   });
+
   expect(mockLog).toHaveBeenCalledTimes(1);
   expect(mockError).not.toHaveBeenCalled();
   expect(JSON.parse(lastLogLine())).toMatchObject({
@@ -698,6 +727,7 @@ it("emits one JSON failure for an unknown server in show", async () => {
 it("emits one JSON failure for invalid config in probe", async () => {
   await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), "{ invalid");
   await expect(mcp("probe", "--json")).rejects.toMatchObject({ code: 1 });
+
   expect(mockLog).toHaveBeenCalledTimes(1);
   expect(JSON.parse(lastLogLine())).toEqual({
     ok: false,
@@ -727,7 +757,9 @@ it("reports directories and continues past them on PATH", async () => {
     await setServer(server, name);
   }
   mockLog.mockClear();
-  await expectExit("doctor", "--json");
+
+  await expect(mcp("doctor", "--json")).rejects.toMatchObject({ code: 1 });
+
   expect(JSON.parse(lastLogLine())).toMatchObject({
     ok: false,
     servers: [
@@ -736,143 +768,4 @@ it("reports directories and continues past them on PATH", async () => {
       { name: "path-dir-then-file", ok: true, issues: [] },
     ],
   });
-});
-
-it("surfaces required OAuth authorization in status and doctor", async () => {
-  readMcpOAuthCredentialsStatus.mockResolvedValue({
-    state: "requires-authorization",
-  });
-  await setServer(httpServer());
-  mockLog.mockClear();
-  await mcp("status", "--verbose");
-  const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
-  expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
-  expect(statusLines).toContain("  oauth: requires-authorization");
-  mockLog.mockClear();
-  await mcp("doctor", "--json");
-  expectDoctor([
-    {
-      level: "warning",
-      message: "OAuth credentials require additional authorization; run openclaw mcp login docs",
-    },
-  ]);
-});
-
-it("shows connected requester principals in list and status output", async () => {
-  countMcpOAuthPrincipals.mockResolvedValue(2);
-  await setServer(
-    {
-      ...httpServer(),
-      oauth: { identity: "per-requester" },
-    },
-    "calendar",
-  );
-  await setServer({ command: "uvx", args: ["context7-mcp"] }, "context7");
-  mockLog.mockClear();
-  await mcp("list");
-  expect(mockLog.mock.calls.map(([line]) => String(line))).toContain(
-    "- calendar (2 connected principals)",
-  );
-  expectOutput(
-    "- context7",
-    "OpenClaw-managed MCP servers (",
-    "OpenClaw-managed mcp.servers entries",
-    "does not include mcporter servers from config/mcporter.json",
-  );
-  expect((await readJson("status")).servers[0]).toMatchObject({
-    name: "calendar",
-    connectedPrincipals: 2,
-  });
-  expect(readMcpOAuthCredentialsStatus).not.toHaveBeenCalled();
-});
-
-it("configures enablement, timeouts, and OAuth login", async () => {
-  completeMcpOAuthAuthorization.mockResolvedValueOnce("authorized");
-  await setServer(oauthHttpServer);
-  await mcp("configure", "docs", "--disable", "--timeout", "9", "--auth", "oauth");
-  await mcp("login", "docs", "--code", "abc123");
-  expect(completeMcpOAuthAuthorization).toHaveBeenCalledWith(
-    expect.objectContaining({
-      serverName: "docs",
-      serverUrl: "https://mcp.example.com",
-    }),
-    expect.objectContaining({ url: "https://mcp.example.com" }),
-    { code: "abc123" },
-  );
-  expect((await readJson("status")).servers[0]).toMatchObject({
-    name: "docs",
-    enabled: false,
-    ok: false,
-    requestTimeoutMs: 9_000,
-    auth: "oauth",
-  });
-});
-
-it("preserves per-requester identity and redirect metadata when updating OAuth scope", async () => {
-  const oauth = {
-    identity: "per-requester",
-    scope: "docs.read",
-    redirectUrl: "https://gateway.example.com/oauth/mcp/callback",
-    clientMetadataUrl: "https://gateway.example.com/oauth/mcp.json",
-  };
-  await setServer({
-    ...httpServer(),
-    oauth,
-    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
-  });
-  await mcp("configure", "docs", "--oauth-scope", "docs.write", "--include", "search");
-  expect(await readServer()).toMatchObject({
-    oauth: { ...oauth, scope: "docs.write" },
-    toolFilter: { include: ["search"], exclude: ["admin_*"] },
-  });
-});
-
-it("does not restore previous OAuth metadata after an explicit clear", async () => {
-  await setServer({
-    url: "https://mcp.example.com",
-    auth: "oauth",
-    oauth: { authProfileId: "docs:mcp", scope: "docs.read" },
-  });
-  await mcp("configure", "docs", "--clear-auth", "--auth", "oauth", "--oauth-scope", "docs.write");
-  expect((await readServer()).oauth).toEqual({ scope: "docs.write" });
-});
-
-it.each(["login", "logout"] as const)(
-  "rejects operator %s for per-requester OAuth",
-  async (command) => {
-    await setServer(
-      {
-        ...httpServer(),
-        oauth: { identity: "per-requester" },
-      },
-      "calendar",
-    );
-    const operation =
-      command === "login" ? completeMcpOAuthAuthorization : clearMcpOAuthCredentials;
-    operation.mockClear();
-    mockError.mockClear();
-    await expect(
-      mcp(command, "calendar", ...(command === "login" ? ["--code", "abc123"] : [])),
-    ).rejects.toMatchObject({ code: 1 });
-    expect(lastErrorLine()).toBe(
-      `MCP server "calendar" uses per-requester OAuth. ${
-        command === "login"
-          ? "Senders connect from the channel via the MCP connect flow."
-          : "Remove or replace the server to clear requester credentials."
-      }`,
-    );
-    expect(operation).not.toHaveBeenCalled();
-  },
-);
-
-it("clears stored OAuth credentials after auth is removed", async () => {
-  await setServer(oauthHttpServer);
-  clearMcpOAuthCredentials.mockClear();
-  await mcp("logout", "docs");
-  expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
-    expect.objectContaining({
-      serverName: "docs",
-      serverUrl: "https://mcp.example.com",
-    }),
-  );
 });

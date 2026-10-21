@@ -1144,7 +1144,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   {
-    testFile: "src/infra/sqlite-worker-store.test.ts",
+    testFile: "src/infra/sqlite-worker-store.existing.test.ts",
     watchGlobs: ["src/infra/sqlite-store.worker.ts"],
   },
   ...[

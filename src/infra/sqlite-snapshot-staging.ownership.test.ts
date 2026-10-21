@@ -17,7 +17,6 @@ import {
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
-import * as probe from "./sqlite-snapshot-staging-owner.test-support.js";
 import { sqliteSnapshotStagingEntrypoints } from "./sqlite-snapshot-staging-runtime.test-support.js";
 import {
   createSqliteSnapshotStagingDirectory,
@@ -114,7 +113,15 @@ it("shares one token process across concurrent and nested async snapshot lifetim
   });
 });
 
-const createFixture = () => probe.createStagingFixture(tempDirs.make("sqlite-staging-ownership-"));
+function createFixture() {
+  const root = tempDirs.make("sqlite-staging-ownership-");
+  const cache = path.join(root, "cache");
+  const source = path.join(root, "source.sqlite");
+  fs.mkdirSync(cache);
+  using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(source);
+  database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
+  return { root, cache, source };
+}
 
 async function reclaimWithLog(root: string, cache: string) {
   const log = path.join(root, "cleanup.log");
@@ -126,6 +133,11 @@ async function reclaimWithLog(root: string, cache: string) {
 
 function drainReclamation(cache: string, report?: (message: string) => void) {
   Array.from(reclaimAbandonedSqliteSnapshots(cache, report));
+}
+
+function assertReadable(location: string) {
+  using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
+  expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
 }
 
 function ageSnapshotTree(directory: string, ageMs = 25 * 60 * 60 * 1000): void {
@@ -323,7 +335,7 @@ it.each(["worker", "legacy"] as const)(
     expect([fs.existsSync(old.root), fs.existsSync(young.root)]).toEqual([false, true]);
     expect(log).toContain(`Reclaimed ${bytes.length} bytes`);
     if (layout === "worker") {
-      probe.expectProbe(young.location);
+      assertReadable(young.location);
       expect(log).toContain("Skipped SQLite snapshot reclamation");
       expect(fs.existsSync(path.join(path.dirname(young.location), "owner.sqlite"))).toBe(false);
     } else {
@@ -432,7 +444,7 @@ it.skipIf(process.platform === "win32")(
       const log = await reclaimWithLog(root, cache);
       expect(fs.existsSync(outer), JSON.stringify(fixture)).toBe(recentChild);
       if (recentChild) {
-        probe.expectProbe(location);
+        assertReadable(location);
         expect(log).toContain("Skipped SQLite snapshot reclamation");
       } else {
         expect(log).toContain(`Reclaimed ${fs.statSync(source).size} bytes`);
@@ -453,7 +465,7 @@ it.skipIf(process.platform === "win32")(
         for (const _ of reclaimAbandonedSqliteSnapshots(${JSON.stringify(cache)})) {}
 
       `);
-      probe.expectProbe(held.location);
+      assertReadable(held.location);
     } finally {
       held.cleanup();
     }

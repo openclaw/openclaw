@@ -8,16 +8,38 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import {
-  resetSnapshotDurability,
-  type SnapshotDurabilityState,
-} from "./sqlite-snapshot-publication.test-support.js";
-import { exclusiveCopyPublication, useSnapshotFixture } from "./sqlite-snapshot.test-support.js";
+  exclusiveCopyPublication,
+  useSnapshotFixture,
+  type PublicationFixture,
+} from "./sqlite-snapshot.test-support.js";
 
-const durabilityTestState = vi.hoisted<SnapshotDurabilityState>(() => ({ hashedBytes: 0 }));
+const durabilityTestState = vi.hoisted(() => ({
+  publish: undefined as PublicationFixture | undefined,
+  publicationSyncUnsupported: false,
+  syncOutcome: undefined as
+    | { status: "synced" }
+    | { status: "unsupported"; code?: string }
+    | undefined,
+}));
+
 vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
-  const { mockSnapshotDurability } = await import("./sqlite-snapshot-publication.test-support.js");
-  return mockSnapshotDurability(actual, durabilityTestState);
+  return {
+    ...actual,
+    publishFileExclusive: async (...args: Parameters<typeof actual.publishFileExclusive>) => {
+      if (path.basename(path.dirname(args[0].targetPath)).startsWith(".sqlite-publish-")) {
+        return actual.publishFileExclusive(...args);
+      }
+      const published = durabilityTestState.publish
+        ? await durabilityTestState.publish(args[0], actual.publishFileExclusive)
+        : await actual.publishFileExclusive(...args);
+      return durabilityTestState.publicationSyncUnsupported
+        ? { ...published, directorySync: { status: "unsupported" as const, code: "ENOTSUP" } }
+        : published;
+    },
+    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
+      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
+  };
 });
 
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -30,7 +52,9 @@ function isDirectoryOpen(flags: string | number | undefined): boolean {
 
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
-  resetSnapshotDurability(durabilityTestState);
+  durabilityTestState.publish = undefined;
+  durabilityTestState.publicationSyncUnsupported = false;
+  durabilityTestState.syncOutcome = undefined;
   vi.restoreAllMocks();
 });
 

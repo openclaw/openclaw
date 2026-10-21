@@ -176,8 +176,18 @@ it.each(["keep", "close", "replace"] as const)(
 
 const workerSource = String.raw`
   const { parentPort, workerData } = require("node:worker_threads");
-  const { once } = require("node:events");
-  const receive = async () => (await once(parentPort, "message"))[0];
+  const messages = [];
+  let receiver;
+  parentPort.on("message", (message) => {
+    if (receiver) {
+      const resolve = receiver;
+      receiver = undefined;
+      resolve(message);
+    } else messages.push(message);
+  });
+  const receive = () => messages.length
+    ? Promise.resolve(messages.shift())
+    : new Promise((resolve) => { receiver = resolve; });
   (async () => {
     const { register } = await import(workerData.loader);
     register();

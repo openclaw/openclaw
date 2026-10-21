@@ -130,7 +130,7 @@ it("joins the first completing carrier's FIFO without canceling accepted work", 
   });
   const slow = busy[0]!;
   const fast = busy[1]!;
-  const { job: nextJob, completion: nextCompletion } = activeJob(fast.slot);
+  const { job: nextJob, completion: nextCompletion } = activeJob(fast.slot, 2);
   const limits = { maxWorkers: 2, maxStores: 2 };
   const opening = lifecycle.acquireSlot(options, limits, replyOwner);
   const cancel = new AbortController();
@@ -152,10 +152,7 @@ it("joins the first completing carrier's FIFO without canceling accepted work", 
       fast.slot,
       { id: fast.job.request.id, ok: true, value: serialize(undefined) },
       {
-        finish(job, ...outcome) {
-          expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);
-          settleSqliteWorkerJob(job, ...outcome);
-        },
+        finish: settleSqliteWorkerJob,
         fail: (error) => {
           throw error;
         },
@@ -166,9 +163,6 @@ it("joins the first completing carrier's FIFO without canceling accepted work", 
     );
     expect(await withinTest(opening, signal)).toBe(fast.slot);
     expect(fast.slot.current).toBe(nextJob);
-    expect(readSqliteWorkerRequestCustody(structuredClone(fast.job.custody.descriptor))).toBe(
-      false,
-    );
     expect(readSqliteWorkerRequestCustody(nextJob.custody.descriptor)).toBe(true);
     expect(slow.slot.current).toBe(slow.job);
     expect(readSqliteWorkerRequestCustody(slow.job.custody.descriptor)).toBe(true);

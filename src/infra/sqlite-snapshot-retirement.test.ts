@@ -2,13 +2,13 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import * as nodeSqlite from "./node-sqlite.js";
 import {
   removeTempDirectory as remove,
   removeTempDirectoryAsync as removeAsync,
 } from "./sqlite-readonly-location-cleanup.js";
 import { defer, deferAsync, useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
-import * as probe from "./sqlite-snapshot-staging-owner.test-support.js";
 import {
   createSqliteSnapshotStagingDirectory as createStaging,
   createSqliteSnapshotStagingDirectorySync as createStagingSync,
@@ -17,7 +17,20 @@ import { acquireSqliteStagingToken } from "./sqlite-staging-token.js";
 
 const tempDirs = useSqliteTempDirs(() => vi.restoreAllMocks());
 
-const createFixture = () => probe.createStagingFixture(tempDirs.make("sqlite-staging-ownership-"));
+function createFixture() {
+  const root = tempDirs.make("sqlite-staging-ownership-");
+  const cache = path.join(root, "cache");
+  const source = path.join(root, "source.sqlite");
+  fs.mkdirSync(cache);
+  using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(source);
+  database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
+  return { cache, source };
+}
+
+function assertReadable(location: string) {
+  using database = nodeSqlite.openNodeSqliteDatabase(location, { readOnly: true });
+  expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
+}
 
 it("preserves a live child during parent cleanup", async () => {
   const { cache, source } = createFixture();
@@ -30,7 +43,7 @@ it("preserves a live child during parent cleanup", async () => {
     await removeAsync(parent);
   });
   expect(await removeAsync(parent)).toBe(false);
-  probe.expectWrappedProbe(location);
+  assertReadable(location);
   expect([await removeAsync(child), await removeAsync(parent)]).toEqual([true, true]);
 });
 
@@ -58,7 +71,7 @@ it.each([
     "SQLite snapshot token ownership is unknown",
   );
   if (nested) {
-    probe.expectWrappedProbe(payload);
+    assertReadable(payload);
   }
   expect(fs.existsSync(orphan)).toBe(true);
 });
@@ -94,5 +107,5 @@ it.each([
     expect(remove(directory)).toBe(true);
   });
   expect(remove(directory)).toBe(false);
-  probe.expectWrappedProbe(location);
+  assertReadable(location);
 });

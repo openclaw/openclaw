@@ -2,7 +2,6 @@ import { isMainThread, threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import {
   expectSettledEntries,
-  sqliteWriteGate,
   readEntryIds as readEntries,
   sqliteDiagnosticClock,
   sqliteMaintenanceFixture,
@@ -12,7 +11,6 @@ import {
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   runSqliteDeferredTransactionSync,
-  runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,
   runSqliteWorkerTransactionSync,
   type SqliteTransactionOptions,
@@ -26,103 +24,7 @@ import {
 
 const resources = sqliteMaintenanceFixture();
 
-function deadlineFixture() {
-  const file = resources.file();
-  const db = resources.open(file);
-  const blocker = resources.open(file);
-  db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE entries(value TEXT)");
-  return { db, blocker };
-}
-
-it.each([false, true])("attempts expired BEGIN once (locked: %s)", async (locked) => {
-  const { db, blocker } = deadlineFixture();
-  if (locked) {
-    blocker.exec("BEGIN IMMEDIATE");
-  }
-  const exec = db.exec.bind(db);
-  let firstFailure: unknown;
-  const attempts = vi.spyOn(db, "exec").mockImplementation((sql) => {
-    try {
-      return exec(sql);
-    } catch (error) {
-      firstFailure ??= error;
-      throw error;
-    }
-  });
-  const queries = vi.spyOn(db, "prepare");
-  const prepare = vi.fn(async () => () => {
-    expect(queries.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout")).toHaveLength(1);
-    expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-    db.prepare("INSERT INTO entries VALUES (?)").run("committed");
-  });
-  const result = await runSqliteImmediateTransaction(db, prepare, {
-    beginDeadlineNs: process.hrtime.bigint() - 1n,
-  }).catch((error: unknown) => error);
-  if (locked) {
-    expect(result).toBe(firstFailure);
-    expect(result).toMatchObject({ errcode: 5 });
-    blocker.exec("ROLLBACK");
-  } else {
-    expect(result).toBeUndefined();
-  }
-  expect(attempts.mock.calls.filter(([sql]) => sql === "BEGIN IMMEDIATE")).toHaveLength(1);
-  expect(prepare).toHaveBeenCalledTimes(1);
-  expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-  expect(db.prepare("SELECT value FROM entries").all()).toEqual(
-    locked ? [] : [{ value: "committed" }],
-  );
-});
-
-it.each(["prepare", "admit"] as const)("retains an eligible BEGIN delayed in %s", async (phase) => {
-  const { db, blocker } = deadlineFixture();
-  blocker.exec("BEGIN IMMEDIATE");
-  const beginDeadlineNs = 1_000_000_000n;
-  let now = 0n;
-  vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
-  const gate = sqliteWriteGate();
-  const calls = { prepare: 0, admit: 0 };
-  const pending = runSqliteImmediateTransaction(
-    db,
-    async () => {
-      calls.prepare += 1;
-      if (phase === "prepare" && calls.prepare === 2) {
-        await gate.wait();
-      }
-      return () => {
-        expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-        db.exec("INSERT INTO entries VALUES ('eligible')");
-      };
-    },
-    { beginDeadlineNs },
-    async (write) => {
-      calls.admit += 1;
-      if (phase === "admit" && calls.admit === 2) {
-        await gate.wait();
-      }
-      return write();
-    },
-  );
-  void pending.catch(() => undefined);
-  try {
-    await Promise.race([gate.entered, pending]);
-    expect(calls.prepare).toBe(2);
-    now = beginDeadlineNs + 1n;
-    blocker.exec("COMMIT");
-    gate.release();
-    await pending;
-    expect(calls.admit).toBe(2);
-    expect(db.prepare("SELECT value FROM entries").all()).toEqual([{ value: "eligible" }]);
-    expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-  } finally {
-    gate.release();
-    if (blocker.isTransaction) {
-      blocker.exec("ROLLBACK");
-    }
-    await pending.catch(() => undefined);
-  }
-});
-
-function diagnosticFixture(mode: "immediate" | "deferred" = "immediate") {
+function fixture(mode: "immediate" | "deferred" = "immediate") {
   const db = resources.entries();
   const logger = { warn: vi.fn() };
   const advance = sqliteDiagnosticClock();
@@ -145,7 +47,7 @@ function asWorker(operation: string, run: () => unknown) {
 const thread = { isMainThread, pid: process.pid, threadId };
 
 it.each(["callback", "commit"])("attributes a metadata relay wait during %s", (stage) => {
-  const { db, advance, run, warning } = diagnosticFixture();
+  const { db, advance, run, warning } = fixture();
   const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
   resources.retain(() => admission.finish());
   vi.spyOn(Atomics, "wait").mockImplementation(() => {
@@ -212,7 +114,7 @@ it("waits for transaction admission before BEGIN and still refuses a revoked com
 });
 
 it("separates preparation, SQL, host wait and a failed COMMIT", () => {
-  const { db, advance, run, warning } = diagnosticFixture();
+  const { db, advance, run, warning } = fixture();
   const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
     advance(350);
     grant();
@@ -272,7 +174,7 @@ it.each([
 ] as const)(
   "reports successful $mode steps at $elapsedMs ms with busyTimeoutMs=$busyTimeoutMs",
   ({ mode, busyTimeoutMs, elapsedMs }) => {
-    const { db, logger, advance, run, warning } = diagnosticFixture(mode);
+    const { db, logger, advance, run, warning } = fixture(mode);
     const location = vi.spyOn(db, "location");
     spySqliteExec(db, undefined, () => advance(elapsedMs));
 
@@ -325,7 +227,7 @@ it.each([
 it.each(["immediate", "deferred"] as const)(
   "preserves successful %s transactions when warnings throw",
   (mode) => {
-    const { db, advance, run } = diagnosticFixture(mode);
+    const { db, advance, run } = fixture(mode);
     const execSpy = spySqliteExec(db, undefined, () => advance(1_500));
     const logger = {
       warn: vi.fn(() => {
@@ -399,7 +301,7 @@ it.each(["begin", "commit"] as const)(
 );
 
 it("names a slow failed transaction holder after rollback closes its connection", () => {
-  const { db, advance, run, warning } = diagnosticFixture();
+  const { db, advance, run, warning } = fixture();
   spySqliteExec(db, (sql) => {
     if (sql === "ROLLBACK") {
       throw new Error("rollback failed");

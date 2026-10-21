@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { beginChatMetadataPublication } from "../../lib/chat/chat-metadata-store.ts";
 import {
@@ -288,9 +287,10 @@ describe("conversation reset confirmation", () => {
   ] as const)("rejects /%s without its exact operator scope", async (command, method) => {
     const host = resetHost(async () => true);
     host.hello = {
+      ...host.hello,
       auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: [method] },
-    } as ApplicationGatewaySnapshot["hello"];
+    };
     host.chatRunId = command === "stop" ? "run-1" : null;
     const result = await dispatchChatSlashCommand(host as never, command, "");
     expect(result).toBe("failed");

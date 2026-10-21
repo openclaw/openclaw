@@ -30,10 +30,7 @@ import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
 import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
 import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
 import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
-import {
-  seedProbe as createProbe,
-  waitForGate,
-} from "./sqlite-snapshot-staging-owner.test-support.js";
+import { waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
 import type {
@@ -224,17 +221,6 @@ function allocate(root: string, signal?: AbortSignal) {
   return pending;
 }
 
-function allocateOwned(root: string) {
-  const pending = allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
-  disposals.push(async () => {
-    const [outcome] = await Promise.allSettled([pending]);
-    if (outcome.status === "fulfilled") {
-      await outcome.value.startRetire().result;
-    }
-  });
-  return pending;
-}
-
 function startPreparation(root: string, pathname: string, signal?: AbortSignal) {
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
   const request = captureSqliteSnapshotStagingOwner().start(
@@ -280,6 +266,14 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
+
+function createProbe(root: string, name = "source", value = "preserved") {
+  const filename = path.join(root, `${name}.sqlite`);
+  using database = new (requireNodeSqlite().DatabaseSync)(filename);
+  database.exec("CREATE TABLE probe(value TEXT)");
+  database.prepare("INSERT INTO probe VALUES(?)").run(value);
+  return filename;
+}
 
 function fixture(cache = false) {
   const root = directories.make("staging-owner-");
@@ -418,10 +412,10 @@ it("preserves allocation launch facts while waiting behind another token command
   const cwd = vi.spyOn(process, "cwd");
   vi.stubEnv("OPENCLAW_SNAPSHOT_HOST_CAPTURE_FIXTURE", "captured");
   const gate = holdRelease(1);
-  const allocations = [allocateOwned(root)];
+  const allocations = [allocateWorkerOwnedSqliteSnapshotDirectory(root, false)];
   try {
     await waitForGate(gate, allocations[0]!);
-    allocations.push(allocateOwned(root));
+    allocations.push(allocateWorkerOwnedSqliteSnapshotDirectory(root, false));
     expect(observation.tasks).toBe(2);
     expect(observation.admitted).toHaveLength(1);
     cwd.mockReturnValue(changedCwd);
@@ -443,29 +437,42 @@ it("preserves allocation launch facts while waiting behind another token command
     cwd.mockRestore();
     vi.unstubAllEnvs();
     releaseGate(gate);
-    await disposeRequests();
+    for (const result of await Promise.allSettled(allocations)) {
+      if (result.status === "fulfilled") {
+        await result.value.startRetire().result;
+      }
+    }
   }
   expectEntries(root, "changed-cwd");
 });
 
 it("retains independent snapshot owners across scoped Doctor state environments", async () => {
   const { root } = fixture();
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "report-state"));
-  const report = await allocateOwned(root);
-  const reportBytes = path.join(report.directory, "retained.txt");
-  fs.writeFileSync(reportBytes, "report snapshot");
+  const owned: Awaited<ReturnType<typeof allocateWorkerOwnedSqliteSnapshotDirectory>>[] = [];
+  try {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "report-state"));
+    const report = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
+    owned.push(report);
+    const reportBytes = path.join(report.directory, "retained.txt");
+    fs.writeFileSync(reportBytes, "report snapshot");
 
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "inspection-state"));
-  const inspection = await allocateOwned(root);
-  const inspectionBytes = path.join(inspection.directory, "retained.txt");
-  fs.writeFileSync(inspectionBytes, "inspection snapshot");
-  expect(fs.readFileSync(reportBytes, "utf8")).toBe("report snapshot");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "inspection-state"));
+    const inspection = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
+    owned.push(inspection);
+    const inspectionBytes = path.join(inspection.directory, "retained.txt");
+    fs.writeFileSync(inspectionBytes, "inspection snapshot");
+    expect(fs.readFileSync(reportBytes, "utf8")).toBe("report snapshot");
 
-  await report.startRetire().result;
-  expect(fs.existsSync(report.directory)).toBe(false);
-  expect(fs.readFileSync(inspectionBytes, "utf8")).toBe("inspection snapshot");
-  await inspection.startRetire().result;
-  expectEntries(root);
+    await report.startRetire().result;
+    expect(fs.existsSync(report.directory)).toBe(false);
+    expect(fs.readFileSync(inspectionBytes, "utf8")).toBe("inspection snapshot");
+    await inspection.startRetire().result;
+    expectEntries(root);
+  } finally {
+    for (const snapshot of owned) {
+      await snapshot.startRetire().result;
+    }
+  }
 });
 
 it("services a queued snapshot while the earlier caller's Promise reactions are blocked", async () => {
