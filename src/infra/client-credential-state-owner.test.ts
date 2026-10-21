@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { recoverClientCredentialStore } from "./client-credential-migration.js";
+import type { ClientSocketRecord } from "./client-credential-operations.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { readClientCredentialReceipt } from "./client-credential-readiness.js";
 import { readClientCredentialFileIdentity } from "./client-credential-receipt.js";
@@ -50,7 +51,7 @@ it.each([false, true])(
     const ambient = fixture("ambient");
     const selected = fixture("selected");
     openOpenClawStateDatabase({ env: ambient.env });
-    const socket = {
+    const socket: ClientSocketRecord = {
       socket_key: "current",
       socket_path: path.join(ambient.root, "exec.sock"),
       socket_token: "synthetic-retained-socket",
