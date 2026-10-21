@@ -26,7 +26,7 @@ const localRecord = (installPath: string, version = "2026.5.4-beta.3"): PluginIn
   version,
 });
 
-it.each([
+const retainedRecords: Array<{ name: string; records: Record<string, PluginInstallRecord> }> = [
   { name: "the current bundled path", records: { discord: localRecord(currentPath("discord")) } },
   {
     name: "compiled bundled paths without a stale version",
@@ -48,17 +48,16 @@ it.each([
       acpx: localRecord(path.join("/tmp/custom-plugins", "acpx")),
     },
   },
-] satisfies Array<{ name: string; records: Record<string, PluginInstallRecord> }>)(
-  "does not list $name",
-  ({ records }) => {
-    expect(
-      listStaleLocalBundledPluginInstallRecords({
-        installRecords: records,
-        bundled: bundledSources(...Object.keys(records)),
-      }),
-    ).toStrictEqual([]);
-  },
-);
+];
+
+it.each(retainedRecords)("does not list $name", ({ records }) => {
+  expect(
+    listStaleLocalBundledPluginInstallRecords({
+      installRecords: records,
+      bundled: bundledSources(...Object.keys(records)),
+    }),
+  ).toStrictEqual([]);
+});
 
 it("removes only stale local bundled plugin install records", () => {
   const stalePath = path.join("/tmp/old-openclaw", "dist", "extensions", "discord");

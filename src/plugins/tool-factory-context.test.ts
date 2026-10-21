@@ -222,7 +222,7 @@ it("allows metadata construction but rejects V2 effects without an admitted invo
   const { entry, context, tool } = register(
     {
       contextVersion: 2,
-      create: (ctx) => probe(effect, ctx.assertInvocationCurrent),
+      create: (ctx) => probe(effect, () => ctx.assertInvocationCurrent()),
     },
     { context: { senderIsOwner: false } },
   );

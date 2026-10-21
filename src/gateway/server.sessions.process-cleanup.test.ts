@@ -56,16 +56,17 @@ test("sessions.delete purges only completed processes owned by the deleted sessi
 test("sessions.processes.list exposes only owned background processes without consuming output", async () => {
   await seedActiveMainSession();
   await directSessionReq("sessions.describe", { key: "main" });
-  const running = seedProcess("agent:main:main", {
+  const scopeKey = "agent:main:main";
+  const running = seedProcess(scopeKey, {
     id: "visible-process",
     agentId: "main",
     backgrounded: true,
     startedAt: 1,
   });
   registry.appendOutput(running, "stdout", "Building the package\n");
-  seedProcess(running.scopeKey, { id: "foreground-process" });
+  seedProcess(scopeKey, { id: "foreground-process" });
   seedProcess("agent:main:other", { id: "other-process", backgrounded: true });
-  seedProcess(running.scopeKey, { id: "finished-visible", backgrounded: true }, true);
+  seedProcess(scopeKey, { id: "finished-visible", backgrounded: true }, true);
 
   const listed = await directSessionReq("sessions.processes.list", { key: "main" });
 

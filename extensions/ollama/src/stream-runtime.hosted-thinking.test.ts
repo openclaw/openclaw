@@ -32,56 +32,59 @@ describe.each(["runtime", "configured"] as const)(
       ["cloud ref through local relay", localBaseUrl, "high", undefined, "glm-5.2:cloud"],
       ["unverified hosted model", cloudBaseUrl, "high", undefined, "qwen3:32b"],
       ["lookalike origin", "https://ollama.com.example.test", "high"],
-    ])("%s (%s → %s)", async (_name, modelBaseUrl, expected, providerBaseUrl, id = "glm-5.2") => {
-      fetchMock.mockResolvedValue({
-        response: new Response(
-          JSON.stringify({
-            model: id,
-            created_at: "2026-01-01T00:00:00Z",
-            message: { role: "assistant", content: "ok" },
-            done: true,
-            prompt_eval_count: 1,
-            eval_count: 1,
-          }) + "\n",
-        ),
-        release: async () => undefined,
-      });
-      const model: ProviderRuntimeModel = {
-        ...createModel(id, "test model", { reasoning: true, contextWindow: 131072 }),
-        provider: "ollama",
-        api: "ollama",
-        baseUrl: modelBaseUrl,
-        ...(source === "configured" ? { params: { thinking: "max" } } : {}),
-      };
-      const streamFn = expectDefined(
-        createConfiguredOllamaCompatStreamWrapper({
-          provider: model.provider,
-          modelId: model.id,
+    ])(
+      "%s (%s → %s)",
+      async (_name, modelBaseUrl, expected, providerBaseUrl = undefined, id = "glm-5.2") => {
+        fetchMock.mockResolvedValue({
+          response: new Response(
+            JSON.stringify({
+              model: id,
+              created_at: "2026-01-01T00:00:00Z",
+              message: { role: "assistant", content: "ok" },
+              done: true,
+              prompt_eval_count: 1,
+              eval_count: 1,
+            }) + "\n",
+          ),
+          release: async () => undefined,
+        });
+        const model: ProviderRuntimeModel = {
+          ...createModel(id, "test model", { reasoning: true, contextWindow: 131072 }),
+          provider: "ollama",
+          api: "ollama",
+          baseUrl: modelBaseUrl,
+          ...(source === "configured" ? { params: { thinking: "max" } } : {}),
+        };
+        const streamFn = expectDefined(
+          createConfiguredOllamaCompatStreamWrapper({
+            provider: model.provider,
+            modelId: model.id,
+            model,
+            config: providerBaseUrl
+              ? {
+                  models: {
+                    providers: { ollama: { baseUrl: providerBaseUrl, api: "ollama", models: [] } },
+                  },
+                }
+              : undefined,
+            thinkingLevel: source === "runtime" ? "max" : "off",
+            streamFn: createConfiguredOllamaStreamFn({ model, providerBaseUrl }),
+          }),
+          "wrapped stream",
+        );
+        const stream = await streamFn(
           model,
-          config: providerBaseUrl
-            ? {
-                models: {
-                  providers: { ollama: { baseUrl: providerBaseUrl, api: "ollama", models: [] } },
-                },
-              }
-            : undefined,
-          thinkingLevel: source === "runtime" ? "max" : "off",
-          streamFn: createConfiguredOllamaStreamFn({ model, providerBaseUrl }),
-        }),
-        "wrapped stream",
-      );
-      const stream = await streamFn(
-        model,
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        {},
-      );
-      const completed = await stream.result();
-      expect(completed.stopReason).toBe("stop");
-      const request = fetchMock.mock.calls[0]?.[0];
-      expect(request.url).toBe(
-        `${providerBaseUrl ?? modelBaseUrl.replace(/\/v1\/?$/, "")}/api/chat`,
-      );
-      expect(JSON.parse(request.init.body).think).toBe(expected);
-    });
+          { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+          {},
+        );
+        const completed = await stream.result();
+        expect(completed.stopReason).toBe("stop");
+        const request = fetchMock.mock.calls[0]?.[0];
+        expect(request.url).toBe(
+          `${providerBaseUrl ?? modelBaseUrl.replace(/\/v1\/?$/, "")}/api/chat`,
+        );
+        expect(JSON.parse(request.init.body).think).toBe(expected);
+      },
+    );
   },
 );

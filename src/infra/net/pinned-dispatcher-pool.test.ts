@@ -6,8 +6,9 @@ import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 
 function poolFixture(maxEntries = 2) {
   const pool = new PinnedDispatcherPool({ maxEntries, idleTtlMs: 60_000 });
-  const create = vi.fn(() => ({ close: vi.fn(async () => undefined) }) as unknown as Dispatcher);
-  const acquire = (key: string) => pool.acquire({ key, createDispatcher: create });
+  const create = vi.fn(() => ({ close: vi.fn(async () => undefined) }));
+  const acquire = (key: string) =>
+    pool.acquire({ key, createDispatcher: () => create() as unknown as Dispatcher });
   return { pool, create, acquire };
 }
 
@@ -20,18 +21,18 @@ it("reuses an exact live key and closes it only at lifecycle shutdown", async ()
   expect(second?.dispatcher).toBe(first?.dispatcher);
   expect(second?.reused).toBe(true);
   expect(create).toHaveBeenCalledOnce();
-  expect(first?.dispatcher.close).not.toHaveBeenCalled();
+  expect(create.mock.results[0]?.value.close).not.toHaveBeenCalled();
   await second?.release();
   await pool.closeAll();
-  expect(first?.dispatcher.close).toHaveBeenCalledOnce();
+  expect(create.mock.results[0]?.value.close).toHaveBeenCalledOnce();
 });
 
 it("keeps separate active pins open through shutdown", async () => {
   const { pool, create, acquire } = poolFixture();
   const oldLease = acquire("origin-a/pin-a");
-  const oldDispatcher = oldLease?.dispatcher;
+  const oldDispatcher = create.mock.results[0]?.value;
   const nextLease = acquire("origin-a/pin-b");
-  const nextDispatcher = nextLease?.dispatcher;
+  const nextDispatcher = create.mock.results[1]?.value;
   expect(create).toHaveBeenCalledTimes(2);
   expect(nextLease?.dispatcher).toBe(create.mock.results[1]?.value);
   expect(oldDispatcher?.close).not.toHaveBeenCalled();
@@ -48,7 +49,7 @@ it("keeps separate active pins open through shutdown", async () => {
 it("falls back to caller-owned dispatchers when capacity is fully leased", async () => {
   const { pool, create, acquire } = poolFixture(1);
   const first = acquire("origin-a/pin-a");
-  const close = first?.dispatcher.close;
+  const close = create.mock.results[0]?.value.close;
   expect(acquire("origin-b/pin-b")).toBeUndefined();
   expect(create).toHaveBeenCalledOnce();
   expect(close).not.toHaveBeenCalled();

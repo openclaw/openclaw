@@ -43,7 +43,7 @@ it("joins coalesced post-connect health before concurrent closes restore fixture
   let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
   const clients: WebSocket[] = [];
   const closing: Promise<void>[] = [];
-  const unblock = collectionGate.release;
+  const unblock = () => collectionGate.release();
   signal.addEventListener("abort", unblock, { once: true });
   try {
     gateway = await createGatewaySuiteHarness({
