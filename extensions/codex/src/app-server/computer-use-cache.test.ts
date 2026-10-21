@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import { writeBundledComputerUsePlugin } from "./computer-use.test-support.js";
 import { resolveCodexComputerUseConfig } from "./config.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
@@ -120,10 +121,4 @@ it("preserves the default namespace when marketplacePath is explicit", async () 
 
 function computerUseCachePath(codexHome: string, version = ""): string {
   return path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use", version);
-}
-
-async function writeBundledComputerUsePlugin(marketplace: string, version: string): Promise<void> {
-  const manifest = path.join(marketplace, "plugins/computer-use/.codex-plugin/plugin.json");
-  await fs.mkdir(path.dirname(manifest), { recursive: true });
-  await fs.writeFile(manifest, JSON.stringify({ name: "computer-use", version }));
 }

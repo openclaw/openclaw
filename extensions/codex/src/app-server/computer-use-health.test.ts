@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { createComputerUseRequest } from "./computer-use.test-support.js";
-import type { ResolvedCodexComputerUseConfig } from "./config.js";
+import { resolveCodexComputerUseConfig, type ResolvedCodexComputerUseConfig } from "./config.js";
 
 describe("Codex Computer Use periodic health", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -125,21 +125,17 @@ function startMonitor(
   return startCodexComputerUseHealthMonitor({
     client: client.client,
     tools,
-    config: {
-      enabled: true,
-      autoInstall: true,
-      marketplaceDiscoveryTimeoutMs: 60_000,
-      liveTestTimeoutMs: 60_000,
-      toolCallTimeoutMs: 60_000,
-      healthCheckEnabled: true,
-      healthCheckIntervalMinutes: 30,
-      pluginCacheMode: "shared",
-      strictReadiness: false,
-      autoRepair: false,
-      pluginName: "computer-use",
-      mcpServerName: "computer-use",
-      ...overrides,
-    },
+    config: resolveCodexComputerUseConfig({
+      env: {},
+      overrides: {
+        enabled: true,
+        autoInstall: true,
+        healthCheckEnabled: true,
+        healthCheckIntervalMinutes: 30,
+        pluginCacheMode: "shared",
+        ...overrides,
+      },
+    }),
   });
 }
 

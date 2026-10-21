@@ -1,4 +1,3 @@
-// Codex tests cover request plugin behavior.
 import path from "node:path";
 import { isNativeError } from "node:util/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -16,7 +15,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { codexControlRequest } from "../command-rpc.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
-
 const sharedClientMocks = vi.hoisted(() => ({
   createIsolatedCodexAppServerClient: vi.fn(),
   getSharedCodexAppServerClient: vi.fn(),
@@ -40,15 +38,31 @@ const { listAllCodexAppServerModels } = await import("./models.js");
 
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
+const sandboxPolicy = {
+  config: { agents: { defaults: { sandbox: { mode: "all" as const } } } },
+  sessionKey: "sandboxed-session",
+};
+const nodePolicy = {
+  config: { tools: { exec: { host: "node" as const, node: "worker-1" } } },
+  sessionKey: "node-session",
+};
+const sandboxEnvironment = {
+  cwd: "/workspace",
+  environments: [{ environmentId: "openclaw-sandbox-abc123", cwd: "/workspace" }],
+};
+const mockRequest = (response: unknown = { ok: true }) => {
+  const request = vi.fn(async () => response);
+  sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+  return request;
+};
 
 describe("requestCodexAppServerJson sandbox guard", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-preflight-");
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
-    sharedClientMocks.getSharedCodexAppServerClient.mockReset();
-    sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
-    sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReset();
+    for (const mock of Object.values(sharedClientMocks)) {
+      mock.mockReset();
+    }
   });
 
   afterEach(() => {
@@ -102,276 +116,102 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     }
   });
 
-  it("fails closed before raw app-server bypass methods in sandboxed sessions", async () => {
+  it.each([
+    ["sandbox", "command/exec"],
+    ["node", "command/exec"],
+    ["node", "process/spawn"],
+    ["sandbox", "app/activate"],
+    ["node", "app/activate"],
+    ["sessionless", "command/exec"],
+    ["sessionless", "config/mcpServer/reload"],
+    ["nodeSandbox", "thread/start"],
+  ] as const)("fails closed before acquisition: %s %s", async (scope, method) => {
+    const policies = {
+      sandbox: sandboxPolicy,
+      node: nodePolicy,
+      sessionless: { config: nodePolicy.config },
+      nodeSandbox: { ...nodePolicy, config: { ...sandboxPolicy.config, ...nodePolicy.config } },
+    };
+    const requestParams =
+      method === "thread/start"
+        ? sandboxEnvironment
+        : method === "app/activate" || method === "config/mcpServer/reload"
+          ? {}
+          : { command: ["sh", "-lc", "id"] };
+    const reason = scope === "sandbox" ? "OpenClaw sandboxing" : "OpenClaw exec host=node";
     await expect(
-      requestCodexAppServerJson({
-        method: "command/exec",
-        requestParams: { command: ["sh", "-lc", "id"] },
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
+      requestCodexAppServerJson({ method, requestParams, ...policies[scope] }),
     ).rejects.toThrow(
-      "Codex-native app-server method `command/exec` is unavailable because OpenClaw sandboxing is active for this session.",
+      `Codex-native app-server method \`${method}\` is unavailable because ${reason} is active for this session.`,
     );
-
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("fails closed before raw app-server bypass methods when exec host=node is active", async () => {
-    for (const method of ["command/exec", "process/spawn"]) {
-      await expect(
-        requestCodexAppServerJson({
-          method,
-          requestParams: { command: ["sh", "-lc", "id"] },
-          config: { tools: { exec: { host: "node", node: "worker-1" } } },
-          sessionKey: "node-session",
-        }),
-      ).rejects.toThrow(
-        `Codex-native app-server method \`${method}\` is unavailable because OpenClaw exec host=node is active for this session.`,
-      );
-    }
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("allows metadata methods in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/list",
-        requestParams: { limit: 10 },
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, expectDeadlineOptions());
   });
 
   it.each([
-    {
-      method: "app/installed" as const,
-      requestParams: { threadId: "thread-1", forceRefresh: false },
-      response: { apps: [] },
-    },
-    {
-      method: "app/read" as const,
-      requestParams: { appIds: ["calendar-app"], includeTools: false },
-      response: { apps: [] },
-    },
-    {
-      method: "plugin/installed" as const,
-      requestParams: { cwds: [] },
-      response: { marketplaces: [], marketplaceLoadErrors: [] },
-    },
-    {
-      method: "experimentalFeature/list" as const,
-      requestParams: {},
-      response: { data: [], nextCursor: null },
-    },
-    {
-      method: "config/batchWrite" as const,
-      requestParams: {
+    ["thread/list", { limit: 10 }, true],
+    ["app/installed", { threadId: "thread-1", forceRefresh: false }, true],
+    ["app/read", { appIds: ["calendar-app"], includeTools: false }, true],
+    ["plugin/installed", { cwds: [] }, true],
+    ["experimentalFeature/list", {}, true],
+    [
+      "config/batchWrite",
+      {
         edits: [
           {
             keyPath: 'apps."calendar".tools."create".approval_mode',
             value: null,
-            mergeStrategy: "replace" as const,
+            mergeStrategy: "replace",
           },
         ],
       },
-      response: {
+      true,
+    ],
+    ["thread/name/set", { threadId: "thread-1", name: "Shared thread" }, false],
+    ["thread/archive", { threadId: "thread-1" }, false],
+    ["thread/unarchive", { threadId: "thread-1" }, false],
+    [
+      "config/value/write",
+      {
+        keyPath: 'apps."google-calendar-app".tools',
+        value: null,
+        mergeStrategy: "replace",
+      },
+      false,
+    ],
+    ["config/read", { includeLayers: false }, false],
+    ["thread/start", sandboxEnvironment, false],
+  ] as const)("allows %s under its execution policies", async (method, requestParams, alsoNode) => {
+    const responses: Record<string, unknown> = {
+      "app/installed": { apps: [] },
+      "app/read": { apps: [] },
+      "plugin/installed": { marketplaces: [], marketplaceLoadErrors: [] },
+      "experimentalFeature/list": { data: [], nextCursor: null },
+      "config/batchWrite": {
         status: "ok",
         version: "1",
         filePath: "/codex/config.toml",
         overriddenMetadata: null,
       },
-    },
-  ])(
-    "allows the $method control-plane request under sandbox and node execution policies",
-    async ({ method, requestParams, response }) => {
-      const request = vi.fn(async () => response);
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-
-      for (const policy of [
-        {
-          config: { agents: { defaults: { sandbox: { mode: "all" as const } } } },
-          sessionKey: "sandboxed-session",
-        },
-        {
-          config: { tools: { exec: { host: "node" as const, node: "worker-1" } } },
-          sessionKey: "node-session",
-        },
-      ]) {
-        await expect(
-          requestCodexAppServerJson({
-            method,
-            requestParams,
-            ...policy,
-          }),
-        ).resolves.toEqual(response);
-      }
-
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(request).toHaveBeenNthCalledWith(1, method, requestParams, expectDeadlineOptions());
-      expect(request).toHaveBeenNthCalledWith(2, method, requestParams, expectDeadlineOptions());
-    },
-  );
-
-  it.each([
-    {
-      description: "sandboxed",
-      config: { agents: { defaults: { sandbox: { mode: "all" as const } } } },
-      sessionKey: "sandboxed-session",
-      reason: "OpenClaw sandboxing is active for this session",
-    },
-    {
-      description: "node-hosted",
-      config: { tools: { exec: { host: "node" as const, node: "worker-1" } } },
-      sessionKey: "node-session",
-      reason: "OpenClaw exec host=node is active for this session",
-    },
-  ])(
-    "fails closed for unlisted app methods in $description sessions",
-    async ({ config, sessionKey, reason }) => {
+      "config/read": { config: { apps: { apps: {} } } },
+      "thread/start": { thread: { id: "thread-1" }, model: "gpt-5.5" },
+    };
+    const response = responses[method] ?? { ok: true };
+    const request = mockRequest(response);
+    const policies = alsoNode ? [sandboxPolicy, nodePolicy] : [sandboxPolicy];
+    for (const policy of policies) {
       await expect(
-        requestCodexAppServerJson({
-          method: "app/activate",
-          requestParams: {},
-          config,
-          sessionKey,
-        }),
-      ).rejects.toThrow(
-        `Codex-native app-server method \`app/activate\` is unavailable because ${reason}.`,
-      );
-
-      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-    },
-  );
-
-  it("allows current native thread management methods in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-
-    for (const method of ["thread/name/set", "thread/archive", "thread/unarchive"] as const) {
-      await expect(
-        requestCodexAppServerJson({
-          method,
-          requestParams:
-            method === "thread/name/set"
-              ? { threadId: "thread-1", name: "Shared thread" }
-              : { threadId: "thread-1" },
-          config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-          sessionKey: "sandboxed-session",
-        }),
-      ).resolves.toEqual({ ok: true });
+        requestCodexAppServerJson({ method, requestParams, ...policy }),
+      ).resolves.toEqual(response);
     }
-
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("fails closed for config-level exec host=node even without a session key", async () => {
-    await expect(
-      requestCodexAppServerJson({
-        method: "command/exec",
-        requestParams: { command: ["sh", "-lc", "id"] },
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `command/exec` is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("fails closed for MCP reload when config-level exec host=node is active", async () => {
-    await expect(
-      requestCodexAppServerJson({
-        method: "config/mcpServer/reload",
-        requestParams: {},
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `config/mcpServer/reload` is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("allows metadata methods when exec host=node is active", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/list",
-        requestParams: { limit: 10 },
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-        sessionKey: "node-session",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, expectDeadlineOptions());
-  });
-
-  it("allows config value writes in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    const params = {
-      keyPath: 'apps."google-calendar-app".tools',
-      value: null,
-      mergeStrategy: "replace",
-    };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "config/value/write",
-        requestParams: params,
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(request).toHaveBeenCalledWith("config/value/write", params, expectDeadlineOptions());
-  });
-
-  it("allows config reads in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ config: { apps: { apps: {} } } }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    const params = { includeLayers: false };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "config/read",
-        requestParams: params,
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).resolves.toEqual({ config: { apps: { apps: {} } } });
-
-    expect(request).toHaveBeenCalledWith("config/read", params, expectDeadlineOptions());
-  });
-
-  it("allows sandbox-pinned thread starts in sandboxed sessions", async () => {
-    const request = vi.fn(async () => ({ thread: { id: "thread-1" }, model: "gpt-5.5" }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    const params = {
-      cwd: "/workspace",
-      environments: [{ environmentId: "openclaw-sandbox-abc123", cwd: "/workspace" }],
-    };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/start",
-        requestParams: params,
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-        sessionKey: "sandboxed-session",
-      }),
-    ).resolves.toEqual({ thread: { id: "thread-1" }, model: "gpt-5.5" });
-
-    expect(request).toHaveBeenCalledWith("thread/start", params, expectDeadlineOptions());
+    expect(request).toHaveBeenCalledTimes(policies.length);
+    for (let index = 0; index < policies.length; index++) {
+      expect(request).toHaveBeenNthCalledWith(
+        index + 1,
+        method,
+        requestParams,
+        expectDeadlineOptions(),
+      );
+    }
   });
 
   it.each([
@@ -901,29 +741,6 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       phase: "client-request",
       category: "deadline-observed",
     });
-  });
-
-  it("blocks thread starts with sandbox environments when exec host=node is active", async () => {
-    const params = {
-      cwd: "/workspace",
-      environments: [{ environmentId: "openclaw-sandbox-abc123", cwd: "/workspace" }],
-    };
-
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/start",
-        requestParams: params,
-        config: {
-          agents: { defaults: { sandbox: { mode: "all" } } },
-          tools: { exec: { host: "node", node: "worker-1" } },
-        },
-        sessionKey: "node-session",
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `thread/start` is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("shares one guarded isolated client across installed-plugin and account reads", async () => {

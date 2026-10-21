@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
-import type { MacOSDesktopCodexAppPathCandidate } from "./desktop-app-paths.js";
+import { writeMarketplaceCandidate } from "./computer-use.test-support.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 describe("managed Codex bundled marketplace", () => {
@@ -14,7 +14,7 @@ describe("managed Codex bundled marketplace", () => {
 
   async function fixture() {
     const root = tempDirs.make("openclaw-codex-marketplace-");
-    const candidate = await writeCandidate(root);
+    const candidate = await writeMarketplaceCandidate(root);
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
     const target = path.join(codexHome, ".tmp", "bundled-marketplaces", "openai-bundled");
@@ -86,28 +86,3 @@ describe("managed Codex bundled marketplace", () => {
     },
   );
 });
-
-async function writeCandidate(root: string): Promise<MacOSDesktopCodexAppPathCandidate> {
-  const appBundlePath = path.join(root, "ChatGPT.app");
-  const bundledMarketplacePath = path.join(appBundlePath, "openai-bundled");
-  const writeJson = async (relativePath: string, value: unknown) => {
-    const target = path.join(bundledMarketplacePath, relativePath);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, JSON.stringify(value));
-  };
-  await writeJson(".agents/plugins/marketplace.json", {
-    name: "openai-bundled",
-    plugins: [{ name: "computer-use" }],
-  });
-  await writeJson("plugins/computer-use/.codex-plugin/plugin.json", {
-    name: "computer-use",
-    version: "1.0.0",
-  });
-  return {
-    appName: "ChatGPT.app",
-    appBundlePath,
-    appServerCommandPath: path.join(appBundlePath, "codex"),
-    bundledMarketplacePath,
-    computerUseServiceAppPaths: [],
-  };
-}

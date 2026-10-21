@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import * as service from "./computer-use-service.js";
+import { writeMarketplaceCandidate } from "./computer-use.test-support.js";
 import * as desktopPaths from "./desktop-app-paths.js";
 import * as generation from "./desktop-generation.js";
 import { isJsonObject } from "./protocol.js";
@@ -31,39 +32,26 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
     const root = tempDirs.make("openclaw-computer-use-startup-");
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
-    const appBundlePath = path.join(root, "ChatGPT.app");
-    const command = path.join(appBundlePath, "codex");
+    const candidate = await writeMarketplaceCandidate(root, "1.0.857", "plugins/openai-bundled");
+    const {
+      appBundlePath,
+      appServerCommandPath: command,
+      bundledMarketplacePath: marketplace,
+    } = candidate;
     const sourceService = path.join(appBundlePath, "Codex Computer Use.app");
     const targetService = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    const marketplace = path.join(appBundlePath, "plugins", "openai-bundled");
     const pluginRoot = path.join(marketplace, "plugins", "computer-use");
     const cachePath = path.join(codexHome, "plugins/cache/openai-bundled/computer-use/1.0.857");
     const priorService = artifact === "service" ? "old-service" : "new-service";
     await writeServiceFixture(sourceService, "new-service");
     await writeServiceFixture(targetService, priorService);
     const sourceIdentity = await inspectServiceFixture(sourceService);
-    await fs.mkdir(path.join(marketplace, ".agents", "plugins"), { recursive: true });
-    await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
-    await writeJson(path.join(marketplace, ".agents/plugins/marketplace.json"), {
-      name: "openai-bundled",
-      plugins: [{ name: "computer-use" }],
-    });
-    await writeJson(path.join(pluginRoot, ".codex-plugin/plugin.json"), {
-      name: "computer-use",
-      version: "1.0.857",
-    });
     await fs.writeFile(path.join(pluginRoot, "generation.txt"), "new-cache");
     await fs.cp(pluginRoot, cachePath, { recursive: true });
     await fs.writeFile(path.join(cachePath, "generation.txt"), "old-cache");
 
     vi.spyOn(desktopPaths, "resolveMacOSDesktopCodexAppPathCandidates").mockReturnValue([
-      {
-        appName: "ChatGPT.app",
-        appBundlePath,
-        appServerCommandPath: command,
-        bundledMarketplacePath: marketplace,
-        computerUseServiceAppPaths: [sourceService],
-      },
+      { ...candidate, computerUseServiceAppPaths: [sourceService] },
     ]);
     vi.spyOn(service, "resolveCodexComputerUseServiceAppSourcePath").mockImplementation((params) =>
       resolveServiceSource({ ...params, ...inspection }),
@@ -125,10 +113,6 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
     }
   });
 });
-
-async function writeJson(file: string, value: unknown) {
-  await fs.writeFile(file, JSON.stringify(value));
-}
 
 async function writeServiceFixture(appPath: string, identity: string): Promise<void> {
   await fs.mkdir(path.join(appPath, "Contents"), { recursive: true });
