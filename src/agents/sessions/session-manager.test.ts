@@ -55,24 +55,6 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
   return SessionManager.open({ ...target, sessionKey }, cwd);
 }
 
-function appendState(manager: SessionManager) {
-  return [manager.getEntries(), manager.getLeafId(), manager.getAppendParentId()];
-}
-
-function branchIds(manager: SessionManager) {
-  return manager.getBranch().map((entry) => entry.id);
-}
-
-async function expectRejectedAppend(
-  manager: SessionManager,
-  events: () => Promise<unknown>,
-  append: () => unknown,
-) {
-  const before = [manager.getBranch(), await events()];
-  expect(append).toThrow("SQLite transcript changed while preparing rewrite");
-  expect([manager.getBranch(), await events()]).toEqual(before);
-}
-
 describe("SessionManager.open", () => {
   it("commits ordered metadata and custom messages with Windows environment semantics off-thread", async () => {
     const { dir, scope: target } = createScope("metadata-worker");

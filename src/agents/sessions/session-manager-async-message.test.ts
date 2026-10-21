@@ -78,6 +78,40 @@ const user = (key: string) => ({
   idempotencyKey: `${key}:user`,
 });
 
+const toolResult = <T extends object>(overrides: T) => ({
+  role: "toolResult" as const,
+  toolCallId: "result",
+  toolName: "lookup",
+  content: [{ type: "text" as const, text: "Synthetic result" }],
+  isError: false,
+  timestamp: 2,
+  ...overrides,
+});
+
+type MetadataWorker = Parameters<
+  Parameters<typeof metadataRuntime.withSessionMetadataWorker>[3]
+>[0];
+
+function interceptWorker(wrap: (worker: MetadataWorker) => MetadataWorker) {
+  const original = metadataRuntime.withSessionMetadataWorker;
+  return vi
+    .spyOn(metadataRuntime, "withSessionMetadataWorker")
+    .mockImplementation((options, database, assertCurrent, operation, controls) =>
+      original(options, database, assertCurrent, (worker) => operation(wrap(worker)), controls),
+    );
+}
+
+function afterMetadataReceipt(after: () => void) {
+  const original = metadataRuntime.withSessionMetadataWorker;
+  return vi
+    .spyOn(metadataRuntime, "withSessionMetadataWorker")
+    .mockImplementation(async (...args) => {
+      const result = await original(...args);
+      after();
+      return result;
+    });
+}
+
 it.for(["protected", "interrupted retry", "below cap", "below cap protected insert"] as const)(
   "resumes idle protected-store maintenance after a lazy worker creates a session (starting state: %s)",
   async (startingState, { signal }) => {
@@ -217,43 +251,31 @@ it.each([1, 2])(
   async (conflicts) => {
     const { target, manager } = await fixture(state, `mutation-conflicts-${conflicts}`);
     await manager.appendMessageAsync(user("seed"));
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
     let appends = 0;
     let mutationReads = 0;
     const failures: unknown[] = [];
-    const spy = vi
-      .spyOn(metadataRuntime, "withSessionMetadataWorker")
-      .mockImplementation((options, database, assertCurrent, operation, controls) =>
-        withWorker(
-          options,
-          database,
-          assertCurrent,
-          (worker) =>
-            operation({
-              execute: async (command, commandOptions) => {
-                if (command.type === "session.metadata.mutation") {
-                  mutationReads++;
-                }
-                if (command.type === "session.metadata.append" && ++appends <= conflicts) {
-                  // The synchronous SDK can commit after host preparation but before the worker.
-                  expect(
-                    appendTranscriptMessageSync(target, {
-                      eventId: `concurrent-${appends}`,
-                      message: user(`concurrent-${appends}`),
-                    }).ok,
-                  ).toBe(true);
-                }
-                try {
-                  return await worker.execute(command, commandOptions);
-                } catch (error) {
-                  failures.push(error);
-                  throw error;
-                }
-              },
-            }),
-          controls,
-        ),
-      );
+    const spy = interceptWorker((worker) => ({
+      execute: async (command, commandOptions) => {
+        if (command.type === "session.metadata.mutation") {
+          mutationReads++;
+        }
+        if (command.type === "session.metadata.append" && ++appends <= conflicts) {
+          // The synchronous SDK can commit after host preparation but before the worker.
+          expect(
+            appendTranscriptMessageSync(target, {
+              eventId: `concurrent-${appends}`,
+              message: user(`concurrent-${appends}`),
+            }).ok,
+          ).toBe(true);
+        }
+        try {
+          return await worker.execute(command, commandOptions);
+        } catch (error) {
+          failures.push(error);
+          throw error;
+        }
+      },
+    }));
     let failure: unknown;
     let entryId: string | undefined;
     try {
@@ -305,14 +327,12 @@ it("keeps a newer user intact when a prepared tool result cannot rebase", async 
   ).toBe(true);
   const before = await loadTranscriptEvents(target);
   await expect(
-    manager.appendMessageAsync({
-      role: "toolResult",
-      toolCallId: "superseded-result",
-      toolName: "lookup",
-      content: [{ type: "text", text: "Prepared for the older user" }],
-      isError: false,
-      timestamp: 2,
-    }),
+    manager.appendMessageAsync(
+      toolResult({
+        toolCallId: "superseded-result",
+        content: [{ type: "text" as const, text: "Prepared for the older user" }],
+      }),
+    ),
   ).rejects.toBeInstanceOf(SqliteTranscriptMutationConflictError);
   expect(await loadTranscriptEvents(target)).toEqual(before);
   expect(manager.getEntries()).toHaveLength(1);
@@ -322,15 +342,15 @@ it("shares one frozen tool-result graph across append receipts, transcript views
   const { target, manager } = await fixture(state, "shared-tool-results");
   const seed = await manager.appendMessageWithTranscriptAnchorAsync(user("shared-results"));
   const text = "Synthetic result line with Unicode: 🦞\n".repeat(1024);
-  const messages = Array.from({ length: 3 }, (_, index) => ({
-    role: "toolResult" as const,
-    toolCallId: `large-${index}`,
-    toolName: "read",
-    content: [{ type: "text" as const, text }],
-    details: { rows: [{ index, values: [index, index + 1] }] },
-    isError: false,
-    timestamp: index + 2,
-  }));
+  const messages = Array.from({ length: 3 }, (_, index) =>
+    toolResult({
+      toolCallId: `large-${index}`,
+      toolName: "read",
+      content: [{ type: "text" as const, text }],
+      details: { rows: [{ index, values: [index, index + 1] }] },
+      timestamp: index + 2,
+    }),
+  );
   const originalGraphs = messages.map((message) => ({
     content: message.content,
     block: message.content[0],
@@ -409,38 +429,22 @@ it.each(["message", "custom"] as const)(
     await manager.appendMessageAsync(user(`captured-${family}`));
     const nested = { value: "captured" };
     const data = { nested };
-    const message = {
-      role: "toolResult" as const,
+    const message = toolResult({
       toolCallId: "captured-result",
-      toolName: "lookup",
       content: [{ type: "text" as const, text: "Captured result" }],
       details: data,
-      isError: false,
-      timestamp: 2,
-    };
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    });
     let appends = 0;
     let workerMutation: boolean | undefined;
-    const spy = vi
-      .spyOn(metadataRuntime, "withSessionMetadataWorker")
-      .mockImplementation((options, database, assertCurrent, operation, controls) =>
-        withWorker(
-          options,
-          database,
-          assertCurrent,
-          (worker) =>
-            operation({
-              execute: (command, commandOptions) => {
-                const pending = worker.execute(command, commandOptions);
-                if (command.type === "session.metadata.append" && ++appends === 2) {
-                  workerMutation = Reflect.set(nested, "value", "worker mutation");
-                }
-                return pending;
-              },
-            }),
-          controls,
-        ),
-      );
+    const spy = interceptWorker((worker) => ({
+      execute: (command, commandOptions) => {
+        const pending = worker.execute(command, commandOptions);
+        if (command.type === "session.metadata.append" && ++appends === 2) {
+          workerMutation = Reflect.set(nested, "value", "worker mutation");
+        }
+        return pending;
+      },
+    }));
     const blocker = manager.appendCustomEntryAsync("queued-before-capture");
     const pending =
       family === "message"
@@ -513,25 +517,17 @@ it("persists the native first content getter result before provenance reads", as
 it("expands message toJSON with its envelope key without changing tool text", async () => {
   const { target, manager } = await fixture(state, "message-json-redaction");
   await manager.appendMessageAsync(user("json-redaction"));
-  const message = {
-    role: "toolResult" as const,
+  const message = toolResult({
     toolCallId: "json-result",
-    toolName: "lookup",
     content: [],
-    isError: false,
-    timestamp: 2,
     toJSON(key: string) {
-      return {
-        role: "toolResult",
+      return toolResult({
         toolCallId: "json-result",
-        toolName: "lookup",
-        content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }],
+        content: [{ type: "text" as const, text: "opaque(abcdefghijklmnopqrst)" }],
         details: { serializationKey: key },
-        isError: false,
-        timestamp: 2,
-      };
+      });
     },
-  };
+  });
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(message, {
     config: { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } },
   });
@@ -559,14 +555,10 @@ it("preserves tool text when JSON normalization copies a frozen content block", 
   });
   expect(block.text).toBe("opaque(abcdefghijklmnopqrst)");
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(
-    {
-      role: "toolResult",
+    toolResult({
       toolCallId: "frozen-result",
-      toolName: "lookup",
       content: [block],
-      isError: false,
-      timestamp: 2,
-    },
+    }),
     { config },
   );
   const expected = [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }];
@@ -678,20 +670,10 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
     message: Parameters<SessionManager["appendMessageWithTranscriptAnchorAsync"]>[0],
     nextKey: string,
   ) => {
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
-    const delayed: typeof withWorker = async (
-      options,
-      database,
-      assertCurrent,
-      operation,
-      controls,
-    ) => {
-      const receipt = await withWorker(options, database, assertCurrent, operation, controls);
+    const spy = afterMetadataReceipt(() => {
       // The retained synchronous SDK can publish before an awaited receipt is adopted.
       newerId = manager.appendMessage(user(nextKey));
-      return receipt;
-    };
-    const spy = vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(delayed);
+    });
     try {
       return await manager.appendMessageWithTranscriptAnchorAsync(message);
     } finally {
@@ -772,21 +754,7 @@ it("fences local navigation changes at worker commit and receipt publication", a
     }
   }
 
-  const withWorker = metadataRuntime.withSessionMetadataWorker;
-  const delayed: typeof withWorker = async (
-    options,
-    database,
-    assertCurrent,
-    operation,
-    controls,
-  ) => {
-    const receipt = await withWorker(options, database, assertCurrent, operation, controls);
-    manager.resetLeaf();
-    return receipt;
-  };
-  const publication = vi
-    .spyOn(metadataRuntime, "withSessionMetadataWorker")
-    .mockImplementation(delayed);
+  const publication = afterMetadataReceipt(() => manager.resetLeaf());
   let failure: unknown;
   try {
     failure = await manager.appendMessageAsync(user("committed-before-reset")).then(
