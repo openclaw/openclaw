@@ -54,9 +54,8 @@ const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
 export function selectStoredGitHubIdentities(
   db: EngineConnection,
   profileIds?: readonly string[],
-  accountIds?: readonly number[],
 ): Map<string, { accounts: StoredGitHubIdentity[]; primary: StoredGitHubIdentity | undefined }> {
-  if (profileIds?.length === 0 || accountIds?.length === 0) {
+  if (profileIds?.length === 0) {
     return new Map();
   }
   if (!tableHasColumn(db, "user_profile_identities", "canonical_login")) {
@@ -77,11 +76,6 @@ export function selectStoredGitHubIdentities(
     .orderBy("subject", "asc");
   if (profileIds) {
     query = query.where("profile_id", "in", [...profileIds]);
-  }
-  if (accountIds) {
-    query = query
-      .where("subject", "in", accountIds.map(String))
-      .where("user_profiles.merged_into", "is", null);
   }
   return projectStoredGitHubIdentities(executeSqliteQuerySync(db, query).rows);
 }
