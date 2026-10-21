@@ -7,6 +7,14 @@ type DiscordAccountConfig = ResolvedDiscordAccount["config"];
 const memberLists = (users: string[], channelUsers: string[]) => ({
   "123": { users, channels: { general: { users: channelUsers } } },
 });
+const privateNames = [
+  "Alice#1234",
+  "second.operator",
+  "trusted.operator",
+  "security-team",
+  "team.owner",
+];
+const stableIds = ["<@123456789012345678>", "987654321098765432"];
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
   readChannelAllowFromStoreMock: vi.fn(async () => [] as string[]),
@@ -123,52 +131,38 @@ describe("Discord security audit findings", () => {
 
   it.each([
     {
-      name: "warns when Discord allowlists contain name-based entries",
+      name: "name-based entries",
       config: {
         allowFrom: ["Alice#1234", " Alice#1234 ", "second.operator", "<@123456789012345678>"],
         guilds: memberLists(["trusted.operator"], ["987654321098765432", "security-team"]),
-      } satisfies DiscordAccountConfig,
+      },
       storeAllowFrom: ["team.owner"],
-      expectNameBasedSeverity: "warn",
-      detailIncludes: [
+      severity: "warn",
+      includes: [
         "Found 5 name/tag entries",
         "channels.discord.allowFrom (2)",
         "channels.discord.guilds.123.users (1)",
         "channels.discord.guilds.123.channels.general.users (1)",
         "Discord pairing store (1)",
       ],
-      detailExcludes: [
-        "Alice#1234",
-        "second.operator",
-        "trusted.operator",
-        "security-team",
-        "team.owner",
-        "<@123456789012345678>",
-        "987654321098765432",
-      ],
     },
     {
-      name: "marks Discord name-based allowlists as break-glass when dangerous matching is enabled",
-      config: {
-        dangerouslyAllowNameMatching: true,
-        allowFrom: ["Alice#1234"],
-      } satisfies DiscordAccountConfig,
-      expectNameBasedSeverity: "info",
-      detailIncludes: ["out-of-scope"],
-      detailExcludes: ["Alice#1234"],
+      name: "break-glass name matching",
+      config: { dangerouslyAllowNameMatching: true, allowFrom: ["Alice#1234"] },
+      severity: "info",
+      includes: ["out-of-scope"],
     },
     {
-      name: "audits name-based allowlists on non-default Discord accounts",
+      name: "non-default account",
       accountId: "beta",
       orderedAccountIds: ["alpha", "beta"],
       hasExplicitAccountPath: true,
-      config: { allowFrom: ["Alice#1234"] } satisfies DiscordAccountConfig,
-      expectNameBasedSeverity: "warn",
-      detailIncludes: ["channels.discord.accounts.beta.allowFrom (1)"],
-      detailExcludes: ["Alice#1234"],
+      config: { allowFrom: ["Alice#1234"] },
+      severity: "warn",
+      includes: ["channels.discord.accounts.beta.allowFrom (1)"],
     },
     {
-      name: "does not warn when Discord allowlists use ID-style entries only",
+      name: "stable IDs only",
       config: {
         allowFrom: [
           "123456789012345678",
@@ -181,32 +175,24 @@ describe("Discord security audit findings", () => {
           ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
           ["723456789012345678", "user:823456789012345678"],
         ),
-      } satisfies DiscordAccountConfig,
-      expectNoNameBasedFinding: true,
+      },
+      severity: undefined,
+      includes: [],
     },
-  ])("$name", async (testCase) => {
-    const findings = await collectFindings({
-      config: testCase.config,
-      accountId: testCase.accountId,
-      orderedAccountIds: testCase.orderedAccountIds,
-      hasExplicitAccountPath: testCase.hasExplicitAccountPath,
-      storeAllowFrom: testCase.storeAllowFrom,
-    });
+  ])("audits $name without exposing identities", async (testCase) => {
+    const findings = await collectFindings(testCase);
     const nameBasedFinding = findings.find(
       (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
     );
 
-    if (testCase.expectNoNameBasedFinding) {
+    if (testCase.severity === undefined) {
       expect(nameBasedFinding).toBeUndefined();
     } else {
-      if (!nameBasedFinding) {
-        throw new Error(`expected name-based finding for ${testCase.name}`);
+      expect(nameBasedFinding?.severity).toBe(testCase.severity);
+      for (const snippet of testCase.includes) {
+        expect(nameBasedFinding?.detail).toContain(snippet);
       }
-      expect(nameBasedFinding.severity).toBe(testCase.expectNameBasedSeverity);
-      for (const snippet of testCase.detailIncludes ?? []) {
-        expect(nameBasedFinding.detail).toContain(snippet);
-      }
-      for (const snippet of testCase.detailExcludes ?? []) {
+      for (const snippet of [...privateNames, ...stableIds]) {
         expect(JSON.stringify(findings)).not.toContain(snippet);
       }
     }

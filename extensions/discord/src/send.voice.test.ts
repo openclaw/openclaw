@@ -1,4 +1,3 @@
-// Discord tests cover send.voice plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -52,14 +51,21 @@ function makeVoiceRest() {
   const postMock = vi
     .spyOn(rest, "post")
     .mockResolvedValue({ id: "msg1", channel_id: "273512430271856640" });
-  return { rest, postMock };
+  return {
+    postMock,
+    send: (options: Partial<VoiceOptions> = {}, source = "https://example.com/voice.ogg") =>
+      sendVoiceMessageDiscord(channelId, source, {
+        cfg: { channels: { discord: { token: "t" } } },
+        rest,
+        token: "t",
+        ...options,
+      }),
+  };
 }
 
-const DISCORD_TEST_CFG = {
-  channels: { discord: { token: "t" } },
-};
-
 let sendVoiceMessageDiscord: typeof import("./send.voice.js").sendVoiceMessageDiscord;
+type VoiceOptions = Parameters<typeof sendVoiceMessageDiscord>[2];
+const channelId = "273512430271856640";
 
 describe("sendVoiceMessageDiscord", () => {
   beforeAll(async () => {
@@ -96,36 +102,19 @@ describe("sendVoiceMessageDiscord", () => {
   });
 
   it("cleans materialized voice media when pre-send conversion fails", async () => {
-    const { rest } = makeVoiceRest();
+    const { send } = makeVoiceRest();
     mediaMocks.probe.mockRejectedValueOnce(new Error("codec probe unavailable"));
     mediaMocks.ffmpeg.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
 
-    await expect(
-      sendVoiceMessageDiscord("273512430271856640", "https://example.com/voice.ogg", {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
-      }),
-    ).rejects.toThrow("ffmpeg unavailable");
+    await expect(send()).rejects.toThrow("ffmpeg unavailable");
 
     await expect(fs.readdir(tempPathMocks.rootDir)).resolves.toEqual([]);
   });
 
   it("records the native reply target in voice receipts", async () => {
-    const { rest, postMock } = makeVoiceRest();
+    const { send, postMock } = makeVoiceRest();
 
-    const result = await sendVoiceMessageDiscord(
-      "273512430271856640",
-      "https://example.com/voice.ogg",
-      {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
-        reply: { messageId: "reply-1", scope: "first" },
-      },
-    );
-
-    expect(result.channelId).toBe("273512430271856640");
+    const result = await send({ reply: { messageId: "reply-1", scope: "first" } });
     expect(postMock).toHaveBeenCalledExactlyOnceWith("/channels/273512430271856640/messages", {
       body: expect.objectContaining({
         attachments: [
@@ -137,18 +126,17 @@ describe("sendVoiceMessageDiscord", () => {
         message_reference: { message_id: "reply-1", fail_if_not_exists: false },
       }),
     });
-    expect(result.receipt.replyToId).toBe("reply-1");
-    expect(result.receipt.parts[0]?.replyToId).toBe("reply-1");
+    expect(result).toMatchObject({
+      channelId,
+      receipt: { replyToId: "reply-1", parts: [{ replyToId: "reply-1" }] },
+    });
   });
 
   it("rechecks live authority after the awaited dispatch callback before creating a message", async () => {
-    const { rest, postMock } = makeVoiceRest();
+    const { send, postMock } = makeVoiceRest();
     let authorized = true;
     await expect(
-      sendVoiceMessageDiscord("273512430271856640", "https://example.com/voice.ogg", {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
+      send({
         retry: { attempts: 1 },
         onPlatformSendDispatch: async () => {
           authorized = false;
@@ -177,15 +165,10 @@ describe("sendVoiceMessageDiscord", () => {
       typeof import("openclaw/plugin-sdk/web-media")
     >("openclaw/plugin-sdk/web-media");
     loadWebMediaRawMock.mockImplementation(loadWebMediaRaw);
-    const { rest, postMock } = makeVoiceRest();
+    const { send, postMock } = makeVoiceRest();
 
     try {
-      await sendVoiceMessageDiscord("273512430271856640", "./voice.ogg", {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
-        mediaAccess,
-      });
+      await send({ mediaAccess }, "./voice.ogg");
 
       const [, loaderOptions] = loadWebMediaRawMock.mock.calls[0] ?? [];
       expect(loaderOptions).toMatchObject({ localRoots: mediaAccess.localRoots, workspaceDir });
@@ -194,14 +177,9 @@ describe("sendVoiceMessageDiscord", () => {
       expect(loaderOptions).not.toHaveProperty("hostReadCapability");
       expect(postMock).toHaveBeenCalledTimes(1);
 
-      await expect(
-        sendVoiceMessageDiscord("273512430271856640", "../outside.ogg", {
-          cfg: DISCORD_TEST_CFG,
-          rest,
-          token: "t",
-          mediaAccess,
-        }),
-      ).rejects.toThrow(/not under an allowed directory/i);
+      await expect(send({ mediaAccess }, "../outside.ogg")).rejects.toThrow(
+        /not under an allowed directory/i,
+      );
       expect(postMock).toHaveBeenCalledTimes(1);
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
@@ -218,14 +196,12 @@ describe("sendVoiceMessageDiscord", () => {
         readFile: mediaReadFile,
         workspaceDir: "/tmp/agent-workspace",
       };
-      const { rest } = makeVoiceRest();
+      const { send } = makeVoiceRest();
 
-      await sendVoiceMessageDiscord("273512430271856640", "./voice.ogg", {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
-        ...(capabilityShape === "canonical" ? { mediaAccess } : { mediaLocalRoots, mediaReadFile }),
-      });
+      await send(
+        capabilityShape === "canonical" ? { mediaAccess } : { mediaLocalRoots, mediaReadFile },
+        "./voice.ogg",
+      );
 
       const [, loaderOptions] = loadWebMediaRawMock.mock.calls[0] ?? [];
       expect(loaderOptions.localRoots).toBe(mediaLocalRoots);
@@ -240,15 +216,15 @@ describe("sendVoiceMessageDiscord", () => {
   );
 
   it("rejects a trusted host reader that has no explicit root boundary", async () => {
-    const { rest } = makeVoiceRest();
+    const { send } = makeVoiceRest();
 
     await expect(
-      sendVoiceMessageDiscord("273512430271856640", "./voice.ogg", {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
-        mediaReadFile: vi.fn(async () => Buffer.from("voice")),
-      }),
+      send(
+        {
+          mediaReadFile: vi.fn(async () => Buffer.from("voice")),
+        },
+        "./voice.ogg",
+      ),
     ).rejects.toThrow(/Host media read requires explicit localRoots/i);
     expect(loadWebMediaRawMock).not.toHaveBeenCalled();
   });

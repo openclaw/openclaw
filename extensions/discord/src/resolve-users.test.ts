@@ -1,25 +1,19 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
 
 describe("resolveDiscordUserAllowlist", () => {
   it("resolves a mention without calling listGuilds", async () => {
     const entry = "<@123456789012345678>";
-    const requests: string[] = [];
+    const fetcher = withFetchPreconnect(vi.fn(async () => new Response(null, { status: 404 })));
     const results = await resolveDiscordUserAllowlist({
       token: "test",
       entries: [entry],
-      fetcher: withFetchPreconnect(async (input) => {
-        const url = urlToString(input);
-        requests.push(url);
-        return url.endsWith("/users/@me/guilds")
-          ? jsonResponse([])
-          : new Response("not found", { status: 404 });
-      }),
+      fetcher,
     });
     expect(results).toEqual([{ input: entry, resolved: true, id: "123456789012345678" }]);
-    expect(requests).toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("fetches guilds only once for multiple username entries", async () => {
@@ -52,27 +46,16 @@ describe("resolveDiscordUserAllowlist", () => {
     ]);
   });
 
-  it("returns unresolved for empty/blank entries", async () => {
-    const results = await resolveDiscordUserAllowlist({
-      token: "test",
-      entries: ["", "  "],
-      fetcher: withFetchPreconnect(async () => new Response("not found", { status: 404 })),
-    });
-    expect(results).toEqual([
-      { input: "", resolved: false },
-      { input: "  ", resolved: false },
-    ]);
-  });
-
-  it("returns ordered unresolved entries when token is blank", async () => {
-    const results = await resolveDiscordUserAllowlist({
-      token: "  ",
-      entries: ["123456789012345678", "alice"],
-    });
-
-    expect(results).toEqual([
-      { input: "123456789012345678", resolved: false },
-      { input: "alice", resolved: false },
-    ]);
+  it.each([
+    ["blank entries", "test", ["", "  "]],
+    ["blank token", "  ", ["123456789012345678", "alice"]],
+  ] as const)("returns ordered unresolved results for %s", async (_name, token, entries) => {
+    expect(
+      await resolveDiscordUserAllowlist({
+        token,
+        entries: [...entries],
+        fetcher: withFetchPreconnect(async () => new Response("not found", { status: 404 })),
+      }),
+    ).toEqual(entries.map((input) => ({ input, resolved: false })));
   });
 });

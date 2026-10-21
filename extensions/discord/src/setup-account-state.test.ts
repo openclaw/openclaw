@@ -17,56 +17,49 @@ const inspectToken = (token: DiscordAccountConfig["token"], rootToken?: string) 
 describe("discord setup account state", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("resolves setup account config when account key casing differs from normalized id", () => {
-    const resolved = resolveDiscordSetupAccountConfig({
-      cfg: config({
-        allowFrom: ["top"],
-        accounts: { Work: { name: "Work", allowFrom: ["acct"] } },
-      }),
-      accountId: "work",
-    });
+  it.each([
+    ["case-insensitive key", "work", undefined, "Work"],
+    ["configured defaultAccount", undefined, "work", "work"],
+  ] as const)(
+    "resolves the %s and its account overrides",
+    (_name, accountId, defaultAccount, key) => {
+      expect(
+        resolveDiscordSetupAccountConfig({
+          cfg: config({
+            defaultAccount,
+            allowFrom: ["top"],
+            accounts: {
+              alerts: { allowFrom: ["alerts-only"] },
+              [key]: { name: "Work", allowFrom: ["acct"] },
+            },
+          }),
+          accountId,
+        }),
+      ).toMatchObject({ accountId: "work", config: { name: "Work", allowFrom: ["acct"] } });
+    },
+  );
 
-    expect(resolved).toMatchObject({
-      accountId: "work",
-      config: { name: "Work", allowFrom: ["acct"] },
-    });
-  });
-
-  it("uses configured defaultAccount for omitted setup account resolution", () => {
-    const resolved = resolveDiscordSetupAccountConfig({
-      cfg: config({
-        defaultAccount: "work",
-        allowFrom: ["top"],
-        accounts: {
-          alerts: { allowFrom: ["alerts-only"] },
-          work: { name: "Work", allowFrom: ["work-only"] },
-        },
-      }),
-    });
-    expect(resolved).toMatchObject({
-      accountId: "work",
-      config: { name: "Work", allowFrom: ["work-only"] },
-    });
-  });
-
-  it("treats explicit blank account tokens as missing without falling back", () => {
-    expect(inspectToken("", "top-level-token")).toMatchObject({
-      accountId: "work",
-      token: "",
-      tokenSource: "none",
-      tokenStatus: "missing",
-      configured: false,
-    });
-  });
-
-  it("reports unresolved SecretRef account tokens as configured but unavailable", () => {
-    expect(inspectToken({ source: "exec", provider: "vault", id: "discord/work" })).toMatchObject({
-      token: "",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-      configured: true,
-    });
-  });
+  it.each([
+    ["blank", "", "none", "missing", false],
+    [
+      "unresolved SecretRef",
+      { source: "exec", provider: "vault", id: "discord/work" },
+      "config",
+      "configured_unavailable",
+      true,
+    ],
+  ] as const)(
+    "reports %s account tokens without falling back",
+    (_name, token, tokenSource, tokenStatus, configured) => {
+      expect(inspectToken(token, "top-level-token")).toMatchObject({
+        accountId: "work",
+        token: "",
+        tokenSource,
+        tokenStatus,
+        configured,
+      });
+    },
+  );
 
   it("keeps the runtime resolver's default-account-only environment fallback", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "Bot setup-token");
@@ -77,10 +70,7 @@ describe("discord setup account state", () => {
       configured: true,
     });
     expect(
-      inspectDiscordSetupAccount({
-        cfg: config({ accounts: { work: {} } }),
-        accountId: "work",
-      }),
+      inspectDiscordSetupAccount({ cfg: config({ accounts: { work: {} } }), accountId: "work" }),
     ).toMatchObject({ token: "", tokenSource: "none", configured: false });
   });
 });

@@ -148,16 +148,11 @@ describe("sendVoiceMessageDiscord conversion", () => {
     const { rest, post } = fixture();
     await sendVoice(rest);
     const codecArgs = runFfprobeMock.mock.calls[0]?.[0] ?? [];
-    expect(codecArgs.slice(0, -1)).toEqual([
-      "-v",
-      "error",
-      "-select_streams",
-      "a:0",
-      "-show_entries",
-      "stream=codec_name,sample_rate",
-      "-of",
-      "csv=p=0",
-    ]);
+    expect(codecArgs.slice(0, -1)).toEqual(
+      "-v error -select_streams a:0 -show_entries stream=codec_name,sample_rate -of csv=p=0".split(
+        " ",
+      ),
+    );
     expect(runFfprobeMock).toHaveBeenCalledTimes(2);
     expect(runFfmpegMock).toHaveBeenCalledTimes(1);
     expect(runFfmpegMock.mock.calls[0]?.[0]).toContain("pcm_s16le");
@@ -186,19 +181,7 @@ describe("sendVoiceMessageDiscord conversion", () => {
         "-y",
         "-i",
         localInput,
-        "-vn",
-        "-sn",
-        "-dn",
-        "-t",
-        "1200",
-        "-ar",
-        "48000",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "64k",
-        "-f",
-        "ogg",
+        ..."-vn -sn -dn -t 1200 -ar 48000 -c:a libopus -b:a 64k -f ogg".split(" "),
       ]);
       const stagedPath = args.at(-1);
       expect(path.basename(stagedPath ?? "")).toMatch(/^\.fs-safe-output-.*-voice-.*\.ogg\.part$/);

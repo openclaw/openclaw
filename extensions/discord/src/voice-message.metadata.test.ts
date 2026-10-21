@@ -46,14 +46,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   fetchWithSsrFGuard: vi.fn(async ({ init }: { init?: RequestInit }) => ({
     response:
       init?.method === "POST"
-        ? new Response(
-            JSON.stringify({
-              attachments: [
-                { id: 0, upload_url: "https://cdn.test/voice", upload_filename: "uploaded.ogg" },
-              ],
-            }),
-            { status: 200 },
-          )
+        ? Response.json({
+            attachments: [
+              { id: 0, upload_url: "https://cdn.test/voice", upload_filename: "uploaded.ogg" },
+            ],
+          })
         : new Response(null, { status: 200 }),
     release: async () => {},
   })),
@@ -127,15 +124,21 @@ async function arrangeMetadata(waveformFails = false) {
     },
   );
   return {
-    inputPath,
-    original,
     post,
     probe,
     started: started.promise,
-    release,
-    cleaned: cleaned.promise,
     outcome,
     isSettled: () => settled,
+    finish: async () => {
+      probe.resolve("1.25\n");
+      release.resolve();
+      await cleaned.promise;
+      await outcome;
+    },
+    expectInputPreserved: async () => {
+      expect(await fs.readFile(inputPath)).toEqual(original);
+      expect(await fs.readdir(media.root)).toEqual(["original.ogg"]);
+    },
   };
 }
 
@@ -153,10 +156,7 @@ describe("public voice send owns waveform cleanup", () => {
       await setImmediate();
       settledBeforeWaveformRelease = fixture.isSettled();
     } finally {
-      fixture.probe.resolve("1.25\n");
-      fixture.release.resolve();
-      await fixture.cleaned;
-      await fixture.outcome;
+      await fixture.finish();
     }
 
     const result = await fixture.outcome;
@@ -164,8 +164,7 @@ describe("public voice send owns waveform cleanup", () => {
       message: "Failed to get audio duration: duration cancellation",
       cause: probeError,
     });
-    expect(await fs.readFile(fixture.inputPath)).toEqual(fixture.original);
-    expect(await fs.readdir(media.root)).toEqual(["original.ogg"]);
+    await fixture.expectInputPreserved();
     expect(settledBeforeWaveformRelease).toBe(false);
   });
 
@@ -178,10 +177,7 @@ describe("public voice send owns waveform cleanup", () => {
         expect(media.waveform).toHaveBeenCalledOnce();
         fixture.probe.resolve("1.25\n");
       } finally {
-        fixture.probe.resolve("1.25\n");
-        fixture.release.resolve();
-        await fixture.cleaned;
-        await fixture.outcome;
+        await fixture.finish();
       }
 
       const result = await fixture.outcome;
@@ -204,8 +200,7 @@ describe("public voice send owns waveform cleanup", () => {
           Buffer.concat([Buffer.from([8, 8, 8]), Buffer.alloc(253)]),
         );
       }
-      expect(await fs.readFile(fixture.inputPath)).toEqual(fixture.original);
-      expect(await fs.readdir(media.root)).toEqual(["original.ogg"]);
+      await fixture.expectInputPreserved();
     },
   );
 });

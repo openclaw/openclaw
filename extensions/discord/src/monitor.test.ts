@@ -149,16 +149,14 @@ describe("discord allowlist helpers", () => {
       ["123", "steipete", "Friends of OpenClaw"],
       ["discord:", "user:", "guild:", "channel:"],
     );
+    const matches = (name: string, allowNameMatching = false) =>
+      allowListMatches(allow, { name }, { allowNameMatching });
     expect(allowListMatches(allow, { id: "123" }, { allowNameMatching: false })).toBe(true);
-    expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: false })).toBe(false);
-    expect(
-      allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: false }),
-    ).toBe(false);
-    expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: true })).toBe(true);
-    expect(
-      allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: true }),
-    ).toBe(true);
-    expect(allowListMatches(allow, { name: "other" }, { allowNameMatching: false })).toBe(false);
+    for (const name of ["steipete", "friends-of-openclaw"]) {
+      expect(matches(name)).toBe(false);
+      expect(matches(name, true)).toBe(true);
+    }
+    expect(matches("other")).toBe(false);
   });
 
   it("does not treat DM wildcard access as owner access", () => {
@@ -221,23 +219,20 @@ describe("discord guild/channel resolution", () => {
 });
 
 it("discord groupPolicy gating: applies open/disabled/allowlist policy rules", () => {
-  const cases = [
-    ["open", "open", false, false, false, true],
-    ["disabled", "disabled", true, true, true, false],
-    ["guild denied", "allowlist", false, false, true, false],
-    ["no channel restriction", "allowlist", true, false, true, true],
-    ["channel allowed", "allowlist", true, true, true, true],
-    ["channel denied", "allowlist", true, true, false, false],
-  ] as const;
-
   for (const [
-    name,
     groupPolicy,
     guildAllowlisted,
     channelAllowlistConfigured,
     channelAllowed,
     expected,
-  ] of cases) {
+  ] of [
+    ["open", false, false, false, true],
+    ["disabled", true, true, true, false],
+    ["allowlist", false, false, true, false],
+    ["allowlist", true, false, true, true],
+    ["allowlist", true, true, true, true],
+    ["allowlist", true, true, false, false],
+  ] as const) {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy,
@@ -245,7 +240,6 @@ it("discord groupPolicy gating: applies open/disabled/allowlist policy rules", (
         channelAllowlistConfigured,
         channelAllowed,
       }),
-      name,
     ).toBe(expected);
   }
 });
@@ -262,18 +256,14 @@ it("discord group DM gating: matches group DM allowlist", () => {
 });
 
 it("discord reply target selection: handles off/first/all reply modes", () => {
-  const cases = [
-    ["off mode", "off", false, undefined],
-    ["first before reply", "first", false, "123"],
-    ["first after reply", "first", true, undefined],
-    ["all before reply", "all", false, "123"],
-    ["all after reply", "all", true, "123"],
-  ] as const;
-
-  for (const [name, replyToMode, hasReplied, expected] of cases) {
-    expect(resolveDiscordReplyTarget({ replyToMode, replyToId: "123", hasReplied }), name).toBe(
-      expected,
-    );
+  for (const [replyToMode, hasReplied, expected] of [
+    ["off", false, undefined],
+    ["first", false, "123"],
+    ["first", true, undefined],
+    ["all", false, "123"],
+    ["all", true, "123"],
+  ] as const) {
+    expect(resolveDiscordReplyTarget({ replyToMode, replyToId: "123", hasReplied })).toBe(expected);
   }
 });
 
@@ -489,29 +479,19 @@ describe("discord DM reaction handling", () => {
   });
 
   it("processes DM reactions with or without guild allowlists", async () => {
-    const cases = [
-      { name: "no guild allowlist", guildEntries: undefined },
-      {
-        name: "guild allowlist configured",
-        guildEntries: {
-          "guild-123": { slug: "guild-123" },
-        },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
+    for (const guildEntries of [undefined, { "guild-123": { slug: "guild-123" } }]) {
       enqueueSystemEventSpy.mockClear();
       resolveAgentRouteMock.mockClear();
 
-      await handleReaction({ guildEntries: testCase.guildEntries });
+      await handleReaction({ guildEntries });
 
-      expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledOnce();
+      expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
       const [text, opts] = firstMockCall(enqueueSystemEventSpy, "enqueueSystemEvent");
-      expect(text, testCase.name).toContain("Discord reaction added");
-      expect(text, testCase.name).toContain("👍");
-      expect(text, testCase.name).toContain("dm");
-      expect(text, testCase.name).not.toContain("undefined");
-      expect(requireRecord(opts, "system event options").sessionKey, testCase.name).toBe(
+      expect(text).toContain("Discord reaction added");
+      expect(text).toContain("👍");
+      expect(text).toContain("dm");
+      expect(text).not.toContain("undefined");
+      expect(requireRecord(opts, "system event options").sessionKey).toBe(
         "discord:acc-1:dm:user-1",
       );
     }
