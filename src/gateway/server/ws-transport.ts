@@ -5,19 +5,42 @@ import type { GatewayConnectionTransport } from "./connection-transport.js";
 import type { installGatewayDeflateCodec } from "./ws-compression.js";
 import { recordGatewayWsEvent } from "./ws-connection-diagnostics.js";
 
-/** Own outbound compression and use the native socket queue for every frame. */
+/** Own outbound compression and socket batching for every frame. */
 export function createGatewayWebSocketTransport(
   socket: WebSocket,
   stream: Socket,
   compression: ReturnType<typeof installGatewayDeflateCodec>,
 ): GatewayConnectionTransport {
+  // oxlint-disable-next-line no-underscore-dangle -- Writable's documented vector hook is absent on Bun HTTP sockets.
+  const nativeWritev = stream._writev !== undefined;
+  const write = stream.write.bind(stream);
+  let batch: { chunks: Uint8Array[]; callbacks: ((error?: Error | null) => void)[] } | undefined;
+  let pendingBytes = 0;
   let batched = false;
+  // Pinned Bun HTTP sockets disable _writev. Keep one copy per burst there;
+  // replacing _writev itself could consume Bun's queued HTTP response operations.
+  if (!nativeWritev) {
+    stream.write = (chunk, encoding, callback) => {
+      const done = typeof encoding === "function" ? encoding : callback;
+      const charset = typeof encoding === "string" ? encoding : "utf8";
+      if (!batch) {
+        return write(chunk, charset, done);
+      }
+      const bytes = typeof chunk === "string" ? Buffer.from(chunk, charset) : chunk;
+      batch.chunks.push(bytes);
+      pendingBytes += bytes.byteLength;
+      if (done) {
+        batch.callbacks.push(done);
+      }
+      return stream.writableLength + pendingBytes < stream.writableHighWaterMark;
+    };
+  }
   return {
     get readyState() {
       return socket.readyState;
     },
     get bufferedAmount() {
-      return socket.bufferedAmount;
+      return socket.bufferedAmount + pendingBytes;
     },
     acceptsDeflatedSegments: compression?.acceptsDeflatedSegments ?? false,
     recordEventSent(event, frame, sessionEvent, presenceMode, wireBytes) {
@@ -29,6 +52,25 @@ export function createGatewayWebSocketTransport(
       }
     },
     batchWrites() {
+      if (!nativeWritev) {
+        if (!batch) {
+          batch = { chunks: [], callbacks: [] };
+          process.nextTick(() => {
+            const queued = batch!;
+            batch = undefined;
+            const bytes = pendingBytes;
+            pendingBytes = 0;
+            if (queued.chunks.length > 0) {
+              write(Buffer.concat(queued.chunks, bytes), "utf8", (error) => {
+                for (const callback of queued.callbacks) {
+                  callback(error);
+                }
+              });
+            }
+          });
+        }
+        return;
+      }
       if (!batched) {
         batched = true;
         stream.cork();
@@ -60,6 +102,14 @@ export function createGatewayWebSocketTransport(
           header.writeUInt16BE(bytes, 2);
         } else if (header.length === 10) {
           header.writeBigUInt64BE(BigInt(bytes), 2);
+        }
+        if (!nativeWritev && !batch) {
+          stream.write(
+            Buffer.concat([header, ...segments], header.length + bytes),
+            "utf8",
+            complete,
+          );
+          return bytes;
         }
         stream.cork();
         stream.write(header, undefined, segments.length === 0 ? complete : undefined);

@@ -134,7 +134,7 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
   },
 );
 
-it("matches ws wire bytes at every uncompressed frame length boundary without joining segments", async () => {
+it("matches ws wire bytes with one native submission at every uncompressed frame length boundary", async () => {
   const { peer, socket, request } = await connect();
   const transport = createGatewayWebSocketTransport(
     socket,
@@ -142,6 +142,9 @@ it("matches ws wire bytes at every uncompressed frame length boundary without jo
     installGatewayDeflateCodec(socket),
   );
   const writes = vi.spyOn(request.socket, "write");
+  const nativeWrite = vi.spyOn(request.socket, "_write");
+  // oxlint-disable-next-line no-underscore-dangle -- Count actual Writable submissions on Node and Bun.
+  const nativeWritev = request.socket._writev ? vi.spyOn(request.socket, "_writev") : undefined;
   for (const length of [125, 126, 65535, 65536]) {
     const bytes = Buffer.from(JSON.stringify("x".repeat(length - 2)));
     const ordinary = once(peer, "message");
@@ -150,6 +153,8 @@ it("matches ws wire bytes at every uncompressed frame length boundary without jo
     await ordinary;
     const expected = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
     writes.mockClear();
+    nativeWrite.mockClear();
+    nativeWritev?.mockClear();
     const frame = new SerializedGatewayFrame([bytes.subarray(0, 1), bytes.subarray(1)]);
     const materialize = vi.spyOn(frame, "toBuffer");
     const received = once(peer, "message");
@@ -160,7 +165,16 @@ it("matches ws wire bytes at every uncompressed frame length boundary without jo
     expect(binary).toBe(false);
     expect(data).toEqual(bytes);
     expect(materialize).not.toHaveBeenCalled();
-    expect(Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)))).toEqual(expected);
+    expect(nativeWrite.mock.calls.length + (nativeWritev?.mock.calls.length ?? 0)).toBe(1);
+    // The no-writev adapter calls its captured native write once with the joined frame.
+    const actual = nativeWrite.mock.calls.length
+      ? Buffer.concat(nativeWrite.mock.calls.map(([chunk]) => Buffer.from(chunk)))
+      : Buffer.concat(
+          nativeWritev!.mock.calls.flatMap(([chunks]) =>
+            chunks.map(({ chunk }) => Buffer.from(chunk)),
+          ),
+        );
+    expect(actual).toEqual(expected);
   }
   writes.mockRestore();
 });
@@ -213,8 +227,8 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
       const id = `history-${windowBits}-${sequence}`;
       const frame = serializeGatewayFrame({ type: "res", id, ok: true, payload: { messages } });
       const materialize = vi.spyOn(SerializedGatewayFrame.prototype, "toBuffer");
-      // The socket borrows the memoized piece directly, including its interior trailer.
-      const writes = vi.spyOn(request.socket, "write");
+      // Compression retains the shared piece even when a no-writev socket must join it.
+      const compress = vi.spyOn(codec, "compress");
       const received = once(client, "message");
       let sent: Promise<void>;
       try {
@@ -229,10 +243,12 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
       } finally {
         materialize.mockRestore();
       }
-      const segment = writes.mock.calls
-        .map(([chunk]) => chunk)
-        .find((chunk): chunk is Buffer => Buffer.isBuffer(chunk) && chunk.equals(compressed));
-      writes.mockRestore();
+      const payload = compress.mock.results[0]?.value;
+      expect(payload).toBeInstanceOf(SerializedGatewayFrame);
+      const segment = (payload instanceof SerializedGatewayFrame ? payload.segments : []).find(
+        (chunk): chunk is Buffer => Buffer.isBuffer(chunk) && chunk.equals(compressed),
+      );
+      compress.mockRestore();
       const [[data, binary]] = await Promise.all([received, sent]);
       expect([binary, data.toString()]).toEqual([false, frame.toString()]);
       const byteLength = compressed.byteLength;
