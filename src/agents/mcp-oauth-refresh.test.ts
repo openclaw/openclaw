@@ -1,5 +1,6 @@
 // Covers MCP OAuth token refresh, lease cancellation, and concurrency.
 import path from "node:path";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,7 +8,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import { clearMcpOAuthCredentials, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
 import { withMcpOAuthProviderForTest, withMcpOAuthTestLease } from "./mcp-oauth.test-support.js";
@@ -119,6 +121,58 @@ describe("MCP OAuth provider", () => {
       },
       {
         prefix: "openclaw-mcp-oauth-fresh-token-held-lease-",
+        skipSessionCleanup: true,
+        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+      },
+    );
+  });
+
+  it("sends only the current requester's stored bearer through the resource fetch path", async () => {
+    await withTempHome(
+      async () => {
+        const requester = requesterMcpOAuthIdentity(IDENTITY.serverName, IDENTITY.serverUrl, {
+          messageChannel: "slack",
+          requesterSenderId: "U123",
+        });
+        const save = async (identity: typeof IDENTITY, accessToken: string) =>
+          await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+            await provider.saveTokens({
+              access_token: accessToken,
+              refresh_token: "test-auth-token",
+              token_type: "Bearer",
+              expires_in: 3600,
+            });
+          });
+        await save(IDENTITY, FRESH_ACCESS);
+        await save(requester, "requester-token");
+        const resourceFetch = vi.fn<FetchLike>(async () => new Response("ok"));
+        const sentBearer = (index: number) =>
+          new Headers(resourceFetch.mock.calls[index]?.[1]?.headers).get("authorization");
+        const send = (identity: typeof IDENTITY) =>
+          withMcpOAuthBearer({ fetchFn: resourceFetch, authFetchFn: resourceFetch, identity })(
+            IDENTITY.serverUrl,
+            { method: "POST", body: "{}", signal: AbortSignal.timeout(2_000) },
+          );
+
+        await withMcpOAuthTestLease(IDENTITY.storeKey, async () => {
+          await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });
+          await expect(send(requester)).resolves.toMatchObject({ status: 200 });
+        });
+        await save(IDENTITY, ROTATED_ACCESS);
+        await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });
+        await clearMcpOAuthCredentials(IDENTITY);
+        await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });
+
+        expect([0, 1, 2, 3].map(sentBearer)).toEqual([
+          `Bearer ${FRESH_ACCESS}`,
+          "Bearer requester-token",
+          `Bearer ${ROTATED_ACCESS}`,
+          null,
+        ]);
+        expect(authMock).not.toHaveBeenCalled();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-bearer-held-lease-",
         skipSessionCleanup: true,
         env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
       },
