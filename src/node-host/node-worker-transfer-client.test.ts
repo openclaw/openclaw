@@ -1,5 +1,5 @@
 import { deepStrictEqual } from "node:assert/strict";
-import { createHash, X509Certificate } from "node:crypto";
+import { X509Certificate } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -14,21 +14,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
-import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-} from "../gateway/worker-environments/workspace-manifest.js";
+import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import {
   closeServer,
   digest,
   fileEntry,
   manifestFixture,
   readUpload,
+  serveTransfer,
   transferFixture,
   transferHandler,
   workspaceTransferHandler,
 } from "./node-worker-transfer-client.fixture.test-support.js";
-import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -64,30 +61,16 @@ describe("node worker transfer client", () => {
   it.skipIf(process.platform === "win32")(
     "reports unsafe ancestry without mutating the workspace",
     async () => {
-      const root = tempDirs.make("node-worker-transfer-permissions-");
-      const workspaceDir = path.join(root, "workspace");
+      const { root, workspaceDir, download, read } = fixture("permissions");
       await fs.mkdir(workspaceDir, { mode: 0o700 });
       await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "keep me");
-      const rawManifest = serializeWorkerWorkspaceManifest({
-        version: 1,
-        baseCommit: null,
-        entries: [],
-      });
-      const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+      const { rawManifest, manifestRef } = manifestFixture();
       const server = createHttpServer((_req, res) => res.writeHead(200).end(rawManifest));
       const gatewayUrl = await listen(server);
       await fs.chmod(root, 0o770);
       const canonicalRoot = await fs.realpath(root);
       try {
-        await expect(
-          runNodeWorkerWorkspaceTransfer({
-            gatewayUrl,
-            environmentId: "environment-permissions",
-            workspaceDir,
-            manifestHome: root,
-            transfer: { direction: "download", token: "test-token", manifestRef },
-          }),
-        ).rejects.toMatchObject({
+        await expect(download(gatewayUrl, manifestRef)).rejects.toMatchObject({
           operation: "download",
           stage: "materialize",
           cause: {
@@ -96,7 +79,7 @@ describe("node worker transfer client", () => {
             ),
           },
         });
-        expect(await fs.readFile(path.join(workspaceDir, "sentinel.txt"), "utf8")).toBe("keep me");
+        expect(await read("sentinel.txt")).toBe("keep me");
         expect((await fs.stat(root)).mode & 0o777).toBe(0o770);
       } finally {
         await fs.chmod(root, 0o700);
@@ -134,34 +117,30 @@ describe("node worker transfer client", () => {
           res.writeHead(404).end();
         }),
       );
-      const gatewayUrl = await listen(server);
-      try {
-        await expect(download(gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
-        await expect(
-          fs.readFile(
-            path.join(
-              root,
-              ".openclaw-worker",
-              "manifests",
-              `${manifestRef.slice("sha256:".length)}.json`,
-            ),
-            "utf8",
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
+      await expect(
+        fs.readFile(
+          path.join(
+            root,
+            ".openclaw-worker",
+            "manifests",
+            `${manifestRef.slice("sha256:".length)}.json`,
           ),
-        ).resolves.toBe(rawManifest);
+          "utf8",
+        ),
+      ).resolves.toBe(rawManifest);
 
-        await fs.writeFile(path.join(workspaceDir, "script.sh"), "#!/bin/sh\necho changed\n");
-        await fs.writeFile(path.join(workspaceDir, "new.txt"), "new\n");
-        const currentRef = await upload(gatewayUrl, manifestRef);
-        expect(currentRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-        expect(JSON.parse(uploadedRaw!)).toMatchObject({
-          entries: [
-            expect.objectContaining({ path: "new.txt", mode: 0o644 }),
-            expect.objectContaining({ path: "script.sh", mode: 0o755 }),
-          ],
-        });
-      } finally {
-        await closeServer(server);
-      }
+      await fs.writeFile(path.join(workspaceDir, "script.sh"), "#!/bin/sh\necho changed\n");
+      await fs.writeFile(path.join(workspaceDir, "new.txt"), "new\n");
+      const currentRef = await upload(gateway.gatewayUrl, manifestRef);
+      expect(currentRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
+      expect(JSON.parse(uploadedRaw!)).toMatchObject({
+        entries: [
+          expect.objectContaining({ path: "new.txt", mode: 0o644 }),
+          expect.objectContaining({ path: "script.sh", mode: 0o755 }),
+        ],
+      });
     },
   );
 
@@ -193,22 +172,18 @@ describe("node worker transfer client", () => {
         }
         res.writeHead(recovering ? 500 : 404).end();
       });
-      const gatewayUrl = await listen(server);
-      try {
-        await expect(download(gatewayUrl, manifestRef)).rejects.toThrow(
-          "workspace-transfer-failed",
-        );
-        await expect(read("sentinel.txt")).resolves.toBe(sentinel);
-        expect(
-          (await fs.readdir(root)).filter((entry) =>
-            entry.startsWith(".workspace.workspace-transfer-"),
-          ),
-        ).toEqual([]);
-        if (recovering) {
-          await expect(fs.access(staleStaging)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      } finally {
-        await closeServer(server);
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).rejects.toThrow(
+        "workspace-transfer-failed",
+      );
+      await expect(read("sentinel.txt")).resolves.toBe(sentinel);
+      expect(
+        (await fs.readdir(root)).filter((entry) =>
+          entry.startsWith(".workspace.workspace-transfer-"),
+        ),
+      ).toEqual([]);
+      if (recovering) {
+        await expect(fs.access(staleStaging)).rejects.toMatchObject({ code: "ENOENT" });
       }
     },
   );
@@ -261,26 +236,22 @@ describe("node worker transfer client", () => {
           res.writeHead(404).end();
         }),
       );
-      const gatewayUrl = await listen(server);
-      try {
-        await expect(download(gatewayUrl, manifestRef)).rejects.toThrow(
-          "workspace-transfer-failed",
-        );
-        expect(substituted).toBe(true);
-        if (replacement === "next entry cleanup") {
-          expect(await fs.readFile(outsideFile, "utf8")).toBe("outside sentinel\n");
-        } else {
-          expect(await fs.readdir(outside)).toEqual([]);
-        }
-        expect(await read("sentinel.txt")).toBe("keep me\n");
-        expect(
-          (await fs.readdir(root)).filter((name) =>
-            name.startsWith(".workspace.workspace-transfer-"),
-          ),
-        ).toEqual([]);
-      } finally {
-        await closeServer(server);
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).rejects.toThrow(
+        "workspace-transfer-failed",
+      );
+      expect(substituted).toBe(true);
+      if (replacement === "next entry cleanup") {
+        expect(await fs.readFile(outsideFile, "utf8")).toBe("outside sentinel\n");
+      } else {
+        expect(await fs.readdir(outside)).toEqual([]);
       }
+      expect(await read("sentinel.txt")).toBe("keep me\n");
+      expect(
+        (await fs.readdir(root)).filter((name) =>
+          name.startsWith(".workspace.workspace-transfer-"),
+        ),
+      ).toEqual([]);
     },
   );
 
@@ -309,7 +280,8 @@ describe("node worker transfer client", () => {
     server.on("secureConnection", () => {
       connectionCount += 1;
     });
-    const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
+    await using gateway = await serveTransfer(server);
+    const gatewayUrl = gateway.gatewayUrl.replace(/^ws/u, "wss");
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     const gatewayPort = Number(new URL(gatewayUrl).port);
     let hidPeerCertificate = false;
@@ -341,7 +313,6 @@ describe("node worker transfer client", () => {
       expect(connectionCount).toBe(1);
     } finally {
       pinnedAgent.off("free", hidePeerCertificate);
-      await closeServer(server);
     }
   });
 
@@ -384,17 +355,14 @@ describe("node worker transfer client", () => {
         sessionReuse.push(socket.isSessionReused());
       }
     });
-    const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
+    await using gateway = await serveTransfer(server);
+    const gatewayUrl = gateway.gatewayUrl.replace(/^ws/u, "wss");
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
-    try {
-      await expect(
-        download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint }),
-      ).resolves.toBe(manifestRef);
-      expect(secureConnections).toBe(2);
-      expect(sessionReuse.every((reused) => !reused)).toBe(true);
-    } finally {
-      await closeServer(server);
-    }
+    await expect(
+      download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint }),
+    ).resolves.toBe(manifestRef);
+    expect(secureConnections).toBe(2);
+    expect(sessionReuse.every((reused) => !reused)).toBe(true);
   });
 
   it("preserves managed proxy routing for pinned transfers", async () => {
@@ -478,15 +446,13 @@ describe("node worker transfer client", () => {
         res.writeHead(200).end(rawManifest);
       },
     );
-    const gatewayUrl = (await listen(server)).replace(/^ws/u, "wss");
-    try {
-      await expect(
-        download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: "00".repeat(32) }),
-      ).rejects.toThrow("gateway TLS fingerprint mismatch");
-      expect(requestCount).toBe(0);
-    } finally {
-      await closeServer(server);
-    }
+    await using gateway = await serveTransfer(server);
+    await expect(
+      download(gateway.gatewayUrl.replace(/^ws/u, "wss"), manifestRef, {
+        gatewayTlsFingerprint: "00".repeat(32),
+      }),
+    ).rejects.toThrow("gateway TLS fingerprint mismatch");
+    expect(requestCount).toBe(0);
   });
 
   it.each([
@@ -512,12 +478,8 @@ describe("node worker transfer client", () => {
         });
         res.end(body);
       });
-      const gatewayUrl = await listen(server);
-      try {
-        await expect(download(gatewayUrl, manifestRef)).rejects.toThrow(expected);
-      } finally {
-        await closeServer(server);
-      }
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).rejects.toThrow(expected);
     },
   );
 

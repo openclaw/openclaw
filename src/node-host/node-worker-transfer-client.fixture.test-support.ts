@@ -9,6 +9,7 @@ import {
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
+import { listen } from "./node-worker-transfer-client.test-support.js";
 
 type TransferOptions = Parameters<typeof runNodeWorkerWorkspaceTransfer>[0];
 type TransferOverrides = Omit<
@@ -121,4 +122,11 @@ export async function closeServer(server: Server | HttpsServer) {
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
   });
+}
+
+export async function serveTransfer(server: Server | HttpsServer) {
+  return {
+    gatewayUrl: await listen(server),
+    [Symbol.asyncDispose]: () => closeServer(server),
+  };
 }
