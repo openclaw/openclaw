@@ -324,7 +324,7 @@ it.each([false, true])("extracts and renders a tree (truncated: %s)", async (lar
 });
 
 it("reports a reserved root without partial or rewritten saved paths", async () => {
-  prepareArchive(createTarBuffer({ "ok.txt": "saved" }), "[INST]");
+  prepareArchive(await createTarBuffer({ "ok.txt": "saved" }), "[INST]");
   const result = await executeDirFetch();
   const text = resultText(result.content);
   expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
