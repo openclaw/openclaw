@@ -1,4 +1,4 @@
-// Plugin transcript reads after branch rewrites: supersedes markers and reset-window cursors.
+import assert from "node:assert/strict";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -9,8 +9,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import {
-  readSessionTranscriptVisibleMessageDelta,
-  readVisibleSessionTranscriptMessageEntries,
+  readSessionTranscriptVisibleMessageDelta as readDelta,
+  readVisibleSessionTranscriptMessageEntries as readVisibleEntries,
 } from "../../plugin-sdk/session-transcript-runtime.js";
 import { useTranscriptRewriteTempDirs } from "./transcript-rewrite.test-support.js";
 
@@ -23,13 +23,6 @@ function asAppendMessage(message: unknown): AppendMessage {
   return message as AppendMessage;
 }
 
-function appendSessionMessages(
-  sessionManager: SessionManager,
-  messages: AppendMessage[],
-): string[] {
-  return messages.map((message) => sessionManager.appendMessage(message));
-}
-
 async function createPersistedRewriteTarget(sessionId: string) {
   const directory = tempDirs.make(`openclaw-${sessionId}-`);
   const target = {
@@ -39,21 +32,44 @@ async function createPersistedRewriteTarget(sessionId: string) {
     storePath: path.join(directory, "sessions.json"),
   };
   await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
-  return { directory, target };
+  const manager = SessionManager.open(target, directory);
+  const ids = [
+    asAppendMessage({ role: "user", content: "read file", timestamp: 1 }),
+    asAppendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      timestamp: 2,
+    }),
+    createToolResultReplacement("large original result"),
+    asAppendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "summary" }],
+      timestamp: 4,
+    }),
+  ].map((message) => manager.appendMessage(message));
+  return { directory, target, manager, ids };
 }
 
-function createTextContent(text: string) {
-  return [{ type: "text", text }];
-}
-
-function createToolResultReplacement(toolName: string, text: string, timestamp: number) {
+function createToolResultReplacement(text: string) {
   return asAppendMessage({
     role: "toolResult",
     toolCallId: "call_1",
-    toolName,
-    content: createTextContent(text),
+    toolName: "read",
+    content: [{ type: "text", text }],
     isError: false,
-    timestamp,
+    timestamp: 3,
+  });
+}
+
+function rewrite(manager: SessionManager, entryId: string | undefined, text: string) {
+  return rewriteTranscriptEntriesInSessionManager({
+    sessionManager: manager,
+    replacements: [
+      {
+        entryId: expectDefined(entryId, "tool result entry id"),
+        message: createToolResultReplacement(text),
+      },
+    ],
   });
 }
 
@@ -63,40 +79,24 @@ beforeAll(async () => {
 
 describe("plugin transcript reads after rewrites", () => {
   it("marks re-appended messages with the entry id they supersede", async () => {
-    const { directory, target } = await createPersistedRewriteTarget("supersedes-rewrite");
+    const {
+      directory,
+      target,
+      manager,
+      ids: [userId, callId, toolId, tailId],
+    } = await createPersistedRewriteTarget("supersedes-rewrite");
     const readMarkers = async () => {
       await waitForSessionTranscriptProjection(target);
-      const visible = await readVisibleSessionTranscriptMessageEntries(target);
-      const delta = await readSessionTranscriptVisibleMessageDelta(target);
-      if (delta.kind !== "page") {
-        throw new Error(`expected visible delta page, got ${delta.kind}`);
-      }
+      const visible = await readVisibleEntries(target);
+      const delta = await readDelta(target);
+      assert(delta.kind === "page", `expected visible delta page, got ${delta.kind}`);
       const markers = (entries: typeof visible) =>
         entries.map((entry) => [entry.entryId, entry.supersedesEntryId]);
       // Both plugin read paths project the same marker; seq differs by read contract.
       expect(markers(delta.entries)).toEqual(markers(visible));
       return markers(visible);
     };
-    const manager = SessionManager.open(target, directory);
-    const [userId, callId, toolId, tailId] = appendSessionMessages(manager, [
-      asAppendMessage({ role: "user", content: "read file", timestamp: 1 }),
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-        timestamp: 2,
-      }),
-      asAppendMessage(createToolResultReplacement("read", "large original result", 3)),
-      asAppendMessage({ role: "assistant", content: createTextContent("summary"), timestamp: 4 }),
-    ]);
-    await rewriteTranscriptEntriesInSessionManager({
-      sessionManager: manager,
-      replacements: [
-        {
-          entryId: expectDefined(toolId, "tool result entry id"),
-          message: createToolResultReplacement("read", "short", 3),
-        },
-      ],
-    });
+    await rewrite(manager, toolId, "short");
     const [toolCopyId, tailCopyId] = manager
       .getBranch()
       .slice(2)
@@ -114,15 +114,7 @@ describe("plugin transcript reads after rewrites", () => {
 
     // A reloaded copy must match its committed row so a later rewrite can chain from it.
     const reopened = SessionManager.open(target, directory);
-    await rewriteTranscriptEntriesInSessionManager({
-      sessionManager: reopened,
-      replacements: [
-        {
-          entryId: expectDefined(toolCopyId, "tool result copy id"),
-          message: createToolResultReplacement("read", "shorter", 3),
-        },
-      ],
-    });
+    await rewrite(reopened, toolCopyId, "shorter");
     const [toolSecondCopyId, tailSecondCopyId, plainCopyId] = reopened
       .getBranch()
       .slice(2)
@@ -138,36 +130,13 @@ describe("plugin transcript reads after rewrites", () => {
   });
 
   it("reports a reset after a rewrite as session_reset to reset-window cursors", async () => {
-    const { directory, target } = await createPersistedRewriteTarget("rewrite-then-reset");
-    const manager = SessionManager.open(target, directory);
-    const toolId = appendSessionMessages(manager, [
-      asAppendMessage({ role: "user", content: "read file", timestamp: 1 }),
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-        timestamp: 2,
-      }),
-      asAppendMessage(createToolResultReplacement("read", "large original result", 3)),
-      asAppendMessage({ role: "assistant", content: createTextContent("summary"), timestamp: 4 }),
-    ])[2];
+    const { directory, target, manager, ids } =
+      await createPersistedRewriteTarget("rewrite-then-reset");
     await waitForSessionTranscriptProjection(target);
-    const drained = await readSessionTranscriptVisibleMessageDelta({
-      ...target,
-      start: "reset-window",
-    });
-    if (drained.kind !== "page") {
-      throw new Error(`expected visible delta page, got ${drained.kind}`);
-    }
+    const drained = await readDelta({ ...target, start: "reset-window" });
+    assert(drained.kind === "page", `expected visible delta page, got ${drained.kind}`);
     // The rewrite re-appends the cursor's anchor; the reset then closes its window.
-    await rewriteTranscriptEntriesInSessionManager({
-      sessionManager: manager,
-      replacements: [
-        {
-          entryId: expectDefined(toolId, "tool result entry id"),
-          message: createToolResultReplacement("read", "short", 3),
-        },
-      ],
-    });
+    await rewrite(manager, ids[2], "short");
     await resetSessionEntryLifecycle({
       agentId: target.agentId,
       storePath: target.storePath,
@@ -180,16 +149,13 @@ describe("plugin transcript reads after rewrites", () => {
     });
     await waitForSessionTranscriptProjection(target);
 
-    const reset = await readSessionTranscriptVisibleMessageDelta({
-      ...target,
-      cursor: drained.cursor,
-    });
+    const reset = await readDelta({ ...target, cursor: drained.cursor });
     expect(reset).toMatchObject({ kind: "reset", reason: "session_reset" });
-    if (reset.kind !== "reset") {
-      throw new Error("expected a session reset");
-    }
-    await expect(
-      readSessionTranscriptVisibleMessageDelta({ ...target, cursor: reset.cursor }),
-    ).resolves.toMatchObject({ kind: "page", entries: [], hasMore: false });
+    assert(reset.kind === "reset", "expected a session reset");
+    await expect(readDelta({ ...target, cursor: reset.cursor })).resolves.toMatchObject({
+      kind: "page",
+      entries: [],
+      hasMore: false,
+    });
   });
 });

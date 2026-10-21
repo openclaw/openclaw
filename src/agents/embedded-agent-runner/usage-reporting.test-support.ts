@@ -16,19 +16,36 @@ let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>
 function makeAssistantMessage(
   overrides: Partial<AssistantMessage> = {},
 ): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
-  // Minimal assistant fixture lets tests override provider/model/usage without
-  // recreating the full attempt result shape.
   return {
     role: "assistant",
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: { input: 0, output: 0 } as AssistantMessage["usage"],
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+    } as AssistantMessage["usage"],
     stopReason: "end_turn" as AssistantMessage["stopReason"],
     timestamp: Date.now(),
     content: [],
     ...overrides,
   };
+}
+
+function runUsage(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
+  return runEmbeddedAgent({
+    sessionId: "test-session",
+    sessionKey: "test-key",
+    sessionFile: "test-key",
+    workspaceDir: state.workspaceDir,
+    prompt: "hello",
+    timeoutMs: 30000,
+    runId,
+    ...overrides,
+  });
 }
 
 describe("runEmbeddedAgent usage reporting", () => {
@@ -44,23 +61,13 @@ describe("runEmbeddedAgent usage reporting", () => {
     setRuntimeConfigSnapshot({});
   });
 
-  afterEach(async () => {
-    await state?.cleanup();
-  });
+  afterEach(() => state?.cleanup());
 
   it("keeps Anthropic multi-call billing usage separate from the final context snapshot", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Tool loop complete"],
-        lastAssistant: makeAssistantMessage({
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-          } as unknown as AssistantMessage["usage"],
-        }),
+        lastAssistant: makeAssistantMessage(),
         currentAttemptAssistant: makeAssistantMessage({
           api: "anthropic-messages",
           provider: "minimax",
@@ -77,28 +84,12 @@ describe("runEmbeddedAgent usage reporting", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
-      sessionId: "test-session",
-      sessionKey: "test-key",
-      sessionFile: "test-key",
-      workspaceDir: state.workspaceDir,
-      prompt: "hello",
-      timeoutMs: 30000,
-      runId: "run-anthropic-multi-call-usage",
+    const result = await runUsage("run-anthropic-multi-call-usage");
+    expect(result.meta.agentMeta).toMatchObject({
+      usage: { input: 110_337, output: 4_000, cacheRead: 40_000, total: 154_337 },
+      lastCallUsage: { input: 67_932, output: 2_000, cacheRead: 18_944 },
+      promptTokens: 86_876,
     });
-
-    expect(result.meta.agentMeta?.usage).toMatchObject({
-      input: 110_337,
-      output: 4_000,
-      cacheRead: 40_000,
-      total: 154_337,
-    });
-    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
-      input: 67_932,
-      output: 2_000,
-      cacheRead: 18_944,
-    });
-    expect(result.meta.agentMeta?.promptTokens).toBe(86_876);
   });
 
   it("reports the resolved model provider when OpenClaw marks the assistant message as the native runtime", async () => {
@@ -111,9 +102,7 @@ describe("runEmbeddedAgent usage reporting", () => {
         api: "openai-completions",
       },
       error: null,
-      authStorage: {
-        setRuntimeApiKey: vi.fn(),
-      },
+      authStorage: { setRuntimeApiKey: vi.fn() },
       modelRegistry: {},
     });
     const assistant = makeAssistantMessage({
@@ -131,16 +120,9 @@ describe("runEmbeddedAgent usage reporting", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
-      sessionId: "test-session",
-      sessionKey: "test-key",
-      sessionFile: "test-key",
-      workspaceDir: state.workspaceDir,
-      prompt: "hello",
+    const result = await runUsage("run-provider-attribution", {
       provider: "openrouter",
       model: "openai/gpt-5.4",
-      timeoutMs: 30000,
-      runId: "run-provider-attribution",
     });
 
     expect(result.meta.agentMeta?.provider).toBe("openrouter");
