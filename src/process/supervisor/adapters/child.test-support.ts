@@ -4,6 +4,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { vi, type Mock } from "vitest";
+import type { spawnAndWait } from "../../spawn-utils.js";
+import type { createChildAdapter } from "./child.js";
 
 export function setPlatform(platform: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
@@ -23,21 +25,18 @@ export function createStubChild(pid = 1234) {
   define("signalCode", null);
   define("channel", {}, false);
   define("connected", true);
-  const killMock = vi.fn(() => true);
-  const sendMock = vi.fn((_message: unknown, ...args: unknown[]) => {
-    const callback = args.findLast((value) => typeof value === "function") as
-      | ((error: Error | null) => void)
-      | undefined;
+  const killMock = (child.kill = vi.fn(() => true));
+  const sendMock = (child.send = vi.fn((_message: unknown, ...args: unknown[]) => {
+    const callback = args.findLast(
+      (value): value is (error: Error | null) => void => typeof value === "function",
+    );
     callback?.(null);
     return true;
-  });
-  const disconnectMock = vi.fn(() => {
+  }));
+  const disconnectMock = (child.disconnect = vi.fn(() => {
     define("connected", false);
     child.emit("disconnect");
-  });
-  child.kill = killMock as ChildProcess["kill"];
-  child.send = sendMock as ChildProcess["send"];
-  child.disconnect = disconnectMock as ChildProcess["disconnect"];
+  }));
   const emitClose = (code: number | null, signal: NodeJS.Signals | null = null) => {
     child.emit("close", code, signal);
   };
@@ -49,9 +48,7 @@ export function createStubChild(pid = 1234) {
   return { child, disconnectMock, killMock, sendMock, emitClose, emitExit };
 }
 
-type SpawnAndWaitParams = Parameters<typeof import("../../spawn-utils.js").spawnAndWait>[0];
-
-export function firstSpawnAndWaitParams(mock: Mock): SpawnAndWaitParams {
+export function firstSpawnAndWaitParams(mock: Mock): Parameters<typeof spawnAndWait>[0] {
   const params = firstMockArg(mock, "spawnAndWait");
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
     throw new Error("expected spawnAndWait params to be an object");
@@ -77,18 +74,13 @@ export async function createWindowsNpmShim(params: {
   await mkdir(path.dirname(entrypoint), { recursive: true });
   await writeFile(entrypoint, "", "utf8");
   const relativeEntrypoint = path.relative(binDir, entrypoint).replaceAll(path.sep, "\\");
-  const shimHead =
-    "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n";
-  const shimCommand = `IF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`;
-  await writeFile(path.join(binDir, `${params.command}.cmd`), `${shimHead}${shimCommand}`, "utf8");
+  const shim = `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`;
+  await writeFile(path.join(binDir, `${params.command}.cmd`), shim, "utf8");
   return { binDir, entrypoint };
 }
-type ChildAdapterFactory = typeof import("./child.js").createChildAdapter;
-
-export function readyChildAdapter(create: ChildAdapterFactory) {
-  return async (params: Parameters<ChildAdapterFactory>[0]) => {
+export const readyChildAdapter =
+  (create: typeof createChildAdapter) => async (params: Parameters<typeof create>[0]) => {
     const { adapter, ready } = await create(params);
     await ready;
     return adapter;
   };
-}
