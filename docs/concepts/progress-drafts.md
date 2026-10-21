@@ -466,7 +466,8 @@ When the final answer is ready, OpenClaw tries to keep the chat clean:
 - A Telegram or Discord progress draft handed off to accepted announcing subagents stays
   visible after the parent yields; the final answer is separate. Telegram keeps
   showing child status and prepared operation names. Discord shows those rows
-  only when the tool log is enabled. See
+  only when the tool log is enabled. Both channels update the checklist when the
+  resumed parent updates its progress card. See
   [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 
 - Otherwise, in `progress` mode on Discord, the final answer is sent as a fresh

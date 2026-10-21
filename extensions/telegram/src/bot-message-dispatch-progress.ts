@@ -208,7 +208,7 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
 /**
  * Keeps a confirmed progress card after its turn for the owner that adopted it.
  * The card keeps Telegram's rendering, throttling and deletion; only the
- * adopting owner's prepared items reach it.
+ * adopting owner's prepared items and the requester's checklist reach it.
  */
 export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
   // Retirement revokes the card synchronously: renders still queued here and
@@ -255,6 +255,8 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
   return {
     push: (item: Parameters<Turn["progressCompositor"]["pushItemEvent"]>[0]) =>
       enqueue(() => compositor.pushItemEvent(item)),
+    updatePlan: (...args: Parameters<Turn["progressCompositor"]["pushPlanProgress"]>) =>
+      enqueue(() => compositor.pushPlanProgress(...args)),
     retire: () => {
       retired = true;
       enqueue(async () => {

@@ -382,6 +382,32 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     expect(deletedIds()).toEqual([retainedId]);
   });
 
+  it("replaces the retained card's checklist with the requester's plan", async () => {
+    type Status = "pending" | "in_progress" | "completed";
+    const steps = (fetch: Status, transcribe: Status) => [
+      { step: "Fetch the recording", status: fetch },
+      { step: "Transcribe it", status: transcribe },
+    ];
+    const { draft } = await retainProgress({
+      prepare: async (options) => {
+        await options?.onPlanUpdate?.({
+          phase: "update",
+          steps: steps("in_progress", "pending"),
+          explanation: "0/2 complete",
+        });
+      },
+    });
+    const [retainedId] = [...visibleMessages.keys()];
+    assert(retainedId !== undefined && draft.updatePlan);
+    expect(visibleMessages.get(retainedId)).toContain("0/2 complete");
+
+    draft.updatePlan(steps("completed", "in_progress"), { explanation: "1/2 complete" });
+    await eventually(() => visibleMessages.get(retainedId)).toContain("1/2 complete");
+
+    draft.retire();
+    await eventually(() => visibleMessages.has(retainedId)).toBe(false);
+  });
+
   it.each([false, true])(
     "rejects a retained edit still awaiting Telegram admission once the draft retires (retried: %s)",
     async (retried) => {

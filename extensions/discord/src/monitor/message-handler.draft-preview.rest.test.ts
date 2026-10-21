@@ -332,6 +332,27 @@ describe("Discord draft preview REST lifecycle", () => {
     expect(requests.filter((method) => method === "DELETE")).toHaveLength(2);
   });
 
+  it("replaces the retained card's checklist with the requester's plan", async () => {
+    const harness = createContinuationHarness({ discordConfig: {} });
+    const { controller, visible } = harness;
+    await controller.pushPlanProgress([
+      { step: "Fetch the recording", status: "in_progress" },
+      { step: "Transcribe it", status: "pending" },
+    ]);
+    await stageDelegation(controller);
+    await deliverWaitingReply(harness, harness.adopt);
+    const { draft, stream } = harness;
+    await advancePreview(stream, 1_200);
+    expectCard(visible, ["▸ Fetch the recording", "▢ Transcribe it"]);
+
+    draft.updatePlan?.([
+      { step: "Fetch the recording", status: "completed" },
+      { step: "Transcribe it", status: "in_progress" },
+    ]);
+    await advancePreview(stream, 1_200);
+    expectCard(visible, ["▸ Transcribe it"], ["▸ Fetch the recording", "▢ Transcribe it"]);
+  });
+
   it("does not flush a progress final when delivery admission refuses custody", async () => {
     const { controller, requests } = createContinuationHarness();
     const adopt = vi.fn(() => true);
