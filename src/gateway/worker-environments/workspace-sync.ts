@@ -530,7 +530,7 @@ export function createWorkerWorkspaceActions(
           baseCommit: base.baseCommit,
           // Seed both manifests so a recreated path under a new ignore rule
           // still invalidates the late-writer fence.
-          priorManifestDigests: base.baseCommit ? [expectedDigest, baseDigest] : [],
+          priorManifestDigests: [expectedDigest, baseDigest],
           hashMemo,
         });
         if (observedRef !== expectedRef) {
@@ -541,7 +541,7 @@ export function createWorkerWorkspaceActions(
         runWorkspaceCommand,
         remoteWorkspaceDir: request.remoteWorkspaceDir,
         baseCommit: base.baseCommit,
-        priorManifestDigests: base.baseCommit ? [baseDigest] : [],
+        priorManifestDigests: [baseDigest],
         hashMemo,
       });
       const changed = currentRef !== request.baseManifestRef;
