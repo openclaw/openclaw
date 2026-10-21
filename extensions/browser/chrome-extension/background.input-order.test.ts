@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { holdNext } from "./background.lifecycle-test-helpers.js";
 import { cleanupBackgroundHarnesses, loadRelayCommandHarness } from "./background.test-harness.js";
 
 let h: Awaited<ReturnType<typeof loadRelayCommandHarness>>;
@@ -19,13 +20,11 @@ const input = (type: string, method = "Input.dispatchMouseEvent", tabId = 7) =>
 
 function deferPolicyRead() {
   const gate = createDeferred<void>();
-  const getTab = h.tabsGet.getMockImplementation()!;
-  h.tabsGet.mockImplementationOnce(async (id) => {
-    await gate.promise;
-    return getTab(id);
-  });
+  holdNext(h.tabsGet, gate.promise);
   return gate;
 }
+const result = expect.objectContaining({ type: "result" });
+const retired = expect.objectContaining({ type: "error", message: "Debugger attachment retired" });
 
 describe("relay input ordering", () => {
   it("preserves mixed input wire order across asynchronous policy reads", async () => {
@@ -54,8 +53,7 @@ describe("relay input ordering", () => {
       expect(observed()).toEqual([]);
     } finally {
       gate.resolve();
-      const results = await Promise.all(inputs);
-      expect(results.every((result) => result.type === "result")).toBe(true);
+      expect(await Promise.all(inputs)).toEqual(events.map(() => result));
     }
     expect(observed()).toEqual(events);
   });
@@ -81,11 +79,7 @@ describe("relay input ordering", () => {
       expect(await h.command({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
     } finally {
       gate.resolve();
-      const results = await Promise.all(commands);
-      expect(results).toEqual([
-        expect.objectContaining({ type: "error", message: "Debugger attachment retired" }),
-        expect.objectContaining({ type: "error", message: "Debugger attachment retired" }),
-      ]);
+      expect(await Promise.all(commands)).toEqual([retired, retired]);
     }
     expect(h.debuggerSendCommand).not.toHaveBeenCalled();
     expect(await input("mouseMoved")).toMatchObject({ type: "result" });
@@ -94,10 +88,7 @@ describe("relay input ordering", () => {
   it("allows subsequent input after a policy lookup rejects the preceding command", async () => {
     h.tabsGet.mockRejectedValueOnce(new Error("Tab lookup failed"));
     const results = await Promise.all(["mouseMoved", "mousePressed"].map((type) => input(type)));
-    expect(results).toEqual([
-      expect.objectContaining({ type: "error" }),
-      expect.objectContaining({ type: "result" }),
-    ]);
+    expect(results).toEqual([expect.objectContaining({ type: "error" }), result]);
     expect(h.debuggerSendCommand).toHaveBeenCalledExactlyOnceWith(
       { tabId: 7 },
       "Input.dispatchMouseEvent",

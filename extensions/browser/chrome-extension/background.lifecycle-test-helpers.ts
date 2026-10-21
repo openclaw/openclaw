@@ -27,9 +27,7 @@ export function deferredScope() {
       };
     },
     releaseAll: () => {
-      for (const release of releases) {
-        release();
-      }
+      releases.forEach((release) => release());
       releases.clear();
     },
   };
@@ -80,28 +78,23 @@ export function connectCdpClient(bridge: ExtensionRelayBridge) {
       assert(frame, `missing CDP reply ${requestId}`);
       return frame;
     });
-  const request = async (
-    method: string,
-    params: Record<string, unknown> = {},
-    sessionId?: string,
-  ) => await response(send(method, params, sessionId));
+  const request = async (...args: Parameters<typeof send>) => await response(send(...args));
+  const events = (method: string) => frames().filter((frame) => frame.method === method);
   return {
     frames,
     send,
     response,
     request,
     close: handlers.onClose,
-    events: (method: string) => frames().filter((frame) => frame.method === method),
-    async requestResult(method: string, params: Record<string, unknown> = {}, sessionId?: string) {
-      const frame = await request(method, params, sessionId);
+    events,
+    async requestResult(...args: Parameters<typeof send>) {
+      const frame = await request(...args);
       expect(frame).not.toHaveProperty("error");
       return frame.result;
     },
     root(targetId: string) {
-      const session = frames().find(
-        (frame) =>
-          frame.method === "Target.attachedToTarget" &&
-          frame.params?.targetInfo?.targetId === targetId,
+      const session = events("Target.attachedToTarget").find(
+        (frame) => frame.params?.targetInfo?.targetId === targetId,
       )?.params?.sessionId;
       assert(typeof session === "string");
       return session;
@@ -112,9 +105,12 @@ export function connectCdpClient(bridge: ExtensionRelayBridge) {
 export const relayFrames = (socket: FakeWebSocket) =>
   socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
 
-function relayRequest(socket: FakeWebSocket, firstSeq = 1000) {
-  let seq = firstSeq;
-  return async (message: Record<string, unknown>) => {
+export async function connectRelay(harness: Awaited<ReturnType<typeof loadBackground>>) {
+  const socket = harness.relaySockets[0]!;
+  expect(socket).toBeDefined();
+  await harness.authenticate(socket);
+  let seq = 1000;
+  const request = async (message: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const id = ++seq;
     socket.receive({ ...message, seq: id });
     return await vi.waitFor(() => {
@@ -123,13 +119,7 @@ function relayRequest(socket: FakeWebSocket, firstSeq = 1000) {
       return response;
     });
   };
-}
-
-export async function connectRelay(harness: Awaited<ReturnType<typeof loadBackground>>) {
-  const socket = harness.relaySockets[0]!;
-  expect(socket).toBeDefined();
-  await harness.authenticate(socket);
-  return { socket, frames: () => relayFrames(socket), request: relayRequest(socket) };
+  return { socket, frames: () => relayFrames(socket), request };
 }
 
 export const runtime = (
@@ -158,19 +148,13 @@ export function expectType(response: unknown, type = "result") {
 }
 
 export function expectUnused(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
+  mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
 }
 
 export async function waitCalled(mock: unknown, ...args: unknown[]) {
-  await vi.waitFor(() => {
-    if (args.length) {
-      expect(mock).toHaveBeenCalledWith(...args);
-    } else {
-      expect(mock).toHaveBeenCalled();
-    }
-  });
+  await vi.waitFor(() =>
+    args.length ? expect(mock).toHaveBeenCalledWith(...args) : expect(mock).toHaveBeenCalled(),
+  );
 }
 
 export function holdNext<Args extends unknown[], Result>(

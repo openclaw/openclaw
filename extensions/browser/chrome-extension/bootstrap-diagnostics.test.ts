@@ -4,7 +4,9 @@ import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.
 
 afterEach(() => vi.restoreAllMocks());
 
-function observerFixture() {
+function observerFixture(sink = () => true) {
+  const output = vi.spyOn(process.stderr, "write").mockImplementation(sink);
+  const diagnostic = createBootstrapDiagnostic();
   let count = 0;
   let reply: ((raw: string) => void) | undefined;
   const receive = vi.fn();
@@ -24,19 +26,19 @@ function observerFixture() {
       };
     },
   } satisfies Pick<ExtensionRelayBridge, "attachCdpClientSocket" | "cdpClientCount">;
-  return { bridge, receive, reply: (raw: string) => reply?.(raw) };
+  const original = bridge.attachCdpClientSocket;
+  diagnostic.watchRelay(bridge);
+  const send = vi.fn();
+  const callbacks = bridge.attachCdpClientSocket({ send, close: vi.fn() });
+  diagnostic.arm("private-selected", "private-unrelated");
+  const respond = (raw: string) => reply?.(raw);
+  return { output, diagnostic, bridge, original, receive, send, callbacks, respond };
 }
 
 describe("bootstrap diagnostic observation", () => {
   it("projects only fixed names and ordinals while forwarding exact bytes", () => {
-    const output = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const diagnostic = createBootstrapDiagnostic();
-    const { bridge, receive, reply } = observerFixture();
-    const original = bridge.attachCdpClientSocket;
-    diagnostic.watchRelay(bridge);
-    const send = vi.fn();
-    const callbacks = bridge.attachCdpClientSocket({ send, close: vi.fn() });
-    diagnostic.arm("private-selected", "private-unrelated");
+    const { output, diagnostic, bridge, original, receive, send, callbacks, respond } =
+      observerFixture();
     const command = JSON.stringify({
       id: 42,
       method: "Page.navigate",
@@ -45,19 +47,18 @@ describe("bootstrap diagnostic observation", () => {
     });
     callbacks.onMessage(command);
     const response = JSON.stringify({ id: 42, error: { message: "private-error" } });
-    reply(response);
-    reply(
-      JSON.stringify({ method: "Runtime.consoleAPICalled", params: { args: ["private-content"] } }),
-    );
+    respond(response);
+    const event = JSON.stringify({
+      method: "Runtime.consoleAPICalled",
+      params: { args: ["private-content"] },
+    });
+    respond(event);
     callbacks.onMessage("private-malformed");
     diagnostic.flush();
-    expect(receive.mock.calls[0]).toEqual([command]);
-    expect(receive).toHaveBeenCalledTimes(2);
-    expect(send.mock.calls[0]).toEqual([response]);
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(receive.mock.calls).toEqual([[command], ["private-malformed"]]);
+    expect(send.mock.calls).toEqual([[response], [event]]);
     const printed = String(output.mock.calls[0]?.[0]);
-    expect(printed).not.toContain("private-");
-    expect(printed).not.toContain("Runtime.consoleAPICalled");
+    expect(printed).not.toMatch(/private-|Runtime\.consoleAPICalled/);
     expect(printed).toContain('"method":"Page.navigate"');
     expect(printed).toContain('"error":true');
     diagnostic.dispose();
@@ -65,14 +66,9 @@ describe("bootstrap diagnostic observation", () => {
   });
 
   it("caps flood output but retains the action outcome and teardown", async () => {
-    const output = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const diagnostic = createBootstrapDiagnostic();
-    const { bridge, reply } = observerFixture();
-    diagnostic.watchRelay(bridge);
-    const callbacks = bridge.attachCdpClientSocket({ send: () => {}, close: () => {} });
-    diagnostic.arm("selected", "unrelated");
+    const { output, diagnostic, callbacks, respond } = observerFixture();
     for (let index = 0; index < 1_000; index++) {
-      reply(
+      respond(
         JSON.stringify({
           method: "Network.requestWillBeSent",
           params: { requestId: `request-${index}` },
@@ -95,23 +91,16 @@ describe("bootstrap diagnostic observation", () => {
   });
 
   it("preserves a transport exception and ignores a diagnostic sink exception", () => {
-    vi.spyOn(process.stderr, "write").mockImplementation(() => {
+    const { diagnostic, receive, send, callbacks } = observerFixture(() => {
       throw new Error("sink");
     });
-    const diagnostic = createBootstrapDiagnostic();
-    const { bridge, receive } = observerFixture();
-    diagnostic.watchRelay(bridge);
     const failure = new Error("transport");
     receive.mockImplementation(() => {
       throw failure;
     });
-    const callbacks = bridge.attachCdpClientSocket({
-      send: () => {
-        throw failure;
-      },
-      close: () => {},
+    send.mockImplementation(() => {
+      throw failure;
     });
-    diagnostic.arm("selected", "unrelated");
     expect(() => callbacks.onMessage("malformed")).toThrow(failure);
     expect(() => diagnostic.flush()).not.toThrow();
     diagnostic.dispose();

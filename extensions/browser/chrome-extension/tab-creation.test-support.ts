@@ -96,12 +96,11 @@ export async function assertRelayTabCreation(params: {
     const createdTab = newTabs[0];
     assert(createdTab);
     expect(createdTab.incognito).toBe(false);
-    expect(
-      await extensionPage.evaluate(
-        async (id) => await chrome.tabGroups.get(id),
-        createdTab.groupId,
-      ),
-    ).toMatchObject({ title: "OpenClaw" });
+    const group = await extensionPage.evaluate(
+      (id) => chrome.tabGroups.get(id),
+      createdTab.groupId,
+    );
+    expect(group).toMatchObject({ title: "OpenClaw" });
     expect(created.initialUrl).toBe("about:blank");
     const body = opened.body as { targetId: string };
     expect(opened.body).toMatchObject({
