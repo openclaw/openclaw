@@ -96,8 +96,10 @@ export function fixture(
     transportRef?: string;
     candidateVersion?: string;
     oldestSupportedBaseline?: string | null;
+    publisherSha?: string;
   } = {},
 ) {
+  const admissionSha = options.publisherSha ?? publisherSha;
   const selected = request(options.inputs, options.candidateSha, options.transportRef);
   const sourceSha = selected.candidateSha;
   const ref = protectedTag ? "release-publish/bbbbbbbbbbbb-10" : "main";
@@ -109,7 +111,7 @@ export function fixture(
     workflowEvent: "workflow_dispatch",
     workflowHeadBranch: ref,
     workflowFullRef: protectedTag ? "refs/tags/" + ref : "refs/heads/main",
-    workflowSha: publisherSha,
+    workflowSha: admissionSha,
   };
   const actor = { id: 91, login: "release-operator", type: "User" };
   const run = {
@@ -117,7 +119,7 @@ export function fixture(
     run_attempt: 1,
     path: producer.workflowPath,
     event: "workflow_dispatch",
-    head_sha: publisherSha,
+    head_sha: admissionSha,
     head_branch: ref,
     repository: { full_name: repository },
     head_repository: { full_name: repository },
@@ -127,7 +129,7 @@ export function fixture(
     actor,
     triggering_actor: { ...actor },
   };
-  const authority = { permission: "write", ancestry: "ahead", tagSha: publisherSha };
+  const authority = { permission: "write", ancestry: "ahead", tagSha: admissionSha };
   const policy = options.policy ?? {
     schema: "openclaw.release-qualification-policy/v1",
     profiles: { beta: ["ci"], stable: ["ci"], full: ["ci"] },
@@ -146,7 +148,7 @@ export function fixture(
   };
   const sources = new Map([
     [
-      publisherSha + ":" + QUALIFICATION_ADMISSION_WORKFLOW,
+      admissionSha + ":" + QUALIFICATION_ADMISSION_WORKFLOW,
       'env:\n  RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"\njobs:\n  admit_qualification:\n',
     ],
     [
@@ -180,7 +182,7 @@ export function fixture(
     expired: false,
     created_at: "2026-09-28T00:00:02Z",
     expires_at: "2099-01-01T00:00:00Z",
-    workflow_run: { id: 40, head_sha: publisherSha },
+    workflow_run: { id: 40, head_sha: admissionSha },
   };
   const jobs = {
     total_count: 1,
@@ -190,7 +192,7 @@ export function fixture(
         name: QUALIFICATION_ADMISSION_JOB,
         run_id: 40,
         run_attempt: 1,
-        head_sha: publisherSha,
+        head_sha: admissionSha,
         status: "completed",
         conclusion: "success",
         started_at: "2026-09-28T00:00:00Z",
@@ -219,7 +221,7 @@ export function fixture(
       throw new Error("Wrong repository");
     }
     const path = endpoint.slice(prefix.length);
-    if (path === "compare/" + publisherSha + "...main") {
+    if (path === "compare/" + admissionSha + "...main") {
       return JSON.stringify({ status: authority.ancestry });
     }
     if (path === "git/ref/tags/" + ref) {

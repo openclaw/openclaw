@@ -40,6 +40,7 @@ export function candidatePublicationFixture(
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
+    protectedTag?: boolean;
   } = {},
 ) {
   const fixture = trustedMainNpmFixture();
@@ -81,7 +82,7 @@ export function candidatePublicationFixture(
       laneInputs,
     ),
   });
-  const admission = admissionFixture(true, {
+  const admission = admissionFixture(options.protectedTag ?? true, {
     inputs,
     candidateSha: q,
     transportRef: branch,
