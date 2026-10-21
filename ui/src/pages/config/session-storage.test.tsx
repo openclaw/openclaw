@@ -107,6 +107,7 @@ it.each([
   ["status", "reconnect"],
   ["run", "client"],
 ])("rejects a delayed %s response after the Gateway %s changes", async (kind, change) => {
+  const warnings = vi.spyOn(console, "warn");
   const { page, context, request, client, reply, publish } = await mount();
   const method = `sessions.storage.${kind}`;
   const previous = createDeferred<SessionsStorageStatusResult>();
@@ -141,6 +142,11 @@ it.each([
     expect(page.textContent).not.toContain("Batch completed");
     expect(button(page, "Run now").disabled).toBe(false);
   }
+  expect(
+    warnings.mock.calls.filter(([message]) =>
+      String(message).includes("UNTRACKED_READ_AFTER_AWAIT"),
+    ),
+  ).toEqual([]);
 });
 
 it("keeps a days draft and inventory through reconnect and retires them on client replacement", async () => {

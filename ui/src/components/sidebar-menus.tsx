@@ -77,10 +77,15 @@ type SidebarMenusState = {
   peopleFilterMenuPosition: MenuPosition | null;
   catalogViewMenuPosition: (MenuPosition & { catalogId: string }) | null;
   filterMenuView: SidebarFilterMenuView;
-  agentMenuPosition: { x: number; top: number } | null;
+  agentMenuPosition: { x: number; top: number; placement?: "right-start" } | null;
   agentMenuMode: "hover" | "click";
   // Anchored by its bottom edge so the footer menu grows upward.
-  identityMenuPosition: { x: number; bottom: number; width: number } | null;
+  identityMenuPosition: {
+    x: number;
+    bottom: number;
+    width: number;
+    placement?: "right-end";
+  } | null;
   menuRenderer: SidebarMenusRenderer | null;
 };
 
@@ -230,6 +235,7 @@ export function createSidebarMenus(deps: {
     clearAgentMenuHoverTimers();
     loadMenuRenderer();
     const rect = trigger.getBoundingClientRect();
+    const rail = !trigger.closest(".shell--mobile-nav") ? trigger.closest(".sidebar-rail") : null;
     menus.closeSessionMenu();
     menus.closeSessionGroupMenu();
     menus.closePositionedMenu("sessionSort");
@@ -243,12 +249,15 @@ export function createSidebarMenus(deps: {
         : null;
     host.ensureAgentIdentities(host.activeChipAgent().agents.map((agent) => agent.id));
     setField("agentMenuMode", mode);
-    // The agent card sits at the top of the sidebar, so the menu drops below it
-    // and shares its left edge; anchoring above would cover the card you clicked.
-    setField("agentMenuPosition", {
-      x: Math.max(8, Math.min(rect.left, window.innerWidth - AGENT_MENU_WIDTH_PX - 8)),
-      top: Math.min(rect.bottom + 4, window.innerHeight - 8),
-    });
+    setField(
+      "agentMenuPosition",
+      rail
+        ? { x: rail.getBoundingClientRect().right, top: rect.top, placement: "right-start" }
+        : {
+            x: Math.max(8, Math.min(rect.left, window.innerWidth - AGENT_MENU_WIDTH_PX - 8)),
+            top: Math.min(rect.bottom + 4, window.innerHeight - 8),
+          },
+    );
   }
 
   function scheduleAgentMenuHoverClose() {
@@ -256,7 +265,7 @@ export function createSidebarMenus(deps: {
       return;
     }
     globalThis.clearTimeout(agentMenuHoverCloseTimer ?? undefined);
-    // The menu is top-layer content separated from its trigger by a 4px gap.
+    // The menu is top-layer content separated from its trigger by a gap.
     // A short grace period keeps crossing that gap from collapsing the target.
     agentMenuHoverCloseTimer = globalThis.setTimeout(() => {
       agentMenuHoverCloseTimer = null;
@@ -626,12 +635,16 @@ export function createSidebarMenus(deps: {
       }
       const rect = trigger.getBoundingClientRect();
       const menuWidth = Math.max(240, rect.width);
+      const rail = !trigger.closest(".shell--mobile-nav") ? trigger.closest(".sidebar-rail") : null;
       openPositionedMenu(
         "identity",
         {
-          x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
-          bottom: Math.max(8, window.innerHeight - rect.top + 4),
+          x: rail
+            ? rail.getBoundingClientRect().right
+            : Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
+          bottom: Math.max(8, window.innerHeight - (rail ? rect.bottom : rect.top) + 4),
           width: rect.width,
+          ...(rail ? { placement: "right-end" as const } : {}),
         },
         trigger,
       );

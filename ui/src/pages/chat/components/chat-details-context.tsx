@@ -1,10 +1,15 @@
 import { For, Loading, Show, action, createMemo, createOptimistic, lazy } from "solid-js";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import "../../../styles/chat/context-breakdown.css";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import "../../../styles/chat/context-breakdown.css";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatSessionEnglish);
 
 // The report is needed only after Context is expanded, not during chat boot.
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {

@@ -114,6 +114,7 @@ export function SessionsView(props: SessionsProps) {
   const application = useOptionalApplication();
   const rows = createMemo(() => props.result?.sessions ?? []);
   const archivedCount = createMemo(() => rows().filter((row) => row.archived === true).length);
+  const transcriptSearch = createMemo(() => props.transcriptSearch);
   return (
     <SettingsPage wide>
       {props.error ? (
@@ -159,8 +160,8 @@ export function SessionsView(props: SessionsProps) {
           </>
         }
       >
-        <Show when={props.transcriptSearch.status !== "idle"}>
-          <TranscriptSearchResults {...props} />
+        <Show when={props.transcriptSearch !== null}>
+          <TranscriptSearchResults {...props} readSearch={transcriptSearch} />
         </Show>
         <SessionsTable {...props} />
       </SettingsSection>

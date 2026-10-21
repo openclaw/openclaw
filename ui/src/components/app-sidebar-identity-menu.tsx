@@ -23,7 +23,7 @@ import "./viewer-facepile.ts";
 import { ThemeModeToggle } from "./theme-mode-toggle.tsx";
 
 type SidebarIdentityMenuParams = {
-  position: { x: number; bottom: number; width: number };
+  position: { x: number; bottom: number; width: number; placement?: "right-end" };
   anchor?: HTMLElement;
   tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   nativeGatewaySnapshot: NativeGatewaysSnapshot | null;

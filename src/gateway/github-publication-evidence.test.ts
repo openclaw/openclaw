@@ -10,10 +10,16 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createSandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { setRuntimeConfigSnapshot, writeConfigFile } from "../config/config.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { encodePngRgb } from "../media/png-encode.js";
-import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  syncCanonicalGitHubIdentity,
+} from "../state/user-profile-writes.js";
 import { guestScopes } from "./github-publication-requester.test-support.js";
 import {
   githubPublicationTestMocks,
@@ -40,7 +46,7 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   };
 });
 
-async function evidenceFixture() {
+async function evidenceFixture(imported = false) {
   const f = await fixture();
   const cwd = f.local!.cwd;
   const bytes = encodePngRgb(Buffer.from([30, 120, 210]), 1, 1);
@@ -100,6 +106,63 @@ async function evidenceFixture() {
       ? commandResult("12345")
       : previous(argv, options),
   );
+  if (imported) {
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
+    });
+    const repo = {
+      id: 12345,
+      full_name: f.publication.repository,
+      private: false,
+      archived: false,
+      owner: { type: "User" },
+      permissions: { push: true },
+    };
+    const number = Number(new URL(f.publication.url).pathname.split("/").at(-1));
+    const base = {
+      repository: repo.full_name,
+      repositoryId: repo.id,
+      branch: "main",
+      commit: "b".repeat(40),
+    };
+    const head = { ...base, branch: f.publication.branch, commit: f.publication.headCommit };
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    await upsertSessionEntryCore(scope, {
+      worktree: {
+        ...loadSessionEntryReadOnly(scope)!.worktree!,
+        githubPullRequest: {
+          url: f.publication.url,
+          host: "github.com",
+          number,
+          base,
+          head,
+          preparedHeadCommit: head.commit,
+        },
+      },
+    });
+    Object.assign(f.state, {
+      number,
+      user: { id: 101, login: "contributor" },
+      maintainer_can_modify: false,
+      base: { repo, ref: base.branch, sha: base.commit },
+      head: { repo, ref: head.branch, sha: head.commit },
+    });
+    const transport = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (argv, options) => {
+      if (argv.includes("GET")) {
+        if (argv.at(-1) === `repos/${repo.full_name}`) {
+          return commandResult(JSON.stringify(repo));
+        }
+        if (argv.at(-1) === `repos/${repo.full_name}/branches/${encodeURIComponent(head.branch)}`) {
+          return commandResult(
+            JSON.stringify({ name: head.branch, commit: { sha: head.commit }, protected: false }),
+          );
+        }
+      }
+      return await transport(argv, options);
+    });
+  }
   let beforeLookup: (() => Promise<void>) | undefined;
   function lookup(_hostname: string, options: LookupAllOptions): Promise<LookupAddress[]>;
   function lookup(_hostname: string, options?: LookupOneOptions | number): Promise<LookupAddress>;
@@ -123,7 +186,12 @@ async function evidenceFixture() {
   const upload = (input: Record<string, unknown> = {}, client?: typeof f.guestSource.client) =>
     f.invoke(
       "guest",
-      { action: "upload_evidence", ...f.expected, evidence, ...input },
+      {
+        action: "upload_evidence",
+        ...(imported ? { expectedHeadCommit: f.publication.headCommit } : f.expected),
+        evidence,
+        ...input,
+      },
       SESSION_KEY,
       { client, sandbox },
     );
@@ -155,6 +223,28 @@ describe("workspace evidence through the guest tool and registered publication a
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("uploads to an imported PR and invalidates its binding before a later transfer", async () => {
+    const f = await evidenceFixture(true);
+    const result = await f.upload();
+    expect(result.details).toMatchObject({
+      pullRequest: { url: f.publication.url },
+      evidence: { status: "uploaded", url: f.url },
+    });
+    expect(result.details).not.toHaveProperty("publication");
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    f.onLookup(async () => {
+      const worktree = loadSessionEntryReadOnly(scope)!.worktree!;
+      await upsertSessionEntryCore(scope, {
+        worktree: {
+          ...worktree,
+          githubPullRequest: { ...worktree.githubPullRequest!, number: 999 },
+        },
+      });
+    });
+    await expect(f.upload()).rejects.toThrow();
+    expect(f.fetch).toHaveBeenCalledOnce();
   });
 
   it("uploads inspected guest workspace bytes and associates the reference only through metadata editing", async () => {

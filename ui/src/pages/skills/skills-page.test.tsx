@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import type { ClawHubSkillDetail } from "../../lib/skills/index.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 // @vitest-environment jsdom
@@ -120,6 +121,152 @@ afterEach(() => {
 });
 
 describe("Skills discovery lifecycle", () => {
+  it("keeps detail chrome usable while one admitted read is pending", async () => {
+    const warnings = vi.spyOn(console, "warn");
+    const pending = deferred<ClawHubSkillDetail>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.detail") {
+        return pending.promise;
+      }
+      if (method === "skills.library.list") {
+        return personalLibrary;
+      }
+      if (method === "skills.search") {
+        return { results: [] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const { page, publishRouteData } = mountSkills(request);
+    publishRouteData({ clawhubRef: "@fixture/guide" });
+    await waitForFast(() =>
+      expect(page.querySelector(".clawhub-skill-detail__body")?.textContent).toContain("Loading"),
+    );
+    const panel = page.querySelector(".skill-reader-dialog");
+    const body = page.querySelector(".clawhub-skill-detail__body");
+    expect(page.querySelector(".exec-approval-title")?.textContent).toContain("@fixture/guide");
+    expect(
+      page.querySelector<HTMLButtonElement>('.skill-reader-dialog [aria-label="Close"]')?.disabled,
+    ).toBe(false);
+    expect(page.querySelector(".skill-reader-dialog__actions")).toBeNull();
+
+    publishRouteData({ clawhubRef: "@fixture/guide", error: "Unrelated report refresh" });
+    pending.resolve({
+      skill: {
+        slug: "guide",
+        displayName: "Guide",
+        summary: "Current guide",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      latestVersion: { version: "2.0.0", createdAt: 2 },
+    });
+    await waitForFast(() =>
+      expect(page.querySelector(".clawhub-skill-detail__body")?.textContent).toContain(
+        "Latest: v2.0.0",
+      ),
+    );
+    expect(page.querySelector(".skill-reader-dialog")).toBe(panel);
+    expect(page.querySelector(".clawhub-skill-detail__body")).toBe(body);
+    expect(page.querySelector(".exec-approval-title")?.textContent).toBe("Guide");
+    expect(page.querySelector(".skill-reader-dialog__actions")?.textContent).toContain("Import");
+    expect(request.mock.calls.filter(([method]) => method === "skills.detail")).toHaveLength(1);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
+  });
+
+  it.each(["error", "missing"])(
+    "renders an admitted %s detail outcome without an install footer",
+    async (outcome) => {
+      const pending = deferred<ClawHubSkillDetail | null>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.detail") {
+          return pending.promise;
+        }
+        if (method === "skills.library.list") {
+          return personalLibrary;
+        }
+        if (method === "skills.search") {
+          return { results: [] };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const { page, publishRouteData } = mountSkills(request);
+      publishRouteData({ clawhubRef: "@fixture/guide" });
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("skills.detail", { slug: "@fixture/guide" }),
+      );
+      if (outcome === "error") {
+        pending.reject(new Error("Synthetic detail failure"));
+      } else {
+        pending.resolve(null);
+      }
+      await waitForFast(() =>
+        expect(page.querySelector(".clawhub-skill-detail__body")?.textContent).toContain(
+          outcome === "error" ? "Synthetic detail failure" : "Skill not found",
+        ),
+      );
+      expect(page.querySelector(".skill-reader-dialog__actions")).toBeNull();
+      expect(page.querySelector(".exec-approval-title")?.textContent).toContain("@fixture/guide");
+    },
+  );
+
+  it.each(["close", "connection", "reference"])(
+    "retires pending detail after %s replacement",
+    async (replacement) => {
+      const oldRead = deferred<ClawHubSkillDetail>();
+      const newRead = deferred<ClawHubSkillDetail>();
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "skills.detail") {
+          return params && typeof params === "object" && "slug" in params && params.slug === "old"
+            ? oldRead.promise
+            : newRead.promise;
+        }
+        if (method === "skills.library.list") {
+          return personalLibrary;
+        }
+        if (method === "skills.search") {
+          return { results: [] };
+        }
+        if (method === "skills.status") {
+          return { skills: [] };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const { page, connection, publishRouteData } = mountSkills(request);
+      publishRouteData({ clawhubRef: "old" });
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("skills.detail", { slug: "old" }),
+      );
+      if (replacement === "close") {
+        page.querySelector<HTMLButtonElement>('.skill-reader-dialog [aria-label="Close"]')!.click();
+        flush();
+        expect(page.querySelector(".skill-reader-dialog")).toBeNull();
+      } else if (replacement === "connection") {
+        // SAFETY: The browser-client fixture only needs the request method used by this page.
+        const client = { request } as unknown as GatewayBrowserClient;
+        connection.publish({ ...connection.gateway.snapshot, client });
+        flush();
+        expect(page.querySelector(".skill-reader-dialog")).toBeNull();
+      }
+      publishRouteData({ clawhubRef: "new", gatewaySnapshot: connection.gateway.snapshot });
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("skills.detail", { slug: "new" }),
+      );
+      oldRead.resolve({
+        skill: { slug: "old", displayName: "Obsolete", createdAt: 1, updatedAt: 1 },
+      });
+      await oldRead.promise;
+      flush();
+      expect(page.querySelector(".skill-reader-dialog")?.textContent).not.toContain("Obsolete");
+      newRead.resolve({
+        skill: { slug: "new", displayName: "Current", createdAt: 1, updatedAt: 1 },
+      });
+      await waitForFast(() =>
+        expect(page.querySelector(".exec-approval-title")?.textContent).toBe("Current"),
+      );
+      expect(request.mock.calls.filter(([method]) => method === "skills.detail")).toHaveLength(2);
+    },
+  );
+
   it("retains a library draft across reconnect and retires it on client replacement", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "skills.library.save") {

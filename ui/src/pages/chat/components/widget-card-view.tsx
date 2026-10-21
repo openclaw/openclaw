@@ -14,6 +14,7 @@ import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts"
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
@@ -34,7 +35,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -48,6 +49,8 @@ import {
   type WidgetRawDetailsLabel,
 } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerMcpAppEnglish();
 

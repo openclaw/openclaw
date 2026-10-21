@@ -2321,7 +2321,6 @@ src/skills/lifecycle/clawhub-install-core.ts	1
 src/skills/lifecycle/clawhub-store.ts	4
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
-src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7

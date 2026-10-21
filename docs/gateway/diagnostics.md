@@ -857,7 +857,9 @@ The event label contains only known protocol names, with `other` for unknown
 names. Payload content and session, user, and connection identifiers are excluded.
 The sender batches observations by event name within one event-loop turn,
 preserving the per-socket frame and byte totals without exporting every send
-as a separate diagnostic event.
+as a separate diagnostic event. Counters are reused across turns; diagnostic
+snapshots and cumulative bucket objects are created only at flush. Disabled
+diagnostics or no interested internal listener skips all per-frame accounting.
 `openclaw_gateway_ws_operator_connections` reports the current authenticated
 operator socket count without labels, updating on connect/disconnect and every
 30 seconds to refresh late-starting exporters or recover dropped snapshots.

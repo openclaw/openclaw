@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, For, Loading, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
@@ -133,6 +133,11 @@ export function PaletteSessionSettingsView(properties: {
   });
   const retry = nativeListener("click", () => properties.options.preferences.retry());
   function SettingsPlaces() {
+    const completion = createMemo(
+      () => ({ promise: properties.options.draft.gateway.cloudProfilesRead }),
+      { equals: (previous, next) => previous.promise === next.promise },
+    );
+    const cloudProfilesRead = createMemo(() => completion().promise?.then(() => null));
     onSettled(() => {
       if (focusTarget) {
         focusTargets[focusTarget]?.focus({ preventScroll: true });
@@ -189,11 +194,16 @@ export function PaletteSessionSettingsView(properties: {
               {t("newSession.environmentSearchEmpty")}
             </div>
           ) : undefined}
-          {properties.options.draft.gateway.cloudProfilesPending ? (
-            <div role="status" class="palette-session-settings__unavailable">
-              {t("common.loading")}
-            </div>
-          ) : undefined}
+          <Loading
+            on={completion()}
+            fallback={
+              <div role="status" class="palette-session-settings__unavailable">
+                {t("common.loading")}
+              </div>
+            }
+          >
+            {cloudProfilesRead()}
+          </Loading>
         </div>
         {properties.options.draft.place.isAdmin() ? (
           <button

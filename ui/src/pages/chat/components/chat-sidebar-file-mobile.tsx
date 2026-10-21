@@ -2,16 +2,19 @@ import type { JSX } from "@solidjs/web";
 import { Show, createUniqueId, onSettled } from "solid-js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
-import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import "../../../components/tooltip.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { FileCopyFeedback } from "./chat-file-copy.ts";
 import type { MobileFileFindCloseReason, FileViewControls } from "./chat-file-reader-controls.ts";
 import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
-import type { MobileFileBack } from "./chat-sidebar-content-types.ts";
 import "./chat-sidebar-file-mobile.css";
+import type { MobileFileBack } from "./chat-sidebar-content-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerCodeBlocksEnglish();
 registerFilePreviewEnglish();

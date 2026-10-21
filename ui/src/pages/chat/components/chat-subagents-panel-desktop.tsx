@@ -2,17 +2,20 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
-import type { SubagentsPanelRow } from "../subagents-panel-data.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";
+import type { SubagentsPanelRow } from "../subagents-panel-data.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Group = "active" | "waiting" | "done" | "stopped" | "failed";
 const groups: readonly Group[] = ["active", "waiting", "done", "stopped", "failed"];

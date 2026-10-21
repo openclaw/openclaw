@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { createEffect, onCleanup, onSettled } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { getCardStaleAgeMs } from "../../lib/workboard/card-alerts.ts";
@@ -158,7 +158,6 @@ export function SessionStatus(props: {
       doc.removeEventListener("keydown", escape, true);
     };
   });
-  onCleanup(dismiss);
   return (
     <openclaw-workboard-session-status
       ref={(element) => {

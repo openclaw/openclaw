@@ -1,5 +1,5 @@
 import { definePage, type PageDefinition } from "@openclaw/uirouter";
-import { createComponent, type Component } from "solid-js";
+import type { Component } from "solid-js";
 import { routePageSpec, type RouteId } from "./app-route-paths.ts";
 
 export type SolidRouteProps<Data = unknown> = {
@@ -43,15 +43,9 @@ export function defineSolidPage<Id extends RouteId, Context = unknown, Data = un
     component: () =>
       load().then((Page) => ({
         header,
-        renderSolid: (props: SolidRouteProps<Data>) =>
-          createComponent<ForwardedRouteProps<Data>>(Page, {
-            get routeData() {
-              return props.data;
-            },
-            get loaderPending() {
-              return props.loaderPending;
-            },
-          }),
+        renderSolid: (props: SolidRouteProps<Data>) => (
+          <Page routeData={props.data} loaderPending={props.loaderPending} />
+        ),
       })),
   });
 }

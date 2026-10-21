@@ -2,13 +2,16 @@ import type { SkillsWorkshopUndoResult } from "@openclaw/gateway-protocol";
 import { action, createOptimistic, createSignal, For, onSettled, Show } from "solid-js";
 import type { SkillWorkshopChangeNotice } from "../../../../../src/shared/skill-workshop-change-notice.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { normalizeAgentId } from "../../../lib/sessions/session-key.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/chat/skill-learned-notice.css";
+import { normalizeAgentId } from "../../../lib/sessions/session-key.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type UndoState = "idle" | "done" | { error: string };
 

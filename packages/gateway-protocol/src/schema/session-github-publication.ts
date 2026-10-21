@@ -110,7 +110,7 @@ export const GitHubPublicationEditSchema = closedObject({
 });
 export const GitHubPublicationReviewRequestSchema = closedObject({
   action: Type.Literal("request_review"),
-  requestId: PersonalGitHubGenerationSchema,
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
 });
 export const GITHUB_PUBLICATION_EVIDENCE_MAX_BYTES = 10_000_000;
@@ -121,7 +121,7 @@ export const GitHubPublicationEvidenceSchema = closedObject({
 });
 export const GitHubPublicationEvidenceUploadSchema = closedObject({
   action: Type.Literal("upload_evidence"),
-  requestId: PersonalGitHubGenerationSchema,
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
   evidence: GitHubPublicationEvidenceSchema,
 });
@@ -212,8 +212,7 @@ export const SessionGitHubPublicationPublishedSchema = closedObject({
   branch: NonEmptyString,
   headCommit: NonEmptyString,
 });
-export const SessionGitHubActionResultSchema = closedObject({
-  publication: SessionGitHubPublicationPublishedSchema,
+const SessionGitHubActionState = {
   publishingSessionKey: NonEmptyString,
   state: Type.Union([
     Type.Literal("draft"),
@@ -250,7 +249,21 @@ export const SessionGitHubActionResultSchema = closedObject({
       }),
     ]),
   ),
-});
+};
+export const SessionGitHubActionResultSchema = Type.Union([
+  closedObject({
+    ...SessionGitHubActionState,
+    publication: SessionGitHubPublicationPublishedSchema,
+  }),
+  closedObject({
+    ...SessionGitHubActionState,
+    pullRequest: closedObject({
+      url: NonEmptyString,
+      repository: NonEmptyString,
+      branch: NonEmptyString,
+    }),
+  }),
+]);
 export const SessionGitHubPublicationFailedSchema = closedObject({
   ...SessionGitHubPublicationBaseSchema,
   status: Type.Literal("failed"),

@@ -1,6 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { INTERNAL_CLAWS_PATH_PARAM, restoreBridgedRouteLocation } from "../../app-route-paths.ts";
-import { defineSolidPage } from "../../app-route-types.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 
 export type ClawsRouteData = { location: RouteLocation; basePath: string };

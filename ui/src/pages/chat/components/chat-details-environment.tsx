@@ -3,7 +3,8 @@ import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
@@ -11,6 +12,8 @@ import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import "./chat-details-environment-desktop.css";
 import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-placement.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Props = { details: ChatDetailsProps; presented: boolean };
 

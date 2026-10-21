@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createOpenClawCodingToolsInternalAsync } from "../../../agents/agent-tools.js";
+import { resolveRuntimeChannelPromptContext } from "../../../agents/runtime-capabilities.js";
+import { buildAgentSystemPrompt } from "../../../agents/system-prompt.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isPrereleaseSemverVersion } from "../../../infra/npm-registry-spec.js";
@@ -118,6 +120,49 @@ describe("ask_user channel catalogs", () => {
         },
       });
       expect(tools.some((tool) => tool.name === "ask_user")).toBe(available);
+    },
+  );
+});
+
+describe("Feishu system prompt button guidance", () => {
+  beforeEach(async () => {
+    const plugin = await getBundledChannelPluginAsync("feishu");
+    if (!plugin) {
+      throw new Error("Missing bundled Feishu channel plugin");
+    }
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "feishu", plugin, source: "test" }]));
+  });
+
+  afterEach(() => resetPluginRuntimeStateForTest());
+
+  it.each([{ capabilities: undefined }, { capabilities: ["inlineButtons"] }])(
+    "does not advertise unsupported callbacks with capabilities $capabilities",
+    ({ capabilities }) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_test",
+            appSecret: "synthetic-secret",
+            ...(capabilities ? { capabilities } : {}),
+          },
+        },
+      };
+      const context = resolveRuntimeChannelPromptContext({ cfg, channel: "feishu" });
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/workspace",
+        toolNames: ["message"],
+        runtimeInfo: {
+          channel: context.runtimeChannel,
+          capabilities: context.runtimeCapabilities,
+          customInlineButtonHint: context.customInlineButtonHint,
+        },
+        messageToolHints: context.messageToolHints,
+      });
+
+      expect(prompt).not.toContain("feishu.capabilities.inlineButtons");
+      expect(prompt).not.toContain('"action":{"type":"callback"');
+      expect(prompt).toContain("ask questions in plain text");
     },
   );
 });

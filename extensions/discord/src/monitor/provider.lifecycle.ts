@@ -1,3 +1,4 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createTransportActivityStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -6,7 +7,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { isFatalGatewayCloseCode } from "../internal/gateway-close-codes.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
-import { waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
 import type { DiscordVoiceManager } from "../voice/voice-runtime.js";
 import {
@@ -198,15 +198,6 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   };
 
-  const registerForceStop = (handler: (err: unknown) => void) => {
-    forceStopHandler = handler;
-    if (queuedForceStopError !== undefined) {
-      const err = queuedForceStopError;
-      queuedForceStopError = undefined;
-      handler(err);
-    }
-  };
-
   const waitForGatewayReady = async (): Promise<void> => {
     const { abortSignal, runtime } = params;
     const waitUntilReady = async (): Promise<GatewayReadyWaitResult> => {
@@ -356,12 +347,44 @@ export async function runDiscordGatewayLifecycle(params: {
       return;
     }
 
-    await waitForDiscordGatewayStop({
-      gateway,
-      abortSignal: params.abortSignal,
-      gatewaySupervisor: params.gatewaySupervisor,
-      onGatewayEvent: handleGatewayEvent,
-      registerForceStop,
+    const { abortSignal, gatewaySupervisor } = params;
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (settle: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        try {
+          gateway.disconnect();
+        } finally {
+          // Disconnect can emit a final error; retain its listener until it returns.
+          abortSignal?.removeEventListener("abort", onAbort);
+          gatewaySupervisor.detachLifecycle();
+          settle();
+        }
+      };
+      const finishReject = (err: unknown) => {
+        finish(() => reject(toErrorObject(err, "Non-Error rejection")));
+      };
+      const onAbort = () => finish(resolve);
+      const onGatewayEvent = (event: DiscordGatewayEvent) => {
+        if (handleGatewayEvent(event) === "stop") {
+          finishReject(new DiscordGatewayLifecycleError(event));
+        }
+      };
+      if (abortSignal?.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
+      gatewaySupervisor.attachLifecycle(onGatewayEvent);
+      forceStopHandler = finishReject;
+      if (queuedForceStopError !== undefined) {
+        const err = queuedForceStopError;
+        queuedForceStopError = undefined;
+        finishReject(err);
+      }
     });
   } catch (err) {
     if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
