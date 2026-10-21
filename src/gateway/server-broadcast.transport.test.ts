@@ -43,7 +43,7 @@ function controlledPeer(connId: string) {
     send: vi.fn(
       (
         wire: string | Buffer | SerializedGatewayFrame,
-        options: { binary: false } | ((error?: Error) => void),
+        options?: { binary: false } | ((error?: Error) => void),
         callback?: (error?: Error) => void,
       ) => {
         frames.push(JSON.parse(String(wire)));

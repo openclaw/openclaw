@@ -250,7 +250,11 @@ it("counts accepted event bytes per socket with bounded names and live operator 
       String(frame).includes('"event":"tick"'),
     )![0];
     const lastFrame = first.socket.send.mock.lastCall![0];
-    expect(events[0]!.bytes).toBe(2 * Buffer.byteLength(firstFrame) + Buffer.byteLength(lastFrame));
+    const firstBytes =
+      typeof firstFrame === "string" ? Buffer.byteLength(firstFrame) : firstFrame.byteLength;
+    const lastBytes =
+      typeof lastFrame === "string" ? Buffer.byteLength(lastFrame) : lastFrame.byteLength;
+    expect(events[0]!.bytes).toBe(2 * firstBytes + lastBytes);
     expect(JSON.stringify(events)).not.toMatch(/private-dynamic-name|private-content|connId/);
     expect(operatorCounts()).toEqual([2]);
     observations.length = 0;
