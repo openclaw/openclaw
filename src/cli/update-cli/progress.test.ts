@@ -10,6 +10,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { createUpdateProgress, prepareResult, printResult } from "./progress.js";
+import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   reportUpdateCommandPendingRecovery,
   UpdateCommandPendingRecoveryFailure,
@@ -32,6 +33,31 @@ const phaseLines = () =>
 const reportPath = `/isolated/update-progress/${runId}.md`;
 const jsonOutput = () => vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 const silenceErrors = () => vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+const healthyRecovery = (version: string) =>
+  ({ serviceRestartSafe: true, service: "healthy", version }) as const;
+const recoveryStep = (overrides: Partial<UpdateRunResult["steps"][number]> = {}) =>
+  stepFixture("gateway recovery verification", {
+    command: "gateway verification",
+    cwd: "/fixture",
+    durationMs: 0,
+    exitCode: 0,
+    ...overrides,
+  });
+function observed(version: string, overrides: UpdateRunRecord["verification"] = {}) {
+  return {
+    serviceRunning: true,
+    runningVersion: version,
+    versionMatch: true,
+    readyz: true,
+    settled: true,
+    ...overrides,
+  };
+}
+function refuseHistory(message: string) {
+  return vi.mocked(getUpdateRun).mockImplementation(() => {
+    throw new Error(message);
+  });
+}
 const timeline = (phase: UpdateRunRecord["phase"], ...completed: UpdateRunRecord["phase"][]) => ({
   phase,
   steps: [
@@ -90,6 +116,11 @@ describe("update progress", () => {
     await printResult({ ...result, runId: undefined, status: "error", steps: [failed] }, {});
   }
 
+  function appendPhases(phase: UpdateRunRecord["phase"], ...completed: UpdateRunRecord["phase"][]) {
+    run.phase = phase;
+    run.steps.push(...timeline(phase, ...completed).steps);
+  }
+
   afterEach(() => {
     presentation?.dispose();
     presentation = undefined;
@@ -112,9 +143,7 @@ describe("update progress", () => {
     ).toBeUndefined();
     expect(json).not.toHaveBeenCalled();
     expect(outputLog).not.toHaveBeenCalled();
-    vi.mocked(getUpdateRun).mockImplementation(() => {
-      throw new Error("released history must not be reopened");
-    });
+    refuseHistory("released history must not be reopened");
     vi.mocked(writeUpdateRunReportArtifact).mockRejectedValue(new Error("released report write"));
     emit();
     expect(writeUpdateRunReportArtifact).toHaveBeenCalledOnce();
@@ -127,15 +156,9 @@ describe("update progress", () => {
     "renders step failures with only bound ledger phases (bound: %s)",
     async (bound) => {
       presentation = await observe(true, bound ? context : undefined);
-      run.phase = "validating";
-      run.steps.push(
-        { step: "staging", status: "completed" },
-        { step: "validating", status: "in_progress" },
-      );
+      appendPhases("validating", "staging");
       if (!bound) {
-        vi.mocked(getUpdateRun).mockImplementation(() => {
-          throw new Error("unbound presentation must not read the ledger");
-        });
+        refuseHistory("unbound presentation must not read the ledger");
       }
       presentation.progress.onStepStart?.(step, run);
       expect(log).toHaveBeenCalledWith(bound ? "validating — build..." : "build...");
@@ -265,9 +288,7 @@ describe("update progress", () => {
 
   it("prints the failure and saved report when history cannot be read", async () => {
     silenceErrors();
-    vi.mocked(getUpdateRun).mockImplementation(() => {
-      throw new Error("history temporarily unavailable");
-    });
+    refuseHistory("history temporarily unavailable");
     await printResult({ ...result, status: "error", reason: "doctor-failed" }, { run: context });
     const text = printed();
     expect(text).toContain("OpenClaw update failed: doctor-failed");
@@ -285,11 +306,7 @@ describe("update progress", () => {
     });
     presentation = await observe(true, context);
     log.mockClear();
-    vi.mocked(getUpdateRun)
-      .mockClear()
-      .mockImplementation(() => {
-        throw new Error("retained history must not be reopened");
-      });
+    refuseHistory("retained history must not be reopened").mockClear();
     const reporting = reportUpdateCommandPendingRecovery(
       new UpdateCommandPendingRecoveryFailure({
         ...result,
@@ -395,11 +412,7 @@ describe("update progress", () => {
     presentation = await observe(true, context);
     presentation.stop();
     // The restarted gateway writes these phases while the CLI has no active step.
-    run.phase = "verifying";
-    run.steps.push(
-      { step: "restarting", status: "completed" },
-      { step: "verifying", status: "in_progress" },
-    );
+    appendPhases("verifying", "restarting");
     await vi.advanceTimersByTimeAsync(250);
     expect(log).toHaveBeenCalledWith("Phase: verifying");
     expect(log).toHaveBeenCalledWith("Phase: restarting");
@@ -474,12 +487,7 @@ describe("update progress", () => {
         verification: { runningVersion: "2026.9.4", versionMatch: rolledBack },
         ...(rolledBack
           ? {
-              recovery: {
-                serviceRestartSafe: true,
-                packageRollbackVerified: true,
-                service: "healthy",
-                version: "2026.9.4",
-              },
+              recovery: { ...healthyRecovery("2026.9.4"), packageRollbackVerified: true },
             }
           : {}),
       };
@@ -512,20 +520,16 @@ describe("update progress", () => {
       run.phase = "finished";
       run.reason = "post-update-plugins";
       run.after = { version: "2026.9.5" };
-      run.verification = {
+      run.verification = observed("2026.8.99", {
         serviceRunning: serviceRunning !== true,
-        runningVersion: "2026.8.99",
-        versionMatch: true,
-        readyz: true,
-        settled: true,
         booted: true,
         noticeDelivered: true,
         doctorHint: "Retained lifecycle guidance",
         recovery:
           serviceRunning === true
             ? { serviceRestartSafe: false, reason: "state-migration-started" }
-            : { serviceRestartSafe: true, version: "2026.8.99", service: "healthy" },
-      };
+            : healthyRecovery("2026.8.99"),
+      });
       run.steps.push({
         step: "gateway recovery verification",
         status: "completed",
@@ -540,30 +544,22 @@ describe("update progress", () => {
         verification:
           serviceRunning === undefined
             ? {}
-            : {
+            : observed("2026.9.5", {
                 serviceRunning,
-                runningVersion: "2026.9.5",
-                versionMatch: true,
                 readyz: serviceRunning,
                 settled: serviceRunning,
-              },
-        ...(serviceRunning === true
-          ? { recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" } }
-          : {}),
+              }),
+        ...(serviceRunning === true ? { recovery: healthyRecovery("2026.9.5") } : {}),
         steps:
           serviceRunning === undefined
             ? []
             : [
-                {
-                  name: "gateway recovery verification",
-                  command: "gateway verification",
-                  cwd: "/fixture",
-                  durationMs: 0,
+                recoveryStep({
                   exitCode: serviceRunning ? 0 : 1,
                   ...(!serviceRunning
                     ? { failureFacts: [{ check: "service", code: "service-not-running" }] }
                     : {}),
-                },
+                }),
               ],
       };
 
@@ -599,16 +595,11 @@ describe("update progress", () => {
       phase: "finished",
       after: { version: "2026.9.5" },
       steps: [{ step: "gateway recovery verification", status: "completed", exitCode: 0 }],
-      verification: {
-        serviceRunning: true,
-        runningVersion: "2026.9.5",
-        versionMatch: true,
-        readyz: true,
-        settled: true,
+      verification: observed("2026.9.5", {
         channelsReady: true,
         pluginErrors: [],
-        recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
-      },
+        recovery: healthyRecovery("2026.9.5"),
+      }),
       confirmedAtMs: 300,
       finishedAtMs: 301,
     };
@@ -618,22 +609,16 @@ describe("update progress", () => {
       after: captured.after,
       recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
       steps: [
-        {
-          name: "gateway recovery verification",
-          command: "gateway verification",
-          cwd: "/fixture",
+        recoveryStep({
           durationMs: 1,
           exitCode: 1,
           failureFacts: [{ check: "settled", code: "stale-readiness-failure" }],
-        },
+        }),
       ],
     };
-    const read = vi
-      .mocked(getUpdateRun)
-      .mockClear()
-      .mockImplementation(() => {
-        throw new Error("Captured terminal publication must not reopen history.");
-      });
+    const read = refuseHistory(
+      "Captured terminal publication must not reopen history.",
+    ).mockClear();
 
     await printResult(stale, { run: context }, { record: captured });
 
@@ -663,12 +648,7 @@ describe("update progress", () => {
     expect(read).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("build...");
 
-    run.phase = "verifying";
-    run.steps.push(
-      { step: "activating", status: "completed" },
-      { step: "restarting", status: "completed" },
-      { step: "verifying", status: "in_progress" },
-    );
+    appendPhases("verifying", "activating", "restarting");
     read.mockResolvedValue(run);
     presentation.resume();
     await vi.advanceTimersByTimeAsync(500);
