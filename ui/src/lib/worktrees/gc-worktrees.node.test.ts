@@ -17,10 +17,14 @@ function receipt(overrides: Partial<WorktreesGcResult> = {}): WorktreesGcResult 
     ...overrides,
   };
 }
+const queued = receipt({ state: "queued" });
 
-function setup() {
+function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[]) {
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const request = vi.spyOn(client, "request");
+  for (const response of responses) {
+    request.mockReturnValueOnce(Promise.resolve(response));
+  }
   const lifecycle = createGatewayConnectionLifecycle({ client, phase: "connected" });
   const scope = lifecycle.capture()!;
   return {
@@ -42,13 +46,9 @@ afterEach(() => {
 });
 
 it("enqueues once, polls the same job serially, and settles only when cleanup completes", async () => {
-  const { request, run } = setup();
   const slowPoll = createDeferred<WorktreesGcResult>();
   const completed = receipt({ removed: ["retired"] });
-  request
-    .mockResolvedValueOnce(receipt({ state: "queued" }))
-    .mockReturnValueOnce(slowPoll.promise)
-    .mockResolvedValueOnce(completed);
+  const { request, run } = setup(queued, slowPoll.promise, completed);
   const settled = vi.fn();
   const pending = run().then(settled);
   await vi.advanceTimersByTimeAsync(999);
@@ -70,44 +70,35 @@ it("enqueues once, polls the same job serially, and settles only when cleanup co
 });
 
 it.each([
-  [receipt({ state: "failed", error: "cleanup owner stopped" }), "cleanup owner stopped"],
+  ["cleanup owner stopped", [queued, receipt({ state: "failed", error: "cleanup owner stopped" })]],
   [
-    receipt({
-      outcome: "partial",
-      issues: [{ stage: "idle", outcome: "failed", reason: "repository unavailable" }],
-    }),
     "repository unavailable",
+    [
+      queued,
+      receipt({
+        outcome: "partial",
+        issues: [{ stage: "idle", outcome: "failed", reason: "repository unavailable" }],
+      }),
+    ],
   ],
-] as const)("surfaces terminal error %s without starting another job", async (result, message) => {
-  const { request, run } = setup();
-  request.mockResolvedValueOnce(receipt({ state: "queued" })).mockResolvedValueOnce(result);
+  ["cleanup failed", [receipt({ state: "queued", jobId: undefined })]],
+] as const)("rejects %s without starting another job", async (message, responses) => {
+  const { request, run } = setup(...responses);
   const failed = expect(run()).rejects.toThrow(message);
   await vi.advanceTimersByTimeAsync(1_000);
   await failed;
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
-it("does not turn a queued response without a job ID into another enqueue", async () => {
-  const { request, run } = setup();
-  request.mockResolvedValueOnce(receipt({ state: "queued", jobId: undefined }));
-  await expect(run()).rejects.toThrow("cleanup failed");
-  expect(request).toHaveBeenCalledOnce();
+  expect(request).toHaveBeenCalledTimes(responses.length);
 });
 
 it.each(["before enqueue", "during enqueue", "between polls", "during poll"] as const)(
   "retires the old Gateway epoch after a same-client reconnect %s",
   async (phase) => {
-    const { request, run, reconnect } = setup();
     const response = createDeferred<WorktreesGcResult>();
+    const { request, run, reconnect } = setup(
+      ...(phase === "during enqueue" ? [response.promise] : [queued, response.promise]),
+    );
     if (phase === "before enqueue") {
       reconnect();
-    }
-    if (phase === "during enqueue") {
-      request.mockReturnValueOnce(response.promise);
-    } else {
-      request
-        .mockResolvedValueOnce(receipt({ state: "queued" }))
-        .mockReturnValueOnce(response.promise);
     }
     const pending = run();
     await vi.advanceTimersByTimeAsync(phase === "during poll" ? 1_000 : 0);
