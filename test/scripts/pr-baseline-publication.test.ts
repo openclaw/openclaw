@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -14,19 +14,16 @@ function fixture() {
   // hosted head as second parent. The inherited main commit is deliberately unsigned.
   f.git(f.repo, "commit", "--allow-empty", "--no-gpg-sign", "-qm", "test: inherited main");
   const baseline = f.git(f.repo, "rev-parse", "HEAD");
-  const reconciled = f.git(
-    f.worktree,
+  const parents = [baseline, f.incoming].flatMap((parent) => ["-p", parent]);
+  const reconciled = f.prepGit(
     "commit-tree",
     "-S",
     "HEAD^{tree}",
-    "-p",
-    baseline,
-    "-p",
-    f.incoming,
+    ...parents,
     "-m",
     "fix: reconcile the reviewed correction",
   );
-  f.git(f.worktree, "reset", "--hard", reconciled);
+  f.prepGit("reset", "--hard", reconciled);
   f.approve();
   f.pass("prepare-baseline-refresh", ["--expected-head", reconciled, "--baseline", baseline]);
   f.approve();
@@ -34,12 +31,12 @@ function fixture() {
 }
 
 function expectRefused(f: ReturnType<typeof fixture>) {
-  const source = f.git(f.worktree, "rev-parse", "HEAD");
+  const source = f.prepGit("rev-parse", "HEAD");
   f.preparePublication();
   const result = f.run("prepare-push");
   expect(result.status, result.stdout + result.stderr).not.toBe(0);
   expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.incoming);
-  expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(source);
+  expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
   expect(existsSync(f.local("prepare-push-result.env"))).toBe(false);
   return result;
 }
@@ -48,15 +45,10 @@ describePosix("baseline-bound publication signatures", () => {
   it("publishes the signed correction without trusting inherited first-parent main history", () => {
     const f = fixture();
     expect(
-      spawnSync("git", ["verify-commit", f.baseline], {
-        cwd: f.worktree,
-        env: f.env,
-      }).status,
+      spawnSync("git", ["verify-commit", f.baseline], { cwd: f.worktree, env: f.env }).status,
     ).not.toBe(0);
-    expect(f.git(f.worktree, "rev-list", "--first-parent", `${f.incoming}..HEAD`)).toContain(
-      f.baseline,
-    );
-    const tree = f.git(f.worktree, "rev-parse", "HEAD^{tree}");
+    expect(f.prepGit("rev-list", "--first-parent", `${f.incoming}..HEAD`)).toContain(f.baseline);
+    const tree = f.prepGit("rev-parse", "HEAD^{tree}");
     const published = f.publish();
     expect(f.git(f.repo, "rev-parse", `${published}^{tree}`)).toBe(tree);
     expect(f.git(f.repo, "merge-base", f.incoming, published)).toBe(f.incoming);
@@ -65,16 +57,16 @@ describePosix("baseline-bound publication signatures", () => {
   it.each(["first", "side"])("rejects an unsigned task commit on the %s parent", (parent) => {
     const f = fixture();
     if (parent === "side") {
-      f.git(f.worktree, "switch", "-qc", "unsigned-task", f.baseline);
+      f.prepGit("switch", "-qc", "unsigned-task", f.baseline);
     }
     writeFileSync(join(f.worktree, "docs/later.md"), "later task change\n");
-    f.git(f.worktree, "add", "docs/later.md");
-    f.git(f.worktree, "commit", "--no-gpg-sign", "-qm", "fix: unsigned task change");
-    const unsigned = f.git(f.worktree, "rev-parse", "HEAD");
+    f.prepGit("add", "docs/later.md");
+    f.prepGit("commit", "--no-gpg-sign", "-qm", "fix: unsigned task change");
+    const unsigned = f.prepGit("rev-parse", "HEAD");
     if (parent === "side") {
-      f.git(f.worktree, "switch", "-q", "pr-42-prep");
-      f.git(f.worktree, "merge", "--no-ff", "-qm", "fix: merge the task change", unsigned);
-      expect(f.git(f.worktree, "rev-list", "--first-parent", `${f.incoming}..HEAD`)).not.toContain(
+      f.prepGit("switch", "-q", "pr-42-prep");
+      f.prepGit("merge", "--no-ff", "-qm", "fix: merge the task change", unsigned);
+      expect(f.prepGit("rev-list", "--first-parent", `${f.incoming}..HEAD`)).not.toContain(
         unsigned,
       );
     }
@@ -93,13 +85,13 @@ describePosix("baseline-bound publication signatures", () => {
       if (fault === "missing") {
         rmSync(f.local("prepare-baseline.json"));
       } else if (fault === "changed") {
-        const binding = JSON.parse(readFileSync(f.local("prepare-baseline.json"), "utf8"));
+        const binding = JSON.parse(f.readLocal("prepare-baseline.json").toString());
         binding.baselineHead = f.incoming;
-        writeFileSync(f.local("prepare-baseline.json"), JSON.stringify(binding));
+        f.writeLocal("prepare-baseline.json", JSON.stringify(binding));
       } else {
-        const context = readFileSync(f.local("prep-context.env"), "utf8");
-        writeFileSync(
-          f.local("prep-context.env"),
+        const context = f.readLocal("prep-context.env").toString();
+        f.writeLocal(
+          "prep-context.env",
           fault === "wrong-anchor"
             ? context.replace(
                 /^PREP_BASELINE_REFRESH_HEAD=.*$/mu,

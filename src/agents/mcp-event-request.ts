@@ -7,6 +7,7 @@ import { VERSION } from "../version.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
+import { MCP_ENTERPRISE_AUTH_CLIENT_EXTENSION } from "./mcp-metadata.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
@@ -115,7 +116,10 @@ export async function requestMcpEvent(params: {
         _meta: {
           "io.modelcontextprotocol/protocolVersion": MCP_EVENTS_PROTOCOL_VERSION,
           "io.modelcontextprotocol/clientInfo": { name: "openclaw", version: VERSION },
-          "io.modelcontextprotocol/clientCapabilities": {},
+          "io.modelcontextprotocol/clientCapabilities":
+            config.auth === "enterprise"
+              ? { extensions: { [MCP_ENTERPRISE_AUTH_CLIENT_EXTENSION]: {} } }
+              : {},
         },
       },
     });

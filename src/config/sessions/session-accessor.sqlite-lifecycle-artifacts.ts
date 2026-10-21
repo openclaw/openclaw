@@ -291,10 +291,7 @@ function* planSessionLifecycleArtifactCleanupPages(
     const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("session_nodes")
-        .select(["session_key", "current_session_id", "updated_at"])
-        .orderBy("session_key", "asc"),
+      db.selectFrom("session_nodes").select(["session_key", "current_session_id", "updated_at"]),
     ).rows;
 
     if (diagnostics) {

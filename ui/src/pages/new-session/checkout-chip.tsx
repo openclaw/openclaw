@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup } from "solid-js";
+import { createMemo, createSignal, For, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -145,7 +145,7 @@ function WorktreeFields(props: {
                 <For each={suggestions()} keyed={(branch) => branch.name}>
                   {(branch, index) => {
                     let button: HTMLButtonElement;
-                    onCleanup(() => {
+                    onSettled(() => () => {
                       suggestionRefs.delete(branch().name);
                       if (activeSuggestion === button) {
                         clearActiveSuggestion();

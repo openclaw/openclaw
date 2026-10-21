@@ -1,4 +1,5 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { buildAgentOnboardingGreeting } from "../../../../src/shared/agent-onboarding.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
@@ -12,10 +13,15 @@ import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
+import { ChatAvatar } from "./chat-avatar-view.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
-import { ChatPaneHeader, type ChatPaneHeaderProps } from "./components/chat-pane-header.tsx";
+import { MessageMarkdown } from "./components/chat-message-text-view.tsx";
+import { ChatPaneHeader } from "./components/chat-pane-header.tsx";
+import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
+import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 registerNewSessionSetupEnglish();
@@ -35,10 +41,12 @@ function PendingSessionCreateContent(
   context: ApplicationContext,
 ) {
   const composerId = `pending-create-${generateUUID()}`;
+  const startedAt = Date.now();
   const sources = [
     projectOwner(context.gateway, (owner) => owner.snapshot),
     projectOwner(context.placementStartup, (owner) => owner),
     projectOwner(context.theme, (owner) => owner),
+    projectOwner(context.agents, (owner) => owner.state),
     projectSource(context.chatSubmissions, {
       read: (owner) => owner,
       subscribe: (owner, notify) => owner.subscribeCreate(notify),
@@ -109,8 +117,22 @@ function PendingSessionCreateContent(
         )
       : submissions.readCreateMessage(props.sessionKey);
     const creationComposer = composerProjection()?.read();
+    const pendingCreate = submissions.readCreate();
+    const displayName =
+      pendingCreate?.creation.sessionKey === props.sessionKey
+        ? pendingCreate.displayName
+        : undefined;
     const agentId = parseAgentSessionKey(props.sessionKey)?.agentId ?? "";
     const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === agentId);
+    const creatingAgent =
+      pendingCreate?.creation.sessionKey === props.sessionKey &&
+      context.agents.state.pendingAgent?.id === agentId;
+    const statusLabel =
+      snapshot.phase !== "connected"
+        ? t("connection.reconnecting")
+        : creatingAgent
+          ? t("agentChip.creatingAgent")
+          : (chatStartupStatusLabel(null, startup) ?? t("newSession.starting"));
     // Reuse the chat chrome without mounting session controllers or granting
     // mutation access to an identity that the Gateway has not admitted yet.
     const noAction = () => {};
@@ -164,10 +186,7 @@ function PendingSessionCreateContent(
         pendingMessage,
         userId: identity?.type === "profile" ? identity.id : null,
         submitting,
-        statusLabel:
-          snapshot.phase === "connected"
-            ? chatStartupStatusLabel(null, startup)
-            : t("connection.reconnecting"),
+        statusLabel,
         completion: cancelled
           ? { label: startup.error ?? t("newSession.placementCancelled") }
           : failed
@@ -175,7 +194,41 @@ function PendingSessionCreateContent(
                 label: t(checking ? "chat.queue.deliveryUnconfirmed" : "chat.queue.notSent"),
               }
             : undefined,
-        renderDraft: () => <div role="status">{t("connection.reconnecting")}</div>,
+        renderDraft: () => (
+          <div class="new-session-page__starting chat-thread-inner">
+            <Show when={creatingAgent}>
+              {/* The shared greeting is a presentation preview; only the Gateway persists it. */}
+              <div class="chat-group assistant">
+                <ChatAvatar
+                  role="assistant"
+                  assistant={{
+                    agentId,
+                    name: displayName ?? t("agentChip.newAgent"),
+                    avatar: null,
+                  }}
+                />
+                <div class="chat-group-messages">
+                  <div class="chat-bubble chat-bubble--first">
+                    <MessageMarkdown
+                      markdown={buildAgentOnboardingGreeting(displayName)}
+                      messageKey={`${composerId}-greeting`}
+                      options={{ role: "assistant", isStreaming: false }}
+                      markdownOptions={{ codeBlockChrome: "none" }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </Show>
+            <div class="chat-group assistant chat-group--working">
+              <div class="chat-group-messages">
+                <ChatWorkingIndicator
+                  part={{ kind: "reading-indicator", key: composerId, startedAt }}
+                  options={{ startupLabel: statusLabel }}
+                />
+              </div>
+            </div>
+          </div>
+        ),
         onOpenImage: openImage,
       },
       creationComposer: creationComposer?.canDisplay() ? creationComposer : undefined,
@@ -183,10 +236,12 @@ function PendingSessionCreateContent(
         paneId: composerId,
         sessionKey: props.sessionKey,
         currentAgentId: agentId,
-        assistantName: agent?.identity?.name ?? agent?.name ?? agentId,
+        assistantName:
+          displayName ?? agent?.identity?.name ?? agent?.name ?? t("agentChip.newAgent"),
         connected: snapshot.phase === "connected",
         canSend: false,
         sessionAdmitted: false,
+        mobileComposer: props.mergedChrome,
         disabledReason: null,
         sending: submitting,
         messages: [],
@@ -202,6 +257,7 @@ function PendingSessionCreateContent(
       },
     };
   });
+  const questions = createComposerQuestions(composerId, () => view().composer);
   return (
     <>
       <div class="sidebar-region">
@@ -216,9 +272,15 @@ function PendingSessionCreateContent(
                 <Show
                   when={view().creationComposer}
                   keyed
-                  fallback={<ChatComposer {...view().composer} />}
+                  fallback={<ChatComposer {...view().composer} questions={questions} />}
                 >
-                  {(composer) => <CreationComposer composer={composer} onOpenImage={openImage} />}
+                  {(composer) => (
+                    <CreationComposer
+                      composer={composer}
+                      mobileComposer={props.mergedChrome}
+                      onOpenImage={openImage}
+                    />
+                  )}
                 </Show>
               </div>
             </div>

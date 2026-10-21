@@ -48,7 +48,7 @@ it("permits parent cold resume once every child is terminal, while preserving un
     releaseCodexBoundLiveThread({
       client: client.client,
       threadId: "parent-thread",
-      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
     });
 
   await client.notify(

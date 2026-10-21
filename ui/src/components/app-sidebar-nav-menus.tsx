@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, onCleanup } from "solid-js";
+import { createUniqueId, onSettled } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
@@ -20,7 +20,13 @@ import {
   type MenuItem,
 } from "./solid/menu.tsx";
 
-type SidebarMenuPosition = { x: number; y?: number; top?: number; bottom?: number };
+type SidebarMenuPosition = {
+  x: number;
+  y?: number;
+  top?: number;
+  bottom?: number;
+  placement?: "right-start" | "right-end";
+};
 
 export function renderSidebarMenuAction(
   value: string,
@@ -65,8 +71,24 @@ export type SidebarDropdownProps = {
 
 export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
   const id = createUniqueId();
+  const sidePlacement = () =>
+    params.position.placement === "right-start" || params.position.placement === "right-end";
+  const triggerAttributes = () => {
+    const attributes = pointMenuTriggerAttributes(
+      {
+        x: params.position.x,
+        y: params.position.bottom ?? params.position.top ?? params.position.y,
+      },
+      params.position.bottom === undefined ? "top" : "bottom",
+    );
+    // This point sits on the rail edge; native button padding must not widen it.
+    return sidePlacement()
+      ? { ...attributes, style: { ...attributes.style, width: "0px", padding: "0", border: "0" } }
+      : attributes;
+  };
   let removeListeners: (() => void)[] = [];
-  onCleanup(() => removeListeners.forEach((stop) => stop()));
+  // Menu publishes its handle after settled setup has registered this teardown.
+  onSettled(() => () => removeListeners.forEach((stop) => stop()));
   return (
     <Menu
       controls={params.controls}
@@ -75,20 +97,20 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
       label={params.label}
       open
       items={params.items}
-      placement={params.position.bottom === undefined ? "bottom-start" : "top-start"}
-      triggerAttributes={pointMenuTriggerAttributes(
-        {
-          x: params.position.x,
-          y: params.position.bottom ?? params.position.top ?? params.position.y,
-        },
-        params.position.bottom === undefined ? "top" : "bottom",
-      )}
+      placement={
+        params.position.placement ??
+        (params.position.bottom === undefined ? "bottom-start" : "top-start")
+      }
+      triggerAttributes={triggerAttributes()}
       ref={(handle) => {
         params.ref?.(handle);
         const { overlay } = handle;
         overlay.surface.dataset.chatAutotypeExempt = "";
         if (params.anchor) {
           overlay.setReturnTarget(params.anchor);
+        }
+        if (sidePlacement()) {
+          overlay.surface.style.setProperty("--oc-overlay-distance", "8px");
         }
         if (params.panelStyle) {
           for (const [property, value] of Object.entries(params.panelStyle)) {
@@ -153,7 +175,6 @@ export function renderSidebarNavLink(params: {
   onPreload?: (event: Event, immediate?: boolean) => void;
   onCancelPreload?: (event: Event) => void;
 }): JSX.Element {
-  const onPreload = params.onPreload;
   return (
     <a
       ref={(element) => params.ref?.(element)}
@@ -161,11 +182,11 @@ export function renderSidebarNavLink(params: {
       href={params.href}
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
-      onFocus={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onBlur={params.onCancelPreload}
-      onPointerEnter={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onPointerLeave={params.onCancelPreload}
-      onTouchStart={onPreload ? (event: TouchEvent) => onPreload(event, true) : undefined}
+      onFocus={(event) => params.onPreload?.(event)}
+      onBlur={(event) => params.onCancelPreload?.(event)}
+      onPointerEnter={(event) => params.onPreload?.(event)}
+      onPointerLeave={(event) => params.onCancelPreload?.(event)}
+      onTouchStart={(event) => params.onPreload?.(event, true)}
       onClick={(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;

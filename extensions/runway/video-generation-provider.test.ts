@@ -17,7 +17,8 @@ import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generatio
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { testVideoGenerationDeadlines } from "../test-support/video-generation-deadline.test-support.js";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock, resolveProviderHttpRequestConfigMock } =
+  getProviderHttpMocks();
 const prompt = "a tiny lobster DJ under neon lights";
 const defaults = { provider: "runway", model: "gen4.5", prompt };
 const outputUrl = "https://example.com/out.mp4";
@@ -125,6 +126,15 @@ it.each<[string, Request, Record<string, unknown>]>([
     },
     { promptImage: "data:image/png;base64,cG5nLWJ5dGVz", ratio: "960:960", duration: 6 },
   ],
+  [
+    "video_to_video",
+    {
+      model: "gen4_aleph",
+      inputVideos: [{ url: "https://example.com/input.mp4" }],
+      aspectRatio: "1:1",
+    },
+    { model: "gen4_aleph", videoUri: "https://example.com/input.mp4", ratio: "960:960" },
+  ],
 ])("submits %s, polls, and downloads the output", async (endpoint, request, body) => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
   try {
@@ -165,6 +175,31 @@ it("authenticates video generation with a resolved file SecretRef provider overl
       assert(headers instanceof Headers);
       expect(headers.get("authorization")).toBe("Bearer runway-resolved-test-key");
     });
+});
+
+it("keeps the resolved proxy and private-network route while polling", async () => {
+  const dispatcherPolicy = {
+    mode: "explicit-proxy" as const,
+    proxyUrl: "http://proxy.example:8080",
+  };
+  resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => ({
+    baseUrl: params.defaultBaseUrl,
+    headers: new Headers(params.defaultHeaders),
+    allowPrivateNetwork: true,
+    dispatcherPolicy,
+  }));
+  mockSuccessfulTask();
+
+  await generateVideo();
+
+  const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
+  expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+    expect.objectContaining({
+      url: "https://api.dev.runwayml.com/v1/tasks/task-1",
+      dispatcherPolicy,
+      policy: expect.objectContaining({ allowPrivateNetwork: true }),
+    }),
+  );
 });
 
 type Failure = [string, Request, (() => ReturnType<typeof mockSubmission>)?];

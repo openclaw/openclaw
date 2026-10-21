@@ -1,9 +1,15 @@
 /* @vitest-environment jsdom */
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
-import { chatPaneHeaderSessionRow as row } from "./chat-pane-header.test-support.ts";
-import { canRevealSessionWorkspace, resolveChatPaneParentSession } from "./chat-pane-header.tsx";
+import {
+  canRevealSessionWorkspace,
+  resolveChatPaneParentSession,
+} from "./chat-pane-header-identity.tsx";
+import {
+  chatPaneHeaderSessionRow as row,
+  mountChatPaneHeader,
+} from "./chat-pane-header.test-support.ts";
 
 it("omits unresolved and self-referential parents", () => {
   const child = row({ key: "agent:main:child", parentSessionKey: "agent:main:missing" });
@@ -47,8 +53,26 @@ it.each<WorkspaceCase>([
     { agentWorkspace, worktreePath: "/local/worktree" },
   ],
   [{}, { root: repo, label: "openclaw" }, { agentWorkspace: repo }],
+  [
+    { key: "agent:bot-stable-id:main" },
+    { root: "/local/workspace/bot-stable-id", label: "Workspace" },
+    { agentWorkspace: "/local/workspace/bot-stable-id" },
+  ],
 ])("resolves workspace from %j", (session, expected, options) => {
   expect(resolveSessionWorkspace({ session: row(session), ...options })).toEqual(expected);
+});
+
+it("does not expose a new agent's storage ID in the workspace breadcrumb tooltip", () => {
+  const containers: HTMLElement[] = [];
+  const { container } = mountChatPaneHeader(containers, {
+    session: row({ key: "agent:bot-stable-id:main" }),
+    workspaceRoot: "/local/workspace/bot-stable-id",
+    workspaceLabel: "Workspace",
+  });
+  onTestFinished(() => containers.forEach((mounted) => mounted.remove()));
+  const crumb = container.querySelector<HTMLElement>(".chat-pane__workspace-chip");
+  expect(crumb?.textContent).toContain("Workspace");
+  expect(crumb?.getAttribute("title")).toBe("Workspace");
 });
 
 it.each<Partial<Parameters<typeof canRevealSessionWorkspace>[0]>>([

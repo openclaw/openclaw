@@ -58,14 +58,10 @@ function resolveRawMSTeamsAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MSTeamsSetupAccountConfig {
-  const normalized = normalizeAccountId(accountId);
   const msteams = cfg.channels?.msteams ?? {};
-  if (normalized === DEFAULT_ACCOUNT_ID) {
-    const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
-    return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? msteams;
-  }
-  const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
-  return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? {};
+  const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, accountId);
+  const rawAccount = rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined;
+  return rawAccount ?? (accountId === DEFAULT_ACCOUNT_ID ? msteams : {});
 }
 
 function resolveCredentialsForSetup(cfg: OpenClawConfig, accountId: string) {

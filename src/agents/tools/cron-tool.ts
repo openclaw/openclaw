@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
@@ -18,7 +17,6 @@ import {
   CRON_MANAGEMENT_METHODS,
   isCronModelManagementAllowed,
 } from "../../gateway/cron-creator-authority-grant.js";
-import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -40,6 +38,7 @@ import {
   readPositiveIntegerParam,
   readToolStringParam,
 } from "./common.js";
+import { createCronAutomationActions } from "./cron-tool-automation.js";
 import {
   isEmptyRecoveredCronPatch,
   readCronToolJob,
@@ -118,9 +117,12 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || action === "status" || action === "list") {
     return;
   }
-  if (["next_check", "get", "remove", "runs"].includes(action)) {
+  const invocationAction = ["next_check", "scratch_get", "scratch_set", "record_result"].includes(
+    action,
+  );
+  if (invocationAction || ["get", "remove", "runs"].includes(action)) {
     const id = readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
-    if (id === selfRemoveOnlyJobId || (action === "next_check" && !id)) {
+    if (id === selfRemoveOnlyJobId || (invocationAction && !id)) {
       return;
     }
   }
@@ -143,6 +145,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const managementAuthority = bindCronManagementGrant(opts?.runId, config);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   const allowCommandJobs = config?.tools?.gatewayPolicy?.automations?.allowCommandJobs !== false;
+  const automation = createCronAutomationActions(opts);
+  const { activeRun, nextCheckEnabled, assertCurrent: assertCurrentRun } = automation;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
   const selfRemoveOnly = Boolean(readCronSelfRemoveOnlyJobId(opts));
@@ -155,6 +159,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       callerScoped: !isCronModelManagementAllowed(config),
       readOnly,
       selfRemoveOnly,
+      activeRun,
+      nextCheckEnabled,
       managementOnly: managementAuthority?.managementOnly,
       allowCommandJobs,
     }),
@@ -165,10 +171,13 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
       selfRemoveOnly,
+      activeRun,
+      nextCheckEnabled,
       management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
     }),
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
+      assertCurrentRun?.();
       let streamExecPolicy: CronStreamExecPolicy | undefined;
       let streamExecutionApproval: CronStreamExecApprovalReceipt | undefined;
       const mutationResult = (result: unknown) =>
@@ -228,6 +237,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               agentId: callerAgentId,
               sessionKey: opts.agentSessionKey.trim(),
               turnSourceAccountId: opts.agentAccountId,
+              ...(assertCurrentRun ? { receiptAuthority: assertCurrentRun } : {}),
               ...(readCronSelfRemoveOnlyJobId(opts)
                 ? { cronSelfManagementJobId: readCronSelfRemoveOnlyJobId(opts) }
                 : {}),
@@ -285,6 +295,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
           requesterAuthority,
           operationSignal,
           readStreamExecPolicy: () => streamExecPolicy,
+          assertCurrent: assertCurrentRun,
           onEffectsStart,
         });
         const readTargetRevision = async (id: string) => {
@@ -494,7 +505,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 const shouldInfer =
                   (deliveryValue == null || delivery) &&
                   (mode === "" || mode === "announce") &&
-                  !hasTarget;
+                  !hasTarget &&
+                  delivery?.target !== "owner";
                 if (shouldInfer) {
                   const inferred = await resolveCronCreationDelivery({
                     cfg: runtimeConfig,
@@ -649,25 +661,11 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                   : `Not finished yet: it is still running, or it runs in this session and starts after this turn. Its delivery follows the job settings; ${followUp}. Do not schedule a verification job.`,
               });
             }
-            case "next_check": {
-              const jobId = readCronSelfRemoveOnlyJobId(opts);
-              const runId = opts?.runId?.trim();
-              if (!jobId || !runId) {
-                throw new Error("cron next_check is only available to the currently running job");
-              }
-              const rawDuration = readToolStringParam(params, "in", { required: true });
-              let delayMs: number;
-              try {
-                delayMs = parseDurationMs(rawDuration);
-              } catch {
-                throw new Error("cron next_check in must be a positive duration");
-              }
-              if (delayMs <= 0) {
-                throw new Error("cron next_check in must be a positive duration");
-              }
-              recordCronNextCheckProposal(runId, jobId, delayMs);
-              return jsonResult({ ok: true, delayMs });
-            }
+            case "scratch_get":
+            case "scratch_set":
+            case "record_result":
+            case "next_check":
+              return await automation.execute(action, params, callGateway, gatewayOpts);
             case "wake": {
               const text = readToolStringParam(params, "text", { required: true });
               const mode =

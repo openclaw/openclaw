@@ -1,7 +1,5 @@
-// Tests the ACP command boundary around plugin-owned conversation resolution.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelCommandConversationContext } from "../../../channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ChannelConfiguredBindingProvider } from "../../../channels/plugins/types.adapters.js";
 import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -13,134 +11,99 @@ import {
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
 
-const baseCfg = {
-  session: { mainKey: "main", scope: "per-sender" },
-} satisfies OpenClawConfig;
-const resolveCommandConversation = vi.fn(
-  (
-    _params: ChannelCommandConversationContext,
-  ): {
-    conversationId: string;
-    parentConversationId?: string;
-  } | null => null,
-);
-
-function installContextPlugin(selfParentConversationByDefault = false): void {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "test-acp",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: "test-acp",
-            config: {
-              listAccountIds: () => ["default", "work"],
-              defaultAccountId: () => "work",
-            },
-          }),
-          bindings: { resolveCommandConversation, selfParentConversationByDefault },
-        },
-      },
-    ]),
-  );
+const resolveCommandConversation =
+  vi.fn<NonNullable<ChannelConfiguredBindingProvider["resolveCommandConversation"]>>();
+function commandParams(ctx: Parameters<typeof buildCommandTestParams>[2]) {
+  return buildCommandTestParams("/acp status", {}, ctx);
 }
 
-describe("commands-acp context", () => {
-  beforeEach(() => {
-    resolveCommandConversation.mockReset().mockReturnValue(null);
-    installContextPlugin();
+function expectContext(
+  ctx: Parameters<typeof commandParams>[0],
+  expected: ReturnType<typeof resolveAcpCommandBindingContext>,
+) {
+  expect(resolveAcpCommandBindingContext(commandParams(ctx))).toEqual(expected);
+}
+
+const plugin = {
+  ...createChannelTestPluginBase({
+    id: "test-acp",
+    config: { listAccountIds: () => ["default", "work"], defaultAccountId: () => "work" },
+  }),
+  bindings: { resolveCommandConversation, selfParentConversationByDefault: false },
+};
+
+beforeEach(() => {
+  resolveCommandConversation.mockReset().mockReturnValue(null);
+  plugin.bindings.selfParentConversationByDefault = false;
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "test-acp", source: "test", plugin }]));
+});
+afterEach(() => resetPluginRuntimeStateForTest());
+
+it("passes authoritative command and message facts to the plugin resolver", () => {
+  const conversation = { conversationId: "peer", parentConversationId: "parent" };
+  resolveCommandConversation.mockReturnValue(conversation);
+  const params = commandParams({
+    Provider: "discord",
+    Surface: "discord",
+    OriginatingChannel: "test-acp",
+    OriginatingTo: "origin-target",
+    To: "fallback-target",
+    From: "source-sender",
+    ChatType: "group",
+    AccountId: "explicit-account",
+    MessageThreadId: 42,
+    ThreadParentId: "native-parent",
+    SenderId: "context-sender",
+    SessionKey: "context-session",
+    ParentSessionKey: "parent-session",
   });
-  afterEach(() => resetPluginRuntimeStateForTest());
+  params.command.senderId = "command-sender";
+  params.command.to = "command-target";
+  params.sessionKey = "command-session";
 
-  it("passes authoritative command and message facts to the plugin resolver", () => {
-    resolveCommandConversation.mockReturnValue({
-      conversationId: "plugin-conversation",
-      parentConversationId: "plugin-parent",
-    });
-    const params = buildCommandTestParams("/acp sessions", baseCfg, {
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "test-acp",
-      OriginatingTo: "origin-target",
-      To: "fallback-target",
-      From: "source-sender",
-      ChatType: "group",
-      AccountId: "explicit-account",
-      MessageThreadId: 42,
-      ThreadParentId: "native-parent",
-      SenderId: "context-sender",
-      SessionKey: "context-session",
-      ParentSessionKey: "parent-session",
-    });
-    params.command.senderId = "command-sender";
-    params.command.to = "command-target";
-    params.sessionKey = "command-session";
-
-    expect(resolveAcpCommandBindingContext(params)).toEqual({
-      channel: "test-acp",
-      accountId: "explicit-account",
-      threadId: "42",
-      conversationId: "plugin-conversation",
-      parentConversationId: "plugin-parent",
-    });
-    expect(resolveCommandConversation).toHaveBeenCalledExactlyOnceWith({
-      accountId: "explicit-account",
-      threadId: "42",
-      threadParentId: "native-parent",
-      senderId: "command-sender",
-      sessionKey: "command-session",
-      parentSessionKey: "parent-session",
-      from: "source-sender",
-      chatType: "group",
-      originatingTo: "origin-target",
-      commandTo: "command-target",
-      fallbackTo: "fallback-target",
-    });
+  expect(resolveAcpCommandBindingContext(params)).toEqual({
+    channel: "test-acp",
+    accountId: "explicit-account",
+    threadId: "42",
+    ...conversation,
   });
-
-  it("drops plugin self-parent defaults before ACP binding lookup", () => {
-    installContextPlugin(true);
-    resolveCommandConversation.mockReturnValue({ conversationId: "peer" });
-    const params = buildCommandTestParams("/acp status", baseCfg, {
-      OriginatingChannel: "test-acp",
-    });
-
-    expect(resolveAcpCommandBindingContext(params)).toEqual({
-      channel: "test-acp",
-      accountId: "work",
-      conversationId: "peer",
-    });
+  expect(resolveCommandConversation).toHaveBeenCalledExactlyOnceWith({
+    accountId: "explicit-account",
+    threadId: "42",
+    threadParentId: "native-parent",
+    senderId: "command-sender",
+    sessionKey: "command-session",
+    parentSessionKey: "parent-session",
+    from: "source-sender",
+    chatType: "group",
+    originatingTo: "origin-target",
+    commandTo: "command-target",
+    fallbackTo: "fallback-target",
   });
+});
 
-  it("falls back to the default account and generic target resolution", () => {
-    const params = buildCommandTestParams("/acp status", baseCfg, {
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      To: "<#123456789>",
-    });
+it("drops plugin self-parent defaults before ACP binding lookup", () => {
+  plugin.bindings.selfParentConversationByDefault = true;
+  resolveCommandConversation.mockReturnValue({ conversationId: "peer" });
+  expectContext(
+    { OriginatingChannel: "test-acp" },
+    { channel: "test-acp", accountId: "work", conversationId: "peer" },
+  );
+});
 
-    expect(resolveAcpCommandBindingContext(params)).toEqual({
-      channel: "slack",
-      accountId: "default",
-      conversationId: "123456789",
-    });
-  });
+it("falls back to the default account and generic target resolution", () => {
+  expectContext(
+    { Provider: "slack", Surface: "slack", OriginatingChannel: "slack", To: "<#123456789>" },
+    { channel: "slack", accountId: "default", conversationId: "123456789" },
+  );
+});
 
-  it.each([
-    { accountId: undefined, expected: "work" },
-    { accountId: "personal", expected: "personal" },
-  ])("keeps account $expected when no conversation can be resolved", ({ accountId, expected }) => {
-    const params = buildCommandTestParams("/acp status", baseCfg, {
-      OriginatingChannel: "test-acp",
-      AccountId: accountId,
-    });
-
-    expect(resolveAcpCommandBindingContext(params)).toEqual({
-      channel: "test-acp",
-      accountId: expected,
-      threadId: undefined,
-    });
-  });
+it.each([
+  { accountId: undefined, expected: "work" },
+  { accountId: "personal", expected: "personal" },
+])("keeps account $expected when no conversation can be resolved", ({ accountId, expected }) => {
+  expectContext(
+    { OriginatingChannel: "test-acp", AccountId: accountId },
+    { channel: "test-acp", accountId: expected, threadId: undefined },
+  );
 });

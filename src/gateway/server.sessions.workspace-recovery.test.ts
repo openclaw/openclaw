@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -41,10 +40,10 @@ type RecoveryScenario =
   | "stale pending epoch";
 
 async function seedPendingWorkspace(scenario: RecoveryScenario) {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const { sessionId, sessionKey, agentId } = REQUEST;
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const database = openOpenClawStateDatabase({ path: path.join(dir, "placements.sqlite") });
+  const database = openOpenClawStateDatabase();
   const placements = createWorkerSessionPlacementStore({ database });
   const { attached } = createDispatchEnvironmentFixtures();
   const environment = {

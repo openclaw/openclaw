@@ -44,6 +44,7 @@ import {
 } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
+import { withUpdatePreviewSignals } from "./update-command-preview-signals.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
@@ -261,14 +262,16 @@ export async function initializeAndRunUpdate(
               }
               const target = initialization.target;
               if (opts.dryRun) {
-                return await previewUpdateCommand({
-                  target,
-                  prepared,
-                  opts,
-                  runId,
-                  invocationCwd,
-                  updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                });
+                return await withUpdatePreviewSignals(opts, () =>
+                  previewUpdateCommand({
+                    target,
+                    prepared,
+                    opts,
+                    runId,
+                    invocationCwd,
+                    updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                  }),
+                );
               }
               const artifact =
                 target.updateInstallKind === "package" &&

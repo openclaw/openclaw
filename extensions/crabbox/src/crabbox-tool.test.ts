@@ -1,6 +1,5 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CrabboxEnvironment } from "./crabbox-tool-results.js";
 import { createCrabboxTool } from "./crabbox-tool.js";
 
 const context: OpenClawPluginToolContext = {
@@ -121,7 +120,7 @@ describe("Crabbox conversation tool", () => {
       "Crabbox environment-one is detached from this conversation.\nEnvironment: error (destroying).\nCleanup will retry",
     ],
   ])("does not claim lease release before confirmed cleanup (%s)", async (status, error, text) => {
-    const stopped: CrabboxEnvironment | undefined = status
+    const stopped = status
       ? { ...environment, status, worker: { state: "destroying", ...(error ? { error } : {}) } }
       : undefined;
     await reply("stop", { stopped: true, ...(stopped ? { environment: stopped } : {}) }, text);

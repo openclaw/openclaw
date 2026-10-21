@@ -61,7 +61,8 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-thinking-select="true"]').waitFor();
       await openChatSidePanelType(page, "Files");
-      await page.locator(".chat-workspace-rail").waitFor();
+      const workspace = page.locator('[data-panel-slot="workspace"]');
+      await workspace.waitFor({ state: "visible" });
       await expect
         .poll(() => composer.evaluate((node) => node.getBoundingClientRect().width))
         .toBeLessThan(360);
@@ -69,9 +70,10 @@ suite.define(() => {
       for (const width of [1100, 1280, 560, 393, 320]) {
         if (width === 560) {
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-          await page.locator(".chat-workspace-rail").waitFor({ state: "hidden" });
+          await workspace.waitFor({ state: "hidden" });
         }
         await page.setViewportSize({ width, height: 729 });
+        await composer.locator("textarea").click();
         await page.mouse.move(0, 0);
         await expect
           .poll(() =>

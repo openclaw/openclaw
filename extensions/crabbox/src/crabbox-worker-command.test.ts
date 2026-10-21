@@ -186,37 +186,28 @@ it("does not start another command when cancelled during retry backoff", async (
     signal: controller.signal,
   });
 });
-it.each(["output capture failed", "cleanup could not confirm process exit", "spawn ENOENT"])(
-  "reports the runner failure without retaining private error data: %s",
-  async (message) => {
-    const token = "synthetic-command-secret-0123456789";
-    const cause = Object.assign(
-      new Error(`${message} token=${token}`, {
-        cause: new Error(`nested token=${token}`),
-      }),
-      { stdout: token, stderr: token },
-    );
-    vi.spyOn(processRunner, "runCrabboxProcess").mockRejectedValue(cause);
-    const error = await runCrabboxCommand({
-      action: "warmup",
-      args: ["warmup"],
-      binary: "crabbox",
-      timeoutMs: 1_000,
-    }).catch((rejection: unknown) => rejection);
-    expect(error).toMatchObject({
-      message: expect.stringContaining(`Crabbox warmup execution failed: ${message}`),
-    });
-    for (let current: unknown = error; current instanceof Error; current = current.cause) {
-      expect(current.message).not.toContain(token);
-    }
-    expect(inspectValue(error, { depth: null })).not.toContain(token);
-    expect(error).not.toHaveProperty("cause");
-    expect(error).toHaveProperty(
-      "message",
-      expect.not.stringContaining("synthetic-command-secret"),
-    );
-  },
-);
+it("reports the runner failure without retaining private error data", async () => {
+  const token = "synthetic-command-secret-0123456789";
+  const cause = Object.assign(
+    new Error(`output capture failed token=${token}`, {
+      cause: new Error(`nested token=${token}`),
+    }),
+    { stdout: token, stderr: token },
+  );
+  vi.spyOn(processRunner, "runCrabboxProcess").mockRejectedValue(cause);
+  const error = await runCrabboxCommand({
+    action: "warmup",
+    args: ["warmup"],
+    binary: "crabbox",
+    timeoutMs: 1_000,
+  }).catch((rejection: unknown) => rejection);
+  expect(error).toMatchObject({
+    message: expect.stringContaining("Crabbox warmup execution failed: output capture failed"),
+  });
+  expect(inspectValue(error, { depth: null })).not.toContain(token);
+  expect(error).not.toHaveProperty("cause");
+  expect(error).toHaveProperty("message", expect.not.stringContaining("synthetic-command-secret"));
+});
 
 const metadataQuery = (text: string) =>
   text.replace(`${LEASE_ID}:`, `${LEASE_ID}?providerMetadata=authoritative:`);

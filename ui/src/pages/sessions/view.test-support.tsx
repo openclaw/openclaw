@@ -47,7 +47,7 @@ export function buildProps(result: SessionsListResult): SessionsProps {
     searchQuery: "",
     transcriptSearchAvailable: true,
     transcriptSearchQuery: "",
-    transcriptSearch: { status: "idle" },
+    transcriptSearch: null,
     agentIdentityById: {},
     sortColumn: "updated",
     sortDir: "desc",

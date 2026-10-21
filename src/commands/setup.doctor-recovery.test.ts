@@ -11,7 +11,7 @@ import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import { setupCommand } from "./setup.js";
-import { makePrompter } from "./setup/__tests__/test-utils.js";
+import { makePrompter, makeRuntime } from "./setup/__tests__/test-utils.js";
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
@@ -22,17 +22,9 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit:${code}`);
-    }),
-  };
-}
-
 it("points failed setup to a repair that works without a terminal", async () => {
+  const repairHint =
+    "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run setup.";
   const stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
   Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
   try {
@@ -52,28 +44,25 @@ it("points failed setup to a repair that works without a terminal", async () => 
         const original = await fs.readFile(configPath, "utf8");
         expect((await readConfigFileSnapshot()).valid).toBe(false);
 
-        const baseline = createRuntime();
+        const baseline = makeRuntime();
         await expect(setupCommand({ json: true }, baseline)).rejects.toThrow("exit:1");
-        const nonInteractive = createRuntime();
+        const nonInteractive = makeRuntime();
         await expect(
           runNonInteractiveSetup(
             { nonInteractive: true, acceptRisk: true, json: true },
             nonInteractive,
           ),
         ).rejects.toThrow("exit:1");
-        const classic = createRuntime();
         const prompter = makePrompter({
           select: vi.fn(async () => {
             throw new Error("Invalid config must stop before setup prompts");
           }),
         });
-        await expect(runSetupWizard({ acceptRisk: true }, classic, prompter)).rejects.toThrow(
+        await expect(runSetupWizard({ acceptRisk: true }, makeRuntime(), prompter)).rejects.toThrow(
           "exit:1",
         );
         expect(prompter.select).not.toHaveBeenCalled();
-        expect(prompter.outro).toHaveBeenCalledWith(
-          "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run setup.",
-        );
+        expect(prompter.outro).toHaveBeenCalledWith(repairHint);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
 
         await using guided = await prepareDoctorContext(configPath, { options: {} });
@@ -95,11 +84,11 @@ it("points failed setup to a repair that works without a terminal", async () => 
         expect(repaired.config.browser).toEqual({ enabled: false });
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
 
-        const retry = createRuntime();
+        const retry = makeRuntime();
         await setupCommand({ json: true }, retry);
         expect(retry.exit).not.toHaveBeenCalled();
         expect(retry.error).not.toHaveBeenCalled();
-        expect(JSON.parse(String(retry.log.mock.calls[0]?.[0]))).toMatchObject({
+        expect(JSON.parse(String(vi.mocked(retry.log).mock.calls[0]?.[0]))).toMatchObject({
           ok: true,
           workspaceDir: workspace,
           configStatus: "unchanged",
@@ -108,9 +97,7 @@ it("points failed setup to a repair that works without a terminal", async () => 
         expect(baseline.error).toHaveBeenCalledWith(
           expect.stringContaining("openclaw doctor --fix"),
         );
-        expect(nonInteractive.error).toHaveBeenCalledWith(
-          "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run setup.",
-        );
+        expect(nonInteractive.error).toHaveBeenCalledWith(repairHint);
       });
     });
   } finally {

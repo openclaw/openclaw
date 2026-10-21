@@ -390,10 +390,40 @@ describe("X publication production-owner composition", () => {
         if (!signal.aborted) {
           throw error;
         }
-        // Cleanup uses the same signal; preserve the first interrupted await.
-        interruptedWait ??= new Error(`X publication ${activeCase}: waiting for ${description}`, {
-          cause: error,
-        });
+        // Capture before cleanup restores the spy and clears its call history.
+        // Keep only the accepted child's cached status/error, never transcript payloads.
+        if (!interruptedWait) {
+          const allowed = outcomes.get("allowed");
+          const child =
+            isRecord(allowed) &&
+            allowed.status === "accepted" &&
+            typeof allowed.childSessionKey === "string" &&
+            typeof allowed.runId === "string"
+              ? { sessionKey: allowed.childSessionKey, runId: allowed.runId }
+              : undefined;
+          const cached = child ? gateway.dedupe.get(`chat:${child.runId}`) : undefined;
+          const payload = isRecord(cached?.payload) ? cached.payload : undefined;
+          const diagnostic = child
+            ? {
+                ...child,
+                embeddedRunnerEntries: model.mock.calls.filter(
+                  ([params]) => params.sessionKey === child.sessionKey,
+                ).length,
+                cachedStatus: typeof payload?.status === "string" ? payload.status : null,
+                cachedErrorCode: cached?.error?.code ?? null,
+                cachedError:
+                  cached?.error?.message ??
+                  (typeof payload?.summary === "string" ? payload.summary : null),
+              }
+            : undefined;
+          // Cleanup uses the same signal; preserve the first interrupted await.
+          interruptedWait = new Error(
+            `X publication ${activeCase}: waiting for ${description}${
+              diagnostic ? `; allowed child: ${JSON.stringify(diagnostic)}` : ""
+            }`,
+            { cause: error },
+          );
+        }
         throw interruptedWait;
       }
     };

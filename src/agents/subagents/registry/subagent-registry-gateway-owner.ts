@@ -7,6 +7,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../../infra/restart-recovery-errors.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
@@ -314,7 +315,10 @@ async function restoreSubagentCompletionSource(
       deferredCompletionSources.add(runtimeKey);
       return;
     }
-    if (error instanceof GatewayOperatorAccessDeniedError) {
+    if (
+      error instanceof GatewayOperatorAccessDeniedError ||
+      error instanceof GatewayOperatorRecoveryAuthorizationError
+    ) {
       unrestorableCompletionSources.set(
         runtimeKey,
         "The original operator no longer has access to this requester continuation",

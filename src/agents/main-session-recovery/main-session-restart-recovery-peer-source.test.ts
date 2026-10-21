@@ -16,13 +16,17 @@ import { prepareConsumedSessionSendSource } from "../../gateway/session-send-rec
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { acceptCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import { seedConsumedPeerRestartInput } from "./main-session-restart-recovery-peer-source.test-support.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 
+type Dispatch = GatewayRecoveryRuntime["dispatchAgent"];
 afterEach(() => {
   testing.resetSessionControllerForTest();
   resetGatewayWorkAdmission();
@@ -30,40 +34,69 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function peerFixture(state: OpenClawTestState) {
+  const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
+    session: { store: storePath, communication: { send: "always", receive: "always" } },
+    tools: { sessions: { visibility: "all" } },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  const endpoint = (name: string) => ({
+    agentId: "main",
+    sessionKey: `agent:main:${name}`,
+    sessionId: `${name}-session`,
+    lifecycleRevision: `${name}-generation`,
+    storePath,
+  });
+  const prepare = (target: ReturnType<typeof endpoint>, sourceRunId: string) =>
+    prepareConsumedSessionSendSource({ config: cfg, target, sourceRunId, assertCurrent() {} });
+  const restart = async () => {
+    await cleanupSessionStateForTest({ stateDir: state.stateDir });
+    rotateAgentEventLifecycleGeneration();
+    await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: state.stateDir });
+  };
+  const recover = (
+    gatewayRuntime: GatewayRecoveryRuntime,
+    options?: Pick<Parameters<typeof recoverStore>[0], "onSkipped" | "shouldContinue">,
+  ) =>
+    recoverStore({
+      storeAgentId: "main",
+      storePath,
+      cfg,
+      handledSessionKeys: new Set(),
+      gatewayRuntime,
+      ...options,
+    });
+  return { cfg, stateDir: state.stateDir, endpoint, prepare, restart, recover };
+}
+
+const withPeerState = (run: (fixture: ReturnType<typeof peerFixture>) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, (state) => run(peerFixture(state)));
+
+function idleRuntime(): GatewayRecoveryRuntime {
+  return {
+    resumeChatInput: vi.fn(),
+    prepareRestartRecovery: () => undefined,
+    dispatchSessionMethod: vi.fn(),
+    waitForAgent: vi.fn(),
+    dispatchAgent: vi.fn(),
+    sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
+  };
+}
+
 it.each(["exact", "legacy"] as const)(
   "restores the %s peer source when the recovery run ID is also a legacy transcript key",
-  async (selected) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-      const endpoint = (name: string) => ({
-        agentId: "main",
-        sessionKey: `agent:main:${name}`,
-        sessionId: `${name}-session`,
-        lifecycleRevision: `${name}-generation`,
-        storePath,
-      });
+  (selected) =>
+    withPeerState(async ({ cfg, endpoint, prepare }) => {
       const legacy = endpoint("legacy-source");
       const exact = endpoint("exact-source");
       const target = endpoint("collision-target");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
-        session: { store: storePath, communication: { send: "always", receive: "always" } },
-        tools: { sessions: { visibility: "all" } },
-      };
-      setRuntimeConfigSnapshot(cfg);
       await seedConsumedPeerRestartInput({ cfg, source: legacy, target, runId: "foo" });
       if (selected === "exact") {
         await seedConsumedPeerRestartInput({ cfg, source: exact, target, runId: "foo:user" });
       }
-      const recovered = expectDefined(
-        await prepareConsumedSessionSendSource({
-          config: cfg,
-          target,
-          sourceRunId: "foo:user",
-          assertCurrent() {},
-        }),
-        "selected peer source",
-      );
+      const recovered = expectDefined(await prepare(target, "foo:user"), "selected peer source");
       try {
         if (selected === "exact") {
           await updateSessionEntry(legacy, () => ({ communication: { send: "never" } }));
@@ -74,53 +107,22 @@ it.each(["exact", "legacy"] as const)(
           communication: { send: "never" },
         }));
         expect(() => recovered.source()).toThrow();
-        expect(
-          await prepareConsumedSessionSendSource({
-            config: cfg,
-            target,
-            sourceRunId: "foo:user",
-            assertCurrent() {},
-          }),
-        ).toBeUndefined();
+        expect(await prepare(target, "foo:user")).toBeUndefined();
       } finally {
         recovered.release();
       }
-    });
-  },
+    }),
 );
 
 it.each(["permission", "replacement"] as const)(
   "keeps consumed peer authority through committed compaction without bypassing %s revocation",
-  async (revocation) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-      const source = {
-        agentId: "main",
-        sessionKey: "agent:main:compaction-source",
-        sessionId: "compaction-source-session",
-        lifecycleRevision: "compaction-source-generation",
-        storePath,
-      };
-      const target = {
-        ...source,
-        sessionKey: "agent:main:compaction-target",
-        sessionId: "compaction-target-session",
-        lifecycleRevision: "compaction-target-generation",
-      };
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
-        session: { store: storePath, communication: { send: "always", receive: "always" } },
-        tools: { sessions: { visibility: "all" } },
-      };
-      setRuntimeConfigSnapshot(cfg);
+  (revocation) =>
+    withPeerState(async ({ cfg, endpoint, prepare }) => {
+      const source = endpoint("compaction-source");
+      const target = endpoint("compaction-target");
       await seedConsumedPeerRestartInput({ cfg, source, target, runId: "compacting-peer-input" });
       const recovered = expectDefined(
-        await prepareConsumedSessionSendSource({
-          config: cfg,
-          target,
-          sourceRunId: "compacting-peer-input",
-          assertCurrent() {},
-        }),
+        await prepare(target, "compacting-peer-input"),
         "consumed peer source",
       );
       try {
@@ -151,43 +153,22 @@ it.each(["permission", "replacement"] as const)(
       } finally {
         recovered.release();
       }
-    });
-  },
+    }),
 );
 
 it.each(["reset", "archive", "deny"] as const)(
   "settles a consumed peer input once when its sender changes before recovery: %s",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-      const source = {
-        agentId: "main",
-        sessionKey: "agent:main:revoked-source",
-        sessionId: "revoked-source-session",
-        lifecycleRevision: "revoked-source-generation",
-        storePath,
-      };
-      const target = {
-        ...source,
-        sessionKey: "agent:main:revoked-target",
-        sessionId: "revoked-target-session",
-        lifecycleRevision: "revoked-target-generation",
-      };
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
-        session: { store: storePath, communication: { send: "always", receive: "always" } },
-        tools: { sessions: { visibility: "all" } },
-      };
-      setRuntimeConfigSnapshot(cfg);
+  (change) =>
+    withPeerState(async ({ cfg, endpoint, restart, recover }) => {
+      const source = endpoint("revoked-source");
+      const target = endpoint("revoked-target");
       const { originalTranscript } = await seedConsumedPeerRestartInput({
         cfg,
         source,
         target,
         runId: "revoked-peer-input",
       });
-      await cleanupSessionStateForTest({ stateDir: state.stateDir });
-      rotateAgentEventLifecycleGeneration();
-      await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: state.stateDir });
+      await restart();
       await updateSessionEntry(source, () =>
         change === "reset"
           ? { sessionId: "replacement-source-session", lifecycleRevision: "replacement-generation" }
@@ -195,23 +176,8 @@ it.each(["reset", "archive", "deny"] as const)(
             ? { archivedAt: Date.now() }
             : { communication: { send: "never" } },
       );
-      const runtime: GatewayRecoveryRuntime = {
-        resumeChatInput: vi.fn(),
-        prepareRestartRecovery: () => undefined,
-        dispatchSessionMethod: vi.fn(),
-        waitForAgent: vi.fn(),
-        sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
-        dispatchAgent: vi.fn(),
-      };
-      const recover = () =>
-        recoverStore({
-          storeAgentId: target.agentId,
-          storePath,
-          cfg,
-          handledSessionKeys: new Set(),
-          gatewayRuntime: runtime,
-        });
-      expect(await recover()).toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
+      const runtime = idleRuntime();
+      expect(await recover(runtime)).toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
       expect(runtime.dispatchAgent).not.toHaveBeenCalled();
       const settledTranscript = await loadTranscriptEvents(target);
       expect(settledTranscript).toHaveLength(originalTranscript.length + 1);
@@ -220,36 +186,16 @@ it.each(["reset", "archive", "deny"] as const)(
       );
       expect(loadSessionEntry(target)).toMatchObject({ status: "interrupted" });
       expect(loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
-      expect(await recover()).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+      expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
       expect(await loadTranscriptEvents(target)).toEqual(settledTranscript);
-    });
-  },
+    }),
 );
 
-it("leaves authenticated consumed inputs to their private requester recovery owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
-      session: { store: storePath, communication: { send: "always", receive: "always" } },
-      tools: { sessions: { visibility: "all" } },
-    };
-    setRuntimeConfigSnapshot(cfg);
+it("leaves authenticated consumed inputs to their private requester recovery owner", () =>
+  withPeerState(async ({ cfg, endpoint, prepare }) => {
     for (const kind of ["channel", "operator"] as const) {
-      const source = {
-        agentId: "main",
-        sessionKey: `agent:main:authenticated-source-${kind}`,
-        sessionId: `authenticated-source-${kind}`,
-        lifecycleRevision: `source-generation-${kind}`,
-        storePath,
-      };
-      const target = {
-        agentId: "main",
-        sessionKey: `agent:main:authenticated-target-${kind}`,
-        sessionId: `authenticated-target-${kind}`,
-        lifecycleRevision: `target-generation-${kind}`,
-        storePath,
-      };
+      const source = endpoint(`authenticated-source-${kind}`);
+      const target = endpoint(`authenticated-target-${kind}`);
       const runId = `authenticated-peer-${kind}`;
       const { receiver, originalTranscript } = await seedConsumedPeerRestartInput({
         cfg,
@@ -263,45 +209,19 @@ it("leaves authenticated consumed inputs to their private requester recovery own
             : { operatorProfileId: "fixture-operator" }),
         },
       });
-      expect(
-        await prepareConsumedSessionSendSource({
-          config: cfg,
-          target,
-          sourceRunId: runId,
-          assertCurrent() {},
-        }),
-      ).toBeUndefined();
+      expect(await prepare(target, runId)).toBeUndefined();
       expect(receiver).toHaveBeenCalledOnce();
       expect(await loadTranscriptEvents(target)).toEqual(originalTranscript);
     }
-  });
-});
+  }));
 
-it("recovers a consumed peer input through two process losses without replaying the input", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-    const source = {
-      agentId: "main",
-      sessionKey: "agent:main:peer-source",
-      sessionId: "peer-source-session",
-      lifecycleRevision: "peer-source-generation",
-    };
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:peer-target",
-      sessionId: "peer-target-session",
-      lifecycleRevision: "peer-target-generation",
-      storePath,
-    };
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
-      session: { store: storePath, communication: { send: "always", receive: "always" } },
-      tools: { sessions: { visibility: "all" } },
-    };
-    setRuntimeConfigSnapshot(cfg);
+it("recovers a consumed peer input through two process losses without replaying the input", () =>
+  withPeerState(async ({ cfg, stateDir, endpoint, restart, recover }) => {
+    const source = endpoint("peer-source");
+    const target = endpoint("peer-target");
     const { receiver, originalTranscript } = await seedConsumedPeerRestartInput({
       cfg,
-      source: { ...source, storePath },
+      source,
       target,
       runId: "accepted-peer-input",
     });
@@ -312,16 +232,8 @@ it("recovers a consumed peer input through two process losses without replaying 
     const skipped: string[] = [];
     let current = true;
     const runtime: GatewayRecoveryRuntime = {
-      resumeChatInput: vi.fn(),
-      prepareRestartRecovery: () => undefined,
-      dispatchSessionMethod: vi.fn(),
-      waitForAgent: vi.fn(),
-      sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
-      dispatchAgent: async <T>(
-        request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
-        _timeout?: number,
-        options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
-      ) => {
+      ...idleRuntime(),
+      dispatchAgent: async <T>(...[request, , options]: Parameters<Dispatch>) => {
         await options?.prepareDispatchCurrent?.();
         options?.assertAdmissionCurrent?.();
         dispatches.push(request.message);
@@ -335,33 +247,25 @@ it("recovers a consumed peer input through two process losses without replaying 
         return { runId: request.idempotencyKey, status: "ok" } as T;
       },
     };
-    const recover = () =>
-      recoverStore({
-        storeAgentId: target.agentId,
-        storePath,
-        cfg,
-        handledSessionKeys: new Set(),
-        gatewayRuntime: runtime,
+    const recoverCurrent = () =>
+      recover(runtime, {
         onSkipped: (reason) => skipped.push(reason),
         shouldContinue: () => current,
       });
     try {
-      await cleanupSessionStateForTest({ stateDir: state.stateDir });
-      rotateAgentEventLifecycleGeneration();
-      await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: state.stateDir });
-      const firstRecovery = await recover();
+      await restart();
+      expect(await recoverCurrent()).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
       expect(skipped).toEqual([]);
-      expect(firstRecovery).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
       expect(loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
       // The admitted continuation vanishes without a terminal owner receipt.
       current = false;
       dispatchGate.resolve();
-      await cleanupSessionStateForTest({ stateDir: state.stateDir });
+      await cleanupSessionStateForTest({ stateDir });
       testing.resetSessionControllerForTest();
       rotateAgentEventLifecycleGeneration();
       current = true;
-      await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: state.stateDir });
-      expect(await recover()).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
+      await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir });
+      expect(await recoverCurrent()).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
       expect(dispatches).toHaveLength(2);
       expect(
         dispatches.every((prompt) => prompt.includes("Your previous turn was interrupted")),
@@ -378,5 +282,4 @@ it("recovers a consumed peer input through two process losses without replaying 
       dispatchGate.resolve();
       finalDispatchGate.resolve();
     }
-  });
-});
+  }));

@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionTranscriptDisplayDeltaResult,
@@ -70,6 +71,7 @@ const recentHistoryWindows = new Map<
     page: SessionTranscriptMessageEventPage;
   }
 >();
+channel("openclaw.memory.critical").subscribe(() => recentHistoryWindows.clear());
 const historyWindowOwners = new WeakSet<CurrentTranscriptProjection["database"]["db"]>();
 
 function retainHistoryWindowOwner(database: CurrentTranscriptProjection["database"]["db"]): void {

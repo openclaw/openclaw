@@ -1,4 +1,13 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
 import type {
   McpAppSettings,
   McpAppSettingsParams,
@@ -17,6 +26,10 @@ import "../../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
 
+const McpAppView = lazy(() => import("../mcp-app-view-registration.ts"), {
+  export: "McpAppView",
+});
+
 type McpAppPanelProps = { launch?: McpAppOpenDetail };
 
 export function McpAppPanel(props: McpAppPanelProps) {
@@ -28,7 +41,6 @@ export function McpAppPanel(props: McpAppPanelProps) {
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal("");
   const [settings, setSettings] = createSignal<McpAppSettings | null>(null);
-  let View: (typeof import("../mcp-app-view.tsx"))["McpAppView"] | undefined;
   let generation = 0;
   let mounted = true;
   const launchIdentity = () => {
@@ -43,7 +55,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
       launch?.quickAction,
     ]);
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     mounted = false;
     generation++;
   });
@@ -83,7 +95,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
     setNotice("");
     try {
       if (loadView) {
-        View = (await import("../mcp-app-view-registration.ts")).McpAppView;
+        await McpAppView.preload();
         // Loading presentation yields; recheck the live target before invoking a tool.
         if (!current()) {
           return;
@@ -262,17 +274,18 @@ export function McpAppPanel(props: McpAppPanelProps) {
                     ? current
                     : (previous ?? initialLaunch);
                 });
-                const LoadedView = View;
-                return id && LoadedView ? (
-                  <LoadedView
-                    sessionKey={viewLaunch().sessionKey}
-                    agentId={viewLaunch().agentId ?? ""}
-                    viewId={id}
-                    title={viewLaunch().entrypoint.title}
-                    deepLink={viewLaunch().deepLink}
-                    onRelaunch={() => void open()}
-                    relaunching={busy()}
-                  />
+                return id ? (
+                  <Loading>
+                    <McpAppView
+                      sessionKey={viewLaunch().sessionKey}
+                      agentId={viewLaunch().agentId ?? ""}
+                      viewId={id}
+                      title={viewLaunch().entrypoint.title}
+                      deepLink={viewLaunch().deepLink}
+                      onRelaunch={() => void open()}
+                      relaunching={busy()}
+                    />
+                  </Loading>
                 ) : undefined;
               }}
             </McpAppRetirement>

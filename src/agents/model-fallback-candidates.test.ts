@@ -9,7 +9,41 @@ import {
   resolveModelCandidateChain,
 } from "./model-fallback-candidates.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
+import type { ModelFallbackCandidate } from "./model-fallback.types.js";
+import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+type Defaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+function imageConfig(
+  imageModel: Defaults["imageModel"],
+  models?: Defaults["models"],
+): OpenClawConfig {
+  return { agents: { defaults: { imageModel, models } } };
+}
+function candidate(
+  model: string,
+  routeOrigin: ModelFallbackCandidate["routeOrigin"],
+  provider = "custom",
+) {
+  return { provider, model, routeOrigin, routeResolution: "resolved" };
+}
+function runImage(
+  cfg: OpenClawConfig,
+  metadataSnapshot = createPluginMetadataSnapshotFixture(),
+  options: {
+    modelOverride?: string;
+    run?: (provider: string, model: string) => Promise<string>;
+  } = {},
+) {
+  return withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+    runWithImageModelFallback({
+      cfg,
+      manifestPlugins: [],
+      run: async (provider, model) => `${provider}/${model}`,
+      ...options,
+    }),
+  );
+}
 
 const customProvider: ModelProviderConfig = {
   api: "openai-completions",
@@ -24,49 +58,26 @@ const customProvider: ModelProviderConfig = {
   ),
 };
 
-describe("resolveModelCandidateChain", () => {
-  it("preserves literal requested model namespaces while deduplicating fallback routes", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "custom/model",
-            fallbacks: ["custom/custom/model", "custom/model", "custom/custom/model"],
-          },
-        },
-      },
-      models: {
-        providers: {
-          custom: customProvider,
-        },
-      },
-    };
+it("preserves literal requested model namespaces while deduplicating fallback routes", () => {
+  const cfg: OpenClawConfig = {
+    ...createModelFallbackConfig("custom/model", [
+      "custom/custom/model",
+      "custom/model",
+      "custom/custom/model",
+    ]),
+    models: { providers: { custom: customProvider } },
+  };
 
-    expect(
-      resolveModelCandidateChain({
-        cfg,
-        provider: " Custom ",
-        model: "custom/model",
-        requestedRouteResolution: "resolved",
-        manifestPlugins: [],
-      }),
-    ).toEqual([
-      {
-        provider: "custom",
-        model: "custom/model",
-        routeOrigin: "requested",
-        routeResolution: "resolved",
-      },
-      {
-        provider: "custom",
-        model: "model",
-        routeOrigin: "configured-fallback",
-        routeResolution: "resolved",
-      },
-    ]);
-  });
+  expect(
+    resolveModelCandidateChain({
+      cfg,
+      provider: " Custom ",
+      model: "custom/model",
+      requestedRouteResolution: "resolved",
+      manifestPlugins: [],
+    }),
+  ).toEqual([candidate("custom/model", "requested"), candidate("model", "configured-fallback")]);
 });
-
 describe("resolveImageFallbackCandidates", () => {
   it.each([
     { kind: "override", api: undefined },
@@ -75,15 +86,13 @@ describe("resolveImageFallbackCandidates", () => {
     "uses one captured view for a bare $kind with provider API $api",
     async ({ kind, api }) => {
       const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            imageModel: { primary: "pick", fallbacks: ["backup"] },
-            models: {
-              "custom/first": { alias: "pick" },
-              "custom/second": { alias: "other" },
-            },
+        ...imageConfig(
+          { primary: "pick", fallbacks: ["backup"] },
+          {
+            "custom/first": { alias: "pick" },
+            "custom/second": { alias: "other" },
           },
-        },
+        ),
         models: {
           providers: {
             custom: {
@@ -110,16 +119,10 @@ describe("resolveImageFallbackCandidates", () => {
         }
         return `${provider}/${model}`;
       });
-      const result = await withPluginRuntimeGenerationScope(
-        { metadataSnapshot: foreignMetadata },
-        () =>
-          runWithImageModelFallback({
-            cfg,
-            manifestPlugins: [],
-            ...(kind === "override" ? { modelOverride: "backup" } : {}),
-            run,
-          }),
-      );
+      const result = await runImage(cfg, foreignMetadata, {
+        ...(kind === "override" ? { modelOverride: "backup" } : {}),
+        run,
+      });
       expect(result.result).toBe("custom/backup");
       expect(run.mock.calls.map(([provider, model]) => [provider, model])).toEqual(
         kind === "override"
@@ -133,61 +136,33 @@ describe("resolveImageFallbackCandidates", () => {
   );
 
   it("retains provider-qualified aliases from bare configured model keys", async () => {
-    const result = await withPluginRuntimeGenerationScope(
-      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-      () =>
-        runWithImageModelFallback({
-          cfg: {
-            agents: {
-              defaults: {
-                imageModel: { primary: "custom/pick" },
-                models: { underlying: { alias: "pick" } },
-              },
-            },
-          },
-          manifestPlugins: [],
-          run: async (provider, model) => `${provider}/${model}`,
-        }),
+    const result = await runImage(
+      imageConfig({ primary: "custom/pick" }, { underlying: { alias: "pick" } }),
     );
     expect(result.result).toBe("custom/underlying");
   });
 
   it("records unresolved configured entries without changing the resolved chain", async () => {
     const warnLogs = createWarnLogCapture("openclaw-image-fallback-candidates-test");
-    const cfg = {
-      agents: {
-        defaults: {
-          imageModel: {
-            primary: "openai/",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "/vision"],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = imageConfig({
+      primary: "openai/",
+      fallbacks: ["anthropic/claude-sonnet-4-6", "/vision"],
+    });
 
     try {
-      expect(
-        resolveImageFallbackCandidates({
-          cfg,
-        }),
-      ).toEqual([
-        {
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          routeOrigin: "configured-fallback",
-          routeResolution: "resolved",
-        },
+      expect(resolveImageFallbackCandidates({ cfg })).toEqual([
+        candidate("claude-sonnet-4-6", "configured-fallback", "anthropic"),
       ]);
-      expect(
-        await warnLogs.findText(
-          'Unresolved image model "openai/"; skipped configured-primary candidate.',
-        ),
-      ).toBeDefined();
-      expect(
-        await warnLogs.findText(
-          'Unresolved image model "/vision"; skipped configured-fallback candidate.',
-        ),
-      ).toBeDefined();
+      for (const [model, origin] of [
+        ["openai/", "primary"],
+        ["/vision", "fallback"],
+      ]) {
+        expect(
+          await warnLogs.findText(
+            `Unresolved image model "${model}"; skipped configured-${origin} candidate.`,
+          ),
+        ).toBeDefined();
+      }
     } finally {
       warnLogs.cleanup();
     }

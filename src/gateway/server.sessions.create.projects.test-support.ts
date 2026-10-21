@@ -15,47 +15,28 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 
 const execFileAsync = promisify(execFile);
+const git = (repo: string, ...args: string[]) => execFileAsync("git", ["-C", repo, ...args]);
 
 async function addWorkspaceOrigin(workspace: string): Promise<void> {
   const remote = `${workspace}.git`;
   await execFileAsync("git", ["clone", "--bare", workspace, remote]);
-  await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", remote]);
-  await execFileAsync("git", ["-C", workspace, "fetch", "origin"]);
-  await execFileAsync("git", ["-C", workspace, "remote", "set-head", "origin", "main"]);
+  await git(workspace, "remote", "add", "origin", remote);
+  await git(workspace, "fetch", "origin");
+  await git(workspace, "remote", "set-head", "origin", "main");
 }
 
-export async function createGitWorkspace(root: string): Promise<string> {
-  const workspace = path.join(root, "workspace");
-  await fs.mkdir(workspace, { recursive: true });
-  await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
-  await fs.writeFile(path.join(workspace, "README.md"), "base\n");
-  await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
-  await execFileAsync("git", [
-    "-c",
-    "user.name=OpenClaw Test",
-    "-c",
-    "user.email=openclaw-test@example.invalid",
-    "-C",
-    workspace,
-    "commit",
-    "-m",
-    "initial",
-  ]);
-  await addWorkspaceOrigin(workspace);
-  return await fs.realpath(workspace);
-}
+export const createGitWorkspace = (root: string) =>
+  initializeRepository(root, "workspace", "base\n");
 
 export async function copyGitWorkspace(template: string, root: string): Promise<string> {
   const workspace = path.join(root, "workspace");
-  await fs.cp(template, workspace, {
-    recursive: true,
-    mode: fsConstants.COPYFILE_FICLONE,
-  });
-  await fs.cp(`${template}.git`, `${workspace}.git`, {
-    recursive: true,
-    mode: fsConstants.COPYFILE_FICLONE,
-  });
-  await execFileAsync("git", ["-C", workspace, "remote", "set-url", "origin", `${workspace}.git`]);
+  for (const suffix of ["", ".git"]) {
+    await fs.cp(`${template}${suffix}`, `${workspace}${suffix}`, {
+      recursive: true,
+      mode: fsConstants.COPYFILE_FICLONE,
+    });
+  }
+  await git(workspace, "remote", "set-url", "origin", `${workspace}.git`);
   return await fs.realpath(workspace);
 }
 
@@ -73,25 +54,32 @@ export const controlUiClient = {
   } as never,
 };
 
-export async function initializeRepository(root: string, name: string): Promise<string> {
+export async function initializeRepository(root: string, name: string, readme = `${name}\n`) {
   const repo = path.join(root, name);
   await fs.mkdir(repo, { recursive: true });
-  await execFileAsync("git", ["init", "-b", "main", repo]);
-  await execFileAsync("git", ["-C", repo, "config", "user.name", "OpenClaw Tests"]);
-  await execFileAsync("git", ["-C", repo, "config", "user.email", "tests@openclaw.invalid"]);
-  await fs.writeFile(path.join(repo, "README.md"), `${name}\n`);
-  await execFileAsync("git", ["-C", repo, "add", "README.md"]);
-  await execFileAsync("git", ["-C", repo, "commit", "-m", "initial"]);
+  await git(repo, "init", "-b", "main");
+  await git(repo, "config", "user.name", "OpenClaw Tests");
+  await git(repo, "config", "user.email", "tests@openclaw.invalid");
+  await fs.writeFile(path.join(repo, "README.md"), readme);
+  await git(repo, "add", "README.md");
+  await git(repo, "commit", "-m", "initial");
   await addWorkspaceOrigin(repo);
   return await fs.realpath(repo);
 }
 
 export async function settleWorkspaceRuns(
+  ...scope: Parameters<typeof waitForCreatedSessionRun>
+): Promise<void> {
+  // Admission retains dispatch/title custody even after error-path deregistration.
+  expect(await waitForCreatedSessionRun(...scope)).toBe(true);
+}
+
+export async function waitForCreatedSessionRun(
   _context: unknown,
   storePath: string,
   sessionKey: string | undefined,
   abort = false,
-): Promise<void> {
+) {
   const targets = [...rpcSourceTesting].map(([runId, entry]) => ({ runId, entry }));
   const released = captureSessionControllerSettlement({
     scope: storePath,
@@ -102,30 +90,8 @@ export async function settleWorkspaceRuns(
       requestRpcSourceCancellation(entry);
     }
   }
-  // Error paths revoke registration before persisting failure; the admission
-  // retains custody until all dispatch and title work finishes in this test store.
-  expect(
-    await waitForChatAbortControllerRemoval({
-      targets,
-      timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
-    }),
-  ).toBe(true);
-  if (released) {
-    await withTimeout(released, SESSION_CONTROLLER_DRAIN_TIMEOUT_MS, "workspace run cleanup");
-  }
-}
-
-export async function waitForCreatedSessionRun(
-  _context: unknown,
-  storePath: string,
-  sessionKey: string | undefined,
-) {
-  const released = captureSessionControllerSettlement({
-    scope: storePath,
-    identities: [sessionKey],
-  });
   const removed = await waitForChatAbortControllerRemoval({
-    targets: [...rpcSourceTesting].map(([runId, entry]) => ({ runId, entry })),
+    targets,
     timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
   });
   if (released) {

@@ -59,7 +59,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     error: null,
     busy: false,
     form: { ...DEFAULT_CRON_FORM },
-    heartbeatScratch: "",
+    gateway: null,
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,

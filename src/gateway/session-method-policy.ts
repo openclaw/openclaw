@@ -103,6 +103,8 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
 const DIRECT_SESSION_READ_METHODS = new Set([
   "board.get",
   "chat.history",
+  "controlUi.sessionPullRequests.subscribe",
+  "controlUi.sessionPullRequests.checks",
   "sessions.processes.list",
   "sessions.describe",
   "sessions.get",

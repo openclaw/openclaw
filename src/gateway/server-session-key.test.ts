@@ -19,24 +19,29 @@ vi.mock("./session-utils.js", () => ({
 const { resolveSessionForRun } = await import("./server-session-key.js");
 
 function indexedProjection(store: Record<string, SessionEntry>, agentId = "main") {
-  const index = new Map<string, ReturnType<SessionRowProjection["findBySessionId"]>>();
-  for (const [key, entry] of Object.entries(store)) {
-    const rows = index.get(entry.sessionId) ?? [];
-    rows.push({
-      ...createSessionRow({
+  const rows = Object.entries(store).map(([key, entry]) =>
+    Object.assign(
+      createSessionRow({
         key,
         agentId: parseAgentSessionKey(key)?.agentId ?? agentId,
         storeTarget: { agentId: "main", storePath: "fixture" },
       }),
-      entry,
-    });
-    index.set(entry.sessionId, rows);
-  }
+      { entry },
+    ),
+  );
   return {
-    findBySessionId: vi.fn<SessionRowProjection["findBySessionId"]>(
-      (query) => index.get(query.sessionId) ?? [],
+    findBySessionId: vi.fn<SessionRowProjection["findBySessionId"]>((query) =>
+      rows.filter(({ entry }) => entry.sessionId === query.sessionId),
     ),
   };
+}
+function expectOwner(
+  runId: string,
+  options: Parameters<typeof resolveSessionForRun>[1],
+  sessionKey: string,
+  agentId = "main",
+) {
+  expect(resolveSessionForRun(runId, options)).toEqual({ sessionKey, agentId });
 }
 
 describe("resolveSessionForRun", () => {
@@ -73,10 +78,7 @@ describe("resolveSessionForRun", () => {
   it("defaults an unscoped persisted lookup to the sole configured agent", () => {
     hoisted.loadConfigMock.mockReturnValue({ agents: { entries: { work: {} } } });
     const projection = indexedProjection({ main: { sessionId: "run-1", updatedAt: 1 } }, "work");
-    expect(resolveSessionForRun("run-1", { projection })).toEqual({
-      sessionKey: "main",
-      agentId: "work",
-    });
+    expectOwner("run-1", { projection }, "main", "work");
     expect(projection.findBySessionId).toHaveBeenCalledWith({
       sessionId: "run-1",
       agentId: "work",
@@ -93,15 +95,14 @@ describe("resolveSessionForRun", () => {
       { global: { sessionId: "global-run", updatedAt: 1 } },
       "research",
     );
-    expect(resolveSessionForRun("global-run", { agentId: "research", projection })).toEqual({
-      sessionKey: "global",
-      agentId: "research",
-    });
+    expectOwner("global-run", { agentId: "research", projection }, "global", "research");
     registerAgentRunContext("qualified-run", { sessionKey: "agent:research:main" });
-    expect(resolveSessionForRun("qualified-run", { agentId: "research", projection })).toEqual({
-      sessionKey: "agent:research:main",
-      agentId: "research",
-    });
+    expectOwner(
+      "qualified-run",
+      { agentId: "research", projection },
+      "agent:research:main",
+      "research",
+    );
     expect(resolveSessionForRun("qualified-run", { agentId: "ops", projection })).toBeUndefined();
   });
 
@@ -129,10 +130,7 @@ describe("resolveSessionForRun", () => {
       session: { scope: "global" },
       agents: { entries: { work: {}, research: {} } },
     });
-    expect(resolveSessionForRun("pending", { projection })).toEqual({
-      sessionKey: "global",
-      agentId: "research",
-    });
+    expectOwner("pending", { projection }, "global", "research");
   });
 
   it("does not infer a stored parent for intentionally keyless internal runs", () => {
@@ -149,14 +147,8 @@ describe("resolveSessionForRun", () => {
       "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 1 },
     });
     registerAgentRunContext("run-1", { sessionKey: "agent:retired:acp:run-1" });
-    expect(resolveSessionForRun("run-1", { agentId: "main", projection })).toEqual({
-      sessionKey: "agent:main:acp:run-1",
-      agentId: "main",
-    });
-    expect(resolveSessionForRun("run-1", { projection })).toEqual({
-      sessionKey: "agent:retired:acp:run-1",
-      agentId: "retired",
-    });
+    expectOwner("run-1", { agentId: "main", projection }, "agent:main:acp:run-1");
+    expectOwner("run-1", { projection }, "agent:retired:acp:run-1", "retired");
   });
 
   it("never reloads the store when orphan events outlive the old miss TTL", () => {
@@ -183,10 +175,7 @@ describe("resolveSessionForRun", () => {
       "agent:main:first": { sessionId: "run-tied", updatedAt: 100 },
       "agent:main:second": { sessionId: "run-tied", updatedAt: 100 },
     });
-    expect(resolveSessionForRun("run-dup", { projection })).toEqual({
-      sessionKey: "agent:main:acp:run-dup",
-      agentId: "main",
-    });
+    expectOwner("run-dup", { projection }, "agent:main:acp:run-dup");
     expect(resolveSessionForRun("run-tied", { projection })).toBeUndefined();
   });
 });

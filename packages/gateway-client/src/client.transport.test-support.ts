@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import type { Server as HttpServer } from "node:http";
 import type { Server as HttpsServer } from "node:https";
 import type { AddressInfo, Server, Socket } from "node:net";
+import { promisify } from "node:util";
 import { afterEach } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
@@ -49,9 +51,7 @@ export function transportFixture(beforeSocketCleanup = () => {}) {
   async function startWebSocketServer() {
     const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     websockets.push(server);
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
+    await once(server, "listening");
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("websocket address unavailable");
@@ -65,10 +65,9 @@ export function transportFixture(beforeSocketCleanup = () => {}) {
   async function listen(server: Server) {
     servers.push(server);
     server.on("connection", trackSocket);
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    const listening = once(server, "listening");
+    server.listen(0, "127.0.0.1");
+    await listening;
     return (server.address() as AddressInfo).port;
   }
   afterEach(async () => {
@@ -88,9 +87,7 @@ export function transportFixture(beforeSocketCleanup = () => {}) {
       socket.destroy();
     }
     for (const server of servers.splice(0).toReversed()) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(server.close.bind(server))();
     }
     await waitForSocketDrain();
   });

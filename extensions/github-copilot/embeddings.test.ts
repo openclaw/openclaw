@@ -79,11 +79,9 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     resolveConfiguredSecretInputStringMock.mockResolvedValue({});
     resolveFirstGithubTokenMock.mockResolvedValue({
       githubToken: "test-token-placeholder",
-      hasProfile: false,
     });
     resolveCopilotRuntimeAuthMock.mockResolvedValue({
       apiKey: "test-token-placeholder",
-      source: "test",
       baseUrl: TEST_BASE_URL,
     });
   });
@@ -101,7 +99,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     resolveFirstGithubTokenMock.mockResolvedValueOnce({
       githubToken: "durable-github-token",
       githubDomain: "acme.ghe.com",
-      hasProfile: true,
     });
     mockModels();
 

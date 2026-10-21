@@ -3,7 +3,8 @@ import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import { makeChatHost, makeRequestMock, expectRequestCounts } from "./chat-host.test-support.ts";
+import { idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -23,27 +24,20 @@ it.each([
   "load failure after reconnect",
 ] as const)("retains outbox ownership across recovery module loading (%s)", async (scenario) => {
   const sessionKey = "agent:main:outbox-loading";
+  const history = idleChatHistory(sessionKey);
+  Object.assign(history.sessionInfo, {
+    sessionId: "outbox-session",
+    updatedAt: 2,
+    lastRunId: "finished-run",
+  });
   const host = createTestPageState(
     makeChatHost({
       sessionKey,
       currentSessionId: "outbox-session",
       chatRunId: "finished-run",
       chatMessage: "Retained outbox message",
-      chatError: null,
-      lastError: null,
       requestHandlers: {
-        "chat.history": {
-          messages: [],
-          sessionInfo: {
-            key: sessionKey,
-            sessionId: "outbox-session",
-            kind: "direct",
-            updatedAt: 2,
-            status: "done",
-            hasActiveRun: false,
-            lastRunId: "finished-run",
-          },
-        },
+        "chat.history": history,
         "chat.send": { runId: "next-run", status: "started", messageSeq: 1 },
       },
     }),
@@ -79,8 +73,7 @@ it.each([
     ]);
     const queued = listStoredChatOutboxes(host);
     expect(queued).toHaveLength(1);
-    expect(host.request.mock.calls.some(([method]) => method === "chat.history")).toBe(false);
-    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expectRequestCounts(host.request, { "chat.history": 0, "chat.send": 0 });
     renderedErrors.length = 0;
 
     if (scenario === "connection epoch" || scenario === "load failure after reconnect") {
@@ -107,8 +100,7 @@ it.each([
       expect(sends[0]?.[1]).toMatchObject({ sessionKey, message: "Retained outbox message" });
       expect(listStoredChatOutboxes(host)).toEqual([]);
     } else {
-      expect(host.request.mock.calls.some(([method]) => method === "chat.history")).toBe(false);
-      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+      expectRequestCounts(host.request, { "chat.history": 0, "chat.send": 0 });
       expect(listStoredChatOutboxes(host)).toEqual(queued);
       if (scenario === "load failure") {
         expect(host.chatError).toEqual(expect.any(String));
@@ -116,8 +108,7 @@ it.each([
         expect(host.lastError).toBe(host.chatError);
         expect(renderedErrors).toContain(host.chatError);
       } else {
-        expect(host.chatError).toBeNull();
-        expect(host.lastError).toBeNull();
+        expect(host).toMatchObject({ chatError: null, lastError: null });
         expect(renderedErrors).toEqual([]);
       }
     }

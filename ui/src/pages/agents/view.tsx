@@ -47,7 +47,6 @@ export type AgentsProps = Omit<
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">>;
   onOpenMemoryImport?: AgentsPageView["onOpenMemoryImport"];
   onOpenMemorySettings?: AgentsPageView["onOpenMemorySettings"];
-  onCreateClaw?: (agentId: string) => void;
 };
 
 export function AgentsPageHeader() {
@@ -124,16 +123,6 @@ export function Agents(props: AgentsProps) {
             <Show when={selectedAgent()}>
               {(agent) => (
                 <>
-                  <Show when={props.onCreateClaw}>
-                    <button
-                      type="button"
-                      class="btn btn--sm btn--ghost"
-                      title={t("clawsDraft.railHint")}
-                      onClick={() => props.onCreateClaw?.(agent().id)}
-                    >
-                      {t("clawsDraft.title")}
-                    </button>
-                  </Show>
                   <Show when={agent().id} keyed>
                     {(id) => {
                       let label!: HTMLSpanElement;

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import type { ClientCredentialReceipt } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import { validateStoredDeviceIdentity } from "./device-identity-material.js";
 import { stripExecApprovalsRawSocketCredentials } from "./exec-approvals-config.js";
@@ -27,6 +28,43 @@ export type LegacyDatabase = Pick<
 > & {
   exec_approvals_config: ApprovalRow;
 };
+
+/** Canonical predecessors consume legacy inputs even when the retained JSON changes. */
+export function resolveClientCredentialLegacyImportClaims(
+  source: EngineConnection,
+  options: {
+    identities: readonly Pick<LegacyDatabase["device_identities"], "identity_key">[];
+    nativeBootstrap: boolean;
+    authTablePresent: boolean;
+  },
+): ClientCredentialReceipt["legacyImports"] {
+  const claims: ClientCredentialReceipt["legacyImports"] = {};
+  for (const row of options.identities) {
+    if (
+      row.identity_key === "primary" ||
+      row.identity_key === "node" ||
+      row.identity_key === "shareExtension"
+    ) {
+      claims[`identity:${row.identity_key}`] = { sha256: null };
+      // Only an existing token table makes absence authoritative for native bootstraps.
+      if (options.authTablePresent) {
+        claims[`auth:${row.identity_key}`] = { sha256: null };
+      }
+    }
+  }
+  if (
+    !options.nativeBootstrap &&
+    tableExists(source, "migration_sources") &&
+    source
+      .prepare(
+        "SELECT 1 FROM migration_sources WHERE migration_kind = 'legacy-device-identity-json' LIMIT 1",
+      )
+      .get()
+  ) {
+    claims["identity:primary"] = { sha256: null };
+  }
+  return claims;
+}
 
 export function sourceRows(database: EngineConnection, nativeBootstrap: boolean) {
   const db = getNodeSqliteKysely<LegacyDatabase>(database);

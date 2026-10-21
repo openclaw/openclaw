@@ -47,6 +47,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/.github/actions/",
     "/scripts/lib/pnpm-lockfile-documents.mjs",
     "/scripts/ios-screenshot-evidence.mjs",
+    "/scripts/lib/ios-test-results.mjs",
     "/scripts/lib/direct-run.mjs",
     "/scripts/ci-static-step.sh",
     "/scripts/ci-collect-checks.sh",
@@ -465,6 +466,7 @@ it.concurrent.for([
     };
     const evidenceScripts = {
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
+      "scripts/lib/ios-test-results.mjs": "workflow XCTest result verifier\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
       "scripts/ci-static-step.sh": "workflow static-step script\n",
       "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",

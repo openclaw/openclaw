@@ -18,10 +18,10 @@ function credentialedShareUrl(): string {
   return url.href;
 }
 
-function webDavFileIdResponse(fileId: string): Response {
+function webDavFileIdResponse(fileId: string, status = 207): Response {
   return new Response(
     `<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:response><d:propstat><d:prop><oc:fileid>${fileId}</oc:fileid></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`,
-    { status: 207, headers: { "content-type": "application/xml" } },
+    { status, headers: { "content-type": "application/xml" } },
   );
 }
 
@@ -361,11 +361,28 @@ describe("Nextcloud Talk inbound media policy", () => {
   });
 
   it.each([
-    { webDavId: "9001", accepted: true },
-    { webDavId: "9002", accepted: false },
+    { webDavId: "9001", status: 207, accepted: true, failure: undefined },
+    {
+      webDavId: "9002",
+      status: 207,
+      accepted: false,
+      failure: { ok: false, reason: "media_message_mismatch" },
+    },
+    {
+      webDavId: "9001",
+      status: 200,
+      accepted: false,
+      failure: { ok: false, reason: "media_fetch_failed", status: 200 },
+    },
+    {
+      webDavId: "9001",
+      status: 404,
+      accepted: false,
+      failure: { ok: false, reason: "media_unavailable", status: 404 },
+    },
   ])(
-    "uses the recipient collision-renamed mount only with matching WebDAV identity ($webDavId)",
-    async ({ webDavId, accepted }) => {
+    "uses the recipient collision-renamed mount only with matching WebDAV identity ($webDavId/$status)",
+    async ({ webDavId, status, accepted, failure }) => {
       const fetchGuarded = mocks.fetchGuarded
         .mockReset()
         .mockResolvedValueOnce(ocsResponse({ id: "bob" }, userUrl))
@@ -375,7 +392,10 @@ describe("Nextcloud Talk inbound media policy", () => {
             historyUrl,
           ),
         )
-        .mockResolvedValueOnce({ response: webDavFileIdResponse(webDavId), release: vi.fn() });
+        .mockResolvedValueOnce({
+          response: webDavFileIdResponse(webDavId, status),
+          release: vi.fn(),
+        });
 
       const result = await resolveNextcloudTalkAuthenticatedMediaSource(
         mediaParams({
@@ -393,7 +413,7 @@ describe("Nextcloud Talk inbound media policy", () => {
           url: "https://nextcloud.example/remote.php/dav/files/bob/Talk/receipt%20(2).pdf",
         });
       } else {
-        expect(result).toEqual({ ok: false, reason: "media_message_mismatch" });
+        expect(result).toEqual(failure);
       }
     },
   );

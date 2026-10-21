@@ -16,18 +16,13 @@ function grantRevision(value: object) {
 function fixture() {
   const heartbeat = {
     id: "heartbeat",
-    enabled: true,
-    description: "Heartbeat",
+    enabled: false,
+    description: "Migrated automation",
     schedule: { everyMs: 1_800_000, kind: "every" },
     state: {},
-    wakeMode: "next-heartbeat",
+    wakeMode: "now",
   };
-  const dreaming = {
-    ...heartbeat,
-    id: "dreaming",
-    enabled: false,
-    schedule: { everyMs: 1_800_000, kind: "every" },
-  };
+  const dreaming = { ...heartbeat, id: "dreaming", enabled: false };
   const row = (definition: typeof heartbeat, ordinal: number, timestamp: number) => {
     const { enabled: _enabled, state: _state, ...grant } = definition;
     return {
@@ -46,35 +41,30 @@ function fixture() {
       grant_definition_revision: grantRevision(grant),
     };
   };
-  const before: [
-    ReturnType<typeof row>,
-    ReturnType<typeof row>,
-    ReturnType<typeof row>,
-    ReturnType<typeof row>,
-  ] = [
+  type Row = ReturnType<typeof row>;
+  const before: [Row, Row, Row, Row] = [
     row(heartbeat, 0, 1000),
     row(dreaming, 10, 9_000_000_000_000),
     { ...row({ ...heartbeat, id: "authored" }, 34, 1000), runtime_updated_at_ms: 1010 },
     { ...row({ ...heartbeat, id: "inactive" }, 19, 1000), store_key: "inactive" },
   ];
   const after = structuredClone(before);
-  for (const entry of after.slice(0, 2)) {
-    const isDreaming = entry.job_id === "dreaming";
-    const definition = isDreaming
-      ? {
-          ...dreaming,
-          enabled: true,
-          schedule: { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" },
-          wakeMode: "now",
-        }
-      : { ...heartbeat, enabled: false };
+  for (const entry of after.slice(1, 2)) {
+    const definition = {
+      ...dreaming,
+      enabled: true,
+      schedule: { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" },
+      wakeMode: "now",
+    };
     const { enabled: _enabled, state: _state, ...grant } = definition;
     const timestamp = Math.max(entry.runtime_updated_at_ms, 2000);
     Object.assign(entry, {
       enabled: definition.enabled ? 1 : 0,
       job_json: JSON.stringify(definition),
       state_json: JSON.stringify({
-        ...(isDreaming ? { consecutiveErrors: 0, scheduleErrorCount: 0, nextRunAtMs: 3000 } : {}),
+        consecutiveErrors: 0,
+        scheduleErrorCount: 0,
+        nextRunAtMs: 3000,
         scheduleActivatedAtMs: 2000,
       }),
       schedule_identity: JSON.stringify({
@@ -86,7 +76,7 @@ function fixture() {
       updated_at: timestamp,
       runtime_updated_at_ms: timestamp,
       grant_definition_updated_at: timestamp,
-      grant_definition_generation: isDreaming ? 4 : 3,
+      grant_definition_generation: 4,
       grant_definition_revision: grantRevision(grant),
     });
   }
@@ -103,69 +93,34 @@ function fixture() {
 }
 
 describe("dreaming runtime persistence assertion", () => {
-  it("accepts sparse ordinals, untouched bytes, and only the two config-owner mutations", () => {
+  it("accepts sparse ordinals, untouched bytes, and only the dreaming-owner mutation", () => {
     const { runtime, rows } = fixture();
-    expect(() => assertRuntimePersistence(runtime, rows, "heartbeat")).not.toThrow();
+    expect(() => assertRuntimePersistence(runtime, rows)).not.toThrow();
   });
 
-  it.each([
-    [
-      "whole-store ordinal compaction",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows[2].sort_order = 2;
-      },
-    ],
-    [
-      "authored timestamp projection",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows[2].updated_at = 1010;
-      },
-    ],
+  it.each<[string, (rows: ReturnType<typeof fixture>["rows"]) => unknown]>([
+    ["migrated automation rewritten by startup", (rows) => Object.assign(rows[0], { enabled: 1 })],
+    ["whole-store ordinal compaction", (rows) => Object.assign(rows[2], { sort_order: 2 })],
+    ["authored timestamp projection", (rows) => Object.assign(rows[2], { updated_at: 1010 })],
     [
       "authored JSON reserialization",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows[2].job_json += " ";
-      },
+      (rows) => Object.assign(rows[2], { job_json: rows[2].job_json + " " }),
     ],
     [
       "inactive partition rewrite",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows[3].updated_at++;
-      },
+      (rows) => Object.assign(rows[3], { updated_at: rows[3].updated_at + 1 }),
     ],
-    [
-      "changed row ordinal rewrite",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows[1].sort_order = 1;
-      },
-    ],
-    [
-      "regressed future timestamp",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows[1].updated_at = 2000;
-      },
-    ],
+    ["changed row ordinal rewrite", (rows) => Object.assign(rows[1], { sort_order: 1 })],
+    ["regressed future timestamp", (rows) => Object.assign(rows[1], { updated_at: 2000 })],
     [
       "stale changed definition grant",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows[1].grant_definition_generation = 3;
-      },
+      (rows) => Object.assign(rows[1], { grant_definition_generation: 3 }),
     ],
-    [
-      "missing row",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows.pop();
-      },
-    ],
-    [
-      "duplicate row",
-      (rows: ReturnType<typeof fixture>["rows"]) => {
-        rows.push(rows[2]);
-      },
-    ],
+    ["missing row", (rows) => rows.pop()],
+    ["duplicate row", (rows) => rows.push(rows[2])],
   ])("rejects %s", (_name, corrupt) => {
     const { runtime, rows } = fixture();
     corrupt(rows);
-    expect(() => assertRuntimePersistence(runtime, rows, "heartbeat")).toThrow();
+    expect(() => assertRuntimePersistence(runtime, rows)).toThrow();
   });
 });

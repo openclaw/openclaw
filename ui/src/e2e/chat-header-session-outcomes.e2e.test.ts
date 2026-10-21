@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionPath,
@@ -30,13 +31,20 @@ function readPane(element: Element) {
   return { sessionKey: pane.sessionKey, chatError: pane.state?.chatError };
 }
 
-async function navigateAwayAndBack(page: Page): Promise<void> {
+async function navigateAwayAndBack(
+  page: Page,
+  navigation: "sidebar" | "history" = "sidebar",
+): Promise<void> {
   for (const sessionKey of [sessionB, sessionA]) {
-    await page
-      .locator(
-        `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
-      )
-      .click();
+    if (navigation === "history") {
+      await (sessionKey === sessionB ? page.goBack() : page.goForward());
+    } else {
+      await page
+        .locator(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
+        )
+        .click();
+    }
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
     const pane = page.locator(".chat-pane-cache__pane--visible");
     await expect.poll(() => pane.evaluate(readPane)).toMatchObject({ sessionKey });
@@ -103,9 +111,9 @@ async function startPlacementReclaim(
   page: Page,
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
 ): Promise<void> {
-  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
   await gateway.deferNext("sessions.reclaim");
-  await page.getByRole("button", { name: "Runs on Cloud" }).click();
+  const details = await openChatDetails(page);
+  await details.locator(".chat-environment__machine-trigger").click();
   await page.getByText("Stop cloud worker…", { exact: true }).click();
   await page.getByRole("button", { name: "Stop worker" }).click();
   await gateway.waitForRequest("sessions.reclaim");
@@ -147,7 +155,8 @@ suite.define(() => {
       );
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.getByRole("button", { name: "Runs on worker", exact: true }).click();
+      const details = await openChatDetails(page);
+      await details.locator(".chat-environment__machine-trigger").click();
       const headerMenu = page.locator(".chat-pane__placement-menu");
       await headerMenu
         .getByText(restartable ? "Restart session…" : "Stop worker…", { exact: true })
@@ -217,15 +226,26 @@ suite.define(() => {
         await page.getByRole("menuitem", { name: "Open in file manager" }).click();
         await gateway.waitForRequest("sessions.files.reveal");
       } else {
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionB));
+        await page
+          .locator(
+            `.sidebar-recent-session[data-session-key="${sessionA}"] a.sidebar-recent-session__link`,
+          )
+          .click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
         await startPlacementReclaim(page, gateway);
       }
-      await navigateAwayAndBack(page);
+      await navigateAwayAndBack(page, reveal ? "sidebar" : "history");
       const message = `Stale ${action} failure must stay retired.`;
       if (reveal) {
         await gateway.resolveDeferred("sessions.files.reveal", { ok: false, error: message });
         await twoFrames(page);
       } else {
+        expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
         await gateway.rejectDeferred("sessions.reclaim", { code: "INVALID_REQUEST", message });
+        await page
+          .getByRole("dialog", { name: "Stop worker?", exact: true })
+          .waitFor({ state: "hidden" });
       }
       await expectRetiredError(page, message);
     },
@@ -235,6 +255,7 @@ suite.define(() => {
     const page = await newChatPage(suite);
     const gateway = await installPlacementGateway(page);
 
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
     await startPlacementReclaim(page, gateway);
     const message = "Current placement failure stays actionable.";
     await gateway.rejectDeferred("sessions.reclaim", { code: "INVALID_REQUEST", message });
@@ -242,8 +263,15 @@ suite.define(() => {
     const visiblePane = page.locator(".chat-pane-cache__pane--visible");
     await expect.poll(() => visiblePane.evaluate(readPane)).toMatchObject({ sessionKey: sessionA });
     await visiblePane.getByRole("alert").getByText(message, { exact: true }).waitFor();
+    const dialog = page.getByRole("dialog", { name: "Stop worker?", exact: true });
+    await expect
+      .poll(() => dialog.getByRole("button", { name: "Stop worker", exact: true }).isEnabled())
+      .toBe(true);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Runs on Cloud" }).click();
+    const details = await openChatDetails(page);
+    await details.locator(".chat-environment__machine-trigger").click();
     await page.getByText("Stop cloud worker…", { exact: true }).waitFor();
   });
 
@@ -270,7 +298,9 @@ suite.define(() => {
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
     await gateway.deferNext("session.visibility.set");
     await page.getByRole("button", { name: "Session sharing" }).click();
-    await page.getByText("Publish draft", { exact: true }).click();
+    const sharing = page.locator(".chat-pane__sharing-menu").filter({ visible: true });
+    await sharing.getByRole("menuitem", { name: "Session access", exact: true }).click();
+    await sharing.getByRole("menuitemradio", { name: "Shared", exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
 
     await navigateAwayAndBack(page);

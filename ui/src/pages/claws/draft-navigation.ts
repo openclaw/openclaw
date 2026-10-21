@@ -1,4 +1,3 @@
-import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -21,17 +20,6 @@ export function canCreateClawDraft(context: ApplicationContext): boolean {
     canCallGatewayMethod(context.gateway.snapshot, "chat.send", "operator.write") &&
     resolveLabFeatureState(currentConfigObject(context.runtimeConfig.state), clawsLab).enabled,
   );
-}
-
-function clawDraftSearch(target: ClawDraftTarget): string {
-  const query = new URLSearchParams(
-    target.draftId ? { draft: target.draftId, agent: target.agentId } : { create: target.agentId },
-  );
-  return `?${query}`;
-}
-
-export function clawDraftUrl(basePath: string, target: ClawDraftTarget): string {
-  return `${pathForRoute("claws", basePath)}${clawDraftSearch(target)}`;
 }
 
 export function clawDraftTargetFromSearch(search: string): ClawDraftTarget | null {

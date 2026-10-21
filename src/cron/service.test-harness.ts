@@ -184,20 +184,29 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
   requestHeartbeatAndWait?: CronServiceDeps["requestHeartbeatAndWait"];
+  runSessionEvent?: CronServiceDeps["runSessionEvent"];
   resolveHeartbeatTimeoutMs?: CronServiceDeps["resolveHeartbeatTimeoutMs"];
   onEvent?: CronServiceDeps["onEvent"];
 }): {
   cron: CronService;
   state: CronServiceState;
   enqueueSystemEvent: MockFn;
+  enqueueSessionEvent: ReturnType<
+    typeof vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>
+  >;
   requestHeartbeat: MockFn;
   requestHeartbeatAndWait: MockFn;
+  runSessionEvent: ReturnType<typeof vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>>;
   finished: ReturnType<typeof createFinishedBarrier>;
 } {
   const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
   const requestHeartbeat = vi.fn();
   const requestHeartbeatAndWait = vi.fn(
     params.requestHeartbeatAndWait ?? (async () => ({ status: "ran" as const, durationMs: 1 })),
+  );
+  const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+    params.runSessionEvent ?? (async () => ({ status: "ok" })),
   );
   const finished = createFinishedBarrier();
   const { cron, state } = createCronServiceWithStateForTest({
@@ -207,8 +216,10 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
+    enqueueSessionEvent,
     requestHeartbeat,
     requestHeartbeatAndWait,
+    runSessionEvent,
     resolveHeartbeatTimeoutMs: params.resolveHeartbeatTimeoutMs,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent: (event) => {
@@ -216,7 +227,16 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
       params.onEvent?.(event);
     },
   });
-  return { cron, state, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait, finished };
+  return {
+    cron,
+    state,
+    enqueueSystemEvent,
+    enqueueSessionEvent,
+    requestHeartbeat,
+    requestHeartbeatAndWait,
+    runSessionEvent,
+    finished,
+  };
 }
 
 export async function withCronServiceForTest(
@@ -227,17 +247,26 @@ export async function withCronServiceForTest(
     logger: ReturnType<typeof createNoopLogger>;
     cronEnabled: boolean;
     runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
+    runSessionEvent?: CronServiceDeps["runSessionEvent"];
   },
   run: (context: {
     cron: CronService;
     state: CronServiceState;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
+    enqueueSessionEvent: ReturnType<
+      typeof vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>
+    >;
     requestHeartbeat: ReturnType<typeof vi.fn>;
+    runSessionEvent: ReturnType<typeof vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await params.makeStorePath();
   const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
   const requestHeartbeat = vi.fn();
+  const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+    params.runSessionEvent ?? (async () => ({ status: "ok" })),
+  );
   const { cron, state } = createCronServiceWithStateForTest({
     scheduler: params.scheduler,
     nowMs: params.nowMs,
@@ -245,7 +274,9 @@ export async function withCronServiceForTest(
     storePath: store.storePath,
     log: params.logger,
     enqueueSystemEvent,
+    enqueueSessionEvent,
     requestHeartbeat,
+    runSessionEvent,
     runIsolatedAgentJob:
       params.runIsolatedAgentJob ??
       (vi.fn(async () => ({ status: "ok" as const, summary: "done" })) as never),
@@ -253,7 +284,14 @@ export async function withCronServiceForTest(
 
   await cron.start();
   try {
-    await run({ cron, state, enqueueSystemEvent, requestHeartbeat });
+    await run({
+      cron,
+      state,
+      enqueueSystemEvent,
+      enqueueSessionEvent,
+      requestHeartbeat,
+      runSessionEvent,
+    });
   } finally {
     cron.stop();
     await store.cleanup();

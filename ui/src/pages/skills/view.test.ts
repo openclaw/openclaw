@@ -521,20 +521,59 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
   });
 
-  it.each([
-    { clawhubDetailLoading: true, clawhubDetailError: null },
-    { clawhubDetailLoading: false, clawhubDetailError: "Unable to read skill" },
-    { clawhubDetailLoading: false, clawhubDetailError: null },
-  ])("keeps unavailable ClawHub details footer-free: %j", async (state) => {
+  it("updates the latest ClawHub version in an open detail dialog", async () => {
     const container = createContainer();
     installDialogMethod("showModal", function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
     });
-    renderView(container, { clawhubDetailRef: "guide", ...state });
-    await Promise.resolve();
-    expect(container.querySelector(".skill-reader-dialog__body")).not.toBeNull();
-    expect(container.querySelector(".skill-reader-dialog openclaw-modal-actions")).toBeNull();
+    const detail = {
+      skill: {
+        slug: "github",
+        displayName: "GitHub",
+        summary: "GitHub integration for OpenClaw",
+        createdAt: 1_700_000_000,
+        updatedAt: 1_700_000_100,
+      },
+      latestVersion: { version: "1.0.0", createdAt: 1_700_000_200 },
+    };
+    renderView(container, { clawhubDetailRef: "github", clawhubDetail: detail });
+    const { dialog } = await getRenderedModalDialog(container);
+    const body = expectDefined(
+      container.querySelector(".skill-reader-dialog__body"),
+      "ClawHub detail body",
+    );
+    expect(normalizeText(body)).toContain("Latest: v1.0.0");
+
+    renderView(container, {
+      clawhubDetailRef: "github",
+      clawhubDetail: {
+        ...detail,
+        latestVersion: { version: "2.0.0", createdAt: 1_700_000_300 },
+      },
+    });
+
+    expect((await getRenderedModalDialog(container)).dialog).toBe(dialog);
+    expect(container.querySelector(".skill-reader-dialog__body")).toBe(body);
+    expect(normalizeText(body)).toContain("Latest: v2.0.0");
+    expect(normalizeText(body)).not.toContain("Latest: v1.0.0");
   });
+
+  it.each(["Unable to read skill", null])(
+    "keeps unavailable ClawHub details footer-free: %s",
+    async (clawhubDetailError) => {
+      const container = createContainer();
+      installDialogMethod("showModal", function (this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+      });
+      renderView(container, { clawhubDetailRef: "guide", clawhubDetailError });
+      await Promise.resolve();
+      expect(container.querySelector(".skill-reader-dialog__body")).not.toBeNull();
+      expect(container.querySelector(".skill-reader-dialog openclaw-modal-actions")).toBeNull();
+      expect(container.querySelector(".skill-reader-dialog__body")?.textContent).toContain(
+        clawhubDetailError ?? "Skill not found",
+      );
+    },
+  );
 
   it("offers install without a detail card for an install-only search result", async () => {
     const container = createContainer();

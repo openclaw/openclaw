@@ -14,10 +14,6 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
 
   const explicitTargets = [
     {
-      path: ["agents", "defaults", "heartbeat", "agentId"],
-      agentId: cfg.agents?.defaults?.heartbeat?.agentId,
-    },
-    {
       path: ["agents", "defaults", "systemAgent", "agentId"],
       agentId: cfg.agents?.defaults?.systemAgent?.agentId,
     },

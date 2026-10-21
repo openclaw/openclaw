@@ -6,6 +6,7 @@ import { resolveActivatedPluginBackupInventory } from "../plugins/manifest-backu
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectDatabaseRows } from "./backup-create-family.test-support.js";
 import {
   createBackupSqliteSnapshotPlan,
   discoverBackupDatabasePaths,
@@ -38,22 +39,20 @@ it("captures every retained account and token database under a disabled plugin's
         plugins: { enabled: false, load: { paths: [fixture.rootDir] } },
       };
       await state.writeConfig(config);
-      const accounts = [
-        ["active", "1111111111111111"],
-        ["active", "2222222222222222"],
-        ["disabled", "3333333333333333"],
-      ] as const;
-      const files = accounts.map(([account, token]) =>
-        state.statePath(
-          "matrix",
-          "accounts",
-          account,
-          "server__user",
-          token,
-          "state",
-          "openclaw.sqlite",
-        ),
-      );
+      const files = [
+        "active/server__user/1111111111111111",
+        "active/server__user/2222222222222222",
+        "disabled/server__user/3333333333333333",
+      ].map((account) => state.statePath("matrix/accounts", account, "state/openclaw.sqlite"));
+      const expectRetained = (snapshotPath: (file: string) => string | undefined) => {
+        for (const [index, file] of files.entries()) {
+          const snapshot = snapshotPath(file);
+          expect(snapshot).toBeDefined();
+          expectDatabaseRows(snapshot!, "SELECT value FROM retained", [
+            { value: `payload-${index}` },
+          ]);
+        }
+      };
       for (const [index, file] of files.entries()) {
         await fs.mkdir(path.dirname(file), { recursive: true });
         using database = openNodeSqliteDatabase(file);
@@ -70,14 +69,10 @@ it("captures every retained account and token database under a disabled plugin's
         ...input,
         plugins: resolvePluginMetadataSnapshot(input),
       });
-      expect(
-        files.every((file) =>
-          roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`)),
-        ),
-      ).toBe(true);
-      expect(
-        roots.some((root) => unrelated === root || unrelated.startsWith(`${root}${path.sep}`)),
-      ).toBe(false);
+      const covered = (file: string) =>
+        roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`));
+      expect(files.every(covered)).toBe(true);
+      expect(covered(unrelated)).toBe(false);
       const inspection = await discoverUpdateStateSchemaInspectionInProcess({
         ...input,
         stagingRoot: state.path("inspection"),
@@ -92,14 +87,7 @@ it("captures every retained account and token database under a disabled plugin's
         additionalPaths: [],
         stopped: true,
       });
-      for (const [index, file] of files.entries()) {
-        const snapshot = update.databases.find((entry) => entry.path === file);
-        expect(snapshot).toBeDefined();
-        using database = openNodeSqliteDatabase(snapshot!.snapshotPath, { readOnly: true });
-        expect(database.prepare("SELECT value FROM retained").get()?.value).toBe(
-          `payload-${index}`,
-        );
-      }
+      expectRetained((file) => update.databases.find((entry) => entry.path === file)?.snapshotPath);
 
       const inventory = resolveActivatedPluginBackupInventory(input);
       const resources = await createBackupResourcePlan({
@@ -119,14 +107,9 @@ it("captures every retained account and token database under a disabled plugin's
         tempDir,
         legacyAuditSnapshots: [],
       });
-      for (const [index, file] of files.entries()) {
-        const snapshot = captured.snapshots.find((entry) => entry.archiveSourcePath === file);
-        expect(snapshot).toBeDefined();
-        using database = openNodeSqliteDatabase(snapshot!.sourcePath, { readOnly: true });
-        expect(database.prepare("SELECT value FROM retained").get()?.value).toBe(
-          `payload-${index}`,
-        );
-      }
+      expectRetained(
+        (file) => captured.snapshots.find((entry) => entry.archiveSourcePath === file)?.sourcePath,
+      );
     },
   );
 });

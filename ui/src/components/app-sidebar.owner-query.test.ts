@@ -1,120 +1,22 @@
 /* @vitest-environment jsdom */
-
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../lib/sessions/session-capability.test-support.ts";
+import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import {
-  createContext,
-  createGatewayHarness,
-  createSidebarElement,
-} from "../test-helpers/app-sidebar.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import "./app-sidebar.tsx";
+  other,
+  ownedSession,
+  viewer,
+  withOwnerSidebar,
+} from "../test-helpers/agent-sidebar.test-support.ts";
+import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
+import { snapshotSessions } from "./sidebar-snapshot-model.ts";
 
-const viewer = { type: "human" as const, id: "viewer", label: "Viewer" };
-
-async function mountOwnerQuery(
-  rows: GatewaySessionRow[],
-  owners: NonNullable<SessionsListResult["owners"]>,
-) {
-  const requests: Record<string, unknown>[] = [];
-  const overflow = createDeferred<SessionsListResult>();
-  const gateway = createGatewayHarness(
-    createTestGatewayClient(async (method, raw) => {
-      const params = asOptionalRecord(raw);
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.describe") {
-        return { session: rows.find((row) => row.key === params?.key) ?? null };
-      }
-      if (method === "sessions.groups.list") {
-        return { names: [], groups: [], sectionOrder: [] };
-      }
-      if (method !== "sessions.list") {
-        return {};
-      }
-      if (params?.source === "sidebar") {
-        requests.push(params);
-        // Stop a broken response/render cycle at the test's transport boundary,
-        // so the request-count assertion can report it without starving the runner.
-        if (requests.length > 8) {
-          queueMicrotask(() => stop());
-          return overflow.promise;
-        }
-      }
-      const selected = rows.filter(
-        (row) =>
-          (!params?.agentId || row.agentId === params.agentId) &&
-          (!params?.ownerId || row.owner?.actor.id === params.ownerId),
-      );
-      return { ...sessionsResult(selected, 1), owners };
-    }),
-  );
-  const hello = gateway.gateway.snapshot.hello!;
-  gateway.publish({
-    selfUser: { id: viewer.id, name: viewer.label },
-    hello: { ...hello, policy: { ...hello.policy, hasMultipleSessionSharingIdentities: false } },
-  });
-  const sessions = createTestSessionCapability(gateway.gateway);
-  await sessions.refresh({ agentId: "main", force: true });
-  const context = createContext(gateway.gateway, sessions);
-  const provider = createApplicationContextProvider(context);
-  const sidebar = await createSidebarElement();
-  let stopped = false;
-  const stop = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    provider.remove();
-    context.connectionBootstrap.reset();
-    sessions.dispose();
-  };
-  sidebar.activeRouteId = "chat";
-  sidebar.sidebarAgentsMode = "chip";
-  provider.append(sidebar.hostElement);
-  document.body.append(provider);
-  sidebar.connected = true;
-
-  const settle = async () => {
-    await settleLitElement(sidebar);
-    // Drain completed transport promises through the real render lifecycle.
-    // The response budget above bounds the defective microtask feedback loop.
-    await nextTurn();
-    await settleLitElement(sidebar);
-  };
-  return {
-    sidebar,
-    requests,
-    settle,
-    async dispose() {
-      stop();
-      overflow.resolve(sessionsResult([], 1));
-      await settle();
-    },
-  };
-}
-
-function ownSession(): GatewaySessionRow {
-  return {
-    key: "agent:main:mine",
-    agentId: "main",
-    kind: "direct",
-    label: "My session",
-    owner: { actor: viewer },
-  };
-}
+const mine = () =>
+  ownedSession("agent:main:mine", viewer.id, { label: "My session", owner: { actor: viewer } });
 
 it.each(["visible", "bounded"])(
   "keeps solo legacy sessions and settles when their participants are %s",
@@ -122,61 +24,151 @@ it.each(["visible", "bounded"])(
     const legacy: GatewaySessionRow = {
       key: "agent:main:legacy",
       agentId: "main",
-      kind: "direct",
+      kind: "direct" as const,
       label: "Legacy session",
       participants:
         participants === "visible" ? [{ identity: { type: "agent", id: "research" } }] : [],
       participantCount: 1,
     };
-    const fixture = await mountOwnerQuery([ownSession(), legacy], [viewer]);
-    try {
-      await fixture.settle();
-      expect(fixture.requests).toHaveLength(1);
-      expect(fixture.requests[0]?.ownerId).toBeUndefined();
-      expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
-      expect(
-        fixture.sidebar.querySelector('[data-session-key="agent:main:legacy"]'),
-      ).not.toBeNull();
-    } finally {
-      await fixture.dispose();
-    }
+    await withOwnerSidebar(
+      [mine(), legacy],
+      [viewer],
+      "query",
+      async ({ sidebar, requests, settle }) => {
+        await settle();
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.ownerId).toBeUndefined();
+        for (const key of ["mine", "legacy"]) {
+          expect(sidebar.querySelector(`[data-session-key="agent:main:${key}"]`)).not.toBeNull();
+        }
+      },
+    );
   },
 );
 
 it("settles with multiple owners and keeps an explicitly selected owner's empty list", async () => {
-  const fixture = await mountOwnerQuery(
-    [ownSession()],
-    [viewer, { type: "human", id: "other", label: "Other" }],
+  await withOwnerSidebar(
+    [mine()],
+    [viewer, other],
+    "query",
+    async ({ sidebar, requests, settle }) => {
+      await settle();
+      expect(requests.length).toBeLessThanOrEqual(2);
+      expect(requests.at(-1)?.ownerId).toBe("viewer");
+      expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+      await sidebar.sidebarMenus.preloadMenuRenderer();
+      await selectSessionMenuValue(sidebar, "owner:other");
+      await settle();
+      expect(requests.at(-1)?.ownerId).toBe("other");
+      expect(requests.length).toBeLessThanOrEqual(3);
+      expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
+      expect(sidebar.querySelector("#sidebar-session-owner-title")?.textContent).toContain("Other");
+    },
   );
-  try {
-    await fixture.settle();
-    expect(fixture.requests.length).toBeLessThanOrEqual(2);
-    expect(fixture.requests.at(-1)?.ownerId).toBe("viewer");
-    expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
-
-    await fixture.sidebar.sidebarMenus.preloadMenuRenderer();
-    await selectSessionMenuValue(fixture.sidebar, "owner:other");
-    await fixture.settle();
-    expect(fixture.requests.at(-1)?.ownerId).toBe("other");
-    expect(fixture.requests.length).toBeLessThanOrEqual(3);
-    expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
-    expect(fixture.sidebar.querySelector("#sidebar-session-owner-title")?.textContent).toContain(
-      "Other",
-    );
-  } finally {
-    await fixture.dispose();
-  }
 });
 
 it("does not include an agent's sessions when its ID equals the signed-in human's ID", async () => {
   const agent = { type: "agent" as const, id: viewer.id, label: "Agent" };
-  const fixture = await mountOwnerQuery([{ ...ownSession(), owner: { actor: agent } }], [agent]);
-  try {
-    await fixture.settle();
-    expect(fixture.requests.length).toBeLessThanOrEqual(2);
-    expect(fixture.requests.at(-1)?.ownerId).toBe("viewer");
-    expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
-  } finally {
-    await fixture.dispose();
-  }
+  await withOwnerSidebar(
+    [{ ...mine(), owner: { actor: agent } }],
+    [agent],
+    "query",
+    async ({ sidebar, requests, settle }) => {
+      await settle();
+      expect(requests.length).toBeLessThanOrEqual(2);
+      expect(requests.at(-1)?.ownerId).toBe("viewer");
+      expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
+    },
+  );
 });
+
+it.each(["owner", "involving-me", "refresh"])(
+  "keeps cached rows until the selected %s query completes",
+  async (selection) => {
+    const idle = vi
+      .fn<(callback: IdleRequestCallback, options?: IdleRequestOptions) => number>()
+      .mockReturnValue(1);
+    vi.stubGlobal("requestIdleCallback", idle);
+    vi.stubGlobal("cancelIdleCallback", vi.fn());
+    const actor = selection === "refresh" ? viewer : other;
+    const replacement = ownedSession("agent:main:replacement", actor.id, {
+      label: "Replacement session",
+      owner: { actor },
+      participants: [{ identity: { type: "profile", id: viewer.id } }],
+    });
+    const stale = { ...replacement, key: "agent:main:stale", label: "Stale query result" };
+    await withOwnerSidebar(
+      selection === "refresh" ? [mine(), stale] : [mine()],
+      [viewer, other],
+      "query",
+      async ({ sidebar, context, settle }) => {
+        await settle();
+        const rows = snapshotSessions(
+          [mine()].map((row) => sidebar.getSessionNavigationState().toSidebarSession(row)),
+        );
+        sidebar.restoreSidebarSnapshot({
+          ...sidebarBootSnapshot(captureBootRoster(context.sessions.state)),
+          ownerId: viewer.id,
+          mode: "chip",
+          sessions: rows,
+          sections: [
+            {
+              id: "ungrouped",
+              rows,
+              totalRowCount: 1,
+              visibleRowCount: 1,
+              visibleLimit: 10,
+              collapsedVisibleRowCount: 1,
+              renderHeader: false,
+            },
+          ],
+        });
+        sidebar.invalidate();
+        await settle();
+        const cachedRow = sidebar.querySelector('[data-session-key="agent:main:mine"]');
+        expect(cachedRow).not.toBeNull();
+        const handoff = idle.mock.calls.find(([, options]) => options?.timeout === 1800)?.[0];
+        expect(handoff).toBeDefined();
+        const pending = createDeferred<SessionsListResult>();
+        const client = context.gateway.snapshot.client!;
+        const request = client.request.bind(client);
+        const read = vi
+          .spyOn(client, "request")
+          .mockImplementation((method, params) =>
+            method === "sessions.list" ? pending.promise : request(method, params),
+          );
+
+        if (selection === "refresh") {
+          void sidebar.sessionData.refreshSidebarSessions();
+        } else {
+          sidebar.setSessionOwnerFilter(
+            selection === "owner" ? other.id : null,
+            selection === "involving-me",
+          );
+        }
+        await settle();
+        expect(read).toHaveBeenCalledWith(
+          "sessions.list",
+          expect.objectContaining(
+            selection === "involving-me" ? { involvingMe: true } : { ownerId: actor.id },
+          ),
+        );
+        handoff!({ didTimeout: false, timeRemaining: () => 10 });
+        // A later shell update must not expose the stale managed window.
+        sidebar.invalidate();
+        await settle();
+        expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBe(cachedRow);
+        expect(sidebar.querySelector('[data-session-key="agent:main:replacement"]')).toBeNull();
+        expect(sidebar.querySelector('[data-session-key="agent:main:stale"]')).toBeNull();
+
+        pending.resolve({ ...sessionsResult([replacement], 2), owners: [viewer, other] });
+        await settle();
+        expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
+        expect(
+          sidebar.querySelector('[data-session-key="agent:main:replacement"]')?.textContent,
+        ).toContain("Replacement session");
+        expect(sidebar.sidebarSnapshot).toBeNull();
+      },
+    );
+  },
+);

@@ -51,7 +51,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await install?.(page);
-    await installMockGateway(page, gatewayOptions);
+    const gateway = await installMockGateway(page, gatewayOptions);
     await page.goto(`${suite.server.baseUrl}${route}`);
     await page.locator(ready).first().waitFor({ state: "attached" });
     if (direction) {
@@ -71,7 +71,7 @@ suite.define(() => {
       .locator(native ? ".macos-titlebar-controls" : ".shell-chrome-controls")
       .boundingBox();
     expect(box).not.toBeNull();
-    return { page, toolbar: box! };
+    return { page, gateway, toolbar: box! };
   }
 
   async function expectAligned(target: Locator, reference: Locator | number, axis: "x" | "y") {
@@ -91,36 +91,14 @@ suite.define(() => {
       await page.screenshot({ animations: "disabled", path: path.join(proofDir, file) });
     }
   }
-  async function expectActions(header: Locator, y: number, right: number) {
-    const buttons = header.locator(
-      ".page-header-actions button:visible, .page-header-actions a.btn:visible",
-    );
-    const count = await buttons.count();
-    expect(count).toBeGreaterThan(0);
-    for (let index = 0; index < count; index++) {
-      await expectAligned(buttons.nth(index), y, "y");
-      expect((await buttons.nth(index).boundingBox())!.x).toBeGreaterThan(right);
-    }
-  }
 
+  // Built-in Pages use the stacked hub header; Memory import keeps the toolbar-row title.
   it.each([true, false])("centers page titles and clears controls (native: %s)", async (native) => {
     const { page, toolbar } = await openPage(
-      "usage",
+      "memory-import",
       native ? installNativeWebChrome : undefined,
       undefined,
-      {
-        methodResponses: {
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "research", name: "Research" },
-            ],
-          },
-        },
-      },
+      undefined,
       native ? undefined : "rtl",
     );
     const header = page.locator(".content .content-header").first();
@@ -129,7 +107,6 @@ suite.define(() => {
     await expectAligned(title, y, "y");
     await expectAligned(title, header, "x");
     const titleBox = (await title.boundingBox())!;
-    let right = titleBox.x + titleBox.width;
     if (native) {
       expect(toolbar.y + toolbar.height).toBe(52);
       expect(titleBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
@@ -139,9 +116,8 @@ suite.define(() => {
       const edges = await page
         .locator(".shell-chrome-controls button:visible")
         .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().right));
-      right = Math.max(right, ...edges);
+      expect(titleBox.x).toBeGreaterThan(Math.max(...edges));
     }
-    await expectActions(header, y, right);
   });
 
   it.each([
@@ -152,18 +128,31 @@ suite.define(() => {
     { width: 390, height: 844, native: false, narrowColumn: false },
     { width: 1524, height: 864, native: true, narrowColumn: false },
   ])(
-    "groups the Agents heading and keeps actions reachable at $width×$height (native: $native, narrow: $narrowColumn)",
+    "keeps the Claws heading and discovery search reachable at $width×$height (native: $native, narrow: $narrowColumn)",
     async ({ width, height, native, narrowColumn }) => {
-      const { page, toolbar } = await openPage(
-        "agents",
+      const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+      const { page, gateway, toolbar } = await openPage(
+        "claws",
         native ? installNativeWebChrome : undefined,
-        undefined,
-        { featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"] },
+        ".claws-catalog-header",
+        {
+          featureMethods: [...defaultControlUiFeatureMethods, "claws.catalog.search"],
+          methodResponses: {
+            "config.get": {
+              config,
+              sourceConfig: config,
+              hash: "claws-header-config",
+              valid: true,
+              issues: [],
+            },
+            "claws.catalog.search": { entries: [] },
+          },
+        },
       );
       await page.setViewportSize({ width, height });
       if (narrowColumn) {
         // Match the content width left during the tablet sidebar transition.
-        await page.locator(".agents-home__header").evaluate((element) => {
+        await page.locator(".claws-catalog-header").evaluate((element) => {
           (element as HTMLElement).style.width = "430px";
         });
       }
@@ -172,8 +161,8 @@ suite.define(() => {
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--mobile-nav");
       }
-      const header = page.locator(".agents-home__header .content-header");
-      const title = header.getByRole("heading", { name: "Agents", exact: true });
+      const header = page.locator(".claws-catalog-header");
+      const title = header.getByRole("heading", { name: "Claws", exact: true });
       const subtitle = header.locator(".page-subtitle");
       await expect
         .poll(async () => {
@@ -194,37 +183,33 @@ suite.define(() => {
       if (native) {
         expect(heading.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
       }
-      const manage = header.getByRole("link", { name: "Manage agents" });
-      const create = header.getByRole("button", { name: "New agent" });
-      expect(await manage.getAttribute("href")).toBe("/settings/agents");
-      for (const action of [manage, create]) {
-        const { box, introBox } = await action.evaluate((element) => {
-          const bounds = (target: Element): Box => {
-            const rect = target.getBoundingClientRect();
-            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-          };
-          const introElement = element.closest(".content-header")!.querySelector(".page-subtitle")!;
-          return { box: bounds(element), introBox: bounds(introElement) };
-        });
-        expect(box.x).toBeGreaterThanOrEqual(0);
-        expect(box.x + box.width).toBeLessThanOrEqual(width);
-        expect(box.y + box.height).toBeLessThanOrEqual(height);
-        expect(
-          box.x + box.width <= introBox.x ||
-            box.x >= introBox.x + introBox.width ||
-            box.y + box.height <= introBox.y ||
-            box.y >= introBox.y + introBox.height,
-          `Agent action ${JSON.stringify(box)} overlaps intro ${JSON.stringify(introBox)}`,
-        ).toBe(true);
-        await action.click({ trial: true });
-      }
+      const search = page.getByRole("searchbox", { name: "Search Claws", exact: true });
+      const { box, introBox } = await search.evaluate((element) => {
+        const bounds = (target: Element): Box => {
+          const rect = target.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        };
+        const introElement = document.querySelector(".claws-catalog-header .page-subtitle")!;
+        return { box: bounds(element), introBox: bounds(introElement) };
+      });
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.y + box.height).toBeLessThanOrEqual(height);
+      expect(
+        box.x + box.width <= introBox.x ||
+          box.x >= introBox.x + introBox.width ||
+          box.y + box.height <= introBox.y ||
+          box.y >= introBox.y + introBox.height,
+        `Claws search ${JSON.stringify(box)} overlaps intro ${JSON.stringify(introBox)}`,
+      ).toBe(true);
+      await search.click({ trial: true });
       await capture(
         page,
-        `agents-header-${width}-${native ? "native" : "browser"}${narrowColumn ? "-narrow" : ""}.png`,
+        `claws-header-${width}-${native ? "native" : "browser"}${narrowColumn ? "-narrow" : ""}.png`,
       );
-      await create.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
-      expect(new URL(page.url()).searchParams.get("intent")).toBe("new-agent");
+      await search.fill("workflow");
+      await gateway.waitForRequest("claws.catalog.search", { match: { query: "workflow" } });
+      expect(new URL(page.url()).pathname).toBe("/claws");
     },
   );
 
@@ -326,7 +311,7 @@ suite.define(() => {
   );
 
   it("keeps the legacy Mac app's lowered web controls clear of intro text", async () => {
-    const { page } = await openPage("usage", async (target) => {
+    const { page } = await openPage("memory-import", async (target) => {
       await target.addInitScript(() => {
         const stamp = () => document.documentElement.classList.add("openclaw-native-macos");
         if (document.documentElement) {
@@ -341,7 +326,7 @@ suite.define(() => {
       await page
         .locator(".shell-chrome-controls button, .shell-chrome-controls a")
         .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
-    ).toEqual(["Expand sidebar", "Open command palette"]);
+    ).toEqual(["Expand sidebar", "Command palette"]);
     expect(controls.y + controls.height).toBeGreaterThan(52);
     const header = page.locator(".content .content-header").first();
     await expectAligned(header.locator(".page-title"), 25, "y");

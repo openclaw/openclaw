@@ -17,6 +17,7 @@ import {
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -795,7 +796,27 @@ describe("interrupted canonical user replay", () => {
           }
           const before = loadTranscriptEventsSync(fixture.target);
           release.resolve();
-          expect((await settled)[0]?.status).toBe("rejected");
+          const outcome = (await settled)[0];
+          expect(outcome?.status).toBe("rejected");
+          if (change === "later-user") {
+            assert(outcome?.status === "rejected");
+            expect(outcome.reason).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+            const run = vi.fn().mockRejectedValue(outcome.reason);
+            const onFallbackStep = vi.fn();
+            await expect(
+              runWithModelFallback({
+                cfg: undefined,
+                provider: "fixture-provider",
+                model: "fixture-model",
+                manifestPlugins: [],
+                fallbacksOverride: ["fixture-next/fixture-model"],
+                run,
+                onFallbackStep,
+              }),
+            ).rejects.toBe(outcome.reason);
+            expect(run).toHaveBeenCalledOnce();
+            expect(onFallbackStep).not.toHaveBeenCalled();
+          }
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
           expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
         },

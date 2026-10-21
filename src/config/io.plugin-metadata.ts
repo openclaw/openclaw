@@ -109,7 +109,6 @@ function resolveReusableGatewayPluginMetadataSnapshot(
       config: params.config,
       env: params.env,
       allowWorkspaceScopedSnapshot: true,
-      requireAgentWorkspaceCompatibility: true,
       allowSynchronousPolicyRead,
     })
   );

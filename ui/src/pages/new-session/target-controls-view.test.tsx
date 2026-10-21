@@ -1,12 +1,39 @@
 /* @vitest-environment jsdom */
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { CatalogBar } from "./catalog-target-view.tsx";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { NewSessionPlaceControls } from "./target-controls-view.tsx";
 
 afterEach(() => {
   localStorage.clear();
   sessionStorage.clear();
+});
+
+it("dispatches catalog retry through the current callback without replacing the button", () => {
+  const original = vi.fn();
+  const replacement = vi.fn();
+  const [retry, setRetry] = createSignal(() => original);
+  const { container } = mountSolid(() => (
+    <CatalogBar
+      retrying={false}
+      groupPending
+      onRetry={retry()}
+      agentSelect={undefined}
+      placeSelect={undefined}
+    />
+  ));
+  const button = container.querySelector("button")!;
+  button.click();
+  expect(original).toHaveBeenCalledOnce();
+
+  setRetry(() => replacement);
+  flush();
+  expect(container.querySelector("button")).toBe(button);
+  button.click();
+  expect(original).toHaveBeenCalledOnce();
+  expect(replacement).toHaveBeenCalledOnce();
 });
 
 it.each([

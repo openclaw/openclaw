@@ -1,4 +1,13 @@
-import { createMemo, For, onSettled } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
@@ -16,6 +25,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
@@ -104,6 +114,27 @@ function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
 }
 export function AppearanceSection(props: ConfigProps) {
   let customThemeImportInput: HTMLInputElement | undefined;
+  const [importing, setImporting] = createOptimistic(false, { equals: false });
+  // Pending work belongs to the action; terminal receipts feed the error region.
+  const importResult = createMemo(() => props.customThemeImportCompletion);
+  const presentImport = action(function* (completion: Promise<void>) {
+    setImporting(true);
+    yield completion;
+  });
+  function importTheme() {
+    const completion = props.onImportCustomTheme();
+    if (completion) {
+      // Commit synchronous admission before starting the pending frame.
+      onSettled(() => {
+        // The same receipt reports failures through the inline error boundary.
+        void presentImport(completion).catch(() => undefined);
+      });
+    }
+  }
+  const importMessage = () => {
+    importResult();
+    return props.customThemeImportMessage;
+  };
   let focusFrame = 0;
   const showCustomThemeImport = () =>
     props.hasCustomTheme || props.customThemeImportExpanded === true;
@@ -368,12 +399,10 @@ export function AppearanceSection(props: ConfigProps) {
                 <div class="settings-theme-import__actions">
                   <button
                     class="btn btn--sm primary"
-                    disabled={
-                      props.customThemeImportBusy || props.customThemeImportUrl.trim().length === 0
-                    }
-                    onClick={() => props.onImportCustomTheme()}
+                    disabled={importing() || props.customThemeImportUrl.trim().length === 0}
+                    onClick={importTheme}
                   >
-                    {props.customThemeImportBusy
+                    {importing()
                       ? t("common.importing")
                       : props.hasCustomTheme
                         ? t("configView.appearance.replace", {
@@ -399,17 +428,32 @@ export function AppearanceSection(props: ConfigProps) {
                     </span>
                   </div>
                 ) : undefined}
-                {props.customThemeImportMessage ? (
-                  <div
-                    class={[
-                      "settings-theme-import__message",
-                      `settings-theme-import__message--${props.customThemeImportMessage.kind}`,
-                    ]}
-                    role={props.customThemeImportMessage.kind === "error" ? "alert" : "status"}
-                  >
-                    {props.customThemeImportMessage.text}
-                  </div>
-                ) : undefined}
+                <Errored
+                  fallback={(error) => (
+                    <div
+                      class="settings-theme-import__message settings-theme-import__message--error"
+                      role="alert"
+                    >
+                      {formatUiError(error())}
+                    </div>
+                  )}
+                >
+                  <Loading>
+                    <Show when={importMessage()}>
+                      {(message) => (
+                        <div
+                          class={[
+                            "settings-theme-import__message",
+                            `settings-theme-import__message--${message().kind}`,
+                          ]}
+                          role={message().kind === "error" ? "alert" : "status"}
+                        >
+                          {message().text}
+                        </div>
+                      )}
+                    </Show>
+                  </Loading>
+                </Errored>
               </div>
             ) : (
               <p class="settings-theme-import__inline-hint">

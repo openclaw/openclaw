@@ -1,6 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { AgentsListResult } from "../../api/types.ts";
-import { defineSolidPage } from "../../app-route-types.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
 import { resolveAgentsRouteLocation, type AgentsRouteLocation } from "./route-location.ts";

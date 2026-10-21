@@ -219,7 +219,7 @@ export function resolveLoginFailureFeedback(
     });
   }
 
-  const pairing = resolvePairingHint(false, rawError, lastErrorCode);
+  const pairing = resolvePairingHint(rawError, lastErrorCode);
   if (pairing) {
     return buildFeedback(rawError, "login.failure.pairing", {
       kind: "pairing-required",
@@ -260,7 +260,7 @@ export function resolveLoginFailureFeedback(
     });
   }
 
-  if (shouldShowInsecureContextHint(false, rawError, lastErrorCode)) {
+  if (shouldShowInsecureContextHint(rawError, lastErrorCode)) {
     return buildFeedback(rawError, "login.failure.insecure", {
       kind: "insecure-context",
       docsHref: "https://docs.openclaw.ai/web/control-ui#insecure-http",

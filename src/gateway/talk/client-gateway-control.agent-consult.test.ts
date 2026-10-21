@@ -1,6 +1,7 @@
 import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   attachActiveEmbeddedRun,
@@ -13,6 +14,7 @@ import {
   testing as embeddedRunsTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
@@ -187,64 +189,119 @@ describe("Talk client agent consult admission", () => {
 
   it.each(["runOwnedArgs", "runPrompt"] as const)(
     "steers and claims only the exact registered consult owner through %s",
-    async (entrypoint) => {
-      const core = deferred<void>();
-      rpcSourceTesting.clear();
-      const isRunCurrent = vi.fn((runId: string) => runId === "run-talk");
-      const operationalRunInstance = {
-        instanceId: `instance:${entrypoint}`,
-        runId: "run-talk",
-      };
-      mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
-      mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
-        const handle = createEmbeddedRunHandle({ runId: "run-talk" });
-        await publishBackend(handle, operationalRunInstance, () => "authority", "attempt");
-        await core.promise;
-        clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
-        return { payloads: [] };
-      });
-      const runner = createOwnedRunner({
-        registerRun: vi.fn(async ({ runId }) => ({
-          release: vi.fn(),
-          isCurrent: () => isRunCurrent(runId),
-        })),
-      });
-
-      const lifecycleRunner = runner[entrypoint];
-      if (entrypoint === "runPrompt") {
-        runner.runPrompt.adoptCompletionClaims();
-      }
-      const run =
-        entrypoint === "runOwnedArgs"
-          ? runner.runOwnedArgs({ question: "first task" }, new AbortController().signal)
-          : runner.runPrompt({ prompt: "first task" });
-      await vi.waitFor(() => expect(rpcSourceTesting.has("run-talk")).toBe(true));
-      const steer = lifecycleRunner.steer;
-      if (!steer) {
-        throw new Error("owned Talk runner did not expose steering");
-      }
-      await steer({ prompt: "latest task" });
-
-      expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith(
-        expect.objectContaining({
+    (entrypoint) =>
+      withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const core = deferred<void>();
+        const published = deferred<void>();
+        const scope = {
+          agentId: "researcher",
           sessionKey: "agent:researcher:talk",
-          runTarget: expect.objectContaining({
+          storePath: state.statePath("sessions.sqlite"),
+        };
+        const now = Date.now();
+        const priorInteractionAt = now - 61 * 60_000;
+        await replaceSessionEntry(scope, {
+          sessionId: "session-talk",
+          updatedAt: priorInteractionAt,
+          lastInteractionAt: priorInteractionAt,
+        });
+        rpcSourceTesting.clear();
+        const isRunCurrent = vi.fn((runId: string) => runId === "run-talk");
+        const operationalRunInstance = {
+          instanceId: `instance:${entrypoint}`,
+          runId: "run-talk",
+        };
+        mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
+        mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
+          await params.onRunStarted?.({
             runId: "run-talk",
-            signal: expect.any(AbortSignal),
-            isCurrent: expect.any(Function),
-          }),
-          getToolAuthorityOverlay: expect.any(Function),
-          text: "latest task",
-          mode: "steer",
-        }),
-      );
-      core.resolve();
-      await expect(run).resolves.toEqual({ text: "done" });
-      expect(lifecycleRunner.claimAppend()).toBe(true);
-      expect(lifecycleRunner.claimAppend()).toBe(false);
-      expect(rpcSourceTesting.has("run-talk")).toBe(false);
-      expect(isRunCurrent).toHaveBeenCalledWith("run-talk");
-    },
+            sessionId: "session-talk",
+            timeoutMs: 60_000,
+          });
+          await params.agentRuntime.runEmbeddedAgent({
+            ...coreParams,
+            sessionTarget: { ...scope, sessionId: "session-talk" },
+          });
+          return { text: "done" };
+        });
+        mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
+          const handle = createEmbeddedRunHandle({ runId: "run-talk" });
+          await publishBackend(handle, operationalRunInstance, () => "authority", "attempt");
+          published.resolve();
+          await core.promise;
+          clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
+          return { payloads: [] };
+        });
+        const runner = createOwnedRunner({
+          sessionTarget: { ...scope, canonicalKey: scope.sessionKey, assertCurrent: () => {} },
+          registerRun: vi.fn(async ({ runId }) => ({
+            release: vi.fn(),
+            isCurrent: () => isRunCurrent(runId),
+          })),
+        });
+
+        const lifecycleRunner = runner[entrypoint];
+        if (entrypoint === "runPrompt") {
+          runner.runPrompt.adoptCompletionClaims();
+        }
+        const run =
+          entrypoint === "runOwnedArgs"
+            ? runner.runOwnedArgs({ question: "first task" }, new AbortController().signal)
+            : runner.runPrompt({ prompt: "first task" });
+        mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(
+          async (
+            params: Parameters<
+              typeof import("../../talk/agent-run-control.js").controlRealtimeVoiceAgentRun
+            >[0],
+          ) => {
+            const recorder = params.createUserTurnTranscriptRecorder?.(params.text);
+            if (entrypoint === "runPrompt") {
+              expect(recorder).toBeDefined();
+              await recorder!.persistApproved();
+            } else {
+              expect(recorder).toBeUndefined();
+            }
+            return { ok: true, queued: true, message: "Steering accepted." };
+          },
+        );
+        const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+        try {
+          await awaitGateBeforeSettlement(published.promise, run, "Talk backend must register");
+          const steer = lifecycleRunner.steer;
+          if (!steer) {
+            throw new Error("owned Talk runner did not expose steering");
+          }
+          await steer({ prompt: "latest task" });
+          expect(loadSessionEntry(scope)?.lastInteractionAt).toBe(
+            entrypoint === "runPrompt" ? now : priorInteractionAt,
+          );
+
+          expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith(
+            expect.objectContaining({
+              sessionKey: "agent:researcher:talk",
+              runTarget: expect.objectContaining({
+                runId: "run-talk",
+                signal: expect.any(AbortSignal),
+                isCurrent: expect.any(Function),
+              }),
+              getToolAuthorityOverlay: expect.any(Function),
+              text: "latest task",
+              mode: "steer",
+            }),
+          );
+          core.resolve();
+          await expect(run).resolves.toEqual({ text: "done" });
+          expect(lifecycleRunner.claimAppend()).toBe(true);
+          expect(lifecycleRunner.claimAppend()).toBe(false);
+          expect(rpcSourceTesting.has("run-talk")).toBe(false);
+          expect(isRunCurrent).toHaveBeenCalledWith("run-talk");
+        } finally {
+          core.resolve();
+          await run.catch(() => undefined);
+          clock.mockRestore();
+          lifecycleRunner.claimFailureAppend();
+        }
+      }),
   );
 
   it("keeps simultaneous same-ID consult completions with their physical stores", async () => {

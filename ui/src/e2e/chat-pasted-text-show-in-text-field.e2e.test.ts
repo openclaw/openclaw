@@ -197,7 +197,12 @@ suite.define(() => {
         label: "Refreshed paste session",
         updatedAt: Date.now(),
       });
-      await page.getByText("Refreshed paste session", { exact: true }).first().waitFor();
+      await page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+        .getByText("Refreshed paste session", { exact: true })
+        .filter({ visible: true })
+        .first()
+        .waitFor();
       expect(await restore.evaluate((node) => document.activeElement === node)).toBe(true);
       await page.keyboard.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);

@@ -34,6 +34,7 @@ import {
   installSessionPlacementAdmissionProvider,
   prepareSessionPlacementSandbox,
 } from "../../session-placement-admission.js";
+import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import * as workspaceSandbox from "../../workspace-sandbox.js";
 import { requireGit } from "../../worktrees/git.js";
 import { insertRegistryWorktree } from "../../worktrees/registry.js";
@@ -428,23 +429,13 @@ it.each(dispatchCases)(
             retainedRetryPreparer?.({ cwd: path.join(cwd, "different") });
           }
         }
-        return {
-          terminal: { kind: "ok" },
+        return makeEmbeddedRunnerAttempt({
           sessionIdUsed: params.sessionId,
-          messagesSnapshot: [],
           assistantTexts: [`${params.agentId} answered`],
-          toolMetas: [],
-          lastAssistant: undefined,
-          didSendViaMessagingTool: false,
-          messagingToolSentTexts: [],
-          messagingToolSentMediaUrls: [],
-          messagingToolSentTargets: [],
-          cloudCodeAssistFormatError: false,
           replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
           providerRetryMaxRetries: legacyRetryCount,
           providerRetryMaxDelayMs: legacyRetryDelayMs,
-        };
+        });
       });
       if (cancelTrajectory) {
         runAttempt.mockImplementation(async (attempt) => {
@@ -732,6 +723,11 @@ it.each(dispatchCases)(
       }
       const pending = prepareAndDispatchEmbeddedRunAttempt(input);
       void pending.catch(() => {});
+      const expectNoDispatch = () => {
+        for (const operation of [resolvePlacementSandbox, localBackend, runAttempt]) {
+          expect(operation).not.toHaveBeenCalled();
+        }
+      };
       try {
         if (retryPreparation === "change-cwd") {
           await expect(pending).rejects.toThrow(
@@ -757,9 +753,7 @@ it.each(dispatchCases)(
             pending,
             "Sandbox setup bypassed workspace attribution",
           );
-          expect(resolvePlacementSandbox).not.toHaveBeenCalled();
-          expect(localBackend).not.toHaveBeenCalled();
-          expect(runAttempt).not.toHaveBeenCalled();
+          expectNoDispatch();
           expect(existsSync(setupFile)).toBe(false);
           if (diffBaseline === "failed") {
             const failure = new Error("workspace attribution failed");
@@ -775,9 +769,7 @@ it.each(dispatchCases)(
             }
           }
           if (diffBaseline !== "settled") {
-            expect(resolvePlacementSandbox).not.toHaveBeenCalled();
-            expect(localBackend).not.toHaveBeenCalled();
-            expect(runAttempt).not.toHaveBeenCalled();
+            expectNoDispatch();
             return;
           }
           await pending;
@@ -831,13 +823,13 @@ it.each(dispatchCases)(
           expect(outcome.error).toBeUndefined();
           expect(outcome.result?.dispatchedAttempt.rawAttempt.terminal).toEqual({ kind: "ok" });
           expect(runAttempt).toHaveBeenCalledOnce();
-          expect(runAttempt.mock.calls[0]?.[0]).toMatchObject({
+          const dispatched = runAttempt.mock.calls[0]?.[0];
+          expect(dispatched).toMatchObject({
             workspaceDir,
             cwd: workspaceDir,
             sessionRoot: workspaceDir,
             sandbox: remoteSandbox,
           });
-          const dispatched = runAttempt.mock.calls[0]?.[0];
           expect(dispatched?.prompt).toBe("Use the skill at /remote/inbound/0/SKILL.md.");
           expect(dispatched?.explicitSkillSelections).toEqual([
             { name: "demo", path: "/remote/inbound/0/SKILL.md" },
@@ -845,11 +837,12 @@ it.each(dispatchCases)(
           ]);
           expect(params.explicitSkillSelections?.[0]?.path).toBe("/host/skills/demo/SKILL.md");
           if (hostMedia === "allowed") {
-            expect(runAttempt.mock.calls[0]?.[0].images).toMatchObject([{ mimeType: "image/png" }]);
+            expect(dispatched?.images).toMatchObject([{ mimeType: "image/png" }]);
           }
           return;
         }
         const { dispatchedAttempt: result } = await pending;
+        const dispatched = runAttempt.mock.calls[0]?.[0];
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
         expect(result.rawAttempt.providerRetryMaxRetries).toBe(
@@ -858,16 +851,14 @@ it.each(dispatchCases)(
         expect(result.rawAttempt.providerRetryMaxDelayMs).toBe(legacyRetryDelayMs);
         expect(() => retainedRetryPreparer?.({ cwd: workspaceDir })).toThrow();
         if (explicitCwd) {
-          expect(runAttempt.mock.calls[0]?.[0]).toMatchObject({
+          expect(dispatched).toMatchObject({
             workspaceDir,
             cwd: path.join(workspaceDir, "packages", "app"),
             sessionRoot: workspaceDir,
             permissionMode: "full",
           });
         }
-        expect(runAttempt.mock.calls[0]?.[0].contextEngine).toBe(
-          configuredContextEngine ? contextEngine : undefined,
-        );
+        expect(dispatched?.contextEngine).toBe(configuredContextEngine ? contextEngine : undefined);
         expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             agentId,
@@ -883,23 +874,23 @@ it.each(dispatchCases)(
           sessionId: `${agentId}-global`,
           storePath: undefined,
         });
-        expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
+        expect.soft(dispatched?.oneShotCliRun).toBe(oneShotCliRun);
         if (sandboxSessionKey === "agent:main:policy") {
-          expect(runAttempt.mock.calls[0]?.[0].preparedWebSearchPolicy).toMatchObject({
+          expect(dispatched?.preparedWebSearchPolicy).toMatchObject({
             allowed: false,
             persistentAllowed: false,
           });
         }
         if (preparedAuth) {
-          expect(runAttempt.mock.calls[0]?.[0].model.headers).toEqual({
+          expect(dispatched?.model.headers).toEqual({
             Authorization: preparedAuth === "explicit-header" ? "Bearer runtime-token" : null,
             "X-Test": "fixture",
           });
         }
-        const sandbox = runAttempt.mock.calls[0]?.[0].sandbox;
+        const sandbox = dispatched?.sandbox;
         if (managedWorkspace && !remoteSkills) {
           expect(preparation).toHaveBeenCalledWith(expect.objectContaining({ admittedRunContext }));
-          expect(runAttempt.mock.calls[0]?.[0]).toMatchObject({
+          expect(dispatched).toMatchObject({
             workspaceDir: projection,
             cwd: projection,
             sessionRoot: projection,
@@ -908,7 +899,6 @@ it.each(dispatchCases)(
           });
           expect(params.workspaceDir).toBe(workspaceDir);
         } else if (skillCatalog === "sandbox") {
-          const dispatched = runAttempt.mock.calls[0]?.[0];
           const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
           expect(dispatched?.skillsSnapshot?.prompt).toContain(
             `<location>${sandboxSkillPath}</location>`,
@@ -917,7 +907,7 @@ it.each(dispatchCases)(
           expect(params.skillsSnapshot?.prompt).toBe(skillsSnapshot?.prompt);
           expect(sandbox?.workspaceAccess).toBe("rw");
         } else if (skillCatalog === "host") {
-          expect(runAttempt.mock.calls[0]?.[0].skillsSnapshot?.prompt).toBe(skillsSnapshot?.prompt);
+          expect(dispatched?.skillsSnapshot?.prompt).toBe(skillsSnapshot?.prompt);
           expect(sandbox).toBeNull();
         } else if (agentId === "work" && sandboxSessionKey === "global") {
           expect(provisioned).toHaveLength(1);

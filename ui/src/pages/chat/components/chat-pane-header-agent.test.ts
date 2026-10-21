@@ -1,13 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createPaneHeaderWorkspaceFixture, createTestChatPane } from "../chat-pane.test-support.ts";
-import {
-  mountChatPaneHeader,
-  renderPaneHeaderInto,
-  selectNativeMenu,
-} from "./chat-pane-header.test-support.ts";
+import { mountChatPaneHeader, renderPaneHeaderInto } from "./chat-pane-header.test-support.ts";
 
 const containers: HTMLElement[] = [];
 afterEach(() => containers.splice(0).forEach((container) => container.remove()));
@@ -21,10 +16,6 @@ function researchHeader(patch: Parameters<typeof mountChatPaneHeader>[1] = {}) {
 
 const find = (container: Element, selector: string) =>
   container.querySelector<HTMLElement>(`.chat-pane__${selector}`);
-const dialogOpen = (container: Element, open: boolean) =>
-  waitForSolid(() =>
-    expect(container.querySelector("[role=dialog]")?.matches(":popover-open")).toBe(open),
-  );
 
 function fixture() {
   const request = vi.fn(async () => ({}));
@@ -64,47 +55,33 @@ function fixture() {
   return { pane, state, container, draw, request, navigate };
 }
 
-it("keeps workspace actions, parent navigation, and session renaming in secondary context", async () => {
-  const { container, props, update } = researchHeader({
+it("opens agent settings from the roster pill without a session context popover", () => {
+  const { container, props } = researchHeader({
     parentSession: { key: "agent:research:parent", title: "Parent conversation" },
   });
-  const trigger = find(container, "agent-identity > button")!;
-  expect(trigger.getAttribute("aria-label")).toBe("Session and workspace for Research lead");
+  const pill = find(container, "agent-identity")!;
+  expect(pill.tagName).toBe("BUTTON");
+  expect(pill.getAttribute("aria-label")).toBe("Research lead settings");
+  pill.click();
+  expect(props.onOpenAgentSettings).toHaveBeenCalledWith("research");
+  expect(container.querySelector("[role=dialog]")).toBeNull();
   expect(find(container, "crumbs")).toBeNull();
-  trigger.click();
-  await dialogOpen(container, true);
-  const dialog = container.querySelector("[role=dialog]")!;
-  expect(dialog.textContent).toContain("Session title");
-  expect(dialog.textContent).toContain("openclaw");
-  find(dialog, "parent-session")!.click();
-  expect(props.onOpenParentSession).toHaveBeenCalledWith("agent:research:parent");
-  const workspace = find(dialog, "workspace-menu")!;
-  await selectNativeMenu(workspace, "copy-path");
-  expect(props.onMenuAction).toHaveBeenCalledWith("copy-path");
-  await selectNativeMenu(workspace, "reveal");
-  expect(props.onMenuAction).toHaveBeenCalledWith("reveal");
-  find(dialog, "session-title-button")!.click();
-  expect(props.onBeginRename).toHaveBeenCalledOnce();
+});
+
+it("edits an overflow-menu rename inline and keeps the pill on agent changes", () => {
+  const { container, props, update } = researchHeader();
   update({ editing: true, renameValue: "Updated conversation" });
-  const input = dialog.querySelector<HTMLInputElement>(".chat-pane__session-title-input")!;
+  const input = find(container, "header-leading")!.querySelector<HTMLInputElement>(
+    ".chat-pane__session-title-input",
+  )!;
   expect(input.value).toBe("Updated conversation");
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(props.onCommitRename).toHaveBeenCalledOnce();
-});
-
-it("opens secondary context for overflow-menu rename and retires it on agent changes", async () => {
-  const { container, update } = researchHeader();
-  update({ editing: true });
-  await dialogOpen(container, true);
-  expect(find(container, "session-title-input")).not.toBeNull();
   update({ editing: false, agent: { id: "main", name: "Chief of Staff", textAvatar: "🦊" } });
-  await dialogOpen(container, false);
   expect(find(container, "crumbs")).toBeNull();
   expect(find(container, "agent-name")?.textContent).toBe("Chief of Staff");
-  find(container, "agent-identity > button")!.click();
-  await dialogOpen(container, true);
-  update({ presented: false });
-  await dialogOpen(container, false);
+  find(container, "agent-identity")!.click();
+  expect(props.onOpenAgentSettings).toHaveBeenCalledWith("main");
 });
 
 it("uses the pane agent on direct navigation and retained agent switches, only in roster mode", () => {
@@ -117,7 +94,7 @@ it("uses the pane agent on direct navigation and retained agent switches, only i
   expect(leading().textContent).not.toContain("What can you do?");
   expect(leading().textContent).not.toContain("workspace-research");
   expect(centered()?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🔬");
-  const settings = find(container, "agent-settings")!;
+  const settings = find(container, "agent-identity")!;
   expect(settings.getAttribute("aria-label")).toBe("Research lead settings");
   settings.click();
   expect(navigate).toHaveBeenCalledWith("agents", {

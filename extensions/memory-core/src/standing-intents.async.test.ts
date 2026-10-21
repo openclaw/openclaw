@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
@@ -19,7 +18,6 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -34,12 +32,12 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   observeHostDataSql,
+  useSqliteWorkerFault,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
-import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import { createStandingIntentExecutor } from "./standing-intents-tool.js";
 import {
   createStandingIntent,
@@ -52,6 +50,26 @@ import {
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
 const writerDrains: Array<() => Promise<unknown>> = [];
+const writeActions = ["create", "list", "cancel", "match"] as const;
+const writeFault = useSqliteWorkerFault(
+  writeActions.map((action) => {
+    const insert = action === "create";
+    const condition = insert
+      ? ""
+      : action === "match"
+        ? "WHEN NEW.fire_count != OLD.fire_count"
+        : `WHEN NEW.status = '${action === "list" ? "expired" : "cancelled"}'`;
+    return {
+      match: new RegExp(`^${insert ? "insert into" : "update"} standing_intents `),
+      name: `reject_intent_${action}`,
+      sql: `CREATE TEMP TRIGGER reject_intent_${action}
+        BEFORE ${insert ? "INSERT" : "UPDATE"} ON standing_intents ${condition}
+        BEGIN SELECT RAISE(ABORT, 'fixture standing-intent write rejected'); END`,
+    };
+  }),
+);
+const failStandingIntentWrites = (action: (typeof writeActions)[number]) =>
+  writeFault.enable(writeActions.indexOf(action));
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -120,54 +138,6 @@ async function holdWriter(beforeRelease?: () => void, beforeLock?: () => Promise
   writerDrains.push(drain);
   await Promise.race([entered.promise, done]);
   return { entered: entered.promise, release: finish.resolve, done, drain };
-}
-
-function failStandingIntentWrites(action: "create" | "list" | "cancel" | "match") {
-  const operation = action === "create" ? "insert into" : "update";
-  const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents);
-  const fixturePath = path.join(stateDir, "standing-intent-statement-fault.mjs");
-  // Prototype interception also reaches statements prepared by the seed operation.
-  fs.writeFileSync(
-    fixturePath,
-    `import { StatementSync } from "node:sqlite";
-import { bindSqliteWorkerBackend as bind } from ${JSON.stringify(moduleUrl.href)};
-export function bindSqliteWorkerBackend(input, context) {
-  const backend = bind(input, context);
-  const action = ${JSON.stringify(action)};
-  const originals = new Map();
-  for (const method of ["run", "get", "all", "iterate"]) {
-    const original = StatementSync.prototype[method];
-    originals.set(method, original);
-    StatementSync.prototype[method] = function (...args) {
-      const sql = this.sourceSQL.toLowerCase().replaceAll('"', '');
-      const selected = action === 'create' || (action === 'match'
-        ? sql.includes('set fire_count =')
-        : args.includes(action === 'list' ? 'expired' : 'cancelled'));
-      if (selected && sql.startsWith(${JSON.stringify(`${operation} standing_intents `)})) {
-        throw new Error('fixture standing-intent write rejected');
-      }
-      return Reflect.apply(original, this, args);
-    };
-  }
-  return { ...backend, close() {
-    for (const [method, original] of originals) StatementSync.prototype[method] = original;
-    return backend.close();
-  } };
-}
-`,
-  );
-  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
-  return vi
-    .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
-    .mockImplementation((options, source, worker) =>
-      open(
-        options,
-        source,
-        worker.moduleUrl.href === moduleUrl.href
-          ? { ...worker, moduleUrl: pathToFileURL(fixturePath) }
-          : worker,
-      ),
-    );
 }
 
 async function expectWaiting(work: Promise<unknown>, entered: Promise<void>) {

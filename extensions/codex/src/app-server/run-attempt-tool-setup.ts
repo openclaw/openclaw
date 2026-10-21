@@ -46,7 +46,7 @@ import {
   captureScheduledCodexAppAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import { releaseCodexProbeClient } from "./shared-client.js";
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
@@ -289,7 +289,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         },
       });
     } finally {
-      releaseLeasedSharedCodexAppServerClient(client);
+      await releaseCodexProbeClient(client, connection.attemptClientFactory);
     }
   }
   let requireExplicitMessageTarget: boolean | undefined;

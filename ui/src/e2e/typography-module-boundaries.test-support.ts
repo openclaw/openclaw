@@ -60,11 +60,11 @@ export function defineTypographyModuleBoundaryTests(
         await page.keyboard.press("Enter");
         const menu = page.locator(".sidebar-identity-menu");
         await menu.waitFor();
-        const shortcut = menu
+        const settingsShortcut = menu
           .locator('[data-value="command:settings"]')
           .locator(".session-menu__shortcut");
 
-        const report = await shortcut.evaluate((element) => ({
+        const report = await settingsShortcut.evaluate((element) => ({
           body: getComputedStyle(document.body).fontFamily,
           shortcut: getComputedStyle(element).fontFamily,
           text: element.textContent?.replace(/\s+/gu, ""),
@@ -76,45 +76,51 @@ export function defineTypographyModuleBoundaryTests(
 
         await page.keyboard.press("Escape");
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-        const panelSelector = page.locator(".side-panel-empty--selector");
-        const panelShortcuts = panelSelector.locator(".side-panel-type-option__shortcut");
+        const panelSelector = page.locator(".side-panel-launcher");
+        const panelShortcuts = [/^Review\b/u, /^Files\b/u, /^Side chat\b/u].map((name) =>
+          panelSelector.getByRole("button", { name }).locator(".side-panel-type-option__shortcut"),
+        );
         await panelSelector.waitFor();
         const labels = applePlatform
           ? ["⌘⌥⇧E", "⌘⇧B", "⌘⇧S"]
           : ["Ctrl+Alt+Shift+E", "Ctrl+Shift+B", "Ctrl+Shift+S"];
         expect(
-          await panelShortcuts.evaluateAll((keys) =>
-            keys.map((key) => ({
-              text: key.textContent?.replace(/\s+/gu, ""),
-              font: getComputedStyle(key).fontFamily,
-            })),
+          await Promise.all(
+            panelShortcuts.map((shortcut) =>
+              shortcut.evaluate((key) => ({
+                text: key.textContent?.replace(/\s+/gu, ""),
+                font: getComputedStyle(key).fontFamily,
+              })),
+            ),
           ),
         ).toEqual(labels.map((text) => ({ text, font: expect.stringMatching(/^system-ui,/u) })));
 
-        const inkOffsets = await panelShortcuts.evaluateAll((keys) =>
-          keys.map((key) => {
-            const letter = key.querySelector<HTMLElement>(".kbd__text");
-            const context = document.createElement("canvas").getContext("2d");
-            if (!letter || !context) {
-              throw new Error("Shortcut must have a measurable letter");
-            }
-            const style = getComputedStyle(letter);
-            context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-            const ink = context.measureText(letter.textContent ?? "");
-            // A zero-height inline box exposes the text baseline without replacing the glyph.
-            const baseline = document.createElement("span");
-            baseline.style.cssText = "display:inline-block;width:0;height:0";
-            letter.append(baseline);
-            const baselineY = baseline.getBoundingClientRect().y;
-            baseline.remove();
-            const box = key.getBoundingClientRect();
-            return (
-              baselineY +
-              (ink.actualBoundingBoxDescent - ink.actualBoundingBoxAscent) / 2 -
-              box.y -
-              box.height / 2
-            );
-          }),
+        const inkOffsets = await Promise.all(
+          panelShortcuts.map((shortcut) =>
+            shortcut.evaluate((key) => {
+              const letter = key.querySelector<HTMLElement>(".kbd__text");
+              const context = document.createElement("canvas").getContext("2d");
+              if (!letter || !context) {
+                throw new Error("Shortcut must have a measurable letter");
+              }
+              const style = getComputedStyle(letter);
+              context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+              const ink = context.measureText(letter.textContent ?? "");
+              // A zero-height inline box exposes the text baseline without replacing the glyph.
+              const baseline = document.createElement("span");
+              baseline.style.cssText = "display:inline-block;width:0;height:0";
+              letter.append(baseline);
+              const baselineY = baseline.getBoundingClientRect().y;
+              baseline.remove();
+              const box = key.getBoundingClientRect();
+              return (
+                baselineY +
+                (ink.actualBoundingBoxDescent - ink.actualBoundingBoxAscent) / 2 -
+                box.y -
+                box.height / 2
+              );
+            }),
+          ),
         );
         // Font hinting rounds cap ink to device pixels; do not center the whole line box instead.
         for (const offset of inkOffsets) {

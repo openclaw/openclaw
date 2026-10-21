@@ -62,7 +62,10 @@ vi.mock("./http-utils.js", async (original) => {
     }),
     checkGatewayHttpRequestAuth: async () => ({ ok: true, requestAuth: requestAuth() }),
     authorizeGatewayHttpRequestOrReply: async () => requestAuth(),
-    authorizeControlUiSessionOwnerReadRequestOrReply: async () => requestAuth(),
+    authorizeControlUiSessionOwnerReadRequestOrReply: async () => ({
+      ...requestAuth(),
+      canReadSession: () => true,
+    }),
     resolveTrustedHttpOperatorScopes: () => ["operator.admin"],
     resolveSharedSecretHttpOperatorScopes: () => ["operator.admin"],
   };

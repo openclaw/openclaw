@@ -305,7 +305,13 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(machineState, "updateConfigMachineStateInDatabase"),
-    [key(machineState, "updateConfigMachineState")],
+    [
+      key(machineState, "updateConfigMachineState"),
+      // Both receipt writers construct only automation-default: keys in their kernel.
+      ...["recordDefaultProactiveJobInDatabase", "recordConvertedProactiveJobInDatabase"].map(
+        (name) => key("src/cron/proactive-job-receipt.kernel.ts", name),
+      ),
+    ],
   ],
   // These keys are built by bounded prefixes in the reviewed owners, never copied from a command.
   [
@@ -505,7 +511,12 @@ const callers = new Map<string, readonly string[]>([
   ]),
   [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
-    [key(sessionEntries, "writeSessionEntry")],
+    [
+      key(
+        "src/config/sessions/session-accessor.sqlite-entry-write.ts",
+        "prepareSessionEntryWrite/write",
+      ),
+    ],
   ],
   [
     key(sessionArtifacts, "deleteSessionNodeArtifacts"),

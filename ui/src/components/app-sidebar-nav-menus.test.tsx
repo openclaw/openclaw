@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
@@ -9,6 +9,7 @@ import {
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SidebarDropdown, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { SessionOrganizer } from "./session-organizer.ts";
 import {
@@ -41,6 +42,81 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   link.dispatchEvent(ordinary);
   expect(ordinary.defaultPrevented).toBe(true);
   expect(navigate).toHaveBeenCalledOnce();
+});
+
+it("uses the current preload callbacks without replacing a sidebar link", () => {
+  const SidebarNavLink = renderSidebarNavLink;
+  const preload = vi.fn();
+  const cancel = vi.fn();
+  const [handlers, setHandlers] = createSignal<{
+    onPreload?: (event: Event, immediate?: boolean) => void;
+    onCancelPreload?: (event: Event) => void;
+  }>({});
+  const view = render(() => (
+    <SidebarNavLink
+      href="/sessions"
+      active={false}
+      icon={<span />}
+      label="Sessions"
+      onNavigate={vi.fn()}
+      {...handlers()}
+    />
+  ));
+  const link = view.getByRole("link", { name: "Sessions" });
+  setHandlers({ onPreload: preload, onCancelPreload: cancel });
+  flush();
+  for (const type of ["focus", "pointerenter", "touchstart", "blur", "pointerleave"]) {
+    link.dispatchEvent(new Event(type, { bubbles: true }));
+  }
+  expect(preload.mock.calls.map(([event, immediate]) => [event.type, immediate])).toEqual([
+    ["focus", undefined],
+    ["pointerenter", undefined],
+    ["touchstart", true],
+  ]);
+  expect(cancel.mock.calls.map(([event]) => event.type)).toEqual(["blur", "pointerleave"]);
+  setHandlers({});
+  flush();
+  link.dispatchEvent(new Event("touchstart", { bubbles: true }));
+  link.dispatchEvent(new Event("blur", { bubbles: true }));
+  expect(preload).toHaveBeenCalledTimes(3);
+  expect(cancel).toHaveBeenCalledTimes(2);
+  expect(view.getByRole("link", { name: "Sessions" })).toBe(link);
+});
+
+it("uses current section actions while retaining the header", () => {
+  const initialToggle = vi.fn();
+  const currentToggle = vi.fn();
+  const initialContext = vi.fn();
+  const currentContext = vi.fn();
+  const [current, setCurrent] = createSignal(false);
+  const view = render(() => (
+    <SectionHeader
+      sectionId="work"
+      sectionHeaders={new Map()}
+      content="Work"
+      draggable={false}
+      onStartDrag={vi.fn()}
+      onFinishDrag={vi.fn()}
+      onContextMenu={current() ? currentContext : initialContext}
+      status={{
+        content: "Expand",
+        label: "Expand work",
+        expanded: false,
+        onToggle: current() ? currentToggle : initialToggle,
+      }}
+    />
+  ));
+  const button = view.getByRole("button", { name: "Expand work" });
+  const header = button.parentElement!;
+  setCurrent(true);
+  flush();
+  button.click();
+  header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+  expect(currentToggle).toHaveBeenCalledOnce();
+  expect(currentContext).toHaveBeenCalledOnce();
+  expect(initialToggle).not.toHaveBeenCalled();
+  expect(initialContext).not.toHaveBeenCalled();
+  expect(view.getByRole("button", { name: "Expand work" })).toBe(button);
 });
 
 it("delivers an action selected through the shared sidebar menu", async () => {
@@ -171,6 +247,7 @@ describe("sidebar rail pin menu", () => {
   ] as const)(
     "closes the rail pin menu before %s dispatch at position %i",
     async (action, index, target) => {
+      const warnings = vi.spyOn(console, "warn");
       const entries: readonly [string, string, string] = [
         "route:usage",
         "route:sessions",
@@ -234,6 +311,11 @@ describe("sidebar rail pin menu", () => {
       expect(menus.triggers.get("railPin")).toBe(trigger);
       menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
       await waitForSolid(() => expect(action === "remove" ? remove : move).toHaveBeenCalledOnce());
+      expect(
+        warnings.mock.calls.filter(
+          ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+        ),
+      ).toEqual([]);
       if (action === "remove") {
         expect(remove).toHaveBeenCalledExactlyOnceWith(target);
         expect(move).not.toHaveBeenCalled();

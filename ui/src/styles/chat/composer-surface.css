@@ -213,7 +213,9 @@
      the surface's own floor is taller than the editor plus these insets. */
   --chat-composer-editor-inset-inline: 14px;
   --chat-composer-editor-inset-block: 6px;
-  --chat-attachment-hit-slop: calc(var(--chat-composer-editor-inset-block) * 2);
+  /* Attachment controls keep their clearance when the compact editor loses its inset. */
+  --chat-attachment-inset-block: 6px;
+  --chat-attachment-hit-slop: calc(var(--chat-attachment-inset-block) * 2);
   /* The editor is a reading and writing surface, not a compact form field, so it
      owns a 16px base instead of the shared control token, whose 14px base only
      reaches 16px through an iOS zoom floor — text that size by accident does not
@@ -883,6 +885,10 @@
 .chat-send-btn--stop svg {
   width: 18px;
   height: 18px;
+}
+
+.chat-send-btn--stop rect {
+  rx: 3px;
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {

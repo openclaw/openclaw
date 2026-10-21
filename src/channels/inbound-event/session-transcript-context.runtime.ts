@@ -37,56 +37,6 @@ function compareMessages(left: PromptMessage, right: PromptMessage): number {
   return leftTimestamp - rightTimestamp;
 }
 
-function mergeMessages(params: {
-  existing: PromptMessage[];
-  transcript: TranscriptMessage[];
-  dedupeAssistantTextKeys: Set<string>;
-  dedupeTranscriptIds: Set<string>;
-  limit: number;
-}): { added: number; messages: PromptMessage[] } {
-  const seen = new Set(params.existing.flatMap(messageKeys));
-  const seenTranscript = new Set<string>();
-  const added: PromptMessage[] = [];
-  for (const item of params.transcript) {
-    if (item.transcriptId && params.dedupeTranscriptIds.has(item.transcriptId)) {
-      continue;
-    }
-    const message = historyMessage(item.entry);
-    const keys = messageKeys(message);
-    const assistantTextKeys =
-      item.role === "assistant"
-        ? messageKeys({
-            ...message,
-            body: stripInlineDirectiveTagsForDelivery(item.entry.body).text,
-          })
-        : keys;
-    if (
-      keys.some((key) => seenTranscript.has(key)) ||
-      (item.role === "assistant" &&
-        assistantTextKeys.some((key) => params.dedupeAssistantTextKeys.has(key))) ||
-      (item.role === "user" && keys.some((key) => seen.has(key)))
-    ) {
-      continue;
-    }
-    keys.forEach((key) => seenTranscript.add(key));
-    added.push(message);
-  }
-  const sorted = [...added, ...params.existing].toSorted(compareMessages);
-  if (sorted.length <= params.limit) {
-    return { added: added.length, messages: sorted };
-  }
-  const pinned = sorted.filter((message) => message.is_reply_target === true);
-  const available = Math.max(0, params.limit - pinned.length);
-  const recent =
-    available === 0
-      ? []
-      : sorted.filter((message) => message.is_reply_target !== true).slice(-available);
-  return {
-    added: added.length,
-    messages: [...pinned.slice(-params.limit), ...recent].toSorted(compareMessages),
-  };
-}
-
 function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
   return (ctx.ChannelStructuredContext ?? []).filter(
     (entry): entry is typeof entry & { payload: Record<string, unknown> } =>
@@ -201,15 +151,46 @@ export async function mergeSessionTranscriptContext(params: {
     const ids = Array.isArray(dedupeIds)
       ? new Set(dedupeIds.filter((id): id is string => typeof id === "string"))
       : new Set<string>();
-    const merged = mergeMessages({
-      existing,
-      transcript,
-      dedupeTranscriptIds: ids,
-      dedupeAssistantTextKeys: new Set(assistantTextKeys ?? []),
-      limit,
-    });
-    window.payload = { ...window.payload, messages: merged.messages };
-    if (merged.added > 0) {
+    const assistantDedupeKeys = new Set(assistantTextKeys ?? []);
+    const seen = new Set(existing.flatMap(messageKeys));
+    const seenTranscript = new Set<string>();
+    const added: PromptMessage[] = [];
+    for (const item of transcript) {
+      if (item.transcriptId && ids.has(item.transcriptId)) {
+        continue;
+      }
+      const message = historyMessage(item.entry);
+      const keys = messageKeys(message);
+      const visibleAssistantKeys =
+        item.role === "assistant"
+          ? messageKeys({
+              ...message,
+              body: stripInlineDirectiveTagsForDelivery(item.entry.body).text,
+            })
+          : keys;
+      if (
+        keys.some((key) => seenTranscript.has(key)) ||
+        (item.role === "assistant" &&
+          visibleAssistantKeys.some((key) => assistantDedupeKeys.has(key))) ||
+        (item.role === "user" && keys.some((key) => seen.has(key)))
+      ) {
+        continue;
+      }
+      keys.forEach((key) => seenTranscript.add(key));
+      added.push(message);
+    }
+    let messages = [...added, ...existing].toSorted(compareMessages);
+    if (!(messages.length <= limit)) {
+      const pinned = messages.filter((message) => message.is_reply_target === true);
+      const available = Math.max(0, limit - pinned.length);
+      const recent =
+        available === 0
+          ? []
+          : messages.filter((message) => message.is_reply_target !== true).slice(-available);
+      messages = [...pinned.slice(-limit), ...recent].toSorted(compareMessages);
+    }
+    window.payload = { ...window.payload, messages };
+    if (added.length > 0) {
       window.source = "session";
     }
   }

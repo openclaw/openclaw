@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as commands from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -27,15 +27,59 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("coalesces snapshot progress while its receipt is settling", async () => {
-  const root = await fs.realpath(tempDirs.make("snapshot-progress-"));
+async function fixture(canary = false) {
+  const root = await fs.realpath(tempDirs.make("snapshot-watchdog-"));
+  const stateDir = path.join(root, "source");
+  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir, TMPDIR: root };
   const worker = path.join(
     root,
     "dist",
     runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
   );
   await fs.mkdir(path.dirname(worker), { recursive: true });
-  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ type: "module", ...(canary ? { version: "2026.10.10" } : {}) }),
+  );
+  if (canary) {
+    for (const file of [
+      "index.js",
+      runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+    ]) {
+      await fs.writeFile(path.join(root, "dist", file), "");
+    }
+  }
+  return { root, stateDir, env, worker, pidFile: path.join(root, "worker.pid") };
+}
+
+function observeWorker(phase?: string) {
+  const entered = createDeferred();
+  const exited = createDeferred();
+  const execute = commands.runUtf8CommandWithTimeout;
+  let output = "";
+  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+    const operation =
+      typeof options === "number"
+        ? execute(argv, options)
+        : execute(argv, {
+            ...options,
+            onOutputChunk(chunk, stream) {
+              options.onOutputChunk?.(chunk, stream);
+              if (stream === "stderr") {
+                output += chunk.toString();
+                if (phase && output.includes(`"phase":"${phase}"`)) {
+                  entered.resolve();
+                }
+              }
+            },
+          });
+    return operation.finally(() => exited.resolve());
+  });
+  return { entered, exited };
+}
+
+it("coalesces snapshot progress while its receipt is settling", async () => {
+  const { root, env, worker } = await fixture();
   await fs.writeFile(
     worker,
     `
@@ -53,17 +97,8 @@ it("coalesces snapshot progress while its receipt is settling", async () => {
   );
   const receipt = createDeferred();
   const entered = createDeferred();
-  const workerExited = createDeferred();
-  const execute = commands.runUtf8CommandWithTimeout;
-  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (...args) => {
-    try {
-      return await execute(...args);
-    } finally {
-      workerExited.resolve();
-    }
-  });
+  const { exited } = observeWorker();
   const observed: string[] = [];
-  const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "source"), TMPDIR: root };
   const operation = prepareUpdateCandidateStateSnapshot({
     candidateRoot: root,
     stateDir: env.OPENCLAW_STATE_DIR,
@@ -80,7 +115,7 @@ it("coalesces snapshot progress while its receipt is settling", async () => {
   });
   try {
     await entered.promise;
-    await workerExited.promise;
+    await exited.promise;
     expect(observed).toHaveLength(1);
   } finally {
     receipt.resolve();
@@ -99,25 +134,7 @@ it.each([
 ])(
   "retains $phase cancellation diagnostics through worker settlement (settled=$settled)",
   async ({ phase, settled }) => {
-    const root = await fs.realpath(tempDirs.make("snapshot-watchdog-"));
-    const stateDir = path.join(root, "source");
-    const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir, TMPDIR: root };
-    const worker = path.join(
-      root,
-      "dist",
-      runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
-    );
-    const pidFile = path.join(root, "worker.pid");
-    await fs.mkdir(path.dirname(worker), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ type: "module", version: "2026.10.10" }),
-    );
-    await fs.writeFile(path.join(root, "dist", "index.js"), "");
-    await fs.writeFile(
-      path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
-      "",
-    );
+    const { root, stateDir, env, worker, pidFile } = await fixture(true);
     await fs.writeFile(
       worker,
       `
@@ -135,27 +152,7 @@ it.each([
       else setInterval(() => {}, 1000);
     `,
     );
-    const entered = createDeferred();
-    const exited = createDeferred();
-    const execute = commands.runUtf8CommandWithTimeout;
-    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
-      if (typeof options === "number") {
-        return execute(argv, options);
-      }
-      let output = "";
-      return execute(argv, {
-        ...options,
-        onOutputChunk(chunk, stream) {
-          options.onOutputChunk?.(chunk, stream);
-          if (stream === "stderr") {
-            output += chunk.toString();
-            if (output.includes(`"phase":"${phase}"`)) {
-              entered.resolve();
-            }
-          }
-        },
-      }).finally(() => exited.resolve());
-    });
+    const { entered, exited } = observeWorker(phase);
     const expire = captureUpdateCandidateDeadline();
     const controller = new AbortController();
     const pendingReceipt = createDeferred();
@@ -176,12 +173,11 @@ it.each([
       },
     });
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        operation.then(() => {
-          throw new Error("Worker never entered the stalled phase");
-        }),
-      ]);
+        operation,
+        "Worker never entered the stalled phase",
+      );
       if (settled) {
         await exited.promise;
         // Drain the command's promise chain so only its progress receipt remains.

@@ -1,30 +1,13 @@
 import { isSafeRegex } from "@a2ui/web_core/v0_8";
 import { Dynamic } from "@solidjs/web";
-import {
-  For,
-  Match,
-  Show,
-  Switch,
-  createMemo,
-  createSignal,
-  createUniqueId,
-  onSettled,
-} from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal, createUniqueId } from "solid-js";
+import { CatalogBoundary, CatalogDialog, catalogAlignment } from "./catalog-primitives.jsx";
 
 const tags = Object.fromEntries(
   "Text Image Icon Video AudioPlayer Row Column List Card Tabs Divider Modal Button CheckBox TextField DateTimeInput MultipleChoice Slider"
     .split(" ")
     .map((name) => [name, `a2ui-${name.toLowerCase()}`]),
 );
-const alignment = (value) =>
-  ({
-    start: "flex-start",
-    end: "flex-end",
-    spaceAround: "space-around",
-    spaceBetween: "space-between",
-    spaceEvenly: "space-evenly",
-  })[value] ?? value;
-
 // The processor owns path normalization and template data contexts; the view only reads bindings.
 function readValue(props, value) {
   void props.revision;
@@ -89,12 +72,13 @@ function Choice(props) {
     const value = readValue(props, choices().selections);
     return Array.isArray(value) ? value : [];
   };
-  const options = () =>
+  const options = createMemo(() =>
     (choices().options ?? []).filter((option) =>
       String(readValue(props, option.label) ?? "")
         .toLowerCase()
         .includes(filter().toLowerCase()),
-    );
+    ),
+  );
   const toggle = (value) => {
     const current = selected();
     const next = current.includes(value)
@@ -218,37 +202,21 @@ function Tabs(props) {
 }
 
 function Modal(props) {
-  let dialog;
-  onSettled(() => () => {
-    if (dialog?.open) {
-      dialog.close();
-    }
-  });
   return (
-    <>
-      <section onClick={() => dialog.showModal()}>
-        <CatalogNode {...props} node={props.node.properties.entryPointChild} />
-      </section>
-      <dialog
-        ref={(element) => {
-          dialog = element;
-        }}
-        onClick={(event) => {
-          if (event.target === dialog) {
-            dialog.close();
-          }
-        }}
-      >
+    <CatalogDialog
+      trigger={<CatalogNode {...props} node={props.node.properties.entryPointChild} />}
+    >
+      {(close) => (
         <section class="modal-content">
           <div id="controls">
-            <button type="button" aria-label="Close dialog" onClick={() => dialog.close()}>
+            <button type="button" aria-label="Close dialog" onClick={close}>
               ×
             </button>
           </div>
           <CatalogNode {...props} node={props.node.properties.contentChild} />
         </section>
-      </dialog>
-    </>
+      )}
+    </CatalogDialog>
   );
 }
 
@@ -281,7 +249,11 @@ export function CatalogNode(props) {
       each={props.node ? [props.node] : []}
       keyed={(node) => `${node.id}:${node.dataContextPath}`}
     >
-      {(node) => <CatalogElement {...props} node={node()} />}
+      {(node) => (
+        <CatalogBoundary>
+          <CatalogElement {...props} node={node()} />
+        </CatalogBoundary>
+      )}
     </For>
   );
 }
@@ -353,10 +325,10 @@ function CatalogElement(props) {
                 type() === "Row" || (type() === "List" && data().direction === "horizontal")
                   ? "row"
                   : "column",
-              "align-items": alignment(
+              "align-items": catalogAlignment(
                 data().alignment ?? (type() === "Row" ? "center" : "stretch"),
               ),
-              "justify-content": alignment(data().distribution ?? "start"),
+              "justify-content": catalogAlignment(data().distribution ?? "start"),
             }}
           >
             <For each={children()} keyed={(child) => `${child.id}:${child.dataContextPath}`}>
@@ -408,7 +380,6 @@ function CatalogElement(props) {
         </Match>
         <Match when={type() === "TextField"}>
           <InputField
-            id={props.node.id}
             label={value("label")}
             value={value("text")}
             pattern={data().validationRegexp}
@@ -436,7 +407,6 @@ function CatalogElement(props) {
         </Match>
         <Match when={type() === "DateTimeInput"}>
           <InputField
-            id={props.node.id}
             label={dateType() === "date" ? "Date" : dateType() === "time" ? "Time" : "Date & Time"}
             type={dateType()}
             value={localDate(value("value"), dateType())}

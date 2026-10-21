@@ -103,7 +103,6 @@ it.skipIf(process.platform !== "linux")(
               defaults: {
                 maxConcurrent: 12,
                 timeoutSeconds: 3600,
-                heartbeat: { every: "0m" },
                 model: { primary: modelRef },
                 models: {
                   [modelRef]: {

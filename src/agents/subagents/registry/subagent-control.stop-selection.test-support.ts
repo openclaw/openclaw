@@ -34,7 +34,6 @@ import {
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   createControlRunFixture,
   enqueueControlRun,
@@ -319,7 +318,6 @@ export function registerQueuedStopControlTests({
         parentFinish.resolve();
         runningFinish.resolve();
         await Promise.all([parentProducer, runningProducer]);
-        swarmSchedulerTesting.reset();
       }
     },
   );
@@ -487,7 +485,6 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
         await originalTurn;
         lookup?.restore();
         parent.complete();
-        swarmSchedulerTesting.reset();
       }
     },
   );

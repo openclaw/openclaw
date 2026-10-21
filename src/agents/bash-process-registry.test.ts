@@ -94,29 +94,6 @@ it("suppresses a notify-on-exit event when terminal poll acknowledgement wins th
   expect(remove).toHaveBeenCalledOnce();
 });
 
-it("caps pending output to avoid runaway polls", () => {
-  const session = makeSession({ maxOutputChars: 100_000, pendingMaxOutputChars: 20_000 });
-
-  const payload = `${"a".repeat(70_000)}${"b".repeat(20_000)}`;
-  appendOutput(session, "stdout", payload);
-
-  const drained = drainSession(session);
-  expect(drained).toMatchObject({ output: "b".repeat(20_000), outputDropped: true });
-  expect(session).toMatchObject({ pendingOutput: [], pendingStdoutChars: 0 });
-  expect(drainSession(session).outputDropped).toBe(false);
-  expect(session.truncated).toBe(true);
-});
-
-it("respects max output cap when pending cap is larger", () => {
-  const session = makeSession({ maxOutputChars: 5_000, pendingMaxOutputChars: 30_000 });
-
-  appendOutput(session, "stdout", "x".repeat(10_000));
-
-  const drained = drainSession(session);
-  expect(drained.output.length).toBe(5_000);
-  expect(session.truncated).toBe(true);
-});
-
 const out = (text: string) => ["stdout", text] as const;
 const err = (text: string) => ["stderr", text] as const;
 const alternating = (...pairs: [string, string][]) =>
@@ -194,17 +171,6 @@ it("only persists finished sessions when backgrounded", () => {
   expect(listFinishedSessions()).toHaveLength(0);
 });
 
-it("retains unread output on its exact process and consumes it once", () => {
-  const session = makeSession({ id: "exact-finished-output" });
-  appendOutput(session, "stdout", "terminal output\n");
-  markExited(session, 0, null, "completed");
-
-  const finished = getFinishedSession(session.id);
-  expect(finished).toBe(session);
-  expect(finished && drainSession(finished).output).toBe("terminal output\n");
-  expect(drainSession(session).output).toBe("");
-});
-
 it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {
   for (let index = 0; index < 53; index += 1) {
     finishOutput(`finished-${index}`, 100, `output-${index}`);
@@ -263,20 +229,6 @@ it("tracks only live backgrounded sessions", () => {
   expect(getActiveBackgroundExecSessionCount()).toBe(0);
 
   markBackgrounded(session);
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
-});
-
-it("keeps a hidden background session active until its process exits", () => {
-  const session = makeSession({ id: "hidden-until-exit", backgrounded: false });
-
-  markBackgrounded(session);
-  session.backgrounded = false;
-  deleteSession(session.id);
-
-  expect(listRunningSessions()).toHaveLength(0);
-  expect(getActiveBackgroundExecSessionCount()).toBe(1);
-
-  markExited(session, null, "SIGTERM", "killed");
   expect(getActiveBackgroundExecSessionCount()).toBe(0);
 });
 

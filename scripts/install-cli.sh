@@ -43,9 +43,11 @@ installer_error() {
   local msg="$1"
   emit_json error message "$msg"
   log "ERROR: $msg"
+  log "Support: https://community.openclaw.ai/"
 }
 installer_npm_version_error() {
   log "ERROR: unable to determine npm version; no package changes were made"
+  log "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
   fail "Could not publish the cloned checkout: ${1}. Inspect the destination for partial files, move it or choose another --git-dir, then retry."
@@ -148,6 +150,10 @@ FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
+
   --json                              Emit NDJSON events (no human output)
   --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
@@ -547,7 +553,7 @@ link_node_runtime_paths() {
   dir="$(node_dir)"
   runtime_bin="${node_path%/*}"
 
-  mkdir -p "${dir}/bin" "${PREFIX}/tools"
+  (umask 077; mkdir -p "${dir}/bin" "${PREFIX}/tools")
   ln -sfn "$node_path" "${dir}/bin/node"
   ln -sfn "$npm_path" "${dir}/bin/npm"
   for name in npx corepack; do
@@ -918,7 +924,7 @@ install_node() {
   emit_json step name node status start version "$NODE_VERSION"
   log "Installing Node ${NODE_VERSION} (user-space)..."
 
-  mkdir -p "${PREFIX}/tools"
+  (umask 077; mkdir -p "${PREFIX}/tools")
   # Darwin's default mktemp location can ignore TMPDIR; use the prepared path explicitly.
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-node.XXXXXX")"
   TMPFILES+=("$tmp")
@@ -942,7 +948,7 @@ install_node() {
   fi
 
   rm -rf "$dir"
-  mkdir -p "$dir"
+  (umask 077; mkdir -p "$dir")
   tar -xzf "$tmp/node.tgz" -C "$dir" --strip-components=1
   rm -rf "$tmp"
 
@@ -1017,7 +1023,7 @@ fix_npm_prefix_if_needed() {
   fi
 
   local target="${HOME}/.npm-global"
-  mkdir -p "$target"
+  (umask 077; mkdir -p "$target")
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
@@ -1035,7 +1041,7 @@ fix_npm_prefix_if_needed() {
 publish_executable_wrapper() {
   local target="$1" target_dir="" temp="" backup=""
   target_dir="${target%/*}"
-  mkdir -p "$target_dir"
+  (umask 077; mkdir -p "$target_dir")
   temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
   TMPFILES+=("$temp")
   cat > "$temp"
@@ -1106,13 +1112,11 @@ install_openclaw() {
   if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
     if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
-      emit_json error message "npm install did not produce a usable OpenClaw package"
-      log "ERROR: npm install did not produce a usable OpenClaw package"
+      installer_error "npm install did not produce a usable OpenClaw package"
       return 1
     fi
   fi
 
-  mkdir -p "${PREFIX}/bin"
   publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1129,7 +1133,7 @@ install_openclaw_from_git() {
   if [[ -z "$repo_dir" ]]; then
     fail "Git install dir cannot be empty"
   fi
-  mkdir -p "$(dirname "$repo_dir")"
+  (umask 077; mkdir -p "$(dirname "$repo_dir")")
   if [[ -d "$repo_dir" ]]; then
     repo_dir="$(cd "$repo_dir" && pwd -P)"
   else
@@ -1209,7 +1213,6 @@ install_openclaw_from_git() {
   run_pnpm -C "$repo_dir" build
   emit_json step name cli-build status ok
 
-  mkdir -p "${PREFIX}/bin"
   publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1359,6 +1362,7 @@ main() {
   fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
+  log "Support: https://community.openclaw.ai/"
 
   if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     "${PREFIX}/bin/openclaw" onboard

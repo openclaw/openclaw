@@ -1,7 +1,6 @@
 import { hash } from "node:crypto";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
@@ -541,27 +540,6 @@ describe("OpenAI Responses continuation", () => {
     cleanupSessionResources("session-1");
     commitBaseline(stale, "resp_stale");
     expect(previousResponseId()).toBeUndefined();
-  });
-
-  it("keeps matching-session and all-session cleanup inside one runtime owner", () => {
-    const firstHost = createAiTransportHost();
-    const secondHost = createAiTransportHost();
-    const commit = (owner: typeof firstHost, sessionId: string, responseId: string) =>
-      runWithAiTransportHost(owner, () => {
-        commitBaseline(claim({ sessionId }), responseId);
-      });
-    const previous = (owner: typeof firstHost, sessionId: string) =>
-      runWithAiTransportHost(owner, () => previousResponseId(sessionId));
-    commit(firstHost, "shared", "first-shared");
-    commit(firstHost, "other", "first-other");
-    commit(secondHost, "shared", "second-shared");
-    commit(secondHost, "other", "second-other");
-    cleanupSessionResources("shared", firstHost);
-    expect(previous(firstHost, "shared")).toBeUndefined();
-    expect(previous(secondHost, "shared")).toBe("second-shared");
-    cleanupSessionResources(undefined, firstHost);
-    expect(previous(firstHost, "other")).toBeUndefined();
-    expect(previous(secondHost, "other")).toBe("second-other");
   });
 });
 

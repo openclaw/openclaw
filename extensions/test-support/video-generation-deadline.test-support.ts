@@ -39,79 +39,43 @@ export function testVideoGenerationDeadlines({
       vi.clearAllTimers();
       vi.useRealTimers();
     });
-    it.each([
-      {
-        name: "finishes beyond the HTTP timeout within the requested operation budget",
-        timeoutMs: 180_000,
-        readyAfterMs: 150_000,
-        pendingAtMs: undefined,
-        settleByMs: 151_000,
-        expectedTimeoutMs: undefined,
-      },
-      {
-        name: "expires at the original deadline after a slow submission",
-        timeoutMs: 180_000,
-        readyAfterMs: Infinity,
-        pendingAtMs: 175_000,
-        settleByMs: 181_000,
-        expectedTimeoutMs: 180_000,
-      },
-      {
-        name: "finishes near the default polling deadline after a slow submission",
-        timeoutMs: undefined,
-        readyAfterMs: defaultPollingTimeoutMs + 5_000,
-        pendingAtMs: defaultPollingTimeoutMs,
-        settleByMs: defaultPollingTimeoutMs + 6_000,
-        expectedTimeoutMs: undefined,
-      },
-    ])("$name", async ({ timeoutMs, readyAfterMs, pendingAtMs, settleByMs, expectedTimeoutMs }) => {
+    it.each<[string, number | undefined, number, number | undefined]>([
+      ["outlasts HTTP timeout within budget", 180_000, 150_000, undefined],
+      ["expires at original deadline after slow submission", 180_000, Infinity, 175_000],
+      [
+        "finishes near default polling deadline after slow submission",
+        undefined,
+        defaultPollingTimeoutMs + 5_000,
+        defaultPollingTimeoutMs,
+      ],
+    ])("%s", async (_, timeoutMs, readyAfterMs, pendingAtMs) => {
+      const settleByMs = Math.min(readyAfterMs, timeoutMs ?? Infinity) + 1_000;
       vi.useFakeTimers();
       const startedAt = Date.now();
       const release = vi.fn(async () => {});
+      const completed =
+        providerId === "runway"
+          ? { status: "SUCCEEDED", output: [videoUrl] }
+          : { status: "completed", outputs: { video_url: videoUrl } };
       postJsonRequestMock.mockImplementation(async () => {
         await new Promise((resolve) => {
           setTimeout(resolve, 10_000);
         });
-        return {
-          response: Response.json({ id: "task-1", status: pendingStatus }),
-          release,
-        };
+        return { response: Response.json({ id: "task-1", status: pendingStatus }), release };
       });
       fetchWithTimeoutMock.mockImplementation(async (url) => {
         if (url === videoUrl) {
           return new Response(videoBytes, { headers: { "content-type": "video/mp4" } });
         }
         const ready = Date.now() - startedAt >= readyAfterMs;
-        return Response.json({
-          id: "task-1",
-          status: ready ? (providerId === "runway" ? "SUCCEEDED" : "completed") : pendingStatus,
-          ...(ready
-            ? providerId === "runway"
-              ? { output: [videoUrl] }
-              : { outputs: { video_url: videoUrl } }
-            : {}),
-        });
+        return Response.json({ id: "task-1", ...(ready ? completed : { status: pendingStatus }) });
       });
-
-      let outcome:
-        | { result: VideoGenerationResult; error?: never }
-        | { error: unknown; result?: never }
-        | undefined;
+      let outcome: { result: VideoGenerationResult } | { error: unknown } | undefined;
       void provider
-        .generateVideo({
-          provider: providerId,
-          model,
-          prompt: "A blue cube on a studio floor",
-          cfg: {},
-          timeoutMs,
-        })
+        .generateVideo({ provider: providerId, model, prompt: "A blue cube", cfg: {}, timeoutMs })
         .then(
-          (result) => {
-            outcome = { result };
-          },
-          (error: unknown) => {
-            outcome = { error };
-          },
+          (result) => (outcome = { result }),
+          (error: unknown) => (outcome = { error }),
         );
       if (pendingAtMs !== undefined) {
         await vi.advanceTimersByTimeAsync(pendingAtMs);
@@ -119,15 +83,16 @@ export function testVideoGenerationDeadlines({
       }
       await vi.advanceTimersByTimeAsync(settleByMs - (pendingAtMs ?? 0));
 
-      if (expectedTimeoutMs === undefined) {
+      if (Number.isFinite(readyAfterMs)) {
         expect(outcome).toMatchObject({
           result: { videos: [{ mimeType: "video/mp4", buffer: videoBytes }] },
         });
       } else {
-        expect(outcome?.error).toBeInstanceOf(Error);
-        expect(outcome?.error).toMatchObject({
-          message: expect.stringContaining(`timed out after ${expectedTimeoutMs}ms`),
-        });
+        expect(outcome).toHaveProperty("error", expect.any(Error));
+        expect(outcome).toHaveProperty(
+          "error.message",
+          expect.stringContaining(`timed out after ${timeoutMs}ms`),
+        );
         expect(fetchWithTimeoutMock.mock.calls.some(([url]) => url === videoUrl)).toBe(false);
       }
       expect(postJsonRequestMock).toHaveBeenCalledOnce();

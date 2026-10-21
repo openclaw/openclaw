@@ -12,6 +12,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "artifacts.download",
   "canvas.document.preview",
   "canvas.document.view",
+  "controlUi.sessionPullRequests.subscribe",
+  "controlUi.sessionPullRequests.checks",
   "mentions.dismiss",
   "mentions.list",
   "models.list",

@@ -52,7 +52,7 @@ export function LazyElementModal(props: {
         <openclaw-modal-dialog
           class={state().status === "loading" ? "lazy-element-loading-modal" : undefined}
           label={state().element.label}
-          onModal-cancel={props.onClose}
+          onModal-cancel={() => props.onClose()}
         >
           <Show
             when={state().status === "loading"}
@@ -71,7 +71,7 @@ export function LazyElementModal(props: {
                   class="btn btn--ghost btn--icon"
                   type="button"
                   aria-label={t("common.close")}
-                  onClick={props.onClose}
+                  onClick={() => props.onClose()}
                 >
                   <Icon name="x" />
                 </button>

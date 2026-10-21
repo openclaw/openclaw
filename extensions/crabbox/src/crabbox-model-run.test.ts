@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { Command } from "commander";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import type { ConfiguredModelEgress } from "openclaw/plugin-sdk/secret-egress-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -17,9 +18,13 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 vi.mock("openclaw/plugin-sdk/secret-egress-runtime", () => ({
   withConfiguredModelEgress: mocks.withEgress,
 }));
-const { runCrabboxModelCommand } = await import("./crabbox-model-run.js");
+const { registerCrabboxModelRunCommand } = await import("./crabbox-model-run-cli.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+const originalExitCode = process.exitCode;
+afterEach(() => {
+  vi.unstubAllEnvs();
+  process.exitCode = originalExitCode;
+});
 const execFileAsync = promisify(execFile);
 const capabilityHelp = "  -upstream-proxy-env string\n";
 const egress: ConfiguredModelEgress = {
@@ -41,7 +46,27 @@ const options = {
 function result(stdout = "", code = 0): SpawnResult {
   return { stdout, stderr: "", code, signal: null, killed: false, termination: "exit" };
 }
-const run = () => runCrabboxModelCommand(options);
+async function run() {
+  const program = new Command().exitOverride();
+  registerCrabboxModelRunCommand({ program, config: options.config });
+  await program.parseAsync(
+    [
+      "crabbox",
+      "run",
+      "--binary",
+      options.binary,
+      "--id",
+      options.id,
+      "--model",
+      options.model,
+      "--timeout",
+      String(options.timeoutMs / 1000),
+      "--",
+      ...options.argv,
+    ],
+    { from: "user" },
+  );
+}
 function nativeResult(output: SpawnResult) {
   mocks.run.mockResolvedValueOnce(result(capabilityHelp)).mockResolvedValueOnce(output);
 }
@@ -61,7 +86,8 @@ it("upgrades an outdated executable before capability and credential use", async
   );
   nativeResult(result("done"));
 
-  await expect(run()).resolves.toMatchObject({ stdout: "done" });
+  await run();
+  expect(process.exitCode).toBe(0);
   expect(mocks.run.mock.calls.map(([argv]) => argv[0])).toEqual([binary, binary]);
   expect(mocks.withEgress).toHaveBeenCalledOnce();
 });
@@ -92,7 +118,8 @@ it("delegates one native job with a host-only proxy grant and sentinel-only app 
     expect(remoteInput).not.toContain("proxy-password-fixture");
     return output;
   });
-  expect(await run()).toEqual(output);
+  await run();
+  expect(process.exitCode).toBe(7);
   expect(mocks.run).toHaveBeenCalledTimes(2);
 
   const fixture = `const fs = require('fs'); console.log(JSON.stringify({

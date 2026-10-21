@@ -6,14 +6,17 @@ import type {
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   buildWidgetThemeMessage,
   postWidgetTheme,
   registerWidgetThemeFrame,
 } from "../../../lib/widget-theme.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionStateListener = (
@@ -36,6 +39,8 @@ type DiscussionProps = {
   onStateChange: SessionDiscussionStateListener | null;
   canOpen: boolean;
   sourceGeneration: number;
+  /** Native shell presentation, independent of the panel's width. */
+  presentation?: "desktop" | "mobile";
 };
 type DiscussionState =
   | { status: "empty" | "loading" | "opening" }
@@ -144,8 +149,14 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
         releaseTheme?.();
       };
     });
-    const empty = (description: string, openUrl?: string | null) => (
+    const empty = (
+      description: string,
+      openUrl?: string | null,
+      presentation?: DiscussionProps["presentation"],
+    ) => (
       <PanelEmptyState
+        // Only the desktop cannot-embed state opts into the approved geometry.
+        presentation={presentation === "desktop" ? "desktop" : undefined}
         icon={<Icon name="messageSquare" />}
         heading={t("chat.sidePanel.discussion")}
         description={description}
@@ -189,6 +200,8 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
               ? "chat.sessionDiscussion.unavailable"
               : "chat.sessionDiscussion.requiresWriteAccess",
           ),
+          undefined,
+          props.canOpen ? props.presentation : undefined,
         );
       }
       const embedUrl = resolveDiscussionEmbedUrl(current.info.embedUrl);
@@ -212,6 +225,7 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
             empty(
               t("chat.sessionDiscussion.unavailable"),
               resolveDiscussionUrl(current.info.openUrl),
+              props.presentation,
             )
           )}
         </div>
@@ -237,6 +251,7 @@ export const SessionDiscussionPanel = defineSolidBridge<DiscussionProps>(
       onStateChange: { default: null, attribute: false },
       canOpen: { default: true },
       sourceGeneration: { default: 0 },
+      presentation: { default: undefined },
     },
   },
 );
