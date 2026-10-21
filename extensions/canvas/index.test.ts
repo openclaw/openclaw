@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import canvasPlugin from "./index.js";
 
 const mocks = vi.hoisted(() => {
@@ -54,7 +54,9 @@ describe("Canvas plugin entry", () => {
 
   it("registers the macOS-only presenter surface and command policy", () => {
     const api = registerCanvas();
-    expect(api.registerNodeInvokePolicy.mock.calls[0][0]).toMatchObject({
+    const [policy] = api.registerNodeInvokePolicy.mock.calls;
+    assert(policy);
+    expect(policy[0]).toMatchObject({
       commands: ["canvas.present", "canvas.hide", "canvas.navigate"],
       defaultPlatforms: ["macos"],
     });
@@ -90,7 +92,9 @@ describe("Canvas plugin entry", () => {
 
     const request = new IncomingMessage(new Socket());
     request.url = "/__openclaw__/a2ui/a2ui.bundle.js";
-    await api.registerHttpRoute.mock.calls[0][0].handler(request, new ServerResponse(request));
+    const [route] = api.registerHttpRoute.mock.calls;
+    assert(route);
+    await route[0].handler(request, new ServerResponse(request));
     expect(mocks.loadRenderer).toHaveBeenCalledTimes(1);
     expect(mocks.handleHttpRequest).toHaveBeenCalledTimes(1);
   });
@@ -98,12 +102,16 @@ describe("Canvas plugin entry", () => {
   it("defers Canvas CLI and tool implementations until use", async () => {
     const api = registerCanvas();
     expect(api.registerTool).toHaveBeenCalledTimes(1);
-    const [toolFactory, opts] = api.registerTool.mock.calls[0];
+    const [toolRegistration] = api.registerTool.mock.calls;
+    assert(toolRegistration);
+    const [toolFactory, opts] = toolRegistration;
     expect(opts?.name).toBeUndefined();
     expect(api.registerNodeCliFeature).toHaveBeenCalledTimes(1);
     expect(mocks.registerNodesCanvasCommands).not.toHaveBeenCalled();
     expect(mocks.createCanvasTool).not.toHaveBeenCalled();
-    await api.registerNodeCliFeature.mock.calls[0][0]({
+    const [cliRegistration] = api.registerNodeCliFeature.mock.calls;
+    assert(cliRegistration);
+    await cliRegistration[0]({
       program: {} as never,
       parentPath: ["nodes"],
       config: {},

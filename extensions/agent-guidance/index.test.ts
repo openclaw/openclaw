@@ -38,7 +38,10 @@ function registerGuidance(pluginConfig: OpenClawPluginApi["pluginConfig"]) {
   register(pluginConfig, (hookName, handler) => {
     registrations.push({ pluginId: "agent-guidance", source: "test", hookName, handler });
   });
-  const registration = registrations.find((entry) => entry.hookName === "before_prompt_build");
+  const registration = registrations.find(
+    (entry): entry is PluginHookRegistration<"before_prompt_build"> =>
+      entry.hookName === "before_prompt_build",
+  );
   assert(registration, "expected before_prompt_build hook registration");
   return registration.handler;
 }

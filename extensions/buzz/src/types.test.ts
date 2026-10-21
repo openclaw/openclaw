@@ -35,7 +35,11 @@ it("discovers the default account from a configured private-key SecretRef", () =
   expect(listBuzzAccountIds(cfg)).toEqual(["default"]);
 });
 it("defaults group access to allowlist", () => {
-  const cfg = buzzConfig({});
+  const cfg = buzzConfig({
+    relayUrl: "wss://buzz.example.com",
+    privateKey: PRIVATE_KEY,
+    groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
+  });
 
   expect(resolveBuzzAccount({ cfg }).config.groupPolicy).toBe("allowlist");
 });
