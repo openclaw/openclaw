@@ -1,6 +1,3 @@
-// This suite owns serialized preload context checks. Cancellation, concurrent
-// preload ownership, backoff and plugin wrapper composition stay as separate
-// cases in stream.test.ts.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";
@@ -42,46 +39,37 @@ it.each([
   { needsLoad: true, failure: "timeout" },
   { needsLoad: true, failure: "http" },
 ])(
-  "routes inference to the matching instance with stable identity (load=$needsLoad, replace=$replacePayload, failure=$failure, providerTimeout=$timeoutSeconds, requestTimeout=$timeoutMs)",
+  "routes instances: load=$needsLoad replace=$replacePayload failure=$failure seconds=$timeoutSeconds ms=$timeoutMs",
   async ({ needsLoad, replacePayload, failure, timeoutSeconds, timeoutMs }) => {
     const key = "qwen3.5-0.8b";
     const instanceId = "openclaw-long-context";
-    const calls: Array<{ path: string; body: unknown }> = [];
+    const loads: Array<{ path: string; body: unknown }> = [];
     let discoveryUnavailable = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({
+    const loaded_instances = [
+      { id: key, config: { context_length: 4096 } },
+      ...(!needsLoad ? [{ id: instanceId, config: { context_length: 16384 } }] : []),
+    ];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/models/load")) {
+        loads.push({
           path: new URL(url).pathname,
           body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
         });
-        if (url.endsWith("/api/v1/models/load")) {
-          if (failure === "timeout") {
-            throw new DOMException("Load request timed out", "TimeoutError");
-          }
-          if (failure === "http") {
-            return Response.json({ error: "load unavailable" }, { status: 503 });
-          }
-          return Response.json({ status: "loaded", instance_id: instanceId });
+        if (failure === "timeout") {
+          throw new DOMException("Load request timed out", "TimeoutError");
         }
-        if (discoveryUnavailable) {
-          throw new Error("discovery temporarily unavailable");
+        if (failure === "http") {
+          return Response.json({ error: "load unavailable" }, { status: 503 });
         }
-        return Response.json({
-          models: [
-            {
-              type: "llm",
-              key,
-              max_context_length: 262144,
-              loaded_instances: [
-                { id: key, config: { context_length: 4096 } },
-                ...(!needsLoad ? [{ id: instanceId, config: { context_length: 16384 } }] : []),
-              ],
-            },
-          ],
-        });
-      }),
-    );
+        return Response.json({ status: "loaded", instance_id: instanceId });
+      }
+      if (discoveryUnavailable) {
+        throw new Error("discovery temporarily unavailable");
+      }
+      return Response.json({
+        models: [{ type: "llm", key, max_context_length: 262144, loaded_instances }],
+      });
+    });
     const payload: Record<string, unknown> = { model: key };
     const observed = vi.fn();
     let dispatched: unknown;
@@ -127,23 +115,20 @@ it.each([
         for await (const event of await wrapped(model, { messages: [] }, { onPayload })) {
           events.push(event);
         }
-        expect(events).toEqual([
-          expect.objectContaining({
+        expect(events).toMatchObject([
+          {
             type: "error",
             reason: "error",
-            error: expect.objectContaining({
+            error: {
               model: key,
               errorCode: "model_load_failed",
               errorBody: JSON.stringify({ requestedContextLength: 16384 }),
-              errorMessage: expect.stringContaining(
-                `LM Studio could not load "${key}" with 16384 context tokens`,
+              errorMessage: expect.stringMatching(
+                /LM Studio could not load "qwen3\.5-0\.8b" with 16384 context tokens.*retry/,
               ),
-            }),
-          }),
+            },
+          },
         ]);
-        expect(events[0]).toMatchObject({
-          error: { errorMessage: expect.stringContaining("retry") },
-        });
       }
       expect(observed).not.toHaveBeenCalled();
     } else {
@@ -159,7 +144,7 @@ it.each([
     expect(loadTimeouts).toEqual(
       needsLoad ? [timeoutMs ?? (timeoutSeconds ? timeoutSeconds * 1000 : 120_000)] : [],
     );
-    expect(calls.filter((call) => call.path.endsWith("/load"))).toEqual(
+    expect(loads).toEqual(
       needsLoad
         ? [{ path: "/api/v1/models/load", body: { model: key, context_length: 16384 } }]
         : [],

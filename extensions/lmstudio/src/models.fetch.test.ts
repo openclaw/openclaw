@@ -1,6 +1,8 @@
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import plugin from "../index.js";
 import { fetchLmstudioModels } from "./models.fetch.js";
@@ -8,13 +10,10 @@ import { discoverLmstudioProvider } from "./setup.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+}));
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
@@ -29,18 +28,14 @@ afterEach(() => {
 describe("LM Studio catalog acquisition", () => {
   function context(headers?: Record<string, string>): ProviderCatalogContext {
     return {
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: "http://localhost:1234/api/v1/",
-              apiKey: "configured-key",
-              headers,
-              models: [],
-            },
-          },
+      config: createModelProviderConfig({
+        lmstudio: {
+          baseUrl: "http://localhost:1234/api/v1/",
+          apiKey: "configured-key",
+          headers,
+          models: [],
         },
-      },
+      }),
       env: {},
       resolveProviderApiKey: () => ({
         apiKey: "LM_API_TOKEN",
@@ -55,6 +50,12 @@ describe("LM Studio catalog acquisition", () => {
     const provider = capturePluginRegistration(plugin).providers[0];
     assert(provider?.catalog);
     return provider.catalog.run;
+  }
+  function expectAuth(fetchMock: ReturnType<typeof vi.fn>, key: string) {
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: expect.any(AbortSignal),
+    });
   }
 
   it.each([401, 503, "disconnect", "invalid-json", "missing-models"])(
@@ -82,10 +83,7 @@ describe("LM Studio catalog acquisition", () => {
           },
         ],
       });
-      expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
-        headers: { Authorization: "Bearer profile-key" },
-        signal: expect.any(AbortSignal),
-      });
+      expectAuth(fetchMock, "profile-key");
       await expect(discoverLmstudioProvider(ctx)).resolves.toMatchObject({
         provider: { models: [] },
       });
@@ -99,10 +97,7 @@ describe("LM Studio catalog acquisition", () => {
       providers: {},
       outcomes: [{ provider: "lmstudio", status: "auth-rejected", rejectionScope: "catalog" }],
     });
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
-      headers: { Authorization: "Bearer header-key" },
-      signal: expect.any(AbortSignal),
-    });
+    expectAuth(fetchMock, "header-key");
   });
 
   it("retains configured and optional empty listings while the public helper stays quiet", async () => {
@@ -149,22 +144,14 @@ describe("LM Studio model response release", () => {
       baseUrl: "http://localhost:1234/v1",
       ssrfPolicy: {},
     });
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await Promise.race([
-        request,
-        new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("LM Studio cleanup waited for the capture clone")),
-            500,
-          );
-        }),
-      ]);
+      const result = await raceWithTimeout(request, 500, () => {
+        throw new Error("LM Studio cleanup waited for the capture clone");
+      });
       expect(result).toMatchObject({ reachable: true, status: 503, models: [] });
       expect(tracked.response.bodyUsed).toBe(true);
       expect(release).toHaveBeenCalledOnce();
     } finally {
-      clearTimeout(timeout);
       await captureClone.body?.cancel().catch(() => undefined);
       await request;
     }
