@@ -209,6 +209,7 @@ try {
     assert(dispatched[2].message.includes("Sheena's expert advice."));
     assert(dispatched[3].message.includes("Later mail."));
     assert(!logs.some((text) => text.includes("sweep failed=")));
+    const restartCommandOffset = commands.length;
     await service.stop();
     await service.start({
       scheduler,
@@ -216,6 +217,7 @@ try {
       serviceHealth: { clearFailure() {}, reportFailure: deadline.reject },
     });
     await settleDueServiceWork();
+    assert(commands.slice(restartCommandOffset).includes("UID"));
     assert.equal(dispatched.length, 4);
     assert.equal(cursors.lookup("fixture").lastSeenUid, 5);
     assert.equal(stores.get("dispatch-claim").entries().length, 5);
