@@ -40,6 +40,39 @@ const methods = [
   "sessions.branches.list",
 ] as const;
 const key = "agent:main:scoped-read";
+const scope = { agentId: "main", sessionKey: key };
+const actor = (client: ReturnType<typeof roleClient>) => ({
+  type: "human" as const,
+  source: "profile" as const,
+  id: client.authenticatedUserProfile!.profileId,
+});
+
+async function readFixture(name: string) {
+  const reader = roleClient("view", name);
+  reader.connect.scopes = ["operator.sessions.read"];
+  const catalog = await prepareUserProfileCatalog();
+  prepareGatewayRecipientProfile(reader);
+  const cfg = rolePolicyConfig();
+  setRuntimeConfigSnapshot(cfg);
+  return {
+    reader,
+    cfg,
+    [Symbol.dispose]: () => catalog.release(),
+  };
+}
+
+function dispatchRequest(
+  method: string,
+  params: Record<string, unknown>,
+  options: Omit<Parameters<typeof handleGatewayRequest>[0], "req" | "isWebchatConnect">,
+  id = method,
+) {
+  return handleGatewayRequest({
+    ...options,
+    req: { type: "req", id, method, params },
+    isWebchatConnect: () => false,
+  });
+}
 
 function dispatchRead(
   method: (typeof methods)[number],
@@ -48,24 +81,25 @@ function dispatchRead(
     "req" | "isWebchatConnect" | "extraHandlers"
   >,
 ) {
-  return handleGatewayRequest({
-    ...options,
-    req: {
-      type: "req",
-      id: method,
-      method,
-      params: {
-        sessionKey: key,
-        agentId: "main",
-        ...(method === "sessions.files.get" || method === "sessions.files.assets"
-          ? { path: "note.txt" }
-          : {}),
-        ...(method === "sessions.files.assets" ? { refs: [] } : {}),
+  return dispatchRequest(
+    method,
+    {
+      sessionKey: key,
+      agentId: "main",
+      ...(method === "sessions.files.get" || method === "sessions.files.assets"
+        ? { path: "note.txt" }
+        : {}),
+      ...(method === "sessions.files.assets" ? { refs: [] } : {}),
+    },
+    {
+      ...options,
+      extraHandlers: {
+        ...sessionsDiffHandlers,
+        ...sessionsFilesHandlers,
+        ...sessionRewindHandlers,
       },
     },
-    isWebchatConnect: () => false,
-    extraHandlers: { ...sessionsDiffHandlers, ...sessionsFilesHandlers, ...sessionRewindHandlers },
-  });
+  );
 }
 
 function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promise<void>) {
@@ -135,28 +169,22 @@ describe("narrow session read owners", () => {
         visibility: "shared" as const,
         spawnedCwd: state.workspaceDir,
         permissionMode: "read-only" as const,
-        createdActor: {
-          type: "human" as const,
-          source: "profile" as const,
-          id: owner.authenticatedUserProfile!.profileId,
-        },
+        createdActor: actor(owner),
       };
       await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
       const respond = vi.fn();
       const dispatch = () =>
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "download",
-            method: "sessions.files.download",
-            params: { sessionKey: key, path: "original.bin" },
+        dispatchRequest(
+          "sessions.files.download",
+          { sessionKey: key, path: "original.bin" },
+          {
+            client: reader,
+            context,
+            respond,
+            extraHandlers: sessionsFilesHandlers,
           },
-          client: reader,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          extraHandlers: sessionsFilesHandlers,
-        });
+          "download",
+        );
       await dispatch();
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       const download = respond.mock.calls[0]?.[1] as { url: string; filename: string };
@@ -215,11 +243,7 @@ describe("narrow session read owners", () => {
                 updatedAt: 1,
                 visibility: row.visibility,
                 ...(row.name === "incognito" ? { incognito: true } : {}),
-                createdActor: {
-                  type: "human",
-                  source: "profile",
-                  id: (row.own ? reader : owner).authenticatedUserProfile!.profileId,
-                },
+                createdActor: actor(row.own ? reader : owner),
               },
             );
           }
@@ -229,19 +253,17 @@ describe("narrow session read owners", () => {
             }
             const client = { ...reader, connId: `${method}-${row.name}` };
             const respond = vi.fn();
-            await handleGatewayRequest({
-              req: {
-                type: "req",
-                id: client.connId,
-                method,
-                params: { key: sessionKey, agentId: "main" },
+            await dispatchRequest(
+              method,
+              { key: sessionKey, agentId: "main" },
+              {
+                client,
+                context,
+                respond,
+                extraHandlers: { ...sessionReadHandlers, ...sessionSubscriptionHandlers },
               },
-              client,
-              context,
-              respond,
-              isWebchatConnect: () => false,
-              extraHandlers: { ...sessionReadHandlers, ...sessionSubscriptionHandlers },
-            });
+              client.connId,
+            );
             if (method === "sessions.describe") {
               expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
                 session: row.visible ? expect.objectContaining({ key: sessionKey }) : null,
@@ -269,19 +291,17 @@ describe("narrow session read owners", () => {
         }
         reader.connect.scopes = ["operator.read"];
         const respond = vi.fn();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "broad-describe",
-            method: "sessions.describe",
-            params: { key: "agent:main:read-foreign-draft" },
+        await dispatchRequest(
+          "sessions.describe",
+          { key: "agent:main:read-foreign-draft" },
+          {
+            client: reader,
+            context,
+            respond,
+            extraHandlers: sessionReadHandlers,
           },
-          client: reader,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          extraHandlers: sessionReadHandlers,
-        });
+          "broad-describe",
+        );
         expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
           session: roles ? null : expect.objectContaining({ key: "agent:main:read-foreign-draft" }),
         });
@@ -293,15 +313,9 @@ describe("narrow session read owners", () => {
     "keeps the original %s through message subscription preparation",
     async (change) => {
       await withOpenClawTestState(profileState, async () => {
-        const client = {
-          ...roleClient("view", "subscription-reader"),
-          connId: "subscription-reader",
-        };
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        prepareGatewayRecipientProfile(client);
-        client.connect.scopes = ["operator.sessions.read"];
-        const cfg = rolePolicyConfig();
-        setRuntimeConfigSnapshot(cfg);
+        using fixture = await readFixture("subscription-reader");
+        const { cfg } = fixture;
+        const client = { ...fixture.reader, connId: "subscription-reader" };
         const entry = {
           sessionId: "original",
           lifecycleRevision: "original",
@@ -318,27 +332,25 @@ describe("narrow session read owners", () => {
         const release = createDeferredCore();
         const respond = vi.fn();
         let current = true;
-        const request = handleGatewayRequest({
-          req: {
-            type: "req",
-            id: change,
-            method: "sessions.messages.subscribe",
-            params: { key, agentId: "main" },
+        const request = dispatchRequest(
+          "sessions.messages.subscribe",
+          { key, agentId: "main" },
+          {
+            client,
+            context,
+            respond,
+            hasCurrentClientAuthority: () => current,
+            extraHandlers: createLazyCoreHandlers({
+              methods: ["sessions.messages.subscribe"],
+              loadHandlers: async () => {
+                entered.resolve();
+                await release.promise;
+                return sessionSubscriptionHandlers;
+              },
+            }),
           },
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          hasCurrentClientAuthority: () => current,
-          extraHandlers: createLazyCoreHandlers({
-            methods: ["sessions.messages.subscribe"],
-            loadHandlers: async () => {
-              entered.resolve();
-              await release.promise;
-              return sessionSubscriptionHandlers;
-            },
-          }),
-        });
+          change,
+        );
         const outcome = Promise.allSettled([request]);
         try {
           await Promise.race([entered.promise, request]);
@@ -386,21 +398,14 @@ describe("narrow session read owners", () => {
     "%s hides foreign draft metadata and rechecks held shared reads",
     async (method) => {
       await withOpenClawTestState(profileState, async (state) => {
-        const client = roleClient("view", "metadata-reader");
         const owner = roleClient("view", "metadata-owner");
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        prepareGatewayRecipientProfile(client);
-        const cfg = rolePolicyConfig();
-        setRuntimeConfigSnapshot(cfg);
+        using fixture = await readFixture("metadata-reader");
+        const { reader: client, cfg } = fixture;
         await state.writeConfig(cfg);
         const entry = {
           sessionId: "metadata-session",
           updatedAt: 1,
-          createdActor: {
-            type: "human" as const,
-            source: "profile" as const,
-            id: owner.authenticatedUserProfile!.profileId,
-          },
+          createdActor: actor(owner),
         };
         for (const grant of ["operator.read", "operator.sessions.read"]) {
           client.connect.scopes = [grant];
@@ -435,19 +440,17 @@ describe("narrow session read owners", () => {
                   }),
             });
             const respond = vi.fn();
-            const request = handleGatewayRequest({
-              req: {
-                type: "req",
-                id: `${grant}-${visibility}`,
-                method,
-                params: { agentId: "main", sessionKey: key },
+            const request = dispatchRequest(
+              method,
+              scope,
+              {
+                client,
+                context,
+                respond,
+                extraHandlers: chatHistoryHandlers,
               },
-              client,
-              context,
-              respond,
-              isWebchatConnect: () => false,
-              extraHandlers: chatHistoryHandlers,
-            });
+              `${grant}-${visibility}`,
+            );
             const outcome = Promise.allSettled([request]);
             try {
               if (visibility === "changed") {
@@ -570,11 +573,7 @@ describe("narrow session read owners", () => {
             sessionId: "scoped-read",
             updatedAt: 1,
             visibility,
-            createdActor: {
-              type: "human",
-              source: "profile",
-              id: owner.authenticatedUserProfile!.profileId,
-            },
+            createdActor: actor(owner),
           },
         );
         io.mockClear();
@@ -590,11 +589,7 @@ describe("narrow session read owners", () => {
           sessionId: "scoped-read",
           updatedAt: 2,
           visibility: "draft",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: owner.authenticatedUserProfile!.profileId,
-          },
+          createdActor: actor(owner),
         },
       );
       reader.connect.scopes = ["operator.read", "operator.sessions.write"];
@@ -609,12 +604,8 @@ describe("narrow session read owners", () => {
 
   it.each(methods)("%s retains only current session read facts", async (method) => {
     await withOpenClawTestState(profileState, async (state) => {
-      const reader = roleClient("view", "retained-reader");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      prepareGatewayRecipientProfile(reader);
-      reader.connect.scopes = ["operator.sessions.read"];
-      const cfg = rolePolicyConfig();
-      setRuntimeConfigSnapshot(cfg);
+      using fixture = await readFixture("retained-reader");
+      const { reader, cfg } = fixture;
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       for (const changed of [
         "metadata-no-revision",
@@ -721,12 +712,8 @@ describe("narrow session read owners", () => {
 
   it("rechecks session visibility before fetching a remote file after stat", async () => {
     await withOpenClawTestState(profileState, async (state) => {
-      const reader = roleClient("view", "remote-reader");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      prepareGatewayRecipientProfile(reader);
-      reader.connect.scopes = ["operator.sessions.read"];
-      const cfg = rolePolicyConfig();
-      setRuntimeConfigSnapshot(cfg);
+      using fixture = await readFixture("remote-reader");
+      const { reader, cfg } = fixture;
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       for (const revoke of [false, true]) {
         const entry = {
@@ -757,19 +744,17 @@ describe("narrow session read owners", () => {
           },
         });
         const respond = vi.fn();
-        const request = handleGatewayRequest({
-          req: {
-            type: "req",
-            id: `remote-${revoke}`,
-            method: "sessions.files.get",
-            params: { sessionKey: key, agentId: "main", path: "note.txt" },
+        const request = dispatchRequest(
+          "sessions.files.get",
+          { ...scope, path: "note.txt" },
+          {
+            client: reader,
+            context,
+            respond,
+            extraHandlers: sessionsFilesHandlers,
           },
-          client: reader,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          extraHandlers: sessionsFilesHandlers,
-        });
+          `remote-${revoke}`,
+        );
         const settled = Promise.allSettled([request]);
         try {
           await Promise.race([entered.promise, request]);

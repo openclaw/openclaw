@@ -24,7 +24,7 @@ import type { handleGatewayRequest } from "./server-methods.js";
 import { dispatchSuspensionRequest as dispatch } from "./server-methods.suspension-admission.test-support.js";
 import { suspendHandlers } from "./server-methods/suspend.js";
 
-function expectStatus(respond: unknown, fields: Record<string, unknown>) {
+export function expectStatus(respond: unknown, fields: Record<string, unknown>) {
   expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(fields));
 }
 

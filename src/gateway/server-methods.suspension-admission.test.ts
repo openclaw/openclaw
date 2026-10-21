@@ -25,6 +25,7 @@ import { runWithGatewayRequestEnvelope } from "./server-methods.js";
 import { createRequestGate, expectRejected } from "./server-methods.request-gate.test-support.js";
 import { dispatchSuspensionRequest } from "./server-methods.suspension-admission.test-support.js";
 import {
+  expectStatus,
   registerSuspensionHandoffLifecycleTests,
   registerSuspensionHandoffAuthorizationTests,
 } from "./server-methods.suspension-handoff.test-support.js";
@@ -150,14 +151,14 @@ describe("gateway request suspension admission", () => {
           core: true,
         });
       const initial = await prepare();
-      expect(initial).toHaveBeenCalledWith(true, expect.objectContaining({ status: "draining" }));
+      expectStatus(initial, { status: "draining" });
       const fenced = read();
       await fenced.request;
       expectRejected(fenced.respond);
       await vi.advanceTimersByTimeAsync(30_000);
       if (renew) {
         const renewal = await prepare();
-        expect(renewal).toHaveBeenCalledWith(true, expect.objectContaining({ status: "draining" }));
+        expectStatus(renewal, { status: "draining" });
       }
       await vi.advanceTimersByTimeAsync(15_000);
       const reopened = read();
@@ -337,17 +338,14 @@ describe("gateway request suspension admission", () => {
       terminalPolicy: "terminate",
     });
 
-    expect(busy).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        status: "busy",
-        reason: "active-work",
-        activeCount: 1,
-        blockers: expect.arrayContaining([
-          expect.objectContaining({ kind: "root-request", count: 1 }),
-        ]),
-      }),
-    );
+    expectStatus(busy, {
+      status: "busy",
+      reason: "active-work",
+      activeCount: 1,
+      blockers: expect.arrayContaining([
+        expect.objectContaining({ kind: "root-request", count: 1 }),
+      ]),
+    });
 
     finish.resolve();
     await active.request;
@@ -356,10 +354,7 @@ describe("gateway request suspension admission", () => {
       terminalPolicy: "terminate",
     });
 
-    expect(ready).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "ready", activeCount: 0, blockers: [] }),
-    );
+    expectStatus(ready, { status: "ready", activeCount: 0, blockers: [] });
     const readyPayload = ready.mock.calls[0]?.[1] as { suspensionId?: string } | undefined;
     expect(readyPayload?.suspensionId).toBeTypeOf("string");
     expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({

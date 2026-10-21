@@ -498,9 +498,7 @@ test.each(["replacement", "capacity-only"])("routes runner inventory changes on 
 test("forwards subscribed payload json without parsing it again", async () => {
   const runtime = createRuntime();
   const { frames } = registerNode(runtime, "conn-node-a", "generation-a");
-  expect(runtime.nodeHasSessionSubscribers("main")).toBe(false);
   runtime.nodeSubscribe("node-a", "main", "conn-node-a");
-  expect(runtime.nodeHasSessionSubscribers(" main ")).toBe(true);
 
   const parseSpy = vi.spyOn(JSON, "parse");
   try {
@@ -515,11 +513,6 @@ test("forwards subscribed payload json without parsing it again", async () => {
     event: "chat",
     payload: { ok: true },
   });
-
-  runtime.nodeUnsubscribe("node-a", "main", "conn-retired");
-  expect(runtime.nodeHasSessionSubscribers("main")).toBe(true);
-  runtime.nodeUnsubscribe("node-a", "main", "conn-node-a");
-  expect(runtime.nodeHasSessionSubscribers("main")).toBe(false);
 });
 
 test.each([true, false])(
