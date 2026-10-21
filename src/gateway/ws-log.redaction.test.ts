@@ -17,11 +17,7 @@ vi.mock("../logging/config.js", () => ({
   readLoggingConfig: () => ({ redactPatterns: ["ordinary"] }),
 }));
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    isEnabled: () => true,
-    info: output,
-    warn: output,
-  }),
+  createSubsystemLogger: () => ({ isEnabled: () => true, info: output, warn: output }),
 }));
 
 beforeEach(() => {
@@ -35,8 +31,10 @@ afterEach(() => {
   setGatewayWsLogStyle("auto");
 });
 
-function logFrame(detail: unknown): void {
-  logWs("out", "res", { method: "health", ok: true, detail, id: "frame" });
+function logFrame(detail: unknown, count = 1): void {
+  for (let index = 0; index < count; index += 1) {
+    logWs("out", "res", { method: "health", ok: true, detail, id: "frame" });
+  }
 }
 
 test("compiles the default patterns only once across repeated WS frames", () => {
@@ -45,9 +43,7 @@ test("compiles the default patterns only once across repeated WS frames", () => 
   logFrame("token=synthetic-value");
   const firstFrameCalls = compile.mock.calls.length;
   expect(firstFrameCalls).toBeGreaterThan(initialCalls);
-  for (let index = 0; index < 20; index += 1) {
-    logFrame("token=synthetic-value");
-  }
+  logFrame("token=synthetic-value", 20);
   expect(compile.mock.calls.length).toBe(firstFrameCalls);
 });
 
@@ -60,9 +56,7 @@ test("skips the default pattern walk for WS frames without candidate substrings"
     logFrame("token=synthetic-value");
     expect(measurements).toContainEqual(expect.objectContaining({ operation: "text" }));
     measurements.length = 0;
-    for (let index = 0; index < 20; index += 1) {
-      logFrame("ordinary response completed");
-    }
+    logFrame("ordinary response completed", 20);
     expect(measurements).toHaveLength(0);
   } finally {
     source.unsubscribe(listener);
@@ -81,26 +75,18 @@ test.each([
     "-----BEGIN PRIVATE KEY-----\nsynthetic-data\n-----END PRIVATE KEY-----",
     "-----BEGIN PRIVATE KEY-----\n…redacted…\n-----END PRIVATE KEY-----",
   ],
-])("preserves redacted WS frame output for %j", (detail, expected) => {
+  [
+    {
+      toJSON() {
+        throw new Error("diagnostic serialization failed");
+      },
+      toString: () => `token=synthetic-value ${"x".repeat(300)}`,
+    },
+    `token=*** ${"x".repeat(230)}...`,
+  ],
+])("preserves redacted WS frame output (case %#)", (detail, expected) => {
   logFrame(detail);
   expect(output.mock.calls.map(([line]) => stripVTControlCharacters(line))).toEqual([
     `→ res ✓ health detail=${expected} id=frame`,
-  ]);
-});
-
-test("redacts and bounds WS frame values when JSON serialization fails", () => {
-  const detail = {
-    toJSON() {
-      throw new Error("diagnostic serialization failed");
-    },
-    toString() {
-      return `token=synthetic-value ${"x".repeat(300)}`;
-    },
-  };
-
-  logFrame(detail);
-
-  expect(output.mock.calls.map(([line]) => stripVTControlCharacters(line))).toEqual([
-    `→ res ✓ health detail=token=*** ${"x".repeat(230)}... id=frame`,
   ]);
 });
