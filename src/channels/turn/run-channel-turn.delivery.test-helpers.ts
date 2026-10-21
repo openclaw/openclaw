@@ -1,4 +1,4 @@
-import { expect, vi } from "vitest";
+import { assert, expect, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatchSettledCounts } from "../../auto-reply/reply/reply-dispatch-outcome.js";
@@ -9,30 +9,15 @@ import type {
   ReplyDispatchSettledCounts,
 } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import type { resolveOutboundDurableFinalDeliverySupport } from "../../infra/outbound/deliver.js";
+import type { DurableMessageSendContextParams } from "../message/send.js";
 import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult } from "./types.js";
 
-export type DurableSendRequest = {
-  accountId?: string;
-  channel?: string;
-  durability?: string;
-  payloads?: ReplyPayload[];
-  replyToMode?: string;
-  session?: {
-    key?: string;
-    agentId?: string;
-    requesterAccountId?: string;
-    requesterSenderId?: string;
-    conversationType?: string;
-  };
-  threadId?: string | number | null;
-  to?: string;
-};
-
-export type DurableSupportRequest = {
-  channel?: string;
-  requirements?: Record<string, boolean>;
-};
+export type DurableSendRequest = Partial<DurableMessageSendContextParams>;
+export type DurableSupportRequest = Partial<
+  Parameters<typeof resolveOutboundDurableFinalDeliverySupport>[0]
+>;
 
 export function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -49,9 +34,9 @@ export function createCtx(overrides: Partial<FinalizedMsgContext> = {}): Finaliz
 }
 
 export function createRecordInboundSession(events: string[] = []): RecordInboundSession {
-  return vi.fn(async () => {
+  return vi.fn<RecordInboundSession>(async () => {
     events.push("record");
-  }) as unknown as RecordInboundSession;
+  });
 }
 
 export function createDurableSendResult(messageIds: string[]) {
@@ -65,10 +50,7 @@ export function createDurableSendResult(messageIds: string[]) {
 export function expectDispatched<TDispatchResult>(
   result: ChannelTurnResult<TDispatchResult>,
 ): asserts result is Extract<ChannelTurnResult<TDispatchResult>, { dispatched: true }> {
-  expect(result.dispatched).toBe(true);
-  if (!result.dispatched) {
-    throw new Error("expected dispatch");
-  }
+  assert(result.dispatched, "expected dispatch");
 }
 
 export function createDispatch(
@@ -107,14 +89,15 @@ export function createDeliveryResultCapture() {
 
 export function createDispatcherBackedDispatch(
   onReceipt: (receipt: ReplyDispatchReceipt | undefined) => void,
+  createPayload: () => ReplyPayload = () => ({ text: "reply" }),
 ): DispatchReplyWithBufferedBlockDispatcher {
   return vi.fn(async (params) => {
     const dispatcher = createReplyDispatcher(params.dispatcherOptions);
-    dispatcher.sendFinalReply({ text: "reply" });
+    dispatcher.sendFinalReply(createPayload());
     dispatcher.markComplete();
     const settledReceipt = (await dispatcher.waitForIdle()) || undefined;
     onReceipt(settledReceipt);
-    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 }, settledReceipt };
+    return { queuedFinal: true, counts: dispatcher.getQueuedCounts(), settledReceipt };
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
 

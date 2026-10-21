@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
@@ -41,15 +42,7 @@ const legacyReplyHistoryCompatibilityFiles = new Set([
   "extensions/mattermost/src/mattermost/runtime-api.ts",
 ]);
 
-const skippedExtensionScanDirs = new Set([
-  ".cache",
-  ".turbo",
-  "build",
-  "coverage",
-  "dist",
-  "node_modules",
-  "tmp",
-]);
+const skippedExtensionScanDirs = /^(?:\.cache|\.turbo|build|coverage|dist|node_modules|tmp)$/;
 
 function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.join(repoRoot, ...relativePath.split("/")), "utf8");
@@ -57,43 +50,21 @@ function readRepoFile(relativePath: string): string {
 
 function isScannableTsFile(relativePath: string): boolean {
   return (
-    !relativePath.split("/").some((part) => skippedExtensionScanDirs.has(part)) &&
+    !relativePath.split("/").some((part) => skippedExtensionScanDirs.test(part)) &&
     relativePath.endsWith(".ts") &&
     !relativePath.endsWith(".d.ts")
   );
 }
 
 function listTsFiles(relativeDir: string): string[] {
-  const gitFiles = listGitTrackedFiles({ repoRoot, pathspecs: relativeDir });
-  if (gitFiles) {
-    return gitFiles.filter(isScannableTsFile);
-  }
-
-  const dir = path.join(repoRoot, ...relativeDir.split("/"));
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const relativePath = path.posix.join(relativeDir, entry.name);
-    if (entry.isDirectory()) {
-      if (skippedExtensionScanDirs.has(entry.name)) {
-        return [];
-      }
-      return listTsFiles(relativePath);
-    }
-    return entry.isFile() && isScannableTsFile(relativePath) ? [relativePath] : [];
-  });
+  return expectDefined(
+    listGitTrackedFiles({ repoRoot, pathspecs: relativeDir }),
+    "migration guardrails require a Git checkout",
+  ).filter(isScannableTsFile);
 }
 
-function collectReplyHistoryBindings(source: string): Set<string> {
-  const bindings = new Set<string>();
-  const importOrExportPattern =
-    /\b(?:import|export)\s*\{([\s\S]*?)\}\s*from\s*["']openclaw\/plugin-sdk\/reply-history["']/g;
-  for (const match of source.matchAll(importOrExportPattern)) {
-    const block = match[1] ?? "";
-    for (const nameMatch of block.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-      bindings.add(nameMatch[0]);
-    }
-  }
-  return bindings;
-}
+const importOrExportPattern =
+  /\b(?:import|export)\s*\{([\s\S]*?)\}\s*from\s*["']openclaw\/plugin-sdk\/reply-history["']/g;
 
 describe("message turn migration guardrails", () => {
   it("drops when ingest returns null", async () => {
@@ -123,9 +94,7 @@ describe("message turn migration guardrails", () => {
     for (const file of migratedMessageTurnFiles) {
       const source = readRepoFile(file);
       for (const helper of lowLevelHistoryHelpers) {
-        expect(source, `${file} should use the channel history window, not ${helper}`).not.toMatch(
-          new RegExp(`\\b${helper}\\b`),
-        );
+        expect(source, `${file}: forbidden ${helper}`).not.toMatch(new RegExp(`\\b${helper}\\b`));
       }
     }
   });
@@ -140,12 +109,12 @@ describe("message turn migration guardrails", () => {
         continue;
       }
       const source = readRepoFile(file);
-      const replyHistoryBindings = collectReplyHistoryBindings(source);
+      const bindings = Array.from(
+        source.matchAll(importOrExportPattern),
+        ([, names]) => names,
+      ).join(" ");
       for (const helper of lowLevelHistoryHelpers) {
-        expect(
-          replyHistoryBindings.has(helper),
-          `${file} should use createChannelHistoryWindow instead of ${helper}`,
-        ).toBe(false);
+        expect(bindings, `${file}: forbidden ${helper}`).not.toMatch(new RegExp(`\\b${helper}\\b`));
       }
     }
   });
