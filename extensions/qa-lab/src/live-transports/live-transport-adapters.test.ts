@@ -39,15 +39,23 @@ const factories = [telegram, discord, matrix, slack, whatsapp].map(({ adapterFac
 
 describe("live transport adapter factories", () => {
   it("opts only the disposable Matrix adapter into same-channel parallelism", () => {
-    expect(factories.filter((factory) => factory.isolatesInstances !== undefined)).toEqual([
-      factories[2],
+    expect(factories.map((factory) => factory.isolatesInstances)).toEqual([
+      undefined,
+      undefined,
+      true,
+      undefined,
+      undefined,
     ]);
-    expect(factories[2].isolatesInstances).toBe(true);
   });
 
   it("declares module-flow support only for adapters that prepare module context", () => {
-    expect(factories[0].supportsModuleFlows).toBeUndefined();
-    expect(factories.slice(1).every((factory) => factory.supportsModuleFlows === true)).toBe(true);
+    expect(factories.map((factory) => factory.supportsModuleFlows)).toEqual([
+      undefined,
+      true,
+      true,
+      true,
+      true,
+    ]);
   });
 
   it.each(Object.entries(mock))(

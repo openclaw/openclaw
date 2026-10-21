@@ -40,7 +40,7 @@ describe("Talk relay barge-in under forced agent consults", () => {
         capabilities,
         forceAgentConsultOnFinalTranscript: forced,
       });
-      expect(createBridge.mock.calls[0][0]).toMatchObject({
+      expect(createBridge.mock.calls[0]?.[0]).toMatchObject({
         autoRespondToAudio: !forced,
         interruptResponseOnInputAudio: expectedInterrupt,
       });
