@@ -3,12 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
-import type { ExecToolApprovalReview } from "./bash-tools.exec-types.js";
 import { readToolEffectReceipt } from "./tool-effect-receipt.js";
 
 const processGatewayAllowlistMock = vi.hoisted(() =>
@@ -36,7 +34,6 @@ const createPreflightTool = () =>
 const runExecPreflight = (command: string, workdir = process.cwd()) =>
   createPreflightTool().execute("call-script-preflight", { command, workdir });
 const injection = /exec preflight: detected likely shell variable injection \(\$DM_JSON\)/;
-const changedScript = "approval script operand changed before execution";
 const withScripts = <T>(files: Record<string, string>, run: (workdir: string) => Promise<T>) =>
   withTempDir("openclaw-exec-preflight-", async (workdir) => {
     for (const [name, source] of Object.entries(files)) {
@@ -95,58 +92,6 @@ describeNonWin("exec script preflight", () => {
       ),
     ).rejects.toThrow("cancelled during approval preparation");
     expect(releaseSpawn).toHaveBeenCalledOnce();
-  });
-
-  it.each([true, false])("revalidates approved bytes before spawn (changed=%s)", async (mutate) => {
-    await withScripts({ "script.sh": "#!/bin/sh\necho approved\n" }, async (workdir) => {
-      const prepared = await prepareSystemRunMutableFileApproval({
-        command: "sh script.sh",
-        cwd: workdir,
-      });
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
-      const approvalReview: ExecToolApprovalReview = {
-        id: "guardian:call-script-preflight",
-        label: "Guardian",
-        status: "approved",
-      };
-      processGatewayAllowlistMock.mockImplementationOnce(async (params) => {
-        params?.onApprovalReview?.(approvalReview);
-        return {
-          allowWithoutEnforcedCommand: true,
-          revalidateBeforeExecution: async () => {
-            const current = await prepared.revalidate();
-            return current.ok
-              ? undefined
-              : {
-                  content: [{ type: "text", text: current.message }],
-                  details: {
-                    status: "failed",
-                    exitCode: null,
-                    durationMs: 0,
-                    aggregated: current.message,
-                    timedOut: false,
-                    cwd: workdir,
-                  },
-                };
-          },
-        };
-      });
-      if (mutate) {
-        await fs.writeFile(path.join(workdir, "script.sh"), "#!/bin/sh\necho mutated\n");
-      }
-      const result = await runExecPreflight("sh script.sh", workdir);
-      expect(result.details).toMatchObject({
-        status: mutate ? "failed" : "completed",
-        approvalReviewOutcome: "approved",
-        approvalReviews: [approvalReview],
-        aggregated: mutate ? expect.stringContaining(changedScript) : "approved",
-      });
-      if (mutate) {
-        expect(result.content[0]).toMatchObject({ text: expect.stringContaining(changedScript) });
-      }
-    });
   });
 
   it.each([

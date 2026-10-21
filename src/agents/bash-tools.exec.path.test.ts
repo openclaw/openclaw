@@ -167,19 +167,6 @@ describe("exec PATH login shell merge", () => {
     expect(shellEnvMocks.getShellPathFromLoginShell).toHaveBeenCalledTimes(1);
   });
 
-  it("throws security violation when env.PATH is provided", async () => {
-    if (isWin) {
-      return;
-    }
-    process.env.PATH = "/usr/bin";
-
-    await expectRejected(
-      { command: "echo $PATH", env: { PATH: "/explicit/bin" } },
-      /Security Violation: Custom 'PATH' variable is forbidden/,
-    );
-    expect(shellEnvMocks.getShellPathFromLoginShell).not.toHaveBeenCalled();
-  });
-
   it("runs exact no-pager requests with empty rather than executable pager values", async () => {
     const result = await execute({
       command: "echo GIT_PAGER PAGER",
@@ -190,25 +177,24 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
-  it("blocks LD_/DYLD_ env vars on host execution", async () => {
-    await expectRejected(
-      { command: "echo ok", env: { LD_DEBUG: "1" } },
-      /Security Violation: Environment variable 'LD_DEBUG' is forbidden/,
-    );
-  });
-
-  it("blocks proxy and TLS override env vars on host execution", async () => {
-    await expectRejected(
-      {
-        command: "echo ok",
-        env: {
-          HTTPS_PROXY: "http://proxy.example.test:8080",
-          NODE_TLS_REJECT_UNAUTHORIZED: "0",
-        },
-      },
+  it.each([
+    [{ PATH: "/explicit/bin" }, /Security Violation: Custom 'PATH' variable is forbidden/],
+    [{ LD_DEBUG: "1" }, /Security Violation: Environment variable 'LD_DEBUG' is forbidden/],
+    [
+      { HTTPS_PROXY: "http://proxy.example.test:8080", NODE_TLS_REJECT_UNAUTHORIZED: "0" },
       /Security Violation: blocked override keys: HTTPS_PROXY, NODE_TLS_REJECT_UNAUTHORIZED\./,
-    );
-  });
+    ],
+  ] satisfies Array<[NonNullable<ExecParams["env"]>, RegExp]>)(
+    "blocks unsafe host overrides %j before reading login PATH",
+    async (env, error) => {
+      if (isWin && "PATH" in env) {
+        return;
+      }
+      shellEnvMocks.getShellPathFromLoginShell.mockClear();
+      await expectRejected({ command: "echo $PATH", env }, error);
+      expect(shellEnvMocks.getShellPathFromLoginShell).not.toHaveBeenCalled();
+    },
+  );
 
   it("strips dangerous inherited env vars from host execution", async () => {
     if (isWin) {

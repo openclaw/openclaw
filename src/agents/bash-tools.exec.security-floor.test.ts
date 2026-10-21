@@ -349,36 +349,47 @@ it.runIf(process.platform !== "win32")("runs reviewed globs and chains as writte
   expect(text(result)).toContain("first.review-fixture\nchain-complete");
 });
 
-it("retains Guardian evidence and denies script drift in reviewed chains", async () => {
-  const command = "sh script.sh; ls *.sh";
-  const script = path.join(tempRoot, "script.sh");
-  fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
-  const autoReviewer = makeReviewer({
-    decision: "allow-once",
-    risk: "low",
-    rationale: "approved script",
-  });
-  const tool = createAutoTool({
-    autoReviewer,
-    runId: "run-guardian-script",
-    cwd: tempRoot,
-  });
-  let changedAfterApproval = false;
-  const unsubscribe = onAgentEvent((event) => {
-    if (event.runId === "run-guardian-script" && event.data.approvalReviewOutcome === "approved") {
-      fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
-      changedAfterApproval = true;
-    }
-  });
-  const result = await tool.execute("tool-guardian-script", { command }).finally(unsubscribe);
-  expect(changedAfterApproval).toBe(true);
-  expect(text(result)).toContain("approval script operand changed before execution");
-  expect(result.details).toMatchObject({
-    status: "failed",
-    approvalReviewOutcome: "approved",
-    approvalReviews: [{ id: "guardian:tool-guardian-script", status: "approved" }],
-  });
-});
+it.each(process.platform === "win32" ? [true] : [false, true])(
+  "retains Guardian evidence and revalidates reviewed scripts (drift=%s)",
+  async (mutate) => {
+    const command = "sh script.sh; ls *.sh";
+    const script = path.join(tempRoot, "script.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
+    const autoReviewer = makeReviewer({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "approved script",
+    });
+    const tool = createAutoTool({
+      autoReviewer,
+      runId: "run-guardian-script",
+      cwd: tempRoot,
+    });
+    let changedAfterApproval = false;
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        mutate &&
+        event.runId === "run-guardian-script" &&
+        event.data.approvalReviewOutcome === "approved"
+      ) {
+        fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
+        changedAfterApproval = true;
+      }
+    });
+    const result = await tool.execute("tool-guardian-script", { command }).finally(unsubscribe);
+    expect(changedAfterApproval).toBe(mutate);
+    const output = mutate ? "approval script operand changed before execution" : "approved";
+    expect(text(result)).toContain(output);
+    expect(result.details).toMatchObject({
+      status: mutate ? "failed" : "completed",
+      approvalReviewOutcome: "approved",
+      approvalReviews: [
+        { id: "guardian:tool-guardian-script", label: "Guardian", status: "approved" },
+      ],
+      aggregated: mutate ? expect.stringContaining(output) : "approved\nscript.sh",
+    });
+  },
+);
 
 it("uses agent-scoped host policy when clamping normalized modes", async () => {
   saveExecApprovals({

@@ -158,25 +158,13 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
   });
 }
 
-async function runExecWithExit(params: {
-  exit: RunExit;
-  stdout?: string | string[];
-  timeoutSec?: number | null;
-  usePty?: boolean;
-}) {
+function queueExit(exit: RunExit, stdout: string[]) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
-    if (params.stdout) {
-      for (const chunk of typeof params.stdout === "string" ? [params.stdout] : params.stdout) {
-        input.onStdout?.(chunk);
-      }
+    for (const chunk of stdout) {
+      input.onStdout?.(chunk);
     }
-    return testRun("run-exit", async () => params.exit, 123);
+    return testRun("run-exit", async () => exit, 123);
   });
-  const run = await runTestExecProcess({
-    usePty: params.usePty ?? false,
-    timeoutSec: params.timeoutSec ?? null,
-  });
-  return { run, outcome: await run.promise };
 }
 
 function prepareSuspension(requestId: string) {
@@ -215,12 +203,9 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 }
 
 it("tracks the last cursor-mode toggle across chunks", async () => {
-  const { run } = await runExecWithExit({
-    stdout: ["\x1b[?1l\x1b", "[?1", "h"],
-    usePty: true,
-    exit: createRunExit(),
-  });
-
+  queueExit(createRunExit(), ["\x1b[?1l\x1b", "[?1", "h"]);
+  const run = await runTestExecProcess({ usePty: true });
+  await run.promise;
   expect(run.session.cursorKeyMode).toBe("application");
 });
 
@@ -582,11 +567,8 @@ it("keeps suspension busy until failed cleanup settles after a process timeout",
 });
 
 it("keeps non-zero normal exits in the completed path", async () => {
-  const { outcome } = await runExecWithExit({
-    stdout: "done",
-    exit: createRunExit({ exitCode: 1, durationMs: 123 }),
-    timeoutSec: 30,
-  });
+  queueExit(createRunExit({ exitCode: 1, durationMs: 123 }), ["done"]);
+  const outcome = await (await runTestExecProcess({ timeoutSec: 30 })).promise;
   expect(outcome).toMatchObject({
     status: "completed",
     exitCode: 1,
