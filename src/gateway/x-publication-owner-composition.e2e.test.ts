@@ -18,6 +18,8 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { mergeAcceptedSessionSpawnsForRun } from "../agents/accepted-session-spawn.js";
 import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -55,6 +57,10 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../process/gateway-work-admission.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
@@ -98,6 +104,8 @@ type TransportCase = {
 };
 let networkCase: TransportCase | undefined;
 let rejectIngress: ((error: unknown) => void) | undefined;
+const agentWaitEndedAt = new Map<string, number>();
+let inspectAgentWait: (() => void) | undefined;
 const appToken = "synthetic-x-composition-app-token";
 const userToken = "synthetic-x-composition-user-token";
 const deniedWorkSessionReply =
@@ -216,6 +224,39 @@ function post(id: string, root: string, author: string, text: string): Post {
   };
 }
 
+// Lifecycle events and agent.wait both complete a child; the registry keeps the
+// later turn end. Both completions write the child row under Gateway root work.
+async function childRegistrySettled(childSessionKey: string): Promise<void> {
+  const completed = Promise.withResolvers<void>();
+  const inspect = () => {
+    for (const run of subagentRuns.values()) {
+      const waitedEndedAt = agentWaitEndedAt.get(run.runId);
+      if (
+        run.childSessionKey === childSessionKey &&
+        typeof run.cleanupCompletedAt === "number" &&
+        waitedEndedAt !== undefined &&
+        (run.execution.endedAt ?? 0) >= waitedEndedAt
+      ) {
+        completed.resolve();
+      }
+    }
+  };
+  const stop = subscribeSubagentRunChanges("projection", inspect);
+  inspectAgentWait = inspect;
+  try {
+    inspect();
+    await completed.promise;
+  } finally {
+    inspectAgentWait = undefined;
+    stop();
+  }
+  await vi.waitFor(
+    () =>
+      expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0),
+    { timeout: 10_000 },
+  );
+}
+
 function observedDeferred<T>() {
   const deferred = Promise.withResolvers<T>();
   // Observe immediately; awaiting the original promise still surfaces its rejection.
@@ -318,9 +359,14 @@ describe("X publication production-owner composition", () => {
     // Registry completion must observe the real child, not the direct fixture's empty wait result.
     vi.mocked(
       expectDefined(gateway.recoveryRuntime, "Gateway recovery fixture").waitForAgent,
-    ).mockImplementation(
-      async (params) => (await prepareAgentWaitForTurn(gateway, params).wait()).result,
-    );
+    ).mockImplementation(async (params) => {
+      const { result } = await prepareAgentWaitForTurn(gateway, params).wait();
+      if ("endedAt" in result && typeof result.endedAt === "number") {
+        agentWaitEndedAt.set(params.runId, result.endedAt);
+        inspectAgentWait?.();
+      }
+      return result;
+    });
     gateway.readPreparedGatewayModelCatalog = async () => {
       const catalog = await gateway.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
@@ -920,6 +966,9 @@ describe("X publication production-owner composition", () => {
             if (childReleased) {
               await waitFor("child admission release", childReleased);
             }
+            // Registry terminal effects still write the child row after release, and
+            // a public build overlapping any child write fails closed with 503.
+            await waitFor("child registry settlement", childRegistrySettled(key));
             await waitFor("projection membership", projection.prepareMembership());
             expect(
               isPublicSessionShareActive(
