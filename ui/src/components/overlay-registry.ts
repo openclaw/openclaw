@@ -213,6 +213,12 @@ export function registerOverlay(
   };
 }
 
+declare global {
+  interface Document {
+    openClawModalLayers?: Set<HTMLElement>;
+  }
+}
+
 function createRegistryEvents(registry: OverlayRegistry) {
   type Press = { branch?: Overlay; revision: number; pointerId: number; canceled?: boolean };
   type Release = {
