@@ -8,7 +8,6 @@ import {
   progressCardPresentation,
 } from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
@@ -220,7 +219,7 @@ function MobileRoot(
       total: inventory.loaded() ? inventory.total() : undefined,
       summary: input.summary,
       notice:
-        inventory.error() && inventory.connected() ? (
+        inventory.readDenied() && inventory.connected() ? (
           <div class="chat-details-mobile-root__notice" role="status">
             <span>
               {t(
@@ -238,15 +237,6 @@ function MobileRoot(
               {t("common.retry")}
             </button>
           </div>
-        ) : !inventory.loaded() &&
-          inventory.loading() &&
-          inventory.available() &&
-          inventory.connected() ? (
-          <PanelLoadingSkeleton
-            variant="file-list"
-            label={t("chat.sessionDetails.automationLoading")}
-            compact
-          />
         ) : undefined,
     };
   };
@@ -278,24 +268,12 @@ function MobileRoot(
           : undefined
       }
       taskProgressNotice={
-        props.details.progressCardInitialLoading || props.details.progressCardError ? (
-          <Show
-            when={props.details.progressCardError}
-            fallback={
-              <PanelLoadingSkeleton
-                variant="document"
-                label={t("sessionProgressCard.widgetLoading")}
-                compact
-              />
-            }
-          >
-            <TaskProgressError
-              class="chat-details-mobile-root__notice"
-              error={props.details.progressCardError}
-              hasCard={Boolean(props.details.progressCard)}
-              onRetry={props.details.onRetryProgressCard}
-            />
-          </Show>
+        props.details.progressCardError && props.details.progressCardError !== "unavailable" ? (
+          <TaskProgressError
+            class="chat-details-mobile-root__notice"
+            error={props.details.progressCardError}
+            hasCard={Boolean(props.details.progressCard)}
+          />
         ) : undefined
       }
       subagents={{ ...props.content.subagents, rows: listSubagents(props.details) }}
@@ -338,7 +316,8 @@ function MobileRoot(
       }
       processes={
         props.content.processes &&
-        (props.content.processes.rows.length > 0 || props.content.processes.error) ? (
+        (props.content.processes.rows.length > 0 ||
+          (props.content.processes.errorKind !== "read" && props.content.processes.error)) ? (
           <ChatDetailsMobileProcesses
             data={props.content.processes}
             presented={props.presented}

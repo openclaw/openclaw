@@ -670,7 +670,11 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
         />
       </Show>
       <TaskProgressError
-        error={props.props?.progressCardError}
+        error={
+          props.props?.progressCardError === "unavailable"
+            ? undefined
+            : props.props?.progressCardError
+        }
         hasCard={Boolean(props.props?.progressCard)}
         onRetry={props.props?.onRetryProgressCard}
       />

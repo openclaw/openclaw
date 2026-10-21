@@ -424,6 +424,85 @@ suite.define(() => {
                   agentId: "main",
                 });
                 await expect.poll(() => processGroup.locator("[data-process-id]").count()).toBe(4);
+                if (colorScheme === "light") {
+                  const paused = cronListResponseFixture({
+                    jobs: [
+                      {
+                        id: "details-follow-up",
+                        name: "Review background work",
+                        enabled: false,
+                        createdAtMs: 1,
+                        updatedAtMs: 1,
+                        schedule: { kind: "every", everyMs: 300_000 },
+                        sessionTarget: "isolated",
+                        wakeMode: "now",
+                        payload: { kind: "agentTurn", message: "Review the background work." },
+                        state: {},
+                      },
+                    ],
+                    snapshotRevision: "details-paused",
+                    total: 1,
+                    offset: 0,
+                    limit: 50,
+                    hasMore: false,
+                    nextOffset: null,
+                  });
+                  await gateway.setMethodResponse("cron.list", paused);
+                  await gateway.emitGatewayEvent("cron", {
+                    action: "added",
+                    jobId: "details-follow-up",
+                  });
+                  const automations = details.locator(".chat-summary__automations");
+                  await automations.getByText("Review background work", { exact: true }).waitFor();
+                  await gateway.deferNext("sessions.processes.list");
+                  await gateway.emitGatewayEvent("sessions.processes.changed", {
+                    sessionKey: parentKey,
+                    agentId: "main",
+                  });
+                  await gateway.rejectDeferred("sessions.processes.list", {
+                    code: "UNAVAILABLE",
+                    message: "Connection temporarily unavailable",
+                  });
+                  await gateway.deferNext("cron.list");
+                  await gateway.emitGatewayEvent("cron", {
+                    action: "updated",
+                    jobId: "details-follow-up",
+                  });
+                  await gateway.rejectDeferred("cron.list", {
+                    code: "UNAVAILABLE",
+                    message: "Connection temporarily unavailable",
+                  });
+                  await expect
+                    .poll(() =>
+                      processGroup.locator(".chat-details-processes").getAttribute("aria-busy"),
+                    )
+                    .toBe("false");
+                  await expect.poll(() => automations.getAttribute("aria-busy")).toBe("false");
+                  expect(await processGroup.locator("[data-process-id]").count()).toBe(4);
+                  await automations.getByText("Paused", { exact: true }).waitFor();
+                  await capture("populated-read-error-light", details, [processGroup, automations]);
+                  await gateway.emitGatewayEvent("sessions.processes.changed", {
+                    sessionKey: parentKey,
+                    agentId: "main",
+                  });
+                  await gateway.setMethodResponse(
+                    "cron.list",
+                    cronListResponseFixture({
+                      jobs: [],
+                      snapshotRevision: "details-empty",
+                      total: 0,
+                      offset: 0,
+                      limit: 50,
+                      hasMore: false,
+                      nextOffset: null,
+                    }),
+                  );
+                  await gateway.emitGatewayEvent("cron", {
+                    action: "removed",
+                    jobId: "details-follow-up",
+                  });
+                  await automations.waitFor({ state: "detached" });
+                }
                 await gateway.setMethodResponse("sessions.processes.list", {
                   sessionId: "details-background",
                   processes: [],
@@ -447,12 +526,9 @@ suite.define(() => {
                 const listError = details.getByRole("alert").filter({
                   hasText: "Process list temporarily unavailable",
                 });
-                await listError.waitFor();
+                expect(await listError.count()).toBe(0);
                 expect(await processGroup.count()).toBe(0);
-                await capture(`processes-list-error-${colorScheme}`, details, [listError]);
-                await listError.getByRole("button", { name: "Retry", exact: true }).click();
-                await listError.waitFor({ state: "detached" });
-                expect(await processGroup.count()).toBe(0);
+                await capture(`processes-list-error-${colorScheme}`, details, [subagents]);
                 await gateway.setMethodResponse("sessions.processes.list", {
                   sessionId: "details-background",
                   processes,

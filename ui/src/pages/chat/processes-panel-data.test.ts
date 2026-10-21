@@ -246,6 +246,32 @@ describe("process panel observation ownership", () => {
     },
   );
 
+  it("retains a failed Stop across an overlapping read until its process is known to be gone", async () => {
+    const pending = createDeferred<SessionsProcessesListResult>();
+    let reads = 0;
+    let next = page();
+    const f = fixture((method) => {
+      if (method === "sessions.processes.stop") {
+        throw new Error("Stop could not reach the worker");
+      }
+      return ++reads === 2 ? pending.promise : next;
+    });
+    await f.load();
+    const refresh = f.data.refresh();
+    await f.data.stop(f.data.snapshot.rows[0]!);
+    pending.resolve(page());
+    await refresh;
+    expect(f.data.snapshot.error).toContain("Stop could not reach the worker");
+    expect(f.data.snapshot.errorKind).toBe("action");
+    next = { ...page(), processes: [], truncated: true };
+    await f.advance(60_000, 4);
+    expect(f.data.snapshot.errorKind).toBe("action");
+    next = { ...next, truncated: false };
+    await f.advance(60_000, 5);
+    expect(f.data.snapshot.error).toBeNull();
+    expect(f.stopCalls()).toHaveLength(1);
+  });
+
   it.each([false, true])(
     "continues read observation after Stop is not accepted (unavailable: %s)",
     async (unavailable) => {
@@ -265,7 +291,8 @@ describe("process panel observation ownership", () => {
       await f.data.stop(f.data.snapshot.rows[0]!);
       await f.advance(60_000, 3);
       expect(f.stopCalls()).toHaveLength(1);
-      expect(f.data.snapshot.error).toBeNull();
+      expect(f.data.snapshot.error).not.toBeNull();
+      expect(f.data.snapshot.errorKind).toBe("action");
     },
   );
 

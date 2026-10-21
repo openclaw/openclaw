@@ -209,8 +209,6 @@ it("admits only presented session-scoped reads and uses the existing automation 
   expect(current.request).not.toHaveBeenCalled();
   current.update({ presented: true });
   expect(element.textContent?.trim()).toBe("");
-  current.update({ hasAutomation: true });
-  expect(element.textContent).toContain("Loading automations…");
   expect(element.textContent).not.toContain("No automations");
   expect(current.request).toHaveBeenCalledWith(
     "cron.list",
@@ -296,7 +294,7 @@ it.each([false, true])(
         flush();
         expect(current.element.textContent).toContain("Paused");
       }
-      expect(current.find(".chat-summary__automation-retry")).not.toBeNull();
+      expect(current.find(".chat-summary__automation-retry")).toBeNull();
       const count = request.mock.calls.length;
       request.mockResolvedValue(page([job({ name: "Recovered automation", enabled: false })]));
       current.publish({ ...current.gateway.snapshot });
@@ -403,7 +401,9 @@ it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
   const pending = createDeferred<Page>();
   const current = component(
     createGatewayRequestMock()
-      .mockRejectedValueOnce(new Error("private server detail"))
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "private server detail" }),
+      )
       .mockReturnValueOnce(pending.promise),
   );
   const { element, find } = current;
@@ -631,7 +631,7 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
   expect(current.request).toHaveBeenCalledTimes(2);
   pending.reject(new Error("refresh failed"));
   await waitForSolid(() => {
-    expect(element.textContent).toContain("Couldn't update automations.");
+    expect(element.textContent).not.toContain("Couldn't update automations.");
     expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
   });
   expect(rows()).toHaveLength(10);

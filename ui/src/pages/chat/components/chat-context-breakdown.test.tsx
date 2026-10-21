@@ -144,12 +144,21 @@ it.each([false, true])(
   "retains only an authorized compatible report during revalidation (denied=%s)",
   async (denied) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const pending = createDeferredCore<ReturnType<typeof usage>>();
+    const recovered = createDeferredCore<ReturnType<typeof usage>>();
     const replacement = createDeferredCore<ReturnType<typeof usage>>();
     let reads = 0;
     const request = createGatewayRequestMock(() =>
-      ++reads === 1 ? usage("current") : reads === 2 ? pending.promise : replacement.promise,
+      ++reads === 1
+        ? usage("current")
+        : reads === 2
+          ? pending.promise
+          : reads === 3 && !denied
+            ? recovered.promise
+            : replacement.promise,
     );
     const { gateway, publish } = createApplicationGateway();
     publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
@@ -179,7 +188,18 @@ it.each([false, true])(
     flush();
     expect(Boolean(view.container.querySelector(".chat-context__bar"))).toBe(!denied);
     if (!denied) {
-      expect(view.container.textContent).toContain("Showing the last available report");
+      expect(view.container.textContent).not.toContain("Showing the last available report");
+      await vi.advanceTimersByTimeAsync(30_000);
+      flush();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toBe(3);
+      recovered.resolve(usage("current"));
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(view.container.querySelector(".chat-context__bar")).not.toBeNull();
+    } else {
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reads).toBe(2);
     }
     publish({ ...gateway.snapshot, phase: "reconnecting" });
     await vi.advanceTimersByTimeAsync(0);
@@ -198,5 +218,65 @@ it.each([false, true])(
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.container.querySelector(".chat-context__bar")).not.toBeNull();
+  },
+);
+
+it.each([false, true])(
+  "keeps explicit Refresh failure visible and recovers an empty=%s report",
+  async (empty) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(empty ? { sessions: [] } : usage("current"))
+      .mockRejectedValueOnce(new Error("Temporary read failure"))
+      .mockRejectedValueOnce(new Error("Still unavailable"))
+      .mockResolvedValue(usage("current"));
+    const { gateway, publish } = createApplicationGateway();
+    publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+    const view = mountSolid(() => (
+      <ChatContextBreakdown
+        gateway={gateway}
+        session={{ key: "agent:main:current", kind: "direct", sessionId: "current" }}
+        used={50000}
+        limit={100000}
+      />
+    ));
+    onTestFinished(view.unmount);
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    if (empty) {
+      expect(view.container.textContent).toContain("No matching context report");
+    }
+    view.getByRole("button", { name: "Refresh" }).click();
+    flush();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.container.textContent).toContain(
+      empty ? "Couldn't load the context breakdown" : "Showing the last available report",
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    flush();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(view.container.textContent).toContain(
+      empty ? "Couldn't load the context breakdown" : "Showing the last available report",
+    );
+    if (empty) {
+      expect(view.container.textContent).toContain("No matching context report");
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    flush();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(view.container.querySelector(".chat-context__bar")).not.toBeNull();
+    expect(view.container.textContent).not.toContain("Showing the last available report");
+    publish({ ...gateway.snapshot, phase: "reconnecting" });
+    flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.getByRole("button", { name: "Refresh" }).hasAttribute("disabled")).toBe(true);
   },
 );

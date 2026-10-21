@@ -424,7 +424,7 @@ it.each(["root", "task-progress"] as const)(
     ));
     expect(view.getByText("Review the saved result")).toBeTruthy();
     expect(view.getByText("Could not clear saved progress card.")).toBeTruthy();
-    expect(view.queryByRole("button", { name: "Retry", exact: true })).toBeNull();
+    expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(
       view.queryByText("Couldn't update task progress. Your saved progress is still shown."),
     ).toBeNull();

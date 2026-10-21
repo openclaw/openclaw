@@ -260,7 +260,9 @@ describe("Subagents panel data ownership", () => {
 
   it("retains child rows and metrics while a failed read recovers automatically", async () => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const row = child("retained");
     let fail = false;
     const f = fixture(

@@ -22,7 +22,7 @@ const REFRESH_INTERVAL_MS = 60_000;
 type ProcessesPanelInput = { sessionKey: string; agentId: string; presented: boolean };
 type ProcessSnapshot = Pick<
   ProcessObservation,
-  "rows" | "loading" | "hasResult" | "truncated" | "error" | "stopping"
+  "rows" | "loading" | "hasResult" | "truncated" | "error" | "errorKind" | "stopping"
 >;
 const EMPTY_PROCESSES: ProcessSnapshot = {
   rows: [],
@@ -30,6 +30,7 @@ const EMPTY_PROCESSES: ProcessSnapshot = {
   hasResult: false,
   truncated: false,
   error: null,
+  errorKind: null,
   stopping: new Set(),
 };
 type SharedObservation = { data: ProcessObservation; listeners: Set<() => void> };
@@ -86,7 +87,7 @@ export class ProcessesPanelData {
   }
 
   refresh(): Promise<void> {
-    return this.entry?.data.refresh() ?? Promise.resolve();
+    return this.entry?.data.refresh(true) ?? Promise.resolve();
   }
 
   stop(row: SessionProcessSummary): Promise<void> {
@@ -112,7 +113,22 @@ class ProcessObservation {
   loading = false;
   hasResult = false;
   truncated = false;
-  error: string | null = null;
+  private readError: string | null = null;
+  private readDenied = false;
+  private actionError: string | null = null;
+  private actionInstanceId: string | null = null;
+  get error(): string | null {
+    return this.readDenied ? this.readError : (this.actionError ?? this.readError);
+  }
+  get errorKind(): "read" | "access" | "action" | null {
+    return this.readDenied
+      ? "access"
+      : this.actionError
+        ? "action"
+        : this.readError
+          ? "read"
+          : null;
+  }
   readonly stopping = new Set<string>();
   private sessionId: string | null = null;
   private scope: SessionConnectionScope | null = null;
@@ -209,7 +225,12 @@ class ProcessObservation {
     return { key: identity.sessionKey, agentId: identity.agentId };
   }
 
-  refresh(): Promise<void> {
+  refresh(explicit = false): Promise<void> {
+    if (explicit) {
+      this.actionError = null;
+      this.actionInstanceId = null;
+      this.changed();
+    }
     if (this.pending) {
       return this.pending;
     }
@@ -222,7 +243,8 @@ class ProcessObservation {
     this.refreshAgain = false;
     this.clearTimer();
     this.loading = true;
-    this.error = null;
+    this.readError = null;
+    this.readDenied = false;
     this.changed();
     const pending = scope.client
       .request<SessionsProcessesListResult>("sessions.processes.list", this.target())
@@ -234,6 +256,11 @@ class ProcessObservation {
         this.rows = result.processes;
         this.truncated = result.truncated;
         this.hasResult = true;
+        const actionRow = this.rows.find((row) => row.instanceId === this.actionInstanceId);
+        if (this.actionError && (actionRow ? actionRow.status !== "running" : !result.truncated)) {
+          this.actionError = null;
+          this.actionInstanceId = null;
+        }
         for (const id of this.stopping) {
           if (!this.rows.some((row) => row.instanceId === id && row.status === "running")) {
             this.stopping.delete(id);
@@ -249,11 +276,14 @@ class ProcessObservation {
         if (accessDenied) {
           this.rows = [];
           this.sessionId = null;
+          this.actionError = null;
+          this.actionInstanceId = null;
           this.stopping.clear();
           this.hasResult = false;
           this.truncated = false;
         }
-        this.error = formatUiError(error);
+        this.readError = formatUiError(error);
+        this.readDenied = accessDenied;
       })
       .finally(() => {
         if (this.pending === pending) {
@@ -295,7 +325,8 @@ class ProcessObservation {
       return;
     }
     this.stopping.add(row.instanceId);
-    this.error = null;
+    this.actionError = null;
+    this.actionInstanceId = null;
     this.changed();
     try {
       const result = await scope.client.request<SessionsProcessesStopResult>(
@@ -312,7 +343,8 @@ class ProcessObservation {
       }
       if (!result.requested) {
         this.stopping.delete(row.instanceId);
-        this.error = t("chat.processesPanel.stopNotRequested");
+        this.actionError = t("chat.processesPanel.stopNotRequested");
+        this.actionInstanceId = row.instanceId;
         this.changed();
         return;
       }
@@ -327,7 +359,8 @@ class ProcessObservation {
         return;
       }
       this.stopping.delete(row.instanceId);
-      this.error = formatUiError(error);
+      this.actionError = formatUiError(error);
+      this.actionInstanceId = row.instanceId;
       const denied =
         error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
       if (denied) {
@@ -340,10 +373,6 @@ class ProcessObservation {
         await this.pending;
         if (this.current(generation)) {
           await this.refresh();
-          if (this.current(generation) && !this.error) {
-            this.error = formatUiError(error);
-            this.changed();
-          }
         }
       }
     }
@@ -376,7 +405,10 @@ class ProcessObservation {
     this.loading = false;
     this.hasResult = false;
     this.truncated = false;
-    this.error = null;
+    this.readError = null;
+    this.readDenied = false;
+    this.actionError = null;
+    this.actionInstanceId = null;
   }
 
   dispose(): void {
