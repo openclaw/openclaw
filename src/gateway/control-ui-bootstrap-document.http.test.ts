@@ -89,7 +89,7 @@ it.each([false, true])(
     });
     const document = await request("/control/chat/main/topic", true, true);
     await waitForDiagnosticEventsDrained();
-    expect(phases.map(({ name }) => name).toSorted()).toEqual(
+    expect(phases.map(({ name: phaseName }) => phaseName).toSorted()).toEqual(
       [
         "auth_grants",
         "identity_avatar",
@@ -122,7 +122,7 @@ it.each([false, true])(
     expect(denied.res.statusCode).toBe(200);
     expect(denied.body).not.toContain(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
     await waitForDiagnosticEventsDrained();
-    expect(phases.map(({ name }) => name)).toEqual([
+    expect(phases.map(({ name: phaseName }) => phaseName)).toEqual([
       "control-ui.document.auth_grants",
       "control-ui.document.render",
       "control-ui.document.total",
