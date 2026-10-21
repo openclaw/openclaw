@@ -52,8 +52,10 @@ const withOverrides = (providerOverrides: SpeechSynthesisRequest["providerOverri
 function sentRequest() {
   expect(fetchMock).toHaveBeenCalledOnce();
   const [input, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs request");
-  expect(init?.body).toEqual(expect.any(String));
-  const body: unknown = JSON.parse(String(init?.body));
+  if (typeof init?.body !== "string") {
+    throw new Error("expected string request body");
+  }
+  const body: unknown = JSON.parse(init.body);
   expect(body && typeof body === "object" && !Array.isArray(body)).toBe(true);
   return { url: new URL(resolveRequestUrl(input)), body };
 }

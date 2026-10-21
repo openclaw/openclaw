@@ -53,6 +53,14 @@ export function fakeNativeBrowser(tabs: Bridge.NativeBrowserTab[] = [], legacy =
         return { ok: true, node: createInspectedNode("Save") };
       case "download":
         return { ok: true, cancelled: false };
+      case "back":
+      case "forward":
+      case "navigate":
+      case "present":
+      case "release-scope":
+      case "reload":
+      case "stop":
+        break;
     }
     return { ok: true };
   });

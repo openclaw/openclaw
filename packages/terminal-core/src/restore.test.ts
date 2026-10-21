@@ -1,7 +1,10 @@
+// Terminal Core tests cover restore behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const clearActiveProgressLine = vi.hoisted(() => vi.fn());
+
 vi.mock("./progress-line.js", () => ({
-  clearActiveProgressLine: vi.fn(),
+  clearActiveProgressLine,
 }));
 
 import { restoreTerminalState } from "./restore.js";
@@ -20,24 +23,40 @@ function configureTerminalIO(params: {
   (process.stdin as { isPaused?: () => boolean }).isPaused = params.isPaused;
 }
 
-function setupPausedTTYStdin(stdinIsTTY = true, stdoutIsTTY = false) {
-  const stdin = { setRawMode: vi.fn(), resume: vi.fn(), isPaused: vi.fn(() => true) };
-  configureTerminalIO({ stdinIsTTY, stdoutIsTTY, ...stdin });
-  return stdin;
+function setupPausedTTYStdin() {
+  const setRawMode = vi.fn();
+  const resume = vi.fn();
+  const isPaused = vi.fn(() => true);
+  configureTerminalIO({
+    stdinIsTTY: true,
+    stdoutIsTTY: false,
+    setRawMode,
+    resume,
+    isPaused,
+  });
+  return { setRawMode, resume };
 }
 
 describe("restoreTerminalState", () => {
-  const original = {
-    stdinIsTTY: process.stdin.isTTY,
-    stdoutIsTTY: process.stdout.isTTY,
-    setRawMode: process.stdin.setRawMode,
-    resume: process.stdin.resume,
-    isPaused: process.stdin.isPaused,
-  };
+  const originalStdinIsTTY = process.stdin.isTTY;
+  const originalStdoutIsTTY = process.stdout.isTTY;
+  const originalSetRawMode = (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode;
+  const originalResume = (process.stdin as { resume?: () => void }).resume;
+  const originalIsPaused = (process.stdin as { isPaused?: () => boolean }).isPaused;
 
   afterEach(() => {
     vi.restoreAllMocks();
-    configureTerminalIO(original);
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: originalStdinIsTTY,
+      configurable: true,
+    });
+    Object.defineProperty(process.stdout, "isTTY", {
+      value: originalStdoutIsTTY,
+      configurable: true,
+    });
+    (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode = originalSetRawMode;
+    (process.stdin as { resume?: () => void }).resume = originalResume;
+    (process.stdin as { isPaused?: () => boolean }).isPaused = originalIsPaused;
   });
 
   it("does not resume paused stdin by default", () => {
@@ -59,7 +78,17 @@ describe("restoreTerminalState", () => {
   });
 
   it("does not touch stdin when stdin is not a TTY", () => {
-    const { setRawMode, resume } = setupPausedTTYStdin(false);
+    const setRawMode = vi.fn();
+    const resume = vi.fn();
+    const isPaused = vi.fn(() => true);
+
+    configureTerminalIO({
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      setRawMode,
+      resume,
+      isPaused,
+    });
 
     restoreTerminalState("test", { resumeStdinIfPaused: true });
 
@@ -70,7 +99,11 @@ describe("restoreTerminalState", () => {
   it("writes kitty and modifyOtherKeys reset sequences to stdout", () => {
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
-    configureTerminalIO({ stdinIsTTY: false, stdoutIsTTY: true });
+    configureTerminalIO({
+      stdinIsTTY: false,
+      stdoutIsTTY: true,
+    });
+
     restoreTerminalState("test");
 
     expect(writeSpy).toHaveBeenCalled();
