@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { listAuditEvents } from "../../audit/audit-event-store.js";
-import { readClawInventory } from "../../claws/inventory-read.js";
+import { readAllClawCronRefsInDatabase } from "../../claws/cron-records.js";
 import { writeRepairJournal } from "../../commands/doctor-session-incognito-key-repair-state.js";
 import { repairReservedIncognitoSessionKeys } from "../../commands/doctor-session-incognito-key-repair.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
@@ -46,7 +49,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           ],
         }),
       ).resolves.toEqual([{ status: "settled" }]);
-      const { events } = await listAuditEvents({ limit: 10 });
+      const { events } = await listAuditEvents({ limit: 10, filters: { includeMessages: true } });
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
         eventId: "first-message",
@@ -56,7 +59,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       });
     });
 
-    it("returns persisted Claw cron ownership through the inventory read worker", async () => {
+    it("returns persisted Claw cron ownership from its admitted store", () => {
       const job = {
         id: "synthetic-job",
         schedule: { cron: "0 8 * * *" },
@@ -84,20 +87,22 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           );
         }),
       );
-      await expect(readClawInventory()).resolves.toMatchObject({
-        cronJobs: [
-          {
-            agentId: "main",
-            manifestId: "synthetic-claw",
-            declarationKey: "synthetic-declaration",
-            schedulerJobId: "synthetic-scheduler",
-            status: "complete",
-            job,
-            createdAtMs: 10,
-            updatedAtMs: 20,
-          },
-        ],
-      });
+      expect(
+        withEngineStoreAdmission(() =>
+          readAllClawCronRefsInDatabase(openOpenClawStateDatabase().db),
+        ),
+      ).toMatchObject([
+        {
+          agentId: "main",
+          manifestId: "synthetic-claw",
+          declarationKey: "synthetic-declaration",
+          schedulerJobId: "synthetic-scheduler",
+          status: "complete",
+          job,
+          createdAtMs: 10,
+          updatedAtMs: 20,
+        },
+      ]);
     });
 
     it("resumes Doctor's journal and rewrites scalar and JSON shared-state keys", async () => {

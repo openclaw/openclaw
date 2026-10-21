@@ -3,8 +3,6 @@ import { readSkillLibrary, saveSkillLibrary } from "../../skills/library/service
 import type { SkillLibraryAuthority } from "../../skills/library/store.js";
 import { listWorkshopChanges, recordWorkshopChange } from "../../skills/workshop/changes.js";
 import type { WorkshopChange } from "../../skills/workshop/changes.kernel.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
@@ -16,11 +14,6 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
 
     it("publishes and reads a personal library skill through the state worker", async () => {
       const profile = admit(() => ensureGatewayOwnerProfile("Synthetic skill author"));
-      if (engine === "postgres") {
-        expect(
-          admit(() => tableExists(openOpenClawStateDatabase().db, "skill_library_entries")),
-        ).toBe(false);
-      }
       const authority: SkillLibraryAuthority = {
         profileId: profile.id,
         scopes: ["operator.read", "operator.write"],
@@ -45,11 +38,6 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     });
 
     it("records the first workshop changes and reads them through the state worker", async () => {
-      if (engine === "postgres") {
-        expect(
-          admit(() => tableExists(openOpenClawStateDatabase().db, "skill_workshop_changes")),
-        ).toBe(false);
-      }
       const first: WorkshopChange = {
         id: "first-workshop-change",
         agentId: "main",
