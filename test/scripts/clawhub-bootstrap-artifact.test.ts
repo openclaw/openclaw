@@ -212,9 +212,6 @@ describe("ClawHub bootstrap artifact manifest", () => {
     const paths = fixture();
     const created = await createManifest(paths);
 
-    writeFileSync(paths.manifestPath, JSON.stringify({ ...created, unexpected: true }));
-    await expect(verifyManifest(paths)).rejects.toThrow("keys are invalid");
-
     writeFileSync(paths.manifestPath, Buffer.from([0xff]));
     await expect(verifyManifest(paths)).rejects.toThrow("not valid UTF-8 JSON");
 

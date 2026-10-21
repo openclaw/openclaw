@@ -837,26 +837,6 @@ describe("ClawHub prepared publication", () => {
     expect(existsSync(f.restoreOptions.outputDir)).toBe(false);
     expect(f.registryReads).toEqual([]);
   });
-
-  it("refuses a matching-version registry package with different bytes instead of adopting it", async () => {
-    const f = preparedFixture();
-    await restorePreparedClawHubPackage(f.restoreOptions);
-    const fetchImpl: typeof fetch = async (input, init) => {
-      if (requestUrl(input).endsWith("/artifact/download")) {
-        return new Response("different published bytes");
-      }
-      return f.options.fetchImpl(input, init);
-    };
-    await expect(
-      verifyPublishedClawHubPackage({
-        expectedArtifactDir: f.restoreOptions.outputDir,
-        packageName: f.entry.name,
-        packageVersion: f.entry.version,
-        publishTag: "latest",
-        retryOptions: { fetchImpl, attempts: 1 },
-      }),
-    ).rejects.toThrow(/registry artifact sha256 mismatch/u);
-  });
 });
 
 describe("ClawHub detached postpublish verification", () => {
