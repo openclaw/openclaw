@@ -1,5 +1,5 @@
 // SQLite query-plan tests pin hot OpenClaw state indexes used by perf proof.
-import type { StatementSync } from "node:sqlite";
+import type { SQLInputValue, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -29,10 +29,28 @@ function createTempStateDir(): string {
   return planTempDirs.make("openclaw-sqlite-plan-");
 }
 
+function observeQueries(pattern: RegExp, observe: (sql: string, params: SQLInputValue[]) => void) {
+  const prototype = requireNodeSqlite().StatementSync.prototype;
+  const observers = (["get", "all", "iterate"] as const).map((method) => {
+    const original = prototype[method];
+    return vi.spyOn(prototype, method).mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver: StatementSync, params) {
+          if (pattern.test(receiver.sourceSQL)) {
+            observe(receiver.sourceSQL, params);
+          }
+          return Reflect.apply(target, receiver, params);
+        },
+      }),
+    );
+  });
+  return { [Symbol.dispose]: () => observers.forEach((observer) => observer.mockRestore()) };
+}
+
 function explainQueryPlan(
   db: EngineConnection,
   sql: string,
-  params: readonly (number | string | null)[] = [],
+  params: readonly SQLInputValue[] = [],
 ): string {
   const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
     detail?: unknown;
@@ -70,21 +88,10 @@ describe("sqlite hot query plans", () => {
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },
     });
     const plans: string[] = [];
-    const prototype = requireNodeSqlite().StatementSync.prototype;
-    const observers = (["get", "all", "iterate"] as const).map((method) => {
-      const original = prototype[method];
-      return vi.spyOn(prototype, method).mockImplementation(
-        new Proxy(original, {
-          apply(target, receiver: StatementSync, params) {
-            if (/^select .* from "session_watch_cursors" /i.test(receiver.sourceSQL)) {
-              plans.push(explainQueryPlan(db, receiver.sourceSQL, params));
-            }
-            return Reflect.apply(target, receiver, params);
-          },
-        }),
-      );
-    });
-    try {
+    {
+      using _ = observeQueries(/^select .* from "session_watch_cursors" /i, (sql, params) => {
+        plans.push(explainQueryPlan(db, sql, params));
+      });
       expect(needsSessionWatchCursorProvenanceMigration(requireNativeSqliteDatabase(db), 4)).toBe(
         false,
       );
@@ -93,8 +100,6 @@ describe("sqlite hot query plans", () => {
         migratedAmbientWatches: 0,
         removedLegacySentinels: 0,
       });
-    } finally {
-      observers.forEach((observer) => observer.mockRestore());
     }
     expect(plans).toHaveLength(2);
     for (const plan of plans) {
@@ -315,40 +320,23 @@ describe("sqlite hot query plans", () => {
       agentId: "worker-1",
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },
     });
-    const captured: Array<{ params: unknown[]; sql: string }> = [];
-    const prototype = requireNodeSqlite().StatementSync.prototype;
-    const observers = (["get", "all", "iterate"] as const).map((method) => {
-      const original = prototype[method];
-      return vi.spyOn(prototype, method).mockImplementation(
-        new Proxy(original, {
-          apply(target, receiver: StatementSync, params) {
-            if (/from "conversation_deliveries" /i.test(receiver.sourceSQL)) {
-              captured.push({ params, sql: receiver.sourceSQL });
-            }
-            return Reflect.apply(target, receiver, params);
-          },
-        }),
-      );
-    });
-    try {
+    const captured: Array<{ params: SQLInputValue[]; sql: string }> = [];
+    {
+      using _ = observeQueries(/from "conversation_deliveries" /i, (sql, params) => {
+        captured.push({ sql, params });
+      });
       expect(
         readConversationDeliveryInDatabase(database, {
           conversationRef: "conversation-1",
           replyToId: "message-1",
         }),
       ).toBeUndefined();
-    } finally {
-      observers.forEach((observer) => observer.mockRestore());
     }
     const [lookup] = captured;
     if (!lookup) {
       throw new Error("reply-target lookup statement was not captured");
     }
-    const plan = explainQueryPlan(
-      database.db,
-      lookup.sql,
-      lookup.params as (number | string | null)[],
-    );
+    const plan = explainQueryPlan(database.db, lookup.sql, lookup.params);
     expect(plan).toContain("idx_agent_conversation_deliveries_reply");
     expect(plan).not.toContain("SCAN delivery");
   });

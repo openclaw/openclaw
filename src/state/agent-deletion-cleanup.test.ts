@@ -86,6 +86,15 @@ function fixture() {
   const target = { agentId: options.agentId, path: database.path };
   const resource = (close = async () => {}) =>
     registerOpenClawAgentDatabaseAsyncResource({ ...target, revoke: () => {}, close });
+  const sharedStore = () => {
+    const sharedOptions = { ...options, agentId: "kept", path: path.join(root, "shared.sqlite") };
+    const shared = openOpenClawAgentDatabase(sharedOptions);
+    const workerScope = { ...options, storePath: shared.path, sessionKey: "agent:worker:shared" };
+    const keptScope = { ...workerScope, agentId: "kept", sessionKey: "agent:kept:shared" };
+    replaceSessionEntrySync(workerScope, { sessionId: "remove", updatedAt: Date.now() });
+    replaceSessionEntrySync(keptScope, { sessionId: "keep", updatedAt: Date.now() });
+    return { sharedOptions, shared, workerScope, keptScope };
+  };
   return {
     root,
     options,
@@ -94,6 +103,7 @@ function fixture() {
     write,
     open: () => openOpenClawAgentDatabase(options),
     resource,
+    sharedStore,
     read: () => loadSessionEntryReadOnly(scope)?.sessionId,
     assertDrained: () => assertNoOpenClawAgentDatabaseLeases("worker", { env: options.env }),
     replaceJournal: () =>
@@ -117,6 +127,18 @@ function fixture() {
         env: options.env,
       }),
   };
+}
+
+function holdIntegrityCheck() {
+  const checked = createDeferred();
+  const resume = createDeferred();
+  const check = integrityWorker.assertSqliteIntegrityInWorker;
+  vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(async (...args) => {
+    await check(...args);
+    checked.resolve();
+    await resume.promise;
+  });
+  return { checked, resume };
 }
 
 function expectPublishedArchive(databasePath: string, sessionId: string, content: string): void {
@@ -504,16 +526,7 @@ describe("agent deletion database cleanup authority", () => {
       }
       let operationCalled = false;
       await f.withDeletion(async (deletion) => {
-        const checked = createDeferred();
-        const resume = createDeferred();
-        const check = integrityWorker.assertSqliteIntegrityInWorker;
-        vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-          async (...args) => {
-            await check(...args);
-            checked.resolve();
-            await resume.promise;
-          },
-        );
+        const { checked, resume } = holdIntegrityCheck();
         let rejected: Promise<unknown> | undefined;
         const running = deletion.runDatabaseCleanup(f.target, async () => {
           rejected = expect(
@@ -555,17 +568,8 @@ describe("agent deletion database cleanup authority", () => {
     closeOpenClawAgentDatabasesForTest(f.root);
     revokeSqliteDatabaseAdmissionsForPath(f.target.path);
     await f.withDeletion(async (deletion) => {
-      const checked = createDeferred();
-      const resume = createDeferred();
+      const { checked, resume } = holdIntegrityCheck();
       const releaseOwner = createDeferred();
-      const check = integrityWorker.assertSqliteIntegrityInWorker;
-      vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-        async (...args) => {
-          await check(...args);
-          checked.resolve();
-          await resume.promise;
-        },
-      );
       const running = deletion.runDatabaseCleanup(f.target, () =>
         withOpenClawAgentDatabaseAsync(f.options, async () => {
           await releaseOwner.promise;
@@ -616,17 +620,12 @@ describe("agent deletion database cleanup authority", () => {
 
   it("preserves a survivor handle first opened during cleanup", async () => {
     const f = fixture();
-    const storePath = path.join(f.root, "shared.sqlite");
-    const sharedOptions = { ...f.options, agentId: "kept", path: storePath };
+    const { sharedOptions, workerScope, keptScope } = f.sharedStore();
+    const storePath = sharedOptions.path;
     const cfg = {
       agents: { entries: { worker: {}, kept: {} } },
       session: { store: storePath },
     };
-    openOpenClawAgentDatabase(sharedOptions);
-    const workerScope = { ...f.options, storePath, sessionKey: "agent:worker:shared" };
-    const keptScope = { ...workerScope, agentId: "kept", sessionKey: "agent:kept:shared" };
-    replaceSessionEntrySync(workerScope, { sessionId: "remove", updatedAt: Date.now() });
-    replaceSessionEntrySync(keptScope, { sessionId: "keep", updatedAt: Date.now() });
     closeOpenClawAgentDatabaseByPath(storePath, "kept");
     let retained: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
     await f.withDeletion(async (deletion) => {
@@ -823,13 +822,8 @@ describe("agent deletion database cleanup authority", () => {
     "purges only target rows in a surviving shared store (cold: %s)",
     async (cold) => {
       const f = fixture();
-      const storePath = path.join(f.root, "shared.sqlite");
-      const sharedOptions = { ...f.options, agentId: "kept", path: storePath };
-      const shared = openOpenClawAgentDatabase(sharedOptions);
-      const workerScope = { ...f.options, storePath, sessionKey: "agent:worker:shared" };
-      const keptScope = { ...workerScope, agentId: "kept", sessionKey: "agent:kept:shared" };
-      replaceSessionEntrySync(workerScope, { sessionId: "remove", updatedAt: Date.now() });
-      replaceSessionEntrySync(keptScope, { sessionId: "keep", updatedAt: Date.now() });
+      const { sharedOptions, shared, workerScope, keptScope } = f.sharedStore();
+      const storePath = shared.path;
       if (cold) {
         closeOpenClawAgentDatabaseByPath(storePath);
       }
