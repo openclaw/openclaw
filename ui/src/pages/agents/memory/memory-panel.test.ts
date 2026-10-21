@@ -44,9 +44,16 @@ function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[
     gateway,
     agents: { state: { agentsList: null }, subscribe: () => () => {} },
     runtimeConfig: {
-      state: { configForm: null, configSnapshot: null },
+      state: {
+        configForm: null,
+        configSnapshot: null,
+        client: gateway.snapshot.client,
+        connected: true,
+      },
       ensureLoaded: vi.fn(async () => undefined),
       refresh: vi.fn(async () => undefined),
+      patch: vi.fn(async () => true),
+      lookupSchemaPath: vi.fn(async () => ({ children: [{ key: "dreaming" }] })),
       subscribe: (listener: () => void) => registerListener(configListeners, listener),
     },
   } as unknown as ApplicationContext;
@@ -56,7 +63,7 @@ function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[
     },
     setConfig(config: Record<string, unknown>) {
       context.runtimeConfig.state.configForm = config;
-      context.runtimeConfig.state.configSnapshot = { config };
+      context.runtimeConfig.state.configSnapshot = { config, hash: "synthetic-config-hash" };
       configListeners.forEach((listener) => listener());
     },
   });
@@ -146,6 +153,77 @@ function click(container: HTMLElement, selector: string) {
   button!.click();
   flush();
 }
+
+it.each(["rejected", "declined"] as const)(
+  "shows a %s toggle write through its receipt and permits retry",
+  async (outcome) => {
+    const page = await createPage();
+    page.context.setConfig({});
+    const pending = deferred<boolean>();
+    const patch = vi.mocked(page.context.runtimeConfig.patch);
+    patch.mockReturnValueOnce(pending.promise);
+    page.state.setEnabled(false);
+    flush();
+    click(page.container, ".exec-approval-actions button");
+    await waitForSolid(() => expect(page.text(".exec-approval-actions button")).toBe("Saving…"));
+    expect(page.toggle.onConfirm()).toBeUndefined();
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    if (outcome === "rejected") {
+      pending.reject(new Error("synthetic patch failure"));
+    } else {
+      pending.resolve(false);
+    }
+    await waitForSolid(() => expect(page.query(".exec-approval-error")).not.toBeNull());
+    expect(page.toggle.open).toBe(true);
+    expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(false);
+    const retry = deferred<boolean>();
+    patch.mockReturnValueOnce(retry.promise);
+    click(page.container, ".exec-approval-actions button");
+    await waitForSolid(() => expect(page.text(".exec-approval-actions button")).toBe("Saving…"));
+    expect(page.query(".exec-approval-error")).toBeNull();
+    retry.resolve(true);
+    await waitForSolid(() => expect(page.toggle.open).toBe(false));
+    expect(patch).toHaveBeenCalledTimes(2);
+    expect(page.query(".exec-approval-error")).toBeNull();
+  },
+);
+
+it.each(["reconnect", "agent", "client", "access", "unmount"] as const)(
+  "releases the admitted toggle receipt immediately on %s retirement",
+  async (replacement) => {
+    const page = await createPage();
+    page.context.setConfig({});
+    const pending = deferred<boolean>();
+    const patch = vi.mocked(page.context.runtimeConfig.patch);
+    patch.mockReturnValueOnce(pending.promise);
+    page.state.setEnabled(false);
+    flush();
+    const completion = page.toggle.onConfirm();
+    const settled = vi.fn();
+    void completion?.then(settled);
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    if (replacement === "reconnect") {
+      page.context.emit({ phase: "reconnecting", hello: null });
+    } else if (replacement === "agent") {
+      page.setAgentId("support");
+    } else if (replacement === "client") {
+      page.context.emit({ client: emptyClient() });
+    } else if (replacement === "access") {
+      page.context.emit({ hello: gatewayHelloForMethods([], []) });
+    } else {
+      page.unmount();
+    }
+    await waitForSolid(() => expect(settled).toHaveBeenCalledOnce());
+    if (replacement === "reconnect") {
+      expect(page.toggle.open).toBe(true);
+    } else if (replacement !== "unmount") {
+      expect(page.toggle.open).toBe(false);
+    }
+    pending.reject(new Error("retired transport failure"));
+    await Promise.resolve();
+    expect(page.query(".exec-approval-error")).toBeNull();
+  },
+);
 
 function wikiOverview(title = "Original title") {
   return {

@@ -1,6 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Mock } from "vitest";
 import type { HelloOk } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { UpdateCommandOptions } from "./shared.js";
+
+export type InstallRootTransitionFixture = {
+  root: string;
+  run: NonNullable<UpdateCommandOptions["run"]>;
+  mocks: {
+    running: boolean;
+    events: string[];
+    command: Mock<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>;
+    capability: Mock<
+      typeof import("../../daemon/systemd-definition-mutation.js").readSystemdDefinitionMutationCapability
+    >;
+    child: Mock<typeof import("../../process/exec.js").runCommandWithTimeout>;
+    health: Mock<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>;
+    configSnapshot: Mock;
+  };
+};
 
 export const maintenanceDefaults = {
   root: process.cwd(),

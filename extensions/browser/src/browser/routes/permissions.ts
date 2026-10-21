@@ -48,10 +48,7 @@ async function grantPermissions(params: {
     ...new Set([...params.requiredPermissions, ...params.optionalPermissions]),
   ];
   const playwrightRequiredPermissions = params.requiredPermissions.map(toPlaywrightPermission);
-  const canUsePlaywright =
-    playwrightRequiredPermissions.every((value): value is string => Boolean(value)) &&
-    params.requiredPermissions.length > 0;
-  if (canUsePlaywright) {
+  if (playwrightRequiredPermissions.every((value): value is string => Boolean(value))) {
     const pw = await getPwAiModule({ mode: "soft" });
     if (pw) {
       try {

@@ -151,10 +151,8 @@ export async function runMSTeamsFeedbackInvokeHandler(
     const { sessionKey, agentId } = route;
     const conversationKind = isDirectMessage ? "direct" : isChannel ? "channel" : "group";
     (async () => {
-      const reflectionConfig = resolveMSTeamsAccountConfig(cfg, accountId);
       const cooldownMs =
-        reflectionConfig.feedbackReflectionCooldownMs ??
-        DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
+        msteamsCfg.feedbackReflectionCooldownMs ?? DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
       let reflection;
       try {
         reflection = await runChannelFeedbackReflection({
@@ -184,16 +182,13 @@ export async function runMSTeamsFeedbackInvokeHandler(
         log.debug?.("reflection produced no output");
         return;
       }
-      const conversationType = normalizeOptionalLowercaseString(
-        conversationRef.conversation?.conversationType,
-      );
       const shouldNotify =
-        conversationType === "personal" && reflection.followUp && Boolean(reflection.userMessage);
+        convType === "personal" && reflection.followUp && Boolean(reflection.userMessage);
       if (!shouldNotify) {
-        if (reflection.followUp && conversationType !== "personal") {
+        if (reflection.followUp && convType !== "personal") {
           log.debug?.("skipping reflection follow-up outside direct message", {
             sessionKey,
-            conversationType,
+            conversationType: convType,
           });
         }
         return;
@@ -205,7 +200,7 @@ export async function runMSTeamsFeedbackInvokeHandler(
           { type: "message", text: reflection.userMessage! },
           {
             accountId,
-            serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(reflectionConfig),
+            serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
           },
         );
       } catch (err) {

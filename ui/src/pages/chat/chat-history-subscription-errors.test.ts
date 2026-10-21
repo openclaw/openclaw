@@ -69,6 +69,84 @@ function createSubscriptionState(options?: {
   return { selected, state, subscribeMessages, unsubscribeMessages, publishedLoads };
 }
 
+it("starts the new subscription before the old unsubscribe settles", async () => {
+  const previous = { key: "agent:main:previous", agentId: null };
+  const release = createDeferred();
+  const { state, selected, subscribeMessages, unsubscribeMessages } = createSubscriptionState({
+    previous,
+    unsubscribeMessages: vi.fn(() => release.promise),
+  });
+  const sync = syncSelectedSessionMessageSubscription(state);
+  await Promise.resolve();
+  expect(unsubscribeMessages).toHaveBeenCalledOnce();
+  expect(subscribeMessages).toHaveBeenCalledWith(selected.key, {
+    agentId: undefined,
+    includeApprovals: true,
+  });
+  expect(state.chatSessionMessageSubscription).toEqual(previous);
+  release.resolve();
+  await sync;
+  expect(state.chatSessionMessageSubscription).toEqual(selected);
+});
+
+it("releases an active message subscription when its pane is disposed", () => {
+  const { state, selected, unsubscribeMessages } = createSubscriptionState();
+  state.chatSessionMessageSubscriptionRequestedKey = selected.key;
+  state.chatSessionMessageSubscription = selected;
+  state.chatSessionApprovalQueue = [
+    {
+      id: "approval-1",
+      kind: "plugin",
+      request: { command: "Approve", sessionKey: selected.key },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    },
+  ];
+  state.chatSessionApprovalReplay = {
+    complete: true,
+    client: state.client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: state.sessionKey,
+  };
+  disposeSelectedSessionMessageSubscription(state);
+  expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(selected);
+  expect(state).toMatchObject({
+    chatSessionApprovalReplay: undefined,
+    chatSessionMessageSubscriptionRequestedKey: null,
+    chatSessionMessageSubscription: null,
+    chatSessionApprovalQueue: [],
+  });
+});
+
+it.each([false, true])(
+  "releases a subscription that resolves after its pane is disposed (initial release fails: %s)",
+  async (failInitialRelease) => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => warning.mockRestore());
+    const requested = createDeferred();
+    const pending = createDeferred<Subscription>();
+    const { state, selected, unsubscribeMessages } = createSubscriptionState({
+      subscribeMessages: vi.fn(() => {
+        requested.resolve();
+        return pending.promise;
+      }),
+    });
+    state.hello = null;
+    if (failInitialRelease) {
+      unsubscribeMessages.mockRejectedValueOnce(new Error("temporary observer release failure"));
+    }
+    const sync = syncSelectedSessionMessageSubscription(state);
+    await requested.promise;
+    disposeSelectedSessionMessageSubscription(state);
+    pending.resolve(selected);
+    await sync;
+    expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(selected);
+    expect(unsubscribeMessages.mock.calls[0]?.[0]).toBe(selected);
+    expect(state.chatSessionMessageSubscription).toBeNull();
+    expect(warning).toHaveBeenCalledTimes(failInitialRelease ? 1 : 0);
+  },
+);
+
 it.each(["dispose", "selection", "capability", "deadline"] as const)(
   "settles transient subscription recovery on %s without touching drafts",
   async (change) => {

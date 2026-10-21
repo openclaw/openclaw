@@ -17,12 +17,12 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import type { InstallRootTransitionFixture } from "./update-command-service-fixtures.test-support.js";
 import {
   type createServiceActivationFixture,
   readyRecoveryHealth,
   serviceUpdateResult,
 } from "./update-command-service-recovery.test-support.js";
-import type { InstallRootTransitionFixture } from "./update-command-service-transition.test-support.js";
 import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,

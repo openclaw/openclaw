@@ -61,7 +61,6 @@ async function verifyDashboardRollover(nativeReconnect: boolean) {
         defaults: {
           workspace: home.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: model.modelRef },
           models: {
             [model.modelRef]: {
