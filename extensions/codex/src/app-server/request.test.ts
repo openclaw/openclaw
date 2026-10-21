@@ -15,16 +15,18 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { codexControlRequest } from "../command-rpc.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
-const sharedClientMocks = vi.hoisted(() => ({
-  createIsolatedCodexAppServerClient: vi.fn(),
-  getSharedCodexAppServerClient: vi.fn(),
-  releaseLeasedSharedCodexAppServerClient: vi.fn(),
-  retireSharedCodexAppServerClientIfCurrent: vi.fn(),
+const shared = vi.hoisted(() => ({
+  isolated: vi.fn(),
+  acquire: vi.fn(),
+  release: vi.fn(),
+  retire: vi.fn(),
 }));
-
 vi.mock("./shared-client.js", () => ({
-  ...sharedClientMocks,
-  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  createIsolatedCodexAppServerClient: shared.isolated,
+  getSharedCodexAppServerClient: shared.acquire,
+  getLeasedSharedCodexAppServerClient: shared.acquire,
+  releaseLeasedSharedCodexAppServerClient: shared.release,
+  retireSharedCodexAppServerClientIfCurrent: shared.retire,
 }));
 
 const {
@@ -52,7 +54,7 @@ const sandboxEnvironment = {
 };
 const mockRequest = (response: unknown = { ok: true }) => {
   const request = vi.fn(async () => response);
-  sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+  shared.acquire.mockResolvedValue({ request });
   return request;
 };
 
@@ -60,7 +62,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-preflight-");
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
-    for (const mock of Object.values(sharedClientMocks)) {
+    for (const mock of Object.values(shared)) {
       mock.mockReset();
     }
   });
@@ -144,7 +146,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     ).rejects.toThrow(
       `Codex-native app-server method \`${method}\` is unavailable because ${reason} is active for this session.`,
     );
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    expect(shared.acquire).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -181,21 +183,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     ["config/read", { includeLayers: false }, false],
     ["thread/start", sandboxEnvironment, false],
   ] as const)("allows %s under its execution policies", async (method, requestParams, alsoNode) => {
-    const responses: Record<string, unknown> = {
-      "app/installed": { apps: [] },
-      "app/read": { apps: [] },
-      "plugin/installed": { marketplaces: [], marketplaceLoadErrors: [] },
-      "experimentalFeature/list": { data: [], nextCursor: null },
-      "config/batchWrite": {
-        status: "ok",
-        version: "1",
-        filePath: "/codex/config.toml",
-        overriddenMetadata: null,
-      },
-      "config/read": { config: { apps: { apps: {} } } },
-      "thread/start": { thread: { id: "thread-1" }, model: "gpt-5.5" },
-    };
-    const response = responses[method] ?? { ok: true };
+    const response = { ok: true };
     const request = mockRequest(response);
     const policies = alsoNode ? [sandboxPolicy, nodePolicy] : [sandboxPolicy];
     for (const policy of policies) {
@@ -229,7 +217,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     async ({ error, category }) => {
       const request = vi.fn().mockRejectedValue(error);
       const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+      shared.acquire.mockResolvedValue({ request });
       await expect(
         requestCodexAppServerJson({
           method: "thread/list",
@@ -247,10 +235,8 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         expectDeadlineOptions(),
       );
       expect(request.mock.calls[0]?.[2]).not.toHaveProperty("controlObservation");
-      expect(sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0]).not.toHaveProperty(
-        "controlObservation",
-      );
-      expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+      expect(shared.acquire.mock.calls[0]?.[0]).not.toHaveProperty("controlObservation");
+      expect(shared.release).toHaveBeenCalledOnce();
       expect(JSON.stringify(controlObservation.failed.mock.calls)).not.toContain("private-");
     },
   );
@@ -274,7 +260,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       const request = vi.spyOn(harness.client, "request");
       const attemptWaiterFinished = vi.fn();
       const controlObservation = { phase: vi.fn(), failed: vi.fn(), attemptWaiterFinished };
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
+      shared.acquire.mockResolvedValue(harness.client);
       try {
         const params = { method, requestParams: {}, controlObservation };
         const result =
@@ -292,9 +278,9 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           expect(attemptWaiterFinished).not.toHaveBeenCalled();
         }
         if (owner === "owned") {
-          expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+          expect(shared.acquire).not.toHaveBeenCalled();
         } else {
-          const acquisition = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+          const acquisition = shared.acquire.mock.calls[0]?.[0];
           expect(acquisition).not.toHaveProperty("controlObservation");
           expect(acquisition).not.toHaveProperty("attemptWaiterFinished");
         }
@@ -308,7 +294,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   it("reports an acquisition rejection without inventing a client request or lease", async () => {
     const error = new Error("private-acquire-error");
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.getSharedCodexAppServerClient.mockRejectedValue(error);
+    shared.acquire.mockRejectedValue(error);
     await expect(
       requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
     ).rejects.toBe(error);
@@ -317,7 +303,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       category: "other",
     });
     expect(controlObservation.phase).not.toHaveBeenCalledWith("client-request");
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
+    expect(shared.release).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -326,7 +312,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       const requestError = new Error("private-request-error");
       const cleanupError = new Error("private-cleanup-error");
       const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-      sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+      shared.isolated.mockResolvedValue({
         request: vi.fn().mockRejectedValue(requestError),
         closeAndWait: vi.fn(async () => {
           if (cleanupFails) {
@@ -354,7 +340,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
     const requestError = new Error("private-request-error");
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+    shared.isolated.mockResolvedValue({
       request: vi.fn().mockRejectedValue(requestError),
       closeAndWait: vi.fn(async () => {
         elapsedClock.mockReturnValue(51);
@@ -383,7 +369,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
     const request = vi.fn();
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    shared.acquire.mockResolvedValue({ request });
     await expect(
       withCodexAppServerJsonClient(
         {
@@ -419,7 +405,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       },
     );
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.getSharedCodexAppServerClient.mockRejectedValue(original);
+    shared.acquire.mockRejectedValue(original);
     const result = await requestCodexAppServerJson({
       method: "thread/list",
       requestParams: {},
@@ -443,14 +429,14 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         throw new Error("observer");
       },
     };
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    shared.acquire.mockResolvedValue({ request });
     await expect(
       requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
     ).resolves.toEqual({ data: [] });
     await expect(
       requestCodexAppServerJson({ method: "thread/list", requestParams: {}, controlObservation }),
     ).rejects.toBe(error);
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
+    expect(shared.release).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a scoped request live when wall time jumps during acquisition", async () => {
@@ -458,7 +444,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const request = vi.fn(async () => ({ ok: true }));
     const entered = createDeferred<void>();
     const acquisition = createDeferred<{ request: typeof request }>();
-    sharedClientMocks.getSharedCodexAppServerClient.mockImplementation(() => {
+    shared.acquire.mockImplementation(() => {
       entered.resolve();
       return acquisition.promise;
     });
@@ -474,7 +460,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         undefined,
         expectDeadlineOptions(),
       );
-      expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+      expect(shared.release).toHaveBeenCalledOnce();
     } finally {
       acquisition.resolve({ request });
     }
@@ -488,7 +474,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const client: TestClient = { request };
     const acquisition = createDeferred<TestClient>();
     const acquisitionStarted = createDeferred<void>();
-    sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(() => {
+    shared.acquire.mockImplementationOnce(() => {
       acquisitionStarted.resolve();
       return acquisition.promise;
     });
@@ -506,7 +492,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         "Codex app-server startup exceeded its wait budget. Retry this request; if it persists, check the Gateway logs.",
     });
     await acquisitionStarted.promise;
-    const acquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0] as
+    const acquireOptions = shared.acquire.mock.calls[0]?.[0] as
       | { abandonSignal?: AbortSignal; timeoutMs?: number }
       | undefined;
 
@@ -536,7 +522,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       const harness = createClientHarness();
       const entered = createDeferred<void>();
       const acquisition = createDeferred<typeof harness.client>();
-      sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(() => {
+      shared.acquire.mockImplementationOnce(() => {
         entered.resolve();
         return acquisition.promise;
       });
@@ -561,7 +547,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       );
       try {
         await Promise.race([entered.promise, pending]);
-        expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledOnce();
+        expect(shared.acquire).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(acquisitionDelayMs);
         acquisition.resolve(harness.client);
         await vi.advanceTimersByTimeAsync(0);
@@ -575,7 +561,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           harness.send({ id: request.id, result: { data: [] } });
           expect(await pending).toEqual({ value: { data: [] }, error: undefined });
         }
-        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+        expect(shared.release).toHaveBeenCalledOnce();
       } finally {
         acquisition.resolve(harness.client);
         harness.client.close();
@@ -603,7 +589,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       releasePreflight = resolve;
     });
     const request = vi.fn(async (_method: string) => ({ thread: { id: "thread-1" } }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    shared.acquire.mockResolvedValue({ request });
     const onResponse = vi.fn();
 
     try {
@@ -642,8 +628,8 @@ describe("requestCodexAppServerJson sandbox guard", () => {
 
       expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
       expect(onResponse).not.toHaveBeenCalled();
-      expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
-      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+      expect(shared.release).toHaveBeenCalledOnce();
+      expect(shared.retire).not.toHaveBeenCalled();
     } finally {
       releasePreflight();
       await vi.advanceTimersByTimeAsync(0);
@@ -654,7 +640,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
 
   it("revokes scoped requests and mutation authority when their client lease ends", async () => {
     const request = vi.fn(async () => ({ ok: true }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    shared.acquire.mockResolvedValue({ request });
     const retained = await withCodexAppServerJsonClient({}, async (send, _client, scope) => {
       await send({ method: "thread/read", requestParams: { threadId: "thread-1" } });
       return { send, assertCurrent: scope.assertCurrent };
@@ -675,16 +661,14 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const reasons: unknown[] = [];
     const listenerErrors: Error[] = [];
     const listenerStackLimits: number[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockImplementation(
-      async ({ abandonSignal }: { abandonSignal: AbortSignal }) => {
-        abandonSignal.addEventListener("abort", () => {
-          reasons.push(abandonSignal.reason);
-          listenerStackLimits.push(Error.stackTraceLimit);
-          listenerErrors.push(new Error("abort listener diagnostic"));
-        });
-        return { request: async () => ({ data: [] }) };
-      },
-    );
+    shared.acquire.mockImplementation(async ({ abandonSignal }: { abandonSignal: AbortSignal }) => {
+      abandonSignal.addEventListener("abort", () => {
+        reasons.push(abandonSignal.reason);
+        listenerStackLimits.push(Error.stackTraceLimit);
+        listenerErrors.push(new Error("abort listener diagnostic"));
+      });
+      return { request: async () => ({ data: [] }) };
+    });
 
     try {
       Error.stackTraceLimit = 10;
@@ -724,7 +708,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     vi.useFakeTimers();
     const page = createDeferred<{ data: never[]; nextCursor: string }>();
     const request = vi.fn(() => page.promise);
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    shared.acquire.mockResolvedValue({ request });
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
     const result = withCodexAppServerJsonClient(
       { timeoutMs: 50, controlObservation },
@@ -736,7 +720,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     page.resolve({ data: [], nextCursor: "next-page" });
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledOnce();
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+    expect(shared.release).toHaveBeenCalledOnce();
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
       phase: "client-request",
       category: "deadline-observed",
@@ -750,7 +734,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       method === "plugin/installed" ? installed : account,
     );
     const closeAndWait = vi.fn(async () => undefined);
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+    shared.isolated.mockResolvedValue({
       request,
       closeAndWait,
     });
@@ -778,8 +762,8 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       ),
     ).resolves.toEqual({ installed, account });
 
-    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledTimes(1);
-    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
+    expect(shared.isolated).toHaveBeenCalledTimes(1);
+    expect(shared.isolated).toHaveBeenCalledWith(
       expect.objectContaining({ startOptions, authProfileId: null }),
     );
     expect(request).toHaveBeenNthCalledWith(
@@ -815,7 +799,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         };
       });
       const closeAndWait = vi.fn(async () => undefined);
-      sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+      shared.isolated.mockResolvedValue({
         request,
         closeAndWait,
       });
@@ -829,7 +813,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         rateLimits: { rateLimitsByLimitId: { codex: { limitId: "codex" } } },
         accountEmail: "codex-account@example.com",
       });
-      expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
+      expect(shared.isolated).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId: "openai:test",
           timeoutMs: expect.any(Number),
@@ -851,7 +835,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const assertCurrent = () => {
       throw new Error("Account removed");
     };
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockImplementation(async (options) => {
+    shared.isolated.mockImplementation(async (options) => {
       options.assertCurrent?.();
       login();
       throw new Error("unguarded login");

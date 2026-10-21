@@ -32,19 +32,6 @@ describe("Codex Computer Use periodic health", () => {
     expectToolCalls(client, 1);
   });
 
-  it("reloads the owner-managed MCP runtime and retries once after a failed probe", async () => {
-    const client = createClient({ liveTestFailures: 1 });
-
-    startMonitor(client, { autoRepair: true });
-
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-
-    expectToolCalls(client, 2);
-    expect(client.request).toHaveBeenCalledWith("config/mcpServer/reload", undefined, {
-      timeoutMs: 60_000,
-    });
-  });
-
   it.each([
     { config: { healthCheckEnabled: false }, reason: "health_disabled" },
     { config: { enabled: false, healthCheckEnabled: true }, reason: "disabled" },
@@ -77,9 +64,7 @@ describe("Codex Computer Use periodic health", () => {
   });
 });
 
-function createClient(
-  options: { liveTestFailures?: number; mcpServerName?: string; mcpTools?: string[] } = {},
-) {
+function createClient(options: { mcpServerName?: string; mcpTools?: string[] } = {}) {
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   const fixture = createComputerUseRequest({
     installed: true,

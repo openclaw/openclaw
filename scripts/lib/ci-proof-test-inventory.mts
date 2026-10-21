@@ -437,7 +437,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/codex/src/app-server/thread-prompt.test.ts",
   "extensions/codex/src/app-server/thread-shell-environment.native.test.ts",
   "extensions/codex/src/app-server/transcript-mirror.test.ts",
-  "extensions/codex/src/app-server/transcript-mirror.visibility.test.ts",
   "extensions/codex/src/app-server/transport-orphan.test.ts",
   "extensions/codex/src/app-server/transport-process-registration.test.ts",
   "extensions/codex/src/app-server/transport-process-snapshot.test.ts",
