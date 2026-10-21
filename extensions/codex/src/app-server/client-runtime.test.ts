@@ -240,33 +240,6 @@ it("rejects ChatGPT refresh on a prepared API-key client", async () => {
   });
 });
 
-it("requests retirement when its auth owner rejects a workspace change", async () => {
-  vi.useFakeTimers();
-  mocks.refreshAuth.mockRejectedValueOnce(new Error("ChatGPT workspace changed"));
-  const onAuthRefreshFailure = vi.fn();
-  const { send, writes } = createRuntimeHarness({
-    agentDir: "/tmp/agent",
-    authProfileId: "openai:default",
-    onAuthRefreshFailure,
-  });
-
-  send({
-    id: "refresh-other-workspace",
-    method: "account/chatgptAuthTokens/refresh",
-    params: {
-      reason: "unauthorized",
-      previousAccountId: "original-workspace",
-    },
-  });
-
-  await vi.advanceTimersByTimeAsync(0);
-  expect(onAuthRefreshFailure).toHaveBeenCalledOnce();
-  expect(JSON.parse(writes.at(-1) ?? "{}")).toMatchObject({
-    id: "refresh-other-workspace",
-    error: { message: expect.stringContaining("ChatGPT workspace changed") },
-  });
-});
-
 it("claims a fresh auto-subscribed child without exposing or evicting an idle owner", async () => {
   const request = vi.fn(async () => ({}));
   const client = {

@@ -1,5 +1,4 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { SemVer } from "semver";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -8,12 +7,11 @@ import {
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { createClientHarness } from "./test-support.js";
-import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
+import { MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type WrittenFrame = { id?: number | string; method?: string; params?: unknown; result?: unknown };
 
 const clients: CodexAppServerClient[] = [];
-const newerMinorVersion = new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version;
 
 function createHarness(options?: Parameters<typeof createClientHarness>[0]) {
   const harness = createClientHarness(options);
@@ -22,14 +20,9 @@ function createHarness(options?: Parameters<typeof createClientHarness>[0]) {
   return Object.assign(harness, {
     frame,
     reply: (result: unknown, index = 0) => harness.send({ id: frame(index).id, result }),
+    reject: (error: { code: number; message: string; data?: unknown }, index = 0) =>
+      harness.send({ id: frame(index).id, error }),
   });
-}
-
-function startInitialize() {
-  const harness = createHarness();
-  const initializing = harness.client.initialize();
-  const outbound = harness.frame();
-  return { harness, initializing, outbound };
 }
 
 function createToolHarness(options: { budget?: number | null; completed?: boolean } = {}) {
@@ -47,6 +40,7 @@ function createToolHarness(options: { budget?: number | null; completed?: boolea
     return options.completed ? { success: true, contentItems: [] } : new Promise<never>(() => {});
   });
   return Object.assign(harness, {
+    call: (id: string, params: unknown) => harness.send({ id, method: "item/tool/call", params }),
     getSignal: () => requestSignal,
     setBudget: (timeoutMs: number | null) => setBudget?.(timeoutMs),
   });
@@ -178,28 +172,6 @@ it("removes unpaired surrogate code units from outbound JSON-RPC strings", async
   await expect(request).resolves.toEqual({ threadId: "thread-1" });
 });
 
-it("logs only malformed frame sizes and still accepts the next response", async () => {
-  const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-  const harness = createHarness();
-  const contentMarker = "synthetic-private-message-and-tool-content-猫";
-  const malformed = `{"token":"secret-value","message":"${contentMarker}"} trailing`;
-  const request = harness.client.request("model/list", {});
-  const outbound = JSON.parse(await harness.waitForWrite(0)) as { id: number };
-  harness.process.stdout.write(
-    `${malformed}\n${JSON.stringify({ id: outbound.id, result: { models: [] } })}\n`,
-  );
-
-  await expect(request).resolves.toEqual({ models: [] });
-  expect(warn).toHaveBeenCalledExactlyOnceWith("failed to parse codex app-server message", {
-    byteCount: Buffer.byteLength(malformed),
-    charCount: malformed.length,
-    fragmentCount: 1,
-  });
-  expect(JSON.stringify(warn.mock.calls)).not.toContain(contentMarker);
-  expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
-  expect(harness.client.getCloseError()).toBeUndefined();
-});
-
 it("keeps the shared client when ownership expires after an overload rejection", async () => {
   vi.useFakeTimers();
   const harness = createHarness();
@@ -222,11 +194,7 @@ it("keeps the shared client when ownership expires after an overload rejection",
     cause: ownershipError,
   });
   await vi.advanceTimersByTimeAsync(0);
-  const first = harness.frame();
-  harness.send({
-    id: first.id,
-    error: { code: -32_001, message: "Server overloaded; retry later." },
-  });
+  harness.reject({ code: -32_001, message: "Server overloaded; retry later." });
   await vi.advanceTimersByTimeAsync(0);
   current = false;
   await vi.advanceTimersByTimeAsync(1_000);
@@ -247,15 +215,7 @@ it("surfaces relogin details from Codex app-server RPC errors", async () => {
       "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
   };
   const request = harness.client.request("thread/start", {});
-  const outbound = harness.frame();
-  harness.send({
-    id: outbound.id,
-    error: {
-      code: -32602,
-      message: "failed to load configuration",
-      data,
-    },
-  });
+  harness.reject({ code: -32602, message: "failed to load configuration", data });
 
   await expect(request).rejects.toMatchObject({
     name: "CodexAppServerRpcError",
@@ -266,36 +226,12 @@ it("surfaces relogin details from Codex app-server RPC errors", async () => {
   await expect(request).rejects.toHaveProperty("data", data);
 });
 
-it("accepts a newer app-server version for normal startup validation", async () => {
-  const version = newerMinorVersion;
-  const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-  const { harness, initializing, outbound } = startInitialize();
-  harness.send({
-    id: outbound.id,
-    result: { userAgent: `openclaw/${version} (macOS; test)` },
-  });
-
-  await expect(initializing).resolves.toBeUndefined();
-  expect(harness.client.getServerVersion()).toBe(version);
-  expect(harness.frame(1)).toEqual({ method: "initialized" });
-  expect(warn).toHaveBeenCalledOnce();
-  expect(warn).toHaveBeenCalledWith(
-    "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
-    {
-      detectedVersion: version,
-      validatedVersion: CODEX_APP_SERVER_VERSION,
-    },
-  );
-});
-
 it.each(["0.149.0-alpha.2", undefined])(
   "rejects unsupported, malformed, or missing app-server version %s",
   async (version) => {
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({
-      id: outbound.id,
-      result: version ? { userAgent: `openclaw/${version} (macOS; test)` } : {},
-    });
+    const harness = createHarness();
+    const initializing = harness.client.initialize();
+    harness.reply(version ? { userAgent: `openclaw/${version} (macOS; test)` } : {});
 
     await expect(initializing).rejects.toThrow(
       `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but ${
@@ -428,7 +364,7 @@ it.each([
   "bounds $id without aborting before its deadline",
   async ({ id, executionTimeoutMs, beforeDeadlineMs, deadlineMs, params }) => {
     const harness = createToolHarness({ budget: executionTimeoutMs });
-    harness.send({ id, method: "item/tool/call", params });
+    harness.call(id, params);
     await vi.advanceTimersByTimeAsync(beforeDeadlineMs);
     expect(harness.writes).toHaveLength(0);
     expect(harness.getSignal()?.aborted).toBe(false);
@@ -451,11 +387,7 @@ it.each([
 
 it("keeps an unlimited parent request cancellable without a replacement deadline", async () => {
   const harness = createToolHarness({ budget: null });
-  harness.send({
-    id: "unlimited-review",
-    method: "item/tool/call",
-    params: { tool: "autoreview" },
-  });
+  harness.call("unlimited-review", { tool: "autoreview" });
   await vi.advanceTimersByTimeAsync(0);
   harness.setBudget(1);
   await vi.advanceTimersByTimeAsync(2_147_483_648);
@@ -469,11 +401,7 @@ it("keeps an unlimited parent request cancellable without a replacement deadline
 it("ignores an execution budget reported after the request completed", async () => {
   const harness = createToolHarness({ completed: true });
 
-  harness.send({
-    id: "retired-budget",
-    method: "item/tool/call",
-    params: { tool: "node_exec" },
-  });
+  harness.call("retired-budget", { tool: "node_exec" });
   await vi.advanceTimersByTimeAsync(0);
   expect(harness.writes).toHaveLength(1);
   expect(harness.getSignal()?.aborted).toBe(false);

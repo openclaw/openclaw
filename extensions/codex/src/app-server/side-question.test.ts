@@ -20,6 +20,7 @@ import {
   useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  captureRuntimeConfigAsyncReader,
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -43,7 +44,7 @@ import {
 } from "./test-support.js";
 
 const {
-  codexHookCommand,
+  invokeSidePreToolUse,
   readCodexAppServerBindingMock: readBinding,
   isCodexAppServerNativeAuthProfileMock: isNativeAuthProfile,
   getSharedCodexAppServerClientMock: acquireClient,
@@ -66,6 +67,7 @@ const {
   platformPreparedRuntimeAuth,
   TEST_HOST_CAPABILITIES,
   useSideQuestionTestSetup,
+  registerSideQuestionForkTests,
   extractRelayIdFromThreadConfig,
   sideLoopRelayParams,
 } = await import("./side-question.test-support.js");
@@ -251,13 +253,35 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   return call;
 }
 
+function expectCall(mock: ReturnType<typeof vi.fn>, expected: Record<string, unknown>) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(expected));
+}
+
+function expectAbsent(value: unknown, ...keys: string[]) {
+  for (const key of keys) {
+    expect(value).not.toHaveProperty(key);
+  }
+}
+
+function expectPrimaryFailure(error: unknown, primary: Error, count: number) {
+  assert(error instanceof AggregateError, "Expected cancellation and cleanup failures");
+  expect(error.cause).toBe(primary);
+  expect(error.errors).toHaveLength(count);
+  expect(error.errors[0]).toBe(primary);
+  expect(error.message).toContain(primary.message);
+  return error;
+}
+
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
 }
 
-beforeAll(() => setRuntimeConfigSnapshot({}));
+beforeAll(async () => {
+  setRuntimeConfigSnapshot({});
+  await captureRuntimeConfigAsyncReader()();
+});
 afterAll(() => clearRuntimeConfigSnapshot());
 
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
@@ -356,40 +380,6 @@ describe("runCodexAppServerSideQuestion", () => {
       await run;
       await request;
     }
-  });
-
-  it("returns billed usage from the side thread without changing its answer", async () => {
-    const { client, turnStarted } = pendingSide();
-    const run = runSide({});
-    await turnStarted.promise;
-    client.emit({
-      method: "rawResponse/completed",
-      params: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        responseId: "side-response",
-        usage: {
-          inputTokens: 8,
-          cachedInputTokens: 2,
-          outputTokens: 4,
-          totalTokens: 12,
-          reasoningOutputTokens: 3,
-        },
-      },
-    });
-    client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-    await expect(run).resolves.toEqual({
-      text: "Side answer.",
-      usage: {
-        input: 6,
-        output: 4,
-        cacheRead: 2,
-        cacheWrite: 0,
-        total: 12,
-        reasoningTokens: 3,
-        contextUsage: { state: "available", promptTokens: 8, totalTokens: 12 },
-      },
-    });
   });
 
   it("forks an ephemeral side thread with the current text and image", async () => {
@@ -510,8 +500,7 @@ describe("runCodexAppServerSideQuestion", () => {
         },
       },
     });
-    expect(turnStartParams).not.toHaveProperty("approvalPolicy");
-    expect(turnStartParams).not.toHaveProperty("sandboxPolicy");
+    expectAbsent(turnStartParams, "approvalPolicy", "sandboxPolicy");
     expect(client.request.mock.calls.at(-1)).toEqual([
       "thread/unsubscribe",
       { threadId: "side-thread" },
@@ -712,9 +701,10 @@ describe("runCodexAppServerSideQuestion", () => {
     if (platform) {
       expect(isNativeAuthProfile).not.toHaveBeenCalled();
     } else {
-      expect(isNativeAuthProfile).toHaveBeenCalledWith(
-        expect.objectContaining({ authProfileId: undefined, authProfileStore: expect.any(Object) }),
-      );
+      expectCall(isNativeAuthProfile, {
+        authProfileId: undefined,
+        authProfileStore: expect.any(Object),
+      });
     }
   });
 
@@ -737,12 +727,10 @@ describe("runCodexAppServerSideQuestion", () => {
       { pluginConfig: { supervision: { enabled: true } } },
     );
 
-    expect(acquireClient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authProfileId: null,
-        startOptions: expect.objectContaining({ homeScope: "user" }),
-      }),
-    );
+    expectCall(acquireClient, {
+      authProfileId: null,
+      startOptions: expect.objectContaining({ homeScope: "user" }),
+    });
     expect(requestedParams(client, "thread/fork")).toMatchObject({
       threadId: "parent-thread",
       model: "gpt-5.5",
@@ -750,12 +738,8 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     const turn = requestedParams(client, "turn/start");
     expect(turn).toMatchObject({ model: "gpt-5.5" });
-    expect(turn).not.toHaveProperty("effort");
-    expect(turn).not.toHaveProperty("collaborationMode");
-    expect(turn).not.toHaveProperty("personality");
-    expect(createTools).toHaveBeenCalledWith(
-      expect.objectContaining({ modelProvider: "openai", modelId: "gpt-5.5" }),
-    );
+    expectAbsent(turn, "effort", "collaborationMode", "personality");
+    expectCall(createTools, { modelProvider: "openai", modelId: "gpt-5.5" });
   });
 
   it("cleans up a supervised fork that returns a different native model pair", async () => {
@@ -928,9 +912,7 @@ describe("runCodexAppServerSideQuestion", () => {
       );
 
       if (senderDenied) {
-        expect(createTools).toHaveBeenCalledWith(
-          expect.objectContaining({ senderId: "restricted-sender" }),
-        );
+        expectCall(createTools, { senderId: "restricted-sender" });
       } else {
         expect(result).toEqual({ text: "Search answer." });
         expect(resolveSearchSupport).not.toHaveBeenCalled();
@@ -1159,22 +1141,11 @@ describe("runCodexAppServerSideQuestion", () => {
           channelId: "voice-room",
           allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
         });
-        const generation = codexHookCommand(config, "hooks.PreToolUse")?.command?.match(
-          /--generation ([^ ]+)/,
-        )?.[1];
-        const response = await invokeNativeHookRelay({
-          provider: "codex",
-          relayId: relayIdDuringFork,
-          generation,
-          requireGeneration: true,
-          event: "pre_tool_use",
-          rawPayload: {
-            hook_event_name: "PreToolUse",
-            tool_name: "Bash",
-            tool_use_id: "side-listener-unavailable-tool",
-            tool_input: { command: "pwd" },
-          },
-        });
+        const response = await invokeSidePreToolUse(
+          config,
+          "side-listener-unavailable-tool",
+          "pwd",
+        );
         expect(response.stdout).toContain("fixture side policy denial");
         return threadResult("side-thread");
       },
@@ -1202,7 +1173,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     expect(relayIdDuringFork).toBeDefined();
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
-    expect(createTools).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-side-1" }));
+    expectCall(createTools, { runId: "run-side-1" });
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
     ).toBeUndefined();
@@ -1337,62 +1308,41 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it.each([
-    {
-      name: "qualified local provider",
-      provider: "codex",
-      model: "lmstudio/local-model",
-      boundModel: "gpt-5.5",
-      boundProvider: undefined,
-      expectedModel: "local-model",
-      local: true,
-    },
-    {
-      name: "bound slash-containing id",
-      provider: "codex",
-      model: "openai/gpt-oss-20b",
-      boundModel: "openai/gpt-oss-20b",
-      boundProvider: "lmstudio",
-      expectedModel: "openai/gpt-oss-20b",
-      local: true,
-    },
-    {
-      name: "qualified OpenAI provider",
-      provider: "codex",
-      model: "openai/gpt-5.5",
-      boundModel: "local-model",
-      boundProvider: "lmstudio",
-      expectedModel: "gpt-5.5",
-      local: false,
-    },
-  ])("preserves side-fork model ownership for $name", async (scenario) => {
-    const client = useClient();
-    readBinding.mockReturnValue({
-      ...readBinding(),
-      model: scenario.boundModel,
-      modelProvider: scenario.boundProvider,
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-    await expectSideAnswer(
-      { provider: scenario.provider, model: scenario.model },
-      { pluginConfig: { appServer: { mode: "guardian", codeModeOnly: true } } },
-    );
-    const fork = mockCall(client.request)[1];
-    expect(fork).toMatchObject({
-      model: scenario.expectedModel,
-      approvalsReviewer: scenario.local ? "user" : "auto_review",
-      config: { "features.code_mode": true, "features.code_mode_only": true },
-    });
-    if (scenario.local) {
-      expect(fork).toMatchObject({
-        modelProvider: "lmstudio",
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
+    ["lmstudio/local-model", "gpt-5.5", undefined, "local-model", true],
+    ["openai/gpt-oss-20b", "openai/gpt-oss-20b", "lmstudio", "openai/gpt-oss-20b", true],
+    ["openai/gpt-5.5", "local-model", "lmstudio", "gpt-5.5", false],
+  ] as const)(
+    "preserves side-fork model ownership for %s",
+    async (model, boundModel, boundProvider, expectedModel, local) => {
+      const client = useClient();
+      readBinding.mockReturnValue({
+        ...readBinding(),
+        model: boundModel,
+        modelProvider: boundProvider,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
       });
-    } else {
-      expect(fork).not.toHaveProperty("modelProvider");
-    }
-  });
+      await expectSideAnswer(
+        { provider: "codex", model },
+        { pluginConfig: { appServer: { mode: "guardian", codeModeOnly: true } } },
+      );
+      const fork = mockCall(client.request)[1];
+      expect(fork).toMatchObject({
+        model: expectedModel,
+        approvalsReviewer: local ? "user" : "auto_review",
+        config: { "features.code_mode": true, "features.code_mode_only": true },
+      });
+      if (local) {
+        expect(fork).toMatchObject({
+          modelProvider: "lmstudio",
+          approvalPolicy: "on-request",
+          sandbox: "workspace-write",
+        });
+      } else {
+        expect(fork).not.toHaveProperty("modelProvider");
+      }
+    },
+  );
 
   it.each(["startup", "cleanup"] as const)(
     "reports a native pre-tool failure during %s",
@@ -1477,21 +1427,16 @@ describe("runCodexAppServerSideQuestion", () => {
   );
 
   it("omits computer control from side threads without a compaction owner", async () => {
-    const { client, turnStarted } = pendingSide();
     const computerExecute = vi.fn();
     createTools.mockReturnValue([
       { ...fakeTool("computer", "Control a desktop"), execute: computerExecute },
     ]);
-    const run = runSide({});
-    await turnStarted.promise;
-    const toolResponse = await requestSideTool(client, {
-      callId: "computer-1",
-      tool: "computer",
-      arguments: { action: "screenshot" },
-      id: 43,
+    const { result, toolResponse } = await runSideQuestionWithManagedWebSearchCall(sideParams(), {
+      preserveToolFactory: true,
+      toolName: "computer",
+      toolArguments: { action: "screenshot" },
     });
-    completeSide(client, "Side answer.");
-    await expect(run).resolves.toEqual({ text: "Side answer." });
+    expect(result).toEqual({ text: "Search answer." });
     expect(computerExecute).not.toHaveBeenCalled();
     expect(toolResponse).toEqual({
       success: false,
@@ -1538,64 +1483,6 @@ describe("runCodexAppServerSideQuestion", () => {
     }
     await expect(run).resolves.toEqual({ text: "Finished answer." });
     await toolResponse;
-  });
-
-  it("projects native side-thread tool notifications into trusted diagnostics", async () => {
-    const client = createPendingClient();
-    const { events: diagnosticEvents, stop: unsubscribeDiagnostics } = captureDiagnostics();
-    const baseRequest = client.request.getMockImplementation()!;
-    client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
-      if (method === "turn/start") {
-        setTimeout(() => {
-          emitItem(client, "started", nativeCommandItem("native-tool-1", "inProgress", null));
-          emitItem(client, "completed", nativeCommandItem("native-tool-1", "completed", 12));
-          const webSearchItem = {
-            type: "webSearch",
-            id: "native-search-1",
-            query: "sensitive side-thread query",
-            action: { type: "search", query: "sensitive side-thread query", queries: null },
-          };
-          emitItem(client, "started", webSearchItem);
-          emitItem(client, "completed", webSearchItem);
-          client.emit(turnCompleted("side-thread", "turn-1", "Native tool answer."));
-        }, 0);
-        return turnStartResult("turn-1");
-      }
-      return baseRequest(method, requestParams);
-    });
-    acquireClient.mockResolvedValue(client);
-
-    try {
-      await runSide({
-        agentId: "side-agent",
-        sessionKey: "agent:side-agent:main",
-        opts: { runId: "run-side-native-tool" },
-      });
-      await flushDiagnosticEvents();
-    } finally {
-      unsubscribeDiagnostics();
-    }
-
-    const toolEvents = diagnosticEvents.filter((event) => event.type.startsWith("tool.execution."));
-    expect(
-      toolEvents.map((event) => [
-        event.type,
-        "agentId" in event ? event.agentId : undefined,
-        "toolName" in event ? event.toolName : undefined,
-        "toolCallId" in event ? event.toolCallId : undefined,
-        "durationMs" in event ? event.durationMs : undefined,
-      ]),
-    ).toEqual([
-      ["tool.execution.started", "side-agent", "bash", "native-tool-1", undefined],
-      ["tool.execution.completed", "side-agent", "bash", "native-tool-1", 12],
-      ["tool.execution.started", "side-agent", "web_search", "native-search-1", undefined],
-      ["tool.execution.error", "side-agent", "web_search", "native-search-1", expect.any(Number)],
-    ]);
-    expect(toolEvents.at(-1)).toMatchObject({
-      errorCode: "tool_outcome_unknown",
-      terminalReason: "failed",
-    });
-    expect(JSON.stringify(toolEvents)).not.toContain("sensitive side-thread query");
   });
 
   it.each(["wiki_status", "autoreview"])(
@@ -1921,19 +1808,12 @@ describe("runCodexAppServerSideQuestion", () => {
             mayHaveWritten: true,
           });
           if (interruptFails) {
-            assert(
-              error instanceof AggregateError,
-              "Expected cancellation and native cleanup failures",
-            );
-            expect(error.cause).toBe(primaryError);
-            expect(error.errors).toHaveLength(2);
-            expect(error.errors[0]).toBe(primaryError);
-            expect(error.errors[1]).toMatchObject({
+            const aggregate = expectPrimaryFailure(error, primaryError, 2);
+            expect(aggregate.errors[1]).toMatchObject({
               message:
                 "Codex /btw cleanup could not confirm the side turn stopped; background terminals may still be running.",
             });
-            expect(error.message).toContain("turn/start aborted: side-start-cancelled");
-            expect(error.message).toContain("could not confirm the side turn stopped");
+            expect(aggregate.message).toContain("could not confirm the side turn stopped");
           } else {
             expect(error).toBe(primaryError);
           }
@@ -2059,18 +1939,11 @@ describe("runCodexAppServerSideQuestion", () => {
           expect(cleanupError).toMatchObject({
             message: expect.stringContaining("background-terminal cleanup failed"),
           });
-          assert(
-            error instanceof AggregateError,
-            "Expected cancellation and terminal cleanup failures",
-          );
-          expect(error.cause).toBe(primaryError);
-          expect(error.errors).toHaveLength(3);
-          expect(error.errors[0]).toBe(primaryError);
-          expect(error.errors[1]).toBe(cleanupError);
-          expect(error.message).toContain("Codex /btw was aborted.");
-          expect(error.message).toContain("background-terminal cleanup failed");
-          expect(error.errors[2]).toBe(projectorError);
-          expect(error.message).toContain(projectorError.message);
+          const aggregate = expectPrimaryFailure(error, primaryError, 3);
+          expect(aggregate.errors[1]).toBe(cleanupError);
+          expect(aggregate.errors[2]).toBe(projectorError);
+          expect(aggregate.message).toContain("background-terminal cleanup failed");
+          expect(aggregate.message).toContain(projectorError.message);
         } else {
           expect(error).toBe(primaryError);
         }
@@ -2089,4 +1962,5 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   );
 });
+registerSideQuestionForkTests();
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
