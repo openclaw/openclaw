@@ -33,6 +33,43 @@ async function openComposer(page: Page, route: string, users: MentionUser[]) {
 }
 
 suite.define(() => {
+  it("reserves three person rows while loading and respects reduced motion", () =>
+    suite.withPage(
+      { viewport: { width: 1440, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const { gateway, textarea } = await openComposer(page, "chat", []);
+        await gateway.deferNext("users.mentionable");
+        const menu = page.getByRole("listbox", { name: "Mention a person" });
+        await textarea.fill("@ha");
+        await gateway.waitForRequest("users.mentionable");
+        expect(await menu.textContent()).toContain("Mention a person");
+        expect(await menu.textContent()).not.toContain("Loading people");
+        expect(await menu.locator(".mention-menu__loading").count()).toBe(3);
+        expect(await menu.getByRole("option").count()).toBe(0);
+        expect(
+          await menu.evaluate((element) => {
+            const skeleton = element.querySelector(".mention-menu__loading .skeleton");
+            return skeleton ? getComputedStyle(skeleton, "::after").animationName : null;
+          }),
+        ).toBe("none");
+        const loading = await menu.boundingBox();
+        await gateway.resolveDeferred("users.mentionable", {
+          users: [
+            { profileId: "harper", displayName: "Harper", online: true },
+            { profileId: "henry", displayName: "Henry", online: false },
+            { profileId: "hazel", displayName: "Hazel", online: false },
+          ],
+          truncated: false,
+        });
+        await expect.poll(() => menu.getByRole("option").count()).toBe(3);
+        const ready = await menu.boundingBox();
+        expect(loading).not.toBeNull();
+        expect(ready).not.toBeNull();
+        expect(ready!.height).toBeCloseTo(loading!.height, 1);
+        expect(ready!.y).toBeCloseTo(loading!.y, 1);
+      },
+    ));
+
   it.each(["chat", "new"])(
     "reuses the picker photo and shows initials while it loads in %s",
     (route) =>

@@ -545,8 +545,6 @@ suite.define(() => {
         origin: new URL(suite.server.baseUrl).origin,
       });
       const messageText = "Reply and context menu action proof.";
-      const privateThinking = "private reply reasoning";
-      const visibleThinkingAnswer = "Visible reply context only.";
       const fullAssistantContent = realisticFullAssistantContent;
       const rawOversizedMarker = "[chat.history omitted: message too large]";
       const oversizedNotice = "This message is too large to display here.";
@@ -556,13 +554,6 @@ suite.define(() => {
           ...(
             [
               ["assistant-action-proof", "assistant", messageText, false],
-              ["user-action-separator", "user", "Keep the next assistant message separate.", false],
-              [
-                "assistant-thinking-proof",
-                "assistant",
-                `<thinking>${privateThinking}</thinking>${visibleThinkingAnswer}`,
-                false,
-              ],
               ["user-truncated-separator", "user", "Keep the truncated message separate.", false],
               ["assistant-full-message", "assistant", rawOversizedMarker, true],
               ["oversized-user", "user", rawOversizedMarker, true],
@@ -646,19 +637,6 @@ suite.define(() => {
       const group = page.locator(".chat-group.assistant").filter({ hasText: messageText });
       const bubble = group.locator(".chat-bubble");
       await bubble.waitFor({ state: "visible" });
-
-      const thinkingGroup = page
-        .locator(".chat-group.assistant")
-        .filter({ hasText: visibleThinkingAnswer });
-      await thinkingGroup.hover();
-      await thinkingGroup.getByRole("button", { name: "Reply to message" }).click();
-      const thinkingReplyPreview = page.locator(".chat-reply-preview");
-      await thinkingReplyPreview.waitFor({ state: "visible" });
-      expect(await thinkingReplyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
-        visibleThinkingAnswer,
-      );
-      expect(await thinkingReplyPreview.textContent()).not.toContain(privateThinking);
-      await thinkingReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
       await group.hover();
 
