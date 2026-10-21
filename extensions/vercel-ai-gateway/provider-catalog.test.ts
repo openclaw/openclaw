@@ -16,8 +16,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 import {
   discoverVercelAiGatewayModels,
   VERCEL_AI_GATEWAY_BASE_URL,
-  VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
-  VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+  VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW as DEFAULT_CONTEXT_WINDOW,
+  VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS as DEFAULT_MAX_TOKENS,
 } from "./api.js";
 import {
   buildStaticVercelAiGatewayProvider,
@@ -25,15 +25,21 @@ import {
   resolveVercelAiGatewayModel,
 } from "./provider-catalog.js";
 
-function mockCatalog(payload: unknown, status = 200) {
+function mockResponse(response: Response) {
   const release = vi.fn(async () => {});
   fetchWithSsrFGuardMock.mockResolvedValueOnce({
-    response: jsonResponse(payload, status),
+    response,
     release,
     finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
   });
   return release;
 }
+
+const mockCatalog = (data: unknown[], status = 200) => mockResponse(jsonResponse({ data }, status));
+const pricedModel = (id: string, input: number, output: number, cacheRead = 0, cacheWrite = 0) => ({
+  id,
+  cost: { input, output, cacheRead, cacheWrite },
+});
 
 afterEach(() => {
   clearLiveCatalogCacheForTests();
@@ -41,16 +47,13 @@ afterEach(() => {
 });
 
 describe("vercel ai gateway provider catalog", () => {
-  it.each([503])(
-    "preserves the public advisory builder for HTTP %s with no rows",
-    async (status) => {
-      const release = mockCatalog({ data: [] }, status);
-      await expect(buildVercelAiGatewayProvider()).resolves.toEqual(
-        buildStaticVercelAiGatewayProvider(),
-      );
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
+  it("preserves the public advisory builder for HTTP 503 with no rows", async () => {
+    const release = mockCatalog([], 503);
+    await expect(buildVercelAiGatewayProvider()).resolves.toEqual(
+      buildStaticVercelAiGatewayProvider(),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
 
   it("preserves provider thinking metadata for known live-only upstream models", () => {
     expect(resolveVercelAiGatewayModel("openai/gpt-5.5")).toMatchObject({
@@ -63,17 +66,15 @@ describe("vercel ai gateway provider catalog", () => {
   });
 
   it("excludes non-language models while preserving vision and legacy catalog rows", async () => {
-    mockCatalog({
-      data: [
-        {
-          id: "alibaba/qwen3-235b-a22b-thinking",
-          type: "language",
-          tags: ["vision", "reasoning"],
-        },
-        { id: "alibaba/qwen3-embedding-0.6b", type: "embedding" },
-        { id: "custom/legacy-model" },
-      ],
-    });
+    mockCatalog([
+      {
+        id: "alibaba/qwen3-235b-a22b-thinking",
+        type: "language",
+        tags: ["vision", "reasoning"],
+      },
+      { id: "alibaba/qwen3-embedding-0.6b", type: "embedding" },
+      { id: "custom/legacy-model" },
+    ]);
 
     expect((await buildVercelAiGatewayProvider()).models).toMatchObject([
       {
@@ -92,7 +93,7 @@ describe("vercel ai gateway provider catalog", () => {
   });
 
   it("propagates a malformed model list row", async () => {
-    const release = mockCatalog({ data: [null] });
+    const release = mockCatalog([null]);
     await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).rejects.toThrow(
       "Vercel AI Gateway model list: malformed JSON response",
     );
@@ -100,46 +101,41 @@ describe("vercel ai gateway provider catalog", () => {
   });
 
   it("falls back from malformed live token metadata", async () => {
-    mockCatalog({
-      data: [
-        {
-          id: "anthropic/claude-opus-4.6",
-          name: "Claude Opus 4.6",
-          context_window: -1,
-          max_tokens: 128_000.5,
-          tags: ["vision", "reasoning"],
-        },
-        {
-          id: "custom/provider-model",
-          name: "Custom model",
-          context_window: Number.POSITIVE_INFINITY,
-          max_tokens: 0,
-          tags: ["reasoning"],
-        },
-      ],
-    });
+    mockCatalog([
+      {
+        id: "anthropic/claude-opus-4.6",
+        name: "Claude Opus 4.6",
+        context_window: -1,
+        max_tokens: 128_000.5,
+        tags: ["vision", "reasoning"],
+      },
+      {
+        id: "custom/provider-model",
+        name: "Custom model",
+        context_window: Number.POSITIVE_INFINITY,
+        max_tokens: 0,
+        tags: ["reasoning"],
+      },
+    ]);
 
-    const models = await discoverVercelAiGatewayModels();
-
-    expect(models[0]).toMatchObject({
-      id: "anthropic/claude-opus-4.6",
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    });
-    expect(models[1]).toMatchObject({
-      id: "custom/provider-model",
-      contextWindow: VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
-    });
+    expect(
+      (await discoverVercelAiGatewayModels()).map(({ id, contextWindow, maxTokens }) => [
+        id,
+        contextWindow,
+        maxTokens,
+      ]),
+    ).toEqual([
+      ["anthropic/claude-opus-4.6", 1_000_000, 128_000],
+      ["custom/provider-model", DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS],
+    ]);
   });
 
   it.each(["1e400", "1e308"])(
     "falls back from overflowing live prices (%s) while preserving valid rates",
     async (price) => {
-      const release = vi.fn(async () => {});
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        // Keep the wire number: JSON.stringify would turn numeric Infinity into null.
-        response: new Response(
+      // Keep the wire number: JSON.stringify would turn numeric Infinity into null.
+      const release = mockResponse(
+        new Response(
           `{"data":[
             {"id":"anthropic/claude-opus-4.6","pricing":{"input":${price}}},
             {"id":"custom/partly-priced","pricing":{"input":${price},"output":0.000001}},
@@ -147,25 +143,14 @@ describe("vercel ai gateway provider catalog", () => {
           ]}`,
           { headers: { "Content-Type": "application/json" } },
         ),
-        release,
-        finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
-      });
+      );
 
       const models = await discoverVercelAiGatewayModels({ discoveryMode: "strict" });
 
       expect(models.map(({ id, cost }) => ({ id, cost }))).toEqual([
-        {
-          id: "anthropic/claude-opus-4.6",
-          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-        },
-        {
-          id: "custom/partly-priced",
-          cost: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0 },
-        },
-        {
-          id: "custom/valid",
-          cost: { input: 2, output: 3.5, cacheRead: 0, cacheWrite: 0 },
-        },
+        pricedModel("anthropic/claude-opus-4.6", 5, 25, 0.5, 6.25),
+        pricedModel("custom/partly-priced", 0, 1),
+        pricedModel("custom/valid", 2, 3.5),
       ]);
       expect(release).toHaveBeenCalledOnce();
     },
