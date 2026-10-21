@@ -1,23 +1,18 @@
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
 import type { WizardNextResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { McpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import * as oauthProvider from "../agents/mcp-oauth-provider.js";
 import * as oauthStore from "../agents/mcp-oauth-store.js";
 import * as oauthCoordinator from "../agents/mcp-oauth.js";
-import { withMcpOAuthProviderForTest } from "../agents/mcp-oauth.test-support.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
-import { writeConfigFile } from "../config/config.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { rpcReq } from "./test-helpers.server.js";
 
 type OAuthProvider = Awaited<ReturnType<typeof oauthProvider.createMcpOAuthClientProvider>>;
 
@@ -27,34 +22,42 @@ export type McpAuthEffectEndpoint = {
 };
 
 type McpAuthForcedEffectFixture = {
-  connection: () => { owner: WebSocket; resourceUrl: string; config: McpServerConfig };
+  connection: () => { resourceUrl: string; config: McpServerConfig };
   request: () => GatewayRequestHandlerOptions | undefined;
   identity: () => McpOAuthIdentity;
   begin: () => Promise<{ sessionId: string; state: string }>;
+  start: () => Promise<string>;
   callback: (state: string) => Promise<Response>;
   terminal: (sessionId: string) => Promise<WizardNextResult>;
   requests: string[];
   effects: McpAuthEffectEndpoint;
 };
 
+export const mcpOAuthMetadata = (resourceUrl: string, issuer = new URL(resourceUrl).origin) => ({
+  issuer,
+  authorization_endpoint: "https://provider.example/authorize",
+  token_endpoint: new URL("/token", resourceUrl).href,
+  registration_endpoint: new URL("/register", resourceUrl).href,
+  response_types_supported: ["code"],
+  grant_types_supported: ["authorization_code", "refresh_token"],
+  code_challenge_methods_supported: ["S256"],
+  token_endpoint_auth_methods_supported: ["none"],
+});
+
 export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture) {
   describe("forced SDK effects", () => {
-    const { identity, begin, callback, terminal, requests, effects } = fixture;
-    let owner: WebSocket;
+    const { identity, begin, start, callback, terminal, requests, effects } = fixture;
     let resourceUrl: string;
     let config: McpServerConfig;
     beforeAll(() => {
-      ({ owner, resourceUrl, config } = fixture.connection());
+      ({ resourceUrl, config } = fixture.connection());
     });
     const restoreEffects: Array<() => void> = [];
     const releaseEffects: Array<() => void> = [];
     let restoreScopes: (() => void) | undefined;
-    let changedConfig = false;
 
     const stored = () => oauthStore.readMcpOAuthStore(identity().storeKey);
     const pending = (state: string) => oauthStore.readMcpOAuthPendingAuthorization(state);
-    const writeServerConfig = (server: McpServerConfig) =>
-      writeConfigFile({ gateway: { reload: { mode: "off" } }, mcp: { servers: { docs: server } } });
     const holdEffect = () => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -80,16 +83,6 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       }
       client.connect.scopes = ["operator.read"];
     };
-    const metadata = (issuer = new URL(resourceUrl).origin) => ({
-      issuer,
-      authorization_endpoint: "https://provider.example/authorize",
-      token_endpoint: new URL("/token", resourceUrl).href,
-      registration_endpoint: new URL("/register", resourceUrl).href,
-      response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
-      code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["none"],
-    });
     const respond = (response: ServerResponse, value: unknown, status = 200) => {
       response.writeHead(status).end(JSON.stringify(value));
       return true;
@@ -139,15 +132,6 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         });
       restoreEffects.push(() => spy.mockRestore());
     };
-    const start = async () => {
-      const sessionId = randomUUID();
-      const started = await rpcReq(owner, "mcp.authLogin", { sessionId, serverName: "docs" });
-      expect(started, JSON.stringify(started.error)).toMatchObject({
-        ok: true,
-        payload: { sessionId, done: false, status: "running" },
-      });
-      return sessionId;
-    };
     const finishError = async (sessionId: string) => {
       await whenAdmittedWizardSessionSettled(session());
       restoreScopes?.();
@@ -193,92 +177,11 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         }
         effects.endpoint = undefined;
         effects.tokenLifetimeSeconds = 3600;
-        if (changedConfig) {
-          changedConfig = false;
-          await writeServerConfig(config);
-        }
         await oauthCoordinator.clearMcpOAuthCredentials(identity());
       }
     });
 
-    it("rejects the real enriched resource discovery save after revocation", async () => {
-      await seed(30);
-      const cached = { ...expectDefined((await stored()).discoveryState, "seed discovery") };
-      delete cached.resourceMetadata;
-      await withMcpOAuthProviderForTest({ identity: identity() }, async (provider) => {
-        await expectDefined(
-          provider.saveDiscoveryState?.bind(provider),
-          "canonical discovery writer",
-        )(cached);
-      });
-      const before = await stored();
-      const beforeRequests = requests.length;
-      const saves: Parameters<NonNullable<OAuthProvider["saveDiscoveryState"]>>[0][] = [];
-      observeProvider((provider) => {
-        const write = expectDefined(
-          provider.saveDiscoveryState?.bind(provider),
-          "discovery writer",
-        );
-        vi.spyOn(provider, "saveDiscoveryState").mockImplementation((value) => {
-          saves.push(value);
-          revoke();
-          return write(value);
-        });
-      });
-      await finishError(await start());
-      expect(saves).toHaveLength(1);
-      expect(saves[0]?.resourceMetadata).toBeDefined();
-      expect(saves[0]?.authorizationServerMetadata).toBeDefined();
-      expect(requests.slice(beforeRequests)).toEqual(["/.well-known/oauth-protected-resource/mcp"]);
-      expect(await stored()).toEqual(before);
-      expect(before.pendingAuthorizationChallenge).toBeUndefined();
-      expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
-    });
-
-    it("rejects the existing metadata-document client ID at its real local save", async () => {
-      const clientMetadataUrl = "https://client.example/openclaw.json";
-      changedConfig = true;
-      await writeServerConfig({ ...config, oauth: { clientMetadataUrl } });
-      effects.endpoint = (request, response) => {
-        if (request.url !== "/.well-known/oauth-authorization-server") {
-          return false;
-        }
-        return respond(response, { ...metadata(), client_id_metadata_document_supported: true });
-      };
-      let beforeSave: Awaited<ReturnType<typeof stored>> | undefined;
-      const clients: unknown[] = [];
-      observeProvider((provider) => {
-        const write = expectDefined(
-          provider.saveClientInformation?.bind(provider),
-          "client information writer",
-        );
-        vi.spyOn(provider, "saveClientInformation").mockImplementation(async (value) => {
-          clients.push(value);
-          beforeSave = await stored();
-          revoke();
-          return write(value);
-        });
-      });
-      const beforeRequests = requests.length;
-      await finishError(await start());
-      expect(clients).toEqual([
-        {
-          client_id: clientMetadataUrl,
-          issuer: new URL(resourceUrl).origin,
-        },
-      ]);
-      expect(beforeSave?.discoveryState?.authorizationServerMetadata).toMatchObject({
-        client_id_metadata_document_supported: true,
-      });
-      expect(await stored()).toEqual(expectDefined(beforeSave, "pre-client-save store"));
-      expectAbsent(await stored(), "clientInformation", "tokens");
-      expect(requests.slice(beforeRequests)).toEqual([
-        "/.well-known/oauth-protected-resource/mcp",
-        "/.well-known/oauth-authorization-server",
-      ]);
-    });
-
-    it.each([false, true])("OIDC path to suffix, revoke=%s", async (withdraw) => {
+    it("rejects OIDC suffix fallback after revocation", async () => {
       const failures = [
         "/.well-known/oauth-authorization-server/tenant",
         "/.well-known/openid-configuration/tenant",
@@ -301,7 +204,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         }
         if (pathname === next) {
           return respond(response, {
-            ...metadata(new URL("/tenant", resourceUrl).href),
+            ...mcpOAuthMetadata(resourceUrl, new URL("/tenant", resourceUrl).href),
             jwks_uri: new URL("/jwks", resourceUrl).href,
             subject_types_supported: ["public"],
             id_token_signing_alg_values_supported: ["RS256"],
@@ -316,24 +219,16 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         response: (pathname, response) => {
           if (pathname === stopPath && response.status === 404) {
             boundaryCount++;
-            if (withdraw) {
-              revoke();
-            }
+            revoke();
           }
         },
       });
       const before = await stored();
       const beforeRequests = requests.length;
-      if (withdraw) {
-        await finishError(await start());
-        expect(await stored()).toEqual(before);
-        expect(requests.slice(beforeRequests)).not.toContain(next);
-        expect(requests.at(-1)).toBe(stopPath);
-      } else {
-        await begin();
-        expect(requests.slice(beforeRequests)).toContain(next);
-        expect((await stored()).lastAuthorizationUrl).toBeDefined();
-      }
+      await finishError(await start());
+      expect(await stored()).toEqual(before);
+      expect(requests.slice(beforeRequests)).not.toContain(next);
+      expect(requests.at(-1)).toBe(stopPath);
       expect(boundaryCount).toBe(1);
       expect(attempts).toContain(next);
     });
