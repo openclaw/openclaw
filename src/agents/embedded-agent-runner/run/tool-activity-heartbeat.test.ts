@@ -18,6 +18,7 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../../runtime/internal-hooks.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   getToolTerminalPresentation,
   setToolTerminalPresentation,
@@ -25,14 +26,7 @@ import {
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 
 const RUN = "test-run";
-const makeTool = () => ({
-  name: "test-tool",
-  label: "Test tool",
-  description: "Test tool",
-  parameters: { type: "object", properties: {} },
-  execute: vi.fn(),
-});
-const wrap = (source: ReturnType<typeof makeTool>) =>
+const wrap = (source: ReturnType<typeof createStubTool>) =>
   wrapEmbeddedAttemptToolWithActivity(source, RUN);
 
 describe("tool-activity-heartbeat", () => {
@@ -97,11 +91,8 @@ describe("tool-activity-heartbeat", () => {
       expect(oldListener).not.toHaveBeenCalled();
     },
   );
-});
-
-describe("heartbeat wrapper metadata preservation", () => {
   it("preserves channel tool metadata on heartbeat-wrapped tools", () => {
-    const source = makeTool();
+    const source = createStubTool("test-tool");
     setChannelAgentToolMeta(source as never, { channelId: "telegram" });
     const wrapped = wrap(source);
     expect(getChannelAgentToolMeta(wrapped as never)).toEqual({ channelId: "telegram" });
@@ -118,7 +109,7 @@ describe("heartbeat wrapper metadata preservation", () => {
   });
 
   it("preserves before-tool-call marker on heartbeat-wrapped tools", () => {
-    const sourceTool = makeTool();
+    const sourceTool = createStubTool("test-tool");
     const source = wrapToolWithBeforeToolCallHook(sourceTool);
     const wrapped = wrap(source);
     expect(isToolWrappedWithBeforeToolCallHook(wrapped)).toBe(true);
@@ -126,7 +117,7 @@ describe("heartbeat wrapper metadata preservation", () => {
   });
 
   it("preserves terminal presentation metadata on heartbeat-wrapped tools", () => {
-    const source = makeTool();
+    const source = createStubTool("test-tool");
     const formatter = () => ({ text: "web_fetch: 3 pages" });
     setToolTerminalPresentation(source, formatter);
     const copiedFormatter = getToolTerminalPresentation(wrap(source));
@@ -135,13 +126,13 @@ describe("heartbeat wrapper metadata preservation", () => {
   });
 
   it("preserves code-mode control identity on heartbeat-wrapped tools", () => {
-    const source = markCodeModeControlTool({ ...makeTool(), name: "exec" });
+    const source = markCodeModeControlTool(createStubTool("exec"));
     expect(isCodeModeControlTool(wrap(source))).toBe(true);
   });
 
   it("applies heartbeat ownership to private preparation and execution", async () => {
     const body = vi.fn(async () => ({ content: [], details: {} }));
-    const source = attachInternalToolExecutionPreparer(makeTool(), async () => ({
+    const source = attachInternalToolExecutionPreparer(createStubTool("test-tool"), async () => ({
       kind: "ready",
       args: {},
       execute: body,

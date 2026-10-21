@@ -1,8 +1,8 @@
 import type { InternalToolBatchCall } from "@openclaw/agent-core";
-import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 
 const mocks = vi.hoisted(() => ({
   attachedLifecycles: [] as Array<{
@@ -37,13 +37,7 @@ vi.mock("../../runtime/internal-hooks.js", () => ({
 import { createToolLoopBatchAdmission } from "./tool-loop-recovery.js";
 
 function batch(id: string, args: Record<string, unknown>, timestamp: number) {
-  const tool = markCodeModeControlTool({
-    name: "exec",
-    label: "exec",
-    description: "code mode exec",
-    parameters: Type.Object({}),
-    execute: async () => ({ content: [], details: {} }),
-  });
+  const tool = markCodeModeControlTool(createStubTool("exec"));
   return {
     assistantMessage: makeAgentAssistantMessage({
       content: [],
@@ -63,39 +57,34 @@ function batch(id: string, args: Record<string, unknown>, timestamp: number) {
   };
 }
 
-describe("tool-loop recovery batch admission", () => {
-  it("canonicalizes equivalent Code Mode exec aliases before loop detection", async () => {
-    mocks.committedArgs.length = 0;
-    mocks.releasedIds.length = 0;
-    mocks.attachedLifecycles.length = 0;
-    const admission = createToolLoopBatchAdmission({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId: "run-1",
-      loopDetection: { enabled: true },
-    });
-    const results = [];
-    for (const [index, alias] of ["code", "command"].entries()) {
-      const toolCallId = `${alias}-alias`;
-      results.push(await admission(batch(toolCallId, { [alias]: "return 1;" }, index + 1)));
-      const lifecycle = mocks.attachedLifecycles[index];
-      lifecycle?.commitReadyCalls([
-        { toolCallId, args: { code: "return 1;", command: "return 1;" } },
-      ]);
-      lifecycle?.releaseSkippedCalls([]);
-    }
-
-    const admittedArgs = mocks.admitToolCallBatch.mock.calls.map(([calls]) => calls[0]?.args);
-    expect(admittedArgs).toEqual([
-      { code: "return 1;", command: "return 1;" },
-      { command: "return 1;", code: "return 1;" },
-    ]);
-    expect(mocks.committedArgs).toEqual(admittedArgs);
-    expect(mocks.releasedIds).toEqual([[], []]);
-    expect(results).toEqual([{}, {}]);
-    expect(mocks.attachedLifecycles[0]?.commitReadyCalls).not.toBe(
-      mocks.attachedLifecycles[1]?.commitReadyCalls,
-    );
-    expect(mocks.attachedLifecycles).toHaveLength(2);
+it("canonicalizes equivalent Code Mode exec aliases before loop detection", async () => {
+  const admission = createToolLoopBatchAdmission({
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    runId: "run-1",
+    loopDetection: { enabled: true },
   });
+  const results = [];
+  for (const [index, alias] of ["code", "command"].entries()) {
+    const toolCallId = `${alias}-alias`;
+    results.push(await admission(batch(toolCallId, { [alias]: "return 1;" }, index + 1)));
+    const lifecycle = mocks.attachedLifecycles[index];
+    lifecycle?.commitReadyCalls([
+      { toolCallId, args: { code: "return 1;", command: "return 1;" } },
+    ]);
+    lifecycle?.releaseSkippedCalls([]);
+  }
+
+  const admittedArgs = mocks.admitToolCallBatch.mock.calls.map(([calls]) => calls[0]?.args);
+  expect(admittedArgs).toEqual([
+    { code: "return 1;", command: "return 1;" },
+    { command: "return 1;", code: "return 1;" },
+  ]);
+  expect(mocks.committedArgs).toEqual(admittedArgs);
+  expect(mocks.releasedIds).toEqual([[], []]);
+  expect(results).toEqual([{}, {}]);
+  expect(mocks.attachedLifecycles[0]?.commitReadyCalls).not.toBe(
+    mocks.attachedLifecycles[1]?.commitReadyCalls,
+  );
+  expect(mocks.attachedLifecycles).toHaveLength(2);
 });
