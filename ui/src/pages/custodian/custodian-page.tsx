@@ -58,11 +58,6 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     historyOwner();
     return null;
   });
-  const historyRead = createMemo(() => {
-    const owner = historyOwner();
-    const receipt = historyReceipt();
-    return receipt?.owner === owner ? receipt.result : Promise.resolve(owner.snapshot);
-  });
   let disposed = false;
   function refreshChannelInventory() {
     const state = context.channels.state;
@@ -233,7 +228,6 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
         historyContent={
           <Show when={historyOpen() && historyAvailable()}>
             <CustodianChangeHistory
-              read={historyRead}
               request={historyReceipt()}
               previous={historyOwner().snapshot}
               onLoad={loadHistory}

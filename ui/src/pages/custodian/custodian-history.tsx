@@ -1,5 +1,5 @@
 import type { SystemChangeEntry } from "@openclaw/gateway-protocol";
-import { Errored, For, isPending, latest, Loading, Show } from "solid-js";
+import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -68,36 +68,35 @@ function HistoryContent(
     onLoad: (reset: boolean) => void;
   },
 ) {
+  const emptyLoading = () => props.loading && props.entries.length === 0;
   return (
     <>
-      <Show
-        when={props.loading && props.entries.length === 0}
-        fallback={
-          <div class="custodian__change-list">
-            <For each={props.entries}>{(entry) => <HistoryCard entry={entry} />}</For>
-            <Show
-              when={props.loading}
-              fallback={
-                <Show when={props.loaded && props.entries.length === 0 && !props.error}>
-                  <div class="custodian__history-state" role="status">
-                    {t("custodian.history.empty")}
-                  </div>
-                </Show>
-              }
-            >
-              <div
-                class="custodian__history-state"
-                role="status"
-                aria-label={t("custodian.history.loading")}
-              >
-                <span class="custodian__history-spinner" aria-hidden="true" />
-              </div>
-            </Show>
-          </div>
-        }
-      >
+      <Show when={emptyLoading()}>
         <SettingsLoadingSkeleton label={t("custodian.history.loading")} />
       </Show>
+      <div class="custodian__change-list" style={{ display: emptyLoading() ? "none" : undefined }}>
+        <For each={props.entries} keyed={(entry) => entry.id}>
+          {(entry) => <HistoryCard entry={entry()} />}
+        </For>
+        <Show
+          when={props.loading}
+          fallback={
+            <Show when={props.loaded && props.entries.length === 0 && !props.error}>
+              <div class="custodian__history-state" role="status">
+                {t("custodian.history.empty")}
+              </div>
+            </Show>
+          }
+        >
+          <div
+            class="custodian__history-state"
+            role="status"
+            aria-label={t("custodian.history.loading")}
+          >
+            <span class="custodian__history-spinner" aria-hidden="true" />
+          </div>
+        </Show>
+      </div>
       <Show when={props.nextCursor}>
         <button
           class="btn btn--ghost custodian__history-more"
@@ -113,13 +112,13 @@ function HistoryContent(
 }
 
 export function CustodianChangeHistory(props: {
-  read: () => HistorySnapshot;
-  request: { reset: boolean } | null;
+  request: { reset: boolean; result: Promise<HistorySnapshot> } | null;
   previous: HistorySnapshot;
   onLoad: (reset: boolean) => void;
 }) {
+  const read = createMemo(() => props.request?.result ?? Promise.resolve(props.previous));
   const readError = () => {
-    const error = props.read().error;
+    const error = read().error;
     if (error) {
       throw new Error(error);
     }
@@ -164,9 +163,9 @@ export function CustodianChangeHistory(props: {
         }
       >
         <HistoryContent
-          {...latest(props.read)}
-          loading={isPending(props.read) && (props.request?.reset ?? true)}
-          loadingMore={isPending(props.read) && props.request?.reset === false}
+          {...latest(read)}
+          loading={(props.request?.reset ?? true) && isPending(read)}
+          loadingMore={props.request?.reset === false && isPending(read)}
           onLoad={props.onLoad}
         />
       </Loading>

@@ -83,4 +83,43 @@ describe("custodian change history", () => {
     );
     expect(page.querySelector(".custodian__history")?.textContent).not.toContain(entry.summary);
   });
+
+  it("clears accepted history while a replacement connection loads", async () => {
+    const entry = {
+      id: "config-audit:old",
+      at: 1_700_000_000_000,
+      kind: "config-write" as const,
+      source: "config-rpc" as const,
+      summary: "Old connection history",
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "openclaw.changes.list"
+        ? { entries: [entry] }
+        : { sessionId: "custodian-session", reply: "Ready.", action: "none" },
+    );
+    const harness = createContext(request, ["openclaw.chat", "openclaw.changes.list"]);
+    const { page } = await mountPage(harness.context, { onboarding: false });
+    button(page, ".custodian__history-toggle").click();
+    await waitForFast(() => expect(page.textContent).toContain(entry.summary));
+
+    const pending = createDeferred<SystemChangesListResult>();
+    const replacement = createContext(
+      vi.fn((method: string) =>
+        method === "openclaw.changes.list"
+          ? pending.promise
+          : Promise.resolve({ sessionId: "replacement-session", reply: "Ready.", action: "none" }),
+      ),
+      ["openclaw.chat", "openclaw.changes.list"],
+    );
+    harness.setGatewaySnapshot({ client: replacement.context.gateway.snapshot.client });
+    await waitForFast(() => expect(page.querySelector(".custodian__history")).toBeNull());
+    button(page, ".custodian__history-toggle").click();
+    await waitForFast(() =>
+      expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+    );
+    expect(page.textContent).not.toContain(entry.summary);
+    pending.resolve({ entries: [{ ...entry, id: "config-audit:new", summary: "New history" }] });
+    await waitForFast(() => expect(page.textContent).toContain("New history"));
+    expect(page.textContent).not.toContain(entry.summary);
+  });
 });
