@@ -1368,6 +1368,9 @@ Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
 there is no post-read registry retry or repeated listing-identity capture.
 Registry receipts and physical replacement invalidate reusable target facts.
+The discovery memo adopts each decoded result once and shares a deeply readonly,
+frozen snapshot on warm reads. Inventory preparation captures its selection facts
+once; repeated reads still check registry, physical-file, and applicable row revisions.
 Session-row writes invalidate fixed-store inventories, whose agent visibility
 can depend on those rows. Per-agent inventories retain their path and registry
 facts across ordinary turns, avoiding another discovery and
