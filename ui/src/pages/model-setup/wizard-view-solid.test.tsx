@@ -51,8 +51,7 @@ it("keeps the wizard and focused input mounted while typing a draft", async () =
   expect(container.querySelector("openclaw-modal-dialog")).toBe(modal);
   expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
   expect(document.activeElement).toBe(input);
-  expect(input.value).toBe("initial typed");
-  expect(untrack(draft)).toBe("initial typed");
+  expect([input.value, untrack(draft)]).toEqual(["initial typed", "initial typed"]);
 
   input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   expect(answer).toHaveBeenCalledExactlyOnceWith("initial typed");
@@ -117,7 +116,6 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   expect(startChat).toHaveBeenCalledOnce();
   setStartingChat(true);
   flush();
-  expect(primary.disabled).toBe(true);
-  expect(primary.getAttribute("aria-busy")).toBe("true");
+  expect([primary.disabled, primary.getAttribute("aria-busy")]).toEqual([true, "true"]);
   expect(primary.querySelector(".btn__spinner")).not.toBeNull();
 });

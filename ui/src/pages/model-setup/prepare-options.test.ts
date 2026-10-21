@@ -64,22 +64,18 @@ describe("model setup prepare options", () => {
     expect(findPreparedModelCandidate(result, "local/provider%beta")).toBeUndefined();
   });
 
-  it("uses provider identity to hide a usable aliased provider", () => {
-    const result = detection(
-      [candidate("provider-auto:other-choice", "lmstudio/qwen3-8b-instruct")],
-      [{ id: "lmstudio-local", brandId: "lmstudio", label: "LM Studio" }],
-    );
-
-    expect(listModelSetupPrepareOptions(result)).toEqual([]);
-  });
-
-  it("keeps setup available for credential-less candidates", () => {
-    const result = detection(
-      [candidate("provider-auto:lmstudio", "lmstudio/qwen3-8b-instruct", false)],
-      [{ id: "lmstudio", brandId: "lmstudio", label: "LM Studio" }],
-    );
-
-    expect(listModelSetupPrepareOptions(result)).toHaveLength(1);
-    expect(findPreparedModelCandidate(result, "lmstudio")).toBeUndefined();
-  });
+  it.each([
+    { credentials: true, kind: "provider-auto:other-choice", id: "lmstudio-local", count: 0 },
+    { credentials: false, kind: "provider-auto:lmstudio", id: "lmstudio", count: 1 },
+  ] as const)(
+    "offers preparation only without usable credentials (credentials=$credentials)",
+    ({ credentials, kind, id, count }) => {
+      const result = detection(
+        [candidate(kind, "lmstudio/qwen3-8b-instruct", credentials)],
+        [{ id, brandId: "lmstudio", label: "LM Studio" }],
+      );
+      expect(listModelSetupPrepareOptions(result)).toHaveLength(count);
+      expect(findPreparedModelCandidate(result, id)).toBeUndefined();
+    },
+  );
 });
